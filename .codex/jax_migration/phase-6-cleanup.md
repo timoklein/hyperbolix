@@ -1,16 +1,13 @@
 # Phase 6 – Cleanup & Documentation
 
-## Goals
-- Remove Torch dependencies and finalize the JAX/Flax codebase for release.
-- Update documentation and communication channels to reflect the new backend.
+## TODOs
+- [ ] Remove Torch-specific code paths, parameters, and dependency entries once JAX parity is achieved.
+- [ ] Delete compatibility flags and deprecated APIs; update `src/__init__.py` exports to point exclusively to JAX implementations.
+- [ ] Refresh docs: rewrite `README.md`, `.codex/AGENTS.md`, and examples to reflect the new stack and usage patterns.
+- [ ] Update CI/CD to install only JAX tooling and drop Torch jobs; ensure wheels/notebooks build cleanly.
+- [ ] Prepare release notes summarising breaking changes, migration guidance, and known limitations for downstream teams.
+- [ ] Coordinate final verification: run full `uv run pytest` suite, lint/format commands, and optional integration notebooks before tagging the release.
 
-## Actions
-- Delete Torch-specific modules, compatibility shims, and leftover dependency references once JAX parity is confirmed.
-- Simplify public APIs by removing `backend` switches. Ensure import paths remain stable or provide deprecation notices.
-- Refresh documentation: update `README.md`, `AGENTS.md`, examples, and changelog with the new stack and migration notes for users.
-- Update CI workflows to install only JAX/Flax dependencies and run JAX-focused test jobs (include GPU matrix if applicable).
-- Prepare release notes detailing breaking changes, upgrade guidance, and any known limitations. Communicate timelines to stakeholders.
-
-## Deliverables
-- Torch-free repository with consistent documentation and CI.
-- Published release plan enabling downstream teams to adopt the JAX version.
+## Notes
+- Communicate timelines and deprecation notices to collaborators well in advance; archive Torch-era tags or branches if long-term support is required.
+- Consider packaging migration utilities (e.g. conversion scripts) separately if they remain useful post-cleanup.

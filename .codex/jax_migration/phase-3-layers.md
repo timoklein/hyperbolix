@@ -1,16 +1,20 @@
-# Phase 3 – Neural Layers
+# Phase 6 – Flax Layers (Scoped)
 
-## Goals
-- Rebuild neural network layers on top of Flax while maintaining functionality equivalent to the Torch implementations.
-- Provide a transitional API enabling side-by-side evaluation of Torch and Flax layers.
+## TODOs (MVP first)
+- [ ] Implement Flax equivalents for high‑value layers only:
+  - [ ] `HyperbolicLinearPoincare` and `HyperbolicLinearPoincarePP`.
+  - [ ] `HyperbolicLinearHyperboloid` (baseline variant).
+- [ ] Port `src/nn_layers/helpers.py` to JAX, rewriting multinomial regression kernels with `jnp`.
+- [ ] Provide `setup`/`__call__` logic performing exp/log maps via Phase 2 utilities.
+- [ ] Add forward‑pass equivalence tests for the MVP layers.
 
-## Actions
-- Translate classes in `src/nn_layers/` into Flax `nn.Module`s; parameter trees become `FrozenDict` structures managed by Flax.
-- Encapsulate manifold-aware math by reusing Phase 2 helpers. Ensure activations and projections run inside `@nn.compact` methods without side effects.
-- Offer optional factory functions (`build_layer(backend="jax"|"torch")`) so callers can choose implementations during the migration window.
-- Re-implement helper utilities (dtype selection, initializer logic) to use JAX random keys and pure functions. Avoid global state by threading PRNG keys.
-- Write example initialization and forward-pass snippets demonstrating how to call the new layers via `flax.linen` APIs.
+## Stretch Goals (defer if not needed)
+- [ ] FHNN/FHCNN variants and RL‑specific layers.
+- [ ] Transitional factories and higher‑level builders.
 
-## Deliverables
-- Flax versions of all hyperbolic layers with unit tests referencing both backends.
-- Interim compatibility wrappers scheduled for removal in Phase 6.
+## Notes
+- Evaluate whether dropout/activation behaviours should leverage `flax.linen.Dropout` and `jax.nn` to stay idiomatic.
+- For modules relying on `torch.nn.Parameter` (e.g. manifold biases), migrate to explicit parameter trees and ensure they participate in gradient updates.
+
+## Acceptance Criteria
+- MVP layer set compiles and runs with Flax; unit tests demonstrate parity with Torch within tolerances.
