@@ -1,0 +1,88 @@
+# GENERAL
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyperbolix"
+version = "0.1.0"
+description = "Hyperbolic Deep Learning in JAX"
+authors = [
+    { name="Timo Klein", email="timo.klein@univie.ac.at" },
+    { name="Thomas Lang", email="thomas.lang@univie.ac.at" }
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flax>=0.12.0",
+    "matplotlib>=3.10.6",
+    "numpy>=2.3.3",
+    "scikit-learn>=1.7.2",
+    "scipy>=1.16.2",
+    "torch>=2.8.0",
+    "tqdm>=4.67.1",
+]
+
+
+
+#----------------------------
+# RUFF
+#----------------------------
+
+[tool.ruff]
+# See https://beta.ruff.rs/docs/rules/
+lint.select = ["E", "F", "B", "UP", "C90", "RUF"]
+# B028: Ignore explicit stacklevel`
+# RUF013: Too many false positives (implicit optional)
+# UP007: Changes Union to | which breaks pyrallis
+lint.ignore = ["B028", "RUF013", "UP007"]
+
+# Allow unused variables when underscore-prefixed.
+lint.dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+lint.mccabe.max-complexity = 15
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    "*.egg-info",
+    "__pycache__",
+    ".eggs",
+    ".git",
+    ".venv",
+    "build/",
+    ".ruff_cache",
+    ".mypy_cache",
+]
+
+# Same as Black.
+line-length = 127
+
+[tool.black]
+line-length = 127
+
+[tool.isort]
+profile = "black"
+line_length = 127
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["hyperbolic_test*", "manifolds*", "utils*"]
+
+
+#----------------------------
+# DEV
+#----------------------------
+
+
+[tool.pytest.ini_options]
+addopts = "-ra -q --log-cli-level=DEBUG"
+testpaths = ["tests"]
+pythonpath = "src"
+
+[dependency-groups]
+dev = [
+    "ipdb>=0.13.13",
+    "py-spy>=0.4.1",
+    "pytest>=8.4.2",
+]
