@@ -1,0 +1,5 @@
+=== PyTorch Baseline Test Environment ===
+Date: Mo 29 Sep 2025 08:28:31 CEST
+Python: Python 3.12.3
+PyTorch: 2.8.0+cu128
+Platform: linux

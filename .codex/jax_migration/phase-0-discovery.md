@@ -1,13 +1,13 @@
 # Phase 0 – Discovery & Baselines
 
 ## TODOs
-- [ ] Catalogue every `torch` import and `torch.nn.Module` subclass across
+-[x] Catalogue every `torch` import and `torch.nn.Module` subclass across
   `src/manifolds`, `src/nn_layers`, `src/optim`, and `src/utils`; capture the findings in `.codex/codebase.md` or a new tracker so JAX work items stay traceable.
-- [ ] Enumerate tensor dtype/default settings (e.g. any `torch.set_default_dtype` usage) and note where mixed precision is assumed.
-- [ ] Snapshot current behaviour:
-  - [ ] Run `uv run pytest -ra -q` and archive the log for regression comparison.
-  - [ ] Export representative parameters/activations from `tests/test_manifolds.py` and `tests/test_optimizers.py` (e.g. via `torch.save`) for parity tests.
-- [ ] Record runtime characteristics for key kernels (exp/log maps, projections, optim steps) using small benchmark scripts to gauge post-JAX performance.
+- [x] Enumerate tensor dtype/default settings (e.g. any `torch.set_default_dtype` usage) and note where mixed precision is assumed.
+- [x] Snapshot current behaviour:
+  - [x] Run `uv run pytest -ra -q` and archive the log for regression comparison.
+  - [x] Export representative parameters/activations from `tests/test_manifolds.py` and `tests/test_optimizers.py` (e.g. via `torch.save`) for parity tests.
+- [x] Record runtime characteristics for key kernels (exp/log maps, projections, optim steps) using small benchmark scripts to gauge post-JAX performance.
 
 ## Progress
 - 2025-09-26: Initial Torch surface mapping

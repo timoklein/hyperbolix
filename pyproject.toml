@@ -68,7 +68,7 @@ line_length = 127
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["hyperbolic_test*", "manifolds*", "utils*"]
+include = ["hyperbolic_test*", "manifolds*", "utils*", "hyperbolix_jax*", "nn_layers*", "optim*"]
 
 
 #----------------------------

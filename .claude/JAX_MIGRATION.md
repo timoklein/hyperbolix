@@ -1,9 +1,15 @@
 # JAX & Flax Migration Plan (Adjusted)
 
 ## Objectives
-- Replace PyTorch with JAX-based equivalents (JAX, Flax, Optax) across manifolds and optimizers first, then selectively port layers.
+- Replace PyTorch with JAX-based equivalents (JAX, Flax NNX, Optax) across manifolds and optimizers first, then selectively port layers.
 - Preserve public API semantics for manifolds and optimizers to ease downstream upgrades; layers can ship as a new namespace.
 - Maintain or improve numerical stability and performance with JIT/VMAP while avoiding in‑place mutation.
+
+## Architecture Decision: Flax NNX
+- **Using Flax NNX** (next-generation Flax) instead of Flax Linen for neural network layers
+- NNX provides more Pythonic, stateful module design that's closer to PyTorch's nn.Module
+- Better integration with JAX transformations and more flexible state management
+- Manifolds use Flax struct.dataclass for pure functional operations
 
 ## Critique Summary
 - **Fixed Critical Issues**: Added Phase 1 for immediate blockers (package discovery configuration in pyproject.toml)
@@ -30,7 +36,7 @@
 ## Module Migration Notes
 - Manifolds: convert to pure `jax.numpy` with `@jax.jit`/`jax.vmap`; replace `torch.jit.script` utils with JAX‑safe numerics; prefer dataclasses over mutable modules.
 - Optimizers: express momentum/Adam state as pytrees; provide both expmap and retraction update modes; expose a small adapter that mirrors the current API names.
-- Layers: implement as Flax `nn.Module` under a new namespace (e.g., `hyperbolix_jax.nn_layers`) to avoid import breakage; ship a thin factory for easier discovery.
+- Layers: implement as Flax NNX `nnx.Module` under a new namespace (e.g., `hyperbolix_jax.nn_layers`) to avoid import breakage; ship a thin factory for easier discovery.
 - Tests: parametrise on backend; reuse saved Torch fixtures and compare with relaxed tolerances where needed.
 
 ## Realism & Risks

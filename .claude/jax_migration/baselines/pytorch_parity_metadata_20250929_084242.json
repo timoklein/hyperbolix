@@ -1,0 +1,224 @@
+{
+  "export_info": {
+    "timestamp": "2025-09-29T08:42:42.151478",
+    "torch_version": "2.8.0+cu128",
+    "seed": 42
+  },
+  "manifolds": {
+    "Euclidean_5_float32": {
+      "manifold_name": "Euclidean",
+      "dimension": 5,
+      "dtype": "float32",
+      "curvature": 0.0,
+      "input_shapes": {
+        "x": [
+          10,
+          5
+        ],
+        "y": [
+          10,
+          5
+        ],
+        "tangent_vecs": [
+          10,
+          5
+        ]
+      },
+      "has_outputs": true,
+      "error": null
+    },
+    "Euclidean_5_float64": {
+      "manifold_name": "Euclidean",
+      "dimension": 5,
+      "dtype": "float64",
+      "curvature": 0.0,
+      "input_shapes": {
+        "x": [
+          10,
+          5
+        ],
+        "y": [
+          10,
+          5
+        ],
+        "tangent_vecs": [
+          10,
+          5
+        ]
+      },
+      "has_outputs": true,
+      "error": null
+    },
+    "Hyperboloid_5_float32": {
+      "manifold_name": "Hyperboloid",
+      "dimension": 5,
+      "dtype": "float32",
+      "curvature": 1.0,
+      "input_shapes": {
+        "x": [
+          10,
+          5
+        ],
+        "y": [
+          10,
+          5
+        ],
+        "tangent_vecs": [
+          10,
+          5
+        ]
+      },
+      "has_outputs": true,
+      "error": null
+    },
+    "Hyperboloid_5_float64": {
+      "manifold_name": "Hyperboloid",
+      "dimension": 5,
+      "dtype": "float64",
+      "curvature": 1.0,
+      "input_shapes": {
+        "x": [
+          10,
+          5
+        ],
+        "y": [
+          10,
+          5
+        ],
+        "tangent_vecs": [
+          10,
+          5
+        ]
+      },
+      "has_outputs": true,
+      "error": null
+    },
+    "PoincareBall_5_float32": {
+      "manifold_name": "PoincareBall",
+      "dimension": 5,
+      "dtype": "float32",
+      "curvature": 1.0,
+      "input_shapes": {
+        "x": [
+          10,
+          5
+        ],
+        "y": [
+          10,
+          5
+        ],
+        "tangent_vecs": [
+          10,
+          5
+        ]
+      },
+      "has_outputs": true,
+      "error": null
+    },
+    "PoincareBall_5_float64": {
+      "manifold_name": "PoincareBall",
+      "dimension": 5,
+      "dtype": "float64",
+      "curvature": 1.0,
+      "input_shapes": {
+        "x": [
+          10,
+          5
+        ],
+        "y": [
+          10,
+          5
+        ],
+        "tangent_vecs": [
+          10,
+          5
+        ]
+      },
+      "has_outputs": true,
+      "error": null
+    }
+  },
+  "optimizers": {
+    "Euclidean_shape_0": {
+      "manifold_name": "Euclidean",
+      "shape": [
+        5
+      ],
+      "has_sgd": true,
+      "has_adam": true
+    },
+    "Euclidean_shape_1": {
+      "manifold_name": "Euclidean",
+      "shape": [
+        3,
+        4
+      ],
+      "has_sgd": true,
+      "has_adam": true
+    },
+    "Euclidean_shape_2": {
+      "manifold_name": "Euclidean",
+      "shape": [
+        2,
+        3,
+        4
+      ],
+      "has_sgd": true,
+      "has_adam": true
+    },
+    "Hyperboloid_shape_0": {
+      "manifold_name": "Hyperboloid",
+      "shape": [
+        5
+      ],
+      "has_sgd": true,
+      "has_adam": true
+    },
+    "Hyperboloid_shape_1": {
+      "manifold_name": "Hyperboloid",
+      "shape": [
+        3,
+        4
+      ],
+      "has_sgd": true,
+      "has_adam": true
+    },
+    "Hyperboloid_shape_2": {
+      "manifold_name": "Hyperboloid",
+      "shape": [
+        2,
+        3,
+        4
+      ],
+      "has_sgd": true,
+      "has_adam": true
+    },
+    "PoincareBall_shape_0": {
+      "manifold_name": "PoincareBall",
+      "shape": [
+        5
+      ],
+      "has_sgd": true,
+      "has_adam": true
+    },
+    "PoincareBall_shape_1": {
+      "manifold_name": "PoincareBall",
+      "shape": [
+        3,
+        4
+      ],
+      "has_sgd": true,
+      "has_adam": true
+    },
+    "PoincareBall_shape_2": {
+      "manifold_name": "PoincareBall",
+      "shape": [
+        2,
+        3,
+        4
+      ],
+      "has_sgd": true,
+      "has_adam": true
+    }
+  }
+}

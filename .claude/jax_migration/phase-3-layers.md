@@ -1,11 +1,17 @@
-# Phase 6 – Flax Layers (Scoped)
+# Phase 6 – Flax NNX Layers (Scoped)
+
+## Architecture Decision: Flax NNX
+- **Using Flax NNX** instead of Flax Linen for more Pythonic, stateful modules
+- NNX modules are closer to PyTorch's `nn.Module` design philosophy
+- Better state management and integration with JAX transformations
+- Explicit parameter handling with `nnx.Param` and state variables
 
 ## TODOs (MVP first)
-- [ ] Implement Flax equivalents for high‑value layers only:
+- [ ] Implement Flax NNX equivalents for high‑value layers only:
   - [ ] `HyperbolicLinearPoincare` and `HyperbolicLinearPoincarePP`.
   - [ ] `HyperbolicLinearHyperboloid` (baseline variant).
 - [ ] Port `src/nn_layers/helpers.py` to JAX, rewriting multinomial regression kernels with `jnp`.
-- [ ] Provide `setup`/`__call__` logic performing exp/log maps via Phase 2 utilities.
+- [ ] Implement NNX modules with `__init__`/`__call__` logic performing exp/log maps via manifold utilities.
 - [ ] Add forward‑pass equivalence tests for the MVP layers.
 
 ## Stretch Goals (defer if not needed)
@@ -13,8 +19,10 @@
 - [ ] Transitional factories and higher‑level builders.
 
 ## Notes
-- Evaluate whether dropout/activation behaviours should leverage `flax.linen.Dropout` and `jax.nn` to stay idiomatic.
-- For modules relying on `torch.nn.Parameter` (e.g. manifold biases), migrate to explicit parameter trees and ensure they participate in gradient updates.
+- Use `flax.nnx.Module` as base class instead of `flax.linen.Module`
+- Leverage `nnx.Param` for parameters and `nnx.Variable` for state management
+- Dropout/activation behaviors should use `jax.nn` functions directly in NNX context
+- Parameters stored as `nnx.Param` automatically participate in gradient updates
 
 ## Acceptance Criteria
-- MVP layer set compiles and runs with Flax; unit tests demonstrate parity with Torch within tolerances.
+- MVP layer set compiles and runs with Flax NNX; unit tests demonstrate parity with Torch within tolerances.
