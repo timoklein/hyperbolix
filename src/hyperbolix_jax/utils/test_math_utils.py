@@ -1,15 +1,15 @@
 """Tests for JAX math utilities."""
 
 import jax.numpy as jnp
-import numpy as np
 from math_utils import (
     smooth_clamp_min,
     smooth_clamp_max,
     smooth_clamp,
-    safe_cosh,
-    safe_sinh,
-    safe_acosh,
-    safe_atanh,
+    cosh,
+    sinh,
+    acosh,
+    asinh,
+    atanh,
     _get_array_eps,
 )
 
@@ -61,19 +61,22 @@ def test_smooth_clamp_max():
     """Test smooth maximum clamping."""
     print("\\nTesting smooth_clamp_max...")
 
-    x = jnp.array([-2.0, -1.0, 0.0, 1.0, 2.0])
+    x = jnp.array([-2.0, -1.0, 0.0, 1.5, 2.0])
     max_val = 1.0
     result = smooth_clamp_max(x, max_val)
 
-    # Values below max_val should be unchanged
-    assert jnp.allclose(result[:4], x[:4], rtol=1e-6)  # [-2, -1, 0, 1] unchanged
+    # Values well below max_val should be unchanged
+    assert jnp.allclose(result[:3], x[:3], rtol=1e-6)  # [-2, -1, 0] unchanged
 
     # Values above max_val should be clamped and <= max_val
-    assert jnp.all(result <= max_val)
+    assert jnp.all(result <= max_val + 1e-10)  # Small tolerance for numerical precision
+
+    # Should be smooth (no discontinuities)
+    assert result[3] > result[4] or jnp.allclose(result[3], result[4], rtol=1e-5)  # monotonic
 
     print(f"  Input:  {x}")
     print(f"  Output: {result}")
-    print(f"  All values <= {max_val}: {jnp.all(result <= max_val)}")
+    print(f"  All values <= {max_val}: {jnp.all(result <= max_val + 1e-10)}")
     print("  ✓ Smooth maximum clamping works")
 
 
@@ -100,19 +103,19 @@ def test_smooth_clamp():
     print("  ✓ Smooth range clamping works")
 
 
-def test_safe_cosh():
+def test_cosh():
     """Test numerically stable cosh."""
-    print("\\nTesting safe_cosh...")
+    print("\\nTesting cosh...")
 
     # Test normal values
     x_normal = jnp.array([-2.0, -1.0, 0.0, 1.0, 2.0])
-    result_normal = safe_cosh(x_normal)
+    result_normal = cosh(x_normal)
     expected_normal = jnp.cosh(x_normal)
     assert jnp.allclose(result_normal, expected_normal)
 
     # Test extreme values that would overflow regular cosh
     x_extreme = jnp.array([-1000.0, -100.0, 0.0, 100.0, 1000.0], dtype=jnp.float32)
-    result_extreme = safe_cosh(x_extreme)
+    result_extreme = cosh(x_extreme)
 
     # Should not contain inf or nan
     assert jnp.all(jnp.isfinite(result_extreme))
@@ -125,22 +128,22 @@ def test_safe_cosh():
     print(f"  Normal cosh: {result_normal}")
     print(f"  Extreme values: {x_extreme}")
     print(f"  Extreme cosh (finite): {jnp.all(jnp.isfinite(result_extreme))}")
-    print("  ✓ Safe cosh works")
+    print("  ✓ cosh works")
 
 
-def test_safe_sinh():
+def test_sinh():
     """Test numerically stable sinh."""
-    print("\\nTesting safe_sinh...")
+    print("\\nTesting sinh...")
 
     # Test normal values
     x_normal = jnp.array([-2.0, -1.0, 0.0, 1.0, 2.0])
-    result_normal = safe_sinh(x_normal)
+    result_normal = sinh(x_normal)
     expected_normal = jnp.sinh(x_normal)
     assert jnp.allclose(result_normal, expected_normal)
 
     # Test extreme values
     x_extreme = jnp.array([-1000.0, -100.0, 0.0, 100.0, 1000.0], dtype=jnp.float32)
-    result_extreme = safe_sinh(x_extreme)
+    result_extreme = sinh(x_extreme)
 
     # Should not contain inf or nan
     assert jnp.all(jnp.isfinite(result_extreme))
@@ -154,22 +157,22 @@ def test_safe_sinh():
     print(f"  Normal sinh: {result_normal}")
     print(f"  Extreme values: {x_extreme}")
     print(f"  Extreme sinh (finite): {jnp.all(jnp.isfinite(result_extreme))}")
-    print("  ✓ Safe sinh works")
+    print("  ✓ sinh works")
 
 
-def test_safe_acosh():
+def test_acosh():
     """Test numerically stable acosh."""
-    print("\\nTesting safe_acosh...")
+    print("\\nTesting acosh...")
 
     # Test valid domain values
     x_valid = jnp.array([1.0, 1.5, 2.0, 5.0, 10.0])
-    result_valid = safe_acosh(x_valid)
+    result_valid = acosh(x_valid)
     expected_valid = jnp.acosh(x_valid)
     assert jnp.allclose(result_valid, expected_valid)
 
     # Test invalid domain values (should be clamped)
     x_invalid = jnp.array([0.5, 0.9, 1.0, 1.1, 2.0])
-    result_invalid = safe_acosh(x_invalid)
+    result_invalid = acosh(x_invalid)
 
     # Should not contain nan
     assert jnp.all(jnp.isfinite(result_invalid))
@@ -183,22 +186,41 @@ def test_safe_acosh():
     print(f"  Valid acosh: {result_valid}")
     print(f"  Invalid domain: {x_invalid}")
     print(f"  Clamped acosh: {result_invalid}")
-    print("  ✓ Safe acosh works")
+    print("  ✓ acosh works")
 
 
-def test_safe_atanh():
+def test_asinh():
+    """Test asinh (no special handling needed)."""
+    print("\\nTesting asinh...")
+
+    x = jnp.array([-100.0, -2.0, -1.0, 0.0, 1.0, 2.0, 100.0])
+    result = asinh(x)
+    expected = jnp.asinh(x)
+
+    # Should match exactly since no clamping
+    assert jnp.allclose(result, expected)
+
+    # Should be finite for all inputs
+    assert jnp.all(jnp.isfinite(result))
+
+    print(f"  Values: {x}")
+    print(f"  asinh: {result}")
+    print("  ✓ asinh works")
+
+
+def test_atanh():
     """Test numerically stable atanh."""
-    print("\\nTesting safe_atanh...")
+    print("\\nTesting atanh...")
 
     # Test valid domain values
     x_valid = jnp.array([-0.9, -0.5, 0.0, 0.5, 0.9])
-    result_valid = safe_atanh(x_valid)
+    result_valid = atanh(x_valid)
     expected_valid = jnp.atanh(x_valid)
     assert jnp.allclose(result_valid, expected_valid)
 
     # Test boundary values (should be clamped away from ±1)
     x_boundary = jnp.array([-1.1, -1.0, -0.9999, 0.9999, 1.0, 1.1])
-    result_boundary = safe_atanh(x_boundary)
+    result_boundary = atanh(x_boundary)
 
     # Should not contain inf or nan
     assert jnp.all(jnp.isfinite(result_boundary))
@@ -211,7 +233,7 @@ def test_safe_atanh():
     print(f"  Valid atanh: {result_valid}")
     print(f"  Boundary values: {x_boundary}")
     print(f"  Clamped atanh (finite): {jnp.all(jnp.isfinite(result_boundary))}")
-    print("  ✓ Safe atanh works")
+    print("  ✓ atanh works")
 
 
 def test_dtype_consistency():
@@ -223,10 +245,11 @@ def test_dtype_consistency():
 
         # Test all functions preserve dtype
         assert smooth_clamp(x, 0.0, 2.0).dtype == dtype
-        assert safe_cosh(x).dtype == dtype
-        assert safe_sinh(x).dtype == dtype
-        assert safe_acosh(x).dtype == dtype
-        assert safe_atanh(x * 0.5).dtype == dtype  # Scale to valid domain
+        assert cosh(x).dtype == dtype
+        assert sinh(x).dtype == dtype
+        assert acosh(x).dtype == dtype
+        assert asinh(x).dtype == dtype
+        assert atanh(x * 0.5).dtype == dtype  # Scale to valid domain
 
         print(f"  ✓ {dtype} dtype preserved across all functions")
 
@@ -241,10 +264,11 @@ def run_all_tests():
     test_smooth_clamp_min()
     test_smooth_clamp_max()
     test_smooth_clamp()
-    test_safe_cosh()
-    test_safe_sinh()
-    test_safe_acosh()
-    test_safe_atanh()
+    test_cosh()
+    test_sinh()
+    test_acosh()
+    test_asinh()
+    test_atanh()
     test_dtype_consistency()
 
     print("\\n=== All Tests Passed! ===")

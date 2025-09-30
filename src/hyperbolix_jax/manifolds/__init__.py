@@ -1,19 +1,12 @@
-"""JAX manifold implementations using Flax struct.dataclass."""
+"""JAX manifold implementations - pure functional approach."""
 
-from .base import ManifoldBase, ManifoldOps
-from .euclidean import Euclidean, create_euclidean
-from .hyperboloid import Hyperboloid
-from .poincare import PoincareBall
-
-# Keep old import for compatibility
-Manifold = ManifoldBase
+# Import manifold modules
+from . import euclidean
+from . import poincare
+from . import hyperboloid
 
 __all__ = [
-    "ManifoldBase",
-    "ManifoldOps",
-    "Manifold",  # alias for compatibility
-    "Euclidean",
-    "create_euclidean",
-    "Hyperboloid",
-    "PoincareBall",
+    "euclidean",
+    "poincare",
+    "hyperboloid",
 ]

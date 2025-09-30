@@ -1,93 +1,418 @@
-"""Euclidean manifold implementation using Flax struct.dataclass."""
+"""Euclidean manifold - pure functional implementation.
 
-from flax import struct
-from typing import ClassVar
+Direct JAX port of PyTorch euclidean.py with pure functions.
+All operations are identity or simple linear operations.
+"""
 
-from ..config import RuntimeConfig, DEFAULT_CONFIG
-from .base import ManifoldBase, ManifoldOps
-from . import euclidean_ops
-
-
-class EuclideanOps:
-    """Pure functional operations for Euclidean manifold."""
-
-    def proj(self, x, config, axis=-1):
-        return euclidean_ops.proj(x, config, axis)
-
-    def dist(self, x, y, config, axis=-1, backproject=True):
-        return euclidean_ops.dist(x, y, config, axis, backproject)
-
-    def dist_0(self, x, config, axis=-1):
-        return euclidean_ops.dist_0(x, config, axis)
-
-    def expmap(self, v, x, config, axis=-1, backproject=True):
-        return euclidean_ops.expmap(v, x, config, axis, backproject)
-
-    def logmap(self, y, x, config, axis=-1, backproject=True):
-        return euclidean_ops.logmap(y, x, config, axis, backproject)
-
-    def ptransp(self, v, x, y, config, axis=-1, backproject=True):
-        return euclidean_ops.ptransp(v, x, y, config, axis, backproject)
-
-    def scalar_mul(self, r, x, config, axis=-1, backproject=True):
-        return euclidean_ops.scalar_mul(r, x, config, axis, backproject)
-
-    def tangent_proj(self, v, x, config, axis=-1):
-        return euclidean_ops.tangent_proj(v, x, config, axis)
+from jaxtyping import Array, Float
+import jax.numpy as jnp
 
 
-@struct.dataclass
-class Euclidean(ManifoldBase):
-    """Euclidean manifold.
-
-    Represents standard Euclidean space R^n with the usual inner product.
-    All operations are trivial (identity, addition, subtraction).
-    """
-
-    # Static configuration
-    name: str = "Euclidean"
-    config: RuntimeConfig = DEFAULT_CONFIG
-
-    # Default static arguments for JIT compilation
-    default_axis: int = -1
-    default_backproject: bool = True
-
-    # Operations instance (class variable to avoid recompilation)
-    _ops: ClassVar[EuclideanOps] = EuclideanOps()
-
-    @property
-    def ops(self) -> ManifoldOps:
-        """Get the pure functional operations for this manifold."""
-        return self._ops
-
-
-def create_euclidean(
-    config: RuntimeConfig = None,
-    *,
-    dtype: str = None,
-    axis: int = -1,
-    backproject: bool = True,
-) -> Euclidean:
-    """Create a Euclidean manifold with specified configuration.
+def proj(
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1
+) -> Float[Array, "..."]:
+    """Project point(s) onto Euclidean space (identity operation).
 
     Args:
-        config: Runtime configuration. If None, uses default for dtype.
-        dtype: Data type ('float32' or 'float64'). Ignored if config provided.
-        axis: Default axis for operations.
-        backproject: Default backproject setting.
+        x: Point(s) in Euclidean space
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute projection (ignored, kept for consistency)
 
     Returns:
-        Euclidean manifold instance.
+        Projected point(s) (identity)
     """
-    if config is None:
-        if dtype is not None:
-            from ..config import get_dtype_config
-            config = get_dtype_config(dtype)
-        else:
-            config = DEFAULT_CONFIG
+    return x
 
-    return Euclidean(
-        config=config,
-        default_axis=axis,
-        default_backproject=backproject,
-    )
+
+def addition(
+    x: Float[Array, "..."],
+    y: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    backproject: bool = True
+) -> Float[Array, "..."]:
+    """Add Euclidean points x and y.
+
+    Args:
+        x: Euclidean point(s)
+        y: Euclidean point(s)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute addition (ignored, kept for consistency)
+        backproject: Whether to backproject (ignored, kept for consistency)
+
+    Returns:
+        Sum x + y
+    """
+    return x + y
+
+
+def scalar_mul(
+    r: Float[Array, "..."],
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    backproject: bool = True
+) -> Float[Array, "..."]:
+    """Multiply Euclidean point(s) x with scalar(s) r.
+
+    Args:
+        r: Scalar factor(s)
+        x: Euclidean point(s)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute multiplication (ignored, kept for consistency)
+        backproject: Whether to backproject (ignored, kept for consistency)
+
+    Returns:
+        Product r * x
+    """
+    return r * x
+
+
+def dist(
+    x: Float[Array, "..."],
+    y: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    keepdim: bool = True,
+    version: str = "default"
+) -> Float[Array, "..."]:
+    """Compute geodesic distance between Euclidean points x and y.
+
+    Args:
+        x: Euclidean point(s)
+        y: Euclidean point(s)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute distance
+        keepdim: Whether to keep the reduced dimension
+        version: Version of distance (ignored, kept for consistency)
+
+    Returns:
+        Euclidean distance ||x - y||
+    """
+    return jnp.linalg.norm(x - y, axis=axis, keepdims=keepdim)
+
+
+def dist_0(
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    keepdim: bool = True,
+    version: str = "default"
+) -> Float[Array, "..."]:
+    """Compute geodesic distance from Euclidean origin to x.
+
+    Args:
+        x: Euclidean point(s)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute distance
+        keepdim: Whether to keep the reduced dimension
+        version: Version of distance (ignored, kept for consistency)
+
+    Returns:
+        Euclidean distance ||x||
+    """
+    return jnp.linalg.norm(x, axis=axis, keepdims=keepdim)
+
+
+def expmap(
+    v: Float[Array, "..."],
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    backproject: bool = True
+) -> Float[Array, "..."]:
+    """Exponential map: map tangent vector v at point x to manifold.
+
+    In Euclidean space, this is simply addition.
+
+    Args:
+        v: Tangent vector(s) at x
+        x: Euclidean point(s)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute (ignored, kept for consistency)
+        backproject: Whether to backproject (ignored, kept for consistency)
+
+    Returns:
+        Point x + v
+    """
+    return x + v
+
+
+def expmap_0(
+    v: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    backproject: bool = True
+) -> Float[Array, "..."]:
+    """Exponential map from origin: map tangent vector v at origin to manifold.
+
+    In Euclidean space, this is identity.
+
+    Args:
+        v: Tangent vector(s) at origin
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute (ignored, kept for consistency)
+        backproject: Whether to backproject (ignored, kept for consistency)
+
+    Returns:
+        Point v
+    """
+    return v
+
+
+def retraction(
+    v: Float[Array, "..."],
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    backproject: bool = True
+) -> Float[Array, "..."]:
+    """Retraction: first-order approximation of exponential map.
+
+    In Euclidean space, retraction equals exponential map (addition).
+
+    Args:
+        v: Tangent vector(s) at x
+        x: Euclidean point(s)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute (ignored, kept for consistency)
+        backproject: Whether to backproject (ignored, kept for consistency)
+
+    Returns:
+        Point x + v
+    """
+    return x + v
+
+
+def logmap(
+    y: Float[Array, "..."],
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    backproject: bool = True
+) -> Float[Array, "..."]:
+    """Logarithmic map: map point y to tangent space at point x.
+
+    In Euclidean space, this is subtraction.
+
+    Args:
+        y: Euclidean point(s)
+        x: Euclidean point(s)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute (ignored, kept for consistency)
+        backproject: Whether to backproject (ignored, kept for consistency)
+
+    Returns:
+        Tangent vector y - x
+    """
+    return y - x
+
+
+def logmap_0(
+    y: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    backproject: bool = True
+) -> Float[Array, "..."]:
+    """Logarithmic map from origin: map point y to tangent space at origin.
+
+    In Euclidean space, this is identity.
+
+    Args:
+        y: Euclidean point(s)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute (ignored, kept for consistency)
+        backproject: Whether to backproject (ignored, kept for consistency)
+
+    Returns:
+        Tangent vector y
+    """
+    return y
+
+
+def ptransp(
+    v: Float[Array, "..."],
+    x: Float[Array, "..."],
+    y: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    backproject: bool = True
+) -> Float[Array, "..."]:
+    """Parallel transport tangent vector v from point x to point y.
+
+    In Euclidean space, tangent spaces are identical everywhere (identity).
+
+    Args:
+        v: Tangent vector(s) at x
+        x: Euclidean point(s) (ignored)
+        y: Euclidean point(s) (ignored)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute (ignored, kept for consistency)
+        backproject: Whether to backproject (ignored, kept for consistency)
+
+    Returns:
+        Tangent vector v (unchanged)
+    """
+    return v
+
+
+def ptransp_0(
+    v: Float[Array, "..."],
+    y: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    backproject: bool = True
+) -> Float[Array, "..."]:
+    """Parallel transport tangent vector v from origin to point y.
+
+    In Euclidean space, tangent spaces are identical everywhere (identity).
+
+    Args:
+        v: Tangent vector(s) at origin
+        y: Euclidean point(s) (ignored)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute (ignored, kept for consistency)
+        backproject: Whether to backproject (ignored, kept for consistency)
+
+    Returns:
+        Tangent vector v (unchanged)
+    """
+    return v
+
+
+def tangent_inner(
+    u: Float[Array, "..."],
+    v: Float[Array, "..."],
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    keepdim: bool = True
+) -> Float[Array, "..."]:
+    """Compute inner product of tangent vectors u and v at point x.
+
+    In Euclidean space, this is the standard dot product.
+
+    Args:
+        u: Tangent vector(s) at x
+        v: Tangent vector(s) at x
+        x: Euclidean point(s) (ignored)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute inner product
+        keepdim: Whether to keep the reduced dimension
+
+    Returns:
+        Inner product <u, v>
+    """
+    return jnp.sum(u * v, axis=axis, keepdims=keepdim)
+
+
+def tangent_norm(
+    v: Float[Array, "..."],
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1,
+    keepdim: bool = True
+) -> Float[Array, "..."]:
+    """Compute norm of tangent vector v at point x.
+
+    In Euclidean space, this is the standard L2 norm.
+
+    Args:
+        v: Tangent vector(s) at x
+        x: Euclidean point(s) (ignored)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute norm
+        keepdim: Whether to keep the reduced dimension
+
+    Returns:
+        Norm ||v||
+    """
+    return jnp.linalg.norm(v, axis=axis, keepdims=keepdim)
+
+
+def egrad2rgrad(
+    grad: Float[Array, "..."],
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1
+) -> Float[Array, "..."]:
+    """Convert Euclidean gradient to Riemannian gradient.
+
+    In Euclidean space, these are identical.
+
+    Args:
+        grad: Euclidean gradient
+        x: Euclidean point(s) (ignored)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute (ignored, kept for consistency)
+
+    Returns:
+        Riemannian gradient (same as Euclidean gradient)
+    """
+    return grad
+
+
+def tangent_proj(
+    v: Float[Array, "..."],
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1
+) -> Float[Array, "..."]:
+    """Project vector v onto tangent space at point x.
+
+    In Euclidean space, tangent space is the entire space (identity).
+
+    Args:
+        v: Vector(s) to project
+        x: Euclidean point(s) (ignored)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to compute (ignored, kept for consistency)
+
+    Returns:
+        Projected vector v (unchanged)
+    """
+    return v
+
+
+def is_in_manifold(
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1
+) -> bool:
+    """Check if point(s) x lie in Euclidean manifold.
+
+    In Euclidean space, all points are valid.
+
+    Args:
+        x: Point(s) to check
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to check (ignored, kept for consistency)
+
+    Returns:
+        Always True
+    """
+    return True
+
+
+def is_in_tangent_space(
+    v: Float[Array, "..."],
+    x: Float[Array, "..."],
+    c: float = 0.0,
+    axis: int = -1
+) -> bool:
+    """Check if vector(s) v lie in tangent space at point x.
+
+    In Euclidean space, all vectors are valid tangent vectors.
+
+    Args:
+        v: Vector(s) to check
+        x: Euclidean point(s) (ignored)
+        c: Curvature (ignored, kept for consistency with other manifolds)
+        axis: Axis along which to check (ignored, kept for consistency)
+
+    Returns:
+        Always True
+    """
+    return True

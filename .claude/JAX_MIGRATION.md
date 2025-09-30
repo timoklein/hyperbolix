@@ -1,48 +1,100 @@
-# JAX & Flax Migration Plan (Adjusted)
+# JAX & Flax Migration Plan (Simplified)
 
 ## Objectives
-- Replace PyTorch with JAX-based equivalents (JAX, Flax NNX, Optax) across manifolds and optimizers first, then selectively port layers.
-- Preserve public API semantics for manifolds and optimizers to ease downstream upgrades; layers can ship as a new namespace.
-- Maintain or improve numerical stability and performance with JIT/VMAP while avoiding in‑place mutation.
+- Replace PyTorch with JAX-based equivalents (JAX, Flax NNX, Optax) with a straightforward port-and-test approach
+- Preserve public API semantics where practical
+- Maintain numerical stability and leverage JIT/VMAP for performance
 
-## Architecture Decision: Flax NNX
-- **Using Flax NNX** (next-generation Flax) instead of Flax Linen for neural network layers
-- NNX provides more Pythonic, stateful module design that's closer to PyTorch's nn.Module
-- Better integration with JAX transformations and more flexible state management
-- Manifolds use Flax struct.dataclass for pure functional operations
+## Scope Reality Check
+This is a **~5.6k LOC codebase** (11 core Python modules + 8 test files), not an enterprise system. The previous 10-phase plan was over-engineered. This simplified plan focuses on direct porting with integrated testing.
 
-## Critique Summary
-- **Fixed Critical Issues**: Added Phase 1 for immediate blockers (package discovery configuration in pyproject.toml)
-- **Enhanced Structure**: Better phase ordering and numbering consistency; added performance validation and migration utilities phases
-- **Missing JAX Configuration**: Added explicit JAX configuration management (jax_enable_x64, device selection)
-- **Complexity Assessment**: The ~4,500 LOC codebase requires more systematic analysis of PyTorch-specific features
-- **Performance Strategy**: Added dedicated performance validation phase with benchmarking framework
-- **Migration Tooling**: Added phase for weight conversion and automated migration utilities
-- **Layer porting**: Correctly scoped to high-value layers only after core parity established
+## Simple 3-Phase Approach
 
-## Adjusted Roadmap
-- [Phase 0 – Discovery & Baselines](./jax_migration/phase-0-discovery.md): inventory Torch usage, capture fixtures, define tolerances and acceptance criteria.
-- [Phase 1 – Critical Configuration Fixes](./jax_migration/phase-1-critical-fixes.md): fix package discovery, JAX configuration management, and immediate blockers.
-- [Phase 2 – Architecture & Package Layout](./jax_migration/phase-2-architecture.md): finalize backend strategy, module layout, and API surface guarantees.
-- [Phase 3 – Core Geometry Port](./jax_migration/phase-3-geometry.md): port `manifolds` and `utils/math_utils.py` to JAX with parity tests.
-- [Phase 4 – Optimizers & Training Loops](./jax_migration/phase-4-optim.md): implement Optax equivalents and minimal training harness.
-- [Phase 5 – Testing & Parity](./jax_migration/phase-5-testing.md): dual‑backend tests, gradient checks, performance tracking; gate promotion to default backend.
-- [Phase 6 – Performance Validation](./jax_migration/phase-6-performance.md): systematic benchmarking, memory profiling, and optimization.
-- [Phase 7 – Flax Layers (Scoped)](./jax_migration/phase-7-layers.md): port high‑value layers only (Poincaré HNN/HNN++ and Hyperboloid linear); defer RL and FHNN variants.
-- [Phase 8 – Migration Utilities](./jax_migration/phase-8-migration-utils.md): weight conversion tools and automated migration scripts.
-- [Phase 9 – Visualization & HoroPCA (Optional)](./jax_migration/phase-9-visualization.md): revisit plotting and dimensionality reduction after core parity.
-- [Phase 10 – Cleanup & Documentation](./jax_migration/phase-10-cleanup.md): remove Torch paths once JAX passes all gates; finalize docs.
+### Phase 1: Core Geometry (1-2 days)
+**Port manifolds + math utilities** - the foundation everything else depends on.
 
-## Module Migration Notes
-- Manifolds: convert to pure `jax.numpy` with `@jax.jit`/`jax.vmap`; replace `torch.jit.script` utils with JAX‑safe numerics; prefer dataclasses over mutable modules.
-- Optimizers: express momentum/Adam state as pytrees; provide both expmap and retraction update modes; expose a small adapter that mirrors the current API names.
-- Layers: implement as Flax NNX `nnx.Module` under a new namespace (e.g., `hyperbolix_jax.nn_layers`) to avoid import breakage; ship a thin factory for easier discovery.
-- Tests: parametrise on backend; reuse saved Torch fixtures and compare with relaxed tolerances where needed.
+Files to port:
+- `src/manifolds/euclidean.py` → `src/hyperbolix_jax/manifolds/euclidean.py`
+- `src/manifolds/hyperboloid.py` → `src/hyperbolix_jax/manifolds/hyperboloid.py`
+- `src/manifolds/poincare.py` → `src/hyperbolix_jax/manifolds/poincare.py`
+- `src/utils/math_utils.py` → `src/hyperbolix_jax/utils/math_utils.py`
 
-## Realism & Risks
-- **Realistic first milestone**: Phases 0–6 (manifolds + optimizers + performance validation) within 2–3 sprints, given the 4,500 LOC scope
-- **Critical dependencies**: Phase 1 must complete before any other work can proceed (package discovery blocking imports)
-- **Complexity factors**: PyTorch-specific features (torch.jit.script, custom autograd) may require significant JAX equivalents
-- **Performance risks**: JAX compilation overhead may initially degrade performance; requires systematic optimization
-- **Numerical stability**: Watch for dtype discrepancies (JAX default float32), epsilon handling differences, and in‑place mutation patterns that must be rewritten functionally
-- **Integration complexity**: Dual-backend testing and weight migration tools add significant overhead but are essential for production deployment
+Migration approach:
+- Replace `torch.tensor` → `jnp.array`, `torch.nn.Parameter` → function arguments
+- Replace `torch.jit.script` decorators with `@jax.jit` (add `static_argnums` as needed)
+- Remove in-place ops (`.copy_()`, `.clamp_()`) → pure functional versions
+- Add `@jax.jit` and `jax.vmap` decorators after correctness is verified
+
+Testing:
+- Port existing pytest tests, run side-by-side comparisons
+- Focus on: distance computation, exp/log maps, gradient flow
+- Use `jnp.allclose` with reasonable tolerances (1e-6 for float32, 1e-12 for float64)
+
+### Phase 2: Optimizers (1 day)
+**Port Riemannian optimizers** - state management as pytrees.
+
+Files to port:
+- `src/optim/riemannian_sgd.py` → `src/hyperbolix_jax/optim/rsgd.py`
+- `src/optim/riemannian_adam.py` → `src/hyperbolix_jax/optim/radam.py`
+
+Migration approach:
+- Use Optax's state management patterns (pytree dictionaries)
+- Momentum/Adam state becomes nested dicts: `{'momentum': ..., 'step': ...}`
+- Implement `init(params)` and `update(grads, state, params)` functions
+- Support both exponential map and retraction-based updates
+
+Testing:
+- Simple optimization loops on toy problems
+- Verify state persistence and gradient updates match PyTorch within tolerance
+
+### Phase 3: Layers & Utils (1-2 days)
+**Port neural network layers and supporting utilities**.
+
+Files to port:
+- `src/nn_layers/*.py` → `src/hyperbolix_jax/nn_layers/` (using Flax NNX)
+- `src/utils/horo_pca.py` → `src/hyperbolix_jax/utils/horo_pca.py`
+- `src/utils/vis_utils.py` → keep as-is (visualization works with both)
+
+Migration approach:
+- Use Flax NNX for stateful layers (simpler than Linen for PyTorch users)
+- Basic pattern: `class HypLinear(nnx.Module)` with `__init__` and `__call__`
+- Port high-value layers first (linear layers, HNN), defer RL variants if complex
+
+Testing:
+- Forward pass tests with known inputs/outputs
+- Gradient checks using `jax.grad`
+- Small training loops to verify end-to-end functionality
+
+## Implementation Notes
+
+**Manifolds**:
+- Keep class-based API similar to PyTorch version
+- Add dtype/tolerance as constructor args (simpler than elaborate config systems)
+- Use `@partial(jax.jit, static_argnums=(...))` for args like `keepdim`, `axis`
+
+**Optimizers**:
+- Follow Optax conventions: `(params, opt_state) → (updates, new_opt_state)`
+- Provide thin wrappers if you want PyTorch-style `.step()` API
+
+**Layers**:
+- Flax NNX is Pythonic and close to PyTorch's `nn.Module`
+- Use `nnx.Param` for trainable weights, standard JAX arrays for buffers
+
+**Testing**:
+- Don't build elaborate fixture infrastructure - just test inline
+- Use `JAX_ENABLE_X64=1` env var when you need float64 precision
+- Parametrize tests over dtypes if needed: `@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])`
+
+## Timeline
+- **Day 1-2**: Phase 1 (manifolds working with tests passing)
+- **Day 3**: Phase 2 (optimizers functional)
+- **Day 4-5**: Phase 3 (layers ported, end-to-end validation)
+
+Total: **~1 focused week** for a complete port with testing.
+
+## What We're NOT Doing
+- ❌ Elaborate dual-backend testing infrastructure
+- ❌ Separate "performance validation" phases with benchmarking frameworks
+- ❌ Weight conversion utilities (just retrain if needed - it's hyperbolic geometry research code)
+- ❌ Complex config management systems (simple constructor args suffice)
+- ❌ Separate `*_ops.py` modules (keep operations with their classes)
