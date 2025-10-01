@@ -6,16 +6,15 @@ Mirrors the PyTorch test suite structure but adapted for functional API.
 Fixtures are defined in tests/jax/conftest.py and automatically loaded.
 """
 
-import numpy as np
-import pytest
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 
 # Enable float64 support in JAX
 jax.config.update("jax_enable_x64", True)
 
 import hyperbolix_jax as hj
-
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -49,11 +48,7 @@ def test_proj(manifold_and_c, uniform_points: jnp.ndarray) -> None:
         assert jnp.allclose(projected, uniform_points, rtol=1e-5, atol=1e-5)
 
 
-def test_addition(
-    manifold_and_c,
-    tolerance: tuple[float, float],
-    uniform_points: jnp.ndarray
-) -> None:
+def test_addition(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
     """Test addition/Möbius addition operation."""
     manifold, c = manifold_and_c
 
@@ -86,10 +81,7 @@ def test_addition(
 
 
 def test_scalar_mul(
-    manifold_and_c,
-    tolerance: tuple[float, float],
-    uniform_points: jnp.ndarray,
-    rng: np.random.Generator
+    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
     """Test scalar multiplication operation."""
     manifold, c = manifold_and_c
@@ -117,11 +109,7 @@ def test_scalar_mul(
     assert manifold.is_in_manifold(result1, c=c, axis=-1)
 
 
-def test_dist_properties(
-    manifold_and_c,
-    tolerance: tuple[float, float],
-    uniform_points: jnp.ndarray
-) -> None:
+def test_dist_properties(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
     """Test distance function properties."""
     manifold, c = manifold_and_c
     atol, rtol = tolerance
@@ -146,11 +134,7 @@ def test_dist_properties(
     assert jnp.all(d_xz <= d_xy + d_yz + atol)
 
 
-def test_dist_0(
-    manifold_and_c,
-    tolerance: tuple[float, float],
-    uniform_points: jnp.ndarray
-) -> None:
+def test_dist_0(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
     """Test distance from origin."""
     manifold, c = manifold_and_c
     atol, rtol = tolerance
@@ -169,11 +153,7 @@ def test_dist_0(
     assert jnp.allclose(d1, d2, atol=atol, rtol=rtol)
 
 
-def test_expmap_logmap_basic(
-    manifold_and_c,
-    tolerance: tuple[float, float],
-    uniform_points: jnp.ndarray
-) -> None:
+def test_expmap_logmap_basic(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
     """Test that expmap and logmap produce valid outputs.
 
     Note: We don't test the inverse property expmap(logmap(y, x), x) ≈ y for
@@ -200,11 +180,7 @@ def test_expmap_logmap_basic(
     assert manifold.is_in_manifold(y_mapped, c=c, axis=-1)
 
 
-def test_expmap_0_logmap_0_inverse(
-    manifold_and_c,
-    tolerance: tuple[float, float],
-    uniform_points: jnp.ndarray
-) -> None:
+def test_expmap_0_logmap_0_inverse(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
     """Test that exp_0 and log_0 are inverse operations."""
     manifold, c = manifold_and_c
     atol, rtol = tolerance
@@ -219,10 +195,7 @@ def test_expmap_0_logmap_0_inverse(
 
 
 def test_ptransp_preserves_norm(
-    manifold_and_c,
-    tolerance: tuple[float, float],
-    uniform_points: jnp.ndarray,
-    rng: np.random.Generator
+    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
     """Test that parallel transport preserves tangent vector norms."""
     manifold, c = manifold_and_c
@@ -231,10 +204,7 @@ def test_ptransp_preserves_norm(
     x, y = _split(uniform_points, 2)
 
     # Create tangent vectors at x
-    v = jnp.asarray(
-        rng.normal(0.0, 0.1, size=x.shape),
-        dtype=uniform_points.dtype
-    )
+    v = jnp.asarray(rng.normal(0.0, 0.1, size=x.shape), dtype=uniform_points.dtype)
 
     # Project onto tangent space at x (necessary for Hyperboloid)
     v = manifold.tangent_proj(v, x, c=c)
@@ -252,19 +222,12 @@ def test_ptransp_preserves_norm(
     assert jnp.allclose(norm_at_x, norm_at_y, atol=atol, rtol=rtol)
 
 
-def test_tangent_inner_positive_definite(
-    manifold_and_c,
-    uniform_points: jnp.ndarray,
-    rng: np.random.Generator
-) -> None:
+def test_tangent_inner_positive_definite(manifold_and_c, uniform_points: jnp.ndarray, rng: np.random.Generator) -> None:
     """Test that tangent inner product is positive definite."""
     manifold, c = manifold_and_c
 
     # Create non-zero tangent vectors
-    v = jnp.asarray(
-        rng.normal(0.0, 1.0, size=uniform_points.shape),
-        dtype=uniform_points.dtype
-    )
+    v = jnp.asarray(rng.normal(0.0, 1.0, size=uniform_points.shape), dtype=uniform_points.dtype)
 
     # Project onto tangent space (necessary for Hyperboloid)
     v = manifold.tangent_proj(v, uniform_points, c=c)
@@ -276,24 +239,15 @@ def test_tangent_inner_positive_definite(
 
 
 def test_tangent_inner_symmetric(
-    manifold_and_c,
-    tolerance: tuple[float, float],
-    uniform_points: jnp.ndarray,
-    rng: np.random.Generator
+    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
     """Test that tangent inner product is symmetric."""
     manifold, c = manifold_and_c
     atol, rtol = tolerance
 
     # Create two tangent vectors
-    u = jnp.asarray(
-        rng.normal(0.0, 1.0, size=uniform_points.shape),
-        dtype=uniform_points.dtype
-    )
-    v = jnp.asarray(
-        rng.normal(0.0, 1.0, size=uniform_points.shape),
-        dtype=uniform_points.dtype
-    )
+    u = jnp.asarray(rng.normal(0.0, 1.0, size=uniform_points.shape), dtype=uniform_points.dtype)
+    v = jnp.asarray(rng.normal(0.0, 1.0, size=uniform_points.shape), dtype=uniform_points.dtype)
 
     # Project onto tangent space (necessary for Hyperboloid)
     u = manifold.tangent_proj(u, uniform_points, c=c)
@@ -305,20 +259,14 @@ def test_tangent_inner_symmetric(
 
     assert jnp.allclose(inner_uv, inner_vu, atol=atol, rtol=rtol)
 
+
 # TODO: Check that this is correct
-def test_egrad2rgrad_on_manifold(
-    manifold_and_c,
-    uniform_points: jnp.ndarray,
-    rng: np.random.Generator
-) -> None:
+def test_egrad2rgrad_on_manifold(manifold_and_c, uniform_points: jnp.ndarray, rng: np.random.Generator) -> None:
     """Test that Riemannian gradient points lie in tangent space."""
     manifold, c = manifold_and_c
 
     # Create Euclidean gradients
-    egrad = jnp.asarray(
-        rng.normal(0.0, 1.0, size=uniform_points.shape),
-        dtype=uniform_points.dtype
-    )
+    egrad = jnp.asarray(rng.normal(0.0, 1.0, size=uniform_points.shape), dtype=uniform_points.dtype)
 
     # Convert to Riemannian gradient
     rgrad = manifold.egrad2rgrad(egrad, uniform_points, c=c)
@@ -342,4 +290,3 @@ def test_is_in_manifold(manifold_and_c, uniform_points: jnp.ndarray) -> None:
         # Points not on hyperboloid surface should not be on manifold
         outside = jnp.ones_like(uniform_points[0:1]) * 10.0
         assert not manifold.is_in_manifold(outside, c=c, axis=-1)
-

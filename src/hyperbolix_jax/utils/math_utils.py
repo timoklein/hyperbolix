@@ -3,8 +3,8 @@
 Direct JAX port of PyTorch math_utils.py with type annotations using jaxtyping.
 """
 
-from jaxtyping import Array, Float
 import jax.numpy as jnp
+from jaxtyping import Array, Float
 
 
 def _get_array_eps(x: Float[Array, "..."]) -> float:
@@ -17,11 +17,7 @@ def _get_array_eps(x: Float[Array, "..."]) -> float:
         raise RuntimeError(f"Expected x to be floating-point, got {x.dtype}")
 
 
-def smooth_clamp_min(
-    x: Float[Array, "..."],
-    min_value: float,
-    smoothing_factor: float = 50.0
-) -> Float[Array, "..."]:
+def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
     """Smoothly clamp array values to a minimum using softplus.
 
     Args:
@@ -40,11 +36,7 @@ def smooth_clamp_min(
     return jnp.where(x < shift, x_clamped, x)
 
 
-def smooth_clamp_max(
-    x: Float[Array, "..."],
-    max_value: float,
-    smoothing_factor: float = 50.0
-) -> Float[Array, "..."]:
+def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
     """Smoothly clamp array values to a maximum using softplus.
 
     Args:
@@ -63,10 +55,7 @@ def smooth_clamp_max(
 
 
 def smooth_clamp(
-    x: Float[Array, "..."],
-    min_value: float,
-    max_value: float,
-    smoothing_factor: float = 50.0
+    x: Float[Array, "..."], min_value: float, max_value: float, smoothing_factor: float = 50.0
 ) -> Float[Array, "..."]:
     """Smoothly clamp array values to a range [min_value, max_value].
 

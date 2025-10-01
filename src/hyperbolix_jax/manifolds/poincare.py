@@ -4,10 +4,10 @@ Direct JAX port of PyTorch poincare.py with pure functions.
 Convention: ||x||^2 < 1/c with c > 0 and sectional curvature -c.
 """
 
-from jaxtyping import Array, Float
 import jax.numpy as jnp
-from ..utils.math_utils import acosh, atanh
+from jaxtyping import Array, Float
 
+from ..utils.math_utils import acosh, atanh
 
 # Default numerical parameters
 MIN_NORM = 1e-15
@@ -25,11 +25,7 @@ def _get_max_norm_eps(x: Float[Array, "..."]) -> float:
         return MAX_NORM_EPS_F32
 
 
-def _conformal_factor(
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def _conformal_factor(x: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
     """Compute conformal factor λ(x) = 2 / (1 - c||x||²).
 
     Args:
@@ -43,21 +39,14 @@ def _conformal_factor(
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    x2 = jnp.sum(x ** 2, axis=axis, keepdims=True)
+    x2 = jnp.sum(x**2, axis=axis, keepdims=True)
     max_norm_eps = _get_max_norm_eps(x)
-    denom = jnp.maximum(
-        1.0 - c * x2,
-        2 * jnp.sqrt(c) * max_norm_eps - c * max_norm_eps ** 2
-    )
+    denom = jnp.maximum(1.0 - c * x2, 2 * jnp.sqrt(c) * max_norm_eps - c * max_norm_eps**2)
     return 2.0 / denom
 
 
 def _gyration(
-    x: Float[Array, "..."],
-    y: Float[Array, "..."],
-    z: Float[Array, "..."],
-    c: float,
-    axis: int = -1
+    x: Float[Array, "..."], y: Float[Array, "..."], z: Float[Array, "..."], c: float, axis: int = -1
 ) -> Float[Array, "..."]:
     """Compute gyration gyr[x,y]z to restore commutativity.
 
@@ -74,9 +63,9 @@ def _gyration(
     References:
         Ungar. "A gyrovector space approach to hyperbolic geometry." 2022.
     """
-    c2 = c ** 2
-    x2 = jnp.sum(x ** 2, axis=axis, keepdims=True)
-    y2 = jnp.sum(y ** 2, axis=axis, keepdims=True)
+    c2 = c**2
+    x2 = jnp.sum(x**2, axis=axis, keepdims=True)
+    y2 = jnp.sum(y**2, axis=axis, keepdims=True)
     xy = jnp.sum(x * y, axis=axis, keepdims=True)
     xz = jnp.sum(x * z, axis=axis, keepdims=True)
     yz = jnp.sum(y * z, axis=axis, keepdims=True)
@@ -89,11 +78,7 @@ def _gyration(
     return z + num / denom
 
 
-def proj(
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def proj(x: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
     """Project point(s) onto Poincaré ball by clipping norm.
 
     Args:
@@ -112,11 +97,7 @@ def proj(
 
 
 def addition(
-    x: Float[Array, "..."],
-    y: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    x: Float[Array, "..."], y: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Möbius gyrovector addition x ⊕ y.
 
@@ -135,12 +116,12 @@ def addition(
     References:
         Ungar. "A gyrovector space approach to hyperbolic geometry." 2022.
     """
-    x2 = jnp.sum(x ** 2, axis=axis, keepdims=True)
-    y2 = jnp.sum(y ** 2, axis=axis, keepdims=True)
+    x2 = jnp.sum(x**2, axis=axis, keepdims=True)
+    y2 = jnp.sum(y**2, axis=axis, keepdims=True)
     xy = jnp.sum(x * y, axis=axis, keepdims=True)
 
     num = (1 + 2 * c * xy + c * y2) * x + (1 - c * x2) * y
-    denom = jnp.maximum(1 + 2 * c * xy + c ** 2 * x2 * y2, MIN_NORM)
+    denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, MIN_NORM)
     res = num / denom
 
     if backproject:
@@ -149,11 +130,7 @@ def addition(
 
 
 def scalar_mul(
-    r: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    r: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Scalar multiplication r ⊗ x on Poincaré ball.
 
@@ -185,7 +162,7 @@ def dist(
     c: float,
     axis: int = -1,
     keepdim: bool = True,
-    version: str = "mobius_direct"
+    version: str = "mobius_direct",
 ) -> Float[Array, "..."]:
     """Compute geodesic distance between Poincaré ball points.
 
@@ -207,10 +184,10 @@ def dist(
     if version in ["mobius_direct", "default"]:
         # Symmetric Möbius distance
         sqrt_c = jnp.sqrt(c)
-        x2y2 = jnp.sum(x ** 2, axis=axis, keepdims=True) * jnp.sum(y ** 2, axis=axis, keepdims=True)
+        x2y2 = jnp.sum(x**2, axis=axis, keepdims=True) * jnp.sum(y**2, axis=axis, keepdims=True)
         xy = jnp.sum(x * y, axis=axis, keepdims=True)
         num = jnp.linalg.norm(y - x, axis=axis, keepdims=True)
-        denom = jnp.sqrt(jnp.maximum(1 - 2 * c * xy + c ** 2 * x2y2, MIN_NORM))
+        denom = jnp.sqrt(jnp.maximum(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
         xysum_norm = num / denom
         dist_c = atanh(sqrt_c * xysum_norm)
         res = 2 * dist_c / sqrt_c
@@ -222,8 +199,8 @@ def dist(
         res = 2 * dist_c / sqrt_c
     elif version == "metric_tensor":
         # Metric tensor induced distance
-        x_sqnorm = jnp.sum(x ** 2, axis=axis, keepdims=True)
-        y_sqnorm = jnp.sum(y ** 2, axis=axis, keepdims=True)
+        x_sqnorm = jnp.sum(x**2, axis=axis, keepdims=True)
+        y_sqnorm = jnp.sum(y**2, axis=axis, keepdims=True)
         xy_diff_sqnorm = jnp.sum((x - y) ** 2, axis=axis, keepdims=True)
         arg = 1 + 2 * c * xy_diff_sqnorm / ((1 - c * x_sqnorm) * (1 - c * y_sqnorm))
         condition = arg < 1 + MIN_NORM
@@ -244,11 +221,7 @@ def dist(
 
 
 def dist_0(
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    keepdim: bool = True,
-    version: str = "mobius_direct"
+    x: Float[Array, "..."], c: float, axis: int = -1, keepdim: bool = True, version: str = "mobius_direct"
 ) -> Float[Array, "..."]:
     """Compute geodesic distance from Poincaré ball origin.
 
@@ -270,7 +243,7 @@ def dist_0(
         dist_c = atanh(sqrt_c * jnp.linalg.norm(x, axis=axis, keepdims=True))
         res = 2 * dist_c / sqrt_c
     elif version == "metric_tensor":
-        x_sqnorm = jnp.sum(x ** 2, axis=axis, keepdims=True)
+        x_sqnorm = jnp.sum(x**2, axis=axis, keepdims=True)
         arg = 1 + 2 * c * x_sqnorm / (1 - c * x_sqnorm)
         condition = arg < 1 + MIN_NORM
         res = jnp.where(condition, jnp.zeros_like(arg), acosh(arg) / jnp.sqrt(c))
@@ -286,11 +259,7 @@ def dist_0(
 
 
 def expmap(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Exponential map: map tangent vector v at point x to manifold.
 
@@ -318,12 +287,7 @@ def expmap(
     return res
 
 
-def expmap_0(
-    v: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
-) -> Float[Array, "..."]:
+def expmap_0(v: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True) -> Float[Array, "..."]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     Args:
@@ -348,11 +312,7 @@ def expmap_0(
 
 
 def retraction(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Retraction: first-order approximation of exponential map.
 
@@ -376,11 +336,7 @@ def retraction(
 
 
 def logmap(
-    y: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    y: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Logarithmic map: map point y to tangent space at point x.
 
@@ -398,10 +354,10 @@ def logmap(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sub = addition(-x, y, c, axis=axis)
-    x2y2 = jnp.sum(x ** 2, axis=axis, keepdims=True) * jnp.sum(y ** 2, axis=axis, keepdims=True)
+    x2y2 = jnp.sum(x**2, axis=axis, keepdims=True) * jnp.sum(y**2, axis=axis, keepdims=True)
     xy = jnp.sum(x * y, axis=axis, keepdims=True)
     num = jnp.linalg.norm(y - x, axis=axis, keepdims=True)
-    denom = jnp.sqrt(jnp.maximum(1 - 2 * c * xy + c ** 2 * x2y2, MIN_NORM))
+    denom = jnp.sqrt(jnp.maximum(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
     sub_norm = num / denom
     c_norm_prod = jnp.maximum(jnp.sqrt(c) * sub_norm, MIN_NORM)
     lambda_x = _conformal_factor(x, c, axis=axis)
@@ -409,12 +365,7 @@ def logmap(
     return res
 
 
-def logmap_0(
-    y: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
-) -> Float[Array, "..."]:
+def logmap_0(y: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True) -> Float[Array, "..."]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     Args:
@@ -436,12 +387,7 @@ def logmap_0(
 
 
 def ptransp(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    y: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], y: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Parallel transport tangent vector v from point x to point y.
 
@@ -465,11 +411,7 @@ def ptransp(
 
 
 def ptransp_0(
-    v: Float[Array, "..."],
-    y: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], y: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Parallel transport tangent vector v from origin to point y.
 
@@ -491,12 +433,7 @@ def ptransp_0(
 
 
 def tangent_inner(
-    u: Float[Array, "..."],
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    keepdim: bool = True
+    u: Float[Array, "..."], v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, keepdim: bool = True
 ) -> Float[Array, "..."]:
     """Compute inner product of tangent vectors u and v at point x.
 
@@ -515,16 +452,12 @@ def tangent_inner(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_x = _conformal_factor(x, c, axis=axis)
-    res = lambda_x ** 2 * jnp.sum(u * v, axis=axis, keepdims=keepdim)
+    res = lambda_x**2 * jnp.sum(u * v, axis=axis, keepdims=keepdim)
     return res
 
 
 def tangent_norm(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    keepdim: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, keepdim: bool = True
 ) -> Float[Array, "..."]:
     """Compute norm of tangent vector v at point x.
 
@@ -548,12 +481,7 @@ def tangent_norm(
     return res
 
 
-def egrad2rgrad(
-    grad: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def egrad2rgrad(grad: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
     """Convert Euclidean gradient to Riemannian gradient.
 
     Args:
@@ -569,15 +497,10 @@ def egrad2rgrad(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_x = _conformal_factor(x, c, axis=axis)
-    return grad / (lambda_x ** 2)
+    return grad / (lambda_x**2)
 
 
-def tangent_proj(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def tangent_proj(v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
     """Project vector v onto tangent space at point x.
 
     In Poincaré ball, tangent space equals ambient space (identity).
@@ -594,12 +517,7 @@ def tangent_proj(
     return v
 
 
-def is_in_manifold(
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    atol: float = 1e-5
-) -> bool:
+def is_in_manifold(x: Float[Array, "..."], c: float, axis: int = -1, atol: float = 1e-5) -> bool:
     """Check if point(s) x lie in Poincaré ball.
 
     Args:
@@ -615,16 +533,11 @@ def is_in_manifold(
         Matches PyTorch implementation which uses strict inequality with no tolerance.
         The projection function already ensures points are strictly inside the ball.
     """
-    x_sqnorm = jnp.sum(x ** 2, axis=axis)
+    x_sqnorm = jnp.sum(x**2, axis=axis)
     return bool(jnp.all(x_sqnorm < 1.0 / c))
 
 
-def is_in_tangent_space(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1
-) -> bool:
+def is_in_tangent_space(v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1) -> bool:
     """Check if vector(s) v lie in tangent space at point x.
 
     In Poincaré ball, all vectors are valid tangent vectors.

@@ -1,8 +1,8 @@
+from typing import Any, Dict, Iterable, Union
+
 import torch
 
-from typing import Any, Dict, Iterable, Union
-from ..manifolds import ManifoldParameter, Euclidean
-
+from ..manifolds import Euclidean, ManifoldParameter
 
 __all__ = ["RiemannianSGD"]
 
@@ -41,6 +41,7 @@ class RiemannianSGD(torch.optim.Optimizer):
     Max Kochurov, Rasul Karimov and Serge Kozlukov. "Geoopt: Riemannian Optimization in PyTorch."
         arXiv (2020).
     """
+
     def __init__(
         self,
         params: Union[Iterable[torch.Tensor], Iterable[Dict[str, Any]]],
@@ -51,7 +52,7 @@ class RiemannianSGD(torch.optim.Optimizer):
         nesterov: bool = False,
         expmap_update: bool = False,
         backproject: bool = True,
-        hyperbolic_axis: int = -1
+        hyperbolic_axis: int = -1,
     ):
         if lr < 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
@@ -118,10 +119,14 @@ class RiemannianSGD(torch.optim.Optimizer):
 
                     if self.expmap_update:
                         # Exact update on the manifold using the exponential map
-                        new_point = manifold.expmap(-learning_rate * grad, point, axis=self.hyperbolic_axis, backproject=self.backproject)
+                        new_point = manifold.expmap(
+                            -learning_rate * grad, point, axis=self.hyperbolic_axis, backproject=self.backproject
+                        )
                     else:
                         # First-order approximation of the update using the retraction mapping
-                        new_point = manifold.retraction(-learning_rate * grad, point, axis=self.hyperbolic_axis, backproject=self.backproject)
+                        new_point = manifold.retraction(
+                            -learning_rate * grad, point, axis=self.hyperbolic_axis, backproject=self.backproject
+                        )
 
                     if momentum > 0:
                         # Parallel transport the momentum to the new point

@@ -1,8 +1,9 @@
+from typing import List
+
 import torch
 
-from typing import List
-from .manifold import Manifold
 from ..utils.math_utils import acosh, atanh, tanh
+from .manifold import Manifold
 
 
 class PoincareBall(Manifold):
@@ -10,9 +11,10 @@ class PoincareBall(Manifold):
     PoincareBall manifold class.
     Convention: x0^2 + x1^2 + ... + xd^2 < 1/c  with c > 0 and sectional curvature -c.
     """
+
     def __init__(
         self,
-        c: torch.Tensor = torch.tensor([1.]),
+        c: torch.Tensor = torch.tensor([1.0]),
         trainable_c: bool = False,
         dtype: str | torch.dtype = "float32",
     ):
@@ -32,8 +34,10 @@ class PoincareBall(Manifold):
             raise ValueError(f"Unsupported dtype: {dtype}. Supported dtypes are float32 and float64.")
 
         if torch.finfo(c.dtype).eps < torch.finfo(self.dtype).eps:
-            print(f"Warning: self.c.dtype is {c.dtype}, but self.dtype is {self.dtype}. "
-                  f"All manifold operations will be performed in precision {c.dtype}!")
+            print(
+                f"Warning: self.c.dtype is {c.dtype}, but self.dtype is {self.dtype}. "
+                f"All manifold operations will be performed in precision {c.dtype}!"
+            )
             self.dtype = c.dtype
 
     def _2manifold_dtype(self, xs: List[torch.Tensor]) -> List[torch.Tensor]:
@@ -55,7 +59,7 @@ class PoincareBall(Manifold):
             res.append(x.to(self.dtype))
         return res
 
-    def _lambda(self, x: torch.Tensor, axis: int=-1) -> torch.Tensor:
+    def _lambda(self, x: torch.Tensor, axis: int = -1) -> torch.Tensor:
         """
         Compute the conformal factor(s) at the PoincareBall point(s) x.
 
@@ -80,13 +84,13 @@ class PoincareBall(Manifold):
         ---------
         Roughly bounded from above by 1/(c.sqrt()*self.max_enorm_eps)
         """
-        x, = self._2manifold_dtype([x])
+        (x,) = self._2manifold_dtype([x])
         x2 = x.pow(2).sum(dim=axis, keepdim=True)
-        denom = (1.0 - self.c * x2).clamp_min(2 * self.c.sqrt() * self.max_enorm_eps - self.c * self.max_enorm_eps ** 2)
+        denom = (1.0 - self.c * x2).clamp_min(2 * self.c.sqrt() * self.max_enorm_eps - self.c * self.max_enorm_eps**2)
         res = 2 / denom
         return res
 
-    def _gyration(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor, axis: int=-1) -> torch.Tensor:
+    def _gyration(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor, axis: int = -1) -> torch.Tensor:
         """
         Compute the gyration gyr[x,y]z of PoincareBall points x, y and z.
         [Operator to restore commutativity and associativity of mobius addition/scalar_mul]
@@ -125,7 +129,7 @@ class PoincareBall(Manifold):
         res = z + num / denom
         return res
 
-    def addition(self, x: torch.Tensor, y: torch.Tensor, axis: int=-1, backproject: bool=True) -> torch.Tensor:
+    def addition(self, x: torch.Tensor, y: torch.Tensor, axis: int = -1, backproject: bool = True) -> torch.Tensor:
         """
         Add PoincareBall point(s) y to PoincareBall point(s) x using mobius gyrovector addition.
         Non-commutative and non-associative!
@@ -161,7 +165,7 @@ class PoincareBall(Manifold):
             res = self.proj(res, axis=axis)
         return res
 
-    def scalar_mul(self, r: torch.Tensor, x: torch.Tensor, axis: int=-1, backproject: bool=True) -> torch.Tensor:
+    def scalar_mul(self, r: torch.Tensor, x: torch.Tensor, axis: int = -1, backproject: bool = True) -> torch.Tensor:
         """
         Multiply PoincareBall point(s) x with scalar(s) r.
 
@@ -199,8 +203,9 @@ class PoincareBall(Manifold):
             res = self.proj(res, axis=axis)
         return res
 
-    def dist(self, x: torch.Tensor, y: torch.Tensor, axis: int=-1,
-             version: str="mobius_direct", backproject: bool=True) -> torch.Tensor:
+    def dist(
+        self, x: torch.Tensor, y: torch.Tensor, axis: int = -1, version: str = "mobius_direct", backproject: bool = True
+    ) -> torch.Tensor:
         """
         Compute the geodesic distance(s) between PoincareBall point(s) x and y.
 
@@ -260,14 +265,14 @@ class PoincareBall(Manifold):
         elif version == "lorentzian_proxy":
             xy_prod = x * y
             xy0 = xy_prod.narrow(axis, 0, 1)
-            xy_rem = xy_prod.narrow(axis, 1, x.shape[axis]-1).sum(dim=axis, keepdim=True)
+            xy_rem = xy_prod.narrow(axis, 1, x.shape[axis] - 1).sum(dim=axis, keepdim=True)
             xy_mink = xy_rem - xy0
             res = -2 / self.c - 2 * xy_mink
         else:
             raise ValueError(f"Unknown version: {version}")
         return res
 
-    def dist_0(self, x: torch.Tensor, axis: int=-1, version: str="mobius_direct") -> torch.Tensor:
+    def dist_0(self, x: torch.Tensor, axis: int = -1, version: str = "mobius_direct") -> torch.Tensor:
         """
         Compute the geodesic distance(s) of PoincareBall point(s) x from/to the PoincareBall origin.
 
@@ -296,7 +301,7 @@ class PoincareBall(Manifold):
         Marc T. Law, et al. "Lorentzian distance learning for hyperbolic representations."
             International Conference on Machine Learning (2019).
         """
-        x, = self._2manifold_dtype([x])
+        (x,) = self._2manifold_dtype([x])
         if version in ["mobius_direct", "mobius", "default"]:
             # (Direct) Mobius distance
             sqrt_c = self.c.sqrt()
@@ -315,7 +320,7 @@ class PoincareBall(Manifold):
             raise ValueError(f"Unknown version: {version}")
         return res
 
-    def expmap(self, v: torch.Tensor, x: torch.Tensor, axis: int=-1, backproject: bool=True) -> torch.Tensor:
+    def expmap(self, v: torch.Tensor, x: torch.Tensor, axis: int = -1, backproject: bool = True) -> torch.Tensor:
         """
         Map tangent vector(s) v at PoincareBall point(s) x to the clipped PoincareBall.
         [Exponential map]
@@ -356,7 +361,7 @@ class PoincareBall(Manifold):
         res = self.addition(x, second_term, axis=axis, backproject=backproject)
         return res
 
-    def expmap_0(self, v: torch.Tensor, axis: int=-1, backproject: bool=True) -> torch.Tensor:
+    def expmap_0(self, v: torch.Tensor, axis: int = -1, backproject: bool = True) -> torch.Tensor:
         """
         Map tangent vector(s) v at the PoincareBall origin to the clipped PoincareBall.
         [Exponential map]
@@ -385,7 +390,7 @@ class PoincareBall(Manifold):
         expmap_0 converges towards the identity map as the norm of vector(s) v approaches zero,
         since tanh(z) ~ z for small z.
         """
-        v, = self._2manifold_dtype([v])
+        (v,) = self._2manifold_dtype([v])
         v_norm = v.norm(p=2, dim=axis, keepdim=True)
         c_norm_prod = (self.c.sqrt() * v_norm).clamp_min(self.min_enorm)
         res = tanh(c_norm_prod) / c_norm_prod * v
@@ -393,7 +398,7 @@ class PoincareBall(Manifold):
             res = self.proj(res, axis=axis)
         return res
 
-    def retraction(self, v: torch.Tensor, x: torch.Tensor, axis: int=-1, backproject: bool=True) -> torch.Tensor:
+    def retraction(self, v: torch.Tensor, x: torch.Tensor, axis: int = -1, backproject: bool = True) -> torch.Tensor:
         """
         First-order approximation of the exponential map for vector(s) v at PoincareBall point(s) x.
         [Retraction map]
@@ -425,7 +430,7 @@ class PoincareBall(Manifold):
             res = self.proj(res, axis=axis)
         return res
 
-    def logmap(self, y: torch.Tensor, x: torch.Tensor, axis: int=-1, backproject: bool=True) -> torch.Tensor:
+    def logmap(self, y: torch.Tensor, x: torch.Tensor, axis: int = -1, backproject: bool = True) -> torch.Tensor:
         """
         Map PoincareBall point(s) y to the tangent space(s) of PoincareBall point(s) x.
         [Logarithmic map]
@@ -469,7 +474,7 @@ class PoincareBall(Manifold):
         res = 2 * atanh(c_norm_prod) / (c_norm_prod * self._lambda(x, axis=axis)) * sub
         return res
 
-    def logmap_0(self, y: torch.Tensor, axis: int=-1, backproject: bool=True) -> torch.Tensor:
+    def logmap_0(self, y: torch.Tensor, axis: int = -1, backproject: bool = True) -> torch.Tensor:
         """
         Map PoincareBall point(s) y to the tangent space of the PoincareBall origin.
         [Logarithmic map]
@@ -499,13 +504,15 @@ class PoincareBall(Manifold):
         logmap_0 converges towards the identity map as the norm of vector(s) y approaches zero,
         since atanh(z) ~ z for small z.
         """
-        y, = self._2manifold_dtype([y])
+        (y,) = self._2manifold_dtype([y])
         y_norm = y.norm(p=2, dim=axis, keepdim=True)
         c_norm_prod = (self.c.sqrt() * y_norm).clamp_min(self.min_enorm)
         res = atanh(c_norm_prod) / c_norm_prod * y
         return res
 
-    def ptransp(self, v: torch.Tensor, x: torch.Tensor, y: torch.Tensor, axis: int=-1, backproject: bool=True) -> torch.Tensor:
+    def ptransp(
+        self, v: torch.Tensor, x: torch.Tensor, y: torch.Tensor, axis: int = -1, backproject: bool = True
+    ) -> torch.Tensor:
         """
         Parallel transport tangent vector(s) v from the tangent space(s) of
         PoincareBall point(s) x to the tangent space(s) of PoincareBall point(s) y.
@@ -544,7 +551,7 @@ class PoincareBall(Manifold):
         res = conformal_frac * self._gyration(y, -x, v, axis=axis)
         return res
 
-    def ptransp_0(self, v: torch.Tensor, y: torch.Tensor, axis: int=-1, backproject: bool=True) -> torch.Tensor:
+    def ptransp_0(self, v: torch.Tensor, y: torch.Tensor, axis: int = -1, backproject: bool = True) -> torch.Tensor:
         """
         Parallel transport tangent vector(s) v from the tangent space of the
         PoincareBall origin to the tangent space(s) of PoincareBall point(s) y.
@@ -580,7 +587,7 @@ class PoincareBall(Manifold):
         res = conformal_frac * v
         return res
 
-    def tangent_inner(self, u: torch.Tensor, v: torch.Tensor, x: torch.Tensor, axis: int=-1) -> torch.Tensor:
+    def tangent_inner(self, u: torch.Tensor, v: torch.Tensor, x: torch.Tensor, axis: int = -1) -> torch.Tensor:
         """
         Compute the inner product(s) between tangent vectors u and v of the tangent space(s)
         at PoincareBall point(s) x with respect to the Riemannian metric of the PoincareBall.
@@ -614,7 +621,7 @@ class PoincareBall(Manifold):
         res = (u * v).sum(dim=axis, keepdim=True) * self._lambda(x, axis=axis) ** 2
         return res
 
-    def tangent_norm(self, v: torch.Tensor, x: torch.Tensor, axis: int=-1) -> torch.Tensor:
+    def tangent_norm(self, v: torch.Tensor, x: torch.Tensor, axis: int = -1) -> torch.Tensor:
         """
         Compute the norm(s) of tangent vector(s) v of the tangent space(s) at PoincareBall
         point(s) x with respect to the Riemannian metric of the PoincareBall.
@@ -646,7 +653,7 @@ class PoincareBall(Manifold):
         res = self._lambda(x, axis=axis) * v.norm(p=2, dim=axis, keepdim=True)
         return res
 
-    def egrad2rgrad(self, grad: torch.Tensor, x: torch.Tensor, axis: int=-1) -> torch.Tensor:
+    def egrad2rgrad(self, grad: torch.Tensor, x: torch.Tensor, axis: int = -1) -> torch.Tensor:
         """
         Compute the Riemannian gradient(s) at PoincareBall point(s) x from the Euclidean gradient(s).
 
@@ -674,12 +681,12 @@ class PoincareBall(Manifold):
         self._lambda() is roughly bounded from above by 1/(c.sqrt()*self.max_enorm_eps)
         """
         # Compute the conformal factor in the manifold's precision and cast it to the gradient's precision
-        x, = self._2manifold_dtype([x])
+        (x,) = self._2manifold_dtype([x])
         conformal_scale = (self._lambda(x, axis=axis) ** 2).to(grad.dtype)
         res = grad / conformal_scale
         return res
 
-    def proj(self, x: torch.Tensor, axis: int=-1) -> torch.Tensor:
+    def proj(self, x: torch.Tensor, axis: int = -1) -> torch.Tensor:
         """
         Project point(s) x onto the clipped PoincareBall by restricting
         the Euclidean norm(s) to 1/c.sqrt()-self.max_enorm_eps.
@@ -710,7 +717,7 @@ class PoincareBall(Manifold):
         res = torch.where(x_norm > max_enorm, proj_x, x)
         return res
 
-    def tangent_proj(self, v: torch.Tensor, x: torch.Tensor, axis: int=-1):
+    def tangent_proj(self, v: torch.Tensor, x: torch.Tensor, axis: int = -1):
         """
         Project point(s) v onto the tangent space(s) at PoincareBall point(s) x.
 
@@ -729,11 +736,11 @@ class PoincareBall(Manifold):
         res : torch.Tensor (dtype=self.dtype)
             The projected tangent vector(s)
         """
-        v, = self._2manifold_dtype([v])
+        (v,) = self._2manifold_dtype([v])
         res = v
         return res
 
-    def is_in_manifold(self, x: torch.Tensor, axis: int=-1) -> bool:
+    def is_in_manifold(self, x: torch.Tensor, axis: int = -1) -> bool:
         """
         Check if point(s) x lie in the PoincareBall.
 
@@ -749,13 +756,13 @@ class PoincareBall(Manifold):
         res : bool
             True if all points x lie in the PoincareBall, False otherwise
         """
-        x, = self._2manifold_dtype([x])
+        (x,) = self._2manifold_dtype([x])
         x2 = x.pow(2).sum(dim=axis, keepdim=True)
         r2 = torch.ones_like(x2) / self.c
         res = torch.all(x2 < r2)
         return res
 
-    def is_in_tangent_space(self, v: torch.Tensor, x: torch.Tensor, axis: int=-1) -> bool:
+    def is_in_tangent_space(self, v: torch.Tensor, x: torch.Tensor, axis: int = -1) -> bool:
         """
         Check if vector(s) v belong to the tangent space(s) at PoincareBall point(s) x.
 
@@ -777,7 +784,7 @@ class PoincareBall(Manifold):
         res = True
         return res
 
-    def to_hyperboloid(self, x: torch.Tensor, axis: int=-1) -> torch.Tensor:
+    def to_hyperboloid(self, x: torch.Tensor, axis: int = -1) -> torch.Tensor:
         """
         Map PoincareBall point(s) x to the Hyperboloid.
 
@@ -793,9 +800,9 @@ class PoincareBall(Manifold):
         res : torch.Tensor (dtype=self.dtype)
             The Hyperboloid point(s)
         """
-        x, = self._2manifold_dtype([x])
+        (x,) = self._2manifold_dtype([x])
         cx2 = self.c * x.pow(2).sum(dim=axis, keepdim=True)
-        res0 = (1. + cx2) / self.c.sqrt()
+        res0 = (1.0 + cx2) / self.c.sqrt()
         res = torch.cat([res0, 2 * x], dim=axis)
-        res = res / (1. - cx2)
+        res = res / (1.0 - cx2)
         return res

@@ -4,10 +4,10 @@ Direct JAX port following the Lorentz/hyperboloid model.
 Convention: -x₀² + ||x_rest||² = -1/c with c > 0, x₀ > 0, and sectional curvature -c.
 """
 
-from jaxtyping import Array, Float
 import jax.numpy as jnp
-from ..utils.math_utils import acosh, atanh
+from jaxtyping import Array, Float
 
+from ..utils.math_utils import acosh, atanh
 
 # Default numerical parameters
 MIN_NORM = 1e-15
@@ -26,10 +26,7 @@ def _get_max_norm_eps(x: Float[Array, "..."]) -> float:
 
 
 def _minkowski_inner(
-    x: Float[Array, "..."],
-    y: Float[Array, "..."],
-    axis: int = -1,
-    keepdim: bool = True
+    x: Float[Array, "..."], y: Float[Array, "..."], axis: int = -1, keepdim: bool = True
 ) -> Float[Array, "..."]:
     """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩.
 
@@ -50,11 +47,7 @@ def _minkowski_inner(
     return result
 
 
-def proj(
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def proj(x: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
     """Project point(s) onto hyperboloid by adjusting temporal component.
 
     Args:
@@ -66,17 +59,13 @@ def proj(
         Projected point(s) with -x₀² + ||x_rest||² = -1/c, x₀ > 0
     """
     x_rest = x[..., 1:]
-    x_rest_sqnorm = jnp.sum(x_rest ** 2, axis=axis, keepdims=True)
+    x_rest_sqnorm = jnp.sum(x_rest**2, axis=axis, keepdims=True)
     x0_new = jnp.sqrt(jnp.maximum(1.0 / c + x_rest_sqnorm, MIN_NORM))
     return jnp.concatenate([x0_new, x_rest], axis=-1)
 
 
 def addition(
-    x: Float[Array, "..."],
-    y: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    x: Float[Array, "..."], y: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Einstein gyrovector addition on hyperboloid.
 
@@ -108,11 +97,7 @@ def addition(
 
 
 def scalar_mul(
-    r: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    r: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Scalar multiplication r ⊗ x on hyperboloid.
 
@@ -137,12 +122,7 @@ def scalar_mul(
 
 
 def dist(
-    x: Float[Array, "..."],
-    y: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    keepdim: bool = True,
-    version: str = "default"
+    x: Float[Array, "..."], y: Float[Array, "..."], c: float, axis: int = -1, keepdim: bool = True, version: str = "default"
 ) -> Float[Array, "..."]:
     """Compute geodesic distance between hyperboloid points.
 
@@ -174,11 +154,7 @@ def dist(
 
 
 def dist_0(
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    keepdim: bool = True,
-    version: str = "default"
+    x: Float[Array, "..."], c: float, axis: int = -1, keepdim: bool = True, version: str = "default"
 ) -> Float[Array, "..."]:
     """Compute geodesic distance from hyperboloid origin.
 
@@ -208,11 +184,7 @@ def dist_0(
 
 
 def expmap(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Exponential map: map tangent vector v at point x to manifold.
 
@@ -248,12 +220,7 @@ def expmap(
     return res
 
 
-def expmap_0(
-    v: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
-) -> Float[Array, "..."]:
+def expmap_0(v: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True) -> Float[Array, "..."]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     Args:
@@ -269,10 +236,7 @@ def expmap_0(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sqrt_c = jnp.sqrt(c)
-    v_norm = jnp.maximum(
-        jnp.sqrt(jnp.sum(v ** 2, axis=axis, keepdims=True)),
-        MIN_NORM
-    )
+    v_norm = jnp.maximum(jnp.sqrt(jnp.sum(v**2, axis=axis, keepdims=True)), MIN_NORM)
 
     # For hyperboloid with constraint -x₀² + ||x_rest||² = -1/c
     # exp_0([v]) = [cosh(√c||v||)/√c, sinh(√c||v||)/(√c||v||) * v]
@@ -287,11 +251,7 @@ def expmap_0(
 
 
 def retraction(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Retraction: first-order approximation of exponential map.
 
@@ -315,11 +275,7 @@ def retraction(
 
 
 def logmap(
-    y: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    y: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Logarithmic map: map point y to tangent space at point x.
 
@@ -357,12 +313,7 @@ def logmap(
     return res
 
 
-def logmap_0(
-    y: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
-) -> Float[Array, "..."]:
+def logmap_0(y: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True) -> Float[Array, "..."]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     Args:
@@ -389,10 +340,7 @@ def logmap_0(
 
     # From y_rest = sinh(√c||v||)/(√c||v||) * v, we get:
     # v = y_rest * (√c||v||)/sinh(√c||v||)
-    y_rest_norm = jnp.maximum(
-        jnp.sqrt(jnp.sum(y_rest ** 2, axis=axis, keepdims=True)),
-        MIN_NORM
-    )
+    y_rest_norm = jnp.maximum(jnp.sqrt(jnp.sum(y_rest**2, axis=axis, keepdims=True)), MIN_NORM)
 
     # ||v|| * √c = acosh(√c·y0)
     sqrt_c_v_norm = sqrt_c * v_norm
@@ -404,12 +352,7 @@ def logmap_0(
 
 
 def ptransp(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    y: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], y: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Parallel transport tangent vector v from point x to point y.
 
@@ -437,11 +380,7 @@ def ptransp(
 
 
 def ptransp_0(
-    v: Float[Array, "..."],
-    y: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], y: Float[Array, "..."], c: float, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Parallel transport tangent vector v from origin to point y.
 
@@ -465,10 +404,7 @@ def ptransp_0(
     # For computing Minkowski inner product with origin
     # ⟨origin, v⟩_L = -sqrt(1/c) * v[0]
 
-    v_norm = jnp.maximum(
-        jnp.sqrt(jnp.sum(v ** 2, axis=axis, keepdims=True)),
-        MIN_NORM
-    )
+    v_norm = jnp.maximum(jnp.sqrt(jnp.sum(v**2, axis=axis, keepdims=True)), MIN_NORM)
 
     # Simplified formula for transport from origin
     res = jnp.sinh(sqrt_c * v_norm) / v_norm * v
@@ -481,12 +417,7 @@ def ptransp_0(
 
 
 def tangent_inner(
-    u: Float[Array, "..."],
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    keepdim: bool = True
+    u: Float[Array, "..."], v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, keepdim: bool = True
 ) -> Float[Array, "..."]:
     """Compute inner product of tangent vectors u and v at point x.
 
@@ -507,11 +438,7 @@ def tangent_inner(
 
 
 def tangent_norm(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    keepdim: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, keepdim: bool = True
 ) -> Float[Array, "..."]:
     """Compute norm of tangent vector v at point x.
 
@@ -532,13 +459,9 @@ def tangent_norm(
         res = jnp.squeeze(res, axis=axis)
     return res
 
+
 # TODO: Check that this is correct
-def egrad2rgrad(
-    grad: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def egrad2rgrad(grad: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
     """Convert Euclidean gradient to Riemannian gradient.
 
     Projects Euclidean gradient onto tangent space.
@@ -574,12 +497,7 @@ def egrad2rgrad(
     return rgrad
 
 
-def tangent_proj(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def tangent_proj(v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
     """Project vector v onto tangent space at point x.
 
     Args:
@@ -604,12 +522,7 @@ def tangent_proj(
     return res
 
 
-def is_in_manifold(
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    atol: float = 1e-5
-) -> bool:
+def is_in_manifold(x: Float[Array, "..."], c: float, axis: int = -1, atol: float = 1e-5) -> bool:
     """Check if point(s) x lie on hyperboloid.
 
     Args:
@@ -623,10 +536,10 @@ def is_in_manifold(
     """
     x0 = x[..., 0]
     x_rest = x[..., 1:]
-    x_rest_sqnorm = jnp.sum(x_rest ** 2, axis=axis)
+    x_rest_sqnorm = jnp.sum(x_rest**2, axis=axis)
 
     # Check constraint: -x₀² + ||x_rest||² = -1/c
-    constraint = -x0 ** 2 + x_rest_sqnorm + 1.0 / c
+    constraint = -(x0**2) + x_rest_sqnorm + 1.0 / c
 
     # Check x₀ > 0
     valid_constraint = jnp.allclose(constraint, 0.0, atol=atol)
@@ -636,11 +549,7 @@ def is_in_manifold(
 
 
 def is_in_tangent_space(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float,
-    axis: int = -1,
-    atol: float | None = None
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1, atol: float | None = None
 ) -> bool:
     """Check if vector(s) v lie in tangent space at point x.
 

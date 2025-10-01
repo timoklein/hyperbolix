@@ -1,8 +1,8 @@
 import torch
 
-from .helpers import get_torch_dtype
 from ..manifolds import ManifoldParameter, PoincareBall
 from ..utils.math_utils import asinh
+from .helpers import get_torch_dtype
 
 
 class HyperbolicRegressionPoincareHDRL(torch.nn.Module):
@@ -41,6 +41,7 @@ class HyperbolicRegressionPoincareHDRL(torch.nn.Module):
     Max Kochurov, Rasul Karimov and Serge Kozlukov. "Geoopt: Riemannian Optimization in PyTorch."
         arXiv (2020).
     """
+
     def __init__(
         self,
         manifold: PoincareBall,
@@ -51,7 +52,7 @@ class HyperbolicRegressionPoincareHDRL(torch.nn.Module):
         params_dtype: str = "float32",
         requires_grad: bool = True,
         input_space: str = "manifold",
-        version: str = "standard"
+        version: str = "standard",
     ):
         super().__init__()
         assert isinstance(manifold, PoincareBall), "manifold must be an instance of PoincareBall"
@@ -64,8 +65,10 @@ class HyperbolicRegressionPoincareHDRL(torch.nn.Module):
 
         self.params_dtype = get_torch_dtype(params_dtype)
         if torch.finfo(self.params_dtype).eps < torch.finfo(manifold.dtype).eps:
-            print(f"Warning: HyperbolicLayer.params_dtype is {self.params_dtype}, but Manifold.dtype is {manifold.dtype}."
-                  f"All manifold operations will be performed in lower precision {manifold.dtype}!")
+            print(
+                f"Warning: HyperbolicLayer.params_dtype is {self.params_dtype}, but Manifold.dtype is {manifold.dtype}."
+                f"All manifold operations will be performed in lower precision {manifold.dtype}!"
+            )
 
         self.requires_grad = requires_grad
         weight = torch.randn((output_dim, input_dim), dtype=self.params_dtype)
@@ -119,14 +122,14 @@ class HyperbolicRegressionPoincareHDRL(torch.nn.Module):
         ######################################################
         x, a, p = self.manifold._2manifold_dtype([x, a, p])
         sqrt_c = self.manifold.c.sqrt()
-        diff = self.manifold.addition(-p, x, axis=-1, backproject=self.backproject) # (B, 1, out_dim, in_dim)
-        diff_norm2 = diff.pow(2).sum(dim=-1, keepdim=True).clamp_min(1e-15) # (B, 1, out_dim, 1)
-        sc_diff_a = (diff * a).sum(dim=-1, keepdim=True) # (B, 1, out_dim, 1)
-        a_norm = a.norm(dim=-1, keepdim=True, p=2) # (out_dim, 1)
-        num = 2.0 * sc_diff_a # (B, 1, out_dim, 1)
-        denom = torch.abs((1 - self.manifold.c * diff_norm2) * a_norm) + 1e-15 # (B, 1, out_dim, 1)
-        signed_distance = asinh(sqrt_c * num / denom) / sqrt_c # (B, 1, out_dim, 1)
-        res = signed_distance * a_norm # (B, 1, out_dim, 1)
+        diff = self.manifold.addition(-p, x, axis=-1, backproject=self.backproject)  # (B, 1, out_dim, in_dim)
+        diff_norm2 = diff.pow(2).sum(dim=-1, keepdim=True).clamp_min(1e-15)  # (B, 1, out_dim, 1)
+        sc_diff_a = (diff * a).sum(dim=-1, keepdim=True)  # (B, 1, out_dim, 1)
+        a_norm = a.norm(dim=-1, keepdim=True, p=2)  # (out_dim, 1)
+        num = 2.0 * sc_diff_a  # (B, 1, out_dim, 1)
+        denom = torch.abs((1 - self.manifold.c * diff_norm2) * a_norm) + 1e-15  # (B, 1, out_dim, 1)
+        signed_distance = asinh(sqrt_c * num / denom) / sqrt_c  # (B, 1, out_dim, 1)
+        res = signed_distance * a_norm  # (B, 1, out_dim, 1)
         return res
 
     def _compute_mlr(self, x: torch.Tensor, a: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
@@ -155,23 +158,25 @@ class HyperbolicRegressionPoincareHDRL(torch.nn.Module):
             arXiv (2020).
         """
         x, a, p = self.manifold._2manifold_dtype([x, a, p])
-        out_dim, in_dim = a.shape # out_dim, in_dim
-        input_batch_dims = x.size()[:-1] # B if x is of shape (B, in_dim)
-        input = x.view(-1, 1, in_dim) # (B, num_spaces=1, dimensions_per_space=in_dim)
-        input_p = input.unsqueeze(-3) # (B, 1, num_spaces=1, dim_per_space=in_dim)
+        out_dim, in_dim = a.shape  # out_dim, in_dim
+        input_batch_dims = x.size()[:-1]  # B if x is of shape (B, in_dim)
+        input = x.view(-1, 1, in_dim)  # (B, num_spaces=1, dimensions_per_space=in_dim)
+        input_p = input.unsqueeze(-3)  # (B, 1, num_spaces=1, dim_per_space=in_dim)
 
         if self.version == "forward":
             # Compute the scaled signed distance to the hyperplane. Scale=Euclidean norm instead of the tangent norm of a
-            signed_distance = self._dist2hyperplane(input_p, a, p) # (B, 1, out_dim, 1)
-            signed_distance = signed_distance #* self.logits_multiplier # logits_multiplier==1
+            signed_distance = self._dist2hyperplane(input_p, a, p)  # (B, 1, out_dim, 1)
+            signed_distance = signed_distance  # * self.logits_multiplier # logits_multiplier==1
         elif self.version == "forward_rs":
             # Parallel transport a to the tangent space at p and return the signed distance to the hyperplane (no scaling)
-            conformal_factor = 1 - self.manifold.c * p.pow(2).sum(dim=-1, keepdim=True) # (out_dim, 1) # not actually the conformal factor
-            signed_distance = self._dist2hyperplane(input_p, a*conformal_factor, p) # (B, 1, out_dim, 1)
-            signed_distance = signed_distance * 2 / conformal_factor.view(1, 1, out_dim, 1) # (B, 1, out_dim, 1)
+            conformal_factor = 1 - self.manifold.c * p.pow(2).sum(
+                dim=-1, keepdim=True
+            )  # (out_dim, 1) # not actually the conformal factor
+            signed_distance = self._dist2hyperplane(input_p, a * conformal_factor, p)  # (B, 1, out_dim, 1)
+            signed_distance = signed_distance * 2 / conformal_factor.view(1, 1, out_dim, 1)  # (B, 1, out_dim, 1)
 
-        signed_distance = signed_distance.sum(-1) # (B, 1, out_dim)
-        res = signed_distance.view(*input_batch_dims, out_dim) # (B, num_planes=out_dim)
+        signed_distance = signed_distance.sum(-1)  # (B, 1, out_dim)
+        res = signed_distance.view(*input_batch_dims, out_dim)  # (B, num_planes=out_dim)
         return res
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

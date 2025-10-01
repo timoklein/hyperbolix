@@ -1,8 +1,8 @@
 import torch
 
-from .helpers import compute_mlr_PoincarePP, get_torch_dtype
 from ..manifolds import ManifoldParameter, PoincareBall
 from ..utils.math_utils import sinh
+from .helpers import compute_mlr_PoincarePP, get_torch_dtype
 
 
 class HyperbolicLinearPoincare(torch.nn.Module):
@@ -37,6 +37,7 @@ class HyperbolicLinearPoincare(torch.nn.Module):
     Ganea Octavian, Gary Bécigneul, and Thomas Hofmann. "Hyperbolic neural networks."
         Advances in neural information processing systems 31 (2018).
     """
+
     def __init__(
         self,
         manifold: PoincareBall,
@@ -46,7 +47,7 @@ class HyperbolicLinearPoincare(torch.nn.Module):
         backproject: bool = True,
         params_dtype: str = "float32",
         requires_grad: bool = True,
-        input_space: str = "manifold"
+        input_space: str = "manifold",
     ):
         super().__init__()
         assert isinstance(manifold, PoincareBall), "manifold must be an instance of PoincareBall"
@@ -59,8 +60,10 @@ class HyperbolicLinearPoincare(torch.nn.Module):
 
         self.params_dtype = get_torch_dtype(params_dtype)
         if torch.finfo(self.params_dtype).eps < torch.finfo(manifold.dtype).eps:
-            print(f"Warning: HyperbolicLayer.params_dtype is {self.params_dtype}, but Manifold.dtype is {manifold.dtype}."
-                  f"All manifold operations will be performed in lower precision {manifold.dtype}!")
+            print(
+                f"Warning: HyperbolicLayer.params_dtype is {self.params_dtype}, but Manifold.dtype is {manifold.dtype}."
+                f"All manifold operations will be performed in lower precision {manifold.dtype}!"
+            )
 
         self.requires_grad = requires_grad
         weight = torch.randn((output_dim, input_dim), dtype=self.params_dtype)
@@ -82,12 +85,13 @@ class HyperbolicLinearPoincare(torch.nn.Module):
         if self.input_space == "manifold":
             x = self.manifold.logmap_0(x, axis=self.hyperbolic_axis)
         else:
-            x, = self.manifold._2manifold_dtype([x])
+            (x,) = self.manifold._2manifold_dtype([x])
 
-        x = (x.unsqueeze(-1) * self.weight.T.unsqueeze(0)).sum(dim=1) # (B, out_dim)
-        x = self.manifold.expmap_0(x, axis=self.hyperbolic_axis, backproject=self.backproject) # (B, out_dim)
-        res = self.manifold.addition(x, self.bias, axis=self.hyperbolic_axis, backproject=self.backproject) # (B, out_dim)
+        x = (x.unsqueeze(-1) * self.weight.T.unsqueeze(0)).sum(dim=1)  # (B, out_dim)
+        x = self.manifold.expmap_0(x, axis=self.hyperbolic_axis, backproject=self.backproject)  # (B, out_dim)
+        res = self.manifold.addition(x, self.bias, axis=self.hyperbolic_axis, backproject=self.backproject)  # (B, out_dim)
         return res
+
 
 class HyperbolicLinearPoincarePP(torch.nn.Module):
     """
@@ -124,6 +128,7 @@ class HyperbolicLinearPoincarePP(torch.nn.Module):
     Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++."
         arXiv preprint arXiv:2006.08210 (2020).
     """
+
     def __init__(
         self,
         manifold: PoincareBall,
@@ -135,7 +140,7 @@ class HyperbolicLinearPoincarePP(torch.nn.Module):
         requires_grad: bool = True,
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0
+        smoothing_factor: float = 50.0,
     ):
         super().__init__()
         assert isinstance(manifold, PoincareBall), "manifold must be an instance of PoincareBall"
@@ -148,8 +153,10 @@ class HyperbolicLinearPoincarePP(torch.nn.Module):
 
         self.params_dtype = get_torch_dtype(params_dtype)
         if torch.finfo(self.params_dtype).eps < torch.finfo(manifold.dtype).eps:
-            print(f"Warning: HyperbolicLayer.params_dtype is {self.params_dtype}, but Manifold.dtype is {manifold.dtype}."
-                  f"All manifold operations will be performed in lower precision {manifold.dtype}!")
+            print(
+                f"Warning: HyperbolicLayer.params_dtype is {self.params_dtype}, but Manifold.dtype is {manifold.dtype}."
+                f"All manifold operations will be performed in lower precision {manifold.dtype}!"
+            )
 
         self.requires_grad = requires_grad
         weight = torch.randn((output_dim, input_dim), dtype=self.params_dtype)
@@ -172,13 +179,14 @@ class HyperbolicLinearPoincarePP(torch.nn.Module):
         if self.input_space == "tangent":
             x = self.manifold.expmap_0(x, axis=self.hyperbolic_axis, backproject=self.backproject)
 
-        v = compute_mlr_PoincarePP(self.manifold, x, self.weight, self.bias, self.hyperbolic_axis,
-                                   self.clamping_factor, self.smoothing_factor)
+        v = compute_mlr_PoincarePP(
+            self.manifold, x, self.weight, self.bias, self.hyperbolic_axis, self.clamping_factor, self.smoothing_factor
+        )
         sqrt_c = self.manifold.c.sqrt()
-        w = sinh(sqrt_c * v) / sqrt_c # (B, out_dim)
-        w2 = w.pow(2).sum(axis=self.hyperbolic_axis, keepdim=True) # (B, 1)
-        denom = 1 + (1 + self.manifold.c * w2).sqrt() # (B, 1)
-        res = w / denom # (B, out_dim)
+        w = sinh(sqrt_c * v) / sqrt_c  # (B, out_dim)
+        w2 = w.pow(2).sum(axis=self.hyperbolic_axis, keepdim=True)  # (B, 1)
+        denom = 1 + (1 + self.manifold.c * w2).sqrt()  # (B, 1)
+        res = w / denom  # (B, out_dim)
         if self.backproject:
             res = self.manifold.proj(res, axis=self.hyperbolic_axis)
         return res

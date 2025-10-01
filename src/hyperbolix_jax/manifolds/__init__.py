@@ -1,9 +1,7 @@
 """JAX manifold implementations - pure functional approach."""
 
 # Import manifold modules
-from . import euclidean
-from . import poincare
-from . import hyperboloid
+from . import euclidean, hyperboloid, poincare
 
 __all__ = [
     "euclidean",

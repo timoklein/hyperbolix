@@ -4,15 +4,11 @@ Direct JAX port of PyTorch euclidean.py with pure functions.
 All operations are identity or simple linear operations.
 """
 
-from jaxtyping import Array, Float
 import jax.numpy as jnp
+from jaxtyping import Array, Float
 
 
-def proj(
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def proj(x: Float[Array, "..."], c: float = 0.0, axis: int = -1) -> Float[Array, "..."]:
     """Project point(s) onto Euclidean space (identity operation).
 
     Args:
@@ -27,11 +23,7 @@ def proj(
 
 
 def addition(
-    x: Float[Array, "..."],
-    y: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    backproject: bool = True
+    x: Float[Array, "..."], y: Float[Array, "..."], c: float = 0.0, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Add Euclidean points x and y.
 
@@ -49,11 +41,7 @@ def addition(
 
 
 def scalar_mul(
-    r: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    backproject: bool = True
+    r: Float[Array, "..."], x: Float[Array, "..."], c: float = 0.0, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Multiply Euclidean point(s) x with scalar(s) r.
 
@@ -76,7 +64,7 @@ def dist(
     c: float = 0.0,
     axis: int = -1,
     keepdim: bool = True,
-    version: str = "default"
+    version: str = "default",
 ) -> Float[Array, "..."]:
     """Compute geodesic distance between Euclidean points x and y.
 
@@ -95,11 +83,7 @@ def dist(
 
 
 def dist_0(
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    keepdim: bool = True,
-    version: str = "default"
+    x: Float[Array, "..."], c: float = 0.0, axis: int = -1, keepdim: bool = True, version: str = "default"
 ) -> Float[Array, "..."]:
     """Compute geodesic distance from Euclidean origin to x.
 
@@ -117,11 +101,7 @@ def dist_0(
 
 
 def expmap(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float = 0.0, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Exponential map: map tangent vector v at point x to manifold.
 
@@ -140,12 +120,7 @@ def expmap(
     return x + v
 
 
-def expmap_0(
-    v: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    backproject: bool = True
-) -> Float[Array, "..."]:
+def expmap_0(v: Float[Array, "..."], c: float = 0.0, axis: int = -1, backproject: bool = True) -> Float[Array, "..."]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     In Euclidean space, this is identity.
@@ -163,11 +138,7 @@ def expmap_0(
 
 
 def retraction(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float = 0.0, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Retraction: first-order approximation of exponential map.
 
@@ -187,11 +158,7 @@ def retraction(
 
 
 def logmap(
-    y: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    backproject: bool = True
+    y: Float[Array, "..."], x: Float[Array, "..."], c: float = 0.0, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Logarithmic map: map point y to tangent space at point x.
 
@@ -210,12 +177,7 @@ def logmap(
     return y - x
 
 
-def logmap_0(
-    y: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    backproject: bool = True
-) -> Float[Array, "..."]:
+def logmap_0(y: Float[Array, "..."], c: float = 0.0, axis: int = -1, backproject: bool = True) -> Float[Array, "..."]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     In Euclidean space, this is identity.
@@ -238,7 +200,7 @@ def ptransp(
     y: Float[Array, "..."],
     c: float = 0.0,
     axis: int = -1,
-    backproject: bool = True
+    backproject: bool = True,
 ) -> Float[Array, "..."]:
     """Parallel transport tangent vector v from point x to point y.
 
@@ -259,11 +221,7 @@ def ptransp(
 
 
 def ptransp_0(
-    v: Float[Array, "..."],
-    y: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    backproject: bool = True
+    v: Float[Array, "..."], y: Float[Array, "..."], c: float = 0.0, axis: int = -1, backproject: bool = True
 ) -> Float[Array, "..."]:
     """Parallel transport tangent vector v from origin to point y.
 
@@ -288,7 +246,7 @@ def tangent_inner(
     x: Float[Array, "..."],
     c: float = 0.0,
     axis: int = -1,
-    keepdim: bool = True
+    keepdim: bool = True,
 ) -> Float[Array, "..."]:
     """Compute inner product of tangent vectors u and v at point x.
 
@@ -309,11 +267,7 @@ def tangent_inner(
 
 
 def tangent_norm(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1,
-    keepdim: bool = True
+    v: Float[Array, "..."], x: Float[Array, "..."], c: float = 0.0, axis: int = -1, keepdim: bool = True
 ) -> Float[Array, "..."]:
     """Compute norm of tangent vector v at point x.
 
@@ -332,12 +286,7 @@ def tangent_norm(
     return jnp.linalg.norm(v, axis=axis, keepdims=keepdim)
 
 
-def egrad2rgrad(
-    grad: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def egrad2rgrad(grad: Float[Array, "..."], x: Float[Array, "..."], c: float = 0.0, axis: int = -1) -> Float[Array, "..."]:
     """Convert Euclidean gradient to Riemannian gradient.
 
     In Euclidean space, these are identical.
@@ -354,12 +303,7 @@ def egrad2rgrad(
     return grad
 
 
-def tangent_proj(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1
-) -> Float[Array, "..."]:
+def tangent_proj(v: Float[Array, "..."], x: Float[Array, "..."], c: float = 0.0, axis: int = -1) -> Float[Array, "..."]:
     """Project vector v onto tangent space at point x.
 
     In Euclidean space, tangent space is the entire space (identity).
@@ -376,11 +320,7 @@ def tangent_proj(
     return v
 
 
-def is_in_manifold(
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1
-) -> bool:
+def is_in_manifold(x: Float[Array, "..."], c: float = 0.0, axis: int = -1) -> bool:
     """Check if point(s) x lie in Euclidean manifold.
 
     In Euclidean space, all points are valid.
@@ -396,12 +336,7 @@ def is_in_manifold(
     return True
 
 
-def is_in_tangent_space(
-    v: Float[Array, "..."],
-    x: Float[Array, "..."],
-    c: float = 0.0,
-    axis: int = -1
-) -> bool:
+def is_in_tangent_space(v: Float[Array, "..."], x: Float[Array, "..."], c: float = 0.0, axis: int = -1) -> bool:
     """Check if vector(s) v lie in tangent space at point x.
 
     In Euclidean space, all vectors are valid tangent vectors.

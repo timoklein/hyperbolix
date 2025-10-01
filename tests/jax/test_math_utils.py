@@ -8,14 +8,14 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 from hyperbolix_jax.utils.math_utils import (
-    smooth_clamp_min,
-    smooth_clamp_max,
-    smooth_clamp,
-    cosh,
-    sinh,
+    _get_array_eps,
     acosh,
     atanh,
-    _get_array_eps,
+    cosh,
+    sinh,
+    smooth_clamp,
+    smooth_clamp_max,
+    smooth_clamp_min,
 )
 
 

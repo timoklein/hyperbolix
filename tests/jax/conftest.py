@@ -6,10 +6,10 @@ interfaces with the PyTorch test fixtures but using JAX/NumPy random operations.
 
 from __future__ import annotations
 
-import numpy as np
-import pytest
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 
 # Enable float64 support in JAX
 jax.config.update("jax_enable_x64", True)
@@ -50,7 +50,7 @@ def tolerance(dtype: jnp.dtype) -> tuple[float, float]:
         ("poincare", 1.0),
         ("hyperboloid", 1.0),
     ],
-    ids=["Euclidean", "PoincareBall", "Hyperboloid"]
+    ids=["Euclidean", "PoincareBall", "Hyperboloid"],
 )
 def manifold_and_c(request: pytest.FixtureRequest, rng: np.random.Generator):
     """Fixture providing (manifold_module, curvature) tuples.
@@ -77,12 +77,7 @@ def manifold_and_c(request: pytest.FixtureRequest, rng: np.random.Generator):
 
 
 @pytest.fixture(scope="package", params=[2, 5, 10, 15])
-def uniform_points(
-    manifold_and_c,
-    dtype: jnp.dtype,
-    request: pytest.FixtureRequest,
-    rng: np.random.Generator
-) -> jnp.ndarray:
+def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequest, rng: np.random.Generator) -> jnp.ndarray:
     """Generate uniformly distributed points on the manifold.
 
     Mirrors the PyTorch uniform_points fixture, generating the same number
@@ -127,7 +122,7 @@ def uniform_points(
         # x₀ = (1 + c||p||²) / (√c * (1 - c||p||²))
         # x_rest = 2p / (√c * (1 - c||p||²))
         p = poincare_points
-        p_sqnorm = np.sum(p ** 2, axis=-1, keepdims=True)
+        p_sqnorm = np.sum(p**2, axis=-1, keepdims=True)
         denom = 1.0 - c * p_sqnorm
         denom = np.maximum(denom, 1e-15)  # Avoid division by zero
 

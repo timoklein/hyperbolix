@@ -1,7 +1,6 @@
 """Hyperbolix JAX backend - pure functional implementation."""
 
-from . import manifolds
-from . import utils
+from . import manifolds, utils
 
 __all__ = [
     "manifolds",
