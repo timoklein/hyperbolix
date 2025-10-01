@@ -79,7 +79,7 @@ include = ["hyperbolic_test*", "manifolds*", "utils*", "hyperbolix_jax*", "nn_la
 
 
 [tool.pytest.ini_options]
-addopts = "-ra -q --log-cli-level=DEBUG"
+addopts = "-ra -q" # --log-cli-level=DEBUG
 testpaths = ["tests"]
 pythonpath = "src"
 

@@ -542,10 +542,8 @@ def tangent_norm(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_x = _conformal_factor(x, c, axis=axis)
-    if keepdim:
-        res = lambda_x * jnp.linalg.norm(v, axis=axis, keepdims=True)
-    else:
-        res = lambda_x * jnp.linalg.norm(v, axis=axis, keepdims=False)
+    res = lambda_x * jnp.linalg.norm(v, axis=axis, keepdims=True)
+    if not keepdim:
         res = jnp.squeeze(res, axis=axis if axis >= 0 else v.ndim + axis)
     return res
 
@@ -608,13 +606,17 @@ def is_in_manifold(
         x: Point(s) to check
         c: Curvature (positive)
         axis: Axis along which to compute norm
-        atol: Absolute tolerance
+        atol: Absolute tolerance (kept for API consistency but not used)
 
     Returns:
         True if ||x||² < 1/c for all points
+
+    Notes:
+        Matches PyTorch implementation which uses strict inequality with no tolerance.
+        The projection function already ensures points are strictly inside the ball.
     """
     x_sqnorm = jnp.sum(x ** 2, axis=axis)
-    return bool(jnp.all(x_sqnorm < (1.0 / c) - atol))
+    return bool(jnp.all(x_sqnorm < 1.0 / c))
 
 
 def is_in_tangent_space(

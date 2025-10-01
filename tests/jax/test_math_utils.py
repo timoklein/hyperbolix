@@ -1,14 +1,19 @@
 """Tests for JAX math utilities."""
 
+import jax
 import jax.numpy as jnp
-from math_utils import (
+import pytest
+
+# Enable float64 support in JAX
+jax.config.update("jax_enable_x64", True)
+
+from hyperbolix_jax.utils.math_utils import (
     smooth_clamp_min,
     smooth_clamp_max,
     smooth_clamp,
     cosh,
     sinh,
     acosh,
-    asinh,
     atanh,
     _get_array_eps,
 )
@@ -189,23 +194,10 @@ def test_acosh():
     print("  ✓ acosh works")
 
 
-def test_asinh():
-    """Test asinh (no special handling needed)."""
-    print("\\nTesting asinh...")
-
-    x = jnp.array([-100.0, -2.0, -1.0, 0.0, 1.0, 2.0, 100.0])
-    result = asinh(x)
-    expected = jnp.asinh(x)
-
-    # Should match exactly since no clamping
-    assert jnp.allclose(result, expected)
-
-    # Should be finite for all inputs
-    assert jnp.all(jnp.isfinite(result))
-
-    print(f"  Values: {x}")
-    print(f"  asinh: {result}")
-    print("  ✓ asinh works")
+# asinh not implemented in hyperbolix_jax - uses jnp.asinh directly
+# def test_asinh():
+#     """Test asinh (no special handling needed)."""
+#     pass
 
 
 def test_atanh():
@@ -248,7 +240,6 @@ def test_dtype_consistency():
         assert cosh(x).dtype == dtype
         assert sinh(x).dtype == dtype
         assert acosh(x).dtype == dtype
-        assert asinh(x).dtype == dtype
         assert atanh(x * 0.5).dtype == dtype  # Scale to valid domain
 
         print(f"  ✓ {dtype} dtype preserved across all functions")
@@ -267,7 +258,7 @@ def run_all_tests():
     test_cosh()
     test_sinh()
     test_acosh()
-    test_asinh()
+    # test_asinh()  # Not implemented - uses jnp.asinh directly
     test_atanh()
     test_dtype_consistency()
 

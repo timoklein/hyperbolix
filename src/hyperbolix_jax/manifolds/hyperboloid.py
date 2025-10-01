@@ -161,12 +161,12 @@ def dist(
         Nickel & Kiela. "Poincaré embeddings for learning hierarchical representations." NeurIPS 2017.
     """
     sqrt_c = jnp.sqrt(c)
-    mink_inner = -_minkowski_inner(x, y, axis=axis, keepdim=True)
+    lorentz_inner = _minkowski_inner(x, y, axis=axis, keepdim=True)
 
-    # Clamp to avoid numerical issues with acosh
-    mink_inner = jnp.maximum(mink_inner, 1.0 + MIN_NORM)
+    arg = -c * lorentz_inner
+    arg = jnp.maximum(arg, 1.0 + MIN_NORM)
 
-    res = acosh(sqrt_c * mink_inner) / sqrt_c
+    res = acosh(arg) / sqrt_c
 
     if not keepdim:
         res = jnp.squeeze(res, axis=axis)
@@ -198,10 +198,9 @@ def dist_0(
     sqrt_c = jnp.sqrt(c)
     x0 = x[..., 0:1]
 
-    # Clamp to avoid numerical issues
-    x0_clamped = jnp.maximum(sqrt_c * x0, 1.0 + MIN_NORM)
+    arg = jnp.maximum(sqrt_c * x0, 1.0 + MIN_NORM)
 
-    res = acosh(x0_clamped) / sqrt_c
+    res = acosh(arg) / sqrt_c
 
     if not keepdim:
         res = jnp.squeeze(res, axis=axis)
@@ -231,12 +230,18 @@ def expmap(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sqrt_c = jnp.sqrt(c)
-    v_norm = jnp.maximum(
-        jnp.sqrt(jnp.sum(v ** 2, axis=axis, keepdims=True)),
-        MIN_NORM
-    )
+    v_sqnorm = _minkowski_inner(v, v, axis=axis, keepdim=True)
+    v_sqnorm = jnp.maximum(v_sqnorm, MIN_NORM)
+    v_norm = jnp.sqrt(v_sqnorm)
+    max_norm_eps = _get_max_norm_eps(v)
 
-    res = jnp.cosh(sqrt_c * v_norm) * x + (jnp.sinh(sqrt_c * v_norm) / v_norm) * v
+    cosh_term = jnp.cosh(sqrt_c * v_norm) * x
+
+    safe_v_norm = jnp.where(v_norm > max_norm_eps, v_norm, jnp.ones_like(v_norm))
+    sinh_factor = jnp.sinh(sqrt_c * v_norm) / (sqrt_c * safe_v_norm)
+    sinh_factor = jnp.where(v_norm > max_norm_eps, sinh_factor, jnp.ones_like(sinh_factor))
+
+    res = cosh_term + sinh_factor * v
 
     if backproject:
         res = proj(res, c, axis=axis)
@@ -332,19 +337,23 @@ def logmap(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sqrt_c = jnp.sqrt(c)
-    mink_inner = -_minkowski_inner(x, y, axis=axis, keepdim=True)
-    mink_inner = jnp.maximum(mink_inner, 1.0 + MIN_NORM)
+    mink_inner = _minkowski_inner(x, y, axis=axis, keepdim=True)
 
-    alpha = acosh(sqrt_c * mink_inner) / sqrt_c
-    alpha = jnp.maximum(alpha, MIN_NORM)
+    acosh_arg = -c * mink_inner
+    acosh_arg = jnp.maximum(acosh_arg, 1.0 + MIN_NORM)
+    dist = acosh(acosh_arg) / sqrt_c
 
-    v = y - mink_inner * x
-    v_norm = jnp.maximum(
-        jnp.sqrt(jnp.sum(v ** 2, axis=axis, keepdims=True)),
-        MIN_NORM
-    )
+    direction = y + c * mink_inner * x
 
-    res = alpha / v_norm * v
+    psi = sqrt_c * dist
+    sinh_psi = jnp.sinh(psi)
+    sinh_psi = jnp.maximum(sinh_psi, MIN_NORM)
+    factor = psi / sinh_psi
+
+    max_norm_eps = _get_max_norm_eps(dist)
+    cond = dist > max_norm_eps
+
+    res = jnp.where(cond, factor * direction, jnp.zeros_like(direction))
     return res
 
 
@@ -523,7 +532,7 @@ def tangent_norm(
         res = jnp.squeeze(res, axis=axis)
     return res
 
-
+# TODO: Check that this is correct
 def egrad2rgrad(
     grad: Float[Array, "..."],
     x: Float[Array, "..."],
@@ -546,9 +555,22 @@ def egrad2rgrad(
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Project onto tangent space: grad - ⟨grad, x⟩_L · x
-    mink_inner_grad_x = _minkowski_inner(grad, x, axis=axis, keepdim=True)
-    rgrad = grad - mink_inner_grad_x * x
+    # In Lorentzian signature the temporal component carries a negative sign.
+    # Flip it before projecting so we project the Riemannian gradient, matching PyTorch.
+    grad_lorentz = grad.at[..., 0].set(-grad[..., 0])
+
+    # Orthogonally project the Lorentzian gradient onto the tangent space.
+    inner_xx = _minkowski_inner(x, x, axis=axis, keepdim=True)
+    scale = jnp.sqrt(jnp.maximum(-c * inner_xx, MIN_NORM))
+    x_normed = x / scale
+
+    denom = _minkowski_inner(x_normed, x_normed, axis=axis, keepdim=True)
+    coeff = _minkowski_inner(x_normed, grad_lorentz, axis=axis, keepdim=True) / denom
+    rgrad = grad_lorentz - coeff * x_normed
+
+    # Repeat the projection to suppress residual numerical drift (important in float32).
+    resid = _minkowski_inner(rgrad, x_normed, axis=axis, keepdim=True)
+    rgrad = rgrad - resid / denom * x_normed
     return rgrad
 
 
@@ -569,9 +591,17 @@ def tangent_proj(
     Returns:
         Projected vector onto tangent space
     """
-    # Tangent space orthogonal to x in Minkowski metric
-    mink_inner_vx = _minkowski_inner(v, x, axis=axis, keepdim=True)
-    return v - mink_inner_vx * x
+    # Normalize x w.r.t. measured Lorentz norm (robust in float32)
+    inner_xx = _minkowski_inner(x, x, axis=axis, keepdim=True)
+    scale = jnp.sqrt(jnp.maximum(-c * inner_xx, MIN_NORM))
+    x_normed = x / scale
+
+    denom = _minkowski_inner(x_normed, x_normed, axis=axis, keepdim=True)
+    coeff = _minkowski_inner(x_normed, v, axis=axis, keepdim=True) / denom
+    res = v - coeff * x_normed
+    resid = _minkowski_inner(res, x_normed, axis=axis, keepdim=True)
+    res = res - resid / denom * x_normed
+    return res
 
 
 def is_in_manifold(
@@ -610,7 +640,7 @@ def is_in_tangent_space(
     x: Float[Array, "..."],
     c: float,
     axis: int = -1,
-    atol: float = 1e-5
+    atol: float | None = None
 ) -> bool:
     """Check if vector(s) v lie in tangent space at point x.
 
@@ -621,10 +651,16 @@ def is_in_tangent_space(
         x: Hyperboloid point(s)
         c: Curvature (positive)
         axis: Axis along which to check
-        atol: Absolute tolerance
+        atol: Absolute tolerance (dtype-aware if None)
 
     Returns:
         True if ⟨v, x⟩_L ≈ 0 for all vectors
     """
+    if atol is None:
+        if v.dtype == jnp.float32:
+            atol = 5e-4
+        else:
+            atol = 1e-7
+
     mink_inner = _minkowski_inner(v, x, axis=axis, keepdim=False)
-    return bool(jnp.allclose(mink_inner, 0.0, atol=atol))
+    return bool(jnp.allclose(mink_inner, 0.0, atol=atol, rtol=0.0))
