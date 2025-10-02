@@ -75,6 +75,7 @@ def test_addition(manifold_and_c, tolerance: tuple[float, float], uniform_points
     result3 = manifold.addition(-uniform_points, uniform_points, c=c)
     assert jnp.allclose(result3, identity, atol=atol, rtol=rtol)
 
+    # TODO: Needs Distributive law and the gyrotriangle inequality
     # Results should stay on manifold
     result = manifold.addition(x, y, c=c)
     assert manifold.is_in_manifold(result, c=c, axis=-1)
@@ -105,8 +106,14 @@ def test_scalar_mul(
     result4 = manifold.scalar_mul(r2 * r1, uniform_points, c=c)
     assert jnp.allclose(result2, result4, atol=atol, rtol=rtol)
 
+    # TODO: Add N-Gyroaddition
+    # TODO: Add distributive law
+    # TODO: Add homogeneity of degree
+    # TODO: Add numerical stability
     # Results should stay on manifold
     assert manifold.is_in_manifold(result1, c=c, axis=-1)
+
+# TODO: Test gyration
 
 
 def test_dist_properties(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
@@ -179,6 +186,8 @@ def test_expmap_logmap_basic(manifold_and_c, tolerance: tuple[float, float], uni
     assert jnp.all(jnp.isfinite(y_mapped))
     assert manifold.is_in_manifold(y_mapped, c=c, axis=-1)
 
+    # TODO: Add expmap0/logmap0 consistency checks
+
 
 def test_expmap_0_logmap_0_inverse(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
     """Test that exp_0 and log_0 are inverse operations."""
@@ -192,6 +201,8 @@ def test_expmap_0_logmap_0_inverse(manifold_and_c, tolerance: tuple[float, float
     x_reconstructed = manifold.expmap_0(v, c=c)
 
     assert jnp.allclose(x_reconstructed, uniform_points, atol=atol, rtol=rtol)
+
+# TODO: Test retraction
 
 
 def test_ptransp_preserves_norm(
@@ -220,6 +231,9 @@ def test_ptransp_preserves_norm(
 
     # Norms should be preserved (isometry)
     assert jnp.allclose(norm_at_x, norm_at_y, atol=atol, rtol=rtol)
+
+
+# TODO: Add ptransp consistency tests and round trip stability
 
 
 def test_tangent_inner_positive_definite(manifold_and_c, uniform_points: jnp.ndarray, rng: np.random.Generator) -> None:
@@ -260,7 +274,6 @@ def test_tangent_inner_symmetric(
     assert jnp.allclose(inner_uv, inner_vu, atol=atol, rtol=rtol)
 
 
-# TODO: Check that this is correct
 def test_egrad2rgrad_on_manifold(manifold_and_c, uniform_points: jnp.ndarray, rng: np.random.Generator) -> None:
     """Test that Riemannian gradient points lie in tangent space."""
     manifold, c = manifold_and_c
