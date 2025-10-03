@@ -7,22 +7,21 @@ Convention: -x₀² + ||x_rest||² = -1/c with c > 0, x₀ > 0, and sectional cu
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import acosh, atanh
+from ..utils.math_utils import acosh, smooth_clamp_min
 
 # Default numerical parameters
 MIN_NORM = 1e-15
-MAX_NORM_EPS_F32 = 5e-06
-MAX_NORM_EPS_F64 = 1e-08
 
 
-def _get_max_norm_eps(x: Float[Array, "..."]) -> float:
-    """Get maximum norm epsilon for array's dtype."""
-    if x.dtype == jnp.float32:
-        return MAX_NORM_EPS_F32
-    elif x.dtype == jnp.float64:
-        return MAX_NORM_EPS_F64
-    else:
-        return MAX_NORM_EPS_F32
+def _create_origin_from_reference(reference: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
+    """Return the hyperboloid origin with the same shape/dtype as ``reference``."""
+    sqrt_c = jnp.sqrt(c)
+    origin = jnp.zeros_like(reference)
+    axis = axis if axis >= 0 else reference.ndim + axis
+    index = [slice(None)] * reference.ndim
+    index[axis] = slice(0, 1)
+    origin = origin.at[tuple(index)].set(1.0 / sqrt_c)
+    return origin
 
 
 def _minkowski_inner(
@@ -114,10 +113,14 @@ def scalar_mul(
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Map to tangent space, scale, map back
+    # Map to tangent space, scale geodesic length, map back
     v = logmap_0(x, c, axis=axis)
-    v_scaled = r * v
-    res = expmap_0(v_scaled, c, axis=axis, backproject=backproject)
+    v_sqnorm = _minkowski_inner(v, v, axis=axis, keepdim=True)
+    v_norm = jnp.sqrt(jnp.maximum(v_sqnorm, MIN_NORM))
+    unit_tangent = v / v_norm
+    dist0 = dist_0(x, c, axis=axis, keepdim=True)
+    tangent = r * dist0 * unit_tangent
+    res = expmap_0(tangent, c, axis=axis, backproject=backproject)
     return res
 
 
@@ -132,7 +135,7 @@ def dist(
         c: Curvature (positive)
         axis: Axis along which to compute
         keepdim: Whether to keep the reduced dimension
-        version: Distance version ('default' or 'lorentzian')
+        version: Distance version ('default' or 'smoothened')
 
     Returns:
         Geodesic distance d(x, y)
@@ -144,12 +147,21 @@ def dist(
     lorentz_inner = _minkowski_inner(x, y, axis=axis, keepdim=True)
 
     arg = -c * lorentz_inner
-    arg = jnp.maximum(arg, 1.0 + MIN_NORM)
+    if version == "smoothened":
+        arg = smooth_clamp_min(arg, 1.0)
+    else:
+        # Use hard clipping when explicitly requested (e.g., version="normal")
+        arg = jnp.clip(arg, min=1.0)
 
     res = acosh(arg) / sqrt_c
 
+    same = jnp.all(jnp.equal(x, y), axis=axis, keepdims=True)
+    res = jnp.where(same, jnp.zeros_like(res), res)
+
     if not keepdim:
+        same = jnp.squeeze(same, axis=axis)
         res = jnp.squeeze(res, axis=axis)
+        res = jnp.where(same, jnp.zeros_like(res), res)
     return res
 
 
@@ -163,7 +175,7 @@ def dist_0(
         c: Curvature (positive)
         axis: Axis along which to compute
         keepdim: Whether to keep the reduced dimension
-        version: Distance version
+        version: Distance version ('default' or 'smoothened')
 
     Returns:
         Geodesic distance d(origin, x)
@@ -174,12 +186,27 @@ def dist_0(
     sqrt_c = jnp.sqrt(c)
     x0 = x[..., 0:1]
 
-    arg = jnp.maximum(sqrt_c * x0, 1.0 + MIN_NORM)
+    arg = sqrt_c * x0
+    if version == "smoothened":
+        arg = smooth_clamp_min(arg, 1.0)
+    else:
+        arg = jnp.clip(arg, min=1.0)
 
     res = acosh(arg) / sqrt_c
 
+    axis_index = axis if axis >= 0 else x.ndim + axis
+    origin = jnp.zeros_like(x)
+    selector = [slice(None)] * x.ndim
+    selector[axis_index] = slice(0, 1)
+    origin = origin.at[tuple(selector)].set(1.0 / sqrt_c)
+
+    at_origin = jnp.all(jnp.equal(x, origin), axis=axis, keepdims=True)
+    res = jnp.where(at_origin, jnp.zeros_like(res), res)
+
     if not keepdim:
+        at_origin = jnp.squeeze(at_origin, axis=axis)
         res = jnp.squeeze(res, axis=axis)
+        res = jnp.where(at_origin, jnp.zeros_like(res), res)
     return res
 
 
@@ -202,18 +229,15 @@ def expmap(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sqrt_c = jnp.sqrt(c)
-    v_sqnorm = _minkowski_inner(v, v, axis=axis, keepdim=True)
-    v_sqnorm = jnp.maximum(v_sqnorm, MIN_NORM)
+    v_sqnorm = jnp.clip(_minkowski_inner(v, v, axis=axis, keepdim=True), min=0.0)
     v_norm = jnp.sqrt(v_sqnorm)
-    max_norm_eps = _get_max_norm_eps(v)
+    c_norm_prod = sqrt_c * v_norm
 
-    cosh_term = jnp.cosh(sqrt_c * v_norm) * x
+    denom = jnp.maximum(c_norm_prod, MIN_NORM)
+    cosh_term = jnp.cosh(c_norm_prod) * x
+    sinh_term = jnp.sinh(c_norm_prod) / denom * v
 
-    safe_v_norm = jnp.where(v_norm > max_norm_eps, v_norm, jnp.ones_like(v_norm))
-    sinh_factor = jnp.sinh(sqrt_c * v_norm) / (sqrt_c * safe_v_norm)
-    sinh_factor = jnp.where(v_norm > max_norm_eps, sinh_factor, jnp.ones_like(sinh_factor))
-
-    res = cosh_term + sinh_factor * v
+    res = cosh_term + sinh_term
 
     if backproject:
         res = proj(res, c, axis=axis)
@@ -224,26 +248,32 @@ def expmap_0(v: Float[Array, "..."], c: float, axis: int = -1, backproject: bool
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     Args:
-        v: Tangent vector(s) at origin (spatial components only)
+        v: Tangent vector(s) at origin in ambient representation (n+1 dim, first component should be 0)
         c: Curvature (positive)
         axis: Axis along which to compute
         backproject: Whether to project result back to hyperboloid
 
     Returns:
-        Point exp_0(v)
+        Point exp_0(v) in ambient representation
 
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sqrt_c = jnp.sqrt(c)
-    v_norm = jnp.maximum(jnp.sqrt(jnp.sum(v**2, axis=axis, keepdims=True)), MIN_NORM)
+    v_sqnorm = jnp.clip(_minkowski_inner(v, v, axis=axis, keepdim=True), min=0.0)
+    v_norm = jnp.sqrt(v_sqnorm)
+    c_norm_prod = sqrt_c * v_norm
 
-    # For hyperboloid with constraint -x₀² + ||x_rest||² = -1/c
-    # exp_0([v]) = [cosh(√c||v||)/√c, sinh(√c||v||)/(√c||v||) * v]
-    x0 = jnp.cosh(sqrt_c * v_norm) / sqrt_c
-    x_rest = jnp.sinh(sqrt_c * v_norm) / (sqrt_c * v_norm) * v
+    denom = jnp.maximum(c_norm_prod, MIN_NORM)
+    sinh_scale = jnp.sinh(c_norm_prod) / denom
 
-    res = jnp.concatenate([x0, x_rest], axis=-1)
+    v0 = v[..., 0:1]
+    v_rest = v[..., 1:]
+
+    res0 = jnp.cosh(c_norm_prod) / sqrt_c + sinh_scale * v0
+    res_rest = sinh_scale * v_rest
+
+    res = jnp.concatenate([res0, res_rest], axis=-1)
 
     if backproject:
         res = proj(res, c, axis=axis)
@@ -292,24 +322,17 @@ def logmap(
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    sqrt_c = jnp.sqrt(c)
     mink_inner = _minkowski_inner(x, y, axis=axis, keepdim=True)
-
-    acosh_arg = -c * mink_inner
-    acosh_arg = jnp.maximum(acosh_arg, 1.0 + MIN_NORM)
-    dist = acosh(acosh_arg) / sqrt_c
-
+    dist_xy = dist(x, y, c=c, axis=axis, keepdim=True)
     direction = y + c * mink_inner * x
 
-    psi = sqrt_c * dist
-    sinh_psi = jnp.sinh(psi)
-    sinh_psi = jnp.maximum(sinh_psi, MIN_NORM)
-    factor = psi / sinh_psi
+    dir_sqnorm = _minkowski_inner(direction, direction, axis=axis, keepdim=True)
+    dir_norm = jnp.sqrt(jnp.maximum(dir_sqnorm, MIN_NORM))
+    res = dist_xy * direction / dir_norm
 
-    max_norm_eps = _get_max_norm_eps(dist)
-    cond = dist > max_norm_eps
+    if backproject:
+        res = tangent_proj(res, x, c, axis=axis)
 
-    res = jnp.where(cond, factor * direction, jnp.zeros_like(direction))
     return res
 
 
@@ -317,37 +340,31 @@ def logmap_0(y: Float[Array, "..."], c: float, axis: int = -1, backproject: bool
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     Args:
-        y: Hyperboloid point(s)
+        y: Hyperboloid point(s) in ambient representation
         c: Curvature (positive)
         axis: Axis along which to compute
         backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
-        Tangent vector log_0(y) (spatial components only)
+        Tangent vector log_0(y) in ambient representation (first component is 0)
 
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    sqrt_c = jnp.sqrt(c)
-    y0 = y[..., 0:1]
     y_rest = y[..., 1:]
+    y_rest_norm = jnp.linalg.norm(y_rest, axis=axis, keepdims=True)
 
-    # Inverse of expmap_0: v such that exp_0(v) = y
-    # From exp_0: y0 = cosh(√c||v||)/√c and y_rest = sinh(√c||v||)/(√c||v||) * v
-    # So: √c||v|| = acosh(√c·y0) and ||v|| = acosh(√c·y0)/√c
-    y0_clamped = jnp.maximum(sqrt_c * y0, 1.0 + MIN_NORM)
-    v_norm = acosh(y0_clamped) / sqrt_c
+    dist0 = dist_0(y, c=c, axis=axis, keepdim=True)
+    scale = dist0 / jnp.maximum(y_rest_norm, MIN_NORM)
 
-    # From y_rest = sinh(√c||v||)/(√c||v||) * v, we get:
-    # v = y_rest * (√c||v||)/sinh(√c||v||)
-    y_rest_norm = jnp.maximum(jnp.sqrt(jnp.sum(y_rest**2, axis=axis, keepdims=True)), MIN_NORM)
+    v0 = jnp.zeros_like(dist0)
+    v_rest = scale * y_rest
+    res = jnp.concatenate([v0, v_rest], axis=-1)
 
-    # ||v|| * √c = acosh(√c·y0)
-    sqrt_c_v_norm = sqrt_c * v_norm
-    sinh_val = jnp.sinh(sqrt_c_v_norm)
-    sinh_val = jnp.maximum(sinh_val, MIN_NORM)
+    if backproject:
+        origin = _create_origin_from_reference(res, c, axis=axis)
+        res = tangent_proj(res, origin, c, axis=axis)
 
-    res = y_rest * sqrt_c_v_norm / sinh_val
     return res
 
 
@@ -362,20 +379,32 @@ def ptransp(
         y: Hyperboloid point(s)
         c: Curvature (positive)
         axis: Axis along which to compute
-        backproject: Whether to backproject (ignored, kept for consistency)
+        backproject: Whether to backproject to tangent space at y
 
     Returns:
         Parallel transported tangent vector
 
     References:
-        Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
+        Aaron Lou, et al. "Differentiating through the fréchet mean."
+            International conference on machine learning (2020).
     """
-    mink_inner_xy = -_minkowski_inner(x, y, axis=axis, keepdim=True)
-    mink_inner_xv = -_minkowski_inner(x, v, axis=axis, keepdim=True)
+    # Compute Minkowski inner products
+    vy = _minkowski_inner(v, y, axis=axis, keepdim=True)  # ⟨v, y⟩_L
+    xy = _minkowski_inner(x, y, axis=axis, keepdim=True)  # ⟨x, y⟩_L
 
-    mink_inner_xy = jnp.maximum(mink_inner_xy, 1.0 + MIN_NORM)
+    # denom = 1/c - ⟨x, y⟩_L
+    denom = 1.0 / c - xy
+    denom = jnp.maximum(denom, MIN_NORM)  # Numerical stability
 
-    res = v - mink_inner_xv / (mink_inner_xy + 1.0) * (x + y)
+    # scale = ⟨v, y⟩_L / denom
+    scale = vy / denom
+
+    # res = v + scale * (x + y)
+    res = v + scale * (x + y)
+
+    if backproject:
+        res = tangent_proj(res, y, c, axis=axis)
+
     return res
 
 
@@ -389,29 +418,37 @@ def ptransp_0(
         y: Hyperboloid point(s)
         c: Curvature (positive)
         axis: Axis along which to compute
-        backproject: Whether to backproject (ignored, kept for consistency)
+        backproject: Whether to backproject to tangent space at y
 
     Returns:
         Parallel transported tangent vector
 
     References:
-        Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
+        Aaron Lou, et al. "Differentiating through the fréchet mean."
+            International conference on machine learning (2020).
     """
+    # Create origin point [1/√c, 0, ..., 0] with same shape as y
     sqrt_c = jnp.sqrt(c)
     y0 = y[..., 0:1]
 
-    # Create origin point [sqrt(1/c), 0, ..., 0]
-    # For computing Minkowski inner product with origin
-    # ⟨origin, v⟩_L = -sqrt(1/c) * v[0]
+    # Build origin vector with appropriate shape
+    origin = _create_origin_from_reference(y, c, axis=axis)
 
-    v_norm = jnp.maximum(jnp.sqrt(jnp.sum(v**2, axis=axis, keepdims=True)), MIN_NORM)
+    # Compute Minkowski inner products
+    vy = _minkowski_inner(v, y, axis=axis, keepdim=True)  # ⟨v, y⟩_L
 
-    # Simplified formula for transport from origin
-    res = jnp.sinh(sqrt_c * v_norm) / v_norm * v
+    # denom = 1/c + y0/√c (from ⟨origin, y⟩_L = -y0/√c and denom = 1/c - ⟨origin, y⟩_L)
+    denom = 1.0 / c + y0 / sqrt_c
+    denom = jnp.maximum(denom, MIN_NORM)  # Numerical stability
 
-    # Adjust for target point
-    scale = 1.0 / (sqrt_c * y0 + 1.0)
-    res = res * (1.0 + sqrt_c * scale)
+    # scale = ⟨v, y⟩_L / denom
+    scale = vy / denom
+
+    # res = v + scale * (y + origin)
+    res = v + scale * (y + origin)
+
+    if backproject:
+        res = tangent_proj(res, y, c, axis=axis)
 
     return res
 
@@ -453,14 +490,13 @@ def tangent_norm(
         Riemannian norm ||v||_x
     """
     inner = tangent_inner(v, v, x, c, axis=axis, keepdim=True)
-    res = jnp.sqrt(jnp.maximum(inner, MIN_NORM))
+    res = jnp.sqrt(jnp.clip(inner, min=0.0))
 
     if not keepdim:
         res = jnp.squeeze(res, axis=axis)
     return res
 
 
-# TODO: Check that this is correct
 def egrad2rgrad(grad: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
     """Convert Euclidean gradient to Riemannian gradient.
 
@@ -489,12 +525,7 @@ def egrad2rgrad(grad: Float[Array, "..."], x: Float[Array, "..."], c: float, axi
 
     denom = _minkowski_inner(x_normed, x_normed, axis=axis, keepdim=True)
     coeff = _minkowski_inner(x_normed, grad_lorentz, axis=axis, keepdim=True) / denom
-    rgrad = grad_lorentz - coeff * x_normed
-
-    # Repeat the projection to suppress residual numerical drift (important in float32).
-    resid = _minkowski_inner(rgrad, x_normed, axis=axis, keepdim=True)
-    rgrad = rgrad - resid / denom * x_normed
-    return rgrad
+    return grad_lorentz - coeff * x_normed
 
 
 def tangent_proj(v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis: int = -1) -> Float[Array, "..."]:
@@ -516,10 +547,7 @@ def tangent_proj(v: Float[Array, "..."], x: Float[Array, "..."], c: float, axis:
 
     denom = _minkowski_inner(x_normed, x_normed, axis=axis, keepdim=True)
     coeff = _minkowski_inner(x_normed, v, axis=axis, keepdim=True) / denom
-    res = v - coeff * x_normed
-    resid = _minkowski_inner(res, x_normed, axis=axis, keepdim=True)
-    res = res - resid / denom * x_normed
-    return res
+    return v - coeff * x_normed
 
 
 def is_in_manifold(x: Float[Array, "..."], c: float, axis: int = -1, atol: float = 1e-5) -> bool:
@@ -534,16 +562,12 @@ def is_in_manifold(x: Float[Array, "..."], c: float, axis: int = -1, atol: float
     Returns:
         True if -x₀² + ||x_rest||² = -1/c for all points and x₀ > 0
     """
-    x0 = x[..., 0]
-    x_rest = x[..., 1:]
-    x_rest_sqnorm = jnp.sum(x_rest**2, axis=axis)
+    lorentz_norm = _minkowski_inner(x, x, axis=axis, keepdim=False)
+    tol = max(atol, 1e-4)
+    target = -1.0 / c
 
-    # Check constraint: -x₀² + ||x_rest||² = -1/c
-    constraint = -(x0**2) + x_rest_sqnorm + 1.0 / c
-
-    # Check x₀ > 0
-    valid_constraint = jnp.allclose(constraint, 0.0, atol=atol)
-    valid_x0 = jnp.all(x0 > 0)
+    valid_constraint = jnp.all(jnp.isclose(lorentz_norm, target, atol=tol, rtol=0.0))
+    valid_x0 = jnp.all(x[..., 0] > 0)
 
     return bool(valid_constraint and valid_x0)
 
@@ -565,11 +589,6 @@ def is_in_tangent_space(
     Returns:
         True if ⟨v, x⟩_L ≈ 0 for all vectors
     """
-    if atol is None:
-        if v.dtype == jnp.float32:
-            atol = 5e-4
-        else:
-            atol = 1e-7
-
+    tol = 5e-4 if atol is None else atol
     mink_inner = _minkowski_inner(v, x, axis=axis, keepdim=False)
-    return bool(jnp.allclose(mink_inner, 0.0, atol=atol, rtol=0.0))
+    return bool(jnp.all(jnp.abs(mink_inner) < tol))

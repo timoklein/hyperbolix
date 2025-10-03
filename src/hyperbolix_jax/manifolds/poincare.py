@@ -429,7 +429,8 @@ def ptransp_0(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_y = _conformal_factor(y, c, axis=axis)
-    return v / lambda_y
+    conformal_frac = 2 / lambda_y
+    return conformal_frac * v
 
 
 def tangent_inner(
