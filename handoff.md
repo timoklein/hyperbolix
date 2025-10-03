@@ -2,9 +2,9 @@
 
 ## Current Status: Phase 1 Complete ✅
 
-**Core geometry implementation and testing infrastructure is complete!** All three manifolds (Euclidean, Poincaré, Hyperboloid) have been ported to pure-functional JAX with comprehensive test coverage.
+**Core geometry implementation and testing infrastructure is complete!** All three manifolds (Euclidean, Poincaré, Hyperboloid) have been ported to pure-functional JAX with comprehensive, expanded test coverage.
 
-**Test Status**: 840/840 tests passing (100%) 🎉
+**Test Status**: 912/912 tests passing (100%) 🎉
 
 ---
 
@@ -38,9 +38,10 @@
 - ✅ Artanh with proper clamping for hyperbolic operations
 
 **Test Coverage** (`tests/jax/`):
-- ✅ **840 tests total** (13 test functions × 3 manifolds × 4 dimensions × 2 dtypes × 3 seeds)
-- ✅ **840 passing (100%)**, 0 failing, 24 skipped
+- ✅ **912 tests total** (including all high- and medium-priority scenarios from `missing_tests.md`)
+- ✅ **912 passing (100%)**, 0 failing, 24 skipped
 - ✅ Tests parametrized over seeds (10, 11, 12), dtypes (float32/float64), and dimensions (2, 5, 10, 15)
+- ✅ Additional high/medium-priority checks: exp/log consistency, scalar multiplication associativity, parallel transport round-trips, and curvature regression tests now mirror the PyTorch suite
 - ✅ Property tests: projection, distance axioms, exp/log inverses, parallel transport isometry
 - ✅ Test fixtures mirror PyTorch test structure for consistency
 - ✅ Math utilities: 9/9 tests passing (100%)
@@ -97,14 +98,18 @@ def operation(
 
 ## 🔧 **Recent Fixes & Improvements**
 
-### **Session 4: Hyperboloid Accuracy Polishing** (2025-10-04)
+### **Session 5: Hyperboloid Intrinsic Representation & Numerical Stability** (2025-10-05)
 
 **Fixes Implemented:**
-1. Corrected hyperboloid `expmap`/`logmap` edge handling to keep outputs on-manifold across seeds and dtypes
-2. Reworked hyperboloid distance calculations for consistency with the PyTorch baseline
-3. Updated `egrad2rgrad` to mirror the Lorentz-signature projection and relaxed the float32 tangent-space tolerance to match PyTorch expectations
+1. **Intrinsic Hyperboloid Maps**: `expmap_0` now operates purely in the intrinsic (tangent) representation, matching PyTorch exactly. `logmap_0` was adjusted accordingly, keeping tangent outputs Lorentz-orthogonal without ad-hoc projections.
+2. **Parallel Transport**: Fixed sign and normalization bugs in `ptransp`/`ptransp_0`, ensuring transported vectors stay in the target tangent space and satisfy associativity checks.
+3. **Distance & Scalar-Mul Numerical Guards**:
+   - Removed broad “snap-to-one” hacks and instead zero out distances only when inputs are provably identical (exact point equality or origin detection via structured tensors).
+   - Added dtype-aware clipping in `expmap`/`expmap_0` to prevent negative underflow in Minkowski norms while preserving accuracy for float64.
+   - Tightened scalar multiplication by reusing the normalized tangent direction and geodesic length path (mirroring PyTorch), eliminating float32 associativity drifts.
+4. **Expanded Test Suite**: Integrated all high- and medium-priority tests from `missing_tests.md`; these now run for both float32 and float64 and caught the issues above.
 
-**Result:** All manifold tests now pass in float32 and float64 across seeds 10–12.
+**Result:** Hyperboloid operations now behave identically to the PyTorch reference across all tested dtypes/seeds, and the strengthened test suite passes cleanly.
 
 ### **Session 3: Poincaré Ball Numerical Stability** (2025-10-01)
 
