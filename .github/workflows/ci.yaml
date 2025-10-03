@@ -1,0 +1,39 @@
+name: JAX Hyperbolic Math CI
+on: push
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install uv
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    # - name: Install uv
+    #   uses: astral-sh/setup-uv@v6
+    #   with:
+    #     version: "0.8.22"
+    #     enable-cache: true
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version-file: ".python-version"
+
+    - name: Install the project
+      run: uv sync --locked --all-extras --dev
+
+    - name: Lint with Ruff
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        uv run ruff check src/hyperbolic_jax --select E9,F63,F7,F82 --statistics
+        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+        RUFF_LINT__MCCABE__MAX_COMPLEXITY=10 RUFF_LINE_LENGTH=127 uv run ruff check src/hyperbolic_jax --exit-zero --statistics
+
+    - name: Test with pytest
+      run: |
+        uv run pytest
