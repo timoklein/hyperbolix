@@ -1,6 +1,6 @@
 import torch
 
-from ..manifolds import Manifold, Hyperboloid
+from ..manifolds import Hyperboloid, Manifold
 
 
 class Expmap(torch.nn.Module):
@@ -16,7 +16,8 @@ class Expmap(torch.nn.Module):
     backproject : bool
         Whether to project results back to the manifold (default: True)
     """
-    def __init__(self, manifold: Manifold, hyperbolic_axis: int=-1, backproject: bool=True):
+
+    def __init__(self, manifold: Manifold, hyperbolic_axis: int = -1, backproject: bool = True):
         super().__init__()
         self.manifold = manifold
         self.hyperbolic_axis = hyperbolic_axis
@@ -24,6 +25,7 @@ class Expmap(torch.nn.Module):
 
     def forward(self, v: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         return self.manifold.expmap(v, x, axis=self.hyperbolic_axis, backproject=self.backproject)
+
 
 class Expmap_0(torch.nn.Module):
     """
@@ -38,7 +40,8 @@ class Expmap_0(torch.nn.Module):
     backproject : bool
         Whether to project results back to the manifold (default: True)
     """
-    def __init__(self, manifold: Manifold, hyperbolic_axis: int=-1, backproject: bool=True):
+
+    def __init__(self, manifold: Manifold, hyperbolic_axis: int = -1, backproject: bool = True):
         super().__init__()
         self.manifold = manifold
         self.hyperbolic_axis = hyperbolic_axis
@@ -46,6 +49,7 @@ class Expmap_0(torch.nn.Module):
 
     def forward(self, v: torch.Tensor) -> torch.Tensor:
         return self.manifold.expmap_0(v, axis=self.hyperbolic_axis, backproject=self.backproject)
+
 
 class Retraction(torch.nn.Module):
     """
@@ -60,7 +64,8 @@ class Retraction(torch.nn.Module):
     backproject : bool
         Whether to project results back to the manifold (default: True)
     """
-    def __init__(self, manifold: Manifold, hyperbolic_axis: int=-1, backproject: bool=True):
+
+    def __init__(self, manifold: Manifold, hyperbolic_axis: int = -1, backproject: bool = True):
         super().__init__()
         self.manifold = manifold
         self.hyperbolic_axis = hyperbolic_axis
@@ -68,6 +73,7 @@ class Retraction(torch.nn.Module):
 
     def forward(self, v: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         return self.manifold.retraction(v, x, axis=self.hyperbolic_axis, backproject=self.backproject)
+
 
 class Logmap(torch.nn.Module):
     """
@@ -82,7 +88,8 @@ class Logmap(torch.nn.Module):
     backproject : bool
         Whether to project results back to the tangent space (default: True)
     """
-    def __init__(self, manifold: Manifold, hyperbolic_axis: int=-1, backproject: bool=True):
+
+    def __init__(self, manifold: Manifold, hyperbolic_axis: int = -1, backproject: bool = True):
         super().__init__()
         self.manifold = manifold
         self.hyperbolic_axis = hyperbolic_axis
@@ -90,6 +97,7 @@ class Logmap(torch.nn.Module):
 
     def forward(self, y: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         return self.manifold.logmap(y, x, axis=self.hyperbolic_axis, backproject=self.backproject)
+
 
 class Logmap_0(torch.nn.Module):
     """
@@ -104,7 +112,8 @@ class Logmap_0(torch.nn.Module):
     backproject : bool
         Whether to project results back to the tangent space (default: True)
     """
-    def __init__(self, manifold: Manifold, hyperbolic_axis: int=-1, backproject: bool=True):
+
+    def __init__(self, manifold: Manifold, hyperbolic_axis: int = -1, backproject: bool = True):
         super().__init__()
         self.manifold = manifold
         self.hyperbolic_axis = hyperbolic_axis
@@ -112,6 +121,7 @@ class Logmap_0(torch.nn.Module):
 
     def forward(self, y: torch.Tensor) -> torch.Tensor:
         return self.manifold.logmap_0(y, axis=self.hyperbolic_axis, backproject=self.backproject)
+
 
 class Proj(torch.nn.Module):
     """
@@ -124,13 +134,15 @@ class Proj(torch.nn.Module):
     hyperbolic_axis : int
         Axis along which the input tensor is hyperbolic (default: -1)
     """
-    def __init__(self, manifold: Manifold, hyperbolic_axis: int=-1):
+
+    def __init__(self, manifold: Manifold, hyperbolic_axis: int = -1):
         super().__init__()
         self.manifold = manifold
         self.hyperbolic_axis = hyperbolic_axis
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.manifold.proj(x, axis=self.hyperbolic_axis)
+
 
 class TanProj(torch.nn.Module):
     """
@@ -144,13 +156,15 @@ class TanProj(torch.nn.Module):
     hyperbolic_axis : int
         Axis along which the input tensor is hyperbolic (default: -1)
     """
-    def __init__(self, manifold: Manifold, hyperbolic_axis: int=-1):
+
+    def __init__(self, manifold: Manifold, hyperbolic_axis: int = -1):
         super().__init__()
         self.manifold = manifold
         self.hyperbolic_axis = hyperbolic_axis
 
     def forward(self, v: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         return self.manifold.tangent_proj(v, x, axis=self.hyperbolic_axis)
+
 
 class HyperbolicActivation(torch.nn.Module):
     """
@@ -167,14 +181,16 @@ class HyperbolicActivation(torch.nn.Module):
     backproject : bool
         Whether to project results back to the manifold (default: True)
     """
-    def __init__(self, manifold: Manifold, activation: torch.nn.Module, hyperbolic_axis: int=-1, backproject: bool=True):
+
+    def __init__(self, manifold: Manifold, activation: torch.nn.Module, hyperbolic_axis: int = -1, backproject: bool = True):
         super().__init__()
         self.manifold = manifold
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject
         if isinstance(self.manifold, Hyperboloid):
-            assert activation(torch.tensor(0.)) == torch.tensor(0.), \
+            assert activation(torch.tensor(0.0)) == torch.tensor(0.0), (
                 "The Hyperboloid activation must map 0 to 0 to map tangent vectors of the manifold origin to tangent vectors of the manifold origin"
+            )
         self.activation = activation
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

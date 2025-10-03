@@ -1,8 +1,8 @@
+from typing import Any, Dict, Iterable, Tuple, Union
+
 import torch
 
-from typing import Any, Dict, Iterable, Tuple, Union
-from ..manifolds import ManifoldParameter, Euclidean
-
+from ..manifolds import Euclidean, ManifoldParameter
 
 __all__ = ["RiemannianAdam"]
 
@@ -46,6 +46,7 @@ class RiemannianAdam(torch.optim.Adam):
     Max Kochurov, Rasul Karimov and Serge Kozlukov. "Geoopt: Riemannian Optimization in PyTorch."
         arXiv (2020).
     """
+
     def __init__(
         self,
         params: Union[Iterable[torch.Tensor], Iterable[Dict[str, Any]]],
@@ -56,7 +57,7 @@ class RiemannianAdam(torch.optim.Adam):
         amsgrad: bool = False,
         expmap_update: bool = False,
         backproject: bool = True,
-        hyperbolic_axis: int = -1
+        hyperbolic_axis: int = -1,
     ):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -148,10 +149,14 @@ class RiemannianAdam(torch.optim.Adam):
 
                     if self.expmap_update:
                         # Exact update on the manifold using the exponential map
-                        new_point = manifold.expmap(-learning_rate * direction, point, axis=self.hyperbolic_axis, backproject=self.backproject)
+                        new_point = manifold.expmap(
+                            -learning_rate * direction, point, axis=self.hyperbolic_axis, backproject=self.backproject
+                        )
                     else:
                         # First-order approximation of the update using the retraction mapping
-                        new_point = manifold.retraction(-learning_rate * direction, point, axis=self.hyperbolic_axis, backproject=self.backproject)
+                        new_point = manifold.retraction(
+                            -learning_rate * direction, point, axis=self.hyperbolic_axis, backproject=self.backproject
+                        )
                     # Parallel transport the exponential averaging to the new point
                     exp_avg_new = manifold.ptransp(exp_avg, point, new_point, axis=self.hyperbolic_axis)
                     # Use copy only for user facing point

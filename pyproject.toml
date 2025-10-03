@@ -15,7 +15,9 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "chex>=0.1.91",
     "flax>=0.12.0",
+    "jaxtyping>=0.3.2",
     "matplotlib>=3.10.6",
     "numpy>=2.3.3",
     "optax>=0.2.6",
@@ -68,7 +70,7 @@ line_length = 127
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["hyperbolic_test*", "manifolds*", "utils*"]
+include = ["hyperbolic_test*", "manifolds*", "utils*", "hyperbolix_jax*", "nn_layers*", "optim*"]
 
 
 #----------------------------
@@ -77,7 +79,7 @@ include = ["hyperbolic_test*", "manifolds*", "utils*"]
 
 
 [tool.pytest.ini_options]
-addopts = "-ra -q --log-cli-level=DEBUG"
+addopts = "-ra -q" # --log-cli-level=DEBUG
 testpaths = ["tests"]
 pythonpath = "src"
 
@@ -86,4 +88,5 @@ dev = [
     "ipdb>=0.13.13",
     "py-spy>=0.4.1",
     "pytest>=8.4.2",
+    "ruff>=0.13.2",
 ]

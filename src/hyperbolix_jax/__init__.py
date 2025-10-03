@@ -1,10 +1,8 @@
-"""Hyperbolix JAX backend placeholder."""
+"""Hyperbolix JAX backend - pure functional implementation."""
 
-from .manifolds import Manifold, Euclidean, Hyperboloid, PoincareBall
+from . import manifolds, utils
 
 __all__ = [
-    "Manifold",
-    "Euclidean",
-    "Hyperboloid",
-    "PoincareBall",
+    "manifolds",
+    "utils",
 ]

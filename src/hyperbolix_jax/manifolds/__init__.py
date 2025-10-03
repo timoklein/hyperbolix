@@ -1,13 +1,10 @@
-"""JAX manifold stubs."""
+"""JAX manifold implementations - pure functional approach."""
 
-from .manifold import Manifold
-from .euclidean import Euclidean
-from .hyperboloid import Hyperboloid
-from .poincare import PoincareBall
+# Import manifold modules
+from . import euclidean, hyperboloid, poincare
 
 __all__ = [
-    "Manifold",
-    "Euclidean",
-    "Hyperboloid",
-    "PoincareBall",
+    "euclidean",
+    "poincare",
+    "hyperboloid",
 ]
