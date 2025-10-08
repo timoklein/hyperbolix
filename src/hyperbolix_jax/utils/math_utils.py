@@ -3,6 +3,7 @@
 Direct JAX port of PyTorch math_utils.py with type annotations using jaxtyping.
 """
 
+import jax.nn as nn
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
@@ -30,9 +31,9 @@ def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor:
     """
     eps = _get_array_eps(x)
     shift = min_value + eps
-    # JAX nn.softplus doesn't have beta, implement manually: softplus_beta(x) = log(1 + exp(beta*x))/beta
+    # Use JAX's numerically stable softplus: softplus_beta(x) = softplus(beta*x)/beta
     arg = smoothing_factor * (x - shift)
-    x_clamped = shift + jnp.log1p(jnp.exp(arg)) / smoothing_factor
+    x_clamped = shift + nn.softplus(arg) / smoothing_factor
     return jnp.where(x < shift, x_clamped, x)
 
 
@@ -50,7 +51,7 @@ def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor:
     eps = _get_array_eps(x)
     shift = max_value - eps
     arg = smoothing_factor * (shift - x)
-    x_clamped = shift - jnp.log1p(jnp.exp(arg)) / smoothing_factor
+    x_clamped = shift - nn.softplus(arg) / smoothing_factor
     return jnp.where(x > shift, x_clamped, x)
 
 
@@ -121,6 +122,18 @@ def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """
     x = jnp.clip(x, 1.0, None)
     return jnp.acosh(x)
+
+
+def asinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
+    """Inverse hyperbolic sine. Domain=(-inf, inf).
+
+    Args:
+        x: Input array of any shape
+
+    Returns:
+        asinh(x)
+    """
+    return jnp.asinh(x)
 
 
 def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:

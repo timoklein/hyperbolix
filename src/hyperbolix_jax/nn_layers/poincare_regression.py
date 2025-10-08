@@ -1,0 +1,288 @@
+"""Poincaré ball regression layers for JAX/Flax NNX."""
+import math
+from typing import Any
+
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from jaxtyping import Array, Float
+
+from ..utils.math_utils import asinh, smooth_clamp
+from .helpers import compute_mlr_poincare_pp, safe_conformal_factor
+
+
+class HypRegressionPoincare(nnx.Module):
+    """
+    Hyperbolic Neural Networks multinomial linear regression layer (Poincaré ball model).
+
+    Computation steps:
+        0) Project the input tensor onto the manifold (optional)
+        1) Compute the multinomial linear regression score(s)
+
+    Parameters
+    ----------
+    manifold_module : module
+        The PoincareBall manifold module
+    in_dim : int
+        Dimension of the input space
+    out_dim : int
+        Dimension of the output space
+    rngs : nnx.Rngs
+        Random number generators for parameter initialization
+    input_space : str
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold')
+    clamping_factor : float
+        Clamping factor for the multinomial linear regression output (default: 1.0)
+    smoothing_factor : float
+        Smoothing factor for the multinomial linear regression output (default: 50.0)
+
+    References
+    ----------
+    Ganea Octavian, Gary Bécigneul, and Thomas Hofmann. "Hyperbolic neural networks."
+        Advances in neural information processing systems 31 (2018).
+    """
+
+    def __init__(
+        self,
+        manifold_module: Any,
+        in_dim: int,
+        out_dim: int,
+        *,
+        rngs: nnx.Rngs,
+        input_space: str = "manifold",
+        clamping_factor: float = 1.0,
+        smoothing_factor: float = 50.0,
+    ):
+        assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
+        self.manifold = manifold_module
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.input_space = input_space
+        self.clamping_factor = clamping_factor
+        self.smoothing_factor = smoothing_factor
+
+        # Tangent space weight
+        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
+        # Manifold bias (initialized to small random values)
+        # FIXME: Not using ManifoldParameter
+        self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01)
+
+    def _compute_mlr(
+        self,
+        x: Float[Array, "batch in_dim"],
+        a: Float[Array, "out_dim in_dim"],
+        p: Float[Array, "out_dim in_dim"],
+        c: float,
+        axis: int,
+        min_enorm: float = 1e-15,
+    ) -> Float[Array, "batch out_dim"]:
+        """
+        Internal method for computing the multinomial linear regression score(s).
+
+        Parameters
+        ----------
+        x : Array (batch, in_dim)
+            PoincareBall point(s)
+        a : Array (out_dim, in_dim)
+            Hyperplane tangent normal(s) in the tangent space at p
+        p : Array (out_dim, in_dim)
+            Hyperplane PoincareBall translation(s)
+        c : float
+            Manifold curvature
+        axis : int
+            Axis along which the tensor is hyperbolic
+        min_enorm : float
+            Minimum norm to avoid division by zero
+
+        Returns
+        -------
+        res : Array (batch, out_dim)
+            The multinomial linear regression score(s) of x with respect to the linear model(s) defined by a and p.
+
+        References
+        ----------
+        Ganea Octavian, Gary Bécigneul, and Thomas Hofmann. "Hyperbolic neural networks."
+            Advances in neural information processing systems 31 (2018).
+        """
+        sqrt_c = jnp.sqrt(c)
+
+        # Compute Möbius subtraction: -p ⊕ x
+        # p is (out_dim, in_dim), -p.T is (in_dim, out_dim), unsqueeze(0) -> (1, in_dim, out_dim)
+        # x is (batch, in_dim), unsqueeze(-1) -> (batch, in_dim, 1)
+        # addition along axis=1 -> (batch, in_dim, out_dim)
+        p_t = -p.T[None, :, :]  # (1, in_dim, out_dim)
+        x_expanded = x[:, :, None]  # (batch, in_dim, 1)
+        sub = self.manifold.addition(p_t, x_expanded, c, axis=1, backproject=True)  # (batch, in_dim, out_dim)
+
+        # Compute inner product with a
+        # a is (out_dim, in_dim), a.T is (in_dim, out_dim)
+        # sub * a.T is (batch, in_dim, out_dim), sum over dim=1 gives (batch, 1, out_dim)
+        a_t = a.T  # (in_dim, out_dim)
+        suba = jnp.sum(sub * a_t[None, :, :], axis=1, keepdims=True)  # (batch, 1, out_dim)
+
+        # Compute norm of a
+        a_norm = jnp.linalg.norm(a, ord=2, axis=axis, keepdims=True).clip(min=min_enorm).T  # (1, out_dim)
+
+        # Compute conformal factor for sub (along axis=1, in_dim dimension)
+        lambda_sub = safe_conformal_factor(sub, c, axis=1)  # (batch, 1, out_dim)
+
+        # Compute asinh argument
+        asinh_arg = sqrt_c * lambda_sub * suba / a_norm  # (batch, 1, out_dim)
+
+        # Improve performance by smoothly clamping the input of asinh()
+        eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
+        clamp = self.clamping_factor * float(math.log(2 / eps))
+        asinh_arg = smooth_clamp(asinh_arg, -clamp, clamp, self.smoothing_factor)
+
+        # Compute signed distance to hyperplane
+        signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, 1, out_dim)
+
+        # Compute conformal factor for p
+        lambda_p = safe_conformal_factor(p, c, axis=axis)  # (out_dim, 1)
+
+        # Final result
+        res = lambda_p.T * a_norm * signed_dist2hyp.squeeze(1)  # (batch, out_dim)
+        return res
+
+    def __call__(
+        self,
+        x: Float[Array, "batch in_dim"],
+        c: float = 1.0,
+        axis: int = -1,
+        backproject: bool = True,
+    ) -> Float[Array, "batch out_dim"]:
+        """
+        Forward pass through the hyperbolic regression layer.
+
+        Parameters
+        ----------
+        x : Array of shape (batch, in_dim)
+            Input tensor where the hyperbolic_axis is last
+        c : float
+            Manifold curvature (default: 1.0)
+        axis : int
+            Axis along which the tensor is hyperbolic (default: -1)
+        backproject : bool
+            Whether to project results back to the manifold (default: True)
+
+        Returns
+        -------
+        res : Array of shape (batch, out_dim)
+            Multinomial linear regression scores
+        """
+        assert axis == -1, "axis must be -1, reshape your tensor accordingly."
+
+        # Map to manifold if needed
+        if self.input_space == "tangent":
+            x = self.manifold.expmap_0(x, c, axis=axis, backproject=backproject)
+
+        # Project bias to manifold
+        bias = self.manifold.proj(self.bias, c, axis=axis)
+
+        # Map self.weight from the tangent space at the origin to the tangent space at self.bias
+        pt_weight = self.manifold.ptransp_0(self.weight, bias, c, axis=axis, backproject=backproject)
+
+        # Compute the multinomial linear regression score(s)
+        res = self._compute_mlr(x, pt_weight, bias, c, axis)
+        return res
+
+
+class HypRegressionPoincarePP(nnx.Module):
+    """
+    Hyperbolic Neural Networks ++ multinomial linear regression layer (Poincaré ball model).
+
+    Computation steps:
+        0) Project the input tensor onto the manifold (optional)
+        1) Compute the multinomial linear regression score(s)
+
+    Parameters
+    ----------
+    manifold_module : module
+        The PoincareBall manifold module
+    in_dim : int
+        Dimension of the input space
+    out_dim : int
+        Dimension of the output space
+    rngs : nnx.Rngs
+        Random number generators for parameter initialization
+    input_space : str
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold')
+    clamping_factor : float
+        Clamping factor for the multinomial linear regression output (default: 1.0)
+    smoothing_factor : float
+        Smoothing factor for the multinomial linear regression output (default: 50.0)
+
+    References
+    ----------
+    Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++."
+        arXiv preprint arXiv:2006.08210 (2020).
+    """
+
+    def __init__(
+        self,
+        manifold_module: Any,
+        in_dim: int,
+        out_dim: int,
+        *,
+        rngs: nnx.Rngs,
+        input_space: str = "manifold",
+        clamping_factor: float = 1.0,
+        smoothing_factor: float = 50.0,
+    ):
+        assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
+        self.manifold = manifold_module
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.input_space = input_space
+        self.clamping_factor = clamping_factor
+        self.smoothing_factor = smoothing_factor
+
+        # Tangent space weight
+        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
+        # Scalar bias (initialized to small random values)
+        self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1)) * 0.01)
+
+    def __call__(
+        self,
+        x: Float[Array, "batch in_dim"],
+        c: float = 1.0,
+        axis: int = -1,
+        backproject: bool = True,
+    ) -> Float[Array, "batch out_dim"]:
+        """
+        Forward pass through the HNN++ hyperbolic regression layer.
+
+        Parameters
+        ----------
+        x : Array of shape (batch, in_dim)
+            Input tensor where the hyperbolic_axis is last
+        c : float
+            Manifold curvature (default: 1.0)
+        axis : int
+            Axis along which the tensor is hyperbolic (default: -1)
+        backproject : bool
+            Whether to project results back to the manifold (default: True)
+
+        Returns
+        -------
+        res : Array of shape (batch, out_dim)
+            Multinomial linear regression scores
+        """
+        assert axis == -1, "axis must be -1, reshape your tensor accordingly."
+
+        # Map to manifold if needed
+        if self.input_space == "tangent":
+            x = self.manifold.expmap_0(x, c, axis=axis, backproject=backproject)
+
+        # Compute multinomial linear regression
+        res = compute_mlr_poincare_pp(
+            x,
+            self.weight.value,
+            self.bias.value,
+            c,
+            axis,
+            self.clamping_factor,
+            self.smoothing_factor,
+        )
+
+        return res
