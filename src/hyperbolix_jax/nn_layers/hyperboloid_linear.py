@@ -1,5 +1,7 @@
 """Hyperboloid linear layers for JAX/Flax NNX."""
-from typing import Any, Optional
+
+from collections.abc import Callable
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -85,7 +87,7 @@ class HypLinearHyperboloid(nnx.Module):
         """
         assert axis == -1, "axis must be -1, reshape your tensor accordingly."
         assert x.shape[axis] == self.in_dim, (
-            f"weight lies in the tangent space at the Hyperboloid origin, i.e. its time coordinate z0 is zero and hence omitted. "
+            f"weight lies in the tangent space at the Hyperboloid origin, its time coordinate z0 is zero and hence omitted."
             f"Thus, x needs to be of dimension {(x.shape[0], self.in_dim)} but is of shape {x.shape}"
         )
 
@@ -167,8 +169,8 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         init_scale: float = 2.3,
         learnable_scale: bool = True,
         eps: float = 1e-5,
-        activation: Optional[callable] = None,
-        dropout_rate: Optional[float] = None,
+        activation: Callable[[Array], Array] | None = None,
+        dropout_rate: float | None = None,
     ):
         assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
         self.manifold = manifold_module
@@ -225,7 +227,9 @@ class HypLinearHyperboloidFHNN(nnx.Module):
             Output on the Hyperboloid manifold
         """
         assert axis == -1, "axis must be -1, reshape your tensor accordingly."
-        assert x.shape[axis] == self.in_dim, f"x needs to be of dimension {(x.shape[0], self.in_dim)} but is of shape {x.shape}"
+        assert x.shape[axis] == self.in_dim, (
+            f"x needs to be of dimension {(x.shape[0], self.in_dim)} but is of shape {x.shape}"
+        )
 
         # Map to manifold if needed
         if self.input_space == "tangent":
@@ -312,7 +316,7 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         init_scale: float = 2.3,
         learnable_scale: bool = False,
         eps: float = 1e-5,
-        activation: Optional[callable] = None,
+        activation: Callable[[Array], Array] | None = None,
         normalize: bool = False,
     ):
         assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
@@ -362,7 +366,9 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
             Output on the Hyperboloid manifold
         """
         assert axis == -1, "axis must be -1, reshape your tensor accordingly."
-        assert x.shape[axis] == self.in_dim, f"x needs to be of dimension {(x.shape[0], self.in_dim)} but is of shape {x.shape}"
+        assert x.shape[axis] == self.in_dim, (
+            f"x needs to be of dimension {(x.shape[0], self.in_dim)} but is of shape {x.shape}"
+        )
 
         # Map to manifold if needed
         if self.input_space == "tangent":

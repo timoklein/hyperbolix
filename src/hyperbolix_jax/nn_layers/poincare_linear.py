@@ -1,4 +1,5 @@
 """Poincaré ball linear layers for JAX/Flax NNX."""
+
 from typing import Any
 
 import jax

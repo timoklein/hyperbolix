@@ -1,6 +1,6 @@
 """Helper functions for hyperbolic neural network layers."""
+
 import math
-from typing import Dict
 
 import jax.numpy as jnp
 from jaxtyping import Array, Float
@@ -12,7 +12,7 @@ MAX_NORM_EPS_F32 = 5e-06
 MAX_NORM_EPS_F64 = 1e-08
 
 # Dictionary mapping of dtype strings to JAX dtypes
-DTYPE_MAP: Dict[str, jnp.dtype] = {
+DTYPE_MAP: dict[str, jnp.dtype] = {
     "float32": jnp.float32,
     "float64": jnp.float64,
 }
@@ -115,7 +115,7 @@ def compute_mlr_hyperboloid(
         arXiv preprint arXiv:2303.15919 (2023).
     """
     assert x.shape[hyperbolic_axis] == z.shape[hyperbolic_axis] + 1, (
-        f"z/weight lies in the tangent space at the Hyperboloid origin, i.e. its time coordinate z0 is zero and hence omitted. "
+        f"z/weight lies in the tangent space at the Hyperboloid origin, i.e. its time coordinate z0 is zero and hence omitted."
         f"Thus, x needs to be of dimension {(x.shape[0], z.shape[hyperbolic_axis] + 1)} but is of shape {x.shape}"
     )
 

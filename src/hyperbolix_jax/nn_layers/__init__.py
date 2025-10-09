@@ -24,23 +24,23 @@ __all__ = [
     # Standard layers
     "Expmap",
     "Expmap0",
-    "Logmap",
-    "Logmap0",
-    "Proj",
-    "TanProj",
-    "Retraction",
-    "HyperbolicActivation",
+    # Hyperboloid linear layers
+    "HypLinearHyperboloid",
+    "HypLinearHyperboloidFHCNN",
+    "HypLinearHyperboloidFHNN",
     # Poincaré linear layers
     "HypLinearPoincare",
     "HypLinearPoincarePP",
-    # Poincaré regression layers
-    "HypRegressionPoincare",
-    "HypRegressionPoincarePP",
-    "HypRegressionPoincareHDRL",
-    # Hyperboloid linear layers
-    "HypLinearHyperboloid",
-    "HypLinearHyperboloidFHNN",
-    "HypLinearHyperboloidFHCNN",
     # Hyperboloid regression layers
     "HypRegressionHyperboloid",
+    # Poincaré regression layers
+    "HypRegressionPoincare",
+    "HypRegressionPoincareHDRL",
+    "HypRegressionPoincarePP",
+    "HyperbolicActivation",
+    "Logmap",
+    "Logmap0",
+    "Proj",
+    "Retraction",
+    "TanProj",
 ]

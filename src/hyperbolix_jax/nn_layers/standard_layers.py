@@ -1,7 +1,7 @@
 """Standard hyperbolic neural network layers (wrappers around manifold operations)."""
+
 from typing import Any
 
-import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
@@ -25,9 +25,7 @@ class Expmap(nnx.Module):
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject
 
-    def __call__(
-        self, v: Float[Array, "..."], x: Float[Array, "..."], c: float = 1.0
-    ) -> Float[Array, "..."]:
+    def __call__(self, v: Float[Array, "..."], x: Float[Array, "..."], c: float = 1.0) -> Float[Array, "..."]:
         """Compute exponential map at point x."""
         return self.manifold.expmap(v, x, c, axis=self.hyperbolic_axis, backproject=self.backproject)
 
@@ -75,9 +73,7 @@ class Retraction(nnx.Module):
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject
 
-    def __call__(
-        self, v: Float[Array, "..."], x: Float[Array, "..."], c: float = 1.0
-    ) -> Float[Array, "..."]:
+    def __call__(self, v: Float[Array, "..."], x: Float[Array, "..."], c: float = 1.0) -> Float[Array, "..."]:
         """Compute retraction at point x."""
         return self.manifold.retraction(v, x, c, axis=self.hyperbolic_axis, backproject=self.backproject)
 
@@ -101,9 +97,7 @@ class Logmap(nnx.Module):
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject
 
-    def __call__(
-        self, y: Float[Array, "..."], x: Float[Array, "..."], c: float = 1.0
-    ) -> Float[Array, "..."]:
+    def __call__(self, y: Float[Array, "..."], x: Float[Array, "..."], c: float = 1.0) -> Float[Array, "..."]:
         """Compute logarithmic map at point x."""
         return self.manifold.logmap(y, x, c, axis=self.hyperbolic_axis, backproject=self.backproject)
 
@@ -170,9 +164,7 @@ class TanProj(nnx.Module):
         self.manifold = manifold_module
         self.hyperbolic_axis = hyperbolic_axis
 
-    def __call__(
-        self, v: Float[Array, "..."], x: Float[Array, "..."], c: float = 1.0
-    ) -> Float[Array, "..."]:
+    def __call__(self, v: Float[Array, "..."], x: Float[Array, "..."], c: float = 1.0) -> Float[Array, "..."]:
         """Project onto tangent space at x."""
         return self.manifold.tangent_proj(v, x, c, axis=self.hyperbolic_axis)
 

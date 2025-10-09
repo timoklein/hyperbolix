@@ -1,4 +1,5 @@
 """Poincaré ball reinforcement learning layers for JAX/Flax NNX."""
+
 from typing import Any
 
 import jax

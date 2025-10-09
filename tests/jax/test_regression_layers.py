@@ -1,4 +1,5 @@
 """Tests for hyperbolic regression neural network layers."""
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -9,8 +10,8 @@ import hyperbolix_jax.manifolds.poincare as poincare
 from hyperbolix_jax.nn_layers import (
     HypRegressionHyperboloid,
     HypRegressionPoincare,
-    HypRegressionPoincarePP,
     HypRegressionPoincareHDRL,
+    HypRegressionPoincarePP,
 )
 
 # Enable float64 for tests

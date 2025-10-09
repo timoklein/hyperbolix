@@ -1,4 +1,5 @@
 """Poincaré ball regression layers for JAX/Flax NNX."""
+
 import math
 from typing import Any
 
