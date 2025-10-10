@@ -180,6 +180,21 @@ Investigated why 19/24 `test_expmap_logmap_inverse` tests were failing for Poinc
 - Change `logmap` scaling to measure the norm after projection instead of pulling from the analytic formula; needs care to maintain gyroproperties.
 - Once a principled fix lands, tighten test tolerances again and remove the temporary relaxation.
 
+### **Session 8: NNX Layer Backprojection Cleanup** (2025-10-10)
+
+**What changed**
+- Removed the `backproject` constructor flag and argument plumbing from all Flax NNX layers (`HypLinearPoincare`, `HypLinearPoincarePP`, `HypRegressionPoincare`, `HypRegressionPoincarePP`, `HypRegressionPoincareHDRL`, `HypLinearHyperboloid`, `HypLinearHyperboloidFHNN`, `HypLinearHyperboloidFHCNN`, `HypRegressionHyperboloid`).
+- Updated docstrings and JIT notes so the static configuration now only lists options that still exist (`input_space`, `version`, `clamping_factor`, etc.).
+- Normalized any conditional projection to run unconditionally where needed (e.g. Poincaré HNN++ output now always passes through `manifold.proj`).
+
+**Rationale**
+- Manifold functions switched to performing their own projection; the explicit `backproject` toggle became a no-op and complicated the API.
+- Simplifies the config space for `nnx.jit` users—fewer static arguments mean fewer recompilations when swapping presets.
+
+**Follow-up**
+- Consider pruning the legacy Torch layers’ `backproject` arguments in a separate cleanup so the cross-backend APIs stay aligned.
+- Re-run `pytest tests/jax/test_nn_layers.py tests/jax/test_regression_layers.py` once other in-flight changes settle to confirm no regressions.
+
 ### **Session 2: Correctness & Testing Infrastructure** (2025-10-01)
 
 **Major Bug Fixes:**

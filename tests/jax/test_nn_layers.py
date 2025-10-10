@@ -99,7 +99,7 @@ def test_hyp_linear_hyperboloid_forward(dtype):
 
     # Create input on manifold
     v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None, None))(v, 1.0, True)
+    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)
@@ -122,7 +122,7 @@ def test_hyp_linear_hyperboloid_gradient(dtype):
 
     # Create input
     v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None, None))(v, 1.0, True)
+    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)

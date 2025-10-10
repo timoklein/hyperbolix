@@ -32,14 +32,10 @@ class HypLinearHyperboloid(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    backproject : bool
-        Whether to project results back to the manifold (default: True).
-        Note: This is a static configuration - changing it after initialization requires recompilation.
-
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space, backproject)
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space)
         are treated as static and will be baked into the compiled function.
 
     References
@@ -56,7 +52,6 @@ class HypLinearHyperboloid(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
-        backproject: bool = True,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -66,7 +61,6 @@ class HypLinearHyperboloid(nnx.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
-        self.backproject = backproject
 
         # Trainable parameters
         # Note: We only set the space coordinates since both parameters lie in the tangent space at the Hyperboloid origin
@@ -168,14 +162,10 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         Note: This is a static configuration - changing it after initialization requires recompilation.
     dropout_rate : float or None
         Dropout rate to apply before the activation or linear transformation (default: None)
-    backproject : bool
-        Whether to project results back to the manifold (default: True).
-        Note: This is a static configuration - changing it after initialization requires recompilation.
-
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space, activation, backproject)
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space, activation)
         are treated as static and will be baked into the compiled function. The dropout layer handles train/eval
         mode switching internally in a JIT-compatible way.
 
@@ -198,7 +188,6 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         eps: float = 1e-5,
         activation: Callable[[Array], Array] | None = None,
         dropout_rate: float | None = None,
-        backproject: bool = True,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -210,7 +199,6 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         self.input_space = input_space
         self.eps = eps
         self.activation = activation
-        self.backproject = backproject
 
         # Trainable parameters
         # FHNN initializes the weights as tangent vectors w.r.t. the Hyperboloid origin
@@ -326,15 +314,11 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
     normalize : bool
         Whether to normalize the space coordinates before rescaling (default: False).
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    backproject : bool
-        Whether to project results back to the manifold (default: True).
-        Note: This is a static configuration - changing it after initialization requires recompilation.
-
     Notes
     -----
     JIT Compatibility:
         This layer is designed to work with nnx.jit. Configuration parameters (input_space, activation,
-        normalize, backproject) are treated as static and will be baked into the compiled function.
+        normalize) are treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -355,7 +339,6 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         eps: float = 1e-5,
         activation: Callable[[Array], Array] | None = None,
         normalize: bool = False,
-        backproject: bool = True,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -368,7 +351,6 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         self.eps = eps
         self.activation = activation
         self.normalize = normalize
-        self.backproject = backproject
 
         # Trainable parameters
         bound = 0.02

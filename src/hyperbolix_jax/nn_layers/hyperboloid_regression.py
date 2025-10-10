@@ -34,14 +34,10 @@ class HypRegressionHyperboloid(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
-    backproject : bool
-        Whether to project results back to the manifold (default: True).
-        Note: This is a static configuration - changing it after initialization requires recompilation.
-
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space, backproject,
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space,
         clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
 
     References
@@ -60,7 +56,6 @@ class HypRegressionHyperboloid(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
-        backproject: bool = True,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -72,7 +67,6 @@ class HypRegressionHyperboloid(nnx.Module):
         self.input_space = input_space
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
-        self.backproject = backproject
 
         # Trainable parameters
         # weight lies in the tangent space of the Hyperboloid origin, so the time coordinate along axis is zero

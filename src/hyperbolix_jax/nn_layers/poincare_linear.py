@@ -34,14 +34,10 @@ class HypLinearPoincare(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    backproject : bool
-        Whether to project results back to the manifold (default: True).
-        Note: This is a static configuration - changing it after initialization requires recompilation.
-
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space, backproject)
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space)
         are treated as static and will be baked into the compiled function. Changing these values after
         JIT compilation will trigger automatic recompilation.
 
@@ -59,7 +55,6 @@ class HypLinearPoincare(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
-        backproject: bool = True,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -69,7 +64,6 @@ class HypLinearPoincare(nnx.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
-        self.backproject = backproject
 
         # Trainable parameters
         # Tangent space weight (Euclidean)
@@ -143,14 +137,10 @@ class HypLinearPoincarePP(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
-    backproject : bool
-        Whether to project results back to the manifold (default: True).
-        Note: This is a static configuration - changing it after initialization requires recompilation.
-
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space, backproject,
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space,
         clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
 
     References
@@ -169,7 +159,6 @@ class HypLinearPoincarePP(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
-        backproject: bool = True,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -181,7 +170,6 @@ class HypLinearPoincarePP(nnx.Module):
         self.input_space = input_space
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
-        self.backproject = backproject
 
         # Trainable parameters
         # Tangent space weight
@@ -230,8 +218,7 @@ class HypLinearPoincarePP(nnx.Module):
         denom = 1 + jnp.sqrt(1 + c * w2)  # (batch, 1)
         res = w / denom  # (batch, out_dim)
 
-        # Backproject if needed (static branch - JIT friendly)
-        if self.backproject:
-            res = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(res, c)
+        # Project results to the manifold
+        res = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(res, c)
 
         return res

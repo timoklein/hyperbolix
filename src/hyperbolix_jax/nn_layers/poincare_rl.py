@@ -36,14 +36,10 @@ class HypRegressionPoincareHDRL(nnx.Module):
         - 'standard': scaled multinomial linear regression score function
         - 'rs': multinomial linear regression with parallel transported a
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    backproject : bool
-        Whether to project results back to the manifold (default: True).
-        Note: This is a static configuration - changing it after initialization requires recompilation.
-
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space, version, backproject)
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space, version)
         are treated as static and will be baked into the compiled function.
 
     References
@@ -63,7 +59,6 @@ class HypRegressionPoincareHDRL(nnx.Module):
         rngs: nnx.Rngs,
         input_space: str = "manifold",
         version: str = "standard",
-        backproject: bool = True,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -76,7 +71,6 @@ class HypRegressionPoincareHDRL(nnx.Module):
         self.out_dim = out_dim
         self.input_space = input_space
         self.version = version
-        self.backproject = backproject
 
         # Trainable parameters
         # Tangent space weight
