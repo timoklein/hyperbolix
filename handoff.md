@@ -384,11 +384,9 @@ Following `idiomatic_jax.md` recommendations, implemented revolutionary vmap-bas
    - Updated all manifold calls to use `jax.vmap` for batch operations
    - Removed `axis` parameter from all layers (always -1)
    - Updated helpers: `safe_conformal_factor`, `compute_mlr_*` use axis=-1
-   - Simplified `__call__` signatures: `(self, x, c=1.0)`
+   - Simplified `__call__` signatures: `(self, x, c=1.0)
 
-### **Pending**:
 
-7. **Update jit_wrappers.py** for new API
 8. **Run adapted tests** to verify correctness
 
 ### **Files Modified**:

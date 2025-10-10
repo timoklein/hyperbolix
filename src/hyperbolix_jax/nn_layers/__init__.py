@@ -9,21 +9,8 @@ from .hyperboloid_regression import HypRegressionHyperboloid
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
 from .poincare_rl import HypRegressionPoincareHDRL
-from .standard_layers import (
-    Expmap,
-    Expmap0,
-    HyperbolicActivation,
-    Logmap,
-    Logmap0,
-    Proj,
-    Retraction,
-    TanProj,
-)
 
 __all__ = [
-    # Standard layers
-    "Expmap",
-    "Expmap0",
     # Hyperboloid linear layers
     "HypLinearHyperboloid",
     "HypLinearHyperboloidFHCNN",
@@ -37,10 +24,4 @@ __all__ = [
     "HypRegressionPoincare",
     "HypRegressionPoincareHDRL",
     "HypRegressionPoincarePP",
-    "HyperbolicActivation",
-    "Logmap",
-    "Logmap0",
-    "Proj",
-    "Retraction",
-    "TanProj",
 ]
