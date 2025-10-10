@@ -28,11 +28,21 @@ class HypRegressionHyperboloid(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization
     input_space : str
-        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold')
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
+        Note: This is a static configuration - changing it after initialization requires recompilation.
     clamping_factor : float
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    backproject : bool
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space, backproject,
+        clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -50,15 +60,21 @@ class HypRegressionHyperboloid(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        backproject: bool = True,
     ):
-        assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
+        if input_space not in ["tangent", "manifold"]:
+            raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
+
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
+        self.backproject = backproject
 
+        # Trainable parameters
         # weight lies in the tangent space of the Hyperboloid origin, so the time coordinate along axis is zero
         self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim - 1)))
         # Scalar bias (initialized to small random values)
@@ -68,8 +84,6 @@ class HypRegressionHyperboloid(nnx.Module):
         self,
         x: Float[Array, "batch in_dim"],
         c: float = 1.0,
-        axis: int = -1,
-        backproject: bool = True,
     ) -> Float[Array, "batch out_dim"]:
         """
         Forward pass through the hyperbolic regression layer.
@@ -80,21 +94,15 @@ class HypRegressionHyperboloid(nnx.Module):
             Input tensor where the hyperbolic_axis is last
         c : float
             Manifold curvature (default: 1.0)
-        axis : int
-            Axis along which the tensor is hyperbolic (default: -1)
-        backproject : bool
-            Whether to project results back to the manifold (default: True)
 
         Returns
         -------
         res : Array of shape (batch, out_dim)
             Multinomial linear regression scores
         """
-        assert axis == -1, "axis must be -1, reshape your tensor accordingly."
-
-        # Map to manifold if needed
+        # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = self.manifold.expmap_0(x, c, axis=axis, backproject=backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
 
         # Compute multinomial linear regression
         res = compute_mlr_hyperboloid(
@@ -102,7 +110,6 @@ class HypRegressionHyperboloid(nnx.Module):
             self.weight.value,
             self.bias.value,
             c,
-            axis,
             self.clamping_factor,
             self.smoothing_factor,
         )

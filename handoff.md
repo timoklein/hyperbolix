@@ -9,7 +9,7 @@
 - ✅ **lax.switch for versions**: Poincaré and Hyperboloid use integer version indices
 - ✅ **jnp.finfo approach**: Removed dtype conditionals, use `jnp.finfo(x.dtype).eps` directly
 - ✅ **checkify error handling**: Created `*_checked.py` modules for runtime validation
-- ⏳ **Pending**: Move NN layer assertions to `__init__`, update jit_wrappers.py
+- ✅ **NN layer refactor**: Moved assertions to `__init__`, added backproject attribute, updated for vmap API
 
 **Test Status**:
 - **Phase 1 (Manifolds)**: Tests adapted to vmap API, not yet run
@@ -378,9 +378,16 @@ Following `idiomatic_jax.md` recommendations, implemented revolutionary vmap-bas
    - `test_math_utils.py`: Removed `_get_array_eps` test
    - `test_checkify.py`: Created comprehensive checkify test suite
 
+6. **Issue 6 - NN layer vmap refactor** (2025-10-10):
+   - Moved `assert` statements to `__init__`, converted to `ValueError`
+   - Added `backproject` as layer attribute (enables static_argnums in vmap)
+   - Updated all manifold calls to use `jax.vmap` for batch operations
+   - Removed `axis` parameter from all layers (always -1)
+   - Updated helpers: `safe_conformal_factor`, `compute_mlr_*` use axis=-1
+   - Simplified `__call__` signatures: `(self, x, c=1.0)`
+
 ### **Pending**:
 
-6. **Issue 6 - NN layer assertions**: Move from `__call__` to `__init__`
 7. **Update jit_wrappers.py** for new API
 8. **Run adapted tests** to verify correctness
 
@@ -389,6 +396,8 @@ Following `idiomatic_jax.md` recommendations, implemented revolutionary vmap-bas
 - `src/hyperbolix_jax/manifolds/{euclidean,poincare,hyperboloid}_checked.py` - NEW
 - `src/hyperbolix_jax/manifolds/__init__.py` - export checked modules
 - `src/hyperbolix_jax/utils/math_utils.py` - jnp.finfo approach
+- `src/hyperbolix_jax/nn_layers/*.py` - vmap API, assertions in __init__, backproject attribute
+- `src/hyperbolix_jax/nn_layers/helpers.py` - removed axis parameter from helpers
 - `tests/jax/test_manifolds.py` - vmap batching
 - `tests/jax/test_math_utils.py` - removed _get_array_eps
 - `tests/jax/test_checkify.py` - NEW

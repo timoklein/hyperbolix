@@ -1,4 +1,10 @@
-"""Standard hyperbolic neural network layers (wrappers around manifold operations)."""
+"""Standard hyperbolic neural network layers (wrappers around manifold operations).
+
+These layers are designed to be JIT-compatible with nnx.jit. All configuration parameters
+(manifold_module, hyperbolic_axis, backproject) are treated as static and will be baked
+into the compiled function. Changing these values after JIT compilation will trigger
+automatic recompilation.
+"""
 
 from typing import Any
 
@@ -15,12 +21,20 @@ class Expmap(nnx.Module):
     manifold_module : module
         The hyperbolic manifold module (e.g., poincare, hyperboloid)
     hyperbolic_axis : int
-        Axis along which the input tensor is hyperbolic (default: -1)
+        Axis along which the input tensor is hyperbolic (default: -1).
+        Note: This is a static configuration.
     backproject : bool
-        Whether to project results back to the manifold (default: True)
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is fully compatible with nnx.jit.
     """
 
     def __init__(self, manifold_module: Any, hyperbolic_axis: int = -1, backproject: bool = True):
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject
@@ -39,12 +53,20 @@ class Expmap0(nnx.Module):
     manifold_module : module
         The hyperbolic manifold module (e.g., poincare, hyperboloid)
     hyperbolic_axis : int
-        Axis along which the input tensor is hyperbolic (default: -1)
+        Axis along which the input tensor is hyperbolic (default: -1).
+        Note: This is a static configuration.
     backproject : bool
-        Whether to project results back to the manifold (default: True)
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is fully compatible with nnx.jit.
     """
 
     def __init__(self, manifold_module: Any, hyperbolic_axis: int = -1, backproject: bool = True):
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject
@@ -63,12 +85,20 @@ class Retraction(nnx.Module):
     manifold_module : module
         The hyperbolic manifold module (e.g., poincare, hyperboloid)
     hyperbolic_axis : int
-        Axis along which the input tensor is hyperbolic (default: -1)
+        Axis along which the input tensor is hyperbolic (default: -1).
+        Note: This is a static configuration.
     backproject : bool
-        Whether to project results back to the manifold (default: True)
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is fully compatible with nnx.jit.
     """
 
     def __init__(self, manifold_module: Any, hyperbolic_axis: int = -1, backproject: bool = True):
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject
@@ -87,12 +117,20 @@ class Logmap(nnx.Module):
     manifold_module : module
         The hyperbolic manifold module (e.g., poincare, hyperboloid)
     hyperbolic_axis : int
-        Axis along which the input tensor is hyperbolic (default: -1)
+        Axis along which the input tensor is hyperbolic (default: -1).
+        Note: This is a static configuration.
     backproject : bool
-        Whether to project results back to the tangent space (default: True)
+        Whether to project results back to the tangent space (default: True).
+        Note: This is a static configuration.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is fully compatible with nnx.jit.
     """
 
     def __init__(self, manifold_module: Any, hyperbolic_axis: int = -1, backproject: bool = True):
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject
@@ -111,12 +149,20 @@ class Logmap0(nnx.Module):
     manifold_module : module
         The hyperbolic manifold module (e.g., poincare, hyperboloid)
     hyperbolic_axis : int
-        Axis along which the input tensor is hyperbolic (default: -1)
+        Axis along which the input tensor is hyperbolic (default: -1).
+        Note: This is a static configuration.
     backproject : bool
-        Whether to project results back to the tangent space (default: True)
+        Whether to project results back to the tangent space (default: True).
+        Note: This is a static configuration.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is fully compatible with nnx.jit.
     """
 
     def __init__(self, manifold_module: Any, hyperbolic_axis: int = -1, backproject: bool = True):
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject
@@ -135,10 +181,17 @@ class Proj(nnx.Module):
     manifold_module : module
         The hyperbolic manifold module (e.g., poincare, hyperboloid)
     hyperbolic_axis : int
-        Axis along which the input tensor is hyperbolic (default: -1)
+        Axis along which the input tensor is hyperbolic (default: -1).
+        Note: This is a static configuration.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is fully compatible with nnx.jit.
     """
 
     def __init__(self, manifold_module: Any, hyperbolic_axis: int = -1):
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.hyperbolic_axis = hyperbolic_axis
 
@@ -157,10 +210,17 @@ class TanProj(nnx.Module):
     manifold_module : module
         The hyperbolic manifold module (e.g., poincare, hyperboloid)
     hyperbolic_axis : int
-        Axis along which the input tensor is hyperbolic (default: -1)
+        Axis along which the input tensor is hyperbolic (default: -1).
+        Note: This is a static configuration.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is fully compatible with nnx.jit.
     """
 
     def __init__(self, manifold_module: Any, hyperbolic_axis: int = -1):
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.hyperbolic_axis = hyperbolic_axis
 
@@ -178,11 +238,19 @@ class HyperbolicActivation(nnx.Module):
     manifold_module : module
         The hyperbolic manifold module (e.g., poincare, hyperboloid)
     activation : callable
-        The activation function to apply in the tangent space at the manifold origin
+        The activation function to apply in the tangent space at the manifold origin.
+        Note: This is a static configuration.
     hyperbolic_axis : int
-        Axis along which the input tensor is hyperbolic (default: -1)
+        Axis along which the input tensor is hyperbolic (default: -1).
+        Note: This is a static configuration.
     backproject : bool
-        Whether to project results back to the manifold (default: True)
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is fully compatible with nnx.jit.
     """
 
     def __init__(
@@ -192,6 +260,7 @@ class HyperbolicActivation(nnx.Module):
         hyperbolic_axis: int = -1,
         backproject: bool = True,
     ):
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.hyperbolic_axis = hyperbolic_axis
         self.backproject = backproject

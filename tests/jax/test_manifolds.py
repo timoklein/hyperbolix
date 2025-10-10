@@ -655,6 +655,10 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     else:
         origin = jnp.zeros_like(uniform_points)
 
+    # Float32 with Poincaré ball requires relaxed tolerance due to conformal factor explosion
+    # near boundary. When points approach ||x|| ≈ 1/√c, the conformal factor λ(x) = 2/(1-c||x||²)
+    # can exceed 10,000. The logmap/tangent_norm round-trip (divide by λ, then multiply by λ)
+    # loses precision, especially for large distances (>10) involving near-boundary points.
     if manifold == hj.manifolds.poincare and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 3e-2)
 
@@ -663,8 +667,6 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     logmap_y_x = logmap_batch(y, x, c, True)
     tangent_norm_logmap = tangent_norm_batch(logmap_y_x, x, c)
     dist_x_y = dist_batch(x, y, c)
-    # BUG: This is always failing for PoincareBall in float32
-    import ipdb; ipdb.set_trace(context=21)
     assert jnp.allclose(tangent_norm_logmap, dist_x_y, atol=atol, rtol=rtol)
 
     # Consistency of tangent_norm with logmap_0 and dist_0

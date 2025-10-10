@@ -32,7 +32,18 @@ class HypLinearPoincare(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization
     input_space : str
-        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold')
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+    backproject : bool
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space, backproject)
+        are treated as static and will be baked into the compiled function. Changing these values after
+        JIT compilation will trigger automatic recompilation.
 
     References
     ----------
@@ -48,13 +59,19 @@ class HypLinearPoincare(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
+        backproject: bool = True,
     ):
-        assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
+        if input_space not in ["tangent", "manifold"]:
+            raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
+
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
+        self.backproject = backproject
 
+        # Trainable parameters
         # Tangent space weight (Euclidean)
         self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
         # Manifold bias (initialized to small random values to avoid gradient issues at origin)
@@ -64,8 +81,6 @@ class HypLinearPoincare(nnx.Module):
         self,
         x: Float[Array, "batch in_dim"],
         c: float = 1.0,
-        axis: int = -1,
-        backproject: bool = True,
     ) -> Float[Array, "batch out_dim"]:
         """
         Forward pass through the hyperbolic linear layer.
@@ -76,34 +91,29 @@ class HypLinearPoincare(nnx.Module):
             Input tensor where the hyperbolic_axis is last
         c : float
             Manifold curvature (default: 1.0)
-        axis : int
-            Axis along which the tensor is hyperbolic (default: -1)
-        backproject : bool
-            Whether to project results back to the manifold (default: True)
 
         Returns
         -------
         res : Array of shape (batch, out_dim)
             Output on the Poincaré ball manifold
         """
-        assert axis == -1, "axis must be -1, reshape your tensor accordingly."
+        # Project bias to manifold (bias is (1, out_dim), squeeze to (out_dim,))
+        bias = self.manifold.proj(self.bias.squeeze(0), c)
 
-        # Project bias to manifold
-        bias = self.manifold.proj(self.bias, c, axis=axis)
-
-        # Map to tangent space if needed
+        # Map to tangent space if needed (static branch - JIT friendly)
         if self.input_space == "manifold":
-            x = self.manifold.logmap_0(x, c, axis=axis)
+            x = jax.vmap(self.manifold.logmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
 
         # Matrix-vector multiplication in tangent space at origin
         # (batch, in_dim) @ (in_dim, out_dim) -> (batch, out_dim)
         x = jnp.einsum("bi,oi->bo", x, self.weight)
 
         # Map back to manifold
-        x = self.manifold.expmap_0(x, c, axis=axis, backproject=backproject)
+        x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
 
         # Manifold bias addition (Möbius addition for Poincaré)
-        res = self.manifold.addition(x, bias, c, axis=axis, backproject=backproject)
+        # Broadcast bias to match batch dimension
+        res = jax.vmap(self.manifold.addition, in_axes=(0, None, None, None), out_axes=0)(x, bias, c, self.backproject)
         return res
 
 
@@ -127,11 +137,21 @@ class HypLinearPoincarePP(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization
     input_space : str
-        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold')
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
+        Note: This is a static configuration - changing it after initialization requires recompilation.
     clamping_factor : float
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    backproject : bool
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space, backproject,
+        clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -149,15 +169,21 @@ class HypLinearPoincarePP(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        backproject: bool = True,
     ):
-        assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
+        if input_space not in ["tangent", "manifold"]:
+            raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
+
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
+        self.backproject = backproject
 
+        # Trainable parameters
         # Tangent space weight
         self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
         # Scalar bias
@@ -167,8 +193,6 @@ class HypLinearPoincarePP(nnx.Module):
         self,
         x: Float[Array, "batch in_dim"],
         c: float = 1.0,
-        axis: int = -1,
-        backproject: bool = True,
     ) -> Float[Array, "batch out_dim"]:
         """
         Forward pass through the HNN++ hyperbolic linear layer.
@@ -179,21 +203,15 @@ class HypLinearPoincarePP(nnx.Module):
             Input tensor where the hyperbolic_axis is last
         c : float
             Manifold curvature (default: 1.0)
-        axis : int
-            Axis along which the tensor is hyperbolic (default: -1)
-        backproject : bool
-            Whether to project results back to the manifold (default: True)
 
         Returns
         -------
         res : Array of shape (batch, out_dim)
             Output on the Poincaré ball manifold
         """
-        assert axis == -1, "axis must be -1, reshape your tensor accordingly."
-
-        # Map to manifold if needed
+        # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = self.manifold.expmap_0(x, c, axis=axis, backproject=backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
 
         # Compute multinomial linear regression
         v = compute_mlr_poincare_pp(
@@ -201,7 +219,6 @@ class HypLinearPoincarePP(nnx.Module):
             self.weight.value,
             self.bias.value,
             c,
-            axis,
             self.clamping_factor,
             self.smoothing_factor,
         )
@@ -209,11 +226,12 @@ class HypLinearPoincarePP(nnx.Module):
         # Generalized linear transformation
         sqrt_c = jnp.sqrt(c)
         w = sinh(sqrt_c * v) / sqrt_c  # (batch, out_dim)
-        w2 = jnp.sum(w**2, axis=axis, keepdims=True)  # (batch, 1)
+        w2 = jnp.sum(w**2, axis=-1, keepdims=True)  # (batch, 1)
         denom = 1 + jnp.sqrt(1 + c * w2)  # (batch, 1)
         res = w / denom  # (batch, out_dim)
 
-        if backproject:
-            res = self.manifold.proj(res, c, axis=axis)
+        # Backproject if needed (static branch - JIT friendly)
+        if self.backproject:
+            res = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(res, c)
 
         return res

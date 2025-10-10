@@ -30,20 +30,24 @@ def _get_max_norm_eps(x: Float[Array, "..."]) -> float:
 def safe_conformal_factor(
     x: Float[Array, "..."],
     c: float,
-    *,
-    axis: int = -1,
 ) -> Float[Array, "..."]:
     """Numerically stable conformal factor λ(x) = 2 / (1 - c||x||²).
 
     Mirrors the manifold implementation to avoid division by values near zero when
     points approach the Poincaré ball boundary.
-    """
 
+    Args:
+        x: Poincaré ball point(s), shape (..., dim)
+        c: Manifold curvature
+
+    Returns:
+        Conformal factor, shape (..., 1)
+    """
     dtype = x.dtype
     c_arr = jnp.asarray(c, dtype=dtype)
     sqrt_c = jnp.sqrt(c_arr)
     max_norm_eps = jnp.asarray(_get_max_norm_eps(x), dtype=dtype)
-    x_norm_sq = jnp.sum(x**2, axis=axis, keepdims=True)
+    x_norm_sq = jnp.sum(x**2, axis=-1, keepdims=True)
     denom_min = 2 * sqrt_c * max_norm_eps - c_arr * max_norm_eps**2
     denom = jnp.maximum(jnp.asarray(1.0, dtype=dtype) - c_arr * x_norm_sq, denom_min)
     return 2.0 / denom
@@ -77,7 +81,6 @@ def compute_mlr_hyperboloid(
     z: Float[Array, "out_dim in_dim_minus_1"],
     r: Float[Array, "out_dim 1"],
     c: float,
-    hyperbolic_axis: int,
     clamping_factor: float,
     smoothing_factor: float,
     min_enorm: float = 1e-15,
@@ -90,13 +93,11 @@ def compute_mlr_hyperboloid(
     x : Array (batch, in_dim)
         Hyperboloid point(s)
     z : Array (out_dim, in_dim-1)
-        Hyperplane tangent normal(s)
+        Hyperplane tangent normal(s) in tangent space at origin (time coordinate omitted)
     r : Array (out_dim, 1)
         Hyperplane Hyperboloid translation(s) defined by the scalar r and z
     c : float
         Manifold curvature
-    hyperbolic_axis : int
-        Axis along which the tensor is hyperbolic
     clamping_factor : float
         Clamping value for the output
     smoothing_factor : float
@@ -114,17 +115,11 @@ def compute_mlr_hyperboloid(
     Ahmad Bdeir, Kristian Schwethelm, and Niels Landwehr. "Fully hyperbolic convolutional neural networks for computer vision."
         arXiv preprint arXiv:2303.15919 (2023).
     """
-    assert x.shape[hyperbolic_axis] == z.shape[hyperbolic_axis] + 1, (
-        f"z/weight lies in the tangent space at the Hyperboloid origin, i.e. its time coordinate z0 is zero and hence omitted."
-        f"Thus, x needs to be of dimension {(x.shape[0], z.shape[hyperbolic_axis] + 1)} but is of shape {x.shape}"
-    )
-
     sqrt_c = jnp.sqrt(c)
     sqrt_cr = sqrt_c * r.T  # (1, out_dim)
-    z_norm = jnp.linalg.norm(z, ord=2, axis=hyperbolic_axis, keepdims=True).clip(min=min_enorm).T  # (1, out_dim)
-    x0 = x.take(0, axis=hyperbolic_axis, mode="wrap")[..., None]  # (batch, 1)
-    # Get space coordinates (all except first)
-    x_rem = jnp.take(x, jnp.arange(1, x.shape[hyperbolic_axis]), axis=hyperbolic_axis)  # (batch, in_dim-1)
+    z_norm = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm).T  # (1, out_dim)
+    x0 = x[:, 0:1]  # (batch, 1) - time coordinate
+    x_rem = x[:, 1:]  # (batch, in_dim-1) - space coordinates
     zx_rem = jnp.einsum("bi,oi->bo", x_rem, z)  # (batch, out_dim)
     alpha = -x0 * sinh(sqrt_cr) * z_norm + cosh(sqrt_cr) * zx_rem  # (batch, out_dim)
     asinh_arg = sqrt_c * alpha / z_norm  # (batch, out_dim)
@@ -145,7 +140,6 @@ def compute_mlr_poincare_pp(
     z: Float[Array, "out_dim in_dim"],
     r: Float[Array, "out_dim 1"],
     c: float,
-    hyperbolic_axis: int,
     clamping_factor: float,
     smoothing_factor: float,
     min_enorm: float = 1e-15,
@@ -163,8 +157,6 @@ def compute_mlr_poincare_pp(
         Hyperplane PoincareBall translation(s) defined by the scalar r and z
     c : float
         Manifold curvature
-    hyperbolic_axis : int
-        Axis along which the tensor is hyperbolic
     clamping_factor : float
         Clamping value for the output
     smoothing_factor : float
@@ -184,10 +176,10 @@ def compute_mlr_poincare_pp(
     """
     sqrt_c = jnp.sqrt(c)
     sqrt_c2r = 2 * sqrt_c * r.T  # (1, out_dim)
-    z_norm = jnp.linalg.norm(z, ord=2, axis=hyperbolic_axis, keepdims=True).clip(min=min_enorm)  # (out_dim, 1)
+    z_norm = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm)  # (out_dim, 1)
 
     # Compute conformal factor (lambda_x)
-    lambda_x = safe_conformal_factor(x, c, axis=hyperbolic_axis)  # (batch, 1)
+    lambda_x = safe_conformal_factor(x, c)  # (batch, 1)
 
     z_unitx = jnp.einsum("bi,oi->bo", x, z / z_norm)  # (batch, out_dim)
     asinh_arg = (1 - lambda_x) * sinh(sqrt_c2r) + sqrt_c * lambda_x * cosh(sqrt_c2r) * z_unitx  # (batch, out_dim)

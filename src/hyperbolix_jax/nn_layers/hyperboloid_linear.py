@@ -30,7 +30,17 @@ class HypLinearHyperboloid(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization
     input_space : str
-        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold')
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+    backproject : bool
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space, backproject)
+        are treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -46,13 +56,19 @@ class HypLinearHyperboloid(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
+        backproject: bool = True,
     ):
-        assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
+        if input_space not in ["tangent", "manifold"]:
+            raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
+
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
+        self.backproject = backproject
 
+        # Trainable parameters
         # Note: We only set the space coordinates since both parameters lie in the tangent space at the Hyperboloid origin
         # The time coordinate (first coordinate) is zero and omitted
         self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim - 1, in_dim - 1)))
@@ -63,8 +79,6 @@ class HypLinearHyperboloid(nnx.Module):
         self,
         x: Float[Array, "batch in_dim"],
         c: float = 1.0,
-        axis: int = -1,
-        backproject: bool = True,
     ) -> Float[Array, "batch out_dim"]:
         """
         Forward pass through the hyperbolic linear layer.
@@ -72,48 +86,49 @@ class HypLinearHyperboloid(nnx.Module):
         Parameters
         ----------
         x : Array of shape (batch, in_dim)
-            Input tensor where the hyperbolic_axis is last
+            Input tensor where the hyperbolic_axis is last. x.shape[-1] must equal self.in_dim.
         c : float
             Manifold curvature (default: 1.0)
-        axis : int
-            Axis along which the tensor is hyperbolic (default: -1)
-        backproject : bool
-            Whether to project results back to the manifold (default: True)
 
         Returns
         -------
         res : Array of shape (batch, out_dim)
             Output on the Hyperboloid manifold
-        """
-        assert axis == -1, "axis must be -1, reshape your tensor accordingly."
-        assert x.shape[axis] == self.in_dim, (
-            f"weight lies in the tangent space at the Hyperboloid origin, its time coordinate z0 is zero and hence omitted."
-            f"Thus, x needs to be of dimension {(x.shape[0], self.in_dim)} but is of shape {x.shape}"
-        )
 
-        # Map to tangent space if needed
+        Note
+        ----
+        The weight lies in the tangent space at the Hyperboloid origin, so its time coordinate is zero and omitted.
+        """
+        # Map to tangent space if needed (static branch - JIT friendly)
         if self.input_space == "manifold":
-            x = self.manifold.logmap_0(x, c, axis=axis, backproject=backproject)
+            x = jax.vmap(self.manifold.logmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
 
         # Matrix-Vector multiplication in the tangent space at the Hyperboloid origin
         # Extract space coordinates (all except first time coordinate)
-        x_rem = jnp.take(x, jnp.arange(1, x.shape[axis]), axis=axis)  # (batch, in_dim - 1)
+        x_rem = x[:, 1:]  # (batch, in_dim - 1)
         # Matrix multiply: (batch, in_dim-1) @ (in_dim-1, out_dim-1) -> (batch, out_dim-1)
         x = jnp.einsum("bi,oi->bo", x_rem, self.weight)
 
         # Since the result needs to lie in the tangent space at the origin we must concatenate the time coordinate back
-        x = jnp.concatenate([jnp.zeros_like(x[:, :1]), x], axis=axis)  # (batch, out_dim)
+        x = jnp.concatenate([jnp.zeros_like(x[:, :1]), x], axis=-1)  # (batch, out_dim)
 
         # Map back to manifold
-        x = self.manifold.expmap_0(x, c, axis=axis, backproject=backproject)  # (batch, out_dim)
+        x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)  # (batch, out_dim)
 
         # Bias addition via parallel transport and exponential map
         # Concatenate zero time coordinate to bias
-        bias = jnp.concatenate([jnp.zeros_like(self.bias[:, :1]), self.bias], axis=axis)  # (1, out_dim)
-        # Parallel transport bias from origin to x
-        pt_bias = self.manifold.ptransp_0(bias, x, c, axis=axis, backproject=backproject)  # (batch, out_dim)
-        # Add transported bias via exponential map
-        res = self.manifold.expmap(pt_bias, x, c, axis=axis, backproject=backproject)  # (batch, out_dim)
+        bias = jnp.concatenate([jnp.zeros_like(self.bias[:, :1]), self.bias], axis=-1)  # (1, out_dim)
+        bias = bias.squeeze(0)  # (out_dim,)
+
+        # Parallel transport bias from origin to each x (vmap over batch)
+        pt_bias = jax.vmap(self.manifold.ptransp_0, in_axes=(None, 0, None, None), out_axes=0)(
+            bias, x, c, self.backproject
+        )  # (batch, out_dim)
+
+        # Add transported bias via exponential map (vmap over batch)
+        res = jax.vmap(self.manifold.expmap, in_axes=(0, 0, None, None), out_axes=0)(
+            pt_bias, x, c, self.backproject
+        )  # (batch, out_dim)
 
         return res
 
@@ -140,7 +155,8 @@ class HypLinearHyperboloidFHNN(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization
     input_space : str
-        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold')
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
+        Note: This is a static configuration - changing it after initialization requires recompilation.
     init_scale : float
         Initial value for the sigmoid scale parameter (default: 2.3)
     learnable_scale : bool
@@ -148,9 +164,20 @@ class HypLinearHyperboloidFHNN(nnx.Module):
     eps : float
         Small value to ensure that the time coordinate is bigger than 1/sqrt(c) (default: 1e-5)
     activation : callable or None
-        Activation function to apply before the linear transformation (default: None)
+        Activation function to apply before the linear transformation (default: None).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
     dropout_rate : float or None
         Dropout rate to apply before the activation or linear transformation (default: None)
+    backproject : bool
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space, activation, backproject)
+        are treated as static and will be baked into the compiled function. The dropout layer handles train/eval
+        mode switching internally in a JIT-compatible way.
 
     References
     ----------
@@ -171,15 +198,21 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         eps: float = 1e-5,
         activation: Callable[[Array], Array] | None = None,
         dropout_rate: float | None = None,
+        backproject: bool = True,
     ):
-        assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
+        if input_space not in ["tangent", "manifold"]:
+            raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
+
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
         self.eps = eps
         self.activation = activation
+        self.backproject = backproject
 
+        # Trainable parameters
         # FHNN initializes the weights as tangent vectors w.r.t. the Hyperboloid origin
         bound = 0.02
         weight_init = jax.random.uniform(rngs.params(), (out_dim, in_dim), minval=-bound, maxval=bound)
@@ -192,9 +225,10 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         if learnable_scale:
             self.scale = nnx.Param(jnp.array(init_scale))
         else:
-            self.scale = nnx.Variable(jnp.array(init_scale))
+            # For non-learnable scale, store as regular Python float (static)
+            self.scale = init_scale
 
-        # Dropout layer
+        # Dropout layer (handles train/eval mode internally)
         if dropout_rate is not None and dropout_rate > 0:
             self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
         else:
@@ -204,8 +238,6 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         self,
         x: Float[Array, "batch in_dim"],
         c: float = 1.0,
-        axis: int = -1,
-        backproject: bool = True,
     ) -> Float[Array, "batch out_dim"]:
         """
         Forward pass through the FHNN hyperbolic linear layer.
@@ -213,33 +245,24 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         Parameters
         ----------
         x : Array of shape (batch, in_dim)
-            Input tensor where the hyperbolic_axis is last
+            Input tensor where the hyperbolic_axis is last. x.shape[-1] must equal self.in_dim.
         c : float
             Manifold curvature (default: 1.0)
-        axis : int
-            Axis along which the tensor is hyperbolic (default: -1)
-        backproject : bool
-            Whether to project results back to the manifold (default: True)
 
         Returns
         -------
         res : Array of shape (batch, out_dim)
             Output on the Hyperboloid manifold
         """
-        assert axis == -1, "axis must be -1, reshape your tensor accordingly."
-        assert x.shape[axis] == self.in_dim, (
-            f"x needs to be of dimension {(x.shape[0], self.in_dim)} but is of shape {x.shape}"
-        )
-
-        # Map to manifold if needed
+        # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = self.manifold.expmap_0(x, c, axis=axis, backproject=backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
 
-        # Apply activation if provided
+        # Apply activation if provided (static branch - JIT friendly)
         if self.activation is not None:
             x = self.activation(x)
 
-        # Apply dropout if provided
+        # Apply dropout if provided (static branch - JIT friendly)
         if self.dropout is not None:
             x = self.dropout(x)
 
@@ -251,15 +274,17 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         x_rem = x[:, 1:]  # (batch, out_dim - 1)
 
         # Compute time coordinate via scaled sigmoid (ensure scale is positive)
-        res0 = jnp.exp(self.scale.value) * jax.nn.sigmoid(x0) + 1 / jnp.sqrt(c) + self.eps  # (batch, 1)
+        # Handle both learnable (Param) and non-learnable (float) scale
+        scale_val = self.scale.value if isinstance(self.scale, nnx.Param) else self.scale
+        res0 = jnp.exp(scale_val) * jax.nn.sigmoid(x0) + 1 / jnp.sqrt(c) + self.eps  # (batch, 1)
 
         # Compute space coordinates scaling factor
-        x_rem_norm = jnp.linalg.norm(x_rem, ord=2, axis=axis, keepdims=True)  # (batch, 1)
+        x_rem_norm = jnp.linalg.norm(x_rem, ord=2, axis=-1, keepdims=True)  # (batch, 1)
         scale = jnp.sqrt(res0**2 - 1 / c) / x_rem_norm  # (batch, 1)
         res_rem = scale * x_rem  # (batch, out_dim - 1)
 
         # Concatenate time and space coordinates
-        res = jnp.concatenate([res0, res_rem], axis=axis)  # (batch, out_dim)
+        res = jnp.concatenate([res0, res_rem], axis=-1)  # (batch, out_dim)
 
         return res
 
@@ -287,7 +312,8 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization
     input_space : str
-        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold')
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
+        Note: This is a static configuration - changing it after initialization requires recompilation.
     init_scale : float
         Initial value for the sigmoid scale parameter (default: 2.3)
     learnable_scale : bool
@@ -295,9 +321,20 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
     eps : float
         Small value to ensure that the time coordinate is bigger than 1/sqrt(c) (default: 1e-5)
     activation : callable or None
-        Activation function to apply before the linear transformation (default: None)
+        Activation function to apply before the linear transformation (default: None).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
     normalize : bool
-        Whether to normalize the space coordinates before rescaling (default: False)
+        Whether to normalize the space coordinates before rescaling (default: False).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+    backproject : bool
+        Whether to project results back to the manifold (default: True).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space, activation,
+        normalize, backproject) are treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -318,8 +355,12 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         eps: float = 1e-5,
         activation: Callable[[Array], Array] | None = None,
         normalize: bool = False,
+        backproject: bool = True,
     ):
-        assert input_space in ["tangent", "manifold"], "input_space must be either 'tangent' or 'manifold'"
+        if input_space not in ["tangent", "manifold"]:
+            raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
+
+        # Static configuration (treated as compile-time constants for JIT)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -327,7 +368,9 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         self.eps = eps
         self.activation = activation
         self.normalize = normalize
+        self.backproject = backproject
 
+        # Trainable parameters
         bound = 0.02
         weight_init = jax.random.uniform(rngs.params(), (out_dim, in_dim), minval=-bound, maxval=bound)
         self.weight = nnx.Param(weight_init)
@@ -337,14 +380,13 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         if learnable_scale:
             self.scale = nnx.Param(jnp.array(init_scale))
         else:
-            self.scale = nnx.Variable(jnp.array(init_scale))
+            # For non-learnable scale, store as regular Python float (static)
+            self.scale = init_scale
 
     def __call__(
         self,
         x: Float[Array, "batch in_dim"],
         c: float = 1.0,
-        axis: int = -1,
-        backproject: bool = True,
     ) -> Float[Array, "batch out_dim"]:
         """
         Forward pass through the FHCNN hyperbolic linear layer.
@@ -352,29 +394,20 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         Parameters
         ----------
         x : Array of shape (batch, in_dim)
-            Input tensor where the hyperbolic_axis is last
+            Input tensor where the hyperbolic_axis is last. x.shape[-1] must equal self.in_dim.
         c : float
             Manifold curvature (default: 1.0)
-        axis : int
-            Axis along which the tensor is hyperbolic (default: -1)
-        backproject : bool
-            Whether to project results back to the manifold (default: True)
 
         Returns
         -------
         res : Array of shape (batch, out_dim)
             Output on the Hyperboloid manifold
         """
-        assert axis == -1, "axis must be -1, reshape your tensor accordingly."
-        assert x.shape[axis] == self.in_dim, (
-            f"x needs to be of dimension {(x.shape[0], self.in_dim)} but is of shape {x.shape}"
-        )
-
-        # Map to manifold if needed
+        # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = self.manifold.expmap_0(x, c, axis=axis, backproject=backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
 
-        # Apply activation if provided
+        # Apply activation if provided (static branch - JIT friendly)
         if self.activation is not None:
             x = self.activation(x)
 
@@ -385,12 +418,14 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         x0 = x[:, 0:1]  # (batch, 1)
         x_rem = x[:, 1:]  # (batch, out_dim - 1)
 
+        # Static branch - JIT friendly
         if self.normalize:
             # Normalize space coordinates
-            x_rem_norm = jnp.linalg.norm(x_rem, ord=2, axis=axis, keepdims=True)  # (batch, 1)
+            x_rem_norm = jnp.linalg.norm(x_rem, ord=2, axis=-1, keepdims=True)  # (batch, 1)
 
-            # Ensure scale is positive
-            scale = jnp.exp(self.scale.value) * jax.nn.sigmoid(x0)  # (batch, 1)
+            # Ensure scale is positive (handle both learnable and non-learnable scale)
+            scale_val = self.scale.value if isinstance(self.scale, nnx.Param) else self.scale
+            scale = jnp.exp(scale_val) * jax.nn.sigmoid(x0)  # (batch, 1)
 
             # Compute time coordinate
             res0 = jnp.sqrt(scale**2 + 1 / c + self.eps)  # (batch, 1)
@@ -398,20 +433,20 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
             # Compute normalized space coordinates
             res_rem = scale * x_rem / x_rem_norm  # (batch, out_dim - 1)
 
-            res = jnp.concatenate([res0, res_rem], axis=axis)  # (batch, out_dim)
+            res = jnp.concatenate([res0, res_rem], axis=-1)  # (batch, out_dim)
 
             # Cast vectors with small space norm to the origin
             # Create origin point
             origin_time = jnp.sqrt(1 / c) * jnp.ones_like(res0)
             origin_space = jnp.zeros_like(res_rem)
-            origin = jnp.concatenate([origin_time, origin_space], axis=axis)
+            origin = jnp.concatenate([origin_time, origin_space], axis=-1)
 
-            # Apply mask where x_rem_norm is very small
+            # Apply mask where x_rem_norm is very small (data-dependent control flow - JIT compatible with jnp.where)
             mask = x_rem_norm <= 1e-5
             res = jnp.where(mask, origin, res)
         else:
             # Compute the time component from the space component and concatenate
-            res0 = jnp.sqrt(jnp.sum(x_rem**2, axis=axis, keepdims=True) + 1 / c)  # (batch, 1)
-            res = jnp.concatenate([res0, x_rem], axis=axis)  # (batch, out_dim)
+            res0 = jnp.sqrt(jnp.sum(x_rem**2, axis=-1, keepdims=True) + 1 / c)  # (batch, 1)
+            res = jnp.concatenate([res0, x_rem], axis=-1)  # (batch, out_dim)
 
         return res

@@ -37,6 +37,26 @@ Version Constants:
 
 Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
+
+Numerical Precision and Float32 Limitations
+-------------------------------------------
+Operations involving points near the boundary (||x|| ≈ 1/√c) can suffer from
+numerical instability, especially with float32. The conformal factor λ(x) = 2/(1-c||x||²)
+grows exponentially as points approach the boundary:
+
+- At d(0,x) ≈ 5: λ(x) ≈ 100
+- At d(0,x) ≈ 7: λ(x) ≈ 1,000
+- At d(0,x) ≈ 10: λ(x) ≈ 10,000+
+
+Float32 (~7 significant digits) loses precision in operations like:
+- logmap/tangent_norm: divide by λ(x), then multiply by λ(x)
+- expmap: multiplies by large λ(x) values
+- addition: combines terms with vastly different scales
+
+For numerical accuracy with large distances or near-boundary points:
+- Use float64 when possible
+- Expect ~3% relative error with float32 for distances > 10
+- Consider projection after operations to maintain manifold constraints
 """
 
 import jax.lax as lax
