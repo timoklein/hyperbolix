@@ -8,7 +8,6 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 from hyperbolix_jax.utils.math_utils import (
-    _get_array_eps,
     acosh,
     atanh,
     cosh,
@@ -17,25 +16,6 @@ from hyperbolix_jax.utils.math_utils import (
     smooth_clamp_max,
     smooth_clamp_min,
 )
-
-
-def test_get_array_eps():
-    """Test epsilon extraction for different dtypes."""
-    print("Testing _get_array_eps...")
-
-    x_f32 = jnp.array([1.0], dtype=jnp.float32)
-    x_f64 = jnp.array([1.0], dtype=jnp.float64)
-
-    eps32 = _get_array_eps(x_f32)
-    eps64 = _get_array_eps(x_f64)
-
-    assert eps32 == jnp.finfo(jnp.float32).eps
-    assert eps64 == jnp.finfo(jnp.float64).eps
-    assert eps32 > eps64  # float32 has larger epsilon
-
-    print(f"  float32 eps: {eps32:.2e}")
-    print(f"  float64 eps: {eps64:.2e}")
-    print("  ✓ Epsilon extraction works correctly")
 
 
 def test_smooth_clamp_min():
@@ -251,7 +231,6 @@ def run_all_tests():
     """Run all math utils tests."""
     print("=== Testing JAX Math Utils ===\\n")
 
-    test_get_array_eps()
     test_smooth_clamp_min()
     test_smooth_clamp_max()
     test_smooth_clamp()

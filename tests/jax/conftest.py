@@ -102,8 +102,9 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
         random_radii = rng.random((num_pts, 1)).astype(np_dtype) ** (1.0 / dim)
         # Scale to ball of radius 1/√c
         points = (random_dirs * random_radii) / np.sqrt(c)
-        # Project to ensure they're strictly inside
-        return jnp.asarray(manifold.proj(jnp.asarray(points, dtype=dtype), c=c))
+        points = jnp.asarray(points, dtype=dtype)
+        proj_batch = jax.vmap(manifold.proj, in_axes=(0, None))
+        return proj_batch(points, c)
 
     elif manifold == hj.manifolds.hyperboloid:
         # Hyperboloid: generate points on upper sheet
@@ -134,8 +135,8 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
         points = jnp.asarray(points, dtype=dtype)
 
         # Project to ensure they're on the manifold
-        points = manifold.proj(points, c=c, axis=-1)
-        return points
+        proj_batch = jax.vmap(manifold.proj, in_axes=(0, None))
+        return proj_batch(points, c)
 
     else:
         raise ValueError("Unknown manifold module")

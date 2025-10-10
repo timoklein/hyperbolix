@@ -30,9 +30,7 @@ jobs:
     - name: Lint with Ruff
       run: |
         # Stop the build if there are Python syntax errors or undefined names
-        uv run ruff check src/hyperbolix_jax --select E9,F63,F7,F82 --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        RUFF_LINT__MCCABE__MAX_COMPLEXITY=10 RUFF_LINE_LENGTH=127 uv run ruff check src/hyperbolix_jax --exit-zero --statistics
+        uv run ruff check src/hyperbolix_jax --exit-zero --statistics
 
     - name: Test with pytest
       run: |

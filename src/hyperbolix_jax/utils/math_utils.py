@@ -3,20 +3,15 @@
 Direct JAX port of PyTorch math_utils.py with type annotations using jaxtyping.
 """
 
+import functools
+
+import jax
+import jax.nn as nn
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 
-def _get_array_eps(x: Float[Array, "..."]) -> float:
-    """Get machine epsilon for array's dtype."""
-    if x.dtype == jnp.float32:
-        return jnp.finfo(jnp.float32).eps
-    elif x.dtype == jnp.float64:
-        return jnp.finfo(jnp.float64).eps
-    else:
-        raise RuntimeError(f"Expected x to be floating-point, got {x.dtype}")
-
-
+@functools.partial(jax.jit, static_argnames=["smoothing_factor"])
 def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
     """Smoothly clamp array values to a minimum using softplus.
 
@@ -28,14 +23,15 @@ def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor:
     Returns:
         Array with values smoothly clamped above min_value
     """
-    eps = _get_array_eps(x)
+    eps = jnp.finfo(x.dtype).eps
     shift = min_value + eps
-    # JAX nn.softplus doesn't have beta, implement manually: softplus_beta(x) = log(1 + exp(beta*x))/beta
+    # Use JAX's numerically stable softplus: softplus_beta(x) = softplus(beta*x)/beta
     arg = smoothing_factor * (x - shift)
-    x_clamped = shift + jnp.log1p(jnp.exp(arg)) / smoothing_factor
+    x_clamped = shift + nn.softplus(arg) / smoothing_factor
     return jnp.where(x < shift, x_clamped, x)
 
 
+@functools.partial(jax.jit, static_argnames=["smoothing_factor"])
 def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
     """Smoothly clamp array values to a maximum using softplus.
 
@@ -47,13 +43,14 @@ def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor:
     Returns:
         Array with values smoothly clamped below max_value
     """
-    eps = _get_array_eps(x)
+    eps = jnp.finfo(x.dtype).eps
     shift = max_value - eps
     arg = smoothing_factor * (shift - x)
-    x_clamped = shift - jnp.log1p(jnp.exp(arg)) / smoothing_factor
+    x_clamped = shift - nn.softplus(arg) / smoothing_factor
     return jnp.where(x > shift, x_clamped, x)
 
 
+@functools.partial(jax.jit, static_argnames=["smoothing_factor"])
 def smooth_clamp(
     x: Float[Array, "..."], min_value: float, max_value: float, smoothing_factor: float = 50.0
 ) -> Float[Array, "..."]:
@@ -72,12 +69,12 @@ def smooth_clamp(
     return smooth_clamp_min(x, min_value, smoothing_factor=smoothing_factor)
 
 
+@jax.jit
 def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic cosine with overflow protection. Domain=(-inf, inf).
 
-    Clamps input to safe ranges to prevent overflow:
-    - float32: [-88, 88]
-    - float64: [-709, 709]
+    Clamps input to safe ranges to prevent overflow based on dtype.
+    Uses log(max) * 0.99 as safety margin.
 
     Args:
         x: Input array of any shape
@@ -85,18 +82,18 @@ def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     Returns:
         cosh(x) with overflow protection
     """
-    # Safe limits as specified in SLEEF library
-    clamp = 88.0 if x.dtype == jnp.float32 else 709.0
+    # Safe limit based on dtype: cosh(x) ≈ exp(x)/2 for large x, so x < log(max)
+    clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
     x = smooth_clamp(x, -clamp, clamp)
     return jnp.cosh(x)
 
 
+@jax.jit
 def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic sine with overflow protection. Domain=(-inf, inf).
 
-    Clamps input to safe ranges to prevent overflow:
-    - float32: [-88, 88]
-    - float64: [-709, 709]
+    Clamps input to safe ranges to prevent overflow based on dtype.
+    Uses log(max) * 0.99 as safety margin.
 
     Args:
         x: Input array of any shape
@@ -104,12 +101,13 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     Returns:
         sinh(x) with overflow protection
     """
-    # Safe limits as specified in SLEEF library
-    clamp = 88.0 if x.dtype == jnp.float32 else 709.0
+    # Safe limit based on dtype: sinh(x) ≈ exp(x)/2 for large x, so x < log(max)
+    clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
     x = smooth_clamp(x, -clamp, clamp)
     return jnp.sinh(x)
 
 
+@jax.jit
 def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic cosine with domain clamping. Domain=[1, inf).
 
@@ -123,6 +121,20 @@ def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return jnp.acosh(x)
 
 
+@jax.jit
+def asinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
+    """Inverse hyperbolic sine. Domain=(-inf, inf).
+
+    Args:
+        x: Input array of any shape
+
+    Returns:
+        asinh(x)
+    """
+    return jnp.asinh(x)
+
+
+@jax.jit
 def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic tangent with domain clamping. Domain=(-1, 1).
 
@@ -134,6 +146,6 @@ def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     Returns:
         atanh(x) with domain protection
     """
-    eps = _get_array_eps(x)
+    eps = jnp.finfo(x.dtype).eps
     x = jnp.clip(x, -1.0 + eps, 1.0 - eps)
     return jnp.atanh(x)
