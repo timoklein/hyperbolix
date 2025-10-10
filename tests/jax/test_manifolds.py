@@ -103,37 +103,37 @@ def test_addition(manifold_and_c, tolerance: tuple[float, float], uniform_points
     x, y = _split(uniform_points, 2)
 
     # Batch operations using vmap
-    addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None, None))
+    addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None))
 
     # Create origin/identity element
     identity = jnp.zeros_like(uniform_points)
 
     # Additive identity: 0 ⊕ x = x
-    result1 = addition_batch(identity, uniform_points, c, True)
+    result1 = addition_batch(identity, uniform_points, c)
     assert jnp.allclose(result1, uniform_points, atol=atol, rtol=rtol)
 
     # Additive identity: x ⊕ 0 = x
-    result2 = addition_batch(uniform_points, identity, c, True)
+    result2 = addition_batch(uniform_points, identity, c)
     assert jnp.allclose(result2, uniform_points, atol=atol, rtol=rtol)
 
     # Additive inverse: (-x) ⊕ x ≈ 0
-    result3 = addition_batch(-uniform_points, uniform_points, c, True)
+    result3 = addition_batch(-uniform_points, uniform_points, c)
     assert jnp.allclose(result3, identity, atol=atol, rtol=rtol)
 
     # Additive inverse: x ⊕ (-x) ≈ 0
-    result4 = addition_batch(uniform_points, -uniform_points, c, True)
+    result4 = addition_batch(uniform_points, -uniform_points, c)
     # Add 1 to avoid precision issues with values very close to zero
     assert jnp.allclose(result4 + 1, identity + 1, atol=atol, rtol=rtol)
 
     # Distributive law: -(x ⊕ y) = (-x) ⊕ (-y)
-    result5 = addition_batch(x, y, c, True)
-    assert jnp.allclose(-result5, addition_batch(-x, -y, c, True), atol=atol, rtol=rtol)
+    result5 = addition_batch(x, y, c)
+    assert jnp.allclose(-result5, addition_batch(-x, -y, c), atol=atol, rtol=rtol)
 
     # Gyrotriangle inequality: ‖x ⊕ y‖ ≤ ‖x‖ ⊕ ‖y‖
     xy_norm = jnp.linalg.norm(result5, axis=-1, keepdims=True)
     x_norm = jnp.linalg.norm(x, axis=-1, keepdims=True)
     y_norm = jnp.linalg.norm(y, axis=-1, keepdims=True)
-    norm_sum = addition_batch(x_norm, y_norm, c, True)
+    norm_sum = addition_batch(x_norm, y_norm, c)
     assert jnp.all(xy_norm <= norm_sum + atol)
 
     # Results should stay on manifold
@@ -156,20 +156,20 @@ def test_scalar_mul(
     identity_scalars = jnp.ones(uniform_points.shape[0], dtype=uniform_points.dtype)
 
     # Batch operations using vmap
-    scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None, None))
-    addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None, None))
+    scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
+    addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None))
 
     # Multiplicative identity: 1 ⊗ x = x
-    result1 = scalar_mul_batch(identity_scalars, uniform_points, c, True)
+    result1 = scalar_mul_batch(identity_scalars, uniform_points, c)
     assert jnp.allclose(result1, uniform_points, atol=atol, rtol=rtol)
 
     # Associative law: (r1*r2) ⊗ x = r1 ⊗ (r2 ⊗ x)
-    result2 = scalar_mul_batch(r1 * r2, uniform_points, c, True)
-    result3 = scalar_mul_batch(r1, scalar_mul_batch(r2, uniform_points, c, True), c, True)
+    result2 = scalar_mul_batch(r1 * r2, uniform_points, c)
+    result3 = scalar_mul_batch(r1, scalar_mul_batch(r2, uniform_points, c), c)
     assert jnp.allclose(result2, result3, atol=atol, rtol=rtol)
 
     # Commutative in scalars: (r1*r2) ⊗ x = (r2*r1) ⊗ x
-    result4 = scalar_mul_batch(r2 * r1, uniform_points, c, True)
+    result4 = scalar_mul_batch(r2 * r1, uniform_points, c)
     assert jnp.allclose(result2, result4, atol=atol, rtol=rtol)
 
     # Additional properties for Euclidean and PoincareBall (not Hyperboloid)
@@ -178,36 +178,36 @@ def test_scalar_mul(
         n = rng.integers(3, 10)
         n_sum = jnp.zeros_like(uniform_points)
         for _ in range(n):
-            n_sum = addition_batch(n_sum, uniform_points, c, True)
+            n_sum = addition_batch(n_sum, uniform_points, c)
         n_scalar = jnp.ones(uniform_points.shape[0], dtype=uniform_points.dtype) * n
-        result_n = scalar_mul_batch(n_scalar, uniform_points, c, True)
+        result_n = scalar_mul_batch(n_scalar, uniform_points, c)
         assert jnp.allclose(n_sum, result_n, atol=atol, rtol=rtol)
 
         # Distributive law: (r1 + r2) ⊗ x = (r1 ⊗ x) ⊕ (r2 ⊗ x)
-        result_dist = scalar_mul_batch(r1 + r2, uniform_points, c, True)
-        result_r1 = scalar_mul_batch(r1, uniform_points, c, True)
-        result_r2 = scalar_mul_batch(r2, uniform_points, c, True)
-        result_add = addition_batch(result_r1, result_r2, c, True)
+        result_dist = scalar_mul_batch(r1 + r2, uniform_points, c)
+        result_r1 = scalar_mul_batch(r1, uniform_points, c)
+        result_r2 = scalar_mul_batch(r2, uniform_points, c)
+        result_add = addition_batch(result_r1, result_r2, c)
         assert jnp.allclose(result_dist, result_add, atol=atol, rtol=rtol)
 
         # Distributive law: (-r) ⊗ x = r ⊗ (-x)
-        result_neg_r = scalar_mul_batch(-r1, uniform_points, c, True)
-        result_r_neg = scalar_mul_batch(r1, -uniform_points, c, True)
+        result_neg_r = scalar_mul_batch(-r1, uniform_points, c)
+        result_r_neg = scalar_mul_batch(r1, -uniform_points, c)
         assert jnp.allclose(result_neg_r, result_r_neg, atol=atol, rtol=rtol)
 
         # Scaling property: direction preservation
         r_abs = jnp.abs(r1)
-        result_scaled = scalar_mul_batch(r_abs, uniform_points, c, True)
-        result_norm = jnp.linalg.norm(scalar_mul_batch(r1, uniform_points, c, True), axis=-1, keepdims=True)
+        result_scaled = scalar_mul_batch(r_abs, uniform_points, c)
+        result_norm = jnp.linalg.norm(scalar_mul_batch(r1, uniform_points, c), axis=-1, keepdims=True)
         # Normalize to get direction
         left_side = result_scaled / result_norm
         right_side = uniform_points / jnp.linalg.norm(uniform_points, axis=-1, keepdims=True)
         assert jnp.allclose(left_side, right_side, atol=atol, rtol=rtol)
 
         # Homogeneity property: ‖r ⊗ x‖ = |r| ⊗ ‖x‖
-        result_norm_lhs = jnp.linalg.norm(scalar_mul_batch(r1, uniform_points, c, True), axis=-1, keepdims=True)
+        result_norm_lhs = jnp.linalg.norm(scalar_mul_batch(r1, uniform_points, c), axis=-1, keepdims=True)
         x_norm = jnp.linalg.norm(uniform_points, axis=-1, keepdims=True)
-        result_norm_rhs = scalar_mul_batch(r_abs, x_norm, c, True)
+        result_norm_rhs = scalar_mul_batch(r_abs, x_norm, c)
         assert jnp.allclose(result_norm_lhs, result_norm_rhs, atol=atol, rtol=rtol)
 
     # Numerical stability tests
@@ -232,18 +232,18 @@ def test_scalar_mul(
 
     # Stability of multiplication with zero scalars
     r_zero_arr = jnp.zeros(uniform_points.shape[0])
-    res = scalar_mul_batch(r_zero_arr, uniform_points, c, True)
+    res = scalar_mul_batch(r_zero_arr, uniform_points, c)
     assert jnp.all(jnp.isfinite(res))
     assert _batch_is_in_manifold(manifold, res, c)
     assert jnp.allclose(res + 1, origin + 1, atol=atol, rtol=rtol)
 
-    res = manifold.scalar_mul(r_zero, v_eps_norm[0], c, True)
+    res = manifold.scalar_mul(r_zero, v_eps_norm[0], c)
     assert jnp.all(jnp.isfinite(res))
     assert manifold.is_in_manifold(res, c=c)
     assert jnp.allclose(res + 1, origin[0] + 1, atol=atol, rtol=rtol)
 
     # Stability of multiplication with small scalars
-    res = manifold.scalar_mul(r_small, v_eps_norm[0], c, True)
+    res = manifold.scalar_mul(r_small, v_eps_norm[0], c)
     assert jnp.all(jnp.isfinite(res))
     assert manifold.is_in_manifold(res, c=c)
     assert res[0] > r_zero
@@ -254,11 +254,11 @@ def test_scalar_mul(
         # Note: Hyperboloid manifold may fail is_in_manifold check with large scalars
         # due to numerical instabilities in the Minkowski inner product
         r_large_arr = jnp.ones(uniform_points.shape[0]) * r_large
-        res = scalar_mul_batch(r_large_arr, uniform_points, c, True)
+        res = scalar_mul_batch(r_large_arr, uniform_points, c)
         assert jnp.all(jnp.isfinite(res))
         assert _batch_is_in_manifold(manifold, res, c)
 
-    res = manifold.scalar_mul(r_large, v_eps_norm[0], c, True)
+    res = manifold.scalar_mul(r_large, v_eps_norm[0], c)
     assert jnp.all(jnp.isfinite(res))
     assert manifold.is_in_manifold(res, c=c)
     assert res[0] > r_zero
@@ -287,67 +287,67 @@ def test_gyration(
     x, y, z, a = _split(uniform_points, 4)
 
     # Batch operations using vmap
-    addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None, None))
+    addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None))
     gyration_batch = jax.vmap(manifold._gyration, in_axes=(0, 0, 0, None))
-    scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None, None))
+    scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
 
     # (Gyro-)commutative law: x ⊕ y = gyr[x,y](y ⊕ x)
-    xy = addition_batch(x, y, c, True)
-    yx = addition_batch(y, x, c, True)
+    xy = addition_batch(x, y, c)
+    yx = addition_batch(y, x, c)
     gyr_yx = gyration_batch(x, y, yx, c)
     assert jnp.allclose(xy, gyr_yx, atol=atol, rtol=rtol)
 
     # Gyrosum inversion law: -(x ⊕ y) = gyr[x,y]((-y) ⊕ (-x))
-    neg_xy = -addition_batch(x, y, c, True)
-    neg_y_neg_x = addition_batch(-y, -x, c, True)
+    neg_xy = -addition_batch(x, y, c)
+    neg_y_neg_x = addition_batch(-y, -x, c)
     gyr_neg = gyration_batch(x, y, neg_y_neg_x, c)
     assert jnp.allclose(neg_xy, gyr_neg, atol=atol, rtol=rtol)
 
     # Left (gyro-)associative law: x ⊕ (y ⊕ z) = (x ⊕ y) ⊕ gyr[x,y]z
-    left_side = addition_batch(x, addition_batch(y, z, c, True), c, True)
+    left_side = addition_batch(x, addition_batch(y, z, c), c)
     gyr_z = gyration_batch(x, y, z, c)
-    right_side = addition_batch(addition_batch(x, y, c, True), gyr_z, c, True)
+    right_side = addition_batch(addition_batch(x, y, c), gyr_z, c)
     assert jnp.allclose(left_side, right_side, atol=atol, rtol=rtol)
 
     # Right (gyro-)associative law: (x ⊕ y) ⊕ z = x ⊕ (y ⊕ gyr[y,x]z)
-    left_side = addition_batch(addition_batch(x, y, c, True), z, c, True)
+    left_side = addition_batch(addition_batch(x, y, c), z, c)
     gyr_yx_z = gyration_batch(y, x, z, c)
-    right_side = addition_batch(x, addition_batch(y, gyr_yx_z, c, True), c, True)
+    right_side = addition_batch(x, addition_batch(y, gyr_yx_z, c), c)
     assert jnp.allclose(left_side, right_side, atol=atol, rtol=rtol)
 
     # Möbius addition under gyrations: gyr[x,y](z ⊕ a) = gyr[x,y]z ⊕ gyr[x,y]a
-    za = addition_batch(z, a, c, True)
+    za = addition_batch(z, a, c)
     gyr_za = gyration_batch(x, y, za, c)
     gyr_z = gyration_batch(x, y, z, c)
     gyr_a = gyration_batch(x, y, a, c)
-    gyr_z_gyr_a = addition_batch(gyr_z, gyr_a, c, True)
+    gyr_z_gyr_a = addition_batch(gyr_z, gyr_a, c)
     assert jnp.allclose(gyr_za, gyr_z_gyr_a, atol=atol, rtol=rtol)
 
     # Left loop property: gyr[x,y]z = gyr[x⊕y,y]z
     gyr_xy = gyration_batch(x, y, z, c)
-    xy = addition_batch(x, y, c, True)
+    xy = addition_batch(x, y, c)
     gyr_xy_y = gyration_batch(xy, y, z, c)
     assert jnp.allclose(gyr_xy, gyr_xy_y, atol=atol, rtol=rtol)
 
     # Right loop property: gyr[x,y]z = gyr[x,y⊕x]z
     gyr_xy = gyration_batch(x, y, z, c)
-    yx = addition_batch(y, x, c, True)
+    yx = addition_batch(y, x, c)
     gyr_x_yx = gyration_batch(x, yx, z, c)
     assert jnp.allclose(gyr_xy, gyr_x_yx, atol=atol, rtol=rtol)
 
     # Identity gyroautomorphism property: gyr[r1⊗x, r2⊗x]y = y
     r1 = jnp.asarray(rng.random(x.shape[0]), dtype=x.dtype)
     r2 = jnp.asarray(rng.random(x.shape[0]), dtype=x.dtype)
-    r1_x = scalar_mul_batch(r1, x, c, True)
-    r2_x = scalar_mul_batch(r2, x, c, True)
+    r1_x = scalar_mul_batch(r1, x, c)
+    r2_x = scalar_mul_batch(r2, x, c)
     gyr_identity = gyration_batch(r1_x, r2_x, y, c)
     assert jnp.allclose(gyr_identity, y, atol=atol, rtol=rtol)
 
     # Gyroautomorphism property: gyr[x,y](r⊗z) = r⊗gyr[x,y]z
-    r_z = scalar_mul_batch(r1, z, c, True)
+    r_z = scalar_mul_batch(r1, z, c)
     gyr_r_z = gyration_batch(x, y, r_z, c)
     gyr_z = gyration_batch(x, y, z, c)
-    r_gyr_z = scalar_mul_batch(r1, gyr_z, c, True)
+    r_gyr_z = scalar_mul_batch(r1, gyr_z, c)
     assert jnp.allclose(gyr_r_z, r_gyr_z, atol=atol, rtol=rtol)
 
     # First gyrogroup theorems
@@ -441,11 +441,11 @@ def test_expmap_logmap_basic(
     x, y = _split(uniform_points, 2)
 
     # Batch operations using vmap
-    expmap_batch = jax.vmap(manifold.expmap, in_axes=(0, 0, None, None))
-    expmap_0_batch = jax.vmap(manifold.expmap_0, in_axes=(0, None, None))
-    retraction_batch = jax.vmap(manifold.retraction, in_axes=(0, 0, None, None))
-    logmap_batch = jax.vmap(manifold.logmap, in_axes=(0, 0, None, None))
-    logmap_0_batch = jax.vmap(manifold.logmap_0, in_axes=(0, None, None))
+    expmap_batch = jax.vmap(manifold.expmap, in_axes=(0, 0, None))
+    expmap_0_batch = jax.vmap(manifold.expmap_0, in_axes=(0, None))
+    retraction_batch = jax.vmap(manifold.retraction, in_axes=(0, 0, None))
+    logmap_batch = jax.vmap(manifold.logmap, in_axes=(0, 0, None))
+    logmap_0_batch = jax.vmap(manifold.logmap_0, in_axes=(0, None))
     tangent_proj_batch = jax.vmap(manifold.tangent_proj, in_axes=(0, 0, None))
 
     # Origin for consistency checks
@@ -473,43 +473,43 @@ def test_expmap_logmap_basic(
         # Note: Hyperboloid may fail is_in_manifold check due to numerical errors
 
         # Expmap
-        v_manif = expmap_batch(v, uniform_points, c, True)
+        v_manif = expmap_batch(v, uniform_points, c)
         assert jnp.all(jnp.isfinite(v_manif))
         assert _batch_is_in_manifold(manifold, v_manif, c)
 
         # Expmap_0
-        v0_manif = expmap_0_batch(v0, c, True)
+        v0_manif = expmap_0_batch(v0, c)
         assert jnp.all(jnp.isfinite(v0_manif))
         assert _batch_is_in_manifold(manifold, v0_manif, c)
 
         # Retraction
-        v_retr = retraction_batch(v, uniform_points, c, True)
+        v_retr = retraction_batch(v, uniform_points, c)
         assert jnp.all(jnp.isfinite(v_retr))
 
-        v0_retr = retraction_batch(v0, origin, c, True)
+        v0_retr = retraction_batch(v0, origin, c)
         assert jnp.all(jnp.isfinite(v0_retr))
 
     # Numerical stability of logmap - check logmap produces finite tangent vectors
     if manifold == hj.manifolds.poincare and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 3e-2)
 
-    logmap_y_x = logmap_batch(y, x, c, True)
+    logmap_y_x = logmap_batch(y, x, c)
     assert jnp.all(jnp.isfinite(logmap_y_x))
     assert _batch_is_in_tangent_space(manifold, logmap_y_x, x, c)
 
     # Stability of inverse operation: expmap(logmap(y, x), x) is finite and on manifold
     # Note: expmap applies backprojection which is not injective
-    res = expmap_batch(logmap_y_x, x, c, True)
+    res = expmap_batch(logmap_y_x, x, c)
     assert jnp.all(jnp.isfinite(res))
     assert _batch_is_in_manifold(manifold, res, c)
 
     # Consistency of expmap/logmap with expmap_0/logmap_0
-    expmap_v0_origin = expmap_batch(v0, origin, c, True)
-    expmap_0_v0 = expmap_0_batch(v0, c, True)
+    expmap_v0_origin = expmap_batch(v0, origin, c)
+    expmap_0_v0 = expmap_0_batch(v0, c)
     assert jnp.allclose(expmap_v0_origin, expmap_0_v0, atol=atol, rtol=rtol)
 
-    logmap_points_origin = logmap_batch(uniform_points, origin, c, True)
-    logmap_0_points = logmap_0_batch(uniform_points, c, True)
+    logmap_points_origin = logmap_batch(uniform_points, origin, c)
+    logmap_0_points = logmap_0_batch(uniform_points, c)
     assert jnp.allclose(logmap_points_origin, logmap_0_points, atol=atol, rtol=rtol)
 
 
@@ -519,14 +519,14 @@ def test_expmap_0_logmap_0_inverse(manifold_and_c, tolerance: tuple[float, float
     atol, rtol = tolerance
 
     # Batch operations using vmap
-    logmap_0_batch = jax.vmap(manifold.logmap_0, in_axes=(0, None, None))
-    expmap_0_batch = jax.vmap(manifold.expmap_0, in_axes=(0, None, None))
+    logmap_0_batch = jax.vmap(manifold.logmap_0, in_axes=(0, None))
+    expmap_0_batch = jax.vmap(manifold.expmap_0, in_axes=(0, None))
 
     # log_0(x) maps x to tangent space at origin
-    v = logmap_0_batch(uniform_points, c, True)
+    v = logmap_0_batch(uniform_points, c)
 
     # exp_0(v) should map back to x
-    x_reconstructed = expmap_0_batch(v, c, True)
+    x_reconstructed = expmap_0_batch(v, c)
 
     assert jnp.allclose(x_reconstructed, uniform_points, atol=atol, rtol=rtol)
 
@@ -544,8 +544,8 @@ def test_ptransp_preserves_norm(
     atol, rtol = tolerance
 
     # Batch operations using vmap
-    ptransp_batch = jax.vmap(manifold.ptransp, in_axes=(0, 0, 0, None, None))
-    ptransp_0_batch = jax.vmap(manifold.ptransp_0, in_axes=(0, 0, None, None))
+    ptransp_batch = jax.vmap(manifold.ptransp, in_axes=(0, 0, 0, None))
+    ptransp_0_batch = jax.vmap(manifold.ptransp_0, in_axes=(0, 0, None))
     tangent_proj_batch = jax.vmap(manifold.tangent_proj, in_axes=(0, 0, None))
 
     # Origin for consistency checks
@@ -569,15 +569,15 @@ def test_ptransp_preserves_norm(
     assert _batch_is_in_tangent_space(manifold, u, origin, c)
 
     # Parallel transport from origin to uniform_points
-    u_pt = ptransp_0_batch(u, uniform_points, c, True)
+    u_pt = ptransp_0_batch(u, uniform_points, c)
     assert _batch_is_in_tangent_space(manifold, u_pt, uniform_points, c)
 
     # Consistency of ptransp with ptransp_0
-    u_pt_general = ptransp_batch(u, origin, uniform_points, c, True)
+    u_pt_general = ptransp_batch(u, origin, uniform_points, c)
     assert jnp.allclose(u_pt_general, u_pt, atol=atol, rtol=rtol)
 
     # Round-trip stability: ptransp(ptransp(u, origin, x), x, origin) ≈ u
-    u_roundtrip = ptransp_batch(u_pt, uniform_points, origin, c, True)
+    u_roundtrip = ptransp_batch(u_pt, uniform_points, origin, c)
     assert jnp.allclose(u_roundtrip, u, atol=atol, rtol=rtol)
     assert _batch_is_in_tangent_space(manifold, u_roundtrip, origin, c)
 
@@ -640,8 +640,8 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     x, y = _split(uniform_points, 2)
 
     # Batch operations using vmap
-    logmap_batch = jax.vmap(manifold.logmap, in_axes=(0, 0, None, None))
-    logmap_0_batch = jax.vmap(manifold.logmap_0, in_axes=(0, None, None))
+    logmap_batch = jax.vmap(manifold.logmap, in_axes=(0, 0, None))
+    logmap_0_batch = jax.vmap(manifold.logmap_0, in_axes=(0, None))
     tangent_norm_batch = jax.vmap(manifold.tangent_norm, in_axes=(0, 0, None))
     dist_fn = _dist_fn(manifold)
     dist_0_fn = _dist_0_fn(manifold)
@@ -664,14 +664,14 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
 
     # Consistency of tangent_norm with logmap and dist
     # ‖log_x(y)‖_x = d(x, y)
-    logmap_y_x = logmap_batch(y, x, c, True)
+    logmap_y_x = logmap_batch(y, x, c)
     tangent_norm_logmap = tangent_norm_batch(logmap_y_x, x, c)
     dist_x_y = dist_batch(x, y, c)
     assert jnp.allclose(tangent_norm_logmap, dist_x_y, atol=atol, rtol=rtol)
 
     # Consistency of tangent_norm with logmap_0 and dist_0
     # ‖log_0(x)‖_0 = d_0(x)
-    logmap_0_points = logmap_0_batch(uniform_points, c, True)
+    logmap_0_points = logmap_0_batch(uniform_points, c)
     tangent_norm_logmap_0 = tangent_norm_batch(logmap_0_points, origin, c)
     dist_0_points = dist_0_batch(uniform_points, c)
     assert jnp.allclose(tangent_norm_logmap_0, dist_0_points, atol=atol, rtol=rtol)

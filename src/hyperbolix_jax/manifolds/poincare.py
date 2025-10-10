@@ -149,7 +149,7 @@ def proj(x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     return jnp.where(cond, x * (max_norm / jnp.maximum(norm, MIN_NORM)), x)
 
 
-def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float, backproject: bool = True) -> Float[Array, "dim"]:
+def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Möbius gyrovector addition x ⊕ y.
 
     Non-commutative and non-associative!
@@ -158,7 +158,6 @@ def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float, backproje
         x: Poincaré ball point, shape (dim,)
         y: Poincaré ball point, shape (dim,)
         c: Curvature (positive)
-        backproject: Whether to project result back to ball
 
     Returns:
         Möbius sum x ⊕ y, shape (dim,)
@@ -173,20 +172,17 @@ def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float, backproje
     num = (1 + 2 * c * xy + c * y2) * x + (1 - c * x2) * y
     denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, MIN_NORM)
     res = num / denom
-
-    if backproject:
-        res = proj(res, c)
+    res = proj(res, c)
     return res
 
 
-def scalar_mul(r: float, x: Float[Array, "dim"], c: float, backproject: bool = True) -> Float[Array, "dim"]:
+def scalar_mul(r: float, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Scalar multiplication r ⊗ x on Poincaré ball.
 
     Args:
         r: Scalar factor
         x: Poincaré ball point, shape (dim,)
         c: Curvature (positive)
-        backproject: Whether to project result back to ball
 
     Returns:
         Scaled point r ⊗ x, shape (dim,)
@@ -197,9 +193,7 @@ def scalar_mul(r: float, x: Float[Array, "dim"], c: float, backproject: bool = T
     x_norm = jnp.maximum(jnp.linalg.norm(x), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * x_norm
     res = jnp.tanh(r * atanh(c_norm_prod)) / c_norm_prod * x
-
-    if backproject:
-        res = proj(res, c)
+    res = proj(res, c)
     return res
 
 
@@ -219,7 +213,7 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float
 def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, ""]:
     """Möbius distance via addition."""
     sqrt_c = jnp.sqrt(c)
-    diff = addition(-x, y, c, backproject=True)
+    diff = addition(-x, y, c)
     dist_c = atanh(sqrt_c * jnp.linalg.norm(diff))
     return 2 * dist_c / sqrt_c
 
@@ -308,14 +302,13 @@ def dist_0(x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_D
     return lax.switch(version_idx, [_dist_0_mobius, _dist_0_mobius, _dist_0_metric_tensor, _dist_0_lorentzian_proxy], x, c)
 
 
-def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float, backproject: bool = True) -> Float[Array, "dim"]:
+def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
     Args:
         v: Tangent vector at x, shape (dim,)
         x: Poincaré ball point, shape (dim,)
         c: Curvature (positive)
-        backproject: Whether to project result back to ball
 
     Returns:
         Point exp_x(v), shape (dim,)
@@ -327,20 +320,17 @@ def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float, backproject
     c_norm_prod = jnp.maximum(jnp.sqrt(c) * v_norm, MIN_NORM)
     lambda_x = _conformal_factor(x, c)
     second_term = jnp.tanh(c_norm_prod * lambda_x / 2) / c_norm_prod * v
-
-    if backproject:
-        second_term = proj(second_term, c)
-    res = addition(x, second_term, c, backproject=backproject)
+    second_term = proj(second_term, c)
+    res = addition(x, second_term, c)
     return res
 
 
-def expmap_0(v: Float[Array, "dim"], c: float, backproject: bool = True) -> Float[Array, "dim"]:
+def expmap_0(v: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     Args:
         v: Tangent vector at origin, shape (dim,)
         c: Curvature (positive)
-        backproject: Whether to project result back to ball
 
     Returns:
         Point exp_0(v), shape (dim,)
@@ -351,20 +341,17 @@ def expmap_0(v: Float[Array, "dim"], c: float, backproject: bool = True) -> Floa
     v_norm = jnp.linalg.norm(v)
     c_norm_prod = jnp.maximum(jnp.sqrt(c) * v_norm, MIN_NORM)
     res = jnp.tanh(c_norm_prod) / c_norm_prod * v
-
-    if backproject:
-        res = proj(res, c)
+    res = proj(res, c)
     return res
 
 
-def retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float, backproject: bool = True) -> Float[Array, "dim"]:
+def retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Retraction: first-order approximation of exponential map.
 
     Args:
         v: Tangent vector at x, shape (dim,)
         x: Poincaré ball point, shape (dim,)
         c: Curvature (positive)
-        backproject: Whether to project result back to ball
 
     Returns:
         Point retr_x(v) ≈ exp_x(v), shape (dim,)
@@ -373,19 +360,17 @@ def retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float, backpro
         Bécigneul & Ganea. "Riemannian adaptive optimization." ICLR 2019.
     """
     res = x + v
-    if backproject:
-        res = proj(res, c)
+    res = proj(res, c)
     return res
 
 
-def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float, backproject: bool = True) -> Float[Array, "dim"]:
+def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Logarithmic map: map point y to tangent space at point x.
 
     Args:
         y: Poincaré ball point, shape (dim,)
         x: Poincaré ball point, shape (dim,)
         c: Curvature (positive)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Tangent vector log_x(y), shape (dim,)
@@ -393,7 +378,7 @@ def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float, backproject
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    sub = addition(-x, y, c, False)
+    sub = addition(-x, y, c)
     x2y2 = jnp.dot(x, x) * jnp.dot(y, y)
     xy = jnp.dot(x, y)
     num = jnp.linalg.norm(y - x)
@@ -405,13 +390,12 @@ def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float, backproject
     return res
 
 
-def logmap_0(y: Float[Array, "dim"], c: float, backproject: bool = True) -> Float[Array, "dim"]:
+def logmap_0(y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     Args:
         y: Poincaré ball point, shape (dim,)
         c: Curvature (positive)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Tangent vector log_0(y), shape (dim,)
@@ -425,9 +409,7 @@ def logmap_0(y: Float[Array, "dim"], c: float, backproject: bool = True) -> Floa
     return res
 
 
-def ptransp(
-    v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: float, backproject: bool = True
-) -> Float[Array, "dim"]:
+def ptransp(v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from point x to point y.
 
     Args:
@@ -435,7 +417,6 @@ def ptransp(
         x: Poincaré ball point, shape (dim,)
         y: Poincaré ball point, shape (dim,)
         c: Curvature (positive)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Parallel transported tangent vector, shape (dim,)
@@ -448,14 +429,13 @@ def ptransp(
     return _gyration(y, -x, v, c) * (lambda_x / lambda_y)
 
 
-def ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float, backproject: bool = True) -> Float[Array, "dim"]:
+def ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from origin to point y.
 
     Args:
         v: Tangent vector at origin, shape (dim,)
         y: Poincaré ball point, shape (dim,)
         c: Curvature (positive)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Parallel transported tangent vector, shape (dim,)

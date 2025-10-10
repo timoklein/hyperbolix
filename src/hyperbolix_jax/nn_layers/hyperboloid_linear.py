@@ -101,7 +101,7 @@ class HypLinearHyperboloid(nnx.Module):
         """
         # Map to tangent space if needed (static branch - JIT friendly)
         if self.input_space == "manifold":
-            x = jax.vmap(self.manifold.logmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
+            x = jax.vmap(self.manifold.logmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Matrix-Vector multiplication in the tangent space at the Hyperboloid origin
         # Extract space coordinates (all except first time coordinate)
@@ -113,7 +113,7 @@ class HypLinearHyperboloid(nnx.Module):
         x = jnp.concatenate([jnp.zeros_like(x[:, :1]), x], axis=-1)  # (batch, out_dim)
 
         # Map back to manifold
-        x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)  # (batch, out_dim)
+        x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)  # (batch, out_dim)
 
         # Bias addition via parallel transport and exponential map
         # Concatenate zero time coordinate to bias
@@ -121,13 +121,13 @@ class HypLinearHyperboloid(nnx.Module):
         bias = bias.squeeze(0)  # (out_dim,)
 
         # Parallel transport bias from origin to each x (vmap over batch)
-        pt_bias = jax.vmap(self.manifold.ptransp_0, in_axes=(None, 0, None, None), out_axes=0)(
-            bias, x, c, self.backproject
+        pt_bias = jax.vmap(self.manifold.ptransp_0, in_axes=(None, 0, None), out_axes=0)(
+            bias, x, c
         )  # (batch, out_dim)
 
         # Add transported bias via exponential map (vmap over batch)
-        res = jax.vmap(self.manifold.expmap, in_axes=(0, 0, None, None), out_axes=0)(
-            pt_bias, x, c, self.backproject
+        res = jax.vmap(self.manifold.expmap, in_axes=(0, 0, None), out_axes=0)(
+            pt_bias, x, c
         )  # (batch, out_dim)
 
         return res
@@ -256,7 +256,7 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         """
         # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Apply activation if provided (static branch - JIT friendly)
         if self.activation is not None:
@@ -405,7 +405,7 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         """
         # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Apply activation if provided (static branch - JIT friendly)
         if self.activation is not None:

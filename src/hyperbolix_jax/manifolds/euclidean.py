@@ -43,14 +43,13 @@ def proj(x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     return x
 
 
-def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
+def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     """Add Euclidean points x and y.
 
     Args:
         x: Euclidean point, shape (dim,)
         y: Euclidean point, shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Sum x + y, shape (dim,)
@@ -58,14 +57,13 @@ def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0, bac
     return x + y
 
 
-def scalar_mul(r: float, x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
+def scalar_mul(r: float, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     """Multiply Euclidean point x with scalar r.
 
     Args:
         r: Scalar factor
         x: Euclidean point, shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Product r * x, shape (dim,)
@@ -104,7 +102,7 @@ def dist_0(x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
     return jnp.linalg.norm(x)
 
 
-def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
+def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
     In Euclidean space, this is simply addition.
@@ -113,7 +111,6 @@ def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backp
         v: Tangent vector at x, shape (dim,)
         x: Euclidean point, shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Point x + v, shape (dim,)
@@ -121,7 +118,7 @@ def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backp
     return x + v
 
 
-def expmap_0(v: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
+def expmap_0(v: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     In Euclidean space, this is identity.
@@ -129,7 +126,6 @@ def expmap_0(v: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -
     Args:
         v: Tangent vector at origin, shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Point v, shape (dim,)
@@ -137,9 +133,7 @@ def expmap_0(v: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -
     return v
 
 
-def retraction(
-    v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True
-) -> Float[Array, "dim"]:
+def retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     """Retraction: first-order approximation of exponential map.
 
     In Euclidean space, retraction equals exponential map (addition).
@@ -148,7 +142,6 @@ def retraction(
         v: Tangent vector at x, shape (dim,)
         x: Euclidean point, shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Point x + v, shape (dim,)
@@ -156,7 +149,7 @@ def retraction(
     return x + v
 
 
-def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
+def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     """Logarithmic map: map point y to tangent space at point x.
 
     In Euclidean space, this is subtraction.
@@ -165,7 +158,6 @@ def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backp
         y: Euclidean point, shape (dim,)
         x: Euclidean point, shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Tangent vector y - x, shape (dim,)
@@ -173,7 +165,7 @@ def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backp
     return y - x
 
 
-def logmap_0(y: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
+def logmap_0(y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     In Euclidean space, this is identity.
@@ -181,7 +173,6 @@ def logmap_0(y: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -
     Args:
         y: Euclidean point, shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Tangent vector y, shape (dim,)
@@ -194,7 +185,6 @@ def ptransp(
     x: Float[Array, "dim"],
     y: Float[Array, "dim"],
     c: float = 0.0,
-    backproject: bool = True,
 ) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from point x to point y.
 
@@ -205,7 +195,6 @@ def ptransp(
         x: Euclidean point (ignored), shape (dim,)
         y: Euclidean point (ignored), shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Tangent vector v (unchanged), shape (dim,)
@@ -213,7 +202,7 @@ def ptransp(
     return v
 
 
-def ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
+def ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from origin to point y.
 
     In Euclidean space, tangent spaces are identical everywhere (identity).
@@ -222,7 +211,6 @@ def ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0, ba
         v: Tangent vector at origin, shape (dim,)
         y: Euclidean point (ignored), shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
-        backproject: Whether to backproject (ignored, kept for consistency)
 
     Returns:
         Tangent vector v (unchanged), shape (dim,)

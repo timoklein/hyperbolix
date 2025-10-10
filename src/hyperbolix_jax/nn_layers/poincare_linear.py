@@ -102,18 +102,18 @@ class HypLinearPoincare(nnx.Module):
 
         # Map to tangent space if needed (static branch - JIT friendly)
         if self.input_space == "manifold":
-            x = jax.vmap(self.manifold.logmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
+            x = jax.vmap(self.manifold.logmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Matrix-vector multiplication in tangent space at origin
         # (batch, in_dim) @ (in_dim, out_dim) -> (batch, out_dim)
         x = jnp.einsum("bi,oi->bo", x, self.weight)
 
         # Map back to manifold
-        x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
+        x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Manifold bias addition (Möbius addition for Poincaré)
         # Broadcast bias to match batch dimension
-        res = jax.vmap(self.manifold.addition, in_axes=(0, None, None, None), out_axes=0)(x, bias, c, self.backproject)
+        res = jax.vmap(self.manifold.addition, in_axes=(0, None, None), out_axes=0)(x, bias, c)
         return res
 
 
@@ -211,7 +211,7 @@ class HypLinearPoincarePP(nnx.Module):
         """
         # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Compute multinomial linear regression
         v = compute_mlr_poincare_pp(

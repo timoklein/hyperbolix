@@ -93,7 +93,7 @@ def proj(x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
 
 
 def addition(
-    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float, backproject: bool = True
+    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float
 ) -> Float[Array, "dim_plus_1"]:
     """Einstein gyrovector addition on hyperboloid.
 
@@ -101,7 +101,6 @@ def addition(
         x: Hyperboloid point, shape (dim+1,)
         y: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        backproject: Whether to project result back to hyperboloid
 
     Returns:
         Einstein sum x ⊕ y, shape (dim+1,)
@@ -117,20 +116,17 @@ def addition(
     gamma = 1.0 / denom
 
     res = x + gamma * (y + (c / (1.0 + sqrt_c)) * mink_inner_xy * x)
-
-    if backproject:
-        res = proj(res, c)
+    res = proj(res, c)
     return res
 
 
-def scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: float, backproject: bool = True) -> Float[Array, "dim_plus_1"]:
+def scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Scalar multiplication r ⊗ x on hyperboloid.
 
     Args:
         r: Scalar factor
         x: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        backproject: Whether to project result back to hyperboloid
 
     Returns:
         Scaled point r ⊗ x, shape (dim+1,)
@@ -145,7 +141,7 @@ def scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: float, backproject: b
     unit_tangent = v / v_norm
     dist0 = dist_0(x, c)
     tangent = r * dist0 * unit_tangent
-    res = expmap_0(tangent, c, backproject=backproject)
+    res = expmap_0(tangent, c)
     return res
 
 
@@ -238,7 +234,7 @@ def dist_0(x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_D
 
 
 def expmap(
-    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float, backproject: bool = True
+    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
 ) -> Float[Array, "dim_plus_1"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
@@ -246,7 +242,6 @@ def expmap(
         v: Tangent vector at x, shape (dim+1,)
         x: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        backproject: Whether to project result back to hyperboloid
 
     Returns:
         Point exp_x(v), shape (dim+1,)
@@ -264,20 +259,17 @@ def expmap(
     sinh_term = jnp.sinh(c_norm_prod) / denom * v
 
     res = cosh_term + sinh_term
-
-    if backproject:
-        res = proj(res, c)
+    res = proj(res, c)
     return res
 
 
-def expmap_0(v: Float[Array, "dim_plus_1"], c: float, backproject: bool = True) -> Float[Array, "dim_plus_1"]:
+def expmap_0(v: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     Args:
         v: Tangent vector at origin in ambient representation, shape (dim+1,)
             (first component should be 0)
         c: Curvature (positive)
-        backproject: Whether to project result back to hyperboloid
 
     Returns:
         Point exp_0(v) in ambient representation, shape (dim+1,)
@@ -300,14 +292,12 @@ def expmap_0(v: Float[Array, "dim_plus_1"], c: float, backproject: bool = True) 
     res_rest = sinh_scale * v_rest
 
     res = jnp.concatenate([res0[None], res_rest])
-
-    if backproject:
-        res = proj(res, c)
+    res = proj(res, c)
     return res
 
 
 def retraction(
-    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float, backproject: bool = True
+    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
 ) -> Float[Array, "dim_plus_1"]:
     """Retraction: first-order approximation of exponential map.
 
@@ -315,7 +305,6 @@ def retraction(
         v: Tangent vector at x, shape (dim+1,)
         x: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        backproject: Whether to project result back to hyperboloid
 
     Returns:
         Point retr_x(v) ≈ exp_x(v), shape (dim+1,)
@@ -324,13 +313,12 @@ def retraction(
         Bécigneul & Ganea. "Riemannian adaptive optimization." ICLR 2019.
     """
     res = x + v
-    if backproject:
-        res = proj(res, c)
+    res = proj(res, c)
     return res
 
 
 def logmap(
-    y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float, backproject: bool = True
+    y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
 ) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map: map point y to tangent space at point x.
 
@@ -338,7 +326,6 @@ def logmap(
         y: Hyperboloid point, shape (dim+1,)
         x: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        backproject: Whether to backproject (project to tangent space)
 
     Returns:
         Tangent vector log_x(y), shape (dim+1,)
@@ -353,20 +340,16 @@ def logmap(
     dir_sqnorm = _minkowski_inner(direction, direction)
     dir_norm = jnp.sqrt(jnp.maximum(dir_sqnorm, MIN_NORM))
     res = dist_xy * direction / dir_norm
-
-    if backproject:
-        res = tangent_proj(res, x, c)
-
+    res = tangent_proj(res, x, c)
     return res
 
 
-def logmap_0(y: Float[Array, "dim_plus_1"], c: float, backproject: bool = True) -> Float[Array, "dim_plus_1"]:
+def logmap_0(y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     Args:
         y: Hyperboloid point in ambient representation, shape (dim+1,)
         c: Curvature (positive)
-        backproject: Whether to backproject (project to tangent space)
 
     Returns:
         Tangent vector log_0(y) in ambient representation, shape (dim+1,)
@@ -384,11 +367,8 @@ def logmap_0(y: Float[Array, "dim_plus_1"], c: float, backproject: bool = True) 
     v0 = jnp.array([0.0])
     v_rest = scale * y_rest
     res = jnp.concatenate([v0, v_rest])
-
-    if backproject:
-        origin = _create_origin(c, y.shape[0] - 1, y.dtype)
-        res = tangent_proj(res, origin, c)
-
+    origin = _create_origin(c, y.shape[0] - 1, y.dtype)
+    res = tangent_proj(res, origin, c)
     return res
 
 
@@ -397,7 +377,6 @@ def ptransp(
     x: Float[Array, "dim_plus_1"],
     y: Float[Array, "dim_plus_1"],
     c: float,
-    backproject: bool = True,
 ) -> Float[Array, "dim_plus_1"]:
     """Parallel transport tangent vector v from point x to point y.
 
@@ -406,7 +385,6 @@ def ptransp(
         x: Hyperboloid point, shape (dim+1,)
         y: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        backproject: Whether to backproject to tangent space at y
 
     Returns:
         Parallel transported tangent vector, shape (dim+1,)
@@ -428,15 +406,12 @@ def ptransp(
 
     # res = v + scale * (x + y)
     res = v + scale * (x + y)
-
-    if backproject:
-        res = tangent_proj(res, y, c)
-
+    res = tangent_proj(res, y, c)
     return res
 
 
 def ptransp_0(
-    v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float, backproject: bool = True
+    v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float
 ) -> Float[Array, "dim_plus_1"]:
     """Parallel transport tangent vector v from origin to point y.
 
@@ -444,7 +419,6 @@ def ptransp_0(
         v: Tangent vector at origin, shape (dim+1,)
         y: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        backproject: Whether to backproject to tangent space at y
 
     Returns:
         Parallel transported tangent vector, shape (dim+1,)
@@ -472,10 +446,7 @@ def ptransp_0(
 
     # res = v + scale * (y + origin)
     res = v + scale * (y + origin)
-
-    if backproject:
-        res = tangent_proj(res, y, c)
-
+    res = tangent_proj(res, y, c)
     return res
 
 

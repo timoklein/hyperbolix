@@ -129,11 +129,11 @@ class HypRegressionPoincare(nnx.Module):
         # Vectorize over both batch and out_dim dimensions
         # vmap over batch dimension (axis 0 of x), then over out_dim (axis 0 of p_neg)
         addition_fn = jax.vmap(
-            jax.vmap(self.manifold.addition, in_axes=(None, 0, None, None), out_axes=0),
-            in_axes=(0, None, None, None),
+            jax.vmap(self.manifold.addition, in_axes=(None, 0, None), out_axes=0),
+            in_axes=(0, None, None),
             out_axes=0,
         )
-        sub = addition_fn(p_neg, x, c, self.backproject)  # (out_dim, batch, in_dim)
+        sub = addition_fn(p_neg, x, c)  # (out_dim, batch, in_dim)
         sub = jnp.transpose(sub, (1, 0, 2))  # (batch, out_dim, in_dim)
 
         # Compute inner product with a: sum(sub * a, axis=-1)
@@ -186,15 +186,15 @@ class HypRegressionPoincare(nnx.Module):
         """
         # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Project bias to manifold (vmap over out_dim dimension)
         bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias, c)
 
         # Map self.weight from the tangent space at the origin to the tangent space at self.bias
         # vmap over out_dim dimension
-        pt_weight = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None, None), out_axes=0)(
-            self.weight, bias, c, self.backproject
+        pt_weight = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(
+            self.weight, bias, c
         )
 
         # Compute the multinomial linear regression score(s)
@@ -295,7 +295,7 @@ class HypRegressionPoincarePP(nnx.Module):
         """
         # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Compute multinomial linear regression
         res = compute_mlr_poincare_pp(

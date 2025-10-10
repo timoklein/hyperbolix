@@ -122,7 +122,7 @@ class HypRegressionPoincareHDRL(nnx.Module):
         sqrt_c = jnp.sqrt(c)
 
         # Möbius subtraction: diff = -p ⊕ x
-        diff = self.manifold.addition(-p, x, c, self.backproject)
+        diff = self.manifold.addition(-p, x, c)
 
         # Compute squared norm of diff
         diff_norm2 = jnp.maximum(jnp.dot(diff, diff), 1e-15)
@@ -226,7 +226,7 @@ class HypRegressionPoincareHDRL(nnx.Module):
         """
         # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None, None), out_axes=0)(x, c, self.backproject)
+            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Project bias to manifold (vmap over out_dim dimension)
         bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias, c)
