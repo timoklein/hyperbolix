@@ -187,9 +187,7 @@ class HypRegressionPoincare(nnx.Module):
 
         # Map self.weight from the tangent space at the origin to the tangent space at self.bias
         # vmap over out_dim dimension
-        pt_weight = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(
-            self.weight, bias, c
-        )
+        pt_weight = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(self.weight, bias, c)
 
         # Compute the multinomial linear regression score(s)
         res = self._compute_mlr(x, pt_weight, bias, c)

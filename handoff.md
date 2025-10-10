@@ -10,10 +10,12 @@
 - ✅ **jnp.finfo approach**: Removed dtype conditionals, use `jnp.finfo(x.dtype).eps` directly
 - ✅ **checkify error handling**: Created `*_checked.py` modules for runtime validation
 - ✅ **NN layer refactor**: Moved assertions to `__init__`, added backproject attribute, updated for vmap API
+- ✅ **JIT compilation**: Math utilities now jitted for performance (2025-10-10)
 
 **Test Status**:
-- **Phase 1 (Manifolds)**: Tests adapted to vmap API, not yet run
-- **Phase 3 (NN Layers)**: 38/44 tests passing (86%), 6 gradient tests marked xfail
+- **Phase 1 (Manifolds)**: 978 passing, 72 skipped (100% of non-skipped tests)
+- **Phase 3 (NN Layers)**: 44/44 tests passing (100%)
+- **Math Utilities**: 8/8 tests passing (100%)
 
 ---
 
@@ -43,17 +45,18 @@
 - Validation: `is_in_manifold(x, c)`, `is_in_tangent_space(v, x, c)`
 
 **Math Utilities** (`src/hyperbolix_jax/utils/math_utils.py`):
-- ✅ Numerically stable `acosh`, `atanh` implementations
-- ✅ Artanh with proper clamping for hyperbolic operations
+- ✅ Numerically stable `acosh`, `atanh` implementations with JIT compilation
+- ✅ Smooth clamping functions (`smooth_clamp_min/max`) with static `smoothing_factor`
+- ✅ All functions use `@jax.jit` for automatic compilation and caching
 
 **Test Coverage** (`tests/jax/`):
-- ✅ **912 tests total** (including all high- and medium-priority scenarios from `missing_tests.md`)
-- ✅ **912 passing (100%)**, 0 failing, 24 skipped
+- ✅ **1,050 tests total** (including all high- and medium-priority scenarios from `missing_tests.md`)
+- ✅ **978 passing (100%)**, 0 failing, 72 skipped
 - ✅ Tests parametrized over seeds (10, 11, 12), dtypes (float32/float64), and dimensions (2, 5, 10, 15)
 - ✅ Additional high/medium-priority checks: exp/log consistency, scalar multiplication associativity, parallel transport round-trips, and curvature regression tests now mirror the PyTorch suite
 - ✅ Property tests: projection, distance axioms, exp/log inverses, parallel transport isometry
 - ✅ Test fixtures mirror PyTorch test structure for consistency
-- ✅ Math utilities: 9/9 tests passing (100%)
+- ✅ Math utilities: 8/8 tests passing (100%) with JIT compilation
 
 ---
 
@@ -180,6 +183,61 @@ Investigated why 19/24 `test_expmap_logmap_inverse` tests were failing for Poinc
 - Change `logmap` scaling to measure the norm after projection instead of pulling from the analytic formula; needs care to maintain gyroproperties.
 - Once a principled fix lands, tighten test tolerances again and remove the temporary relaxation.
 
+### **Session 9: JIT Compilation for Math Utilities** (2025-10-10)
+
+**Analysis Phase:**
+1. **Identified JIT candidates**: Analyzed all test files to determine which operations would benefit from JIT compilation
+2. **Math utilities as primary target**: Simple leaf functions (cosh, sinh, acosh, atanh, smooth_clamp_*) with no nested calls
+3. **Manifold operations decision**: Determined manifold operations should NOT be jitted by default due to:
+   - Complex call graphs (functions call each other, creating nested JIT issues)
+   - User flexibility (better for users to jit entire computations for optimal fusion)
+   - Already documented patterns (docstrings show how users should jit at call site)
+
+**Implementation:**
+```python
+# Math utilities with JIT decorators added
+@jax.jit  # Simple functions
+def cosh(x): ...
+def sinh(x): ...
+def acosh(x): ...
+def asinh(x): ...
+def atanh(x): ...
+
+@functools.partial(jax.jit, static_argnames=["smoothing_factor"])  # Static hyperparameter
+def smooth_clamp_min(x, min_value, smoothing_factor=50.0): ...
+def smooth_clamp_max(x, max_value, smoothing_factor=50.0): ...
+def smooth_clamp(x, min_value, max_value, smoothing_factor=50.0): ...
+```
+
+**Key Design Decisions:**
+1. **Simple `@jax.jit` for hyperbolic functions**: These are leaf functions with no dependencies, benefit from compilation caching
+2. **Static `smoothing_factor`**: Made static because it's almost always 50.0, enables compile-time optimization
+3. **Dynamic min/max values**: Keep dynamic as they vary (e.g., computed from curvature)
+4. **Dtype handling**: `jnp.finfo(x.dtype)` is JAX-friendly, compiles once per dtype
+
+**Manifold Operations Analysis:**
+- **Why NOT jitted**: Functions like `expmap` call `proj` and `addition`, `logmap` calls `dist` and `tangent_proj`
+- **Nested JIT problem**: Pre-jitting creates overhead, prevents fusion optimization
+- **Better approach**: Users should jit their own code (models, training steps) for optimal performance
+- **Documentation**: Manifold docstrings already show recommended JIT patterns
+
+**Test Results:**
+- ✅ **978 tests passing** (72 skipped as expected)
+- ✅ All math_utils tests pass (8/8)
+- ✅ All manifold tests pass
+- ✅ All neural network layer tests pass
+- ✅ No behavioral changes, purely performance optimization
+
+**Future Work Proposed:**
+- Add `nnx.jit` tests for neural network layers to validate realistic production use cases
+- Test jitted forward passes, gradient computations, and multi-layer compositions
+- Verify `nnx.jit` handles module state correctly
+
+**Files Modified:**
+- `src/hyperbolix_jax/utils/math_utils.py` - Added jax.jit decorators, imported functools and jax
+
+**Impact:** Math utilities now compile once per dtype and cache compiled versions, providing immediate performance benefits when called directly or within larger jitted computations.
+
 ### **Session 8: NNX Layer Backprojection Cleanup** (2025-10-10)
 
 **What changed**
@@ -192,7 +250,7 @@ Investigated why 19/24 `test_expmap_logmap_inverse` tests were failing for Poinc
 - Simplifies the config space for `nnx.jit` users—fewer static arguments mean fewer recompilations when swapping presets.
 
 **Follow-up**
-- Consider pruning the legacy Torch layers’ `backproject` arguments in a separate cleanup so the cross-backend APIs stay aligned.
+- Consider pruning the legacy Torch layers' `backproject` arguments in a separate cleanup so the cross-backend APIs stay aligned.
 - Re-run `pytest tests/jax/test_nn_layers.py tests/jax/test_regression_layers.py` once other in-flight changes settle to confirm no regressions.
 
 ### **Session 2: Correctness & Testing Infrastructure** (2025-10-01)
@@ -562,16 +620,23 @@ None currently. All implemented components are fully functional:
 
 ### **Immediate Next Steps**
 
-1. **Port Phase 2 - Optimizers** (originally Phase 2, skipped over)
+1. **Add `nnx.jit` tests for neural network layers** (Session 9 proposal)
+   - Test jitted forward passes for all layer types
+   - Test gradient computation with jit
+   - Test multi-layer jitted compositions
+   - Verify module state handling with `nnx.jit`
+   - Validate dynamic curvature parameter in jitted context
+   - ✅ Forward and gradient jitted tests added for all NN layers (2025-10-11)
+
+2. **Port Phase 2 - Optimizers** (originally Phase 2, skipped over)
    - Riemannian SGD (`src/optim/rsgd.py`)
    - Riemannian Adam (`src/optim/radam.py`)
    - Use Optax functional style with pytree state management
 
 ### **Future Work**
-1. **Performance optimization** - Add JIT compilation, vmap batching to layers
-2. **Documentation** - Usage examples and API docs for layers
-3. **Comprehensive benchmarking** - Compare JAX vs PyTorch performance
-4. **End-to-end examples** - Small training loops demonstrating usage
+1. **Documentation** - Usage examples and API docs for layers, JIT best practices
+2. **Comprehensive benchmarking** - Compare JAX vs PyTorch performance, JIT speedups
+3. **End-to-end examples** - Small training loops demonstrating usage with JIT
 
 ---
 

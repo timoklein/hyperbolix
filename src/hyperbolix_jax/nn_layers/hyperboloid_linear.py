@@ -115,14 +115,10 @@ class HypLinearHyperboloid(nnx.Module):
         bias = bias.squeeze(0)  # (out_dim,)
 
         # Parallel transport bias from origin to each x (vmap over batch)
-        pt_bias = jax.vmap(self.manifold.ptransp_0, in_axes=(None, 0, None), out_axes=0)(
-            bias, x, c
-        )  # (batch, out_dim)
+        pt_bias = jax.vmap(self.manifold.ptransp_0, in_axes=(None, 0, None), out_axes=0)(bias, x, c)  # (batch, out_dim)
 
         # Add transported bias via exponential map (vmap over batch)
-        res = jax.vmap(self.manifold.expmap, in_axes=(0, 0, None), out_axes=0)(
-            pt_bias, x, c
-        )  # (batch, out_dim)
+        res = jax.vmap(self.manifold.expmap, in_axes=(0, 0, None), out_axes=0)(pt_bias, x, c)  # (batch, out_dim)
 
         return res
 

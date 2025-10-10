@@ -41,6 +41,28 @@ def test_hyp_linear_poincare_forward(dtype):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_linear_poincare_jitted_forward(dtype):
+    """Test HypLinearPoincare forward pass under nnx.jit."""
+    key = jax.random.PRNGKey(42)
+    batch_size, in_dim, out_dim = 8, 5, 3
+
+    x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
+    x = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
+
+    rngs = nnx.Rngs(42)
+    layer = HypLinearPoincare(poincare, in_dim, out_dim, rngs=rngs)
+
+    @nnx.jit
+    def forward(module, inputs, curvature):
+        return module(inputs, c=curvature)
+
+    y = forward(layer, x, 1.0)
+
+    assert y.shape == (batch_size, out_dim)
+    assert jax.vmap(poincare.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_gradient(dtype):
     """Test HypLinearPoincare has valid gradients."""
     key = jax.random.PRNGKey(42)
@@ -63,6 +85,30 @@ def test_hyp_linear_poincare_gradient(dtype):
     loss, grads = nnx.value_and_grad(loss_fn)(layer)
 
     # Check gradients exist and are finite
+    assert jnp.isfinite(loss)
+    assert jnp.isfinite(grads.weight.value).all()
+    assert jnp.isfinite(grads.bias.value).all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_linear_poincare_jitted_gradient(dtype):
+    """Test HypLinearPoincare gradients under nnx.jit."""
+    key = jax.random.PRNGKey(42)
+    batch_size, in_dim, out_dim = 4, 5, 3
+
+    x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
+    x = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
+
+    rngs = nnx.Rngs(42)
+    layer = HypLinearPoincare(poincare, in_dim, out_dim, rngs=rngs)
+
+    @nnx.jit
+    def loss_fn(module, inputs, curvature):
+        y = module(inputs, c=curvature)
+        return jnp.sum(y**2)
+
+    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
+
     assert jnp.isfinite(loss)
     assert jnp.isfinite(grads.weight.value).all()
     assert jnp.isfinite(grads.bias.value).all()
@@ -92,6 +138,52 @@ def test_hyp_linear_poincare_pp_forward(dtype):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_linear_poincare_pp_jitted_forward(dtype):
+    """Test HypLinearPoincarePP forward pass under nnx.jit."""
+    key = jax.random.PRNGKey(42)
+    batch_size, in_dim, out_dim = 8, 5, 3
+
+    x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
+    x = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
+
+    rngs = nnx.Rngs(42)
+    layer = HypLinearPoincarePP(poincare, in_dim, out_dim, rngs=rngs)
+
+    @nnx.jit
+    def forward(module, inputs, curvature):
+        return module(inputs, c=curvature)
+
+    y = forward(layer, x, 1.0)
+
+    assert y.shape == (batch_size, out_dim)
+    assert jax.vmap(poincare.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_linear_poincare_pp_jitted_gradient(dtype):
+    """Test HypLinearPoincarePP gradients under nnx.jit."""
+    key = jax.random.PRNGKey(42)
+    batch_size, in_dim, out_dim = 4, 5, 3
+
+    x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
+    x = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
+
+    rngs = nnx.Rngs(42)
+    layer = HypLinearPoincarePP(poincare, in_dim, out_dim, rngs=rngs)
+
+    @nnx.jit
+    def loss_fn(module, inputs, curvature):
+        y = module(inputs, c=curvature)
+        return jnp.sum(y**2)
+
+    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
+
+    assert jnp.isfinite(loss)
+    assert jnp.isfinite(grads.weight.value).all()
+    assert jnp.isfinite(grads.bias.value).all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_hyperboloid_forward(dtype):
     """Test HypLinearHyperboloid forward pass."""
     key = jax.random.PRNGKey(42)
@@ -111,6 +203,28 @@ def test_hyp_linear_hyperboloid_forward(dtype):
     # Check output shape
     assert y.shape == (batch_size, out_dim)
     # Check output is on manifold (vmap over batch)
+    assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_linear_hyperboloid_jitted_forward(dtype):
+    """Test HypLinearHyperboloid forward pass under nnx.jit."""
+    key = jax.random.PRNGKey(42)
+    batch_size, in_dim, out_dim = 8, 5, 4
+
+    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
+    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
+
+    rngs = nnx.Rngs(42)
+    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
+
+    @nnx.jit
+    def forward(module, inputs, curvature):
+        return module(inputs, c=curvature)
+
+    y = forward(layer, x, 1.0)
+
+    assert y.shape == (batch_size, out_dim)
     assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
 
 
@@ -143,6 +257,30 @@ def test_hyp_linear_hyperboloid_gradient(dtype):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_linear_hyperboloid_jitted_gradient(dtype):
+    """Test HypLinearHyperboloid gradients under nnx.jit."""
+    key = jax.random.PRNGKey(42)
+    batch_size, in_dim, out_dim = 4, 5, 4
+
+    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
+    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
+
+    rngs = nnx.Rngs(42)
+    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
+
+    @nnx.jit
+    def loss_fn(module, inputs, curvature):
+        y = module(inputs, c=curvature)
+        return jnp.sum(y**2)
+
+    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
+
+    assert jnp.isfinite(loss)
+    assert jnp.isfinite(grads.weight.value).all()
+    assert jnp.isfinite(grads.bias.value).all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_hyperboloid_tangent_input(dtype):
     """Test HypLinearHyperboloid with tangent space input."""
     key = jax.random.PRNGKey(42)
@@ -163,4 +301,50 @@ def test_hyp_linear_hyperboloid_tangent_input(dtype):
     # Check output shape
     assert y.shape == (batch_size, out_dim)
     # Check output is on manifold (vmap over batch)
+    assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_linear_hyperboloid_tangent_jitted_gradient(dtype):
+    """Test HypLinearHyperboloid tangent input gradients under nnx.jit."""
+    key = jax.random.PRNGKey(42)
+    batch_size, in_dim, out_dim = 4, 5, 4
+
+    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
+    v = v.at[:, 0].set(0.0)
+
+    rngs = nnx.Rngs(42)
+    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs, input_space="tangent")
+
+    @nnx.jit
+    def loss_fn(module, inputs, curvature):
+        y = module(inputs, c=curvature)
+        return jnp.sum(y**2)
+
+    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, v, 1.0))(layer)
+
+    assert jnp.isfinite(loss)
+    assert jnp.isfinite(grads.weight.value).all()
+    assert jnp.isfinite(grads.bias.value).all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_linear_hyperboloid_tangent_jitted_forward(dtype):
+    """Test HypLinearHyperboloid tangent input forward pass under nnx.jit."""
+    key = jax.random.PRNGKey(42)
+    batch_size, in_dim, out_dim = 8, 5, 4
+
+    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
+    v = v.at[:, 0].set(0.0)
+
+    rngs = nnx.Rngs(42)
+    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs, input_space="tangent")
+
+    @nnx.jit
+    def forward(module, inputs, curvature):
+        return module(inputs, c=curvature)
+
+    y = forward(layer, v, 1.0)
+
+    assert y.shape == (batch_size, out_dim)
     assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()

@@ -3,11 +3,15 @@
 Direct JAX port of PyTorch math_utils.py with type annotations using jaxtyping.
 """
 
+import functools
+
+import jax
 import jax.nn as nn
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 
+@functools.partial(jax.jit, static_argnames=["smoothing_factor"])
 def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
     """Smoothly clamp array values to a minimum using softplus.
 
@@ -27,6 +31,7 @@ def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor:
     return jnp.where(x < shift, x_clamped, x)
 
 
+@functools.partial(jax.jit, static_argnames=["smoothing_factor"])
 def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
     """Smoothly clamp array values to a maximum using softplus.
 
@@ -45,6 +50,7 @@ def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor:
     return jnp.where(x > shift, x_clamped, x)
 
 
+@functools.partial(jax.jit, static_argnames=["smoothing_factor"])
 def smooth_clamp(
     x: Float[Array, "..."], min_value: float, max_value: float, smoothing_factor: float = 50.0
 ) -> Float[Array, "..."]:
@@ -63,6 +69,7 @@ def smooth_clamp(
     return smooth_clamp_min(x, min_value, smoothing_factor=smoothing_factor)
 
 
+@jax.jit
 def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic cosine with overflow protection. Domain=(-inf, inf).
 
@@ -81,6 +88,7 @@ def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return jnp.cosh(x)
 
 
+@jax.jit
 def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic sine with overflow protection. Domain=(-inf, inf).
 
@@ -99,6 +107,7 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return jnp.sinh(x)
 
 
+@jax.jit
 def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic cosine with domain clamping. Domain=[1, inf).
 
@@ -112,6 +121,7 @@ def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return jnp.acosh(x)
 
 
+@jax.jit
 def asinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic sine. Domain=(-inf, inf).
 
@@ -124,6 +134,7 @@ def asinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return jnp.asinh(x)
 
 
+@jax.jit
 def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic tangent with domain clamping. Domain=(-1, 1).
 

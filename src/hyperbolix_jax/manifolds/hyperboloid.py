@@ -92,9 +92,7 @@ def proj(x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     return jnp.concatenate([x0_new[None], x_rest])
 
 
-def addition(
-    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float
-) -> Float[Array, "dim_plus_1"]:
+def addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Einstein gyrovector addition on hyperboloid.
 
     Args:
@@ -233,9 +231,7 @@ def dist_0(x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_D
     return lax.switch(version_idx, [_dist_0_default, _dist_0_smoothened], x, c)
 
 
-def expmap(
-    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
-) -> Float[Array, "dim_plus_1"]:
+def expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
     Args:
@@ -296,9 +292,7 @@ def expmap_0(v: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_
     return res
 
 
-def retraction(
-    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
-) -> Float[Array, "dim_plus_1"]:
+def retraction(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Retraction: first-order approximation of exponential map.
 
     Args:
@@ -317,9 +311,7 @@ def retraction(
     return res
 
 
-def logmap(
-    y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
-) -> Float[Array, "dim_plus_1"]:
+def logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map: map point y to tangent space at point x.
 
     Args:
@@ -410,9 +402,7 @@ def ptransp(
     return res
 
 
-def ptransp_0(
-    v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float
-) -> Float[Array, "dim_plus_1"]:
+def ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Parallel transport tangent vector v from origin to point y.
 
     Args:
