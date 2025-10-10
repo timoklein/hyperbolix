@@ -39,6 +39,7 @@ def test_hyp_linear_poincare_forward(dtype):
     # Check output is on manifold (vmap over batch)
     assert jax.vmap(poincare.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
 
+
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_gradient(dtype):
     """Test HypLinearPoincare has valid gradients."""
@@ -65,6 +66,7 @@ def test_hyp_linear_poincare_gradient(dtype):
     assert jnp.isfinite(loss)
     assert jnp.isfinite(grads.weight.value).all()
     assert jnp.isfinite(grads.bias.value).all()
+
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_pp_forward(dtype):
@@ -111,6 +113,7 @@ def test_hyp_linear_hyperboloid_forward(dtype):
     # Check output is on manifold (vmap over batch)
     assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
 
+
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_hyperboloid_gradient(dtype):
     """Test HypLinearHyperboloid has valid gradients."""
@@ -138,6 +141,7 @@ def test_hyp_linear_hyperboloid_gradient(dtype):
     assert jnp.isfinite(grads.weight.value).all()
     assert jnp.isfinite(grads.bias.value).all()
 
+
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_hyperboloid_tangent_input(dtype):
     """Test HypLinearHyperboloid with tangent space input."""
@@ -160,4 +164,3 @@ def test_hyp_linear_hyperboloid_tangent_input(dtype):
     assert y.shape == (batch_size, out_dim)
     # Check output is on manifold (vmap over batch)
     assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
-

@@ -39,7 +39,6 @@ Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
 """
 
-import jax
 import jax.lax as lax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
@@ -62,9 +61,7 @@ def _create_origin(c: float, dim: int, dtype=jnp.float32) -> Float[Array, "dim_p
     return origin
 
 
-def _minkowski_inner(
-    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"]
-) -> Float[Array, ""]:
+def _minkowski_inner(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"]) -> Float[Array, ""]:
     """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩.
 
     Args:
@@ -126,9 +123,7 @@ def addition(
     return res
 
 
-def scalar_mul(
-    r: float, x: Float[Array, "dim_plus_1"], c: float, backproject: bool = True
-) -> Float[Array, "dim_plus_1"]:
+def scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: float, backproject: bool = True) -> Float[Array, "dim_plus_1"]:
     """Scalar multiplication r ⊗ x on hyperboloid.
 
     Args:
@@ -197,11 +192,7 @@ def dist(
     References:
         Nickel & Kiela. "Poincaré embeddings for learning hierarchical representations." NeurIPS 2017.
     """
-    return lax.switch(
-        version_idx,
-        [_dist_default, _dist_smoothened],
-        x, y, c
-    )
+    return lax.switch(version_idx, [_dist_default, _dist_smoothened], x, y, c)
 
 
 # Distance from origin implementations for lax.switch
@@ -229,9 +220,7 @@ def _dist_0_smoothened(x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, 
     return jnp.where(at_origin, 0.0, res)
 
 
-def dist_0(
-    x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_DEFAULT
-) -> Float[Array, ""]:
+def dist_0(x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
     """Compute geodesic distance from hyperboloid origin.
 
     Args:
@@ -245,11 +234,7 @@ def dist_0(
     References:
         Nickel & Kiela. "Poincaré embeddings for learning hierarchical representations." NeurIPS 2017.
     """
-    return lax.switch(
-        version_idx,
-        [_dist_0_default, _dist_0_smoothened],
-        x, c
-    )
+    return lax.switch(version_idx, [_dist_0_default, _dist_0_smoothened], x, c)
 
 
 def expmap(
@@ -408,7 +393,11 @@ def logmap_0(y: Float[Array, "dim_plus_1"], c: float, backproject: bool = True) 
 
 
 def ptransp(
-    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float, backproject: bool = True
+    v: Float[Array, "dim_plus_1"],
+    x: Float[Array, "dim_plus_1"],
+    y: Float[Array, "dim_plus_1"],
+    c: float,
+    backproject: bool = True,
 ) -> Float[Array, "dim_plus_1"]:
     """Parallel transport tangent vector v from point x to point y.
 
@@ -509,9 +498,7 @@ def tangent_inner(
     return _minkowski_inner(u, v)
 
 
-def tangent_norm(
-    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
-) -> Float[Array, ""]:
+def tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, ""]:
     """Compute norm of tangent vector v at point x.
 
     Args:

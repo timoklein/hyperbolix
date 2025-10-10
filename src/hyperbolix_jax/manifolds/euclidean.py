@@ -43,9 +43,7 @@ def proj(x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     return x
 
 
-def addition(
-    x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0, backproject: bool = True
-) -> Float[Array, "dim"]:
+def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
     """Add Euclidean points x and y.
 
     Args:
@@ -60,9 +58,7 @@ def addition(
     return x + y
 
 
-def scalar_mul(
-    r: float, x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True
-) -> Float[Array, "dim"]:
+def scalar_mul(r: float, x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
     """Multiply Euclidean point x with scalar r.
 
     Args:
@@ -95,9 +91,7 @@ def dist(
     return jnp.linalg.norm(x - y)
 
 
-def dist_0(
-    x: Float[Array, "dim"], c: float = 0.0
-) -> Float[Array, ""]:
+def dist_0(x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
     """Compute geodesic distance from Euclidean origin to x.
 
     Args:
@@ -110,9 +104,7 @@ def dist_0(
     return jnp.linalg.norm(x)
 
 
-def expmap(
-    v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True
-) -> Float[Array, "dim"]:
+def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
     In Euclidean space, this is simply addition.
@@ -164,9 +156,7 @@ def retraction(
     return x + v
 
 
-def logmap(
-    y: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True
-) -> Float[Array, "dim"]:
+def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
     """Logarithmic map: map point y to tangent space at point x.
 
     In Euclidean space, this is subtraction.
@@ -223,9 +213,7 @@ def ptransp(
     return v
 
 
-def ptransp_0(
-    v: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0, backproject: bool = True
-) -> Float[Array, "dim"]:
+def ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0, backproject: bool = True) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from origin to point y.
 
     In Euclidean space, tangent spaces are identical everywhere (identity).
@@ -264,9 +252,7 @@ def tangent_inner(
     return jnp.dot(u, v)
 
 
-def tangent_norm(
-    v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0
-) -> Float[Array, ""]:
+def tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
     """Compute norm of tangent vector v at point x.
 
     In Euclidean space, this is the standard L2 norm.

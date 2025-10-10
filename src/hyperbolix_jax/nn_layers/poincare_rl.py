@@ -183,7 +183,8 @@ class HypRegressionPoincareHDRL(nnx.Module):
             # vmap over batch dimension (x), then over out_dim (a, p)
             dist_fn = jax.vmap(
                 jax.vmap(self._dist2hyperplane, in_axes=(None, 0, 0, None), out_axes=0),
-                in_axes=(0, None, None, None), out_axes=0
+                in_axes=(0, None, None, None),
+                out_axes=0,
             )
             signed_distance = dist_fn(x, a, p, c)  # (batch, out_dim)
         elif self.version == "rs":
@@ -195,7 +196,8 @@ class HypRegressionPoincareHDRL(nnx.Module):
             # Compute distance with scaled a
             dist_fn = jax.vmap(
                 jax.vmap(self._dist2hyperplane, in_axes=(None, 0, 0, None), out_axes=0),
-                in_axes=(0, None, None, None), out_axes=0
+                in_axes=(0, None, None, None),
+                out_axes=0,
             )
             signed_distance = dist_fn(x, a_scaled, p, c)  # (batch, out_dim)
             signed_distance = signed_distance * 2 / conformal_factor.T  # (batch, out_dim)

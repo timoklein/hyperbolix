@@ -130,7 +130,8 @@ class HypRegressionPoincare(nnx.Module):
         # vmap over batch dimension (axis 0 of x), then over out_dim (axis 0 of p_neg)
         addition_fn = jax.vmap(
             jax.vmap(self.manifold.addition, in_axes=(None, 0, None, None), out_axes=0),
-            in_axes=(0, None, None, None), out_axes=0
+            in_axes=(0, None, None, None),
+            out_axes=0,
         )
         sub = addition_fn(p_neg, x, c, self.backproject)  # (out_dim, batch, in_dim)
         sub = jnp.transpose(sub, (1, 0, 2))  # (batch, out_dim, in_dim)
