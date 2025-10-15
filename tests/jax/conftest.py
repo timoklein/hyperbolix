@@ -11,10 +11,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+import hyperbolix_jax as hj
+
 # Enable float64 support in JAX
 jax.config.update("jax_enable_x64", True)
 
-import hyperbolix_jax as hj
 
 
 @pytest.fixture(scope="package", params=[*range(10, 13)])
@@ -58,7 +59,7 @@ def manifold_and_c(request: pytest.FixtureRequest, rng: np.random.Generator):
     Mirrors the PyTorch manifold fixture but returns functional modules
     instead of class instances. Curvatures are sampled the same way as PyTorch.
     """
-    manifold_name, c_base = request.param
+    manifold_name, _ = request.param
 
     if manifold_name == "euclidean":
         # Euclidean always has c=0

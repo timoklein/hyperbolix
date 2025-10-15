@@ -1,5 +1,3 @@
-from typing import List
-
 import torch
 
 from .manifold import Manifold
@@ -30,7 +28,7 @@ class Euclidean(Manifold):
         else:
             raise ValueError(f"Unsupported dtype: {dtype}. Supported dtypes are float32, and float64.")
 
-    def _2manifold_dtype(self, xs: List[torch.Tensor]) -> List[torch.Tensor]:
+    def _2manifold_dtype(self, xs: list[torch.Tensor]) -> list[torch.Tensor]:
         """
         Convert the list of tensor(s) xs to the Euclidean manifold's dtype.
 

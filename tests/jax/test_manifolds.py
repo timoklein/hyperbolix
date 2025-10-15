@@ -13,10 +13,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+import hyperbolix_jax as hj
+
 # Enable float64 support in JAX
 jax.config.update("jax_enable_x64", True)
 
-import hyperbolix_jax as hj
 
 # ---------------------------------------------------------------------------
 # Helper functions

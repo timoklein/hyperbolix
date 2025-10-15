@@ -79,13 +79,41 @@ include = ["hyperbolic_test*", "manifolds*", "utils*", "hyperbolix_jax*", "nn_la
 
 [tool.pytest.ini_options]
 addopts = "-ra -q" # --log-cli-level=DEBUG
-testpaths = ["tests"]
+testpaths = ["tests", "benchmarks"]
 pythonpath = "src"
+# Collect benchmark files in addition to test files
+python_files = ["test_*.py", "*_test.py", "bench_*.py"]
 
 [dependency-groups]
 dev = [
     "ipdb>=0.13.13",
     "py-spy>=0.4.1",
     "pytest>=8.4.2",
+    "pytest-benchmark>=5.1.0",
+    "pre-commit>=4.0.1",
+    "pyright>=1.1.390",
     "ruff>=0.13.2",
 ]
+
+
+#----------------------------
+# PYRIGHT
+#----------------------------
+
+[tool.pyright]
+include = ["src/hyperbolix_jax"]
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "src/manifolds",      # Old PyTorch code
+    "src/nn_layers",      # Old PyTorch code
+    "src/optim",          # Old PyTorch code
+    "src/utils",          # Old PyTorch code
+]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportUnusedImport = true
+reportUnusedVariable = true
+reportDuplicateImport = true

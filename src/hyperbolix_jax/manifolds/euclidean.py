@@ -288,7 +288,7 @@ def tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0)
     return v
 
 
-def is_in_manifold(x: Float[Array, "dim"], c: float = 0.0) -> bool:
+def is_in_manifold(x: Float[Array, "dim"], c: float = 0.0) -> Array:
     """Check if point x lies in Euclidean manifold.
 
     In Euclidean space, all points are valid.
@@ -303,7 +303,7 @@ def is_in_manifold(x: Float[Array, "dim"], c: float = 0.0) -> bool:
     return jnp.array(True, dtype=bool)
 
 
-def is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> bool:
+def is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Array:
     """Check if vector v lies in tangent space at point x.
 
     In Euclidean space, all vectors are valid tangent vectors.

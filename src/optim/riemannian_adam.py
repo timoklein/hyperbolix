@@ -1,4 +1,5 @@
-from typing import Any, Dict, Iterable, Tuple, Union
+from typing import Any
+from collections.abc import Iterable
 
 import torch
 
@@ -49,9 +50,9 @@ class RiemannianAdam(torch.optim.Adam):
 
     def __init__(
         self,
-        params: Union[Iterable[torch.Tensor], Iterable[Dict[str, Any]]],
+        params: Iterable[torch.Tensor] | Iterable[dict[str, Any]],
         lr: float,
-        betas: Tuple[float, float] = (0.9, 0.999),
+        betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
         weight_decay: float = 0,
         amsgrad: bool = False,

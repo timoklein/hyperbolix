@@ -12,10 +12,25 @@
 - ✅ **NN layer refactor**: Moved assertions to `__init__`, added backproject attribute, updated for vmap API
 - ✅ **JIT compilation**: Math utilities now jitted for performance (2025-10-10)
 
+**NEW: Developer Workflow Improvements** (2025-10-15):
+- ✅ **Pre-commit hooks**: Automatic linting, formatting, and validation on commit
+- ✅ **Pyright type checking**: Static type analysis for JAX code
+- ✅ **JIT performance benchmarks**: 168 benchmarks across manifolds and NN layers (benchmarks/)
+- ✅ **Enhanced CI/CD**: Parallel test execution, caching, benchmark regression detection
+- ✅ **Developer guide**: Comprehensive workflow documentation (DEVELOPER_GUIDE.md)
+
+**NEW: CI + Tooling Hardening** (2025-10-16):
+- ✅ **CI pipeline overhaul** (`.github/workflows/ci.yaml`): Split into dedicated lint, type-check, test matrix, and benchmark jobs with uv caching and benchmark regression gating.
+- ✅ **Project configuration updates** (`pyproject.toml`, `uv.lock`): Added `pytest-benchmark`, `pre-commit`, `pyright`; collect `bench_*.py`; configured Pyright to focus on `src/hyperbolix_jax` while excluding legacy PyTorch modules.
+- ✅ **Legacy typing modernized** (`src/optim`, `src/nn_layers`, `src/utils`, `src/manifolds`): Replaced `typing` aliases with built-in generics and f-strings for Python 3.12 + Pyright compatibility.
+- ✅ **Docs + metadata refresh** (`docs/source/conf.py`, `README.md`, `.gitignore`): Updated author credits, ensured newline hygiene to keep Sphinx/CI happy.
+- ✅ **Pre-commit polish** (`.pre-commit-config.yaml`): Explicit `stages: [pre-commit]` for `isort` to silence deprecated stage warnings.
+
 **Test Status**:
 - **Phase 1 (Manifolds)**: 978 passing, 72 skipped (100% of non-skipped tests)
 - **Phase 3 (NN Layers)**: 44/44 tests passing (100%)
 - **Math Utilities**: 8/8 tests passing (100%)
+- **Benchmarks**: 168 test cases passing (100%)
 
 ---
 
@@ -109,6 +124,41 @@ def operation(
 ---
 
 ## 🔧 **Recent Fixes & Improvements**
+
+### **Session 6: Developer Workflow & Tooling Infrastructure** (2025-10-15)
+
+**Implemented Tooling:**
+1. **Pre-commit Hooks** (`.pre-commit-config.yaml`):
+   - Ruff linting and formatting (auto-fix enabled)
+   - Trailing whitespace and EOF cleanup
+   - YAML/TOML validation, merge conflict detection
+   - Installed with `uv run pre-commit install`
+
+2. **Type Checking** (Pyright in `pyproject.toml`):
+   - Basic mode enabled for `src/hyperbolix_jax`
+   - Detected 13 type issues (element-wise functions returning Array vs scalar)
+   - Integrated into CI pipeline
+
+3. **JIT Performance Benchmarks** (`benchmarks/`):
+   - Created 168 parametrized benchmark tests across dim × batch_size
+   - **Manifold benchmarks** (`bench_manifolds.py`): dist, expmap, logmap, math utils (with/without JIT)
+   - **NN layer benchmarks** (`bench_nn_layers.py`): forward/backward passes, multi-layer networks
+   - Properly documented vmap `in_axes` with inline comments
+   - Fixed Hyperboloid layer dimension mismatch (ambient dim = intrinsic dim + 1)
+   - Removed unnecessary vmap for element-wise functions (acosh, atanh, cosh, sinh)
+   - Pytest configuration updated to discover `bench_*.py` files
+
+4. **Enhanced CI/CD** (`.github/workflows/ci.yaml`):
+   - Separate jobs for lint, typecheck, test (4 parallel suites), benchmark
+   - UV dependency caching for faster builds
+   - Benchmark regression detection (fails on >10% slowdown)
+
+5. **Documentation** (`DEVELOPER_GUIDE.md`, `benchmarks/README.md`):
+   - Complete developer workflow reference
+   - Benchmark usage guide with examples
+   - Troubleshooting tips and best practices
+
+**Result:** Professional development workflow with automated quality checks, performance tracking, and comprehensive documentation. All 168 benchmarks passing, ready for continuous performance monitoring.
 
 ### **Session 5: Hyperboloid Intrinsic Representation & Numerical Stability** (2025-10-05)
 

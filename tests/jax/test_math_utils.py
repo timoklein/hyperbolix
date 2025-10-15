@@ -2,10 +2,6 @@
 
 import jax
 import jax.numpy as jnp
-import pytest
-
-# Enable float64 support in JAX
-jax.config.update("jax_enable_x64", True)
 
 from hyperbolix_jax.utils.math_utils import (
     acosh,
@@ -16,6 +12,10 @@ from hyperbolix_jax.utils.math_utils import (
     smooth_clamp_max,
     smooth_clamp_min,
 )
+
+# Enable float64 support in JAX
+jax.config.update("jax_enable_x64", True)
+
 
 
 def test_smooth_clamp_min():

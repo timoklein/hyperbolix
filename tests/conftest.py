@@ -1,7 +1,5 @@
 """This file contains global fixtures that are used across all our tests."""
 
-from typing import Tuple
-
 import pytest
 import torch
 
@@ -21,7 +19,7 @@ def dtype(request: pytest.FixtureRequest) -> torch.dtype:
 
 
 @pytest.fixture(scope="package")
-def tolerance(dtype: str) -> Tuple[float, float]:
+def tolerance(dtype: str) -> tuple[float, float]:
     """Set numerical tolerances for floating point comparisons."""
     if dtype == "float32":
         atol = 4e-03
