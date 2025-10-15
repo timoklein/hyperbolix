@@ -17,7 +17,6 @@ from hyperbolix_jax.utils.math_utils import (
 jax.config.update("jax_enable_x64", True)
 
 
-
 def test_smooth_clamp_min():
     """Test smooth minimum clamping."""
     print("\\nTesting smooth_clamp_min...")

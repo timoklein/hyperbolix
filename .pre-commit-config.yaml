@@ -10,7 +10,7 @@ repos:
       - id: isort
         name: isort (python)
         stages: [pre-commit]
-        files: ^src/hyperbolix_jax/
+        files: ^(src/hyperbolix_jax/|tests/jax/)
         args: [--profile, black, --line-length, "127"]
 
   # Ruff - fast Python linter and formatter (JAX code only)
@@ -21,11 +21,11 @@ repos:
       - id: ruff
         args: [--fix]
         types_or: [python, pyi]
-        files: ^src/hyperbolix_jax/
+        files: ^(src/hyperbolix_jax/|tests/jax/)
       # Run the formatter
       - id: ruff-format
         types_or: [python, pyi]
-        files: ^src/hyperbolix_jax/
+        files: ^(src/hyperbolix_jax/|tests/jax/)
 
   # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks

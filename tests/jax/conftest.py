@@ -17,7 +17,6 @@ import hyperbolix_jax as hj
 jax.config.update("jax_enable_x64", True)
 
 
-
 @pytest.fixture(scope="package", params=[*range(10, 13)])
 def seed_jax(request: pytest.FixtureRequest) -> int:
     """Global seed for JAX reproducibility (mirrors PyTorch seeds 10, 11, 12)."""
