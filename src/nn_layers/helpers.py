@@ -1,5 +1,4 @@
 import math
-from typing import Dict
 
 import torch
 
@@ -7,7 +6,7 @@ from ..manifolds import Hyperboloid, PoincareBall
 from ..utils.math_utils import asinh, cosh, sinh, smooth_clamp
 
 # Dictionary mapping of dtype strings to torch dtypes
-DTYPE_MAP: Dict[str, torch.dtype] = {
+DTYPE_MAP: dict[str, torch.dtype] = {
     "float32": torch.float32,
     "float64": torch.float64,
 }

@@ -1,5 +1,3 @@
-from typing import List
-
 import torch
 
 from ..utils.math_utils import acosh, cosh, sinh, smooth_clamp_min
@@ -38,7 +36,7 @@ class Hyperboloid(Manifold):
             )
             self.dtype = c.dtype
 
-    def _2manifold_dtype(self, xs: List[torch.Tensor]) -> List[torch.Tensor]:
+    def _2manifold_dtype(self, xs: list[torch.Tensor]) -> list[torch.Tensor]:
         """
         Convert the list of tensor(s) xs to the Hyperboloid's dtype.
 

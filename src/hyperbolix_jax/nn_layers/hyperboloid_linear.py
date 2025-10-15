@@ -111,7 +111,7 @@ class HypLinearHyperboloid(nnx.Module):
 
         # Bias addition via parallel transport and exponential map
         # Concatenate zero time coordinate to bias
-        bias = jnp.concatenate([jnp.zeros_like(self.bias[:, :1]), self.bias], axis=-1)  # (1, out_dim)
+        bias = jnp.concatenate([jnp.zeros_like(self.bias.value[:, :1]), self.bias.value], axis=-1)  # (1, out_dim)
         bias = bias.squeeze(0)  # (out_dim,)
 
         # Parallel transport bias from origin to each x (vmap over batch)

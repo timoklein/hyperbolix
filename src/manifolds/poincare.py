@@ -1,5 +1,3 @@
-from typing import List
-
 import torch
 
 from ..utils.math_utils import acosh, atanh, tanh
@@ -40,7 +38,7 @@ class PoincareBall(Manifold):
             )
             self.dtype = c.dtype
 
-    def _2manifold_dtype(self, xs: List[torch.Tensor]) -> List[torch.Tensor]:
+    def _2manifold_dtype(self, xs: list[torch.Tensor]) -> list[torch.Tensor]:
         """
         Convert the list of tensor(s) xs to the PoincareBall's dtype.
 

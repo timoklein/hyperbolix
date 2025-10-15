@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import pytest
 import torch
 
@@ -9,7 +7,7 @@ from src.optim import RiemannianAdam, RiemannianSGD
 
 @pytest.mark.parametrize("expmap_update", [True, False])
 def test_riemannian_adam(
-    manifold: Manifold, tolerance: Tuple[float, float], uniform_points: torch.Tensor, expmap_update: bool
+    manifold: Manifold, tolerance: tuple[float, float], uniform_points: torch.Tensor, expmap_update: bool
 ) -> None:
     """Test the RiemannianAdam for convergence."""
     _, rtol = tolerance
@@ -31,7 +29,7 @@ def test_riemannian_adam(
 
 @pytest.mark.parametrize("expmap_update", [True, False])
 def test_riemannian_sgd(
-    manifold: Manifold, tolerance: Tuple[float, float], uniform_points: torch.Tensor, expmap_update: bool
+    manifold: Manifold, tolerance: tuple[float, float], uniform_points: torch.Tensor, expmap_update: bool
 ) -> None:
     """Test the RiemannianSGD for convergence."""
     _, rtol = tolerance

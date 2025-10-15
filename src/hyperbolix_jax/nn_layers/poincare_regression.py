@@ -286,8 +286,8 @@ class HypRegressionPoincarePP(nnx.Module):
         # Compute multinomial linear regression
         res = compute_mlr_poincare_pp(
             x,
-            self.weight,
-            self.bias,
+            self.weight.value,
+            self.bias.value,
             c,
             self.clamping_factor,
             self.smoothing_factor,

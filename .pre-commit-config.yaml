@@ -1,0 +1,59 @@
+# Pre-commit hooks for code quality and consistency
+# Install: uv run pre-commit install
+# Run manually: uv run pre-commit run --all-files
+
+repos:
+  # isort - import sorting (JAX code only)
+  - repo: https://github.com/pycqa/isort
+    rev: 7.0.0
+    hooks:
+      - id: isort
+        name: isort (python)
+        stages: [pre-commit]
+        files: ^src/hyperbolix_jax/
+        args: [--profile, black, --line-length, "127"]
+
+  # Ruff - fast Python linter and formatter (JAX code only)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.13.2
+    hooks:
+      # Run the linter
+      - id: ruff
+        args: [--fix]
+        types_or: [python, pyi]
+        files: ^src/hyperbolix_jax/
+      # Run the formatter
+      - id: ruff-format
+        types_or: [python, pyi]
+        files: ^src/hyperbolix_jax/
+
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Remove trailing whitespace
+      - id: trailing-whitespace
+      # Ensure files end with a newline
+      - id: end-of-file-fixer
+      # Check YAML syntax
+      - id: check-yaml
+      # Check for merge conflict markers
+      - id: check-merge-conflict
+      # Check for large files (>500KB)
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      # Check for case conflicts on case-insensitive filesystems
+      - id: check-case-conflict
+      # Validate pyproject.toml syntax
+      - id: check-toml
+      # Check for debugger imports
+      - id: debug-statements
+
+  # Pyright type checking (optional - can be slow, JAX code only)
+  # Uncomment to enable type checking in pre-commit
+  # - repo: https://github.com/RobertCraigie/pyright-python
+  #   rev: v1.1.390
+  #   hooks:
+  #     - id: pyright
+  #       files: ^src/hyperbolix_jax/
+  #       additional_dependencies: []

@@ -80,7 +80,7 @@ def _get_max_norm_eps(x: Float[Array, "dim"]) -> float:
 
     Uses eps^0.75 as empirically stable value that scales with precision.
     """
-    return jnp.finfo(x.dtype).eps ** 0.75
+    return float(jnp.finfo(x.dtype).eps ** 0.75)
 
 
 def _conformal_factor(x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
@@ -225,7 +225,7 @@ def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float
     xy_diff_sqnorm = jnp.dot(x - y, x - y)
     arg = 1 + 2 * c * xy_diff_sqnorm / ((1 - c * x_sqnorm) * (1 - c * y_sqnorm))
     condition = arg < 1 + MIN_NORM
-    return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))
+    return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
 
 
 def _dist_lorentzian_proxy(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, ""]:
@@ -274,7 +274,7 @@ def _dist_0_metric_tensor(x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
     x_sqnorm = jnp.dot(x, x)
     arg = 1 + 2 * c * x_sqnorm / (1 - c * x_sqnorm)
     condition = arg < 1 + MIN_NORM
-    return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))
+    return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
 
 
 def _dist_0_lorentzian_proxy(x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
@@ -519,7 +519,7 @@ def tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Fl
     return v
 
 
-def is_in_manifold(x: Float[Array, "dim"], c: float, atol: float = 1e-5) -> bool:
+def is_in_manifold(x: Float[Array, "dim"], c: float, atol: float = 1e-5) -> Array:
     """Check if point x lies in Poincaré ball.
 
     Args:
@@ -538,7 +538,7 @@ def is_in_manifold(x: Float[Array, "dim"], c: float, atol: float = 1e-5) -> bool
     return x_sqnorm < 1.0 / c
 
 
-def is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> bool:
+def is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Array:
     """Check if vector v lies in tangent space at point x.
 
     In Poincaré ball, all vectors are valid tangent vectors.

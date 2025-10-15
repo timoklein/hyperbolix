@@ -1,5 +1,4 @@
 import copy
-from typing import List
 
 import torch
 
@@ -19,7 +18,7 @@ class Manifold(torch.nn.Module):
         self.max_enorm_eps = None
         self.dtype = None
 
-    def _2manifold_dtype(self, xs: List[torch.Tensor]) -> List[torch.Tensor]:
+    def _2manifold_dtype(self, xs: list[torch.Tensor]) -> list[torch.Tensor]:
         """Convert a list of tensor(s) to the manifold dtype."""
         raise NotImplementedError
 

@@ -1,37 +1,188 @@
-name: JAX Hyperbolic Math CI
-on: push
+name: CI
+
+on:
+  push:
+    branches: [main, nn-layers]
+  pull_request:
+    branches: [main]
 
 jobs:
-  build-linux:
+  # Linting job - runs quickly to catch simple errors
+  lint:
+    name: Lint (Ruff)
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install uv
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - uses: actions/checkout@v4
 
-    # - name: Install uv
-    #   uses: astral-sh/setup-uv@v6
-    #   with:
-    #     version: "0.8.22"
-    #     enable-cache: true
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version-file: ".python-version"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
-    - name: Install the project
-      run: uv sync --locked --all-extras --dev
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
 
-    - name: Lint with Ruff
-      run: |
-        # Stop the build if there are Python syntax errors or undefined names
-        uv run ruff check src/hyperbolix_jax --exit-zero --statistics
+      - name: Cache uv dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
 
-    - name: Test with pytest
-      run: |
-        uv run pytest
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run Ruff linter
+        run: uv run ruff check src/hyperbolix_jax tests/jax benchmarks
+
+      - name: Run Ruff formatter check
+        run: uv run ruff format --check src tests benchmarks
+
+  # Type checking job
+  typecheck:
+    name: Type Check (Pyright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Cache uv dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run Pyright
+        run: uv run pyright src/hyperbolix_jax
+
+  # Test job - runs in parallel for different test suites
+  test:
+    name: Test (${{ matrix.test-suite }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test-suite:
+          - "jax/test_manifolds.py"
+          - "jax/test_math_utils.py"
+          - "jax/test_nn_layers.py"
+          - "jax/test_regression_layers.py"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Cache uv dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run tests
+        run: uv run pytest tests/${{ matrix.test-suite }} -v
+
+  # Benchmark job - runs on main branch to track performance
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for comparison
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Cache uv dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Download previous benchmark data
+        uses: actions/cache@v4
+        with:
+          path: ./cache
+          key: benchmark-${{ runner.os }}-${{ github.ref_name }}
+          restore-keys: |
+            benchmark-${{ runner.os }}-
+
+      - name: Run benchmarks
+        run: |
+          # Run quick benchmark subset (not all parameter combinations)
+          uv run pytest benchmarks/ \
+            --benchmark-only \
+            --benchmark-json=benchmark.json \
+            -k "dim10-batch_size100" \
+            --benchmark-warmup=on
+
+      - name: Compare benchmarks
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -f cache/benchmark.json ]; then
+            echo "Comparing against previous benchmark..."
+            uv run pytest benchmarks/ \
+              --benchmark-only \
+              --benchmark-compare=cache/benchmark.json \
+              --benchmark-compare-fail=mean:10% \
+              -k "dim10-batch_size100"
+          else
+            echo "No previous benchmark found, skipping comparison"
+          fi
+        continue-on-error: true
+
+      - name: Store benchmark result
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p cache
+          cp benchmark.json cache/benchmark.json
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark.json

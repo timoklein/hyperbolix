@@ -1,5 +1,3 @@
-from typing import Union
-
 import torch
 
 from ..manifolds import Hyperboloid
@@ -166,8 +164,8 @@ class HyperbolicLinearHyperboloidFHNN(torch.nn.Module):
         init_scale: float = 2.3,
         learnable_scale: bool = True,
         eps: float = 1e-5,
-        activation: Union[None, torch.nn.Module] = None,
-        dropout: Union[None, float] = None,
+        activation: None | torch.nn.Module = None,
+        dropout: None | float = None,
     ):
         super().__init__()
         assert isinstance(manifold, Hyperboloid), "manifold must be an instance of Hyperboloid"
@@ -291,7 +289,7 @@ class HyperbolicLinearHyperboloidFHCNN(torch.nn.Module):
         init_scale: float = 2.3,
         learnable_scale: bool = False,
         eps: float = 1e-5,
-        activation: Union[None, torch.nn.Module] = None,
+        activation: None | torch.nn.Module = None,
         normalize: bool = False,
     ):
         super().__init__()

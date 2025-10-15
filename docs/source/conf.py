@@ -6,9 +6,9 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "Hyperbolic Math"
-copyright = "2025, Thomas Lang, Kevin Sidak, Timo Klein"
-author = "Thomas Lang, Kevin Sidak, Timo Klein"
+project = "Hyperbolic Deep Learning in JAX"
+copyright = "2025, Timo Klein, Thomas Lang, Andrii Shkabrii"
+author = "Timo Klein, Thomas Lang, Andrii Shkabrii"
 release = "2025"
 
 # -- General configuration ---------------------------------------------------
@@ -31,8 +31,8 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))
 
 project = "hyper_math"
-copyright = "2025, Thomas Lang, Kevin Sidak"
-author = "Thomas Lang, Kevin Sidak"
+copyright = "2025, Timo Klein, Thomas Lang, Andrii Shkabrii"
+author = "Timo Klein, Thomas Lang, Andrii Shkabrii"
 release = "0.1.0"
 
 extensions = [

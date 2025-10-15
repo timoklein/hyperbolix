@@ -1,5 +1,4 @@
 import os
-from typing import Dict, List, Tuple, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -14,10 +13,10 @@ from .horo_pca import HoroPCA, center_data, compute_frechet_mean
 def create_figure(
     points: torch.Tensor,
     _manifold: Manifold,
-    labels: Union[npt.ArrayLike, None] = None,
-    edges: Union[Tuple[List[int], List[int]], None] = None,
-    hyperplanes: Union[Tuple[torch.Tensor, torch.Tensor], None] = None,
-    settings: Dict[str, Union[str, bool]] = None,
+    labels: npt.ArrayLike | None = None,
+    edges: tuple[list[int], list[int]] | None = None,
+    hyperplanes: tuple[torch.Tensor, torch.Tensor] | None = None,
+    settings: dict[str, str | bool] = None,
 ) -> None:
     """
     Create and save a 2D visualization of hyperbolic points, geodesics, and hyperplanes in the PoincareBall.
@@ -126,9 +125,9 @@ def to_hyperboloid_vis(x: torch.Tensor, poincare: PoincareBall) -> torch.Tensor:
 def pointsTo2dPoincare(
     x: torch.Tensor,
     poincare: PoincareBall,
-    hyperplanes: Union[Tuple[torch.Tensor, torch.Tensor], None] = None,
-    settings: Union[dict, None] = None,
-) -> Tuple[npt.ArrayLike, Union[npt.ArrayLike, None]]:
+    hyperplanes: tuple[torch.Tensor, torch.Tensor] | None = None,
+    settings: dict | None = None,
+) -> tuple[npt.ArrayLike, npt.ArrayLike | None]:
     """Project Hyperboloid points and Hyperboloid hyperplanes to the 2d PoincareBall using the specified method."""
     hyperboloid = Hyperboloid(c=poincare.c, dtype=poincare.dtype)
 
@@ -164,7 +163,7 @@ def pointsTo2dPoincare(
     return x, hyperplanes
 
 
-def plot_2d_points(x: torch.Tensor, ax: plt.Axes, labels: Union[npt.ArrayLike, None] = None) -> List[plt.Line2D]:
+def plot_2d_points(x: torch.Tensor, ax: plt.Axes, labels: npt.ArrayLike | None = None) -> list[plt.Line2D]:
     """Plot 2d PoincareBall points with labels (optional)."""
     x = x.cpu()
     if labels is None:
@@ -175,7 +174,7 @@ def plot_2d_points(x: torch.Tensor, ax: plt.Axes, labels: Union[npt.ArrayLike, N
         unique_labels = np.unique(labels)
         cmap = plt.cm.tab10 if len(unique_labels) <= 10 else plt.cm.tab20
         colors = cmap(np.linspace(0, 1, len(unique_labels)))
-        color_map = dict(zip(unique_labels, colors))
+        color_map = dict(zip(unique_labels, colors, strict=False))
         ax.scatter(x[:, 0], x[:, 1], c=[color_map[label] for label in labels], alpha=0.6, zorder=2)
         handles = [
             plt.Line2D(
@@ -187,7 +186,7 @@ def plot_2d_points(x: torch.Tensor, ax: plt.Axes, labels: Union[npt.ArrayLike, N
 
 
 def plot_edges(
-    points: torch.Tensor, edges: Tuple[List[int], List[int]], poincare: PoincareBall, ax: plt.Axes, handles: List[plt.Line2D]
+    points: torch.Tensor, edges: tuple[list[int], list[int]], poincare: PoincareBall, ax: plt.Axes, handles: list[plt.Line2D]
 ) -> None:
     """Plot geodesic segment(s) connecting x and y."""
     assert len(edges[0]) == len(edges[0]), "Start and end points must have the same shape"
@@ -196,7 +195,7 @@ def plot_edges(
     x = points[edges[0]]
     y = points[edges[1]]
     dir = poincare.addition(-x, y)
-    for _x, _dir in zip(x, dir):
+    for _x, _dir in zip(x, dir, strict=False):
         # Compute points on the geodesic segment connecting x and y
         second_term = poincare.scalar_mul(t, _dir.repeat(spacing, 1), backproject=True)
         geodesic = poincare.addition(_x.repeat(spacing, 1), second_term, backproject=True)
@@ -206,7 +205,7 @@ def plot_edges(
 
 
 def plot_hyperplane(
-    hyperplanes: Tuple[torch.Tensor, torch.Tensor], poincare: PoincareBall, ax: plt.Axes, handles: List[plt.Line2D]
+    hyperplanes: tuple[torch.Tensor, torch.Tensor], poincare: PoincareBall, ax: plt.Axes, handles: list[plt.Line2D]
 ) -> None:
     """Plot hyperplane(s) and their base point(s)."""
     hyperplane_normals, hyperplane_base_points = hyperplanes
@@ -216,7 +215,7 @@ def plot_hyperplane(
     hyperplane_dirs = hyperplane_normals[:, ::-1]
     spacing = 10_000
     t = torch.linspace(-500, 500, spacing, device=poincare.c.device)
-    for _base, _dir in zip(hyperplane_base_points, hyperplane_dirs):
+    for _base, _dir in zip(hyperplane_base_points, hyperplane_dirs, strict=False):
         points = poincare.expmap(torch.outer(t, _dir), _base.repeat(spacing, 1)).cpu()
         ax.plot(points[:, 0], points[:, 1], c="green", alpha=0.6, zorder=3)
     ax.scatter(hyperplane_base_points[:, 0], hyperplane_base_points[:, 1], c="green", marker="P", s=50, zorder=4)
@@ -226,7 +225,7 @@ def plot_hyperplane(
     )
 
 
-def save_figure(fig: plt.Figure, file_name: str, file_path: Union[str, None] = None, format: str = "png") -> None:
+def save_figure(fig: plt.Figure, file_name: str, file_path: str | None = None, format: str = "png") -> None:
     """Save the figure to a file."""
     if file_path is None:
         file_path = os.getcwd()

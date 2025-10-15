@@ -152,7 +152,7 @@ def _dist_default(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], 
     res = acosh(arg) / sqrt_c
     # Zero out if points are identical
     same = jnp.all(jnp.equal(x, y))
-    return jnp.where(same, 0.0, res)
+    return jnp.where(same, 0.0, res)  # type: ignore[return-value]
 
 
 def _dist_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, ""]:
@@ -163,7 +163,7 @@ def _dist_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"
     res = acosh(arg) / sqrt_c
     # Zero out if points are identical
     same = jnp.all(jnp.equal(x, y))
-    return jnp.where(same, 0.0, res)
+    return jnp.where(same, 0.0, res)  # type: ignore[return-value]
 
 
 def dist(
@@ -199,7 +199,7 @@ def _dist_0_default(x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, ""]
     # Zero out if at origin
     origin = _create_origin(c, x.shape[0] - 1, x.dtype)
     at_origin = jnp.all(jnp.equal(x, origin))
-    return jnp.where(at_origin, 0.0, res)
+    return jnp.where(at_origin, 0.0, res)  # type: ignore[return-value]
 
 
 def _dist_0_smoothened(x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, ""]:
@@ -211,7 +211,7 @@ def _dist_0_smoothened(x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, 
     # Zero out if at origin
     origin = _create_origin(c, x.shape[0] - 1, x.dtype)
     at_origin = jnp.all(jnp.equal(x, origin))
-    return jnp.where(at_origin, 0.0, res)
+    return jnp.where(at_origin, 0.0, res)  # type: ignore[return-value]
 
 
 def dist_0(x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
@@ -525,7 +525,7 @@ def tangent_proj(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c
     return v - coeff * x_normed
 
 
-def is_in_manifold(x: Float[Array, "dim_plus_1"], c: float, atol: float = 1e-5) -> bool:
+def is_in_manifold(x: Float[Array, "dim_plus_1"], c: float, atol: float = 1e-5) -> Array:
     """Check if point x lies on hyperboloid.
 
     Args:
@@ -548,7 +548,7 @@ def is_in_manifold(x: Float[Array, "dim_plus_1"], c: float, atol: float = 1e-5) 
 
 def is_in_tangent_space(
     v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float, atol: float | None = None
-) -> bool:
+) -> Array:
     """Check if vector v lies in tangent space at point x.
 
     Tangent space is orthogonal to x in Minkowski metric: ⟨v, x⟩_L = 0

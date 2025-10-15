@@ -1,4 +1,5 @@
-from typing import Any, Dict, Iterable, Union
+from typing import Any
+from collections.abc import Iterable
 
 import torch
 
@@ -44,7 +45,7 @@ class RiemannianSGD(torch.optim.Optimizer):
 
     def __init__(
         self,
-        params: Union[Iterable[torch.Tensor], Iterable[Dict[str, Any]]],
+        params: Iterable[torch.Tensor] | Iterable[dict[str, Any]],
         lr: float,
         momentum: float = 0,
         dampening: float = 0,
@@ -55,11 +56,11 @@ class RiemannianSGD(torch.optim.Optimizer):
         hyperbolic_axis: int = -1,
     ):
         if lr < 0.0:
-            raise ValueError("Invalid learning rate: {}".format(lr))
+            raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
-            raise ValueError("Invalid momentum value: {}".format(momentum))
+            raise ValueError(f"Invalid momentum value: {momentum}")
         if weight_decay < 0.0:
-            raise ValueError("Invalid weight_decay value: {}".format(weight_decay))
+            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
 
         defaults = dict(
             lr=lr,
