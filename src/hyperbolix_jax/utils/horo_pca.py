@@ -10,6 +10,8 @@ References:
         arXiv preprint arXiv:2105.14686 (2021).
 """
 
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import optax
@@ -49,7 +51,7 @@ def _batched_minkowski_inner(
 def _horo_projection_rank1(
     x: Float[Array, "n_points dim_plus_1"],
     Q: Float[Array, "1 dim_plus_1"],
-    c: float,
+    c: Float[Array, ""] | float,
 ) -> Float[Array, "n_points dim_plus_1"]:
     """Special-case horo projection when only one ideal is provided.
 
@@ -110,7 +112,7 @@ def _horo_projection_rank1(
 def _horo_projection_points(
     x: Float[Array, "n_points dim_plus_1"],
     Q: Float[Array, "n_components dim_plus_1"],
-    c: float,
+    c: Float[Array, ""] | float,
 ) -> Float[Array, "n_points dim_plus_1"]:
     """Compute horospherical projections for a batch of points.
 
@@ -181,7 +183,7 @@ def _horo_projection_points(
 def _projected_variance_loss(
     Q_param: Float[Array, "n_components dim_or_dim_minus_1"],
     x_data: Float[Array, "n_points dim_plus_1"],
-    c_val: float,
+    c_val: Float[Array, ""] | float,
 ) -> Float[Array, ""]:
     """Compute negative generalized variance of horospherical projections.
 
@@ -224,7 +226,7 @@ def _projected_variance_loss(
 
 def compute_frechet_mean(
     x: Float[Array, "n_points dim_plus_1"],
-    c: float,
+    c: Float[Array, ""] | float,
     max_iters: int = 5_000,
     tol: float = 5e-6,
     lr_candidates: tuple[float, ...] = (1e-2, 2e-2, 5e-3, 4e-2, 2.5e-3),
@@ -308,7 +310,7 @@ def compute_frechet_mean(
 def center_data(
     x: Float[Array, "n_points dim_plus_1"],
     mean: Float[Array, "1 dim_plus_1"],
-    c: float,
+    c: Float[Array, ""] | float,
 ) -> Float[Array, "n_points dim_plus_1"]:
     """Center hyperboloid points around their Fréchet mean using Lorentz transformation.
 
@@ -429,7 +431,7 @@ class HoroPCA(nnx.Module):
         self.c = nnx.Variable(jnp.array(c, dtype=jnp.float32))
 
         # Initialize data_mean as None (will be set during fit)
-        self.data_mean = nnx.Variable(None)
+        self.data_mean: nnx.Variable[Float[Array, "1 dim_plus_1"] | None] = nnx.Variable(None)
         self.loss_history = nnx.Variable(jnp.zeros((0,), dtype=jnp.float32))
 
         # Initialize principal components Q based on manifold type
@@ -478,7 +480,7 @@ class HoroPCA(nnx.Module):
         self,
         x: Float[Array, "n_points dim_plus_1"],
         Q: Float[Array, "n_components dim_plus_1"],
-        c: float,
+        c: Float[Array, ""] | float,
     ) -> Float[Array, "n_points dim_plus_1"]:
         """Compute horospherical projections onto the geodesic submanifold.
 
@@ -563,7 +565,8 @@ class HoroPCA(nnx.Module):
 
             # Update parameters
             updates, opt_state = optimizer.update(grads, opt_state)
-            self.Q.value = optax.apply_updates(self.Q.value, updates)
+            updated_Q = cast(Float[Array, "n_components dim_or_dim_minus_1"], optax.apply_updates(self.Q.value, updates))
+            self.Q.value = updated_Q
 
         if loss_history:
             self.loss_history.value = jnp.asarray(loss_history, dtype=jnp.float32)

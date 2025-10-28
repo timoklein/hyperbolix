@@ -53,7 +53,7 @@ VERSION_DEFAULT = 0
 VERSION_SMOOTHENED = 1
 
 
-def _create_origin(c: float, dim: int, dtype=jnp.float32) -> Float[Array, "dim_plus_1"]:
+def _create_origin(c: Float[Array, ""] | float, dim: int, dtype=jnp.float32) -> Float[Array, "dim_plus_1"]:
     """Create hyperboloid origin [1/√c, 0, ..., 0]."""
     sqrt_c = jnp.sqrt(c)
     origin = jnp.zeros(dim + 1, dtype=dtype)
@@ -76,7 +76,7 @@ def _minkowski_inner(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"
     return -x0y0 + x_rest_y_rest
 
 
-def proj(x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def proj(x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float) -> Float[Array, "dim_plus_1"]:
     """Project point onto hyperboloid by adjusting temporal component.
 
     Args:
@@ -169,7 +169,7 @@ def _dist_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"
 def dist(
     x: Float[Array, "dim_plus_1"],
     y: Float[Array, "dim_plus_1"],
-    c: float,
+    c: Float[Array, ""] | float,
     version_idx: int = VERSION_DEFAULT,
 ) -> Float[Array, ""]:
     """Compute geodesic distance between hyperboloid points.
@@ -231,7 +231,9 @@ def dist_0(x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_D
     return lax.switch(version_idx, [_dist_0_default, _dist_0_smoothened], x, c)
 
 
-def expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def expmap(
+    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float
+) -> Float[Array, "dim_plus_1"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
     Args:
@@ -311,7 +313,9 @@ def retraction(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: 
     return res
 
 
-def logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def logmap(
+    y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float
+) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map: map point y to tangent space at point x.
 
     Args:
@@ -504,7 +508,9 @@ def egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"],
     return grad_lorentz - coeff * x_normed
 
 
-def tangent_proj(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def tangent_proj(
+    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float
+) -> Float[Array, "dim_plus_1"]:
     """Project vector v onto tangent space at point x.
 
     Args:

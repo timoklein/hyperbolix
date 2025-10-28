@@ -12,7 +12,7 @@ from jaxtyping import Array, Float, Key
 def compute_pairwise_distances(
     points: Float[Array, "n_points dim"],
     manifold_module,
-    c: float,
+    c: Float[Array, ""] | float,
     version_idx: int = 0,
 ) -> Float[Array, "n_points n_points"]:
     """Compute pairwise geodesic distances between points on a manifold.
