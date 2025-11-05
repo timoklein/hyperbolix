@@ -8,6 +8,7 @@ import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
+from ..optim import mark_manifold_param
 from ..utils.math_utils import asinh, smooth_clamp
 from .helpers import compute_mlr_poincare_pp, safe_conformal_factor
 
@@ -72,11 +73,15 @@ class HypRegressionPoincare(nnx.Module):
         self.smoothing_factor = smoothing_factor
 
         # Trainable parameters
-        # Tangent space weight
+        # Tangent space weight (Euclidean)
         self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
         # Manifold bias (initialized to small random values)
-        # FIXME: Not using ManifoldParameter
-        self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01)
+        # Mark as manifold parameter for Riemannian optimization
+        self.bias = mark_manifold_param(
+            nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01),
+            manifold_type="poincare",
+            curvature=1.0,  # Default curvature, will be overridden by c parameter in forward pass
+        )
 
     def _compute_mlr(
         self,
