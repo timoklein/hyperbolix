@@ -9,6 +9,8 @@ This module tests the Riemannian SGD and Adam optimizers with:
 6. Both expmap and retraction modes
 """
 
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -22,6 +24,8 @@ from hyperbolix_jax.optim import (
     riemannian_adam,
     riemannian_sgd,
 )
+from hyperbolix_jax.optim.riemannian_adam import RAdamState
+from hyperbolix_jax.optim.riemannian_sgd import RSGDState
 
 
 class TestManifoldMetadata:
@@ -157,7 +161,8 @@ class TestRiemannianSGD:
 
         # With momentum > 0, the momentum state should be non-zero
         if momentum > 0:
-            momentum_norm = jnp.linalg.norm(opt_state.momentum)
+            state = cast(RSGDState, opt_state)
+            momentum_norm = jnp.linalg.norm(state.momentum)
             assert momentum_norm > 0, "Momentum should be non-zero"
 
     def test_mixed_parameters(self):
@@ -259,13 +264,14 @@ class TestRiemannianAdam:
             param.value = param.value + updates
 
         # Check that moments are non-zero
-        m1_norm = jnp.linalg.norm(opt_state.m1)
-        m2_norm = jnp.linalg.norm(opt_state.m2)
+        state = cast(RAdamState, opt_state)
+        m1_norm = jnp.linalg.norm(state.m1)
+        m2_norm = jnp.linalg.norm(state.m2)
         assert m1_norm > 0, "First moment should be non-zero"
         assert m2_norm > 0, "Second moment should be non-zero"
 
         # Check that step count increased
-        assert opt_state.count == 10
+        assert state.count == 10
 
     def test_mixed_parameters(self):
         """Test RAdam with mixed Euclidean and manifold parameters."""

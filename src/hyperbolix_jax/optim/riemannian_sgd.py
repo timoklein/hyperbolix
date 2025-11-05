@@ -24,7 +24,7 @@ Bécigneul, Gary, and Octavian-Eugen Ganea. "Riemannian adaptive optimization me
     arXiv preprint arXiv:1810.00760 (2018).
 """
 
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import jax.numpy as jnp
 import optax
@@ -41,9 +41,12 @@ class RSGDState(NamedTuple):
     ----------
     momentum : Any
         Pytree of momentum terms, same structure as parameters
+    count : Array
+        Step count for schedule handling
     """
 
     momentum: Any
+    count: jnp.ndarray
 
 
 def riemannian_sgd(
@@ -117,9 +120,9 @@ def riemannian_sgd(
         state : RSGDState
             Initial optimizer state with zero momentum
         """
-        # Initialize momentum as zeros with same structure as params
         momentum = tree_util.tree_map(lambda p: jnp.zeros_like(p), params)
-        return RSGDState(momentum=momentum)
+        count = jnp.zeros([], jnp.int32)
+        return RSGDState(momentum=momentum, count=count)
 
     def update_fn(
         updates: Any,
@@ -152,14 +155,15 @@ def riemannian_sgd(
         if params is None:
             raise ValueError("Riemannian SGD requires params to be provided in update step")
 
-        # Get learning rate (handle both static and scheduled)
+        # Increment step count
+        count_inc = state.count + 1
+
+        # Get learning rate (handle both static value and schedule)
         if callable(learning_rate):
-            # If learning_rate is a schedule, we need to track step count
-            # For simplicity, we'll assume a static learning rate for now
-            # In practice, wrap with optax.inject_hyperparams for schedules
-            lr = learning_rate
+            lr_value = learning_rate(count_inc)
         else:
-            lr = learning_rate
+            lr_value = cast(float, learning_rate)
+        lr = jnp.asarray(lr_value)
 
         # We need to traverse the params pytree to access Variable metadata
         # while simultaneously mapping over the gradients and momentum
@@ -189,7 +193,8 @@ def riemannian_sgd(
                 new_momentum = momentum * mom_value + rgrad
 
                 # 3. Move on manifold using exponential map or retraction
-                direction = -lr * new_momentum
+                lr_cast = lr.astype(new_momentum.dtype)
+                direction = -lr_cast * new_momentum
                 if use_expmap:
                     new_param_value = manifold_module.expmap(direction, param_value, c)
                 else:
@@ -211,7 +216,8 @@ def riemannian_sgd(
                 new_momentum = momentum * mom_value + grad_value
 
                 # parameter update: param = param - lr * m
-                param_update = -lr * new_momentum
+                lr_cast = lr.astype(new_momentum.dtype)
+                param_update = -lr_cast * new_momentum
 
                 return (param_update, new_momentum)
 
@@ -249,8 +255,8 @@ def riemannian_sgd(
             param_updates = tree_util.tree_unflatten(result_treedef, param_update_leaves)
             new_momentum = tree_util.tree_unflatten(result_treedef, new_momentum_leaves)
 
-        new_state = RSGDState(momentum=new_momentum)
+        new_state = RSGDState(momentum=new_momentum, count=count_inc)
 
         return param_updates, new_state
 
-    return optax.GradientTransformation(init_fn, update_fn)
+    return optax.GradientTransformation(init_fn, cast(Any, update_fn))

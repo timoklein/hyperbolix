@@ -31,7 +31,7 @@ Kingma, Diederik P., and Jimmy Ba. "Adam: A method for stochastic optimization."
     arXiv preprint arXiv:1412.6980 (2014).
 """
 
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import jax.numpy as jnp
 import optax
@@ -174,17 +174,15 @@ def riemannian_adam(
         if params is None:
             raise ValueError("Riemannian Adam requires params to be provided in update step")
 
-        # Get learning rate (handle both static and scheduled)
-        if callable(learning_rate):
-            # If learning_rate is a schedule, we need to track step count
-            # For simplicity, we'll assume a static learning rate for now
-            # In practice, wrap with optax.inject_hyperparams for schedules
-            lr = learning_rate
-        else:
-            lr = learning_rate
-
         # Increment step count
         count_inc = state.count + 1
+
+        # Get learning rate (handle both static value and schedule)
+        if callable(learning_rate):
+            lr_value = learning_rate(count_inc)
+        else:
+            lr_value = cast(float, learning_rate)
+        lr = jnp.asarray(lr_value)
 
         # Bias correction terms
         bias_correction1 = 1 - beta1**count_inc
@@ -232,7 +230,8 @@ def riemannian_adam(
                 m2_hat = new_m2 / bias_correction2
                 direction = m1_hat / (jnp.sqrt(m2_hat) + eps)
 
-                step = -lr * direction
+                lr_cast = lr.astype(direction.dtype)
+                step = -lr_cast * direction
                 if use_expmap:
                     new_param_value = manifold_module.expmap(step, param_value, c)
                 else:
@@ -249,7 +248,8 @@ def riemannian_adam(
                 m1_hat = new_m1 / bias_correction1
                 m2_hat = new_m2 / bias_correction2
 
-                param_update = -lr * m1_hat / (jnp.sqrt(m2_hat) + eps)
+                lr_cast = lr.astype(m1_hat.dtype)
+                param_update = -lr_cast * m1_hat / (jnp.sqrt(m2_hat) + eps)
                 transported_m1 = new_m1
                 transported_m2 = new_m2
 
@@ -265,4 +265,4 @@ def riemannian_adam(
 
         return param_updates, new_state
 
-    return optax.GradientTransformation(init_fn, update_fn)
+    return optax.GradientTransformation(init_fn, cast(Any, update_fn))
