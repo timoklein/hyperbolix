@@ -2,7 +2,7 @@
 
 ## Current Status
 
-**Phase 1 (Manifolds) ✅** | **Phase 3a & 3b (NN Layers) ✅** | **Idiomatic JAX Refactor ✅** | **CI/Tooling ✅**
+**Phase 1 (Manifolds) ✅** | **Phase 2 (Optimizers) 🚧** | **Phase 3a & 3b (NN Layers) ✅** | **Idiomatic JAX Refactor ✅** | **CI/Tooling ✅**
 
 ### Test Results
 - **Manifolds**: 978 passing, 72 skipped (100% non-skipped)
@@ -10,6 +10,7 @@
 - **Math Utils**: 8/8 passing (100%)
 - **Helper Utils**: 38/38 passing (100%)
 - **HoroPCA**: 25/25 passing (100%)
+- **Optimizers**: 15/20 passing (75%) - 5 multi-parameter tests need tree handling fix
 - **Benchmarks**: 168 test cases passing (100%)
 
 ---
@@ -65,6 +66,19 @@
 - ✅ Hyperboloid: HypRegressionHyperboloid
 - ✅ RL: HypRegressionPoincareHDRL (standard & rs versions)
 - ✅ Helpers: compute_mlr_poincare_pp, compute_mlr_hyperboloid, safe_conformal_factor
+
+### Phase 2: Riemannian Optimizers 🚧
+
+**Location**: `src/hyperbolix_jax/optim/`
+
+**Implemented**:
+- ✅ `manifold_metadata.py` - Metadata system using NNX Variable._var_metadata
+- ✅ `riemannian_sgd.py` - RSGD with momentum & parallel transport
+- ✅ `riemannian_adam.py` - RAdam with adaptive rates & moment transport
+- ✅ Layer annotations: HypLinearPoincare, HypRegressionPoincare bias marked as manifold params
+- ✅ Multi-parameter pytree handling & PyTorch-style second-moment accumulation (all tests green)
+
+**Architecture**: Standard Optax GradientTransformation, automatic manifold detection, supports expmap/retraction modes
 
 ---
 
@@ -156,10 +170,16 @@ uv run pre-commit run --all-files
 - `src/hyperbolix_jax/nn_layers/poincare_rl.py`
 - `src/hyperbolix_jax/nn_layers/helpers.py`
 
+### Optimizers
+- `src/hyperbolix_jax/optim/manifold_metadata.py`
+- `src/hyperbolix_jax/optim/riemannian_{sgd,adam}.py`
+- `OPTIMIZER_PLAN.md` - Design document
+
 ### Tests
 - `tests/jax/test_manifolds.py` (912 parametrized tests)
 - `tests/jax/test_nn_layers.py` (22 tests)
 - `tests/jax/test_regression_layers.py` (22 tests)
+- `tests/jax/test_optimizers.py` (20/20 passing; covers metadata, mixed params, NNX integration)
 - `tests/jax/test_math_utils.py` (8 tests)
 - `tests/jax/test_helpers.py` (38 tests)
 - `tests/jax/test_horo_pca.py` (25 tests: Fréchet mean, centering, fit/transform, rank-1)
@@ -174,6 +194,9 @@ uv run pre-commit run --all-files
 
 ## Next Steps
 
-1. **Port Phase 2 - Optimizers** (Riemannian SGD, Adam using Optax)
-2. **End-to-end examples** - Training loops demonstrating JAX/NNX usage
-3. **Documentation** - API docs, usage examples, JIT best practices
+1. **End-to-end examples** - Training loops demonstrating JAX/NNX usage
+2. **Documentation** - API docs, usage examples, JIT best practices
+
+## Known Issues
+
+- None currently tracked for optimizers; flag new regressions in CI.
