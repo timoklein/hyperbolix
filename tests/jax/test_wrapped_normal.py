@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from hyperbolix_jax.distributions import wrapped_normal
+from hyperbolix_jax.distributions import wrapped_normal_hyperboloid, wrapped_normal_poincare
 from hyperbolix_jax.manifolds import hyperboloid, poincare
 
 # Enable float64 support for numerical precision in tests
@@ -44,7 +44,7 @@ def test_sample_single_point_isotropic(dtype: jnp.dtype, tolerance: tuple[float,
 
     # Sample with isotropic covariance
     sigma = 0.1
-    z = wrapped_normal.sample(key, mu, sigma, c)
+    z = wrapped_normal_hyperboloid.sample(key, mu, sigma, c)
 
     # Check output shape
     assert z.shape == (3,), f"Expected shape (3,), got {z.shape}"
@@ -65,7 +65,7 @@ def test_sample_shape_parameter(dtype: jnp.dtype, tolerance: tuple[float, float]
     sigma = 0.1
 
     # Sample with sample_shape
-    z = wrapped_normal.sample(key, mu, sigma, c, sample_shape=(5, 3))
+    z = wrapped_normal_hyperboloid.sample(key, mu, sigma, c, sample_shape=(5, 3))
 
     # Check output shape: sample_shape + mu.shape
     assert z.shape == (5, 3, 3), f"Expected shape (5, 3, 3), got {z.shape}"
@@ -88,7 +88,7 @@ def test_sample_diagonal_covariance(dtype: jnp.dtype, tolerance: tuple[float, fl
     # Diagonal covariance for spatial dimension (n=2)
     sigma_diag = jnp.array([0.1, 0.2], dtype=dtype)
 
-    z = wrapped_normal.sample(key, mu, sigma_diag, c)
+    z = wrapped_normal_hyperboloid.sample(key, mu, sigma_diag, c)
 
     # Check output shape
     assert z.shape == (3,), f"Expected shape (3,), got {z.shape}"
@@ -110,7 +110,7 @@ def test_sample_full_covariance(dtype: jnp.dtype, tolerance: tuple[float, float]
     # Full covariance for spatial dimension (n=2)
     sigma_full = jnp.array([[0.1, 0.01], [0.01, 0.1]], dtype=dtype)
 
-    z = wrapped_normal.sample(key, mu, sigma_full, c)
+    z = wrapped_normal_hyperboloid.sample(key, mu, sigma_full, c)
 
     # Check output shape
     assert z.shape == (3,), f"Expected shape (3,), got {z.shape}"
@@ -131,13 +131,13 @@ def test_sample_dtype_propagation(tolerance: tuple[float, float]) -> None:
     sigma = 0.1
 
     # Sample with explicit float64 dtype
-    z_f64 = wrapped_normal.sample(key, mu, sigma, c, dtype=jnp.float64)
+    z_f64 = wrapped_normal_hyperboloid.sample(key, mu, sigma, c, dtype=jnp.float64)
 
     assert z_f64.dtype == jnp.float64, f"Expected dtype float64, got {z_f64.dtype}"
     assert hyperboloid.is_in_manifold(z_f64, c, atol=1e-10), "Float64 sample not on hyperboloid"
 
     # Sample with explicit float32 dtype
-    z_f32 = wrapped_normal.sample(key, mu, sigma, c, dtype=jnp.float32)
+    z_f32 = wrapped_normal_hyperboloid.sample(key, mu, sigma, c, dtype=jnp.float32)
 
     assert z_f32.dtype == jnp.float32, f"Expected dtype float32, got {z_f32.dtype}"
     assert hyperboloid.is_in_manifold(z_f32, c, atol=1e-5), "Float32 sample not on hyperboloid"
@@ -162,7 +162,7 @@ def test_sample_batched_means(dtype: jnp.dtype, tolerance: tuple[float, float]) 
 
     sigma = 0.1
 
-    z = wrapped_normal.sample(key, mu_batch, sigma, c)
+    z = wrapped_normal_hyperboloid.sample(key, mu_batch, sigma, c)
 
     # Check output shape: should match mu_batch.shape
     assert z.shape == (2, 3), f"Expected shape (2, 3), got {z.shape}"
@@ -181,7 +181,7 @@ def test_sample_different_curvatures(dtype: jnp.dtype, tolerance: tuple[float, f
         mu = hyperboloid._create_origin(c, dim=2, dtype=dtype)
         sigma = 0.1
 
-        z = wrapped_normal.sample(key, mu, sigma, c)
+        z = wrapped_normal_hyperboloid.sample(key, mu, sigma, c)
 
         assert z.shape == (3,), f"Expected shape (3,), got {z.shape}"
         assert hyperboloid.is_in_manifold(z, c, atol=atol), f"Sample not on hyperboloid with c={c}"
@@ -223,7 +223,7 @@ def test_sample_vmap_compatibility(dtype: jnp.dtype, tolerance: tuple[float, flo
     sigma = 0.1
 
     # vmap over keys
-    sample_vmap = jax.vmap(lambda k: wrapped_normal.sample(k, mu, sigma, c))
+    sample_vmap = jax.vmap(lambda k: wrapped_normal_hyperboloid.sample(k, mu, sigma, c))
     z_batch = sample_vmap(keys)
 
     assert z_batch.shape == (10, 3), f"Expected shape (10, 3), got {z_batch.shape}"
@@ -242,7 +242,7 @@ def test_sample_gradient_flow(dtype: jnp.dtype, tolerance: tuple[float, float]) 
     # Define a simple loss that uses sampling
     def loss_fn(mu_param):
         # Sample and compute some loss (e.g., distance from origin)
-        z = wrapped_normal.sample(key, mu_param, sigma, c)
+        z = wrapped_normal_hyperboloid.sample(key, mu_param, sigma, c)
         origin = hyperboloid._create_origin(c, dim=3, dtype=dtype)
         dist = hyperboloid.dist(z, origin, c, version_idx=hyperboloid.VERSION_DEFAULT)
         return dist
@@ -298,7 +298,7 @@ def test_sample_poincare_single_point_isotropic(dtype: jnp.dtype, tolerance: tup
 
     # Sample with isotropic covariance
     sigma = 0.1
-    z = wrapped_normal.sample_poincare(key, mu, sigma, c)
+    z = wrapped_normal_poincare.sample(key, mu, sigma, c)
 
     # Check output shape
     assert z.shape == (2,), f"Expected shape (2,), got {z.shape}"
@@ -318,7 +318,7 @@ def test_sample_poincare_shape_parameter(dtype: jnp.dtype, tolerance: tuple[floa
     sigma = 0.1
 
     # Sample with sample_shape
-    z = wrapped_normal.sample_poincare(key, mu, sigma, c, sample_shape=(5, 3))
+    z = wrapped_normal_poincare.sample(key, mu, sigma, c, sample_shape=(5, 3))
 
     # Check output shape: sample_shape + mu.shape
     assert z.shape == (5, 3, 2), f"Expected shape (5, 3, 2), got {z.shape}"
@@ -340,7 +340,7 @@ def test_sample_poincare_diagonal_covariance(dtype: jnp.dtype, tolerance: tuple[
     # Diagonal covariance
     sigma_diag = jnp.array([0.1, 0.2], dtype=dtype)
 
-    z = wrapped_normal.sample_poincare(key, mu, sigma_diag, c)
+    z = wrapped_normal_poincare.sample(key, mu, sigma_diag, c)
 
     assert z.shape == (2,), f"Expected shape (2,), got {z.shape}"
     assert z.dtype == dtype, f"Expected dtype {dtype}, got {z.dtype}"
@@ -358,7 +358,7 @@ def test_sample_poincare_full_covariance(dtype: jnp.dtype, tolerance: tuple[floa
     # Full covariance
     sigma_full = jnp.array([[0.1, 0.01], [0.01, 0.1]], dtype=dtype)
 
-    z = wrapped_normal.sample_poincare(key, mu, sigma_full, c)
+    z = wrapped_normal_poincare.sample(key, mu, sigma_full, c)
 
     assert z.shape == (2,), f"Expected shape (2,), got {z.shape}"
     assert z.dtype == dtype, f"Expected dtype {dtype}, got {z.dtype}"
@@ -383,7 +383,7 @@ def test_sample_poincare_batched_means(dtype: jnp.dtype, tolerance: tuple[float,
 
     sigma = 0.1
 
-    z = wrapped_normal.sample_poincare(key, mu_batch, sigma, c)
+    z = wrapped_normal_poincare.sample(key, mu_batch, sigma, c)
 
     assert z.shape == (2, 2), f"Expected shape (2, 2), got {z.shape}"
     assert z.dtype == dtype, f"Expected dtype {dtype}, got {z.dtype}"
@@ -399,7 +399,7 @@ def test_sample_poincare_different_curvatures(dtype: jnp.dtype, tolerance: tuple
         mu = jnp.zeros(2, dtype=dtype)
         sigma = 0.1
 
-        z = wrapped_normal.sample_poincare(key, mu, sigma, c)
+        z = wrapped_normal_poincare.sample(key, mu, sigma, c)
 
         assert z.shape == (2,), f"Expected shape (2,), got {z.shape}"
         assert poincare.is_in_manifold(z, c, atol=atol), f"Sample not in Poincaré ball with c={c}"
@@ -436,7 +436,7 @@ def test_sample_poincare_vmap_compatibility(dtype: jnp.dtype, tolerance: tuple[f
     sigma = 0.1
 
     # vmap over keys
-    sample_vmap = jax.vmap(lambda k: wrapped_normal.sample_poincare(k, mu, sigma, c))
+    sample_vmap = jax.vmap(lambda k: wrapped_normal_poincare.sample(k, mu, sigma, c))
     z_batch = sample_vmap(keys)
 
     assert z_batch.shape == (10, 2), f"Expected shape (10, 2), got {z_batch.shape}"
@@ -455,7 +455,7 @@ def test_sample_poincare_gradient_flow(dtype: jnp.dtype, tolerance: tuple[float,
     # Define a simple loss that uses sampling
     def loss_fn(mu_param):
         # Sample and compute some loss (e.g., norm)
-        z = wrapped_normal.sample_poincare(key, mu_param, sigma, c)
+        z = wrapped_normal_poincare.sample(key, mu_param, sigma, c)
         return jnp.linalg.norm(z)
 
     # Compute gradient
