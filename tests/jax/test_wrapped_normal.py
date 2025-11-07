@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import pytest
 
 from hyperbolix_jax.distributions import wrapped_normal
-from hyperbolix_jax.manifolds import hyperboloid
+from hyperbolix_jax.manifolds import hyperboloid, poincare
 
 # Enable float64 support for numerical precision in tests
 jax.config.update("jax_enable_x64", True)
@@ -19,6 +19,12 @@ jax.config.update("jax_enable_x64", True)
 def _batch_is_on_hyperboloid(points: jnp.ndarray, c: float, atol: float = 1e-5) -> bool:
     """Check if all points in batch are on hyperboloid."""
     is_in = jax.vmap(lambda p: hyperboloid.is_in_manifold(p, c=c, atol=atol))
+    return bool(jnp.all(is_in(points)))
+
+
+def _batch_is_in_poincare(points: jnp.ndarray, c: float, atol: float = 1e-5) -> bool:
+    """Check if all points in batch are in Poincaré ball."""
+    is_in = jax.vmap(lambda p: poincare.is_in_manifold(p, c=c, atol=atol))
     return bool(jnp.all(is_in(points)))
 
 
@@ -274,3 +280,187 @@ def test_embed_spatial_0_batch(dtype: jnp.dtype) -> None:
     assert jnp.all(v_tangent[:, 0] == 0.0), "First component should be 0"
     assert jnp.allclose(v_tangent[:, 1:], v_spatial), "Spatial components should match"
     assert v_tangent.dtype == dtype, f"Expected dtype {dtype}, got {v_tangent.dtype}"
+
+
+# ---------------------------------------------------------------------------
+# Tests - Poincaré Ball Sampling
+# ---------------------------------------------------------------------------
+
+
+def test_sample_poincare_single_point_isotropic(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
+    """Test basic Poincaré sampling with a single mean point and isotropic covariance."""
+    key = jax.random.PRNGKey(42)
+    atol, rtol = tolerance
+
+    # Create mean at origin
+    c = 1.0
+    mu = jnp.zeros(2, dtype=dtype)
+
+    # Sample with isotropic covariance
+    sigma = 0.1
+    z = wrapped_normal.sample_poincare(key, mu, sigma, c)
+
+    # Check output shape
+    assert z.shape == (2,), f"Expected shape (2,), got {z.shape}"
+    assert z.dtype == dtype, f"Expected dtype {dtype}, got {z.dtype}"
+
+    # Check point is in Poincaré ball
+    assert poincare.is_in_manifold(z, c, atol=atol), "Sampled point not in Poincaré ball"
+
+
+def test_sample_poincare_shape_parameter(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
+    """Test that sample_shape parameter works for Poincaré."""
+    key = jax.random.PRNGKey(42)
+    atol, rtol = tolerance
+
+    c = 1.0
+    mu = jnp.zeros(2, dtype=dtype)
+    sigma = 0.1
+
+    # Sample with sample_shape
+    z = wrapped_normal.sample_poincare(key, mu, sigma, c, sample_shape=(5, 3))
+
+    # Check output shape: sample_shape + mu.shape
+    assert z.shape == (5, 3, 2), f"Expected shape (5, 3, 2), got {z.shape}"
+    assert z.dtype == dtype, f"Expected dtype {dtype}, got {z.dtype}"
+
+    # Check all points are in ball
+    z_flat = z.reshape(-1, 2)
+    assert _batch_is_in_poincare(z_flat, c, atol=atol), "Not all sampled points in Poincaré ball"
+
+
+def test_sample_poincare_diagonal_covariance(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
+    """Test Poincaré sampling with diagonal covariance."""
+    key = jax.random.PRNGKey(42)
+    atol, rtol = tolerance
+
+    c = 1.0
+    mu = jnp.zeros(2, dtype=dtype)
+
+    # Diagonal covariance
+    sigma_diag = jnp.array([0.1, 0.2], dtype=dtype)
+
+    z = wrapped_normal.sample_poincare(key, mu, sigma_diag, c)
+
+    assert z.shape == (2,), f"Expected shape (2,), got {z.shape}"
+    assert z.dtype == dtype, f"Expected dtype {dtype}, got {z.dtype}"
+    assert poincare.is_in_manifold(z, c, atol=atol), "Sampled point not in Poincaré ball"
+
+
+def test_sample_poincare_full_covariance(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
+    """Test Poincaré sampling with full covariance matrix."""
+    key = jax.random.PRNGKey(42)
+    atol, rtol = tolerance
+
+    c = 1.0
+    mu = jnp.zeros(2, dtype=dtype)
+
+    # Full covariance
+    sigma_full = jnp.array([[0.1, 0.01], [0.01, 0.1]], dtype=dtype)
+
+    z = wrapped_normal.sample_poincare(key, mu, sigma_full, c)
+
+    assert z.shape == (2,), f"Expected shape (2,), got {z.shape}"
+    assert z.dtype == dtype, f"Expected dtype {dtype}, got {z.dtype}"
+    assert poincare.is_in_manifold(z, c, atol=atol), "Sampled point not in Poincaré ball"
+
+
+def test_sample_poincare_batched_means(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
+    """Test Poincaré sampling with batched mean points."""
+    key = jax.random.PRNGKey(42)
+    atol, rtol = tolerance
+
+    c = 1.0
+    mu_batch = jnp.array(
+        [
+            [0.0, 0.0],  # origin
+            [0.1, 0.1],  # another point
+        ],
+        dtype=dtype,
+    )
+    # Project to ensure they're in ball
+    mu_batch = jax.vmap(lambda m: poincare.proj(m, c))(mu_batch)
+
+    sigma = 0.1
+
+    z = wrapped_normal.sample_poincare(key, mu_batch, sigma, c)
+
+    assert z.shape == (2, 2), f"Expected shape (2, 2), got {z.shape}"
+    assert z.dtype == dtype, f"Expected dtype {dtype}, got {z.dtype}"
+    assert _batch_is_in_poincare(z, c, atol=atol), "Not all batched samples in Poincaré ball"
+
+
+def test_sample_poincare_different_curvatures(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
+    """Test Poincaré sampling with different curvature values."""
+    key = jax.random.PRNGKey(42)
+    atol, rtol = tolerance
+
+    for c in [0.5, 1.0, 2.0]:
+        mu = jnp.zeros(2, dtype=dtype)
+        sigma = 0.1
+
+        z = wrapped_normal.sample_poincare(key, mu, sigma, c)
+
+        assert z.shape == (2,), f"Expected shape (2,), got {z.shape}"
+        assert poincare.is_in_manifold(z, c, atol=atol), f"Sample not in Poincaré ball with c={c}"
+
+
+def test_sample_poincare_jit_compatibility(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
+    """Test that Poincaré sampling works with JAX jit."""
+    key = jax.random.PRNGKey(42)
+    atol, rtol = tolerance
+
+    c = 1.0
+    mu = jnp.zeros(2, dtype=dtype)
+    sigma = 0.1
+
+    # JIT compile the sampling function
+    sample_jit = jax.jit(wrapped_normal.sample_poincare, static_argnames=["sample_shape"])
+
+    z = sample_jit(key, mu, sigma, c, sample_shape=())
+
+    assert z.shape == (2,), f"Expected shape (2,), got {z.shape}"
+    assert poincare.is_in_manifold(z, c, atol=atol), "JIT-compiled sample not in Poincaré ball"
+
+
+def test_sample_poincare_vmap_compatibility(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
+    """Test that Poincaré sampling works with JAX vmap."""
+    key = jax.random.PRNGKey(42)
+    atol, rtol = tolerance
+
+    # Create multiple keys
+    keys = jax.random.split(key, 10)
+
+    c = 1.0
+    mu = jnp.zeros(2, dtype=dtype)
+    sigma = 0.1
+
+    # vmap over keys
+    sample_vmap = jax.vmap(lambda k: wrapped_normal.sample_poincare(k, mu, sigma, c))
+    z_batch = sample_vmap(keys)
+
+    assert z_batch.shape == (10, 2), f"Expected shape (10, 2), got {z_batch.shape}"
+    assert _batch_is_in_poincare(z_batch, c, atol=atol), "Not all vmapped samples in Poincaré ball"
+
+
+def test_sample_poincare_gradient_flow(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
+    """Test that Poincaré sampling is differentiable w.r.t. mean."""
+    key = jax.random.PRNGKey(42)
+    atol, rtol = tolerance
+
+    c = 1.0
+    mu = jnp.zeros(3, dtype=dtype)
+    sigma = 0.1
+
+    # Define a simple loss that uses sampling
+    def loss_fn(mu_param):
+        # Sample and compute some loss (e.g., norm)
+        z = wrapped_normal.sample_poincare(key, mu_param, sigma, c)
+        return jnp.linalg.norm(z)
+
+    # Compute gradient
+    grad_mu = jax.grad(loss_fn)(mu)
+
+    # Check that gradient is finite and has correct shape
+    assert grad_mu.shape == mu.shape, f"Gradient shape mismatch: {grad_mu.shape} vs {mu.shape}"
+    assert jnp.all(jnp.isfinite(grad_mu)), "Gradient contains NaN or Inf"
