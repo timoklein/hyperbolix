@@ -31,7 +31,7 @@ Implementation of the wrapped normal distribution on hyperbolic space (hyperbolo
 
 ```python
 # Sampling
-z = wrapped_normal.sample(key, mu, sigma, c)
+z = wrapped_normal.sample(key, mu, sigma, c, sample_shape=(), dtype=None)
 
 # Log probability
 log_p = wrapped_normal.log_prob(z, mu, sigma, c)
@@ -40,6 +40,7 @@ log_p = wrapped_normal.log_prob(z, mu, sigma, c)
 **Rationale:**
 - **Simplest:** No overhead of classes, constructors, or type definitions
 - **Most JAX idiomatic:** Matches `jax.random.*`, `jax.nn.*`, and existing `hyperboloid.*` functions
+- **Familiar:** Mirrors `jax.random.multivariate_normal`'s `sample_shape`/`dtype` interface so callers can adopt it drop-in
 - **Best jit/vmap integration:** Explicit control over which arguments get vmapped
 - **Consistent:** All existing manifold operations are pure functions
 - **Flexible:** Parameters come from neural network outputs, not stored in distribution object
@@ -71,12 +72,24 @@ src/hyperbolix_jax/
 ## Implementation Details
 
 ### Covariance Support
-**Support all three parameterizations:**
-1. **Isotropic:** `sigma` is scalar → `σ²I`
-2. **Diagonal:** `sigma` is n-dimensional vector → `diag(σ₁², ..., σₙ²)`
-3. **Full:** `sigma` is n×n matrix → general covariance
+**Support all three parameterizations (converted before calling `jax.random.multivariate_normal`):**
+1. **Isotropic:** `sigma` is scalar standard deviation → expand to `σ² I`
+2. **Diagonal:** `sigma` is n-dimensional vector of standard deviations → expand to `diag(σ₁², ..., σₙ²)`
+3. **Full:** `sigma` is n×n covariance matrix (already SPD)
 
-**Primary use case:** Diagonal covariance (most common in neural networks)
+**Primary use case:** Diagonal covariance (most common). `_sample_gaussian` delegates to `jax.random.multivariate_normal` so SPD/dtype checks happen upstream; the helper only standardizes parameterizations and applies broadcasting.
+
+### Batch & Shape Semantics
+- `sample` mirrors `jax.random.multivariate_normal`: accepts `sample_shape=()` and `dtype` arguments, broadcasts `mu`, `sigma`, and optional curvature arrays across shared batch dimensions, and materializes leading `sample_shape` axes before parameter axes.
+- `mu` has shape `(..., n + 1)` (hyperboloid coordinates). Spatial dimension `n = mu.shape[-1] - 1` determines covariance size.
+- `sigma` matches the parameterization shape for the spatial dimension but supports any number of leading batch axes that broadcast with `mu`.
+- Curvature `c` can be a Python float or an array; arrays must match (or be broadcastable to) `mu.shape[:-1]` to avoid ambiguous broadcasting. When batched, `c` should line up exactly with the batch axes of `mu`/`sigma`.
+- `log_prob` mirrors broadcasting rules as well: output shape is `sample_shape + batch_shape` (no manifold dimension).
+- Helper functions should raise informative shape errors before calling JAX primitives when broadcasting fails.
+
+### Dtype Propagation
+- Default to `dtype or mu.dtype` and explicitly cast `sigma`, intermediate Gaussian samples, and curvature-dependent computations to that dtype.
+- Respect `jax_enable_x64`; allow callers to request float64 draws while keeping parameters in float32.
 
 ### Dimension Handling
 - Covariance `Σ` is **n × n** for spatial components only
@@ -110,24 +123,24 @@ All required primitives already exist in `hyperboloid.py`:
 3. Implement `wrapped_normal.py`:
    - Helper: `_sample_gaussian(key, sigma, n)` - handles isotropic/diagonal/full covariance
    - Helper: `_embed_in_tangent_space(v_spatial)` - prepends zero to create `[0, v_bar]`
-   - Main: `sample(key, mu, sigma, c)` - full sampling algorithm
+   - Main: `sample(key, mu, sigma, c, sample_shape=(), dtype=None)` - full sampling algorithm mirroring `jax.random.multivariate_normal` semantics
 
 ### Phase 2: Log-Probability Function
 4. Implement log-prob components:
    - Helper: `_gaussian_log_prob(v, sigma)` - log probability of Gaussian
-   - Helper: `_log_det_jacobian(v, c)` - compute `log((sinh r / r)^(n-1))`
+   - Helper: `_log_det_jacobian(v, c)` - compute `log((sinh r / r)^(n-1))` with a dedicated `r → 0` Taylor branch
    - Main: `log_prob(z, mu, sigma, c)` - full log-probability
 
 ### Phase 3: Testing
 5. Create `tests/jax/test_wrapped_normal.py`:
-   - **Test 1:** Basic functionality (sample and log_prob execute without errors)
+   - **Test 1:** Basic functionality + `sample_shape` semantics (`sample_shape=(5, 3)` with batched `mu`)
    - **Test 2:** Manifold constraint (sampled points satisfy hyperboloid equation)
-   - **Test 3:** PDF normalization (numerical integration ≈ 1)
-   - **Test 4:** Gradient flow (ensure differentiability for learning)
-   - **Test 5:** All covariance types (isotropic, diagonal, full)
+   - **Test 3:** Euclidean limit sanity check (`c → 0` / mean at origin) by comparing against `jax.random.multivariate_normal`
+   - **Test 4:** Gradient flow + `jit/vmap` compatibility (ensure differentiability for learning)
+   - **Test 5:** All covariance types (isotropic, diagonal, full) and dtype propagation (float32 vs float64)
 
 ### Phase 4: Validation & Documentation
-6. Optional validation function: `validate_params(mu, sigma, c)` for debugging
+6. Lightweight validation helper: `validate_params(mu, sigma, c)` guarding shape agreement and curvature broadcast issues (optionally toggled via a `debug` flag)
 7. Add docstrings with math notation and usage examples
 8. Update main package `__init__.py` to expose distributions module
 9. Add usage examples in docstrings
@@ -136,11 +149,12 @@ All required primitives already exist in `hyperboloid.py`:
 
 ### Test 1: Basic Functionality
 ```python
-# Ensure functions execute without errors
-z = wrapped_normal.sample(key, mu, sigma, c)
+# Ensure functions execute without errors and respect sample_shape/dtype
+z = wrapped_normal.sample(key, mu, sigma, c, sample_shape=(4,), dtype=jnp.float64)
 lp = wrapped_normal.log_prob(z, mu, sigma, c)
-assert z.shape == mu.shape
-assert lp.shape == ()
+assert z.shape == (4,) + mu.shape
+assert lp.shape == (4,) + mu.shape[:-1]
+assert z.dtype == jnp.float64
 ```
 
 ### Test 2: Manifold Constraint
@@ -150,24 +164,26 @@ z = wrapped_normal.sample(key, mu, sigma, c)
 assert hyperboloid.is_in_manifold(z, c, atol=1e-5)
 ```
 
-### Test 3: PDF Normalization
+### Test 3: Euclidean Limit Consistency
 ```python
-# Numerical integration should equal 1 (use Monte Carlo or quadrature)
-# ∫ p(z) dz ≈ 1
+# With curvature near zero, wrapped samples should match Euclidean MVN statistics.
+flat = jax.random.multivariate_normal(key, mean=jnp.zeros(n), cov=jnp.eye(n), shape=(1024,))
+wrapped = wrapped_normal.sample(key, origin_mu, sigma, c=jnp.array(1e-5), sample_shape=(1024,))
+assert jnp.allclose(flat.mean(axis=0), wrapped[..., 1:].mean(axis=0), atol=1e-2)
 ```
 
 ### Test 4: Gradient Flow
 ```python
-# Ensure differentiability
+# Ensure differentiability inside jit/vmap pipelines
 def loss(mu):
-    z = wrapped_normal.sample(key, mu, sigma, c)
-    return wrapped_normal.log_prob(z, mu, sigma, c)
+    z = wrapped_normal.sample(key, mu, sigma, c, sample_shape=(2,))
+    return wrapped_normal.log_prob(z, mu, sigma, c).sum()
 
 grad_mu = jax.grad(loss)(mu)
 assert not jnp.any(jnp.isnan(grad_mu))
 ```
 
-### Test 5: Covariance Types
+### Test 5: Covariance Types & Dtypes
 ```python
 # Test isotropic
 z1 = wrapped_normal.sample(key, mu, 0.1, c)
@@ -177,6 +193,10 @@ z2 = wrapped_normal.sample(key, mu, jnp.array([0.1, 0.2]), c)
 
 # Test full
 z3 = wrapped_normal.sample(key, mu, jnp.eye(2) * 0.1, c)
+
+# Test dtype propagation
+z_float64 = wrapped_normal.sample(key, mu, sigma, c, dtype=jnp.float64)
+assert z_float64.dtype == jnp.float64
 ```
 
 ## Notes
