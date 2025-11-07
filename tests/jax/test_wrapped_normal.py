@@ -254,46 +254,6 @@ def test_sample_gradient_flow(dtype: jnp.dtype, tolerance: tuple[float, float]) 
 # ---------------------------------------------------------------------------
 
 
-def test_sample_gaussian_isotropic(dtype: jnp.dtype) -> None:
-    """Test Gaussian sampling with isotropic covariance."""
-    key = jax.random.PRNGKey(42)
-    sigma = 0.1
-    n = 2
-
-    samples = wrapped_normal._sample_gaussian(key, sigma, n, sample_shape=(100,), dtype=dtype)
-
-    assert samples.shape == (100, 2), f"Expected shape (100, 2), got {samples.shape}"
-    assert samples.dtype == dtype, f"Expected dtype {dtype}, got {samples.dtype}"
-
-    # Check approximate statistics (with tolerance for randomness)
-    mean = jnp.mean(samples, axis=0)
-    assert jnp.allclose(mean, 0.0, atol=0.1), f"Mean should be near 0, got {mean}"
-
-
-def test_sample_gaussian_diagonal(dtype: jnp.dtype) -> None:
-    """Test Gaussian sampling with diagonal covariance."""
-    key = jax.random.PRNGKey(42)
-    sigma = jnp.array([0.1, 0.2], dtype=dtype)
-    n = 2
-
-    samples = wrapped_normal._sample_gaussian(key, sigma, n, sample_shape=(100,), dtype=dtype)
-
-    assert samples.shape == (100, 2), f"Expected shape (100, 2), got {samples.shape}"
-    assert samples.dtype == dtype, f"Expected dtype {dtype}, got {samples.dtype}"
-
-
-def test_sample_gaussian_full(dtype: jnp.dtype) -> None:
-    """Test Gaussian sampling with full covariance."""
-    key = jax.random.PRNGKey(42)
-    sigma = jnp.array([[0.1, 0.01], [0.01, 0.1]], dtype=dtype)
-    n = 2
-
-    samples = wrapped_normal._sample_gaussian(key, sigma, n, sample_shape=(100,), dtype=dtype)
-
-    assert samples.shape == (100, 2), f"Expected shape (100, 2), got {samples.shape}"
-    assert samples.dtype == dtype, f"Expected dtype {dtype}, got {samples.dtype}"
-
-
 def test_embed_in_tangent_space_single(dtype: jnp.dtype) -> None:
     """Test embedding a single spatial vector."""
     v_spatial = jnp.array([0.1, 0.2], dtype=dtype)

@@ -15,109 +15,6 @@ from jaxtyping import Array, Float, PRNGKeyArray
 from ..manifolds import hyperboloid
 
 
-def _sample_gaussian(
-    key: PRNGKeyArray,
-    sigma: Float[Array, "..."] | float,
-    n: int,
-    sample_shape: tuple[int, ...] = (),
-    dtype=None,
-) -> Float[Array, "..."]:
-    """Sample from Gaussian in spatial coordinates with flexible covariance.
-
-    Args:
-        key: JAX random key
-        sigma: Covariance parameterization. Can be:
-            - Scalar: isotropic covariance σ² I
-            - 1D array of length n: diagonal covariance diag(σ₁², ..., σₙ²)
-            - 2D array (n, n): full covariance matrix (must be SPD)
-        n: Spatial dimension (number of coordinates, excluding temporal)
-        sample_shape: Shape of samples to draw, prepended to output
-        dtype: Output dtype (default: infer from sigma or use float32)
-
-    Returns:
-        Gaussian samples v_bar ~ N(0, Σ) of shape sample_shape + batch_shape + (n,)
-        where batch_shape comes from broadcasting sigma's batch dimensions
-    """
-    # Determine dtype
-    if dtype is None:
-        if isinstance(sigma, (int, float)):
-            dtype = jnp.float32
-        else:
-            dtype = sigma.dtype
-
-    # Handle different covariance parameterizations
-    sigma_array = jnp.asarray(sigma, dtype=dtype)
-
-    # Isotropic: scalar -> σ² I
-    if sigma_array.ndim == 0 or (sigma_array.ndim == 1 and sigma_array.shape[0] == 1):
-        scalar_sigma = sigma_array.item() if sigma_array.ndim == 1 else sigma_array
-        cov = jnp.eye(n, dtype=dtype) * (scalar_sigma**2)
-        mean = jnp.zeros(n, dtype=dtype)
-        return jax.random.multivariate_normal(key, mean, cov, shape=sample_shape, dtype=dtype)
-
-    # Diagonal: 1D vector -> diag(σ₁², ..., σₙ²)
-    elif sigma_array.ndim == 1:
-        # sigma_array has shape (..., n) potentially with batch dims
-        if sigma_array.shape[-1] != n:
-            raise ValueError(f"Diagonal sigma must have spatial dimension {n}, got {sigma_array.shape[-1]}")
-
-        # For diagonal covariance with batching, we need to handle each batch separately
-        # Extract batch shape
-        batch_shape = sigma_array.shape[:-1]
-
-        if len(batch_shape) == 0:
-            # No batch dimensions
-            cov = jnp.diag(sigma_array**2)
-            mean = jnp.zeros(n, dtype=dtype)
-            return jax.random.multivariate_normal(key, mean, cov, shape=sample_shape, dtype=dtype)
-        else:
-            # With batch dimensions, need to vmap
-            def sample_single(key_i, sigma_i):
-                cov_i = jnp.diag(sigma_i**2)
-                mean_i = jnp.zeros(n, dtype=dtype)
-                return jax.random.multivariate_normal(key_i, mean_i, cov_i, shape=sample_shape, dtype=dtype)
-
-            # Split keys for each batch element
-            n_batch = int(jnp.prod(jnp.array(batch_shape)))
-            keys = jax.random.split(key, n_batch)
-            sigma_flat = sigma_array.reshape(n_batch, n)
-
-            # vmap over batch dimension
-            samples = jax.vmap(sample_single)(keys, sigma_flat)
-            # Reshape to sample_shape + batch_shape + (n,)
-            return samples.reshape(sample_shape + batch_shape + (n,))
-
-    # Full: 2D matrix -> use directly as covariance
-    elif sigma_array.ndim == 2:
-        if sigma_array.shape[-2:] != (n, n):
-            raise ValueError(f"Full covariance must be ({n}, {n}), got {sigma_array.shape[-2:]}")
-
-        mean = jnp.zeros(n, dtype=dtype)
-        return jax.random.multivariate_normal(key, mean, sigma_array, shape=sample_shape, dtype=dtype)
-
-    # Full with batch: 3D or higher
-    else:
-        # sigma_array has shape (..., n, n) with batch dimensions
-        if sigma_array.shape[-2:] != (n, n):
-            raise ValueError(f"Full covariance must end with ({n}, {n}), got {sigma_array.shape[-2:]}")
-
-        batch_shape = sigma_array.shape[:-2]
-
-        def sample_single(key_i, sigma_i):
-            mean_i = jnp.zeros(n, dtype=dtype)
-            return jax.random.multivariate_normal(key_i, mean_i, sigma_i, shape=sample_shape, dtype=dtype)
-
-        # Split keys for each batch element
-        n_batch = int(jnp.prod(jnp.array(batch_shape)))
-        keys = jax.random.split(key, n_batch)
-        sigma_flat = sigma_array.reshape(n_batch, n, n)
-
-        # vmap over batch dimension
-        samples = jax.vmap(sample_single)(keys, sigma_flat)
-        # Reshape to sample_shape + batch_shape + (n,)
-        return samples.reshape(sample_shape + batch_shape + (n,))
-
-
 def _embed_in_tangent_space(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plus_1"]:
     """Embed spatial vector in tangent space at origin by prepending zero.
 
@@ -200,7 +97,22 @@ def sample(
     c_array = jnp.asarray(c, dtype=dtype)
 
     # Step 1: Sample v_bar ~ N(0, Σ) ∈ R^n
-    v_spatial = _sample_gaussian(key, sigma, n, sample_shape=sample_shape, dtype=dtype)
+    # Convert sigma to covariance matrix
+    sigma_array = jnp.asarray(sigma, dtype=dtype)
+    if sigma_array.ndim == 0:  # Scalar -> isotropic covariance σ²I
+        cov = (sigma_array**2) * jnp.eye(n, dtype=dtype)
+    elif sigma_array.ndim == 1:  # Vector -> diagonal covariance
+        if sigma_array.shape[0] != n:
+            raise ValueError(f"Diagonal sigma must have length {n}, got {sigma_array.shape[0]}")
+        cov = jnp.diag(sigma_array**2)
+    else:  # Matrix -> full covariance
+        if sigma_array.shape[-2:] != (n, n):
+            raise ValueError(f"Covariance matrix must be ({n}, {n}), got {sigma_array.shape}")
+        cov = sigma_array
+
+    # Sample from multivariate normal
+    mean = jnp.zeros(n, dtype=dtype)
+    v_spatial = jax.random.multivariate_normal(key, mean, cov, shape=sample_shape, dtype=dtype)
 
     # Step 2: Embed as tangent vector v = [0, v_bar] ∈ T_{μ₀}ℍⁿ
     v = _embed_in_tangent_space(v_spatial)
