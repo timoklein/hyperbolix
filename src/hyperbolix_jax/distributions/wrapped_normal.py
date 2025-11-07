@@ -15,22 +15,6 @@ from jaxtyping import Array, Float, PRNGKeyArray
 from ..manifolds import hyperboloid
 
 
-def _embed_in_tangent_space(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plus_1"]:
-    """Embed spatial vector in tangent space at origin by prepending zero.
-
-    Creates tangent vector v = [0, v_bar] ∈ T_{μ₀}ℍⁿ from spatial sample v_bar ∈ ℝⁿ.
-
-    Args:
-        v_spatial: Spatial sample(s), shape (..., n)
-
-    Returns:
-        Tangent vector(s) at origin, shape (..., n+1)
-    """
-    # Prepend zero for temporal component
-    zeros = jnp.zeros(v_spatial.shape[:-1] + (1,), dtype=v_spatial.dtype)
-    return jnp.concatenate([zeros, v_spatial], axis=-1)
-
-
 def sample(
     key: PRNGKeyArray,
     mu: Float[Array, "... n_plus_1"],
@@ -114,8 +98,8 @@ def sample(
     mean = jnp.zeros(n, dtype=dtype)
     v_spatial = jax.random.multivariate_normal(key, mean, cov, shape=sample_shape, dtype=dtype)
 
-    # Step 2: Embed as tangent vector v = [0, v_bar] ∈ T_{μ₀}ℍⁿ
-    v = _embed_in_tangent_space(v_spatial)
+    # Step 2: Embed as tangent vector v = [0, v_bar] ∈ T_{μ₀}ℍⁿ at origin
+    v = hyperboloid.embed_spatial_0(v_spatial)
 
     # Handle sample_shape and batch dimensions for parallel transport and expmap
     # v has shape: sample_shape + (possibly batch from sigma) + (n+1)

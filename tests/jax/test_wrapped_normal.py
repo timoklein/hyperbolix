@@ -254,10 +254,10 @@ def test_sample_gradient_flow(dtype: jnp.dtype, tolerance: tuple[float, float]) 
 # ---------------------------------------------------------------------------
 
 
-def test_embed_in_tangent_space_single(dtype: jnp.dtype) -> None:
-    """Test embedding a single spatial vector."""
+def test_embed_spatial_0_single(dtype: jnp.dtype) -> None:
+    """Test embedding a single spatial vector at origin."""
     v_spatial = jnp.array([0.1, 0.2], dtype=dtype)
-    v_tangent = wrapped_normal._embed_in_tangent_space(v_spatial)
+    v_tangent = hyperboloid.embed_spatial_0(v_spatial)
 
     assert v_tangent.shape == (3,), f"Expected shape (3,), got {v_tangent.shape}"
     assert v_tangent[0] == 0.0, f"First component should be 0, got {v_tangent[0]}"
@@ -265,10 +265,10 @@ def test_embed_in_tangent_space_single(dtype: jnp.dtype) -> None:
     assert v_tangent.dtype == dtype, f"Expected dtype {dtype}, got {v_tangent.dtype}"
 
 
-def test_embed_in_tangent_space_batch(dtype: jnp.dtype) -> None:
-    """Test embedding batched spatial vectors."""
+def test_embed_spatial_0_batch(dtype: jnp.dtype) -> None:
+    """Test embedding batched spatial vectors at origin."""
     v_spatial = jnp.array([[0.1, 0.2], [0.3, 0.4]], dtype=dtype)
-    v_tangent = wrapped_normal._embed_in_tangent_space(v_spatial)
+    v_tangent = hyperboloid.embed_spatial_0(v_spatial)
 
     assert v_tangent.shape == (2, 3), f"Expected shape (2, 3), got {v_tangent.shape}"
     assert jnp.all(v_tangent[:, 0] == 0.0), "First component should be 0"

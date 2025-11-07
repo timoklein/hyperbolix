@@ -76,6 +76,29 @@ def _minkowski_inner(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"
     return -x0y0 + x_rest_y_rest
 
 
+def embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plus_1"]:
+    """Embed spatial vector as tangent vector at origin by prepending zero.
+
+    Creates tangent vector v = [0, v_bar] ∈ T_{μ₀}ℍⁿ from spatial vector v_bar ∈ ℝⁿ.
+    This is used to embed Gaussian samples from spatial coordinates into the tangent
+    space at the origin before parallel transport.
+
+    Args:
+        v_spatial: Spatial vector(s), shape (..., n)
+
+    Returns:
+        Tangent vector(s) at origin, shape (..., n+1)
+
+    Examples:
+        >>> v_spatial = jnp.array([0.1, 0.2])
+        >>> v_tangent = embed_spatial_0(v_spatial)
+        >>> v_tangent
+        Array([0. , 0.1, 0.2], dtype=float32)
+    """
+    zeros = jnp.zeros(v_spatial.shape[:-1] + (1,), dtype=v_spatial.dtype)
+    return jnp.concatenate([zeros, v_spatial], axis=-1)
+
+
 def proj(x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float) -> Float[Array, "dim_plus_1"]:
     """Project point onto hyperboloid by adjusting temporal component.
 
