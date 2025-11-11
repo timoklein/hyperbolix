@@ -130,3 +130,219 @@ def sample(
             z = jax.vmap(lambda uu, m: hyperboloid.expmap(uu, m, c))(u, mu)
 
     return z
+
+
+def _gaussian_log_prob(
+    v_spatial: Float[Array, "... n"],
+    sigma: Float[Array, "..."] | float,
+    n: int,
+    dtype,
+) -> Float[Array, "..."]:
+    """Compute log probability of zero-mean Gaussian.
+
+    For v ~ N(0, Σ), computes:
+    log p(v) = -n/2 * log(2π) - 1/2 * log|Σ| - 1/2 * v^T Σ^(-1) v
+
+    Args:
+        v_spatial: Spatial vector(s), shape (..., n)
+        sigma: Covariance parameterization (scalar, 1D, or 2D)
+        n: Spatial dimension
+        dtype: Data type
+
+    Returns:
+        Log probability, shape (...)
+    """
+    import jax.numpy as jnp
+
+    sigma_array = jnp.asarray(sigma, dtype=dtype)
+
+    # Compute log probability based on sigma type
+    if sigma_array.ndim == 0:  # Isotropic: Σ = σ² I
+        sigma_sq = sigma_array**2
+        # log|Σ| = n * log(σ²) = n * 2 * log(σ)
+        log_det = n * 2 * jnp.log(sigma_array)
+        # v^T Σ^(-1) v = v^T v / σ²
+        v_sq_norm = jnp.sum(v_spatial**2, axis=-1)
+        quadratic_term = v_sq_norm / sigma_sq
+    elif sigma_array.ndim == 1:  # Diagonal: Σ = diag(σ₁², ..., σₙ²)
+        sigma_sq = sigma_array**2
+        # log|Σ| = sum log(σᵢ²) = 2 * sum log(σᵢ)
+        log_det = 2 * jnp.sum(jnp.log(sigma_array))
+        # v^T Σ^(-1) v = sum(vᵢ² / σᵢ²)
+        quadratic_term = jnp.sum((v_spatial**2) / sigma_sq, axis=-1)
+    else:  # Full covariance matrix
+        # log|Σ| via Cholesky decomposition
+        L = jnp.linalg.cholesky(sigma_array)
+        log_det = 2 * jnp.sum(jnp.log(jnp.diagonal(L)))
+        # v^T Σ^(-1) v via solve
+        # Solve L L^T α = v, then v^T Σ^(-1) v = α^T α
+        # For batched v_spatial with shape (..., n), transpose to solve and transpose back
+        alpha = jnp.linalg.solve(L, v_spatial.T).T
+        quadratic_term = jnp.sum(alpha**2, axis=-1)
+
+    # log p(v) = -n/2 * log(2π) - 1/2 * log|Σ| - 1/2 * v^T Σ^(-1) v
+    log_prob = -0.5 * (n * jnp.log(2 * jnp.pi) + log_det + quadratic_term)
+
+    return log_prob
+
+
+def _log_det_jacobian(
+    v: Float[Array, "... n_plus_1"],
+    c: float,
+    n: int,
+) -> Float[Array, "..."]:
+    """Compute log determinant of projection Jacobian.
+
+    Computes log det(∂proj_μ(v)/∂v) = (n-1) * log(sinh(r) / r)
+    where r = ||v||_L is the Minkowski norm.
+
+    For numerical stability, uses Taylor expansion for small r:
+    log(sinh(r) / r) ≈ r²/6 for r → 0
+
+    Args:
+        v: Tangent vector at origin, shape (..., n+1)
+        c: Curvature (positive scalar)
+        n: Spatial dimension (manifold dimension)
+
+    Returns:
+        Log determinant of Jacobian, shape (...)
+    """
+    import jax.numpy as jnp
+
+    # Compute Minkowski norm: r = sqrt(⟨v, v⟩_L)
+    # For tangent vector at origin: v = [0, v_bar], so ⟨v, v⟩_L = -v₀² + ||v_rest||²
+    # Since v = [0, v_bar], we have ⟨v, v⟩_L = ||v_bar||² = ||v[..., 1:]||²
+    v_spatial = v[..., 1:]  # Extract spatial components
+    v_minkowski_sq = jnp.sum(v_spatial**2, axis=-1)  # ||v_bar||²
+    r = jnp.sqrt(jnp.maximum(v_minkowski_sq, 1e-15))  # Clip for numerical stability
+
+    # Threshold for switching to Taylor expansion
+    r_threshold = 1e-3
+
+    # Standard computation: log(sinh(r) / r) = log(sinh(r)) - log(r)
+    log_sinh_r_over_r_standard = jnp.log(jnp.sinh(r)) - jnp.log(r)
+
+    # Taylor expansion for small r: log(sinh(r) / r) ≈ r²/6
+    log_sinh_r_over_r_taylor = (r**2) / 6.0
+
+    # Use Taylor expansion when r < r_threshold
+    log_sinh_r_over_r = jnp.where(
+        r < r_threshold,
+        log_sinh_r_over_r_taylor,
+        log_sinh_r_over_r_standard
+    )
+
+    # log det = (n-1) * log(sinh(r) / r)
+    log_det = (n - 1) * log_sinh_r_over_r
+
+    return log_det
+
+
+def log_prob(
+    z: Float[Array, "... n_plus_1"],
+    mu: Float[Array, "... n_plus_1"],
+    sigma: Float[Array, "..."] | float,
+    c: float,
+) -> Float[Array, "..."]:
+    """Compute log probability of wrapped normal distribution.
+
+    Implements Algorithm 2 from the paper:
+    1. Map z to u = exp_μ⁻¹(z) ∈ T_μℍⁿ (logarithmic map)
+    2. Move u to v = PT_{μ→μ₀}(u) ∈ T_{μ₀}ℍⁿ (parallel transport to origin)
+    3. Calculate log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
+
+    Args:
+        z: Sample point(s) on hyperboloid, shape (..., n+1)
+        mu: Mean point on hyperboloid, shape (..., n+1)
+        sigma: Covariance parameterization. Can be:
+            - Scalar: isotropic covariance sigma^2 I (n x n)
+            - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
+            - 2D array (n, n): full covariance matrix (must be SPD)
+        c: Curvature (positive scalar)
+
+    Returns:
+        Log probability, shape (...) (manifold dimension removed)
+
+    Examples:
+        >>> import jax
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix_jax.distributions import wrapped_normal_hyperboloid
+        >>>
+        >>> # Compute log probability of samples
+        >>> key = jax.random.PRNGKey(0)
+        >>> mu = jnp.array([1.0, 0.0, 0.0])
+        >>> sigma = 0.1
+        >>> z = wrapped_normal_hyperboloid.sample(key, mu, sigma, c=1.0)
+        >>> log_p = wrapped_normal_hyperboloid.log_prob(z, mu, sigma, c=1.0)
+        >>> log_p.shape
+        ()
+        >>>
+        >>> # Batch computation
+        >>> z_batch = wrapped_normal_hyperboloid.sample(key, mu, sigma, c=1.0, sample_shape=(10,))
+        >>> log_p_batch = wrapped_normal_hyperboloid.log_prob(z_batch, mu, sigma, c=1.0)
+        >>> log_p_batch.shape
+        (10,)
+    """
+    import jax.numpy as jnp
+
+    # Determine dtype
+    dtype = z.dtype
+
+    # Extract spatial dimension
+    n = mu.shape[-1] - 1  # Spatial dimension
+
+    # Handle batching with vmap if needed
+    # For now, assume z and mu have compatible shapes
+    # If z has extra leading dimensions (samples), we need to vmap
+
+    # Step 1: Map z to tangent space at mu using logarithmic map
+    # u = log_μ(z) = exp_μ⁻¹(z)
+    if z.ndim > mu.ndim:
+        # z has sample dimensions, need to vmap over them
+        # Figure out how many sample dimensions
+        n_sample_dims = z.ndim - mu.ndim
+
+        # Create vmapped version of logmap
+        logmap_fn = hyperboloid.logmap
+        for _ in range(n_sample_dims):
+            logmap_fn = jax.vmap(logmap_fn, in_axes=(0, None, None))
+
+        u = logmap_fn(z, mu, c)
+    elif z.ndim == mu.ndim and mu.ndim > 1:
+        # Both are batched, vmap over batch dimension
+        u = jax.vmap(lambda zz, mm: hyperboloid.logmap(zz, mm, c))(z, mu)
+    else:
+        # Single point
+        u = hyperboloid.logmap(z, mu, c)
+
+    # Step 2: Parallel transport from mu to origin
+    # v = PT_{μ→μ₀}(u)
+    mu_0 = hyperboloid._create_origin(c, n, dtype)
+
+    if u.ndim > 1:
+        # Batched, need to vmap
+        if mu.ndim > 1:
+            # mu is also batched
+            v = jax.vmap(lambda uu, mm: hyperboloid.ptransp(uu, mm, mu_0, c))(u, mu)
+        else:
+            # Only u is batched (from sample_shape)
+            v = jax.vmap(lambda uu: hyperboloid.ptransp(uu, mu, mu_0, c))(u)
+    else:
+        # Single point
+        v = hyperboloid.ptransp(u, mu, mu_0, c)
+
+    # Step 3: Extract spatial components from v (remove temporal component)
+    # v = [0, v_bar] at origin, so v_spatial = v[..., 1:]
+    v_spatial = v[..., 1:]
+
+    # Step 4: Compute log p(v) where v ~ N(0, Σ)
+    log_p_v = _gaussian_log_prob(v_spatial, sigma, n, dtype)
+
+    # Step 5: Compute log det Jacobian
+    log_det_jac = _log_det_jacobian(v, c, n)
+
+    # Step 6: Compute final log probability
+    # log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
+    log_p_z = log_p_v - log_det_jac
+
+    return log_p_z
