@@ -19,7 +19,7 @@ def sample(
     key: PRNGKeyArray,
     mu: Float[Array, "... n_plus_1"],
     sigma: Float[Array, "..."] | float,
-    c: Float[Array, "..."] | float,
+    c: float,
     sample_shape: tuple[int, ...] = (),
     dtype=None,
 ) -> Float[Array, "..."]:
@@ -38,7 +38,7 @@ def sample(
             - Scalar: isotropic covariance sigma^2 I (n x n)
             - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
             - 2D array (n, n): full covariance matrix (must be SPD)
-        c: Curvature (positive scalar or array broadcastable with mu's batch shape)
+        c: Curvature (positive scalar)
         sample_shape: Shape of samples to draw, prepended to output. Default: ()
         dtype: Output dtype. Default: infer from mu
 
