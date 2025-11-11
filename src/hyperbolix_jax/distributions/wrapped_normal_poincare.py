@@ -153,7 +153,8 @@ def _gaussian_log_prob(
     mean = jnp.zeros(n, dtype=dtype)
 
     # Compute log probability using JAX built-in
-    return multivariate_normal.logpdf(v, mean, cov)
+    # Cast to Array to satisfy type checker
+    return jnp.asarray(multivariate_normal.logpdf(v, mean, cov))
 
 
 def _log_det_jacobian(
