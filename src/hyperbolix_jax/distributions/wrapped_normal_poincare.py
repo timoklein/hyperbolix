@@ -121,3 +121,191 @@ def sample(
             z = jax.vmap(lambda m, z0: poincare.addition(m, z0, c))(mu, z_0)
 
     return z
+
+
+def _gaussian_log_prob(
+    v: Float[Array, "... n"],
+    sigma: Float[Array, "..."] | float,
+    n: int,
+    dtype,
+) -> Float[Array, "..."]:
+    """Compute log probability of zero-mean Gaussian.
+
+    For v ~ N(0, Σ), computes:
+    log p(v) = -n/2 * log(2π) - 1/2 * log|Σ| - 1/2 * v^T Σ^(-1) v
+
+    Args:
+        v: Vector(s) in tangent space, shape (..., n)
+        sigma: Covariance parameterization (scalar, 1D, or 2D)
+        n: Dimension
+        dtype: Data type
+
+    Returns:
+        Log probability, shape (...)
+    """
+    import jax.numpy as jnp
+    from jax.scipy.stats import multivariate_normal
+
+    # Convert sigma parameterization to covariance matrix
+    cov = sigma_to_cov(sigma, n, dtype)
+
+    # Zero mean
+    mean = jnp.zeros(n, dtype=dtype)
+
+    # Compute log probability using JAX built-in
+    return multivariate_normal.logpdf(v, mean, cov)
+
+
+def _log_det_jacobian(
+    v: Float[Array, "... n"],
+    c: float,
+    n: int,
+) -> Float[Array, "..."]:
+    """Compute log determinant of projection Jacobian for Poincaré ball.
+
+    Computes log det(∂proj_μ(v)/∂v) = (n-1) * log(sinh(√c·r) / (√c·r))
+    where r = ||v|| is the Euclidean norm of the tangent vector at origin.
+
+    For numerical stability, uses Taylor expansion for small √c·r:
+    log(sinh(√c·r) / (√c·r)) ≈ (c·r²)/6 for √c·r → 0
+
+    Args:
+        v: Tangent vector at origin, shape (..., n)
+        c: Curvature (positive scalar)
+        n: Dimension of Poincaré ball
+
+    Returns:
+        Log determinant of Jacobian, shape (...)
+    """
+    import jax.numpy as jnp
+
+    # Compute Euclidean norm of tangent vector
+    r = jnp.sqrt(jnp.sum(v**2, axis=-1))
+
+    # Scale by √c
+    sqrt_c = jnp.sqrt(c)
+    sqrt_c_r = sqrt_c * r
+
+    # Threshold for switching to Taylor expansion
+    threshold = 1e-3
+
+    # Standard computation: log(sinh(√c·r) / (√c·r)) = log(sinh(√c·r)) - log(√c·r)
+    log_sinh_over_arg_standard = jnp.log(jnp.sinh(sqrt_c_r)) - jnp.log(sqrt_c_r)
+
+    # Taylor expansion for small √c·r: log(sinh(x) / x) ≈ x²/6
+    # Here x = √c·r, so x² = c·r²
+    log_sinh_over_arg_taylor = (c * r**2) / 6.0
+
+    # Use Taylor expansion when √c·r < threshold
+    log_sinh_over_arg = jnp.where(
+        sqrt_c_r < threshold,
+        log_sinh_over_arg_taylor,
+        log_sinh_over_arg_standard
+    )
+
+    # log det = (n-1) * log(sinh(√c·r) / (√c·r))
+    log_det = (n - 1) * log_sinh_over_arg
+
+    return log_det
+
+
+def log_prob(
+    z: Float[Array, "... n"],
+    mu: Float[Array, "... n"],
+    sigma: Float[Array, "..."] | float,
+    c: float,
+) -> Float[Array, "..."]:
+    """Compute log probability of wrapped normal distribution on Poincaré ball.
+
+    Implements Algorithm 2 from the paper adapted for Poincaré ball:
+    1. Map z to u = log_μ(z) ∈ T_μ𝔹ⁿ (logarithmic map)
+    2. Move u to v = PT_{μ→0}(u) ∈ T_0𝔹ⁿ (parallel transport to origin)
+    3. Calculate log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
+
+    Args:
+        z: Sample point(s) on Poincaré ball, shape (..., n)
+        mu: Mean point on Poincaré ball, shape (..., n)
+        sigma: Covariance parameterization. Can be:
+            - Scalar: isotropic covariance sigma^2 I (n x n)
+            - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
+            - 2D array (n, n): full covariance matrix (must be SPD)
+        c: Curvature (positive scalar)
+
+    Returns:
+        Log probability, shape (...) (spatial dimension removed)
+
+    Examples:
+        >>> import jax
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix_jax.distributions import wrapped_normal_poincare
+        >>>
+        >>> # Compute log probability of samples
+        >>> key = jax.random.PRNGKey(0)
+        >>> mu = jnp.array([0.0, 0.0])
+        >>> sigma = 0.1
+        >>> z = wrapped_normal_poincare.sample(key, mu, sigma, c=1.0)
+        >>> log_p = wrapped_normal_poincare.log_prob(z, mu, sigma, c=1.0)
+        >>> log_p.shape
+        ()
+        >>>
+        >>> # Batch computation
+        >>> z_batch = wrapped_normal_poincare.sample(key, mu, sigma, c=1.0, sample_shape=(10,))
+        >>> log_p_batch = wrapped_normal_poincare.log_prob(z_batch, mu, sigma, c=1.0)
+        >>> log_p_batch.shape
+        (10,)
+    """
+    import jax.numpy as jnp
+
+    # Determine dtype
+    dtype = z.dtype
+
+    # Extract dimension
+    n = mu.shape[-1]  # Dimension of Poincaré ball
+
+    # Step 1: Map z to tangent space at mu using logarithmic map
+    # u = log_μ(z)
+    if z.ndim > mu.ndim:
+        # z has sample dimensions, need to vmap over them
+        n_sample_dims = z.ndim - mu.ndim
+
+        # Create vmapped version of logmap
+        logmap_fn = poincare.logmap
+        for _ in range(n_sample_dims):
+            logmap_fn = jax.vmap(logmap_fn, in_axes=(0, None, None))
+
+        u = logmap_fn(z, mu, c)
+    elif z.ndim == mu.ndim and mu.ndim > 1:
+        # Both are batched, vmap over batch dimension
+        u = jax.vmap(lambda zz, mm: poincare.logmap(zz, mm, c))(z, mu)
+    else:
+        # Single point
+        u = poincare.logmap(z, mu, c)
+
+    # Step 2: Parallel transport from mu to origin
+    # v = PT_{μ→0}(u)
+    mu_0 = jnp.zeros(n, dtype=dtype)  # Origin is zero vector in Poincaré ball
+
+    if u.ndim > 1:
+        # Batched, need to vmap
+        if mu.ndim > 1:
+            # mu is also batched
+            v = jax.vmap(lambda uu, mm: poincare.ptransp(uu, mm, mu_0, c))(u, mu)
+        else:
+            # Only u is batched (from sample_shape)
+            v = jax.vmap(lambda uu: poincare.ptransp(uu, mu, mu_0, c))(u)
+    else:
+        # Single point
+        v = poincare.ptransp(u, mu, mu_0, c)
+
+    # Step 3: Compute log p(v) where v ~ N(0, Σ)
+    # Note: v is already in R^n, no need to extract spatial components like in hyperboloid
+    log_p_v = _gaussian_log_prob(v, sigma, n, dtype)
+
+    # Step 4: Compute log det Jacobian
+    log_det_jac = _log_det_jacobian(v, c, n)
+
+    # Step 5: Compute final log probability
+    # log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
+    log_p_z = log_p_v - log_det_jac
+
+    return log_p_z
