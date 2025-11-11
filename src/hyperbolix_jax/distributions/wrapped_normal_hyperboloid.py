@@ -9,7 +9,6 @@ References:
 """
 
 import jax
-import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ._common import sample_gaussian, sigma_to_cov
