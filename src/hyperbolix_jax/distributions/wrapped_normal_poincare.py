@@ -219,8 +219,8 @@ def log_prob(
     """Compute log probability of wrapped normal distribution on Poincaré ball.
 
     Implements Algorithm 2 from the paper adapted for Poincaré ball:
-    1. Map z to u = log_μ(z) ∈ T_μ𝔹ⁿ (logarithmic map)
-    2. Move u to v = PT_{μ→0}(u) ∈ T_0𝔹ⁿ (parallel transport to origin)
+    1. Map z to u = log_μ(z) ∈ T_μB^n (logarithmic map)
+    2. Move u to v = PT_{μ→0}(u) ∈ T_0B^n (parallel transport to origin)
     3. Calculate log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
 
     Args:
