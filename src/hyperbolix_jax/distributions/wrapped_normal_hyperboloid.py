@@ -36,8 +36,8 @@ def sample(
         key: JAX random key
         mu: Mean point on hyperboloid, shape (..., n+1) in ambient coordinates
         sigma: Covariance parameterization in spatial coordinates. Can be:
-            - Scalar: isotropic covariance σ² I (n × n)
-            - 1D array of length n: diagonal covariance diag(σ₁², ..., σₙ²)
+            - Scalar: isotropic covariance sigma^2 I (n x n)
+            - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
             - 2D array (n, n): full covariance matrix (must be SPD)
         c: Curvature (positive scalar or array broadcastable with mu's batch shape)
         sample_shape: Shape of samples to draw, prepended to output. Default: ()

@@ -14,8 +14,8 @@ def sigma_to_cov(
 
     Args:
         sigma: Covariance parameterization. Can be:
-            - Scalar: isotropic covariance σ² I (n × n)
-            - 1D array of length n: diagonal covariance diag(σ₁², ..., σₙ²)
+            - Scalar: isotropic covariance sigma^2 I (n x n)
+            - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
             - 2D array (n, n): full covariance matrix (must be SPD)
         n: Spatial dimension
         dtype: Output dtype
@@ -28,7 +28,7 @@ def sigma_to_cov(
     """
     sigma_array = jnp.asarray(sigma, dtype=dtype)
 
-    if sigma_array.ndim == 0:  # Scalar -> isotropic covariance σ²I
+    if sigma_array.ndim == 0:  # Scalar -> isotropic covariance sigma^2 I
         return (sigma_array**2) * jnp.eye(n, dtype=dtype)
     elif sigma_array.ndim == 1:  # Vector -> diagonal covariance
         if sigma_array.shape[0] != n:

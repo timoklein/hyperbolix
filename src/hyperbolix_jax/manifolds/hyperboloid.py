@@ -95,7 +95,7 @@ def embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plu
         >>> v_tangent
         Array([0. , 0.1, 0.2], dtype=float32)
     """
-    zeros = jnp.zeros(v_spatial.shape[:-1] + (1,), dtype=v_spatial.dtype)
+    zeros = jnp.zeros((*v_spatial.shape[:-1], 1), dtype=v_spatial.dtype)
     return jnp.concatenate([zeros, v_spatial], axis=-1)
 
 

@@ -2,7 +2,6 @@
 
 import jax
 import jax.numpy as jnp
-import pytest
 
 from hyperbolix_jax.distributions import wrapped_normal_hyperboloid, wrapped_normal_poincare
 from hyperbolix_jax.manifolds import hyperboloid, poincare
@@ -36,7 +35,7 @@ def _batch_is_in_poincare(points: jnp.ndarray, c: float, atol: float = 1e-5) -> 
 def test_sample_single_point_isotropic(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test basic sampling with a single mean point and isotropic covariance."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     # Create mean at origin in H^2 (3D ambient space)
     c = 1.0
@@ -57,7 +56,7 @@ def test_sample_single_point_isotropic(dtype: jnp.dtype, tolerance: tuple[float,
 def test_sample_shape_parameter(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test that sample_shape parameter works correctly."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     # Create mean
     c = 1.0
@@ -79,7 +78,7 @@ def test_sample_shape_parameter(dtype: jnp.dtype, tolerance: tuple[float, float]
 def test_sample_diagonal_covariance(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test sampling with diagonal covariance."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     # Create mean in H^2
     c = 1.0
@@ -101,7 +100,7 @@ def test_sample_diagonal_covariance(dtype: jnp.dtype, tolerance: tuple[float, fl
 def test_sample_full_covariance(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test sampling with full covariance matrix."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     # Create mean in H^2
     c = 1.0
@@ -123,7 +122,7 @@ def test_sample_full_covariance(dtype: jnp.dtype, tolerance: tuple[float, float]
 def test_sample_dtype_propagation(tolerance: tuple[float, float]) -> None:
     """Test that dtype parameter is respected."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    _atol, _rtol = tolerance
 
     # Create mean in H^2 with float32
     c = 1.0
@@ -146,7 +145,7 @@ def test_sample_dtype_propagation(tolerance: tuple[float, float]) -> None:
 def test_sample_batched_means(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test sampling with batched mean points."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     # Create batch of means in H^2
     c = 1.0
@@ -175,7 +174,7 @@ def test_sample_batched_means(dtype: jnp.dtype, tolerance: tuple[float, float]) 
 def test_sample_different_curvatures(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test sampling with different curvature values."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     for c in [0.5, 1.0, 2.0]:
         mu = hyperboloid._create_origin(c, dim=2, dtype=dtype)
@@ -195,7 +194,7 @@ def test_sample_different_curvatures(dtype: jnp.dtype, tolerance: tuple[float, f
 def test_sample_jit_compatibility(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test that sampling works with JAX jit."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     c = 1.0
     mu = hyperboloid._create_origin(c, dim=2, dtype=dtype)
@@ -213,7 +212,7 @@ def test_sample_jit_compatibility(dtype: jnp.dtype, tolerance: tuple[float, floa
 def test_sample_vmap_compatibility(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test that sampling works with JAX vmap."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     # Create multiple keys
     keys = jax.random.split(key, 10)
@@ -233,7 +232,7 @@ def test_sample_vmap_compatibility(dtype: jnp.dtype, tolerance: tuple[float, flo
 def test_sample_gradient_flow(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test that sampling is differentiable w.r.t. mean."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    _atol, _rtol = tolerance
 
     c = 1.0
     mu = hyperboloid._create_origin(c, dim=3, dtype=dtype)
@@ -290,7 +289,7 @@ def test_embed_spatial_0_batch(dtype: jnp.dtype) -> None:
 def test_sample_poincare_single_point_isotropic(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test basic Poincaré sampling with a single mean point and isotropic covariance."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     # Create mean at origin
     c = 1.0
@@ -311,7 +310,7 @@ def test_sample_poincare_single_point_isotropic(dtype: jnp.dtype, tolerance: tup
 def test_sample_poincare_shape_parameter(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test that sample_shape parameter works for Poincaré."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     c = 1.0
     mu = jnp.zeros(2, dtype=dtype)
@@ -332,7 +331,7 @@ def test_sample_poincare_shape_parameter(dtype: jnp.dtype, tolerance: tuple[floa
 def test_sample_poincare_diagonal_covariance(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test Poincaré sampling with diagonal covariance."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     c = 1.0
     mu = jnp.zeros(2, dtype=dtype)
@@ -350,7 +349,7 @@ def test_sample_poincare_diagonal_covariance(dtype: jnp.dtype, tolerance: tuple[
 def test_sample_poincare_full_covariance(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test Poincaré sampling with full covariance matrix."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     c = 1.0
     mu = jnp.zeros(2, dtype=dtype)
@@ -368,7 +367,7 @@ def test_sample_poincare_full_covariance(dtype: jnp.dtype, tolerance: tuple[floa
 def test_sample_poincare_batched_means(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test Poincaré sampling with batched mean points."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     c = 1.0
     mu_batch = jnp.array(
@@ -393,7 +392,7 @@ def test_sample_poincare_batched_means(dtype: jnp.dtype, tolerance: tuple[float,
 def test_sample_poincare_different_curvatures(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test Poincaré sampling with different curvature values."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     for c in [0.5, 1.0, 2.0]:
         mu = jnp.zeros(2, dtype=dtype)
@@ -408,7 +407,7 @@ def test_sample_poincare_different_curvatures(dtype: jnp.dtype, tolerance: tuple
 def test_sample_poincare_jit_compatibility(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test that Poincaré sampling works with JAX jit."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     c = 1.0
     mu = jnp.zeros(2, dtype=dtype)
@@ -426,7 +425,7 @@ def test_sample_poincare_jit_compatibility(dtype: jnp.dtype, tolerance: tuple[fl
 def test_sample_poincare_vmap_compatibility(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test that Poincaré sampling works with JAX vmap."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    atol, _rtol = tolerance
 
     # Create multiple keys
     keys = jax.random.split(key, 10)
@@ -446,7 +445,7 @@ def test_sample_poincare_vmap_compatibility(dtype: jnp.dtype, tolerance: tuple[f
 def test_sample_poincare_gradient_flow(dtype: jnp.dtype, tolerance: tuple[float, float]) -> None:
     """Test that Poincaré sampling is differentiable w.r.t. mean."""
     key = jax.random.PRNGKey(42)
-    atol, rtol = tolerance
+    _atol, _rtol = tolerance
 
     c = 1.0
     mu = jnp.zeros(3, dtype=dtype)
