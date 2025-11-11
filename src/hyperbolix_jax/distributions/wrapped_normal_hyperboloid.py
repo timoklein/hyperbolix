@@ -78,8 +78,6 @@ def sample(
     # Extract spatial dimension
     n = mu.shape[-1] - 1  # Spatial dimension (n for H^n in R^(n+1))
 
-    # Ensure curvature is array for consistency
-    c_array = jnp.asarray(c, dtype=dtype)
 
     # Step 1: Sample v_bar ~ N(0, Σ) ∈ R^n
     cov = sigma_to_cov(sigma, n, dtype)
@@ -104,14 +102,14 @@ def sample(
             # ptransp_0 expects single point, so we may need to vmap over batch dims
             if mu.ndim == 1:
                 # Single point, no batching
-                u = hyperboloid.ptransp_0(v_single, mu, c_array)
+                u = hyperboloid.ptransp_0(v_single, mu, c)
                 # Step 4: Exponential map at mu
-                z = hyperboloid.expmap(u, mu, c_array)
+                z = hyperboloid.expmap(u, mu, c)
             else:
                 # Batched mu, need to vmap
                 # Broadcast v_single to match mu's batch shape if needed
-                u = jax.vmap(lambda m, vs: hyperboloid.ptransp_0(vs, m, c_array))(mu, v_single)
-                z = jax.vmap(lambda uu, m: hyperboloid.expmap(uu, m, c_array))(u, mu)
+                u = jax.vmap(lambda m, vs: hyperboloid.ptransp_0(vs, m, c))(mu, v_single)
+                z = jax.vmap(lambda uu, m: hyperboloid.expmap(uu, m, c))(u, mu)
 
             return z
 
@@ -125,12 +123,12 @@ def sample(
         if mu.ndim == 1:
             # Single point
             # Step 3: Parallel transport from origin to mu
-            u = hyperboloid.ptransp_0(v, mu, c_array)
+            u = hyperboloid.ptransp_0(v, mu, c)
             # Step 4: Exponential map at mu
-            z = hyperboloid.expmap(u, mu, c_array)
+            z = hyperboloid.expmap(u, mu, c)
         else:
             # Batched mu, need to vmap
-            u = jax.vmap(lambda m, vs: hyperboloid.ptransp_0(vs, m, c_array))(mu, v)
-            z = jax.vmap(lambda uu, m: hyperboloid.expmap(uu, m, c_array))(u, mu)
+            u = jax.vmap(lambda m, vs: hyperboloid.ptransp_0(vs, m, c))(mu, v)
+            z = jax.vmap(lambda uu, m: hyperboloid.expmap(uu, m, c))(u, mu)
 
     return z

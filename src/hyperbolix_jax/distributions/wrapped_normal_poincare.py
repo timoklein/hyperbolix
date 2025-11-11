@@ -79,8 +79,6 @@ def sample(
     # Extract dimension
     n = mu.shape[-1]  # Dimension of Poincaré ball
 
-    # Ensure curvature is array for consistency
-    c_array = jnp.asarray(c, dtype=dtype)
 
     # Step 1: Sample v ~ N(0, Σ) ∈ R^n (directly in tangent space at origin)
     cov = sigma_to_cov(sigma, n, dtype)
@@ -96,13 +94,13 @@ def sample(
             # Map to ball at origin
             if mu.ndim == 1:
                 # Single mean point
-                z_0 = poincare.expmap_0(v_single, c_array)
+                z_0 = poincare.expmap_0(v_single, c)
                 # Move to mean using Möbius addition
-                z = poincare.addition(mu, z_0, c_array)
+                z = poincare.addition(mu, z_0, c)
             else:
                 # Batched mu, need to vmap
-                z_0 = jax.vmap(lambda vs: poincare.expmap_0(vs, c_array))(v_single)
-                z = jax.vmap(lambda m, z0: poincare.addition(m, z0, c_array))(mu, z_0)
+                z_0 = jax.vmap(lambda vs: poincare.expmap_0(vs, c))(v_single)
+                z = jax.vmap(lambda m, z0: poincare.addition(m, z0, c))(mu, z_0)
 
             return z
 
@@ -116,12 +114,12 @@ def sample(
         if mu.ndim == 1:
             # Single point
             # Map to ball at origin
-            z_0 = poincare.expmap_0(v, c_array)
+            z_0 = poincare.expmap_0(v, c)
             # Move to mean using Möbius addition
-            z = poincare.addition(mu, z_0, c_array)
+            z = poincare.addition(mu, z_0, c)
         else:
             # Batched mu, need to vmap
-            z_0 = jax.vmap(lambda vs: poincare.expmap_0(vs, c_array))(v)
-            z = jax.vmap(lambda m, z0: poincare.addition(m, z0, c_array))(mu, z_0)
+            z_0 = jax.vmap(lambda vs: poincare.expmap_0(vs, c))(v)
+            z = jax.vmap(lambda m, z0: poincare.addition(m, z0, c))(mu, z_0)
 
     return z
