@@ -77,7 +77,6 @@ def sample(
     # Extract spatial dimension
     n = mu.shape[-1] - 1  # Spatial dimension (n for H^n in R^(n+1))
 
-
     # Step 1: Sample v_bar ~ N(0, Σ) ∈ R^n
     cov = sigma_to_cov(sigma, n, dtype)
     v_spatial = sample_gaussian(key, cov, sample_shape=sample_shape, dtype=dtype)

@@ -78,7 +78,6 @@ def sample(
     # Extract dimension
     n = mu.shape[-1]  # Dimension of Poincaré ball
 
-
     # Step 1: Sample v ~ N(0, Σ) ∈ R^n (directly in tangent space at origin)
     cov = sigma_to_cov(sigma, n, dtype)
     v = sample_gaussian(key, cov, sample_shape=sample_shape, dtype=dtype)
