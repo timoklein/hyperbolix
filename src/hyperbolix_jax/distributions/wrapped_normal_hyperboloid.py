@@ -153,37 +153,16 @@ def _gaussian_log_prob(
         Log probability, shape (...)
     """
     import jax.numpy as jnp
+    from jax.scipy.stats import multivariate_normal
 
-    sigma_array = jnp.asarray(sigma, dtype=dtype)
+    # Convert sigma parameterization to covariance matrix
+    cov = sigma_to_cov(sigma, n, dtype)
 
-    # Compute log probability based on sigma type
-    if sigma_array.ndim == 0:  # Isotropic: Σ = σ² I
-        sigma_sq = sigma_array**2
-        # log|Σ| = n * log(σ²) = n * 2 * log(σ)
-        log_det = n * 2 * jnp.log(sigma_array)
-        # v^T Σ^(-1) v = v^T v / σ²
-        v_sq_norm = jnp.sum(v_spatial**2, axis=-1)
-        quadratic_term = v_sq_norm / sigma_sq
-    elif sigma_array.ndim == 1:  # Diagonal: Σ = diag(σ₁², ..., σₙ²)
-        sigma_sq = sigma_array**2
-        # log|Σ| = sum log(σᵢ²) = 2 * sum log(σᵢ)
-        log_det = 2 * jnp.sum(jnp.log(sigma_array))
-        # v^T Σ^(-1) v = sum(vᵢ² / σᵢ²)
-        quadratic_term = jnp.sum((v_spatial**2) / sigma_sq, axis=-1)
-    else:  # Full covariance matrix
-        # log|Σ| via Cholesky decomposition
-        L = jnp.linalg.cholesky(sigma_array)
-        log_det = 2 * jnp.sum(jnp.log(jnp.diagonal(L)))
-        # v^T Σ^(-1) v via solve
-        # Solve L L^T α = v, then v^T Σ^(-1) v = α^T α
-        # For batched v_spatial with shape (..., n), transpose to solve and transpose back
-        alpha = jnp.linalg.solve(L, v_spatial.T).T
-        quadratic_term = jnp.sum(alpha**2, axis=-1)
+    # Zero mean
+    mean = jnp.zeros(n, dtype=dtype)
 
-    # log p(v) = -n/2 * log(2π) - 1/2 * log|Σ| - 1/2 * v^T Σ^(-1) v
-    log_prob = -0.5 * (n * jnp.log(2 * jnp.pi) + log_det + quadratic_term)
-
-    return log_prob
+    # Compute log probability using JAX built-in
+    return multivariate_normal.logpdf(v_spatial, mean, cov)
 
 
 def _log_det_jacobian(
