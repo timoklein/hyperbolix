@@ -11,8 +11,8 @@ References:
 import jax
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ._common import sample_gaussian, sigma_to_cov
 from ..manifolds import poincare
+from ._common import sample_gaussian, sigma_to_cov
 
 
 def sample(
@@ -198,11 +198,7 @@ def _log_det_jacobian(
     log_sinh_over_arg_taylor = (c * r**2) / 6.0
 
     # Use Taylor expansion when √c·r < threshold
-    log_sinh_over_arg = jnp.where(
-        sqrt_c_r < threshold,
-        log_sinh_over_arg_taylor,
-        log_sinh_over_arg_standard
-    )
+    log_sinh_over_arg = jnp.where(sqrt_c_r < threshold, log_sinh_over_arg_taylor, log_sinh_over_arg_standard)
 
     # log det = (n-1) * log(sinh(√c·r) / (√c·r))
     log_det = (n - 1) * log_sinh_over_arg

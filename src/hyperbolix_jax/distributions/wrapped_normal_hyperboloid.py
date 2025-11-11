@@ -11,8 +11,8 @@ References:
 import jax
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ._common import sample_gaussian, sigma_to_cov
 from ..manifolds import hyperboloid
+from ._common import sample_gaussian, sigma_to_cov
 
 
 def sample(
@@ -206,11 +206,7 @@ def _log_det_jacobian(
     log_sinh_r_over_r_taylor = (r**2) / 6.0
 
     # Use Taylor expansion when r < r_threshold
-    log_sinh_r_over_r = jnp.where(
-        r < r_threshold,
-        log_sinh_r_over_r_taylor,
-        log_sinh_r_over_r_standard
-    )
+    log_sinh_r_over_r = jnp.where(r < r_threshold, log_sinh_r_over_r_taylor, log_sinh_r_over_r_standard)
 
     # log det = (n-1) * log(sinh(r) / r)
     log_det = (n - 1) * log_sinh_r_over_r
