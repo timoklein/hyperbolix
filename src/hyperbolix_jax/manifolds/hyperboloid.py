@@ -594,3 +594,58 @@ def is_in_tangent_space(
     tol = 5e-4 if atol is None else atol
     mink_inner = _minkowski_inner(v, x)
     return jnp.abs(mink_inner) < tol
+
+
+def hcat(
+    points: Float[Array, "N n"],
+    c: float = 1.0,
+) -> Float[Array, "dN_plus_1"]:
+    """Lorentz direct concatenation for Hyperboloid points.
+
+    Given N points on a d-dimensional Hyperboloid manifold (living in (d+1)-dimensional
+    ambient space), concatenates them into a single point on a (dN)-dimensional Hyperboloid
+    manifold (living in (dN+1)-dimensional ambient space).
+
+    The formula is:
+    y = [sqrt(sum(x_i[0]^2) - (N-1)/c), x_1[1:], ..., x_N[1:]]
+
+    where x_i[0] is the time component and x_i[1:] are the space components.
+
+    Args:
+        points: N points in (d+1)-dimensional ambient space, shape (N, d+1).
+                Each point satisfies: -x[0]^2 + sum(x[1:]^2) = -1/c
+        c: Manifold curvature (positive)
+
+    Returns:
+        Single point in (dN+1)-dimensional ambient space, shape (dN+1,).
+        - Time coordinate: sqrt(sum(x_i[0]^2) - (N-1)/c)
+        - Space coordinates: concatenation of all input space components
+
+    References:
+        Qu, M., & Zou, J. (2022). Hyperbolic Hierarchical Knowledge Graph Embeddings for Link Prediction.
+        Ahmad Bdeir, et al. "Fully hyperbolic convolutional neural networks for computer vision."
+            arXiv preprint arXiv:2303.15919 (2023).
+
+    Notes:
+        The operation preserves the manifold structure: the output satisfies the Lorentz
+        constraint for the (dN)-dimensional manifold.
+    """
+    N, _ambient_dim = points.shape
+
+    # Extract time components (first coordinate of each point)
+    time_components = points[:, 0]  # (N,)
+
+    # Extract space components (remaining coordinates of each point)
+    space_components = points[:, 1:]  # (N, d)
+
+    # Compute new time coordinate using the formula
+    # Note: MINUS (N-1)/c, not plus!
+    time_new = jnp.sqrt(jnp.sum(time_components**2) - (N - 1) / c)  # scalar
+
+    # Concatenate all space components: [x_1[1:], x_2[1:], ..., x_N[1:]]
+    space_concatenated = space_components.reshape(-1)  # (N*d,)
+
+    # Combine: [time_new, space_concatenated]
+    result = jnp.concatenate([jnp.array([time_new]), space_concatenated])  # (1 + N*d,) = (dN+1,)
+
+    return result
