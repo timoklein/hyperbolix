@@ -114,62 +114,49 @@ class HypConv2DHyperboloid(nnx.Module):
         self,
         x: Float[Array, "batch height width in_channels"],
     ) -> Float[Array, "batch out_height out_width kernel_h kernel_w in_channels"]:
-        """Extract patches (receptive fields) from the input.
-
-        Parameters
-        ----------
-        x : Array of shape (batch, height, width, in_channels)
-            Input feature map
-
-        Returns
-        -------
-        patches : Array of shape (batch, out_height, out_width, kernel_h, kernel_w, in_channels)
-            Extracted patches
-        """
-        _batch, height, width, _in_channels = x.shape
+        """Extract patches (receptive fields) from the input using optimized JAX primitives."""
+        batch, height, width, in_channels = x.shape
         kernel_h, kernel_w = self.kernel_size
         stride_h, stride_w = self.stride
 
-        # Calculate output dimensions
+        # 1. Handle Padding (Manually, to ensure manifold validity)
         if self.padding == "SAME":
             out_height = (height + stride_h - 1) // stride_h
             out_width = (width + stride_w - 1) // stride_w
-            # Calculate padding needed
-            pad_height = max((out_height - 1) * stride_h + kernel_h - height, 0)
-            pad_width = max((out_width - 1) * stride_w + kernel_w - width, 0)
-            pad_top = pad_height // 2
-            pad_bottom = pad_height - pad_top
-            pad_left = pad_width // 2
-            pad_right = pad_width - pad_left
+            pad_h = max((out_height - 1) * stride_h + kernel_h - height, 0)
+            pad_w = max((out_width - 1) * stride_w + kernel_w - width, 0)
+            pad_top = pad_h // 2
+            pad_bottom = pad_h - pad_top
+            pad_left = pad_w // 2
+            pad_right = pad_w - pad_left
 
-            # For hyperbolic manifold, we need to pad with valid manifold points
-            # Use the origin point: [sqrt(1/c), 0, ..., 0] - but we don't have c here yet
-            # Instead, we'll pad with edge values (replicate) which are valid manifold points
+            # Pad with edge values to stay on manifold
             x = jnp.pad(
                 x,
                 ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                mode="edge",  # Replicate edge values instead of zeros
+                mode="edge",
             )
-            # Update height and width after padding
-            height = x.shape[1]
-            width = x.shape[2]
-        else:  # VALID
-            out_height = (height - kernel_h) // stride_h + 1
-            out_width = (width - kernel_w) // stride_w + 1
 
-        # Extract patches using indexing
-        patches_list = []
-        for i in range(out_height):
-            row_patches = []
-            for j in range(out_width):
-                h_start = i * stride_h
-                w_start = j * stride_w
-                patch = x[:, h_start : h_start + kernel_h, w_start : w_start + kernel_w, :]
-                row_patches.append(patch)
-            patches_list.append(jnp.stack(row_patches, axis=1))
-        patches = jnp.stack(patches_list, axis=1)
+        # 2. Extract Patches using LAX primitive (High Performance)
+        # Output shape: (batch, out_height, out_width, in_channels * kernel_h * kernel_w)
+        patches_flat = jax.lax.conv_general_dilated_patches(
+            lhs=x,
+            filter_shape=(kernel_h, kernel_w),
+            window_strides=(stride_h, stride_w),
+            padding="VALID",  # We already padded manually
+            dimension_numbers=("NHWC", "OIHW", "NHWC"),  # Standard TF/JAX layout
+        )
 
-        return patches  # (batch, out_height, out_width, kernel_h, kernel_w, in_channels)
+        # 3. Reshape to separate kernel dimensions and channels
+        out_h, out_w = patches_flat.shape[1], patches_flat.shape[2]
+
+        # JAX conv_general_dilated_patches output order is "c" + spatial dims from rhs_spec
+        # With rhs_spec="OIHW", the flattened dim order is (in_channels, kernel_h, kernel_w)
+        # We need (kernel_h, kernel_w, in_channels) for downstream processing
+        patches = patches_flat.reshape(batch, out_h, out_w, in_channels, kernel_h, kernel_w)
+        patches = patches.transpose(0, 1, 2, 4, 5, 3)  # (batch, out_h, out_w, kh, kw, in_c)
+
+        return patches
 
     def __call__(
         self,
@@ -193,33 +180,36 @@ class HypConv2DHyperboloid(nnx.Module):
         """
         # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            # vmap over batch, height, width
-            x = jax.vmap(
-                jax.vmap(jax.vmap(self.manifold.expmap_0, in_axes=(0, None)), in_axes=(0, None)),
-                in_axes=(0, None),
-            )(x, c)
+            # 1. Flatten batch and spatial dims: (B*H*W, C)
+            x_flat = x.reshape(-1, x.shape[-1])
+
+            # 2. Apply single vmap over the list of vectors
+            x_mapped = jax.vmap(self.manifold.expmap_0, in_axes=(0, None))(x_flat, c)
+
+            # 3. Reshape back to (B, H, W, C)
+            x = x_mapped.reshape(x.shape)
 
         # Extract patches (receptive fields)
-        patches = self._extract_patches(x)  # (batch, out_h, out_w, kernel_h, kernel_w, in_channels)
+        # Shape: (batch, out_h, out_w, kernel_h, kernel_w, in_channels)
+        patches = self._extract_patches(x)
 
-        batch, out_height, out_width, kernel_h, kernel_w, in_channels = patches.shape
+        batch, out_h, out_w, kh, kw, in_c = patches.shape
 
-        # Reshape to apply HCat: (batch, out_h, out_w, kernel_h*kernel_w, in_channels)
-        patches_reshaped = patches.reshape(batch, out_height, out_width, kernel_h * kernel_w, in_channels)
+        # Flatten batch and spatial dims for parallel processing
+        # Shape: (batch * out_h * out_w, kh * kw, in_channels)
+        patches_flat = patches.reshape(-1, kh * kw, in_c)
 
-        # Apply HCat to each receptive field
-        # vmap over batch, out_height, out_width dimensions
-        def apply_hcat_single(receptive_field):
-            """Apply HCat to a single receptive field of shape (kernel_h*kernel_w, in_channels)."""
-            return self.manifold.hcat(receptive_field, c)
+        # 1. Apply HCat
+        # vmap over the flattened spatial/batch dimension
+        # Input to hcat: (N_points, in_channels) -> Output: (hcat_dim,)
+        hcat_out = jax.vmap(self.manifold.hcat, in_axes=(0, None))(patches_flat, c)  # (batch*out_h*out_w, hcat_dim)
 
-        hcat_fn = jax.vmap(jax.vmap(jax.vmap(apply_hcat_single)))
-        hcat_output = hcat_fn(patches_reshaped)  # (batch, out_h, out_w, hcat_out_dim)
+        # 2. Apply Linear
+        # Input: (hcat_dim,) -> Output: (out_channels,)
+        linear_out = self.linear(hcat_out, c)
 
-        # Apply linear transformation to each spatial location
-        # vmap over batch, out_height, out_width dimensions
-        linear_fn = jax.vmap(jax.vmap(jax.vmap(lambda p: self.linear(p.reshape(1, -1), c).squeeze(0))))
-        output = linear_fn(hcat_output)  # (batch, out_h, out_w, out_channels)
+        # 3. Reshape back
+        output = linear_out.reshape(batch, out_h, out_w, self.out_channels)
 
         return output
 
@@ -333,78 +323,55 @@ class HypConv3DHyperboloid(nnx.Module):
         self,
         x: Float[Array, "batch depth height width in_channels"],
     ) -> Float[Array, "batch out_depth out_height out_width kernel_d kernel_h kernel_w in_channels"]:
-        """Extract patches (receptive fields) from the 3D input.
-
-        Parameters
-        ----------
-        x : Array of shape (batch, depth, height, width, in_channels)
-            Input feature map
-
-        Returns
-        -------
-        patches : Array of shape (batch, out_depth, out_height, out_width, kernel_d, kernel_h, kernel_w, in_channels)
-            Extracted patches
-        """
-        _batch, depth, height, width, _in_channels = x.shape
+        """Extract patches (receptive fields) from the 3D input using optimized JAX primitives."""
+        batch, depth, height, width, in_channels = x.shape
         kernel_d, kernel_h, kernel_w = self.kernel_size
         stride_d, stride_h, stride_w = self.stride
 
-        # Calculate output dimensions
+        # 1. Handle Padding (Manually, to ensure manifold validity)
         if self.padding == "SAME":
             out_depth = (depth + stride_d - 1) // stride_d
             out_height = (height + stride_h - 1) // stride_h
             out_width = (width + stride_w - 1) // stride_w
 
-            # Calculate padding needed
-            pad_depth = max((out_depth - 1) * stride_d + kernel_d - depth, 0)
-            pad_height = max((out_height - 1) * stride_h + kernel_h - height, 0)
-            pad_width = max((out_width - 1) * stride_w + kernel_w - width, 0)
+            pad_d = max((out_depth - 1) * stride_d + kernel_d - depth, 0)
+            pad_h = max((out_height - 1) * stride_h + kernel_h - height, 0)
+            pad_w = max((out_width - 1) * stride_w + kernel_w - width, 0)
 
-            pad_front = pad_depth // 2
-            pad_back = pad_depth - pad_front
-            pad_top = pad_height // 2
-            pad_bottom = pad_height - pad_top
-            pad_left = pad_width // 2
-            pad_right = pad_width - pad_left
+            pad_front = pad_d // 2
+            pad_back = pad_d - pad_front
+            pad_top = pad_h // 2
+            pad_bottom = pad_h - pad_top
+            pad_left = pad_w // 2
+            pad_right = pad_w - pad_left
 
-            # For hyperbolic manifold, pad with edge values (replicate) which are valid manifold points
+            # Pad with edge values to stay on manifold
             x = jnp.pad(
                 x,
                 ((0, 0), (pad_front, pad_back), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                mode="edge",  # Replicate edge values instead of zeros
+                mode="edge",
             )
-            # Update dimensions after padding
-            depth = x.shape[1]
-            height = x.shape[2]
-            width = x.shape[3]
-        else:  # VALID
-            out_depth = (depth - kernel_d) // stride_d + 1
-            out_height = (height - kernel_h) // stride_h + 1
-            out_width = (width - kernel_w) // stride_w + 1
 
-        # Extract patches using indexing
-        patches_list = []
-        for i in range(out_depth):
-            depth_patches = []
-            for j in range(out_height):
-                row_patches = []
-                for k in range(out_width):
-                    d_start = i * stride_d
-                    h_start = j * stride_h
-                    w_start = k * stride_w
-                    patch = x[
-                        :,
-                        d_start : d_start + kernel_d,
-                        h_start : h_start + kernel_h,
-                        w_start : w_start + kernel_w,
-                        :,
-                    ]
-                    row_patches.append(patch)
-                depth_patches.append(jnp.stack(row_patches, axis=1))
-            patches_list.append(jnp.stack(depth_patches, axis=1))
-        patches = jnp.stack(patches_list, axis=1)
+        # 2. Extract Patches using LAX primitive
+        # Output shape: (batch, out_depth, out_height, out_width, in_channels * kernel_d * kernel_h * kernel_w)
+        patches_flat = jax.lax.conv_general_dilated_patches(
+            lhs=x,
+            filter_shape=(kernel_d, kernel_h, kernel_w),
+            window_strides=(stride_d, stride_h, stride_w),
+            padding="VALID",
+            dimension_numbers=("NDHWC", "OIDHW", "NDHWC"),
+        )
 
-        return patches  # (batch, out_depth, out_height, out_width, kernel_d, kernel_h, kernel_w, in_channels)
+        # 3. Reshape to separate kernel dimensions and channels
+        out_d, out_h, out_w = patches_flat.shape[1], patches_flat.shape[2], patches_flat.shape[3]
+
+        # JAX conv_general_dilated_patches output order is "c" + spatial dims from rhs_spec
+        # With rhs_spec="OIDHW", the flattened dim order is (in_channels, kernel_d, kernel_h, kernel_w)
+        # We need (kernel_d, kernel_h, kernel_w, in_channels) for downstream processing
+        patches = patches_flat.reshape(batch, out_d, out_h, out_w, in_channels, kernel_d, kernel_h, kernel_w)
+        patches = patches.transpose(0, 1, 2, 3, 5, 6, 7, 4)  # (batch, out_d, out_h, out_w, kd, kh, kw, in_c)
+
+        return patches
 
     def __call__(
         self,
@@ -428,37 +395,33 @@ class HypConv3DHyperboloid(nnx.Module):
         """
         # Map to manifold if needed (static branch - JIT friendly)
         if self.input_space == "tangent":
-            # vmap over batch, depth, height, width
-            x = jax.vmap(
-                jax.vmap(
-                    jax.vmap(jax.vmap(self.manifold.expmap_0, in_axes=(0, None)), in_axes=(0, None)),
-                    in_axes=(0, None),
-                ),
-                in_axes=(0, None),
-            )(x, c)
+            # 1. Flatten batch and spatial dims: (B*D*H*W, C)
+            x_flat = x.reshape(-1, x.shape[-1])
+
+            # 2. Apply single vmap over the list of vectors
+            x_mapped = jax.vmap(self.manifold.expmap_0, in_axes=(0, None))(x_flat, c)
+
+            # 3. Reshape back to (B, D, H, W, C)
+            x = x_mapped.reshape(x.shape)
 
         # Extract patches (receptive fields)
-        patches = self._extract_patches(x)  # (batch, out_d, out_h, out_w, kernel_d, kernel_h, kernel_w, in_channels)
+        # Shape: (batch, out_d, out_h, out_w, kernel_d, kernel_h, kernel_w, in_channels)
+        patches = self._extract_patches(x)
 
-        batch, out_depth, out_height, out_width, kernel_d, kernel_h, kernel_w, in_channels = patches.shape
+        batch, out_d, out_h, out_w, kd, kh, kw, in_c = patches.shape
 
-        # Reshape to apply HCat: (batch, out_d, out_h, out_w, kernel_d*kernel_h*kernel_w, in_channels)
-        patches_reshaped = patches.reshape(
-            batch, out_depth, out_height, out_width, kernel_d * kernel_h * kernel_w, in_channels
-        )
+        # Flatten batch and spatial dims for parallel processing
+        # Shape: (batch * out_d * out_h * out_w, kd * kh * kw, in_channels)
+        patches_flat = patches.reshape(-1, kd * kh * kw, in_c)
 
-        # Apply HCat to each receptive field
-        # vmap over batch, out_depth, out_height, out_width dimensions
-        def apply_hcat_single(receptive_field):
-            """Apply HCat to a single receptive field of shape (kernel_d*kernel_h*kernel_w, in_channels)."""
-            return self.manifold.hcat(receptive_field, c)
+        # 1. Apply HCat
+        # vmap over the flattened spatial/batch dimension
+        hcat_out = jax.vmap(self.manifold.hcat, in_axes=(0, None))(patches_flat, c)  # (batch*out_d*out_h*out_w, hcat_dim)
 
-        hcat_fn = jax.vmap(jax.vmap(jax.vmap(jax.vmap(apply_hcat_single))))
-        hcat_output = hcat_fn(patches_reshaped)  # (batch, out_d, out_h, out_w, hcat_out_dim)
+        # 2. Apply Linear
+        linear_out = self.linear(hcat_out, c)
 
-        # Apply linear transformation to each spatial location
-        # vmap over batch, out_depth, out_height, out_width dimensions
-        linear_fn = jax.vmap(jax.vmap(jax.vmap(jax.vmap(lambda p: self.linear(p.reshape(1, -1), c).squeeze(0)))))
-        output = linear_fn(hcat_output)  # (batch, out_d, out_h, out_w, out_channels)
+        # 3. Reshape back
+        output = linear_out.reshape(batch, out_d, out_h, out_w, self.out_channels)
 
         return output

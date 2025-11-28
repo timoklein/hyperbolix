@@ -640,12 +640,15 @@ def hcat(
 
     # Compute new time coordinate using the formula
     # Note: MINUS (N-1)/c, not plus!
-    time_new = jnp.sqrt(jnp.sum(time_components**2) - (N - 1) / c)  # scalar
+    # Numerical stability: clamp to MIN_NORM to handle points very close to origin
+    time_sq_sum = jnp.sum(time_components**2) - (N - 1) / c
+    time_new = jnp.sqrt(jnp.maximum(time_sq_sum, MIN_NORM))  # scalar
 
     # Concatenate all space components: [x_1[1:], x_2[1:], ..., x_N[1:]]
     space_concatenated = space_components.reshape(-1)  # (N*d,)
 
     # Combine: [time_new, space_concatenated]
-    result = jnp.concatenate([jnp.array([time_new]), space_concatenated])  # (1 + N*d,) = (dN+1,)
+    # Use time_new[None] instead of jnp.array([time_new]) to avoid extra allocation
+    result = jnp.concatenate([time_new[None], space_concatenated])  # (1 + N*d,) = (dN+1,)
 
     return result
