@@ -8,7 +8,7 @@ import pytest
 from flax import nnx
 
 import hyperbolix_jax.manifolds.hyperboloid as hyperboloid
-from hyperbolix_jax.nn_layers.hyperboloid_conv import HypConvHyperboloid
+from hyperbolix_jax.nn_layers.hyperboloid_conv import HypConv3DHyperboloid, HypConvHyperboloid
 
 # Enable float64 for tests
 jax.config.update("jax_enable_x64", True)
@@ -410,3 +410,226 @@ def test_hypconv_hyperboloid_different_curvatures(dtype):
         is_in_manifold_fn = partial(hyperboloid.is_in_manifold, c=c)
         is_on_manifold = jax.vmap(jax.vmap(jax.vmap(is_in_manifold_fn)))(y)
         assert is_on_manifold.all(), f"Failed for curvature {c}"
+
+
+# ============================================================================
+# HypConv3DHyperboloid Layer Tests
+# ============================================================================
+
+
+@pytest.mark.parametrize("kernel_size", [1, 2, 3])
+@pytest.mark.parametrize("padding", ["SAME", "VALID"])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hypconv3d_hyperboloid_output_shape(kernel_size, padding, dtype):
+    """Test HypConv3DHyperboloid output shape with different kernel sizes and padding."""
+    key = jax.random.PRNGKey(42)
+    batch_size, depth, height, width, in_channels, out_channels = 2, 4, 4, 4, 3, 4
+    c = 1.0
+
+    # Create input feature map (batch, depth, height, width, in_channels)
+    x = jax.random.normal(key, (batch_size, depth, height, width, in_channels), dtype=dtype) * 0.1
+
+    # Project each point to manifold
+    proj_fn = partial(hyperboloid.proj, c=c)
+    x_manifold = jax.vmap(jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0), in_axes=0)(x)
+
+    # Create layer
+    rngs = nnx.Rngs(42)
+    layer = HypConv3DHyperboloid(
+        manifold_module=hyperboloid,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        rngs=rngs,
+        padding=padding,
+    )
+
+    # Forward pass
+    y = layer(x_manifold, c=c)
+
+    # Check output shape
+    if padding == "SAME":
+        expected_depth, expected_height, expected_width = depth, height, width
+    else:  # VALID
+        expected_depth = depth - kernel_size + 1
+        expected_height = height - kernel_size + 1
+        expected_width = width - kernel_size + 1
+
+    assert y.shape == (batch_size, expected_depth, expected_height, expected_width, out_channels), (
+        f"Expected shape ({batch_size}, {expected_depth}, {expected_height}, {expected_width}, {out_channels}), got {y.shape}"
+    )
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hypconv3d_hyperboloid_output_on_manifold(dtype):
+    """Test that all outputs lie on the Hyperboloid manifold."""
+    key = jax.random.PRNGKey(42)
+    batch_size, depth, height, width, in_channels, out_channels = 2, 4, 4, 4, 3, 3
+    c = 1.0
+
+    # Create input
+    x = jax.random.normal(key, (batch_size, depth, height, width, in_channels), dtype=dtype) * 0.1
+    proj_fn = partial(hyperboloid.proj, c=c)
+    x_manifold = jax.vmap(jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0), in_axes=0)(x)
+
+    # Create layer
+    rngs = nnx.Rngs(42)
+    layer = HypConv3DHyperboloid(
+        manifold_module=hyperboloid,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=2,
+        rngs=rngs,
+    )
+
+    # Forward pass
+    y = layer(x_manifold, c=c)
+
+    # Check all outputs are on manifold
+    is_in_manifold_fn = partial(hyperboloid.is_in_manifold, c=c)
+    is_on_manifold = jax.vmap(jax.vmap(jax.vmap(jax.vmap(is_in_manifold_fn))))(y)
+    assert is_on_manifold.all(), "Not all outputs lie on the Hyperboloid manifold"
+
+
+@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hypconv3d_hyperboloid_stride(stride, dtype):
+    """Test HypConv3DHyperboloid with different strides."""
+    key = jax.random.PRNGKey(42)
+    batch_size, depth, height, width, in_channels, out_channels = 2, 8, 8, 8, 3, 4
+    kernel_size = 3
+    c = 1.0
+
+    # Create input
+    x = jax.random.normal(key, (batch_size, depth, height, width, in_channels), dtype=dtype) * 0.1
+    proj_fn = partial(hyperboloid.proj, c=c)
+    x_manifold = jax.vmap(jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0), in_axes=0)(x)
+
+    # Create layer
+    rngs = nnx.Rngs(42)
+    layer = HypConv3DHyperboloid(
+        manifold_module=hyperboloid,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        rngs=rngs,
+        padding="VALID",
+    )
+
+    # Forward pass
+    y = layer(x_manifold, c=c)
+
+    # Check output shape with stride
+    expected_depth = (depth - kernel_size) // stride + 1
+    expected_height = (height - kernel_size) // stride + 1
+    expected_width = (width - kernel_size) // stride + 1
+
+    assert y.shape == (batch_size, expected_depth, expected_height, expected_width, out_channels), (
+        f"Expected shape ({batch_size}, {expected_depth}, {expected_height}, {expected_width}, {out_channels}), got {y.shape}"
+    )
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hypconv3d_hyperboloid_different_curvatures(dtype):
+    """Test HypConv3DHyperboloid with different curvature values."""
+    key = jax.random.PRNGKey(42)
+    batch_size, depth, height, width, in_channels, out_channels = 2, 4, 4, 4, 3, 3
+
+    curvatures = [0.5, 1.0, 2.0]
+
+    for c in curvatures:
+        # Create input
+        x = jax.random.normal(key, (batch_size, depth, height, width, in_channels), dtype=dtype) * 0.1
+        proj_fn = partial(hyperboloid.proj, c=c)
+        x_manifold = jax.vmap(jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0), in_axes=0)(x)
+
+        # Create layer
+        rngs = nnx.Rngs(42)
+        layer = HypConv3DHyperboloid(
+            manifold_module=hyperboloid,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=2,
+            rngs=rngs,
+        )
+
+        # Forward pass
+        y = layer(x_manifold, c=c)
+
+        # Check outputs are on manifold with correct curvature
+        is_in_manifold_fn = partial(hyperboloid.is_in_manifold, c=c)
+        is_on_manifold = jax.vmap(jax.vmap(jax.vmap(jax.vmap(is_in_manifold_fn))))(y)
+        assert is_on_manifold.all(), f"Failed for curvature {c}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hypconv3d_hyperboloid_tangent_input(dtype):
+    """Test HypConv3DHyperboloid with tangent space input."""
+    key = jax.random.PRNGKey(42)
+    batch_size, depth, height, width, in_channels, out_channels = 2, 4, 4, 4, 3, 3
+    c = 1.0
+
+    # Create tangent space input (not on manifold)
+    x_tangent = jax.random.normal(key, (batch_size, depth, height, width, in_channels), dtype=dtype) * 0.1
+
+    # Create layer with tangent input space
+    rngs = nnx.Rngs(42)
+    layer = HypConv3DHyperboloid(
+        manifold_module=hyperboloid,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=2,
+        rngs=rngs,
+        input_space="tangent",
+    )
+
+    # Forward pass
+    y = layer(x_tangent, c=c)
+
+    # Check outputs are on manifold
+    is_in_manifold_fn = partial(hyperboloid.is_in_manifold, c=c)
+    is_on_manifold = jax.vmap(jax.vmap(jax.vmap(jax.vmap(is_in_manifold_fn))))(y)
+    assert is_on_manifold.all(), "Outputs should be on manifold even with tangent input"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hypconv3d_hyperboloid_anisotropic_kernel(dtype):
+    """Test HypConv3DHyperboloid with non-cubic kernel size."""
+    key = jax.random.PRNGKey(42)
+    batch_size, depth, height, width, in_channels, out_channels = 2, 8, 8, 8, 3, 4
+    kernel_size = (2, 3, 2)  # Non-cubic kernel
+    c = 1.0
+
+    # Create input
+    x = jax.random.normal(key, (batch_size, depth, height, width, in_channels), dtype=dtype) * 0.1
+    proj_fn = partial(hyperboloid.proj, c=c)
+    x_manifold = jax.vmap(jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0), in_axes=0)(x)
+
+    # Create layer with anisotropic kernel
+    rngs = nnx.Rngs(42)
+    layer = HypConv3DHyperboloid(
+        manifold_module=hyperboloid,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        rngs=rngs,
+        padding="VALID",
+    )
+
+    # Forward pass
+    y = layer(x_manifold, c=c)
+
+    # Check output shape
+    expected_depth = depth - kernel_size[0] + 1
+    expected_height = height - kernel_size[1] + 1
+    expected_width = width - kernel_size[2] + 1
+
+    assert y.shape == (batch_size, expected_depth, expected_height, expected_width, out_channels), (
+        f"Expected shape ({batch_size}, {expected_depth}, {expected_height}, {expected_width}, {out_channels}), got {y.shape}"
+    )
+
+    # Check outputs are on manifold
+    is_in_manifold_fn = partial(hyperboloid.is_in_manifold, c=c)
+    is_on_manifold = jax.vmap(jax.vmap(jax.vmap(jax.vmap(is_in_manifold_fn))))(y)
+    assert is_on_manifold.all(), "All outputs should be on manifold"

@@ -1,6 +1,6 @@
 """Hyperbolic neural network layers for JAX/Flax NNX."""
 
-from .hyperboloid_conv import HypConvHyperboloid
+from .hyperboloid_conv import HypConv2DHyperboloid, HypConv3DHyperboloid, HypConvHyperboloid
 from .hyperboloid_linear import HypLinearHyperboloid, HypLinearHyperboloidFHCNN, HypLinearHyperboloidFHNN
 from .hyperboloid_regression import HypRegressionHyperboloid
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
@@ -9,7 +9,9 @@ from .poincare_rl import HypRegressionPoincareHDRL
 
 __all__ = [
     # Hyperboloid convolutional layers
-    "HypConvHyperboloid",
+    "HypConv2DHyperboloid",
+    "HypConv3DHyperboloid",
+    "HypConvHyperboloid",  # Backward compatible alias for HypConv2DHyperboloid
     # Hyperboloid linear layers
     "HypLinearHyperboloid",
     "HypLinearHyperboloidFHCNN",

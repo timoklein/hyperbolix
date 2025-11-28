@@ -7,7 +7,7 @@
 ### Test Results
 - **Manifolds**: 978 passing, 72 skipped (100% non-skipped)
 - **NN Layers**: 44/44 passing (100%)
-- **Hyperboloid Convolution**: 44/44 passing (100%)
+- **Hyperboloid Convolution**: 68/68 passing (100%) - includes 2D (44 tests) and 3D (24 tests)
 - **Math Utils**: 8/8 passing (100%)
 - **Helper Utils**: 38/38 passing (100%)
 - **HoroPCA**: 25/25 passing (100%)
@@ -57,7 +57,8 @@
 - ✅ Standard layers: Expmap, Logmap, Proj, TanProj, Retraction, HyperbolicActivation
 - ✅ Poincaré: HypLinearPoincare, HypLinearPoincarePP
 - ✅ Hyperboloid: HypLinearHyperboloid, FHNN, FHCNN variants
-- ✅ Hyperboloid Convolution: HypConvHyperboloid with Lorentz direct concatenation (HCat)
+- ✅ Hyperboloid Convolution: HypConv2DHyperboloid, HypConv3DHyperboloid with Lorentz direct concatenation (HCat)
+  - `HypConvHyperboloid` is backward-compatible alias for `HypConv2DHyperboloid`
 
 **Architecture**: Flax NNX modules storing manifold module references, curvature `c` passed at call time
 
@@ -181,7 +182,10 @@ uv run pre-commit run --all-files
 ### Tests
 - `tests/jax/test_manifolds.py` (912 parametrized tests)
 - `tests/jax/test_nn_layers.py` (22 tests)
-- `tests/jax/test_hyperboloid_conv.py` (44 tests: HCat operation + conv layer)
+- `tests/jax/test_hyperboloid_conv.py` (68 tests: HCat operation + 2D/3D conv layers)
+  - HCat: 5 tests (manifold constraint, dimensionality, time coordinate formula, space concatenation)
+  - 2D Conv: 39 tests (shape, manifold constraint, stride, curvature, tangent input)
+  - 3D Conv: 24 tests (shape, manifold constraint, stride, curvature, tangent input, anisotropic kernels)
 - `tests/jax/test_regression_layers.py` (22 tests)
 - `tests/jax/test_optimizers.py` (20/20 passing; covers metadata, mixed params, NNX integration)
 - `tests/jax/test_math_utils.py` (8 tests)
@@ -207,25 +211,34 @@ uv run pre-commit run --all-files
 
 ## Edge Cases & Considerations
 
-### Hyperboloid Convolutional Layer
+### Hyperboloid Convolutional Layers (2D & 3D)
 
 1. **Padding Strategy**
-   - Uses `mode="edge"` (replicates border pixels) instead of zero-padding
+   - Uses `mode="edge"` (replicates border pixels/voxels) instead of zero-padding
    - **Rationale**: Zero vectors don't lie on the hyperboloid manifold; edge replication preserves valid manifold points
    - **Implication**: Different behavior from standard Euclidean CNNs at boundaries
+   - **Applies to**: Both 2D and 3D convolutions
 
 2. **Dimensional Growth in Multi-Layer Architectures**
-   - HCat operation increases dimensionality: input ambient dim `d+1` → output ambient dim `(d×N)+1` where `N = kernel_h × kernel_w`
-   - **Example**: 3-dim input with 3×3 kernel → 3×9+1 = 28-dim output
-   - **Implication**: Dimension grows rapidly in deep networks; consider small kernels (1×1, 2×2) or dimensionality reduction between layers
+   - HCat operation increases dimensionality: input ambient dim `d+1` → output ambient dim `(d×N)+1`
+   - **2D Example**: `N = kernel_h × kernel_w`, e.g., 3-dim input with 3×3 kernel → 3×9+1 = 28-dim output
+   - **3D Example**: `N = kernel_d × kernel_h × kernel_w`, e.g., 3-dim input with 2×2×2 kernel → 3×8+1 = 25-dim output
+   - **Implication**: Dimension grows rapidly in deep networks; consider small kernels or dimensionality reduction between layers
 
-3. **Numerical Stability in HCat**
+3. **3D Convolution Design**
+   - **Separate class**: `HypConv3DHyperboloid` (not a generic `ndim` parameter)
+   - **Rationale**: Optimal JIT performance, type safety with explicit 5D shapes, matches PyTorch/TF conventions
+   - **Input shape**: `(batch, depth, height, width, in_channels)`
+   - **Kernel/stride**: 3-tuples `(d, h, w)` or scalar (expanded to cubic)
+   - **Anisotropic kernels**: Supported, e.g., `kernel_size=(2, 3, 2)` for different spatial scales
+
+4. **Numerical Stability in HCat**
    - Formula: `sqrt(sum(x_i[0]^2) - (N-1)/c)` requires `sum(x_i[0]^2) ≥ (N-1)/c`
    - **Valid for**: Properly initialized hyperboloid points where `x[0] ≥ 1/sqrt(c)`
    - **Risk**: Low under normal conditions; NaN possible with invalid inputs or extreme curvatures
    - **Mitigation**: Input validation via `is_in_manifold` checks
 
-4. **Jaxtyping Annotations**
+5. **Jaxtyping Annotations**
    - Ruff linter reports F722/F821 errors on shape specifications (`"N n"`, `"dim_plus_1"`, etc.)
    - **Status**: False positives - jaxtyping uses string literals for runtime shape checking
    - **Action**: Ignore these specific Ruff errors; pattern used consistently throughout codebase
