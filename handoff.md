@@ -8,6 +8,7 @@
 - **Manifolds**: 978 passing, 72 skipped (100% non-skipped)
 - **NN Layers**: 44/44 passing (100%)
 - **Hyperboloid Convolution**: 68/68 passing (100%) - includes 2D (44 tests) and 3D (24 tests)
+- **Lorentz Convolution**: 66/66 passing (100%) - LorentzConv2D and LorentzConv3D layers
 - **Hyperboloid Activations**: 86/86 passing (100%) - hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish
 - **Math Utils**: 8/8 passing (100%)
 - **Helper Utils**: 38/38 passing (100%)
@@ -60,6 +61,11 @@
 - ✅ Hyperboloid: HypLinearHyperboloid, FHNN, FHCNN variants
 - ✅ Hyperboloid Convolution: HypConv2DHyperboloid, HypConv3DHyperboloid with Lorentz direct concatenation (HCat)
   - `HypConvHyperboloid` is backward-compatible alias for `HypConv2DHyperboloid`
+- ✅ Lorentz Convolution: LorentzConv2D, LorentzConv3D implementing "Fully Hyperbolic CNNs" (Bdeir et al., 2023)
+  - Pipeline: RotationConv → DistanceRescaling → LorentzBoost
+  - `lorentz_boost()` and `distance_rescale()` operations in hyperboloid.py
+  - Norm-preserving rotation convolution with automatic Algorithm 3 condition checking
+  - Optional distance rescaling and Lorentz boost transformations
 - ✅ Hyperboloid Activations: hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish
   - Functional implementations that apply activation to space components
   - Reconstructs time component using manifold constraint
@@ -92,6 +98,19 @@
 ---
 
 ## Recent Improvements
+
+### Lorentz Convolution Implementation (2025-12-11)
+- ✅ Implemented LorentzConv2D and LorentzConv3D from "Fully Hyperbolic CNNs" paper
+- ✅ Added `lorentz_boost()` and `distance_rescale()` to hyperboloid.py manifold
+- ✅ Fixed 9 critical bugs from implementation review:
+  - Fixed velocity projection formula in lorentz_boost (prevented gamma=inf)
+  - Added near-zero convolution output handling for numerical stability
+  - Fixed distance_rescale origin edge case with L'Hopital limit
+  - Added dtype parameter support (float32/float64) throughout layer
+  - Added manifold projection after boost/rescale operations
+  - Replaced no-op Algorithm 3 check with meaningful condition warning at init
+  - Documented SAME padding norm pooling behavior (edge value weighting)
+- ✅ All 66 Lorentz convolution tests passing (shape, manifold constraint, gradients, JIT, curvature)
 
 ### Idiomatic JAX Refactor (2025-10-09)
 - ✅ vmap-native API: All manifolds refactored to single-point operations
@@ -176,6 +195,7 @@ uv run pre-commit run --all-files
 - `src/hyperbolix_jax/nn_layers/standard_layers.py`
 - `src/hyperbolix_jax/nn_layers/{poincare,hyperboloid}_linear.py`
 - `src/hyperbolix_jax/nn_layers/hyperboloid_conv.py` - Hyperboloid convolution with HCat
+- `src/hyperbolix_jax/nn_layers/lorentz_conv.py` - Lorentz convolution (LorentzConv2D/3D)
 - `src/hyperbolix_jax/nn_layers/hyperboloid_activations.py` - Hyperboloid activation functions (hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish)
 - `src/hyperbolix_jax/nn_layers/{poincare,hyperboloid}_regression.py`
 - `src/hyperbolix_jax/nn_layers/poincare_rl.py`
@@ -193,6 +213,9 @@ uv run pre-commit run --all-files
   - HCat: 5 tests (manifold constraint, dimensionality, time coordinate formula, space concatenation)
   - 2D Conv: 39 tests (shape, manifold constraint, stride, curvature, tangent input)
   - 3D Conv: 24 tests (shape, manifold constraint, stride, curvature, tangent input, anisotropic kernels)
+- `tests/jax/test_lorentz_conv.py` (66 tests: LorentzConv2D and LorentzConv3D layers)
+  - 2D Conv: shape, manifold constraint, stride, input_space, gradients, JIT, curvature, boost/rescaling flags
+  - 3D Conv: shape, manifold constraint, stride, curvature, gradients, JIT, boost/rescaling flags
 - `tests/jax/test_hyperboloid_activations.py` (86 tests: hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish)
   - Manifold constraint tests (single point, batch, multi-dim batches)
   - Shape preservation tests (different dtypes, dimensions, batch sizes)
