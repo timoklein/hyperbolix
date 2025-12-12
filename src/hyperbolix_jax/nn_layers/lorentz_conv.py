@@ -440,7 +440,7 @@ class LorentzConv2D(nnx.Module):
             # Flatten batch and spatial dims for vmap
             batch, out_h, out_w, out_c = y.shape
             y_flat = y.reshape(-1, out_c)
-            y_rescaled = jax.vmap(self.manifold.distance_rescale, in_axes=(0, None))(y_flat, c)
+            y_rescaled = jax.vmap(self.manifold.distance_rescale, in_axes=(0, None, None, None))(y_flat, c, 2000.0, 1.0)
             y = y_rescaled.reshape(batch, out_h, out_w, out_c)
 
         # 3. Lorentz Boost
@@ -601,7 +601,7 @@ class LorentzConv3D(nnx.Module):
             # Flatten batch and spatial dims for vmap
             batch, out_d, out_h, out_w, out_c = y.shape
             y_flat = y.reshape(-1, out_c)
-            y_rescaled = jax.vmap(self.manifold.distance_rescale, in_axes=(0, None))(y_flat, c)
+            y_rescaled = jax.vmap(self.manifold.distance_rescale, in_axes=(0, None, None, None))(y_flat, c, 2000.0, 1.0)
             y = y_rescaled.reshape(batch, out_d, out_h, out_w, out_c)
 
         # 3. Lorentz Boost
