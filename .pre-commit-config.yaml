@@ -3,17 +3,17 @@
 # Run manually: uv run pre-commit run --all-files
 
 repos:
-  # isort - import sorting (JAX code only)
+  # isort - import sorting
   - repo: https://github.com/pycqa/isort
     rev: 7.0.0
     hooks:
       - id: isort
         name: isort (python)
         stages: [pre-commit]
-        files: ^(src/hyperbolix_jax/|tests/jax/)
+        files: ^(hyperbolix/|tests/)
         args: [--profile, black, --line-length, "127"]
 
-  # Ruff - fast Python linter and formatter (JAX code only)
+  # Ruff - fast Python linter and formatter
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.13.2
     hooks:
@@ -21,11 +21,11 @@ repos:
       - id: ruff
         args: [--fix]
         types_or: [python, pyi]
-        files: ^(src/hyperbolix_jax/|tests/jax/)
+        files: ^(hyperbolix/|tests/)
       # Run the formatter
       - id: ruff-format
         types_or: [python, pyi]
-        files: ^(src/hyperbolix_jax/|tests/jax/)
+        files: ^(hyperbolix/|tests/)
 
   # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -49,11 +49,11 @@ repos:
       # Check for debugger imports
       - id: debug-statements
 
-  # Pyright type checking (optional - can be slow, JAX code only)
+  # Pyright type checking (optional - can be slow)
   # Uncomment to enable type checking in pre-commit
   # - repo: https://github.com/RobertCraigie/pyright-python
   #   rev: v1.1.390
   #   hooks:
   #     - id: pyright
-  #       files: ^src/hyperbolix_jax/
+  #       files: ^hyperbolix/
   #       additional_dependencies: []

@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-import hyperbolix_jax as hj
+import hyperbolix as hj
 
 # ============================================================================
 # Poincaré Ball Benchmarks
