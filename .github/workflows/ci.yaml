@@ -32,10 +32,10 @@ jobs:
         run: uv sync --locked --dev
 
       - name: Run Ruff linter
-        run: uv run ruff check src/hyperbolix_jax tests/jax benchmarks
+        run: uv run ruff check hyperbolix tests benchmarks
 
       - name: Run Ruff formatter check
-        run: uv run ruff format --check src tests benchmarks
+        run: uv run ruff format --check hyperbolix tests benchmarks
 
   # Type checking job
   typecheck:
@@ -66,7 +66,7 @@ jobs:
         run: uv sync --locked --dev
 
       - name: Run Pyright
-        run: uv run pyright src/hyperbolix_jax
+        run: uv run pyright hyperbolix
 
   # Test job - runs in parallel for different test suites
   test:
@@ -76,10 +76,17 @@ jobs:
       fail-fast: false
       matrix:
         test-suite:
-          - "jax/test_manifolds.py"
-          - "jax/test_math_utils.py"
-          - "jax/test_nn_layers.py"
-          - "jax/test_regression_layers.py"
+          - "test_helpers.py"
+          - "test_horo_pca.py"
+          - "test_hyperboloid_activations.py"
+          - "test_hyperboloid_conv.py"
+          - "test_lorentz_conv.py"
+          - "test_manifolds.py"
+          - "test_math_utils.py"
+          - "test_nn_layers.py"
+          - "test_optimizers.py"
+          - "test_regression_layers.py"
+          - "test_wrapped_normal.py"
 
     steps:
       - uses: actions/checkout@v4

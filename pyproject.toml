@@ -68,8 +68,8 @@ profile = "black"
 line_length = 127
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["hyperbolic_test*", "manifolds*", "utils*", "hyperbolix_jax*", "nn_layers*", "optim*"]
+where = ["hyperbolix"]
+include = ["hyperbolic_test*", "manifolds*", "utils*", "nn_layers*", "optim*", "distributions*"]
 
 
 #----------------------------
@@ -80,7 +80,7 @@ include = ["hyperbolic_test*", "manifolds*", "utils*", "hyperbolix_jax*", "nn_la
 [tool.pytest.ini_options]
 addopts = "-ra -q" # --log-cli-level=DEBUG
 testpaths = ["tests", "benchmarks"]
-pythonpath = "src"
+pythonpath = "hyperbolix"
 # Collect benchmark files in addition to test files
 python_files = ["test_*.py", "*_test.py", "bench_*.py"]
 
@@ -101,14 +101,10 @@ dev = [
 #----------------------------
 
 [tool.pyright]
-include = ["src/hyperbolix_jax"]
+include = ["hyperbolix"]
 exclude = [
     "**/node_modules",
     "**/__pycache__",
-    "src/manifolds",      # Old PyTorch code
-    "src/nn_layers",      # Old PyTorch code
-    "src/optim",          # Old PyTorch code
-    "src/utils",          # Old PyTorch code
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"

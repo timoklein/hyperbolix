@@ -14,8 +14,8 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-import hyperbolix_jax.manifolds as manifolds
-from hyperbolix_jax.nn_layers import (
+import hyperbolix.manifolds as manifolds
+from hyperbolix.nn_layers import (
     HypLinearHyperboloid,
     HypLinearPoincare,
     HypRegressionPoincare,

@@ -1,8 +1,10 @@
-# Hyperbolix JAX Migration - Project Handoff
+# Hyperbolix - Project Handoff
+
+**Hyperbolix** is a pure JAX implementation of hyperbolic deep learning, providing manifold operations, neural network layers, and Riemannian optimizers for hyperbolic geometry. Built with Flax NNX and Optax for modern JAX workflows.
 
 ## Current Status
 
-**Phase 1 (Manifolds) ✅** | **Phase 2 (Optimizers) 🚧** | **Phase 3a & 3b (NN Layers) ✅** | **Idiomatic JAX Refactor ✅** | **CI/Tooling ✅**
+**Phase 1 (Manifolds) ✅** | **Phase 2 (Optimizers) ✅** | **Phase 3a & 3b (NN Layers) ✅** | **Idiomatic JAX Refactor ✅** | **CI/Tooling ✅** | **Code Cleanup ✅**
 
 ### Test Results
 - **Manifolds**: 978 passing, 72 skipped (100% non-skipped)
@@ -13,7 +15,7 @@
 - **Math Utils**: 8/8 passing (100%)
 - **Helper Utils**: 38/38 passing (100%)
 - **HoroPCA**: 25/25 passing (100%)
-- **Optimizers**: 15/20 passing (75%) - 5 multi-parameter tests need tree handling fix
+- **Optimizers**: 20/20 passing (100%)
 - **Benchmarks**: 168 test cases passing (100%)
 
 ---
@@ -22,7 +24,7 @@
 
 ### Phase 1: Core Geometry (Manifolds)
 
-**Location**: `src/hyperbolix_jax/manifolds/`
+**Location**: `hyperbolix/manifolds/`
 
 **Implemented**:
 - ✅ `euclidean.py` - Flat Euclidean space
@@ -36,16 +38,16 @@
 - Integer version indices with `lax.switch` for JIT optimization
 - Operations: proj, addition, scalar_mul, dist, expmap, logmap, retraction, ptransp, tangent operations, egrad2rgrad, validation
 
-**Math Utilities** (`src/hyperbolix_jax/utils/math_utils.py`):
+**Math Utilities** (`hyperbolix/utils/math_utils.py`):
 - ✅ JIT-compiled hyperbolic functions (cosh, sinh, acosh, atanh)
 - ✅ Numerically stable smooth clamping with static `smoothing_factor`
 
-**Helper Utilities** (`src/hyperbolix_jax/utils/helpers.py`):
+**Helper Utilities** (`hyperbolix/utils/helpers.py`):
 - ✅ `compute_pairwise_distances`: Efficient pairwise distance computation using vmap
 - ✅ `compute_hyperbolic_delta`: Delta-hyperbolicity metric based on Gromov 4-point condition
 - ✅ `get_delta`: Combined delta, diameter, and relative delta computation with subsampling
 
-**HoroPCA** (`src/hyperbolix_jax/utils/horo_pca.py`):
+**HoroPCA** (`hyperbolix/utils/horo_pca.py`):
 - ✅ `compute_frechet_mean`: Gradient descent Fréchet mean on hyperboloid
 - ✅ `center_data`: Lorentz transformation centering via Lorentz boost
 - ✅ `HoroPCA`: Flax NNX module for hyperbolic dimensionality reduction via horospherical projections
@@ -53,7 +55,7 @@
 
 ### Phase 3a: Linear Neural Network Layers
 
-**Location**: `src/hyperbolix_jax/nn_layers/`
+**Location**: `hyperbolix/nn_layers/`
 
 **Implemented**:
 - ✅ Standard layers: Expmap, Logmap, Proj, TanProj, Retraction, HyperbolicActivation
@@ -82,9 +84,9 @@
 - ✅ RL: HypRegressionPoincareHDRL (standard & rs versions)
 - ✅ Helpers: compute_mlr_poincare_pp, compute_mlr_hyperboloid, safe_conformal_factor
 
-### Phase 2: Riemannian Optimizers 🚧
+### Phase 2: Riemannian Optimizers
 
-**Location**: `src/hyperbolix_jax/optim/`
+**Location**: `hyperbolix/optim/`
 
 **Implemented**:
 - ✅ `manifold_metadata.py` - Metadata system using NNX Variable._var_metadata
@@ -98,6 +100,15 @@
 ---
 
 ## Recent Improvements
+
+### Project Structure Cleanup (2025-12-12)
+- ✅ Removed PyTorch legacy code: cleaned up old PyTorch implementation
+- ✅ Unified directory structure: `src/hyperbolix_jax/` → `hyperbolix/`, `tests/jax/` → `tests/`
+- ✅ Updated package name: `hyperbolix_jax` → `hyperbolix` across all imports
+- ✅ Updated all configuration files: pyproject.toml, CI workflows, pre-commit hooks
+- ✅ Updated all documentation: DEVELOPER_GUIDE.md, handoff.md, code examples
+- ✅ Updated all docstrings: 30+ files with corrected import paths
+- ✅ Verified: 0 references to old paths remaining
 
 ### Lorentz Convolution Implementation (2025-12-11)
 - ✅ Implemented LorentzConv2D and LorentzConv3D from "Fully Hyperbolic CNNs" paper
@@ -122,7 +133,7 @@
 ### CI & Tooling Hardening (2025-10-16)
 - ✅ CI pipeline: split into lint, type-check, test matrix (4 parallel suites), benchmark jobs
 - ✅ Pre-commit hooks: Ruff linting/formatting, YAML/TOML validation, merge conflict detection
-- ✅ Pyright type checking: configured for `src/hyperbolix_jax` with Python 3.12+ syntax
+- ✅ Pyright type checking: configured for `src` with Python 3.12+ syntax
 - ✅ JIT benchmarks: 168 parametrized tests across manifolds & NN layers
 - ✅ Benchmark regression detection: fails on >10% slowdown
 - ✅ Legacy code modernized: built-in generics, f-strings, Python 3.12+
@@ -144,7 +155,7 @@ manifold = Hyperboloid(c=1.0)
 result = manifold.dist(x, y)
 
 # New JAX (pure functions, vmap-native)
-import hyperbolix_jax.manifolds.hyperboloid as hyperboloid
+import hyperbolix.manifolds.hyperboloid as hyperboloid
 result = hyperboloid.dist(x, y, c=1.0)  # (dim,) -> scalar
 ```
 
@@ -166,13 +177,13 @@ class HypLinearPoincare(nnx.Module):
 ## Test Commands
 
 ```bash
-# Run all JAX tests
-uv run pytest tests/jax/ -v
+# Run all tests
+uv run pytest tests/ -v
 
 # Run specific test suites
-uv run pytest tests/jax/test_manifolds.py -v
-uv run pytest tests/jax/test_nn_layers.py -v
-uv run pytest tests/jax/test_regression_layers.py -v
+uv run pytest tests/test_manifolds.py -v
+uv run pytest tests/test_nn_layers.py -v
+uv run pytest tests/test_regression_layers.py -v
 
 # Run benchmarks
 uv run pytest benchmarks/ -v
@@ -186,37 +197,37 @@ uv run pre-commit run --all-files
 ## Key Files
 
 ### Manifolds
-- `src/hyperbolix_jax/manifolds/{euclidean,poincare,hyperboloid}.py` (includes `hcat` in hyperboloid)
-- `src/hyperbolix_jax/manifolds/{euclidean,poincare,hyperboloid}_checked.py`
-- `src/hyperbolix_jax/utils/math_utils.py`
-- `src/hyperbolix_jax/utils/helpers.py`
+- `hyperbolix/manifolds/{euclidean,poincare,hyperboloid}.py` (includes `hcat` in hyperboloid)
+- `hyperbolix/manifolds/{euclidean,poincare,hyperboloid}_checked.py`
+- `hyperbolix/utils/math_utils.py`
+- `hyperbolix/utils/helpers.py`
 
 ### NN Layers
-- `src/hyperbolix_jax/nn_layers/standard_layers.py`
-- `src/hyperbolix_jax/nn_layers/{poincare,hyperboloid}_linear.py`
-- `src/hyperbolix_jax/nn_layers/hyperboloid_conv.py` - Hyperboloid convolution with HCat
-- `src/hyperbolix_jax/nn_layers/lorentz_conv.py` - Lorentz convolution (LorentzConv2D/3D)
-- `src/hyperbolix_jax/nn_layers/hyperboloid_activations.py` - Hyperboloid activation functions (hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish)
-- `src/hyperbolix_jax/nn_layers/{poincare,hyperboloid}_regression.py`
-- `src/hyperbolix_jax/nn_layers/poincare_rl.py`
-- `src/hyperbolix_jax/nn_layers/helpers.py`
+- `hyperbolix/nn_layers/standard_layers.py`
+- `hyperbolix/nn_layers/{poincare,hyperboloid}_linear.py`
+- `hyperbolix/nn_layers/hyperboloid_conv.py` - Hyperboloid convolution with HCat
+- `hyperbolix/nn_layers/lorentz_conv.py` - Lorentz convolution (LorentzConv2D/3D)
+- `hyperbolix/nn_layers/hyperboloid_activations.py` - Hyperboloid activation functions (hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish)
+- `hyperbolix/nn_layers/{poincare,hyperboloid}_regression.py`
+- `hyperbolix/nn_layers/poincare_rl.py`
+- `hyperbolix/nn_layers/helpers.py`
 
 ### Optimizers
-- `src/hyperbolix_jax/optim/manifold_metadata.py`
-- `src/hyperbolix_jax/optim/riemannian_{sgd,adam}.py`
+- `hyperbolix/optim/manifold_metadata.py`
+- `hyperbolix/optim/riemannian_{sgd,adam}.py`
 - `OPTIMIZER_PLAN.md` - Design document
 
 ### Tests
-- `tests/jax/test_manifolds.py` (912 parametrized tests)
-- `tests/jax/test_nn_layers.py` (22 tests)
-- `tests/jax/test_hyperboloid_conv.py` (68 tests: HCat operation + 2D/3D conv layers)
+- `tests/test_manifolds.py` (912 parametrized tests)
+- `tests/test_nn_layers.py` (22 tests)
+- `tests/test_hyperboloid_conv.py` (68 tests: HCat operation + 2D/3D conv layers)
   - HCat: 5 tests (manifold constraint, dimensionality, time coordinate formula, space concatenation)
   - 2D Conv: 39 tests (shape, manifold constraint, stride, curvature, tangent input)
   - 3D Conv: 24 tests (shape, manifold constraint, stride, curvature, tangent input, anisotropic kernels)
-- `tests/jax/test_lorentz_conv.py` (66 tests: LorentzConv2D and LorentzConv3D layers)
+- `tests/test_lorentz_conv.py` (66 tests: LorentzConv2D and LorentzConv3D layers)
   - 2D Conv: shape, manifold constraint, stride, input_space, gradients, JIT, curvature, boost/rescaling flags
   - 3D Conv: shape, manifold constraint, stride, curvature, gradients, JIT, boost/rescaling flags
-- `tests/jax/test_hyperboloid_activations.py` (86 tests: hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish)
+- `tests/test_hyperboloid_activations.py` (86 tests: hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish)
   - Manifold constraint tests (single point, batch, multi-dim batches)
   - Shape preservation tests (different dtypes, dimensions, batch sizes)
   - Correctness tests (formula verification, activation behavior)
@@ -224,11 +235,11 @@ uv run pre-commit run --all-files
   - JIT compatibility tests
   - Curvature tests (different c values)
   - Edge case tests (zero inputs, moderate magnitudes)
-- `tests/jax/test_regression_layers.py` (22 tests)
-- `tests/jax/test_optimizers.py` (20/20 passing; covers metadata, mixed params, NNX integration)
-- `tests/jax/test_math_utils.py` (8 tests)
-- `tests/jax/test_helpers.py` (38 tests)
-- `tests/jax/test_horo_pca.py` (25 tests: Fréchet mean, centering, fit/transform, rank-1)
+- `tests/test_regression_layers.py` (22 tests)
+- `tests/test_optimizers.py` (20/20 passing; covers metadata, mixed params, NNX integration)
+- `tests/test_math_utils.py` (8 tests)
+- `tests/test_helpers.py` (38 tests)
+- `tests/test_horo_pca.py` (25 tests: Fréchet mean, centering, fit/transform, rank-1)
 
 ### Documentation
 - `DEVELOPER_GUIDE.md` - Development workflow
@@ -238,10 +249,23 @@ uv run pre-commit run --all-files
 
 ---
 
+## Project Status
+
+**All core functionality is complete and production-ready!** The project includes:
+- ✅ Full manifold operations (Euclidean, Poincaré, Hyperboloid)
+- ✅ Neural network layers (linear, convolutional, regression)
+- ✅ Riemannian optimizers (RSGD, RAdam)
+- ✅ Probability distributions (wrapped normal)
+- ✅ Utility functions (HoroPCA, delta-hyperbolicity)
+- ✅ Comprehensive test suite (100% passing)
+- ✅ CI/CD pipeline with benchmarking
+- ✅ Clean, unified codebase structure
+
 ## Next Steps
 
 1. **End-to-end examples** - Training loops demonstrating JAX/NNX usage
 2. **Documentation** - API docs, usage examples, JIT best practices
+3. **Distribution package** - Publish to PyPI as `hyperbolix`
 
 ## Known Issues
 

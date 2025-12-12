@@ -23,7 +23,7 @@ This is an **alternative** to the existing `HypConv2DHyperboloid` (which uses HC
 ## File Structure
 
 ```
-src/hyperbolix_jax/nn_layers/
+hyperbolix/nn_layers/
 ├── lorentz_conv.py         # NEW: LorentzConv2D, LorentzConv3D
 ├── lorentz_transforms.py   # NEW: lorentz_boost, distance_rescale, rotation_conv helpers
 └── __init__.py             # UPDATE: Add exports
@@ -243,9 +243,9 @@ z = W·x · ‖x‖ / ‖W·x‖
 
 | File | Purpose |
 |------|---------|
-| `src/hyperbolix_jax/manifolds/hyperboloid.py` | Reuse: `proj`, `expmap_0`, `acosh`, `sinh` |
-| `src/hyperbolix_jax/nn_layers/hyperboloid_conv.py` | Reference: JIT patterns, padding handling |
-| `src/hyperbolix_jax/utils/math_utils.py` | Reuse: `smooth_clamp_min`, numerical utilities |
+| `hyperbolix/manifolds/hyperboloid.py` | Reuse: `proj`, `expmap_0`, `acosh`, `sinh` |
+| `hyperbolix/nn_layers/hyperboloid_conv.py` | Reference: JIT patterns, padding handling |
+| `hyperbolix/utils/math_utils.py` | Reuse: `smooth_clamp_min`, numerical utilities |
 
 ---
 

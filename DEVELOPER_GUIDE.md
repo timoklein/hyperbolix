@@ -35,13 +35,13 @@ uv run pre-commit run --all-files
 
 ```bash
 # Lint with Ruff
-uv run ruff check src tests benchmarks
+uv run ruff check hyperbolix tests benchmarks
 
 # Format with Ruff
-uv run ruff format src tests benchmarks
+uv run ruff format hyperbolix tests benchmarks
 
 # Type check with Pyright
-uv run pyright src/hyperbolix_jax
+uv run pyright hyperbolix
 ```
 
 ### Running Tests
@@ -51,8 +51,8 @@ uv run pyright src/hyperbolix_jax
 uv run pytest
 
 # Specific test suite
-uv run pytest tests/jax/test_manifolds.py
-uv run pytest tests/jax/test_nn_layers.py
+uv run pytest tests/test_manifolds.py
+uv run pytest tests/test_nn_layers.py
 
 # Fast tests only (skip slow parametrizations)
 uv run pytest -k "dim2"
@@ -168,16 +168,16 @@ git commit --no-verify -m "your message"
 
 ```bash
 # Run with debugger
-uv run pytest tests/jax/test_manifolds.py --pdb
+uv run pytest tests/test_manifolds.py --pdb
 
 # Show print statements
-uv run pytest tests/jax/test_manifolds.py -s
+uv run pytest tests/test_manifolds.py -s
 
 # Show full diff for assertion failures
-uv run pytest tests/jax/test_manifolds.py -vv
+uv run pytest tests/test_manifolds.py -vv
 
 # Run specific test
-uv run pytest tests/jax/test_manifolds.py::test_dist -v
+uv run pytest tests/test_manifolds.py::test_dist -v
 ```
 
 ### Profile Performance
@@ -199,7 +199,7 @@ open profile.svg
 uv run pyright
 
 # Check specific file
-uv run pyright src/hyperbolix_jax/manifolds/poincare.py
+uv run pyright hyperbolix/manifolds/poincare.py
 
 # Watch mode (re-check on file changes)
 uv run pyright --watch
