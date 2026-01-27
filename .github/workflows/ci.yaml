@@ -160,7 +160,7 @@ jobs:
           uv run pytest benchmarks/ \
             --benchmark-only \
             --benchmark-json=benchmark.json \
-            -k "dim10-batch_size100" \
+            -k "10-100" \
             --benchmark-warmup=on
 
       - name: Compare benchmarks
@@ -172,7 +172,7 @@ jobs:
               --benchmark-only \
               --benchmark-compare=cache/benchmark.json \
               --benchmark-compare-fail=mean:10% \
-              -k "dim10-batch_size100"
+              -k "10-100"
           else
             echo "No previous benchmark found, skipping comparison"
           fi
