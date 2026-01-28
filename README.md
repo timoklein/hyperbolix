@@ -5,7 +5,7 @@
 [![Tests](https://img.shields.io/badge/tests-1400%2B%20passing-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)]()
 [![JAX](https://img.shields.io/badge/JAX-compatible-orange)]()
-[![License](https://img.shields.io/badge/license-TBD-lightgrey)]()
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Pure JAX implementation of hyperbolic deep learning with manifold operations, neural network layers, and Riemannian optimizers. Built with Flax NNX and Optax.
 
@@ -112,4 +112,4 @@ For bugs or questions, [open an issue](https://github.com/hyperbolix/hyperbolix/
 
 ## License
 
-TBD
+MIT License. See LICENSE for details.

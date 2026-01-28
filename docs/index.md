@@ -150,7 +150,7 @@ If you use Hyperbolix in your research, please cite:
 
 ## License
 
-[Add your license here]
+MIT License. See LICENSE for details.
 
 ## Acknowledgments
 
