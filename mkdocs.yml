@@ -1,0 +1,128 @@
+site_name: Hyperbolix
+site_description: Hyperbolic Deep Learning in JAX
+site_author: Timo Klein, Thomas Lang, Andrii Shkabrii
+site_url: https://hyperbolix.github.io/hyperbolix
+
+repo_name: hyperbolix
+repo_url: https://github.com/hyperbolix/hyperbolix
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            show_source: true
+            show_root_heading: true
+            show_signature_annotations: true
+            separate_signature: true
+            merge_init_into_class: true
+            members_order: source
+            show_if_no_docstring: false
+  # mkdocs-jupyter disabled temporarily - causing build timeouts
+  # Will be re-enabled after troubleshooting
+  # - mkdocs-jupyter:
+  #     execute: false
+  #     include_source: true
+  #     ignore_h1_titles: true
+  - mike:
+      version_selector: true
+      css_dir: css
+      javascript_dir: js
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+      toc_depth: 3
+
+extra_javascript:
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/hyperbolix/hyperbolix
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/hyperbolix/
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - User Guide:
+      - Manifolds: user-guide/manifolds.md
+      - Neural Network Layers: user-guide/nn-layers.md
+      - Riemannian Optimizers: user-guide/optimizers.md
+      - Batching & JIT: user-guide/batching-jit.md
+      - Numerical Stability: user-guide/numerical-stability.md
+      - Training Workflows: user-guide/training-workflows.md
+  # Tutorials disabled temporarily (requires mkdocs-jupyter)
+  # - Tutorials:
+  #     - Basic Manifold Operations: tutorials/basic-manifold-ops.ipynb
+  #     - Hyperbolic Neural Networks: tutorials/hyperbolic-nn.ipynb
+  #     - Riemannian Optimization: tutorials/riemannian-optimization.ipynb
+  - API Reference:
+      - Manifolds: api-reference/manifolds.md
+      - Neural Network Layers: api-reference/nn-layers.md
+      - Optimizers: api-reference/optimizers.md
+      - Distributions: api-reference/distributions.md
+      - Utilities: api-reference/utils.md
+  - Mathematical Background: mathematical-background.md
+  - Developer Guide: developer-guide.md
+  - Changelog: changelog.md

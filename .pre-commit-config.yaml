@@ -37,6 +37,7 @@ repos:
       - id: end-of-file-fixer
       # Check YAML syntax
       - id: check-yaml
+        exclude: ^mkdocs\.yml$  # MkDocs uses custom YAML tags
       # Check for merge conflict markers
       - id: check-merge-conflict
       # Check for large files (>500KB)
