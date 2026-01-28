@@ -93,6 +93,10 @@ dev = [
     "pre-commit>=4.0.1",
     "pyright>=1.1.390",
     "ruff>=0.13.2",
+    "mkdocs-material>=9.7.1",
+    "mkdocstrings[python]>=1.0.2",
+    "mkdocs-jupyter>=0.25.1",
+    "mike>=2.1.3",
 ]
 
 
