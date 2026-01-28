@@ -11,6 +11,9 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 
 ## Features
 
+> [!WARNING]
+> **Project Status**: This is a 100% Vibe-coded project. While we have extensive test coverage, bugs and errors should be expected. Use with caution in production environments.
+
 - 🌐 **3 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid
 - 🧠 **13+ Neural Network Layers**: Linear, convolutional (2D/3D), regression
 - ⚡ **4 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish

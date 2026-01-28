@@ -78,7 +78,10 @@ output = model(input_data, c=1.0)
 
 ## Project Status
 
-**All core functionality is complete and production-ready!**
+!!! warning "100% Vibe-Coded Project"
+    This project was developed entirely through AI-assisted coding ("vibe coding"). While we have extensive test coverage (1,400+ tests), bugs and errors should be expected. Use with appropriate caution in production environments.
+
+**All core functionality is complete!**
 
 - ✅ Phase 1: Manifolds (978 passing tests)
 - ✅ Phase 2: Riemannian Optimizers (20 passing tests)
