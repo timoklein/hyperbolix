@@ -88,15 +88,7 @@ exclude = [
     ".mypy_cache",
 ]
 
-# Same as Black.
 line-length = 127
-
-[tool.black]
-line-length = 127
-
-[tool.isort]
-profile = "black"
-line_length = 127
 
 #----------------------------
 # DEV
