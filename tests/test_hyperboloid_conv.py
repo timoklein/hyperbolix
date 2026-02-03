@@ -342,8 +342,8 @@ def test_hypconv_hyperboloid_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.linear.weight.value).all()
-    assert jnp.isfinite(grads.linear.bias.value).all()
+    assert jnp.isfinite(grads.linear.weight[...]).all()
+    assert jnp.isfinite(grads.linear.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])

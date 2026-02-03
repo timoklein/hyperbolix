@@ -211,9 +211,9 @@ def riemannian_adam(
             manifold_info = None
             if hasattr(param_variable, "_var_metadata"):
                 manifold_info = get_manifold_info(param_variable)
-                param_value = param_variable.value if hasattr(param_variable, "value") else param_variable
+                param_value = param_variable[...] if isinstance(param_variable, nnx.Variable) else param_variable
             else:
-                param_value = param_variable.value if hasattr(param_variable, "value") else param_variable
+                param_value = param_variable[...] if isinstance(param_variable, nnx.Variable) else param_variable
 
             if manifold_info is not None:
                 manifold_module, c = manifold_info

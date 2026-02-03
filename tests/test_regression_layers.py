@@ -87,8 +87,8 @@ def test_hyp_regression_poincare_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -111,8 +111,8 @@ def test_hyp_regression_poincare_jitted_gradient(dtype):
     loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
 
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -184,8 +184,8 @@ def test_hyp_regression_poincare_pp_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -208,8 +208,8 @@ def test_hyp_regression_poincare_pp_jitted_gradient(dtype):
     loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
 
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -283,8 +283,8 @@ def test_hyp_regression_poincare_hdrl_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -308,8 +308,8 @@ def test_hyp_regression_poincare_hdrl_jitted_gradient(dtype, version):
     loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
 
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -384,8 +384,8 @@ def test_hyp_regression_hyperboloid_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -409,8 +409,8 @@ def test_hyp_regression_hyperboloid_jitted_gradient(dtype):
     loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
 
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])

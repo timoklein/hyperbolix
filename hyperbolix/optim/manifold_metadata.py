@@ -94,7 +94,7 @@ def mark_manifold_param(
         String identifier for the manifold (must be registered in the manifold registry)
     curvature : float or callable
         Either a static curvature value or a callable that returns the current curvature.
-        Use a callable (e.g., lambda: self.c.value) for learnable curvature.
+        Use a callable (e.g., lambda: self.c[...]) for learnable curvature.
 
     Returns
     -------
@@ -163,7 +163,7 @@ def get_manifold_info(param: nnx.Variable) -> tuple[Any, Any] | None:
     >>> if manifold_info is not None:
     ...     manifold_module, c = manifold_info
     ...     # param lives on a manifold, apply Riemannian operations
-    ...     rgrad = manifold_module.egrad2rgrad(grad, param.value, c)
+    ...     rgrad = manifold_module.egrad2rgrad(grad, param[...], c)
     ... else:
     ...     # param is Euclidean, apply standard operations
     ...     pass

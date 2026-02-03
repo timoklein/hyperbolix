@@ -118,21 +118,21 @@ class TestRiemannianSGD:
             return poincare.dist(x, target, c) ** 2
 
         # Run optimization steps
-        initial_loss = loss_fn(param.value)
+        initial_loss = loss_fn(param[...])
         for _ in range(50):
             # Compute gradient
-            grad = jax.grad(loss_fn)(param.value)
+            grad = jax.grad(loss_fn)(param[...])
 
             # Apply update
             updates, opt_state = tx.update(grad, opt_state, param)
-            param.value = param.value + updates
+            param[...] = param[...] + updates
 
         # Check that loss decreased
-        final_loss = loss_fn(param.value)
+        final_loss = loss_fn(param[...])
         assert final_loss < initial_loss * 0.1, f"Loss did not decrease sufficiently: {initial_loss} -> {final_loss}"
 
         # Check that point is still on manifold
-        assert poincare.is_in_manifold(param.value, c)
+        assert poincare.is_in_manifold(param[...], c)
 
     @pytest.mark.parametrize("momentum", [0.0, 0.9])
     def test_momentum_transport(self, momentum):
@@ -155,9 +155,9 @@ class TestRiemannianSGD:
 
         # Run several steps
         for _ in range(10):
-            grad = jax.grad(loss_fn)(param.value)
+            grad = jax.grad(loss_fn)(param[...])
             updates, opt_state = tx.update(grad, opt_state, param)
-            param.value = param.value + updates
+            param[...] = param[...] + updates
 
         # With momentum > 0, the momentum state should be non-zero
         if momentum > 0:
@@ -186,22 +186,22 @@ class TestRiemannianSGD:
 
         # Simple loss
         def loss_fn(m):
-            return jnp.sum(m.euclidean.value**2) + jnp.sum(m.manifold.value**2)
+            return jnp.sum(m.euclidean[...] ** 2) + jnp.sum(m.manifold[...] ** 2)
 
         # Store initial values
-        initial_euclidean = model.euclidean.value.copy()
-        initial_manifold = model.manifold.value.copy()
+        initial_euclidean = model.euclidean[...].copy()
+        initial_manifold = model.manifold[...].copy()
 
         # Training step
         _, grads = nnx.value_and_grad(loss_fn)(model)
         optimizer.update(model, grads)
 
         # Check both parameters were updated
-        assert not jnp.allclose(model.euclidean.value, initial_euclidean)
-        assert not jnp.allclose(model.manifold.value, initial_manifold)
+        assert not jnp.allclose(model.euclidean[...], initial_euclidean)
+        assert not jnp.allclose(model.manifold[...], initial_manifold)
 
         # Check manifold parameter is still on manifold
-        assert poincare.is_in_manifold(model.manifold.value, 1.0)
+        assert poincare.is_in_manifold(model.manifold[...], 1.0)
 
 
 class TestRiemannianAdam:
@@ -226,15 +226,15 @@ class TestRiemannianAdam:
         def loss_fn(x):
             return poincare.dist(x, target, c) ** 2
 
-        initial_loss = loss_fn(param.value)
+        initial_loss = loss_fn(param[...])
         for _ in range(50):
-            grad = jax.grad(loss_fn)(param.value)
+            grad = jax.grad(loss_fn)(param[...])
             updates, opt_state = tx.update(grad, opt_state, param)
-            param.value = param.value + updates
+            param[...] = param[...] + updates
 
-        final_loss = loss_fn(param.value)
+        final_loss = loss_fn(param[...])
         assert final_loss < initial_loss * 0.1, f"Loss did not decrease sufficiently: {initial_loss} -> {final_loss}"
-        assert poincare.is_in_manifold(param.value, c)
+        assert poincare.is_in_manifold(param[...], c)
 
     def test_moment_transport(self):
         """Test that moments are parallel transported correctly."""
@@ -259,9 +259,9 @@ class TestRiemannianAdam:
 
         # Run several steps
         for _ in range(10):
-            grad = jax.grad(loss_fn)(param.value)
+            grad = jax.grad(loss_fn)(param[...])
             updates, opt_state = tx.update(grad, opt_state, param)
-            param.value = param.value + updates
+            param[...] = param[...] + updates
 
         # Check that moments are non-zero
         state = cast(RAdamState, opt_state)
@@ -292,19 +292,19 @@ class TestRiemannianAdam:
         optimizer = nnx.Optimizer(model, tx, wrt=nnx.Param)
 
         def loss_fn(m):
-            return jnp.sum(m.euclidean.value**2) + jnp.sum(m.manifold.value**2)
+            return jnp.sum(m.euclidean[...] ** 2) + jnp.sum(m.manifold[...] ** 2)
 
         # Store initial values
-        initial_euclidean = model.euclidean.value.copy()
-        initial_manifold = model.manifold.value.copy()
+        initial_euclidean = model.euclidean[...].copy()
+        initial_manifold = model.manifold[...].copy()
 
         # Training step
         _, grads = nnx.value_and_grad(loss_fn)(model)
         optimizer.update(model, grads)
 
-        assert not jnp.allclose(model.euclidean.value, initial_euclidean)
-        assert not jnp.allclose(model.manifold.value, initial_manifold)
-        assert poincare.is_in_manifold(model.manifold.value, 1.0)
+        assert not jnp.allclose(model.euclidean[...], initial_euclidean)
+        assert not jnp.allclose(model.manifold[...], initial_manifold)
+        assert poincare.is_in_manifold(model.manifold[...], 1.0)
 
 
 class TestNNXIntegration:
@@ -344,7 +344,7 @@ class TestNNXIntegration:
         assert final_loss < initial_loss
 
         # Check bias is still on manifold
-        assert poincare.is_in_manifold(layer.bias.value.squeeze(0), 1.0)
+        assert poincare.is_in_manifold(layer.bias[...].squeeze(0), 1.0)
 
     def test_hyplinear_poincare_with_radam(self):
         """Test HypLinearPoincare with RAdam via nnx.Optimizer."""
@@ -372,7 +372,7 @@ class TestNNXIntegration:
 
         final_loss = loss_fn(layer)
         assert final_loss < initial_loss
-        assert poincare.is_in_manifold(layer.bias.value.squeeze(0), 1.0)
+        assert poincare.is_in_manifold(layer.bias[...].squeeze(0), 1.0)
 
     def test_jit_compilation(self):
         """Test that optimizer works with JIT compilation."""
@@ -445,12 +445,12 @@ class TestEdgeCases:
 
         # Run many steps
         for _ in range(100):
-            grad = jax.grad(loss_fn)(param.value)
+            grad = jax.grad(loss_fn)(param[...])
             updates, opt_state = tx.update(grad, opt_state, param)
-            param.value = param.value + updates
+            param[...] = param[...] + updates
 
             # Check at each step
-            assert poincare.is_in_manifold(param.value, c), f"Parameter left manifold: {param.value}"
+            assert poincare.is_in_manifold(param[...], c), f"Parameter left manifold: {param[...]}"
 
     def test_zero_gradient(self):
         """Test optimizer handles zero gradients gracefully."""
@@ -464,9 +464,9 @@ class TestEdgeCases:
         opt_state = tx.init(param)
 
         # Zero gradient
-        grad = jnp.zeros_like(param.value)
+        grad = jnp.zeros_like(param[...])
         updates, opt_state = tx.update(grad, opt_state, param)
 
         # Parameter should not change
-        new_value = param.value + updates
-        assert jnp.allclose(new_value, param.value)
+        new_value = param[...] + updates
+        assert jnp.allclose(new_value, param[...])

@@ -511,7 +511,7 @@ class HoroPCA(nnx.Module):
         Returns:
             Negative generalized variance (scalar)
         """
-        return _projected_variance_loss(self.Q.value, x, self.c.value)
+        return _projected_variance_loss(self.Q[...], x, self.c[...])
 
     def fit(self, x: Float[Array, "n_points n_in_features"]) -> None:
         """Fit HoroPCA to the data by finding optimal principal components.
@@ -527,7 +527,7 @@ class HoroPCA(nnx.Module):
                 - For Poincaré: shape is (n_points, dim)
                 - For Hyperboloid: shape is (n_points, dim+1)
         """
-        c = self.c.value
+        c = self.c[...]
 
         # Convert to hyperboloid if needed
         if self.manifold_name == "poincare":
@@ -545,10 +545,10 @@ class HoroPCA(nnx.Module):
             x = jax.vmap(poincare_to_hyperboloid)(x)
 
         # Compute Fréchet mean
-        self.data_mean.value = compute_frechet_mean(x, c)
+        self.data_mean.set_value(compute_frechet_mean(x, c))
 
         # Center data around Fréchet mean
-        x_centered = center_data(x, self.data_mean.value, c)
+        x_centered = center_data(x, self.data_mean[...], c)
 
         # Set up optimizer
         optimizer = optax.adam(self.lr)
@@ -558,20 +558,20 @@ class HoroPCA(nnx.Module):
         loss_history: list[float] = []
 
         for _ in range(self.max_steps):
-            loss, grads = loss_and_grad(self.Q.value, x_centered, c)
+            loss, grads = loss_and_grad(self.Q[...], x_centered, c)
             loss_history.append(float(loss))
 
             grads = jnp.clip(grads, -1e5, 1e5)
 
             # Update parameters
             updates, opt_state = optimizer.update(grads, opt_state)
-            updated_Q = cast(Float[Array, "n_components dim_or_dim_minus_1"], optax.apply_updates(self.Q.value, updates))
-            self.Q.value = updated_Q
+            updated_Q = cast(Float[Array, "n_components dim_or_dim_minus_1"], optax.apply_updates(self.Q[...], updates))
+            self.Q[...] = updated_Q
 
         if loss_history:
-            self.loss_history.value = jnp.asarray(loss_history, dtype=jnp.float32)
+            self.loss_history.set_value(jnp.asarray(loss_history, dtype=jnp.float32))
         else:
-            self.loss_history.value = jnp.zeros((0,), dtype=jnp.float32)
+            self.loss_history.set_value(jnp.zeros((0,), dtype=jnp.float32))
 
     def transform(
         self,
@@ -591,7 +591,7 @@ class HoroPCA(nnx.Module):
             The output is in the lower-dimensional Poincaré ball, represented
             by coordinates in the orthonormalized principal component basis.
         """
-        c = self.c.value
+        c = self.c[...]
 
         # Convert to hyperboloid if needed
         if self.manifold_name == "poincare":
@@ -606,14 +606,14 @@ class HoroPCA(nnx.Module):
             x = jax.vmap(poincare_to_hyperboloid)(x)
 
         # Compute or recompute mean
-        if recompute_mean or self.data_mean.value is None:
-            self.data_mean.value = compute_frechet_mean(x, c)
+        if recompute_mean or self.data_mean[...] is None:
+            self.data_mean.set_value(compute_frechet_mean(x, c))
 
         # Center data
-        x_centered = center_data(x, self.data_mean.value, c)
+        x_centered = center_data(x, self.data_mean[...], c)
 
         # Orthonormalize principal components
-        Q_ortho, _ = jnp.linalg.qr(self.Q.value.T, mode="reduced")
+        Q_ortho, _ = jnp.linalg.qr(self.Q[...].T, mode="reduced")
         Q_ortho = Q_ortho.T  # shape: (n_components, dim)
 
         # Map to hyperboloid ideals

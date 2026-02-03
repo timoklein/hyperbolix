@@ -427,9 +427,9 @@ def test_lorentz_conv2d_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss), f"Loss is not finite: {loss}"
-    assert jnp.isfinite(grads.weight.value).all(), "Weight gradients contain NaN/Inf"
+    assert jnp.isfinite(grads.weight[...]).all(), "Weight gradients contain NaN/Inf"
     if layer.use_boost:
-        assert jnp.isfinite(grads.boost_velocity.value).all(), "Boost velocity gradients contain NaN/Inf"
+        assert jnp.isfinite(grads.boost_velocity[...]).all(), "Boost velocity gradients contain NaN/Inf"
 
 
 @pytest.mark.parametrize("dtype", [jnp.float64])
@@ -838,9 +838,9 @@ def test_lorentz_conv3d_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss), f"Loss is not finite: {loss}"
-    assert jnp.isfinite(grads.weight.value).all(), "Weight gradients contain NaN/Inf"
+    assert jnp.isfinite(grads.weight[...]).all(), "Weight gradients contain NaN/Inf"
     if layer.use_boost:
-        assert jnp.isfinite(grads.boost_velocity.value).all(), "Boost velocity gradients contain NaN/Inf"
+        assert jnp.isfinite(grads.boost_velocity[...]).all(), "Boost velocity gradients contain NaN/Inf"
 
 
 @pytest.mark.parametrize("dtype", [jnp.float64])

@@ -118,7 +118,7 @@ class HypLinearHyperboloid(nnx.Module):
 
         # Bias addition via parallel transport and exponential map
         # Concatenate zero time coordinate to bias
-        bias = jnp.concatenate([jnp.zeros_like(self.bias.value[:, :1]), self.bias.value], axis=-1)  # (1, out_dim)
+        bias = jnp.concatenate([jnp.zeros_like(self.bias[...][:, :1]), self.bias[...]], axis=-1)  # (1, out_dim)
         bias = bias.squeeze(0)  # (out_dim,)
 
         # Parallel transport bias from origin to each x (vmap over batch)
@@ -272,7 +272,7 @@ class HypLinearHyperboloidFHNN(nnx.Module):
 
         # Compute time coordinate via scaled sigmoid (ensure scale is positive)
         # Handle both learnable (Param) and non-learnable (float) scale
-        scale_val = self.scale.value if isinstance(self.scale, nnx.Param) else self.scale
+        scale_val = self.scale[...] if isinstance(self.scale, nnx.Param) else self.scale
         res0 = jnp.exp(scale_val) * jax.nn.sigmoid(x0) + 1 / jnp.sqrt(c) + self.eps  # (batch, 1)
 
         # Compute space coordinates scaling factor
@@ -428,7 +428,7 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
             x_rem_norm = jnp.linalg.norm(x_rem, ord=2, axis=-1, keepdims=True)  # (batch, 1)
 
             # Ensure scale is positive (handle both learnable and non-learnable scale)
-            scale_val = self.scale.value if isinstance(self.scale, nnx.Param) else self.scale
+            scale_val = self.scale[...] if isinstance(self.scale, nnx.Param) else self.scale
             scale = jnp.exp(scale_val) * jax.nn.sigmoid(x0)  # (batch, 1)
 
             # Compute time coordinate

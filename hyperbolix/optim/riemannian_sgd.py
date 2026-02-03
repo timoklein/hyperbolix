@@ -180,7 +180,7 @@ def riemannian_sgd(
             if hasattr(param_variable, "_var_metadata"):
                 # param_variable is an nnx.Variable with potential metadata
                 manifold_info = get_manifold_info(param_variable)
-                param_value = param_variable.value if hasattr(param_variable, "value") else param_variable
+                param_value = param_variable[...] if isinstance(param_variable, nnx.Variable) else param_variable
 
             if manifold_info is not None:
                 # Riemannian parameter update

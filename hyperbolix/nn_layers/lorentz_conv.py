@@ -439,7 +439,7 @@ class LorentzConv2D(nnx.Module):
             x = x_mapped.reshape(x.shape)
 
         # 1. Rotation Convolution (norm-preserving)
-        y = rotation_conv_2d(x, self.weight.value, c, self.stride, self.padding)
+        y = rotation_conv_2d(x, self.weight[...], c, self.stride, self.padding)
 
         # 2. Distance Rescaling
         if self.use_distance_rescaling:
@@ -454,7 +454,7 @@ class LorentzConv2D(nnx.Module):
             # Flatten batch and spatial dims for vmap
             batch, out_h, out_w, out_c = y.shape
             y_flat = y.reshape(-1, out_c)
-            y_boosted = jax.vmap(self.manifold.lorentz_boost, in_axes=(0, None, None))(y_flat, self.boost_velocity.value, c)
+            y_boosted = jax.vmap(self.manifold.lorentz_boost, in_axes=(0, None, None))(y_flat, self.boost_velocity[...], c)
             y = y_boosted.reshape(batch, out_h, out_w, out_c)
 
         return y
@@ -600,7 +600,7 @@ class LorentzConv3D(nnx.Module):
             x = x_mapped.reshape(x.shape)
 
         # 1. Rotation Convolution (norm-preserving)
-        y = rotation_conv_3d(x, self.weight.value, c, self.stride, self.padding)
+        y = rotation_conv_3d(x, self.weight[...], c, self.stride, self.padding)
 
         # 2. Distance Rescaling
         if self.use_distance_rescaling:
@@ -615,7 +615,7 @@ class LorentzConv3D(nnx.Module):
             # Flatten batch and spatial dims for vmap
             batch, out_d, out_h, out_w, out_c = y.shape
             y_flat = y.reshape(-1, out_c)
-            y_boosted = jax.vmap(self.manifold.lorentz_boost, in_axes=(0, None, None))(y_flat, self.boost_velocity.value, c)
+            y_boosted = jax.vmap(self.manifold.lorentz_boost, in_axes=(0, None, None))(y_flat, self.boost_velocity[...], c)
             y = y_boosted.reshape(batch, out_d, out_h, out_w, out_c)
 
         return y
