@@ -44,6 +44,8 @@ def hyp_relu(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... d
       -x₀² + ||x_rest||² = -1/c
     - This approach avoids frequent exp/log maps for better numerical stability
     - Works on arrays of any shape, similar to jax.nn.relu
+    - For curvature-changing transformations, see `hrc_relu` from the Hypformer module,
+      which generalizes this function to support different input/output curvatures
 
     References
     ----------
@@ -131,6 +133,8 @@ def hyp_leaky_relu(
     - LeakyReLU allows small negative values (scaled by negative_slope) which
       can help gradient flow compared to standard ReLU
     - Works on arrays of any shape, similar to jax.nn.leaky_relu
+    - For curvature-changing transformations, see `hrc_leaky_relu` from the
+      Hypformer module
 
     References
     ----------
@@ -207,6 +211,8 @@ def hyp_tanh(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... d
     - The time component is reconstructed using the hyperboloid constraint
     - Tanh naturally bounds outputs in [-1, 1], which can help with stability
     - Works on arrays of any shape, similar to jax.nn.tanh
+    - For curvature-changing transformations, see `hrc_tanh` from the
+      Hypformer module
 
     References
     ----------
@@ -286,6 +292,8 @@ def hyp_swish(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... 
     - The time component is reconstructed using the hyperboloid constraint
     - Swish is smooth and non-monotonic, often performing well in deep networks
     - Works on arrays of any shape, similar to jax.nn.swish
+    - For curvature-changing transformations, see `hrc_swish` from the
+      Hypformer module
 
     References
     ----------

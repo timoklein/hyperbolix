@@ -87,6 +87,9 @@ def rotation_conv_2d(
           operation still produces valid manifold points but without the
           norm-preserving guarantee.
         - For SAME padding, input is padded with edge values to stay on manifold.
+        - The time reconstruction uses the HRC pattern: ``time = sqrt(||space||^2 + 1/c)``.
+          See :func:`hyperbolix.nn_layers.hrc` for the generalized version with
+          curvature change support.
     """
     _, height, width, _ = x.shape
     kh, kw = weight.shape[2], weight.shape[3]
@@ -201,6 +204,9 @@ def rotation_conv_3d(
           the operation still produces valid manifold points but without the
           norm-preserving guarantee.
         - For SAME padding, input is padded with edge values to stay on manifold.
+        - The time reconstruction uses the HRC pattern: ``time = sqrt(||space||^2 + 1/c)``.
+          See :func:`hyperbolix.nn_layers.hrc` for the generalized version with
+          curvature change support.
     """
     _, depth, height, width, _ = x.shape
     kd, kh, kw = weight.shape[2], weight.shape[3], weight.shape[4]

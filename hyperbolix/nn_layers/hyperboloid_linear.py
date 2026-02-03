@@ -38,6 +38,13 @@ class HypLinearHyperboloid(nnx.Module):
         This layer is designed to work with nnx.jit. Configuration parameters (input_space)
         are treated as static and will be baked into the compiled function.
 
+    See Also
+    --------
+    htc : Hyperbolic Transformation Component that generalizes linear transformations
+        with curvature change support. Uses a different mathematical approach (direct
+        constraint reconstruction vs. exp/log maps).
+    HTCLinear : Module wrapper for htc with learnable linear transformation.
+
     References
     ----------
     Ines Chami, et al. "Hyperbolic graph convolutional neural networks."
@@ -164,6 +171,12 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         This layer is designed to work with nnx.jit. Configuration parameters (input_space, activation)
         are treated as static and will be baked into the compiled function. The dropout layer handles train/eval
         mode switching internally in a JIT-compatible way.
+
+    See Also
+    --------
+    htc : Hyperbolic Transformation Component with curvature change support. Unlike FHNN,
+        htc uses constraint-based time reconstruction rather than learned sigmoid scaling.
+    HTCLinear : Module wrapper for htc with learnable linear transformation.
 
     References
     ----------
@@ -315,6 +328,19 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
     JIT Compatibility:
         This layer is designed to work with nnx.jit. Configuration parameters (input_space, activation,
         normalize) are treated as static and will be baked into the compiled function.
+
+    Relationship to HTC/HRC:
+        When ``normalize=False`` and ``c_in = c_out``, this layer uses the same time reconstruction
+        pattern as ``htc``: ``time = sqrt(||space||^2 + 1/c)``. The key difference is that FHCNN
+        applies a linear transform to the full input and discards the computed time, while ``htc``
+        uses the linear output directly as spatial components. When ``normalize=True``, FHCNN uses
+        a learned sigmoid scaling which differs from both htc and hrc.
+
+    See Also
+    --------
+    htc : Hyperbolic Transformation Component with curvature change support.
+        Similar time reconstruction pattern when normalize=False.
+    HTCLinear : Module wrapper for htc with learnable linear transformation.
 
     References
     ----------
