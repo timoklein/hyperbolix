@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
-from .hyperboloid_linear import HypLinearHyperboloid
+from .hyperboloid_linear import HypLinearHyperboloidFHCNN
 
 
 class HypConv2DHyperboloid(nnx.Module):
@@ -102,12 +102,14 @@ class HypConv2DHyperboloid(nnx.Module):
 
         # Create the linear transformation layer
         # Input: hcat_out_ambient_dim, Output: out_channels
-        self.linear = HypLinearHyperboloid(
+        self.linear = HypLinearHyperboloidFHCNN(
             manifold_module=manifold_module,
             in_dim=hcat_out_ambient_dim,
             out_dim=out_channels,
             rngs=rngs,
             input_space="manifold",  # HCat output is always on manifold
+            learnable_scale=False,
+            normalize=False,
         )
 
     def _extract_patches(
@@ -311,12 +313,14 @@ class HypConv3DHyperboloid(nnx.Module):
 
         # Create the linear transformation layer
         # Input: hcat_out_ambient_dim, Output: out_channels
-        self.linear = HypLinearHyperboloid(
+        self.linear = HypLinearHyperboloidFHCNN(
             manifold_module=manifold_module,
             in_dim=hcat_out_ambient_dim,
             out_dim=out_channels,
             rngs=rngs,
             input_space="manifold",  # HCat output is always on manifold
+            learnable_scale=False,
+            normalize=False,
         )
 
     def _extract_patches(

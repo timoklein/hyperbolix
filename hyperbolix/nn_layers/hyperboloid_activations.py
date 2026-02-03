@@ -4,15 +4,182 @@ This module implements activation functions for the Hyperboloid manifold that ap
 activations directly to space components and reconstruct the time component using
 the manifold constraint. This approach avoids frequent logarithmic and exponential
 maps, providing better numerical stability than the tangent space approach.
+
+The module provides two families of activations:
+- hrc_*: Hyperbolic Regularization Component with curvature-change support (c_in → c_out)
+- hyp_*: Curvature-preserving wrappers (c_in = c_out = c) for convenience
+
+For the core hrc() function and NNX modules, see hypformer module.
 """
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+# Import hrc from hypformer (used by regularization NNX modules)
+from .hypformer import hrc
+
+# Curvature-Changing Activations (HRC convenience functions)
+
+
+def hrc_relu(
+    x: Float[Array, "... dim_plus_1"],
+    c_in: float,
+    c_out: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... dim_plus_1"]:
+    """HRC with ReLU activation.
+
+    Equivalent to hrc(x, jax.nn.relu, c_in, c_out, eps).
+    When c_in = c_out = c, this is equivalent to hyp_relu(x, c).
+
+    Parameters
+    ----------
+    x : Array of shape (..., dim+1)
+        Input point(s) on the hyperboloid manifold with curvature c_in.
+    c_in : float
+        Input curvature parameter (must be positive).
+    c_out : float
+        Output curvature parameter (must be positive).
+    eps : float, optional
+        Small value for numerical stability (default: 1e-7).
+
+    Returns
+    -------
+    y : Array of shape (..., dim+1)
+        Output point(s) on the hyperboloid manifold with curvature c_out.
+    """
+    return hrc(x, jax.nn.relu, c_in, c_out, eps)
+
+
+def hrc_leaky_relu(
+    x: Float[Array, "... dim_plus_1"],
+    c_in: float,
+    c_out: float,
+    negative_slope: float = 0.01,
+    eps: float = 1e-7,
+) -> Float[Array, "... dim_plus_1"]:
+    """HRC with LeakyReLU activation.
+
+    When c_in = c_out = c, this is equivalent to hyp_leaky_relu(x, c, negative_slope).
+
+    Parameters
+    ----------
+    x : Array of shape (..., dim+1)
+        Input point(s) on the hyperboloid manifold with curvature c_in.
+    c_in : float
+        Input curvature parameter (must be positive).
+    c_out : float
+        Output curvature parameter (must be positive).
+    negative_slope : float, optional
+        Negative slope coefficient for LeakyReLU (default: 0.01).
+    eps : float, optional
+        Small value for numerical stability (default: 1e-7).
+
+    Returns
+    -------
+    y : Array of shape (..., dim+1)
+        Output point(s) on the hyperboloid manifold with curvature c_out.
+    """
+
+    def f_r(z):
+        return jax.nn.leaky_relu(z, negative_slope)
+
+    return hrc(x, f_r, c_in, c_out, eps)
+
+
+def hrc_tanh(
+    x: Float[Array, "... dim_plus_1"],
+    c_in: float,
+    c_out: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... dim_plus_1"]:
+    """HRC with tanh activation.
+
+    When c_in = c_out = c, this is equivalent to hyp_tanh(x, c).
+
+    Parameters
+    ----------
+    x : Array of shape (..., dim+1)
+        Input point(s) on the hyperboloid manifold with curvature c_in.
+    c_in : float
+        Input curvature parameter (must be positive).
+    c_out : float
+        Output curvature parameter (must be positive).
+    eps : float, optional
+        Small value for numerical stability (default: 1e-7).
+
+    Returns
+    -------
+    y : Array of shape (..., dim+1)
+        Output point(s) on the hyperboloid manifold with curvature c_out.
+    """
+    return hrc(x, jnp.tanh, c_in, c_out, eps)
+
+
+def hrc_swish(
+    x: Float[Array, "... dim_plus_1"],
+    c_in: float,
+    c_out: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... dim_plus_1"]:
+    """HRC with Swish/SiLU activation.
+
+    When c_in = c_out = c, this is equivalent to hyp_swish(x, c).
+
+    Parameters
+    ----------
+    x : Array of shape (..., dim+1)
+        Input point(s) on the hyperboloid manifold with curvature c_in.
+    c_in : float
+        Input curvature parameter (must be positive).
+    c_out : float
+        Output curvature parameter (must be positive).
+    eps : float, optional
+        Small value for numerical stability (default: 1e-7).
+
+    Returns
+    -------
+    y : Array of shape (..., dim+1)
+        Output point(s) on the hyperboloid manifold with curvature c_out.
+    """
+    return hrc(x, jax.nn.swish, c_in, c_out, eps)
+
+
+def hrc_gelu(
+    x: Float[Array, "... dim_plus_1"],
+    c_in: float,
+    c_out: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... dim_plus_1"]:
+    """HRC with GELU activation.
+
+    Parameters
+    ----------
+    x : Array of shape (..., dim+1)
+        Input point(s) on the hyperboloid manifold with curvature c_in.
+    c_in : float
+        Input curvature parameter (must be positive).
+    c_out : float
+        Output curvature parameter (must be positive).
+    eps : float, optional
+        Small value for numerical stability (default: 1e-7).
+
+    Returns
+    -------
+    y : Array of shape (..., dim+1)
+        Output point(s) on the hyperboloid manifold with curvature c_out.
+    """
+    return hrc(x, jax.nn.gelu, c_in, c_out, eps)
+
+
+# Curvature-Preserving Activations (convenience wrappers)
+
 
 def hyp_relu(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... dim_plus_1"]:
     """Apply ReLU activation to space components of hyperboloid point(s).
+
+    Curvature-preserving wrapper around hrc_relu(x, c_in=c, c_out=c).
 
     This function applies the ReLU activation function to the spatial components
     of hyperboloid points and reconstructs valid manifold points using the
@@ -44,8 +211,8 @@ def hyp_relu(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... d
       -x₀² + ||x_rest||² = -1/c
     - This approach avoids frequent exp/log maps for better numerical stability
     - Works on arrays of any shape, similar to jax.nn.relu
-    - For curvature-changing transformations, see `hrc_relu` from the Hypformer module,
-      which generalizes this function to support different input/output curvatures
+    - For curvature-changing transformations, use `hrc_relu` which supports
+      different input/output curvatures
 
     References
     ----------
@@ -76,29 +243,15 @@ def hyp_relu(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... d
     >>> y_feature.shape
     (4, 16, 16, 10)
     """
-    # Extract spatial components
-    x_space = x[..., 1:]
-
-    # Apply ReLU activation to spatial components
-    activated_space = jnp.maximum(x_space, 0.0)
-
-    # Compute norm squared of activated spatial components
-    norm_sq = jnp.sum(activated_space**2, axis=-1)
-
-    # Reconstruct time component using hyperboloid constraint
-    # Constraint: -x₀² + ||x_rest||² = -1/c
-    # => x₀ = sqrt(||x_rest||² + 1/c)
-    x0_sq = norm_sq + 1.0 / c
-    x0 = jnp.sqrt(jnp.maximum(x0_sq, 0.0))  # Clamp for numerical stability
-
-    # Concatenate time and spatial components
-    return jnp.concatenate([x0[..., None], activated_space], axis=-1)
+    return hrc_relu(x, c_in=c, c_out=c)
 
 
 def hyp_leaky_relu(
     x: Float[Array, "... dim_plus_1"], c: float, negative_slope: float = 0.01
 ) -> Float[Array, "... dim_plus_1"]:
     """Apply LeakyReLU activation to space components of hyperboloid point(s).
+
+    Curvature-preserving wrapper around hrc_leaky_relu(x, c_in=c, c_out=c, negative_slope).
 
     This function applies the LeakyReLU activation function to the spatial
     components of hyperboloid points and reconstructs valid manifold points
@@ -133,8 +286,8 @@ def hyp_leaky_relu(
     - LeakyReLU allows small negative values (scaled by negative_slope) which
       can help gradient flow compared to standard ReLU
     - Works on arrays of any shape, similar to jax.nn.leaky_relu
-    - For curvature-changing transformations, see `hrc_leaky_relu` from the
-      Hypformer module
+    - For curvature-changing transformations, use `hrc_leaky_relu` which
+      supports different input/output curvatures
 
     References
     ----------
@@ -162,25 +315,13 @@ def hyp_leaky_relu(
     >>> y_batch.shape
     (8, 5)
     """
-    # Extract spatial components
-    x_space = x[..., 1:]
-
-    # Apply LeakyReLU activation to spatial components
-    activated_space = jnp.where(x_space > 0, x_space, negative_slope * x_space)
-
-    # Compute norm squared of activated spatial components
-    norm_sq = jnp.sum(activated_space**2, axis=-1)
-
-    # Reconstruct time component using hyperboloid constraint
-    x0_sq = norm_sq + 1.0 / c
-    x0 = jnp.sqrt(jnp.maximum(x0_sq, 0.0))
-
-    # Concatenate time and spatial components
-    return jnp.concatenate([x0[..., None], activated_space], axis=-1)
+    return hrc_leaky_relu(x, c_in=c, c_out=c, negative_slope=negative_slope)
 
 
 def hyp_tanh(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... dim_plus_1"]:
     """Apply tanh activation to space components of hyperboloid point(s).
+
+    Curvature-preserving wrapper around hrc_tanh(x, c_in=c, c_out=c).
 
     This function applies the hyperbolic tangent activation function to the
     spatial components of hyperboloid points and reconstructs valid manifold
@@ -211,8 +352,8 @@ def hyp_tanh(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... d
     - The time component is reconstructed using the hyperboloid constraint
     - Tanh naturally bounds outputs in [-1, 1], which can help with stability
     - Works on arrays of any shape, similar to jax.nn.tanh
-    - For curvature-changing transformations, see `hrc_tanh` from the
-      Hypformer module
+    - For curvature-changing transformations, use `hrc_tanh` which supports
+      different input/output curvatures
 
     References
     ----------
@@ -241,25 +382,13 @@ def hyp_tanh(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... d
     >>> import jax
     >>> assert jnp.all(jnp.abs(y_batch[..., 1:]) <= 1.0)
     """
-    # Extract spatial components
-    x_space = x[..., 1:]
-
-    # Apply tanh activation to spatial components
-    activated_space = jnp.tanh(x_space)
-
-    # Compute norm squared of activated spatial components
-    norm_sq = jnp.sum(activated_space**2, axis=-1)
-
-    # Reconstruct time component using hyperboloid constraint
-    x0_sq = norm_sq + 1.0 / c
-    x0 = jnp.sqrt(jnp.maximum(x0_sq, 0.0))
-
-    # Concatenate time and spatial components
-    return jnp.concatenate([x0[..., None], activated_space], axis=-1)
+    return hrc_tanh(x, c_in=c, c_out=c)
 
 
 def hyp_swish(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... dim_plus_1"]:
     """Apply Swish/SiLU activation to space components of hyperboloid point(s).
+
+    Curvature-preserving wrapper around hrc_swish(x, c_in=c, c_out=c).
 
     This function applies the Swish (also known as SiLU) activation function
     to the spatial components of hyperboloid points and reconstructs valid
@@ -292,8 +421,8 @@ def hyp_swish(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... 
     - The time component is reconstructed using the hyperboloid constraint
     - Swish is smooth and non-monotonic, often performing well in deep networks
     - Works on arrays of any shape, similar to jax.nn.swish
-    - For curvature-changing transformations, see `hrc_swish` from the
-      Hypformer module
+    - For curvature-changing transformations, use `hrc_swish` which supports
+      different input/output curvatures
 
     References
     ----------
@@ -324,19 +453,67 @@ def hyp_swish(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... 
     >>> y_feature.shape
     (4, 16, 16, 10)
     """
-    # Extract spatial components
-    x_space = x[..., 1:]
+    return hrc_swish(x, c_in=c, c_out=c)
 
-    # Apply Swish activation to spatial components
-    # Swish(x) = x * sigmoid(x)
-    activated_space = x_space * jax.nn.sigmoid(x_space)
 
-    # Compute norm squared of activated spatial components
-    norm_sq = jnp.sum(activated_space**2, axis=-1)
+def hyp_gelu(x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... dim_plus_1"]:
+    """Apply GELU activation to space components of hyperboloid point(s).
 
-    # Reconstruct time component using hyperboloid constraint
-    x0_sq = norm_sq + 1.0 / c
-    x0 = jnp.sqrt(jnp.maximum(x0_sq, 0.0))
+    Curvature-preserving wrapper around hrc_gelu(x, c_in=c, c_out=c).
 
-    # Concatenate time and spatial components
-    return jnp.concatenate([x0[..., None], activated_space], axis=-1)
+    This function applies the Gaussian Error Linear Unit (GELU) activation function
+    to the spatial components of hyperboloid points and reconstructs valid manifold
+    points using the hyperboloid constraint.
+
+    Mathematical formula:
+        y = [sqrt(||GELU(x_s)||^2 + 1/c), GELU(x_s)]
+
+    where x_s are the spatial components x[..., 1:].
+
+    Parameters
+    ----------
+    x : Array of shape (..., dim+1)
+        Input point(s) on the hyperboloid manifold in ambient space, where
+        ... represents arbitrary batch dimensions. The last dimension contains
+        the time component (x[..., 0]) and spatial components (x[..., 1:]).
+    c : float
+        Curvature parameter, must be positive (c > 0).
+
+    Returns
+    -------
+    y : Array of shape (..., dim+1)
+        Output point(s) on the hyperboloid manifold, same shape as input.
+
+    Notes
+    -----
+    - This function applies GELU only to spatial components
+    - The time component is reconstructed using the hyperboloid constraint
+    - GELU is smooth and commonly used in transformer architectures
+    - Works on arrays of any shape, similar to jax.nn.gelu
+    - For curvature-changing transformations, use `hrc_gelu` which supports
+      different input/output curvatures
+
+    Examples
+    --------
+    >>> import jax.numpy as jnp
+    >>> from hyperbolix.nn_layers import hyp_gelu
+    >>>
+    >>> # Single point
+    >>> x = jnp.array([1.05, 0.1, -0.2, 0.15])
+    >>> y = hyp_gelu(x, c=1.0)
+    >>> y.shape
+    (4,)
+    >>>
+    >>> # Batch of points
+    >>> x_batch = jnp.ones((8, 5))
+    >>> y_batch = hyp_gelu(x_batch, c=1.0)
+    >>> y_batch.shape
+    (8, 5)
+    >>>
+    >>> # Multi-dimensional batch
+    >>> x_feature = jnp.ones((4, 16, 16, 10))
+    >>> y_feature = hyp_gelu(x_feature, c=1.0)
+    >>> y_feature.shape
+    (4, 16, 16, 10)
+    """
+    return hrc_gelu(x, c_in=c, c_out=c)

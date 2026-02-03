@@ -1,13 +1,14 @@
 """Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Component (HRC).
 
-This module implements the HTC and HRC layers from the Hypformer paper, which generalize
-hyperbolic neural network operations by supporting curvature changes (c_in → c_out) and
-wrapping arbitrary Euclidean functions.
+This module implements the core HTC and HRC operations from the Hypformer paper, which
+generalize hyperbolic neural network operations with curvature-change support.
+
+For activation convenience functions, see hyperboloid_activations module.
 
 Key features:
-- HRC: Wraps Euclidean regularization/activation functions operating on spatial components
-- HTC: Wraps Euclidean linear transformations operating on full hyperboloid points
-- When c_in = c_out, HRC reduces to existing hyperboloid activations
+- HRC: Core function wrapping Euclidean operations on spatial components
+- HTC: Wraps Euclidean linear transformations on full hyperboloid points
+- NNX modules: HTCLinear, HRCDropout, HRCLayerNorm
 
 References
 ----------
@@ -42,7 +43,7 @@ def hrc(
 
     When c_in = c_out = c, this reduces to:
         output = [sqrt(||f_r(x_s)||^2 + 1/c), f_r(x_s)]
-    which is the pattern used by existing hyperboloid activations.
+    which is the pattern used by curvature-preserving hyperboloid activations.
 
     Parameters
     ----------
@@ -72,6 +73,10 @@ def hrc(
       -x₀² + ||x_rest||² = -1/c_out
     - This avoids expensive exp/log maps while maintaining mathematical correctness
     - The spatial scaling factor sqrt(c_in/c_out) ensures proper curvature transformation
+
+    References
+    ----------
+    Hypformer paper (citation to be added)
 
     Examples
     --------
@@ -203,160 +208,6 @@ def htc(
 
     # Concatenate time and spatial components
     return jnp.concatenate([x0[..., None], scaled_out], axis=-1)
-
-
-# Convenience functions for common activations
-
-
-def hrc_relu(
-    x: Float[Array, "... dim_plus_1"],
-    c_in: float,
-    c_out: float,
-    eps: float = 1e-7,
-) -> Float[Array, "... dim_plus_1"]:
-    """HRC with ReLU activation.
-
-    Equivalent to hrc(x, jax.nn.relu, c_in, c_out, eps).
-    When c_in = c_out = c, this is equivalent to hyp_relu(x, c).
-
-    Parameters
-    ----------
-    x : Array of shape (..., dim+1)
-        Input point(s) on the hyperboloid manifold with curvature c_in.
-    c_in : float
-        Input curvature parameter (must be positive).
-    c_out : float
-        Output curvature parameter (must be positive).
-    eps : float, optional
-        Small value for numerical stability (default: 1e-7).
-
-    Returns
-    -------
-    y : Array of shape (..., dim+1)
-        Output point(s) on the hyperboloid manifold with curvature c_out.
-    """
-    return hrc(x, jax.nn.relu, c_in, c_out, eps)
-
-
-def hrc_leaky_relu(
-    x: Float[Array, "... dim_plus_1"],
-    c_in: float,
-    c_out: float,
-    negative_slope: float = 0.01,
-    eps: float = 1e-7,
-) -> Float[Array, "... dim_plus_1"]:
-    """HRC with LeakyReLU activation.
-
-    When c_in = c_out = c, this is equivalent to hyp_leaky_relu(x, c, negative_slope).
-
-    Parameters
-    ----------
-    x : Array of shape (..., dim+1)
-        Input point(s) on the hyperboloid manifold with curvature c_in.
-    c_in : float
-        Input curvature parameter (must be positive).
-    c_out : float
-        Output curvature parameter (must be positive).
-    negative_slope : float, optional
-        Negative slope coefficient for LeakyReLU (default: 0.01).
-    eps : float, optional
-        Small value for numerical stability (default: 1e-7).
-
-    Returns
-    -------
-    y : Array of shape (..., dim+1)
-        Output point(s) on the hyperboloid manifold with curvature c_out.
-    """
-
-    def f_r(z):
-        return jax.nn.leaky_relu(z, negative_slope)
-
-    return hrc(x, f_r, c_in, c_out, eps)
-
-
-def hrc_tanh(
-    x: Float[Array, "... dim_plus_1"],
-    c_in: float,
-    c_out: float,
-    eps: float = 1e-7,
-) -> Float[Array, "... dim_plus_1"]:
-    """HRC with tanh activation.
-
-    When c_in = c_out = c, this is equivalent to hyp_tanh(x, c).
-
-    Parameters
-    ----------
-    x : Array of shape (..., dim+1)
-        Input point(s) on the hyperboloid manifold with curvature c_in.
-    c_in : float
-        Input curvature parameter (must be positive).
-    c_out : float
-        Output curvature parameter (must be positive).
-    eps : float, optional
-        Small value for numerical stability (default: 1e-7).
-
-    Returns
-    -------
-    y : Array of shape (..., dim+1)
-        Output point(s) on the hyperboloid manifold with curvature c_out.
-    """
-    return hrc(x, jnp.tanh, c_in, c_out, eps)
-
-
-def hrc_swish(
-    x: Float[Array, "... dim_plus_1"],
-    c_in: float,
-    c_out: float,
-    eps: float = 1e-7,
-) -> Float[Array, "... dim_plus_1"]:
-    """HRC with Swish/SiLU activation.
-
-    When c_in = c_out = c, this is equivalent to hyp_swish(x, c).
-
-    Parameters
-    ----------
-    x : Array of shape (..., dim+1)
-        Input point(s) on the hyperboloid manifold with curvature c_in.
-    c_in : float
-        Input curvature parameter (must be positive).
-    c_out : float
-        Output curvature parameter (must be positive).
-    eps : float, optional
-        Small value for numerical stability (default: 1e-7).
-
-    Returns
-    -------
-    y : Array of shape (..., dim+1)
-        Output point(s) on the hyperboloid manifold with curvature c_out.
-    """
-    return hrc(x, jax.nn.swish, c_in, c_out, eps)
-
-
-def hrc_gelu(
-    x: Float[Array, "... dim_plus_1"],
-    c_in: float,
-    c_out: float,
-    eps: float = 1e-7,
-) -> Float[Array, "... dim_plus_1"]:
-    """HRC with GELU activation.
-
-    Parameters
-    ----------
-    x : Array of shape (..., dim+1)
-        Input point(s) on the hyperboloid manifold with curvature c_in.
-    c_in : float
-        Input curvature parameter (must be positive).
-    c_out : float
-        Output curvature parameter (must be positive).
-    eps : float, optional
-        Small value for numerical stability (default: 1e-7).
-
-    Returns
-    -------
-    y : Array of shape (..., dim+1)
-        Output point(s) on the hyperboloid manifold with curvature c_out.
-    """
-    return hrc(x, jax.nn.gelu, c_in, c_out, eps)
 
 
 # Flax NNX Modules

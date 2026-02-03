@@ -30,16 +30,6 @@ All layers follow Flax NNX conventions and store manifold module references.
 
 ### Hyperboloid Linear
 
-::: hyperbolix.nn_layers.HypLinearHyperboloid
-    options:
-      show_source: true
-      heading_level: 4
-
-::: hyperbolix.nn_layers.HypLinearHyperboloidFHNN
-    options:
-      show_source: true
-      heading_level: 4
-
 ::: hyperbolix.nn_layers.HypLinearHyperboloidFHCNN
     options:
       show_source: true
