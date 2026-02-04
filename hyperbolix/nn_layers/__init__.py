@@ -15,13 +15,14 @@ from .hyperboloid_activations import (
 from .hyperboloid_conv import HypConv2DHyperboloid, HypConv3DHyperboloid, HypConvHyperboloid
 from .hyperboloid_linear import HypLinearHyperboloidFHCNN
 from .hyperboloid_regression import HypRegressionHyperboloid
-from .hypformer import HRCDropout, HRCLayerNorm, HTCLinear, hrc, htc
+from .hypformer import HRCBatchNorm, HRCDropout, HRCLayerNorm, HTCLinear, hrc, htc
 from .lorentz_conv import LorentzConv2D, LorentzConv3D
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
 from .poincare_rl import HypRegressionPoincareHDRL
 
 __all__ = [
+    "HRCBatchNorm",
     "HRCDropout",
     "HRCLayerNorm",
     "HTCLinear",

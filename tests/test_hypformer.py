@@ -6,6 +6,7 @@ from flax import nnx
 
 from hyperbolix.manifolds import hyperboloid
 from hyperbolix.nn_layers import (
+    HRCBatchNorm,
     HRCDropout,
     HRCLayerNorm,
     HTCLinear,
@@ -513,3 +514,136 @@ def test_hrc_batch_consistency():
     for i in range(batch_size):
         y_single = hrc_relu(x_batch[i], c_in=c_in, c_out=c_out)
         assert jnp.allclose(y_batch[i], y_single, atol=1e-6)
+
+
+# HRCBatchNorm tests
+
+
+def test_hrc_batchnorm_forward():
+    """Test HRCBatchNorm forward pass with manifold constraint."""
+    bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+    # Training mode
+    y = bn(x, c_in=1.0, c_out=1.0, use_running_average=False)
+
+    assert y.shape == x.shape
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], 1.0, atol=1e-5)
+
+
+def test_hrc_batchnorm_curvature_change():
+    """Test HRCBatchNorm with curvature change."""
+    bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    c_in = 1.0
+    c_out = 2.0
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, c_in)
+
+    y = bn(x, c_in=c_in, c_out=c_out, use_running_average=False)
+
+    assert y.shape == x.shape
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], c_out, atol=1e-5)
+
+
+def test_hrc_batchnorm_training_vs_eval():
+    """Test HRCBatchNorm behaves differently in training vs eval mode."""
+    bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+    # Training mode - update running statistics
+    y_train1 = bn(x, c_in=1.0, c_out=1.0, use_running_average=False)
+    y_train2 = bn(x, c_in=1.0, c_out=1.0, use_running_average=False)
+
+    # Evaluation mode - use running statistics
+    y_eval = bn(x, c_in=1.0, c_out=1.0, use_running_average=True)
+
+    # All outputs should be valid manifold points
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y_train1[i], 1.0, atol=1e-5)
+        assert hyperboloid.is_in_manifold(y_train2[i], 1.0, atol=1e-5)
+        assert hyperboloid.is_in_manifold(y_eval[i], 1.0, atol=1e-5)
+
+    # Eval mode output should be different from training mode
+    # (using running average vs batch statistics)
+    assert not jnp.allclose(y_eval, y_train1, atol=1e-6)
+
+
+def test_hrc_batchnorm_shape_preservation():
+    """Test HRCBatchNorm preserves input shape."""
+    bn = HRCBatchNorm(num_features=16, rngs=nnx.Rngs(0))
+
+    # Test with different batch sizes
+    for batch_size in [8, 16, 32]:
+        x = jax.random.normal(jax.random.PRNGKey(batch_size), (batch_size, 17))
+        x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+        y = bn(x, c_in=1.0, c_out=1.0, use_running_average=False)
+
+        assert y.shape == x.shape
+
+
+def test_hrc_batchnorm_gradient():
+    """Test gradients through HRCBatchNorm."""
+    bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+    def loss_fn(model):
+        y = model(x, c_in=1.0, c_out=2.0, use_running_average=False)
+        return jnp.sum(y**2)
+
+    loss, grads = nnx.value_and_grad(loss_fn)(bn)
+
+    assert jnp.isfinite(loss)
+    # Check that gradients exist for scale and bias parameters
+    assert hasattr(grads.bn, "scale")
+    assert hasattr(grads.bn, "bias")
+    assert jnp.all(jnp.isfinite(grads.bn.scale[...]))
+    assert jnp.all(jnp.isfinite(grads.bn.bias[...]))
+
+
+def test_hrc_batchnorm_jit():
+    """Test HRCBatchNorm works under JIT compilation."""
+    bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    @nnx.jit
+    def forward(model, x, c_in, c_out):
+        return model(x, c_in, c_out, use_running_average=False)
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+    y = forward(bn, x, 1.0, 2.0)
+
+    assert y.shape == x.shape
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], 2.0, atol=1e-5)
+
+
+def test_hrc_batchnorm_extreme_curvatures():
+    """Test HRCBatchNorm with extreme curvature ratios."""
+    bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+
+    # Very small to very large curvature
+    x_small = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 0.1)
+    y = bn(x_small, c_in=0.1, c_out=10.0, use_running_average=False)
+
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], 10.0, atol=1e-4)
+
+    # Very large to very small curvature
+    x_large = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 10.0)
+    y = bn(x_large, c_in=10.0, c_out=0.1, use_running_average=False)
+
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], 0.1, atol=1e-4)
