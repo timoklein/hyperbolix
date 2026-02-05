@@ -7,8 +7,8 @@ import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
+from .hyperboloid_core import hrc
 from .hyperboloid_linear import HypLinearHyperboloidFHCNN
-from .hypformer import hrc
 
 
 class LorentzConv2D(nnx.Module):

@@ -9,15 +9,16 @@ The module provides two families of activations:
 - hrc_*: Hyperbolic Regularization Component with curvature-change support (c_in → c_out)
 - hyp_*: Curvature-preserving wrappers (c_in = c_out = c) for convenience
 
-For the core hrc() function and NNX modules, see hypformer module.
+For the core hrc() function, see hyperboloid_core module.
+For HRC NNX modules (dropout, normalization), see hyperboloid_regularization module.
 """
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-# Import hrc from hypformer (used by regularization NNX modules)
-from .hypformer import hrc
+# Import hrc from hyperboloid_core (foundational Hypformer operation)
+from .hyperboloid_core import hrc
 
 # Curvature-Changing Activations (HRC convenience functions)
 

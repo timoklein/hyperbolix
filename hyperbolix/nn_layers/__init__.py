@@ -13,9 +13,10 @@ from .hyperboloid_activations import (
     hyp_tanh,
 )
 from .hyperboloid_conv import HypConv2DHyperboloid, HypConv3DHyperboloid, LorentzConv2D
-from .hyperboloid_linear import HypLinearHyperboloidFHCNN
+from .hyperboloid_core import hrc, htc
+from .hyperboloid_linear import HTCLinear, HypLinearHyperboloidFHCNN
 from .hyperboloid_regression import HypRegressionHyperboloid
-from .hypformer import HRCBatchNorm, HRCDropout, HRCLayerNorm, HTCLinear, hrc, htc
+from .hyperboloid_regularization import HRCBatchNorm, HRCDropout, HRCLayerNorm
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
 from .poincare_rl import HypRegressionPoincareHDRL
