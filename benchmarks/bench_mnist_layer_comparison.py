@@ -49,7 +49,6 @@ from hyperbolix.nn_layers import (
     HypConv2DHyperboloid,
     HypLinearHyperboloidFHCNN,
     HypRegressionHyperboloid,
-    LorentzConv2D,
     hrc_relu,
 )
 from hyperbolix.optim import riemannian_sgd
@@ -469,108 +468,6 @@ class FullyHyperbolicCNN_HCat(nnx.Module):
         return self.output(x, c)  # (batch, 10)
 
 
-class FullyHyperbolicCNN_Lorentz(nnx.Module):
-    """Fully hyperbolic CNN using LorentzConv2D (rotation + rescaling + boost approach).
-
-    This uses the Lorentz convolution from Eq. 7 of the paper, which applies
-    rotation convolution, distance rescaling, and Lorentz boost.
-
-    Architecture:
-        Input (28×28×1) → Project each pixel to Hyperboloid (28×28×2)
-                        → LorentzConv2D (2→33, stride=2) + HRC ReLU + HRC BatchNorm → 14×14×33
-                        → LorentzConv2D (33→65, stride=2) + HRC ReLU + HRC BatchNorm → 7×7×65
-                        → Global Average Pooling
-                        → FHCNN Linear (65→65) + HRC ReLU
-                        → HypRegressionHyperboloid MLR (65→10 classes)
-    """
-
-    def __init__(self, rngs: nnx.Rngs):
-        # Lorentz convolutional layers
-        # Note: Use float64 dtype to match jax_enable_x64
-        self.lorentz_conv1 = LorentzConv2D(
-            manifold_module=hyperboloid,
-            in_channels=2,
-            out_channels=33,
-            kernel_size=3,
-            rngs=rngs,
-            stride=2,  # Downsample 28→14
-            padding="SAME",
-            input_space="manifold",
-            use_distance_rescaling=True,
-            use_boost=True,
-            dtype=jnp.float64,
-        )
-        self.hyp_bn1 = HRCBatchNorm(32, rngs=rngs)
-
-        self.lorentz_conv2 = LorentzConv2D(
-            manifold_module=hyperboloid,
-            in_channels=33,
-            out_channels=65,
-            kernel_size=3,
-            rngs=rngs,
-            stride=2,  # Downsample 14→7
-            padding="SAME",
-            input_space="manifold",
-            use_distance_rescaling=True,
-            use_boost=True,
-            dtype=jnp.float64,
-        )
-        self.hyp_bn2 = HRCBatchNorm(64, rngs=rngs)
-
-        # Hyperbolic linear layers
-        self.hyp_linear = HypLinearHyperboloidFHCNN(
-            hyperboloid,
-            65,
-            65,
-            rngs=rngs,
-            input_space="manifold",
-            learnable_scale=False,
-            normalize=False,
-        )
-        self.output = HypRegressionHyperboloid(hyperboloid, 65, 10, rngs=rngs, input_space="manifold")
-
-    def __call__(
-        self, x: Float[Array, "batch 784"], c: float = 1.0, use_running_average: bool = False
-    ) -> Float[Array, "batch 10"]:
-        # Cast to float64 to match LorentzConv2D weights (jax_enable_x64 is True)
-        x = x.astype(jnp.float64)
-
-        # Reshape to image
-        x = x.reshape(-1, 28, 28, 1)  # (batch, 28, 28, 1)
-
-        # Project each pixel value to hyperboloid
-        batch_size, h, w, _ = x.shape
-        x_flat = x.reshape(batch_size * h * w)
-        time_coords = jnp.sqrt(x_flat**2 + 1 / c)
-        x_hyp = jnp.stack([time_coords, x_flat], axis=-1)
-        x = x_hyp.reshape(batch_size, h, w, 2)  # (batch, 28, 28, 2)
-
-        # First Lorentz conv block
-        x = self.lorentz_conv1(x, c)  # (batch, 14, 14, 33)
-        x = hrc_relu(x, c, c)
-        x = self.hyp_bn1(x, c_in=c, c_out=c, use_running_average=use_running_average)
-
-        # Second Lorentz conv block
-        x = self.lorentz_conv2(x, c)  # (batch, 7, 7, 65)
-        x = hrc_relu(x, c, c)
-        x = self.hyp_bn2(x, c_in=c, c_out=c, use_running_average=use_running_average)
-
-        # Global average pooling
-        x_space = x[..., 1:]  # (batch, 7, 7, 64)
-        x_space_pooled = jnp.mean(x_space, axis=(1, 2))  # (batch, 64)
-
-        # Reconstruct as hyperboloid point
-        time_coord = jnp.sqrt(jnp.sum(x_space_pooled**2, axis=-1, keepdims=True) + 1 / c)
-        x = jnp.concatenate([time_coord, x_space_pooled], axis=-1)  # (batch, 65)
-
-        # Hyperbolic linear layer
-        x = self.hyp_linear(x, c)
-        x = hrc_relu(x, c, c)
-
-        # Hyperbolic MLR classification
-        return self.output(x, c)
-
-
 # ==============================================================================
 # Training Utilities
 # ==============================================================================
@@ -897,11 +794,6 @@ Examples:
         help="Run fully hyperbolic CNN using HypConv2D (HCat approach)",
     )
     parser.add_argument(
-        "--fully-hyp-lorentz",
-        action="store_true",
-        help="Run fully hyperbolic CNN using LorentzConv2D (rotation + rescaling + boost)",
-    )
-    parser.add_argument(
         "--all",
         action="store_true",
         help="Run all models (default if no flags specified)",
@@ -923,13 +815,7 @@ def main():
     # Determine which models to run
     # If no specific flags are set (or --all is set), run all models
     run_all = args.all or not (
-        args.fhcnn_hybrid
-        or args.fhcnn_direct
-        or args.htc_hybrid
-        or args.htc_direct
-        or args.fhcnn_cnn
-        or args.fully_hyp_hcat
-        or args.fully_hyp_lorentz
+        args.fhcnn_hybrid or args.fhcnn_direct or args.htc_hybrid or args.htc_direct or args.fhcnn_cnn or args.fully_hyp_hcat
     )
 
     # Build list of models to benchmark
@@ -940,7 +826,6 @@ def main():
         (HTCDirect, "HTC-Direct", args.htc_direct or run_all),
         (FHCNNCNNHybrid, "FHCNN-CNN-Hybrid", args.fhcnn_cnn or run_all),
         (FullyHyperbolicCNN_HCat, "FullyHyp-HCat", args.fully_hyp_hcat or run_all),
-        (FullyHyperbolicCNN_Lorentz, "FullyHyp-Lorentz", args.fully_hyp_lorentz or run_all),
     ]
 
     models = [(cls, name) for cls, name, should_run in available_models if should_run]

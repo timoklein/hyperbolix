@@ -216,10 +216,6 @@ class HypConv2DHyperboloid(nnx.Module):
         return output
 
 
-# Backward compatible alias
-HypConvHyperboloid = HypConv2DHyperboloid
-
-
 class HypConv3DHyperboloid(nnx.Module):
     """
     Hyperbolic 3D Convolutional Layer for Hyperboloid model.

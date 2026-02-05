@@ -12,11 +12,10 @@ from .hyperboloid_activations import (
     hyp_swish,
     hyp_tanh,
 )
-from .hyperboloid_conv import HypConv2DHyperboloid, HypConv3DHyperboloid, HypConvHyperboloid
+from .hyperboloid_conv import HypConv2DHyperboloid, HypConv3DHyperboloid
 from .hyperboloid_linear import HypLinearHyperboloidFHCNN
 from .hyperboloid_regression import HypRegressionHyperboloid
 from .hypformer import HRCBatchNorm, HRCDropout, HRCLayerNorm, HTCLinear, hrc, htc
-from .lorentz_conv import LorentzConv2D, LorentzConv3D
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
 from .poincare_rl import HypRegressionPoincareHDRL
@@ -28,7 +27,6 @@ __all__ = [
     "HTCLinear",
     "HypConv2DHyperboloid",
     "HypConv3DHyperboloid",
-    "HypConvHyperboloid",
     "HypLinearHyperboloidFHCNN",
     "HypLinearPoincare",
     "HypLinearPoincarePP",
@@ -36,8 +34,6 @@ __all__ = [
     "HypRegressionPoincare",
     "HypRegressionPoincareHDRL",
     "HypRegressionPoincarePP",
-    "LorentzConv2D",
-    "LorentzConv3D",
     "hrc",
     "hrc_gelu",
     "hrc_leaky_relu",

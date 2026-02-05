@@ -73,29 +73,7 @@ print(output.shape)  # (10, 16)
       show_source: true
       heading_level: 4
 
-::: hyperbolix.nn_layers.HypConvHyperboloid
-    options:
-      show_source: false
-      heading_level: 4
-
-!!! note "Backward Compatibility"
-    `HypConvHyperboloid` is an alias for `HypConv2DHyperboloid` for backward compatibility.
-
-### Lorentz Convolutions
-
-Implements "Fully Hyperbolic CNNs" (Bdeir et al., 2023).
-
-::: hyperbolix.nn_layers.LorentzConv2D
-    options:
-      show_source: true
-      heading_level: 4
-
-::: hyperbolix.nn_layers.LorentzConv3D
-    options:
-      show_source: true
-      heading_level: 4
-
-### Convolution Example
+### Usage Example
 
 ```python
 from hyperbolix.nn_layers import HypConv2DHyperboloid
@@ -133,32 +111,6 @@ print(output.shape)  # (8, 28, 28, 32×9+1) - dimension grows!
     - Output: `(d×N)+1` dimensions where `N = kernel_height × kernel_width`
 
     For 3×3 kernel: 3D input → 28D output. Use small kernels or add dimensionality reduction layers.
-
-### Lorentz Convolution Example
-
-```python
-from hyperbolix.nn_layers import LorentzConv2D
-from hyperbolix.manifolds import hyperboloid
-from flax import nnx
-
-# Lorentz convolution with boost and rescaling
-conv = LorentzConv2D(
-    manifold_module=hyperboloid,
-    out_channels=64,
-    kernel_size=(3, 3),
-    stride=(1, 1),
-    input_space='tangent',  # or 'ambient'
-    use_lorentz_boost=True,
-    use_distance_rescale=True,
-    rngs=nnx.Rngs(0)
-)
-
-# Input in tangent space
-x_tangent = jax.random.normal(nnx.Rngs(1).params(), (8, 28, 28, 32))
-
-output = conv(x_tangent, c=1.0)
-print(output.shape)  # (8, 28, 28, 64+1) - ambient dimension
-```
 
 ## Regression Layers
 

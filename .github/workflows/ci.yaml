@@ -80,7 +80,6 @@ jobs:
           - "test_horo_pca.py"
           - "test_hyperboloid_activations.py"
           - "test_hyperboloid_conv.py"
-          - "test_lorentz_conv.py"
           - "test_manifolds.py"
           - "test_math_utils.py"
           - "test_nn_layers.py"
