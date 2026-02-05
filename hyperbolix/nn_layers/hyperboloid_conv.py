@@ -8,6 +8,125 @@ from flax import nnx
 from jaxtyping import Array, Float
 
 from .hyperboloid_linear import HypLinearHyperboloidFHCNN
+from .hypformer import hrc
+
+
+class LorentzConv2D(nnx.Module):
+    """
+    Lorentz 2D Convolutional Layer using the Hyperbolic Layer (HL) approach.
+
+    This layer applies convolution to the space-like components of Lorentzian
+    vectors and reconstructs the time-like component to maintain the manifold
+    constraint. This is equivalent to an HRC (Hyperbolic Regularization Component)
+    wrapper around a standard Conv2D.
+
+    Computation steps:
+        1) Extract space-like components x_s from input x = [x_t, x_s]^T
+        2) Apply Euclidean convolution: y_s = Conv2D(x_s)
+        3) Reconstruct time component: y_t = sqrt(||y_s||^2 + 1/c)
+        4) Return y = [y_t, y_s]^T
+
+    Parameters
+    ----------
+    in_channels : int
+        Number of input channels (ambient dimension, including time component)
+    out_channels : int
+        Number of output channels (ambient dimension, including time component)
+    kernel_size : int or tuple[int, int]
+        Size of the convolutional kernel
+    rngs : nnx.Rngs
+        Random number generators for parameter initialization
+    stride : int or tuple[int, int]
+        Stride of the convolution (default: 1)
+    padding : str or int or tuple
+        Padding mode: 'SAME', 'VALID', or explicit padding (default: 'SAME')
+
+    Notes
+    -----
+    This implementation follows the Hyperbolic Layer (HL) approach from
+    "Fully Hyperbolic Convolutional Neural Networks for Computer Vision".
+
+    The layer operates only on space-like components, making it more
+    computationally efficient than the HCat-based approach (HypConv2DHyperboloid),
+    though it doesn't perform true hyperbolic convolution. Instead, it applies
+    Euclidean operations to spatial components and reconstructs the time component.
+
+    See Also
+    --------
+    hypformer.hrc : Core HRC function this layer is based on
+    HypConv2DHyperboloid : Full hyperbolic convolution using HCat concatenation
+
+    References
+    ----------
+    He, Neil, Menglin Yang, and Rex Ying. "Lorentzian residual neural networks."
+    Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 1. 2025.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | tuple[int, int],
+        *,
+        rngs: nnx.Rngs,
+        stride: int | tuple[int, int] = 1,
+        padding: str = "SAME",
+    ):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        # Create Euclidean conv layer for space components only
+        # in_channels - 1: skip time component at index 0
+        # out_channels - 1: time will be reconstructed from constraint
+        self.conv = nnx.Conv(
+            in_features=in_channels - 1,
+            out_features=out_channels - 1,
+            kernel_size=kernel_size,
+            strides=stride,
+            padding=padding,
+            rngs=rngs,
+        )
+
+    def __call__(
+        self,
+        x: Float[Array, "batch height width in_channels"],
+        c: float = 1.0,
+    ) -> Float[Array, "batch out_height out_width out_channels"]:
+        """
+        Forward pass through the Lorentz convolutional layer.
+
+        This layer is a specific instance of the Hyperbolic Regularization Component (HRC)
+        where the regularization function f_r is a 2D convolution. The HRC pattern:
+        1. Extracts space components
+        2. Applies Euclidean convolution
+        3. Reconstructs time component using Lorentz constraint
+
+        Parameters
+        ----------
+        x : Array of shape (batch, height, width, in_channels)
+            Input feature map where x[..., 0] is time component and
+            x[..., 1:] are space components on the Lorentz manifold
+        c : float
+            Manifold curvature parameter (default: 1.0)
+
+        Returns
+        -------
+        out : Array of shape (batch, out_height, out_width, out_channels)
+            Output feature map on the Lorentz manifold
+
+        Notes
+        -----
+        This implementation uses the HRC function from hypformer.py, demonstrating that
+        LorentzConv2D (from LResNet) and HRC (from Hypformer) are mathematically equivalent
+        approaches to adapting Euclidean operations for hyperbolic geometry.
+        """
+
+        # Define convolution as the HRC regularization function f_r
+        def conv_fn(x_space):
+            return self.conv(x_space)
+
+        # Apply HRC with curvature-preserving transformation (c_in = c_out = c)
+        return hrc(x, conv_fn, c_in=c, c_out=c, eps=1e-8)
 
 
 class HypConv2DHyperboloid(nnx.Module):
