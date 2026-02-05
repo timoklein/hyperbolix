@@ -292,7 +292,7 @@ class FHCNNCNNHybrid(nnx.Module):
     - Use constraint-based projection (not expmap_0) to avoid exponential blowup
 
     Architecture:
-        Input (28×28×1) → Euclidean Conv(1→32, stride=2) + ReLU + BatchNorm
+        Input (28x28x1) → Euclidean Conv(1→32, stride=2) + ReLU + BatchNorm
                         → Euclidean Conv(32→64, stride=2) + ReLU + BatchNorm
                         → Global Average Pooling → (batch, 64)
                         → Project to Hyperboloid (64→65) via constraint
@@ -385,9 +385,9 @@ class FullyHyperbolicCNN_HCat(nnx.Module):
     hyperboloid manifold, using the HCat concatenation approach from the paper.
 
     Architecture:
-        Input (28×28×1) → Project each pixel to Hyperboloid (28×28×2)
-                        → HypConv2D (2→33, stride=2) + HRC ReLU + HRC BatchNorm → 14×14×33
-                        → HypConv2D (33→65, stride=2) + HRC ReLU + HRC BatchNorm → 7×7×65
+        Input (28x28x1) → Project each pixel to Hyperboloid (28x28x2)
+                        → HypConv2D (2→33, stride=2) + HRC ReLU + HRC BatchNorm → 14x14x33
+                        → HypConv2D (33→65, stride=2) + HRC ReLU + HRC BatchNorm → 7x7x65
                         → Global Average Pooling (extract spatial, pool, reconstruct time)
                         → FHCNN Linear (65→65) + HRC ReLU
                         → HypRegressionHyperboloid MLR (65→10 classes)
@@ -482,9 +482,9 @@ class FullyHyperbolicCNN_Lorentz(nnx.Module):
     following the Hyperbolic Layer (HL) pattern.
 
     Architecture:
-        Input (28×28×1) → Project each pixel to Hyperboloid (28×28×2)
-                        → LorentzConv2D (2→33, stride=2) + HRC BatchNorm + HRC ReLU → 14×14×33
-                        → LorentzConv2D (33→65, stride=2) + HRC BatchNorm + HRC ReLU → 7×7×65
+        Input (28x28x1) → Project each pixel to Hyperboloid (28x28x2)
+                        → LorentzConv2D (2→33, stride=2) + HRC BatchNorm + HRC ReLU → 14x14x33
+                        → LorentzConv2D (33→65, stride=2) + HRC BatchNorm + HRC ReLU → 7x7x65
                         → Global Average Pooling (extract spatial, pool, reconstruct time)
                         → FHCNN Linear (65→65) + HRC ReLU
                         → HypRegressionHyperboloid MLR (65→10 classes)
@@ -761,7 +761,7 @@ def plot_comparison(results: dict[str, dict[str, Any]]):
     results : dict
         Dictionary mapping model names to their metrics
     """
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    _fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
     # Plot 1: Training loss curves
     ax = axes[0, 0]
