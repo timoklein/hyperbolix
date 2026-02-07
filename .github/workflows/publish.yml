@@ -39,10 +39,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Publish to TestPyPI
+        continue-on-error: true
         run: uv publish --publish-url https://test.pypi.org/legacy/ --trusted-publishing always dist/*
 
   publish-pypi:
-    needs: publish-testpypi
+    needs: build
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
