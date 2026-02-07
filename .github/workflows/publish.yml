@@ -41,21 +41,21 @@ jobs:
       - name: Publish to TestPyPI
         run: uv publish --publish-url https://test.pypi.org/legacy/ --trusted-publishing always dist/*
 
-  # publish-pypi:
-  #   needs: publish-testpypi
-  #   runs-on: ubuntu-latest
-  #   environment: pypi
-  #   permissions:
-  #     id-token: write
-  #   steps:
-  #     - name: Download artifacts
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: dist
-  #         path: dist/
-  #
-  #     - name: Install uv
-  #       uses: astral-sh/setup-uv@v5
-  #
-  #     - name: Publish to PyPI
-  #       run: uv publish --trusted-publishing always dist/*
+  publish-pypi:
+    needs: publish-testpypi
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Publish to PyPI
+        run: uv publish --trusted-publishing always dist/*
