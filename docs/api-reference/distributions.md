@@ -40,7 +40,7 @@ import jax.numpy as jnp
 
 # Mean on Poincaré ball
 mean = jnp.array([0.2, 0.3])
-mean_proj = poincare.proj(mean, c=1.0, version=None)
+mean_proj = poincare.proj(mean, c=1.0)
 
 # Standard deviation
 std = 0.1
@@ -65,8 +65,8 @@ log_probs = jax.vmap(
 print(log_probs.shape)  # (100,)
 
 # Higher probability near mean
-point_near_mean = poincare.proj(jnp.array([0.21, 0.29]), c=1.0, version=None)
-point_far = poincare.proj(jnp.array([0.7, 0.7]), c=1.0, version=None)
+point_near_mean = poincare.proj(jnp.array([0.21, 0.29]), c=1.0)
+point_far = poincare.proj(jnp.array([0.7, 0.7]), c=1.0)
 
 print(f"Log prob (near): {wrapped_normal_poincare.log_prob(point_near_mean, mean_proj, std, c=1.0):.4f}")
 print(f"Log prob (far): {wrapped_normal_poincare.log_prob(point_far, mean_proj, std, c=1.0):.4f}")

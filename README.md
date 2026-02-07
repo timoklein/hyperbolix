@@ -56,7 +56,7 @@ uv sync  # or: pip install -e .
 
 ## Documentation
 
-📖 **[Full Documentation](https://hyperbolix.github.io/hyperbolix/)** (coming soon)
+📖 **[Full Documentation](https://hyperbolix.github.io/hyperbolix/)**
 
 - **[Getting Started](docs/getting-started.md)** - Installation and first examples
 - **[User Guides](docs/user-guide/)** - Manifolds, layers, optimizers, batching, numerical stability

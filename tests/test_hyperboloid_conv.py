@@ -8,7 +8,7 @@ import pytest
 from flax import nnx
 
 import hyperbolix.manifolds.hyperboloid as hyperboloid
-from hyperbolix.nn_layers.hyperboloid_conv import HypConv3DHyperboloid, HypConvHyperboloid
+from hyperbolix.nn_layers.hyperboloid_conv import HypConv2DHyperboloid, HypConv3DHyperboloid
 
 # Enable float64 for tests
 jax.config.update("jax_enable_x64", True)
@@ -161,7 +161,7 @@ def test_hcat_space_concatenation(dtype):
 
 
 # ============================================================================
-# HypConvHyperboloid Layer Tests
+# HypConv2DHyperboloid Layer Tests
 # ============================================================================
 
 
@@ -169,7 +169,7 @@ def test_hcat_space_concatenation(dtype):
 @pytest.mark.parametrize("padding", ["SAME", "VALID"])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hypconv_hyperboloid_output_shape(kernel_size, padding, dtype):
-    """Test HypConvHyperboloid output shape with different kernel sizes and padding."""
+    """Test HypConv2DHyperboloid output shape with different kernel sizes and padding."""
     key = jax.random.PRNGKey(42)
     batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
     c = 1.0
@@ -182,7 +182,7 @@ def test_hypconv_hyperboloid_output_shape(kernel_size, padding, dtype):
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypConvHyperboloid(
+    layer = HypConv2DHyperboloid(
         manifold_module=hyperboloid,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -219,7 +219,7 @@ def test_hypconv_hyperboloid_output_on_manifold(dtype):
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypConvHyperboloid(
+    layer = HypConv2DHyperboloid(
         manifold_module=hyperboloid,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -243,7 +243,7 @@ def test_hypconv_hyperboloid_output_on_manifold(dtype):
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hypconv_hyperboloid_stride(stride, dtype):
-    """Test HypConvHyperboloid with different stride values."""
+    """Test HypConv2DHyperboloid with different stride values."""
     key = jax.random.PRNGKey(42)
     batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
     kernel_size = 3
@@ -255,7 +255,7 @@ def test_hypconv_hyperboloid_stride(stride, dtype):
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypConvHyperboloid(
+    layer = HypConv2DHyperboloid(
         manifold_module=hyperboloid,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -277,7 +277,7 @@ def test_hypconv_hyperboloid_stride(stride, dtype):
 @pytest.mark.parametrize("input_space", ["manifold", "tangent"])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hypconv_hyperboloid_input_space(input_space, dtype):
-    """Test HypConvHyperboloid with different input_space settings."""
+    """Test HypConv2DHyperboloid with different input_space settings."""
     key = jax.random.PRNGKey(42)
     batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
     c = 1.0
@@ -294,7 +294,7 @@ def test_hypconv_hyperboloid_input_space(input_space, dtype):
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypConvHyperboloid(
+    layer = HypConv2DHyperboloid(
         manifold_module=hyperboloid,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -313,7 +313,7 @@ def test_hypconv_hyperboloid_input_space(input_space, dtype):
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hypconv_hyperboloid_gradient(dtype):
-    """Test HypConvHyperboloid has valid gradients."""
+    """Test HypConv2DHyperboloid has valid gradients."""
     key = jax.random.PRNGKey(42)
     batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
     c = 1.0
@@ -324,7 +324,7 @@ def test_hypconv_hyperboloid_gradient(dtype):
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypConvHyperboloid(
+    layer = HypConv2DHyperboloid(
         manifold_module=hyperboloid,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -342,13 +342,13 @@ def test_hypconv_hyperboloid_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.linear.weight.value).all()
-    assert jnp.isfinite(grads.linear.bias.value).all()
+    assert jnp.isfinite(grads.linear.weight[...]).all()
+    assert jnp.isfinite(grads.linear.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hypconv_hyperboloid_jitted(dtype):
-    """Test HypConvHyperboloid under nnx.jit."""
+    """Test HypConv2DHyperboloid under nnx.jit."""
     key = jax.random.PRNGKey(42)
     batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
     c = 1.0
@@ -359,7 +359,7 @@ def test_hypconv_hyperboloid_jitted(dtype):
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypConvHyperboloid(
+    layer = HypConv2DHyperboloid(
         manifold_module=hyperboloid,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -381,7 +381,7 @@ def test_hypconv_hyperboloid_jitted(dtype):
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hypconv_hyperboloid_different_curvatures(dtype):
-    """Test HypConvHyperboloid with different curvature values."""
+    """Test HypConv2DHyperboloid with different curvature values."""
     key = jax.random.PRNGKey(42)
     batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
 
@@ -395,7 +395,7 @@ def test_hypconv_hyperboloid_different_curvatures(dtype):
 
         # Create layer
         rngs = nnx.Rngs(42)
-        layer = HypConvHyperboloid(
+        layer = HypConv2DHyperboloid(
             manifold_module=hyperboloid,
             in_channels=in_channels,
             out_channels=out_channels,

@@ -17,3 +17,6 @@ wheels/
 
 # Docs
 site/
+
+# Benchmark results
+results/

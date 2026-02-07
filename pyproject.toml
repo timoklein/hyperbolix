@@ -1,8 +1,8 @@
 # GENERAL
 
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
 
 [project]
 name = "hyperbolix"
@@ -14,8 +14,34 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.12"
+license = {text = "MIT"}
+keywords = [
+    "hyperbolic",
+    "deep-learning",
+    "jax",
+    "flax",
+    "machine-learning",
+    "riemannian",
+    "poincare",
+    "hyperboloid",
+    "neural-networks",
+    "geometric-deep-learning",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
+]
 dependencies = [
     "chex>=0.1.91",
+    "datasets>=3.2.0",
     "flax>=0.12.0",
     "jaxtyping>=0.3.2",
     "matplotlib>=3.10.6",
@@ -23,11 +49,18 @@ dependencies = [
     "optax>=0.2.6",
     "scikit-learn>=1.7.2",
     "scipy>=1.16.2",
-    "torch>=2.8.0",
     "tqdm>=4.67.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/timoklein/hyperbolix"
+Documentation = "https://timoklein.github.io/hyperbolix/"
+Repository = "https://github.com/timoklein/hyperbolix"
+Issues = "https://github.com/timoklein/hyperbolix/issues"
+Changelog = "https://github.com/timoklein/hyperbolix/releases"
 
+[tool.uv.build-backend]
+module-root = ""
 
 #----------------------------
 # RUFF
@@ -57,20 +90,7 @@ exclude = [
     ".mypy_cache",
 ]
 
-# Same as Black.
 line-length = 127
-
-[tool.black]
-line-length = 127
-
-[tool.isort]
-profile = "black"
-line_length = 127
-
-[tool.setuptools.packages.find]
-where = ["hyperbolix"]
-include = ["hyperbolic_test*", "manifolds*", "utils*", "nn_layers*", "optim*", "distributions*"]
-
 
 #----------------------------
 # DEV

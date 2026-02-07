@@ -223,8 +223,8 @@ class HypRegressionPoincareHDRL(nnx.Module):
             x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Project bias to manifold (vmap over out_dim dimension)
-        bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias.value, c)
+        bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias[...], c)
 
         # Compute MLR scores
-        res = self._compute_mlr(x, self.weight.value, bias, c)
+        res = self._compute_mlr(x, self.weight[...], bias, c)
         return res

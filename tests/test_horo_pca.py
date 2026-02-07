@@ -172,7 +172,7 @@ class TestHoroPCA:
         assert model.n_components == n_components
         assert model.n_in_features == n_in_features
         assert model.manifold_name == "hyperboloid"
-        assert model.Q.value.shape == (n_components, n_in_features - 1)
+        assert model.Q[...].shape == (n_components, n_in_features - 1)
 
     def test_initialization_poincare(self):
         """Test HoroPCA initialization with Poincaré manifold."""
@@ -192,7 +192,7 @@ class TestHoroPCA:
         assert model.n_components == n_components
         assert model.n_in_features == n_in_features
         assert model.manifold_name == "poincare"
-        assert model.Q.value.shape == (n_components, n_in_features)
+        assert model.Q[...].shape == (n_components, n_in_features)
 
     def test_invalid_manifold(self):
         """Test that invalid manifold raises error."""
@@ -261,8 +261,8 @@ class TestHoroPCA:
         model.fit(x)
 
         # Check that data_mean was computed
-        assert model.data_mean.value is not None
-        assert model.data_mean.value.shape == (1, n_in_features)
+        assert model.data_mean[...] is not None
+        assert model.data_mean[...].shape == (1, n_in_features)
 
     def test_fit_poincare_basic(self):
         """Test basic fit functionality with Poincaré ball."""
@@ -292,8 +292,8 @@ class TestHoroPCA:
         model.fit(x)
 
         # Check that data_mean was computed
-        assert model.data_mean.value is not None
-        assert model.data_mean.value.shape == (1, n_in_features + 1)  # Hyperboloid representation
+        assert model.data_mean[...] is not None
+        assert model.data_mean[...].shape == (1, n_in_features + 1)  # Hyperboloid representation
 
     def test_rank1_fit_transform_hyperboloid(self):
         """Ensure rank-1 configuration trains and transforms without NaNs."""
@@ -317,7 +317,7 @@ class TestHoroPCA:
         )
 
         model.fit(x)
-        assert model.loss_history.value.shape == (model.max_steps,)
+        assert model.loss_history[...].shape == (model.max_steps,)
 
         x_transformed = model.transform(x)
         assert x_transformed.shape == (n_points, 1)
@@ -345,7 +345,7 @@ class TestHoroPCA:
         )
 
         model.fit(x)
-        assert model.loss_history.value.shape == (model.max_steps,)
+        assert model.loss_history[...].shape == (model.max_steps,)
 
         x_transformed = model.transform(x)
         assert x_transformed.shape == (n_points, 1)
@@ -482,7 +482,7 @@ class TestHoroPCA:
         )
 
         model.fit(x)
-        history = model.loss_history.value
+        history = model.loss_history[...]
         assert history.shape == (model.max_steps,)
         assert jnp.all(jnp.isfinite(history))
 

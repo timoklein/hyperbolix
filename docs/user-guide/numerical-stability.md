@@ -136,7 +136,7 @@ from hyperbolix.manifolds import poincare
 
 # After addition or other operations
 result = poincare.add(x, y, c=1.0)
-result = poincare.proj(result, c=1.0, version_idx=None)  # Project back to manifold
+result = poincare.proj(result, c=1.0)  # Project back to manifold
 ```
 
 **2. Keep points away from boundary**
@@ -302,18 +302,15 @@ Operations like addition, linear transformations can push points off the manifol
 - After `expmap` (already on manifold)
 - After `proj` (redundant)
 
-### Projection Versions
+### Projection
 
-Projection also has versions optimizing for different scenarios:
+Projection ensures points stay on the manifold by clipping norms:
 
 ```python
-# Default: version_idx=None (automatic selection)
-x_proj = poincare.proj(x, c=1.0, version_idx=None)
+# Project to Poincaré ball
+x_proj = poincare.proj(x, c=1.0)
 
-# Version 0: Basic normalization
-x_proj = poincare.proj(x, c=1.0, version_idx=0)
-
-# Try different versions if numerical issues arise
+# Projection is numerically stable and automatically handles edge cases
 ```
 
 ### Projection in Training
@@ -333,7 +330,7 @@ class HyperbolicModel(nnx.Module):
 
         x = self.layer2(x, c)
         # Final projection
-        x = jax.vmap(lambda xi: poincare.proj(xi, c, None))(x)
+        x = jax.vmap(lambda xi: poincare.proj(xi, c))(x)
         return x
 ```
 

@@ -124,3 +124,86 @@ This fails the build if performance regresses by more than 10%.
 ### Slow benchmark runs
 - Skip warmup: `--benchmark-disable-gc`
 - Run subset: `-k "jit"` (only JIT tests)
+
+---
+
+## MNIST Layer Comparison Benchmark
+
+The `bench_mnist_layer_comparison.py` script provides end-to-end training benchmarks comparing different hyperbolic neural network architectures on MNIST.
+
+### Available Models
+
+- **FHCNN-Hybrid**: Fully Hyperbolic CNN with Euclidean embedding
+- **FHCNN-Direct**: Fully Hyperbolic CNN with direct projection
+- **HTC-Hybrid**: Hyperbolic Transformation Component with Euclidean embedding
+- **HTC-Direct**: Hyperbolic Transformation Component with direct projection
+- **FHCNN-CNN-Hybrid**: FHCNN-based convolutional network with HRCBatchNorm
+
+### Usage
+
+#### Run all models (default)
+
+```bash
+uv run python benchmarks/bench_mnist_layer_comparison.py
+```
+
+#### Run specific models
+
+```bash
+# Run only the CNN model
+uv run python benchmarks/bench_mnist_layer_comparison.py --fhcnn-cnn
+
+# Run FHCNN variants
+uv run python benchmarks/bench_mnist_layer_comparison.py --fhcnn-hybrid --fhcnn-direct
+
+# Run HTC variants
+uv run python benchmarks/bench_mnist_layer_comparison.py --htc-hybrid --htc-direct
+```
+
+#### Custom random seed
+
+```bash
+uv run python benchmarks/bench_mnist_layer_comparison.py --fhcnn-cnn --seed 123
+```
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--fhcnn-hybrid` | Run FHCNN with Euclidean embedding |
+| `--fhcnn-direct` | Run FHCNN with direct projection |
+| `--htc-hybrid` | Run HTC with Euclidean embedding |
+| `--htc-direct` | Run HTC with direct projection |
+| `--fhcnn-cnn` | Run FHCNN-based CNN with BatchNorm |
+| `--all` | Run all models (default if no flags specified) |
+| `--seed SEED` | Random seed for reproducibility (default: 42) |
+| `-h, --help` | Show help message |
+
+### Output
+
+The benchmark generates:
+
+1. **JSON results** (`results/mnist_benchmark_results.json`):
+   - Training losses and validation accuracies per epoch
+   - Parameter counts and memory usage
+   - Compilation and training times
+
+2. **Comparison plots** (`results/mnist_comparison.png`):
+   - Training loss and accuracy curves
+   - Training speed comparison
+   - Model capacity comparison
+
+3. **Summary table** (printed to console)
+
+### Examples
+
+```bash
+# Quick CNN test during development
+uv run python benchmarks/bench_mnist_layer_comparison.py --fhcnn-cnn
+
+# Compare FHCNN vs HTC (hybrid variants)
+uv run python benchmarks/bench_mnist_layer_comparison.py --fhcnn-hybrid --htc-hybrid
+
+# Full benchmark with custom seed
+uv run python benchmarks/bench_mnist_layer_comparison.py --all --seed 999
+```

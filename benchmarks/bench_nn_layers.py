@@ -16,7 +16,6 @@ from flax import nnx
 
 import hyperbolix.manifolds as manifolds
 from hyperbolix.nn_layers import (
-    HypLinearHyperboloid,
     HypLinearPoincare,
     HypRegressionPoincare,
 )
@@ -41,22 +40,6 @@ def poincare_linear_layer(dim):
         manifold_module=manifolds.poincare,
         in_dim=dim,
         out_dim=dim,
-        rngs=rngs,
-        input_space="manifold",
-    )
-
-
-@pytest.fixture
-def hyperboloid_linear_layer(dim):
-    """Create a Hyperboloid linear layer.
-
-    Note: Hyperboloid manifold lives in R^(dim+1), so in_dim and out_dim are dim+1.
-    """
-    rngs = nnx.Rngs(42)
-    return HypLinearHyperboloid(
-        manifold_module=manifolds.hyperboloid,
-        in_dim=dim + 1,  # Ambient dimension
-        out_dim=dim + 1,  # Ambient dimension
         rngs=rngs,
         input_space="manifold",
     )
@@ -145,37 +128,6 @@ def test_poincare_forward_backward_with_jit(benchmark, poincare_linear_layer, la
         # Ensure computation completes
         jax.tree.map(lambda x: x.block_until_ready(), grads)
         return loss.block_until_ready()
-
-    benchmark(run)
-
-
-# ============================================================================
-# Hyperboloid Layer Benchmarks
-# ============================================================================
-
-
-def test_hyperboloid_forward_pass_with_jit(benchmark, hyperboloid_linear_layer, layer_input):
-    """Benchmark Hyperboloid forward pass with JIT."""
-    # Hyperboloid needs dim+1: (batch, dim) -> (batch, dim+1)
-    layer_input_3d = jnp.concatenate([layer_input, jnp.ones((layer_input.shape[0], 1))], axis=1)
-
-    # Project to hyperboloid: proj(x, c) for each x[i]
-    proj_fn = jax.vmap(
-        manifolds.hyperboloid.proj,
-        in_axes=(0, None),  # (x: batch, c: scalar)
-    )
-    layer_input_3d = proj_fn(layer_input_3d, 1.0)
-
-    @nnx.jit
-    def forward(model, x, c):
-        return model(x, c)
-
-    # Warmup
-    _ = forward(hyperboloid_linear_layer, layer_input_3d, 1.0).block_until_ready()
-
-    def run():
-        result = forward(hyperboloid_linear_layer, layer_input_3d, 1.0)
-        return result.block_until_ready()
 
     benchmark(run)
 

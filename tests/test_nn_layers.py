@@ -5,10 +5,8 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-import hyperbolix.manifolds.hyperboloid as hyperboloid
 import hyperbolix.manifolds.poincare as poincare
 from hyperbolix.nn_layers import (
-    HypLinearHyperboloid,
     HypLinearPoincare,
     HypLinearPoincarePP,
 )
@@ -86,8 +84,8 @@ def test_hyp_linear_poincare_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -110,8 +108,8 @@ def test_hyp_linear_poincare_jitted_gradient(dtype):
     loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
 
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -179,172 +177,5 @@ def test_hyp_linear_poincare_pp_jitted_gradient(dtype):
     loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
 
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_linear_hyperboloid_forward(dtype):
-    """Test HypLinearHyperboloid forward pass."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 5, 4
-
-    # Create input on manifold
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
-
-    # Forward pass
-    y = layer(x, c=1.0)
-
-    # Check output shape
-    assert y.shape == (batch_size, out_dim)
-    # Check output is on manifold (vmap over batch)
-    assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_linear_hyperboloid_jitted_forward(dtype):
-    """Test HypLinearHyperboloid forward pass under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 5, 4
-
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
-
-    @nnx.jit
-    def forward(module, inputs, curvature):
-        return module(inputs, c=curvature)
-
-    y = forward(layer, x, 1.0)
-
-    assert y.shape == (batch_size, out_dim)
-    assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_linear_hyperboloid_gradient(dtype):
-    """Test HypLinearHyperboloid has valid gradients."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 4, 5, 4
-
-    # Create input
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
-
-    # Define loss function
-    def loss_fn(model):
-        y = model(x, c=1.0)
-        return jnp.sum(y**2)
-
-    # Compute gradients
-    loss, grads = nnx.value_and_grad(loss_fn)(layer)
-
-    # Check gradients exist and are finite
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_linear_hyperboloid_jitted_gradient(dtype):
-    """Test HypLinearHyperboloid gradients under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 4, 5, 4
-
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
-
-    @nnx.jit
-    def loss_fn(module, inputs, curvature):
-        y = module(inputs, c=curvature)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_linear_hyperboloid_tangent_input(dtype):
-    """Test HypLinearHyperboloid with tangent space input."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 5, 4
-
-    # Create tangent vector at origin
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    # Ensure it's a valid tangent vector (time coordinate is 0)
-    v = v.at[:, 0].set(0.0)
-
-    # Create layer with tangent input
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs, input_space="tangent")
-
-    # Forward pass
-    y = layer(v, c=1.0)
-
-    # Check output shape
-    assert y.shape == (batch_size, out_dim)
-    # Check output is on manifold (vmap over batch)
-    assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_linear_hyperboloid_tangent_jitted_gradient(dtype):
-    """Test HypLinearHyperboloid tangent input gradients under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 4, 5, 4
-
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    v = v.at[:, 0].set(0.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs, input_space="tangent")
-
-    @nnx.jit
-    def loss_fn(module, inputs, curvature):
-        y = module(inputs, c=curvature)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, v, 1.0))(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.weight.value).all()
-    assert jnp.isfinite(grads.bias.value).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_linear_hyperboloid_tangent_jitted_forward(dtype):
-    """Test HypLinearHyperboloid tangent input forward pass under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 5, 4
-
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    v = v.at[:, 0].set(0.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs, input_space="tangent")
-
-    @nnx.jit
-    def forward(module, inputs, curvature):
-        return module(inputs, c=curvature)
-
-    y = forward(layer, v, 1.0)
-
-    assert y.shape == (batch_size, out_dim)
-    assert jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0).all()
+    assert jnp.isfinite(grads.weight[...]).all()
+    assert jnp.isfinite(grads.bias[...]).all()

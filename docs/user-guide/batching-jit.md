@@ -75,7 +75,7 @@ Common patterns:
 ```python
 # Project batch of points
 x_batch = jax.random.normal(jax.random.PRNGKey(0), (100, 16))
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x_batch, 1.0, None)
+x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
 
 # Compute distances from single point to batch
 origin = jnp.zeros(16)
@@ -190,7 +190,7 @@ layer = HypLinearPoincare(
 
 # Batch input: (batch_size, in_dim)
 x_batch = jax.random.normal(nnx.Rngs(1).params(), (32, 128)) * 0.3
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x_batch, 1.0, None)
+x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
 
 # Forward pass handles batching internally
 output = layer(x_proj, c=1.0)
@@ -251,7 +251,7 @@ def forward(model, x, c):
 
 # Use with batch
 x_batch = jax.random.normal(nnx.Rngs(1).params(), (32, 784)) * 0.1
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x_batch, 1.0, None)
+x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
 logits = forward(model, x_proj, c=1.0)
 print(logits.shape)  # (32, 10)
 ```
@@ -303,7 +303,7 @@ def train_step(model, optimizer, x_batch, y_batch, c):
 for epoch in range(num_epochs):
     for x_batch, y_batch in dataloader:
         # Project to manifold
-        x_batch = jax.vmap(poincare.proj, in_axes=(0, None, None))(x_batch, 1.0, None)
+        x_batch = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
 
         # Single JIT-compiled step
         loss = train_step(model, optimizer, x_batch, y_batch, c=1.0)
@@ -346,18 +346,18 @@ distances = jax.vmap(dist_jit, in_axes=(0, 0, None, None))(
 ### 3. Use Static Arguments Appropriately
 
 ```python
-# GOOD: Version index is static
+# GOOD: Keep curvature dynamic
 @jax.jit
 def process_batch(x_batch, c):
     return jax.vmap(
-        lambda x: poincare.proj(x, c, version_idx=0)  # Version baked into function
+        lambda x: poincare.proj(x, c)  # Simple projection
     )(x_batch)
 
 # BAD: Making everything static reduces flexibility
 @jax.jit
 def process_batch_bad(x_batch):  # c=1.0 hardcoded
     return jax.vmap(
-        lambda x: poincare.proj(x, c=1.0, version_idx=0)
+        lambda x: poincare.proj(x, c=1.0)
     )(x_batch)  # Can't change curvature without recompilation
 ```
 
@@ -430,12 +430,12 @@ distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(
 # WRONG: Can't learn curvature
 @jax.jit
 def model_forward(x, c=1.0):  # c fixed at compile time
-    return poincare.proj(x, c, None)
+    return poincare.proj(x, c)
 
 # CORRECT: Keep c dynamic
 @jax.jit
 def model_forward(x, c):  # c can vary
-    return poincare.proj(x, c, None)
+    return poincare.proj(x, c)
 ```
 
 ## Benchmark Results

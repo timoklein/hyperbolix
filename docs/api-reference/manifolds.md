@@ -103,15 +103,6 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
         - inner
         - norm
 
-## Validation Modules
-
-Each manifold has a corresponding `*_checked.py` module that uses JAX's `checkify` for runtime validation:
-
-- `hyperbolix.manifolds.euclidean_checked`
-- `hyperbolix.manifolds.poincare_checked`
-- `hyperbolix.manifolds.hyperboloid_checked`
-
-These modules are useful for debugging but add runtime overhead. Use the standard modules for production.
 
 ## Usage Examples
 
@@ -126,7 +117,7 @@ y = jnp.array([0.3, -0.1])
 c = 1.0
 
 # Compute distance
-distance = poincare.dist(x, y, c, version=0)
+distance = poincare.dist(x, y, c, version_idx=0)
 ```
 
 ### Batched Operations with vmap
@@ -140,8 +131,8 @@ x_batch = jax.random.normal(jax.random.PRNGKey(0), (100, 3))
 y_batch = jax.random.normal(jax.random.PRNGKey(1), (100, 3))
 
 # Project to hyperboloid
-x_proj = jax.vmap(hyperboloid.proj, in_axes=(0, None, None))(x_batch, c, None)
-y_proj = jax.vmap(hyperboloid.proj, in_axes=(0, None, None))(y_batch, c, None)
+x_proj = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x_batch, c)
+y_proj = jax.vmap(hyperboloid.proj, in_axes=(0, None))(y_batch, c)
 
 # Compute distances
 distances = jax.vmap(hyperboloid.dist, in_axes=(0, 0, None, None))(
@@ -155,7 +146,7 @@ distances = jax.vmap(hyperboloid.dist, in_axes=(0, 0, None, None))(
 from hyperbolix.manifolds import poincare
 
 # Point on manifold
-x = poincare.proj(jnp.array([0.2, 0.3]), c=1.0, version=None)
+x = poincare.proj(jnp.array([0.2, 0.3]), c=1.0)
 
 # Tangent vector
 v = jnp.array([0.1, -0.05])
