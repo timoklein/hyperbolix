@@ -29,7 +29,7 @@ y = jnp.array([0.3, -0.1])
 c = 1.0  # Curvature parameter
 
 # Compute distance (single point operation)
-distance = poincare.dist(x, y, c, version=0)
+distance = poincare.dist(x, y, c, version_idx=0)
 print(f"Distance: {distance}")
 
 # Batch operations with vmap
@@ -37,8 +37,8 @@ x_batch = jax.random.normal(jax.random.PRNGKey(0), (100, 2)) * 0.3
 y_batch = jax.random.normal(jax.random.PRNGKey(1), (100, 2)) * 0.3
 
 # Project to manifold and compute pairwise distances
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x_batch, c, None)
-y_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(y_batch, c, None)
+x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, c)
+y_proj = jax.vmap(poincare.proj, in_axes=(0, None))(y_batch, c)
 distances = jax.vmap(poincare.dist, in_axes=(0, 0, None, None))(x_proj, y_proj, c, 0)
 ```
 
@@ -115,8 +115,8 @@ The curvature `c` is passed at **call time**, not stored in objects:
 
 ```python
 # Different curvatures for different calls
-dist_c1 = poincare.dist(x, y, c=1.0, version=0)
-dist_c2 = poincare.dist(x, y, c=2.0, version=0)
+dist_c1 = poincare.dist(x, y, c=1.0, version_idx=0)
+dist_c2 = poincare.dist(x, y, c=2.0, version_idx=0)
 ```
 
 This allows for learnable curvature in neural networks.

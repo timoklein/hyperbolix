@@ -39,11 +39,11 @@ y = jnp.array([0.3, -0.1])
 c = 1.0  # Curvature
 
 # Project to manifold (ensures points lie on Poincaré ball)
-x_proj = poincare.proj(x, c, version=None)
-y_proj = poincare.proj(y, c, version=None)
+x_proj = poincare.proj(x, c)
+y_proj = poincare.proj(y, c)
 
 # Compute hyperbolic distance
-distance = poincare.dist(x_proj, y_proj, c, version=0)
+distance = poincare.dist(x_proj, y_proj, c, version_idx=0)
 print(f"Distance: {distance:.4f}")
 ```
 
@@ -58,8 +58,8 @@ x_batch = jax.random.normal(key, (100, 2)) * 0.3
 y_batch = jax.random.normal(jax.random.PRNGKey(1), (100, 2)) * 0.3
 
 # Project each point (batched operation)
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x_batch, c, None)
-y_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(y_batch, c, None)
+x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, c)
+y_proj = jax.vmap(poincare.proj, in_axes=(0, None))(y_batch, c)
 
 # Compute pairwise distances
 distances = jax.vmap(poincare.dist, in_axes=(0, 0, None, None))(
@@ -90,8 +90,8 @@ Pass `c` at call time for maximum flexibility:
 
 ```python
 # Different curvatures
-dist_c1 = poincare.dist(x, y, c=1.0, version=0)
-dist_c2 = poincare.dist(x, y, c=2.0, version=0)
+dist_c1 = poincare.dist(x, y, c=1.0, version_idx=0)
+dist_c2 = poincare.dist(x, y, c=2.0, version_idx=0)
 ```
 
 ### Version Parameter
@@ -100,10 +100,10 @@ Many manifold functions accept a `version` parameter for numerical stability:
 
 ```python
 # Poincaré distance has 4 versions
-dist_v0 = poincare.dist(x, y, c, version=0)  # Fastest
-dist_v1 = poincare.dist(x, y, c, version=1)  # Metric tensor
-dist_v2 = poincare.dist(x, y, c, version=2)  # Lorentzian proxy
-dist_v3 = poincare.dist(x, y, c, version=3)  # Conformal factor
+dist_v0 = poincare.dist(x, y, c, version_idx=0)  # Fastest
+dist_v1 = poincare.dist(x, y, c, version_idx=1)  # Metric tensor
+dist_v2 = poincare.dist(x, y, c, version_idx=2)  # Lorentzian proxy
+dist_v3 = poincare.dist(x, y, c, version_idx=3)  # Conformal factor
 ```
 
 ## Building a Neural Network
@@ -140,7 +140,7 @@ model = SimpleHypNet(rngs=nnx.Rngs(0))
 
 # Forward pass
 x = jax.random.normal(nnx.Rngs(1).params(), (10, 32)) * 0.3
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x, 1.0, None)
+x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
 
 output = model(x_proj, c=1.0)
 print(output.shape)  # (10, 8)
@@ -182,12 +182,12 @@ If JIT compilation fails, check that curvature `c` is not being traced:
 # Wrong: c is traced
 @jax.jit
 def forward(x, c):
-    return poincare.dist(x, y, c, 0)
+    return poincare.dist(x, y, c, version_idx=0)
 
 # Better: use partial
 from functools import partial
 
 @partial(jax.jit, static_argnums=(2,))
 def forward(x, y, c):
-    return poincare.dist(x, y, c, 0)
+    return poincare.dist(x, y, c, version_idx=0)
 ```

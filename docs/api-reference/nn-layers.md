@@ -54,7 +54,7 @@ layer = HypLinearPoincare(
 
 # Forward pass
 x = jax.random.normal(nnx.Rngs(1).params(), (10, 32)) * 0.3
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x, 1.0, None)
+x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
 
 output = layer(x_proj, c=1.0)
 print(output.shape)  # (10, 16)
@@ -258,10 +258,10 @@ block = HypformerBlock(in_dim=33, out_dim=64, rngs=nnx.Rngs(0))
 
 # Input on hyperboloid with curvature 1.0
 x = jax.random.normal(nnx.Rngs(1).params(), (32, 33))
-x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+x_proj = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
 
 # Transform to curvature 2.0
-output = block(x, c_in=1.0, c_out=2.0)
+output = block(x_proj, c_in=1.0, c_out=2.0)
 print(output.shape)  # (32, 65) - 64 spatial + 1 time
 ```
 
@@ -327,7 +327,7 @@ regressor = HypRegressionPoincare(
 
 # Input: hyperbolic embeddings
 x = jax.random.normal(nnx.Rngs(1).params(), (64, 32)) * 0.3
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x, 1.0, None)
+x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
 
 # Forward pass returns logits
 logits = regressor(x_proj, c=1.0)
@@ -509,7 +509,7 @@ model = HyperbolicNN(rngs=nnx.Rngs(0))
 
 # Input data (projected to Poincaré ball)
 x = jax.random.normal(nnx.Rngs(1).params(), (32, 784)) * 0.1
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x, 1.0, None)
+x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
 
 output = model(x_proj, c=1.0)
 print(output.shape)  # (32, 10)

@@ -67,7 +67,7 @@ dist_matrix = compute_pairwise_distances(
     points,
     manifold_module=poincare,
     c=1.0,
-    version=0
+    version_idx=0
 )
 
 # Result: (4, 4) matrix of distances
@@ -88,8 +88,8 @@ key = jax.random.PRNGKey(0)
 points = jax.random.normal(key, (100, 2)) * 0.3
 
 # Project to Poincaré ball
-points_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(
-    points, 1.0, None
+points_proj = jax.vmap(poincare.proj, in_axes=(0, None))(
+    points, 1.0
 )
 
 # Compute delta-hyperbolicity
