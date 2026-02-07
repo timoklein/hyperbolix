@@ -6,7 +6,7 @@ build-backend = "uv_build"
 
 [project]
 name = "hyperbolix"
-version = "0.1.0"
+version = "0.1.1"
 description = "Hyperbolic Deep Learning in JAX"
 authors = [
     { name="Timo Klein", email="timo.klein@univie.ac.at" },
