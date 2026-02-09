@@ -24,6 +24,52 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 
+def lorentz_residual(
+    x: Float[Array, "... dim_plus_1"],
+    y: Float[Array, "... dim_plus_1"],
+    w_y: float | Float[Array, ""],
+    c: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... dim_plus_1"]:
+    """Lorentzian midpoint-based residual connection (LResNet from HELM).
+
+    Computes the weighted Lorentzian midpoint of x and y, projecting back
+    to the hyperboloid:
+
+        ave = x + w_y * y
+        result = ave / sqrt(c * |<ave, ave>_L|)
+
+    where <a, a>_L = -a_0^2 + ||a_s||^2 is the Minkowski inner product.
+
+    Parameters
+    ----------
+    x : Array, shape (..., d+1)
+        Points on hyperboloid with curvature c.
+    y : Array, shape (..., d+1)
+        Points on hyperboloid with curvature c (to be added with weight w_y).
+    w_y : float or scalar Array
+        Weight for the y contribution.
+    c : float
+        Curvature parameter (positive, c > 0).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    Returns
+    -------
+    Array, shape (..., d+1)
+        Points on hyperboloid with curvature c.
+
+    References
+    ----------
+    Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+    """
+    ave = x + w_y * y  # (..., d+1)
+    # Minkowski inner: -ave_0^2 + ||ave_s||^2
+    mink = -(ave[..., 0:1] ** 2) + jnp.sum(ave[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., 1)
+    denom = jnp.sqrt(jnp.maximum(c * jnp.abs(mink), eps))  # (..., 1)
+    return ave / denom  # (..., d+1)
+
+
 def hrc(
     x: Float[Array, "... dim_plus_1"],
     f_r: Callable[[Float[Array, "..."]], Float[Array, "..."]],

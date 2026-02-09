@@ -9,6 +9,11 @@ All notable changes to Hyperbolix will be documented in this file.
 - Complete API reference documentation
 - Getting Started guide
 - CI/CD workflow for documentation builds
+- Positional encoding layers for hyperbolic Transformers:
+    - `lorentz_residual`: Lorentzian midpoint-based residual connection
+    - `hope`: Hyperbolic Rotary Positional Encoding (functional)
+    - `HyperbolicRoPE`: NNX module wrapper for HOPE
+    - `HypformerPositionalEncoding`: Learnable positional encoding with HTCLinear
 
 ## [0.1.0] - 2026-01
 
