@@ -67,8 +67,10 @@ class HypLinearPoincare(nnx.Module):
         self.input_space = input_space
 
         # Trainable parameters
-        # Tangent space weight (Euclidean)
-        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
+        # Tangent space weight (Euclidean) - initialized with std = 1/sqrt(fan_in)
+        # to prevent outputs from saturating at the Poincaré ball boundary
+        std = 1.0 / jnp.sqrt(in_dim)
+        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
         # Manifold bias (initialized to small random values to avoid gradient issues at origin)
         # Mark as manifold parameter for Riemannian optimization
         self.bias = mark_manifold_param(
@@ -178,8 +180,10 @@ class HypLinearPoincarePP(nnx.Module):
         self.smoothing_factor = smoothing_factor
 
         # Trainable parameters
-        # Tangent space weight
-        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
+        # Tangent space weight - initialized with std = 1/sqrt(fan_in)
+        # to prevent outputs from saturating at the Poincaré ball boundary
+        std = 1.0 / jnp.sqrt(in_dim)
+        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
         # Scalar bias
         self.bias = nnx.Param(jnp.zeros((out_dim, 1)))
 
