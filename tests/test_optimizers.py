@@ -320,8 +320,8 @@ class TestNNXIntegration:
             rngs=nnx.Rngs(0),
         )
 
-        # Create optimizer
-        tx = riemannian_sgd(learning_rate=0.01, momentum=0.9)
+        # Create optimizer (smaller LR for stability with scaled weight init)
+        tx = riemannian_sgd(learning_rate=0.001, momentum=0.9)
         optimizer = nnx.Optimizer(layer, tx, wrt=nnx.Param)
 
         # Dummy input and loss
@@ -334,8 +334,8 @@ class TestNNXIntegration:
         # Initial loss
         initial_loss = loss_fn(layer)
 
-        # Training step
-        for _ in range(10):
+        # Training steps
+        for _ in range(100):
             _, grads = nnx.value_and_grad(loss_fn)(layer)
             optimizer.update(layer, grads)
 
@@ -355,7 +355,8 @@ class TestNNXIntegration:
             rngs=nnx.Rngs(0),
         )
 
-        tx = riemannian_adam(learning_rate=0.01)
+        # Smaller LR for stability with scaled weight init
+        tx = riemannian_adam(learning_rate=0.001)
         optimizer = nnx.Optimizer(layer, tx, wrt=nnx.Param)
 
         x = jax.random.normal(jax.random.key(1), (8, 5))
@@ -366,7 +367,8 @@ class TestNNXIntegration:
 
         initial_loss = loss_fn(layer)
 
-        for _ in range(10):
+        # Training steps
+        for _ in range(100):
             _, grads = nnx.value_and_grad(loss_fn)(layer)
             optimizer.update(layer, grads)
 
