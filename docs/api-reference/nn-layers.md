@@ -217,6 +217,11 @@ The Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Comp
       show_source: true
       heading_level: 4
 
+::: hyperbolix.nn_layers.HRCRMSNorm
+    options:
+      show_source: true
+      heading_level: 4
+
 ::: hyperbolix.nn_layers.HRCDropout
     options:
       show_source: true
@@ -225,7 +230,7 @@ The Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Comp
 ### Hypformer Example
 
 ```python
-from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, hrc_relu
+from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, HRCRMSNorm, hrc_relu
 from hyperbolix.manifolds import hyperboloid
 from flax import nnx
 import jax.numpy as jnp
@@ -239,7 +244,9 @@ class HypformerBlock(nnx.Module):
             out_features=out_dim,
             rngs=rngs
         )
+        # Can use BatchNorm or RMSNorm for normalization
         self.bn = HRCBatchNorm(num_features=out_dim, rngs=rngs)
+        # self.rms = HRCRMSNorm(num_features=out_dim, rngs=rngs)  # Alternative: faster, simpler
 
     def __call__(self, x, c_in=1.0, c_out=2.0, use_running_average=False):
         # Linear transformation with curvature change

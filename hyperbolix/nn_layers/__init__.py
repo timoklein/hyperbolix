@@ -17,7 +17,7 @@ from .hyperboloid_core import hrc, htc, lorentz_residual
 from .hyperboloid_linear import HTCLinear, HypLinearHyperboloidFHCNN
 from .hyperboloid_positional import HyperbolicRoPE, HypformerPositionalEncoding, hope
 from .hyperboloid_regression import HypRegressionHyperboloid
-from .hyperboloid_regularization import HRCBatchNorm, HRCDropout, HRCLayerNorm
+from .hyperboloid_regularization import HRCBatchNorm, HRCDropout, HRCLayerNorm, HRCRMSNorm
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
 from .poincare_rl import HypRegressionPoincareHDRL
@@ -26,6 +26,7 @@ __all__ = [
     "HRCBatchNorm",
     "HRCDropout",
     "HRCLayerNorm",
+    "HRCRMSNorm",
     "HTCLinear",
     "HypConv2DHyperboloid",
     "HypConv3DHyperboloid",

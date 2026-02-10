@@ -10,6 +10,7 @@ For the Hyperbolic Transformation Component (HTC), see hyperboloid_linear module
 Key components:
 - HRCDropout: Hyperbolic dropout with curvature change
 - HRCLayerNorm: Hyperbolic layer normalization with curvature change
+- HRCRMSNorm: Hyperbolic RMS normalization with curvature change
 - HRCBatchNorm: Hyperbolic batch normalization with curvature change
 
 References
@@ -159,6 +160,85 @@ class HRCLayerNorm(nnx.Module):
             Output points on hyperboloid with curvature c_out.
         """
         return hrc(x, self.ln, c_in, c_out, self.eps)
+
+
+class HRCRMSNorm(nnx.Module):
+    """Hyperbolic Regularization Component with RMS normalization.
+
+    Applies RMS normalization to spatial components of hyperboloid points,
+    then reconstructs the time component for the output curvature. RMSNorm
+    is a simpler and faster variant of LayerNorm that only normalizes by
+    the root mean square without centering.
+
+    Parameters
+    ----------
+    num_features : int
+        Number of spatial features to normalize.
+    rngs : nnx.Rngs
+        Random number generators for parameter initialization.
+    epsilon : float, optional
+        Small value for numerical stability in RMS norm (default: 1e-6).
+    eps : float, optional
+        Small value for numerical stability in HRC (default: 1e-7).
+
+    Attributes
+    ----------
+    rms : nnx.RMSNorm
+        Flax RMS normalization.
+    eps : float
+        Numerical stability parameter for HRC.
+
+    Notes
+    -----
+    RMSNorm Formula:
+        y = x / RMS(x) * scale, where RMS(x) = sqrt(mean(x^2) + epsilon)
+
+    RMSNorm is more efficient than LayerNorm as it skips mean subtraction
+    and is commonly used in modern transformers (e.g., LLaMA, GPT-NeoX).
+
+    Examples
+    --------
+    >>> from flax import nnx
+    >>> from hyperbolix.nn_layers import HRCRMSNorm
+    >>>
+    >>> rms = HRCRMSNorm(num_features=64, rngs=nnx.Rngs(0))
+    >>> y = rms(x, c_in=1.0, c_out=2.0)
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        *,
+        rngs: nnx.Rngs,
+        epsilon: float = 1e-6,
+        eps: float = 1e-7,
+    ):
+        self.rms = nnx.RMSNorm(num_features, epsilon=epsilon, rngs=rngs)
+        self.eps = eps
+
+    def __call__(
+        self,
+        x: Float[Array, "batch dim_plus_1"],
+        c_in: float = 1.0,
+        c_out: float = 1.0,
+    ) -> Float[Array, "batch dim_plus_1"]:
+        """Apply HRC RMS normalization.
+
+        Parameters
+        ----------
+        x : Array of shape (batch, dim+1)
+            Input points on hyperboloid with curvature c_in.
+        c_in : float, optional
+            Input curvature (default: 1.0).
+        c_out : float, optional
+            Output curvature (default: 1.0).
+
+        Returns
+        -------
+        y : Array of shape (batch, dim+1)
+            Output points on hyperboloid with curvature c_out.
+        """
+        return hrc(x, self.rms, c_in, c_out, self.eps)
 
 
 class HRCBatchNorm(nnx.Module):

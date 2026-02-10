@@ -9,6 +9,7 @@ from hyperbolix.nn_layers import (
     HRCBatchNorm,
     HRCDropout,
     HRCLayerNorm,
+    HRCRMSNorm,
     HTCLinear,
     hrc,
     hrc_gelu,
@@ -647,3 +648,128 @@ def test_hrc_batchnorm_extreme_curvatures():
 
     for i in range(32):
         assert hyperboloid.is_in_manifold(y[i], 0.1, atol=1e-4)
+
+
+# HRCRMSNorm tests
+
+
+def test_hrc_rmsnorm_forward():
+    """Test HRCRMSNorm forward pass with manifold constraint."""
+    rms = HRCRMSNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+    y = rms(x, c_in=1.0, c_out=1.0)
+
+    assert y.shape == x.shape
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], 1.0, atol=1e-5)
+
+
+def test_hrc_rmsnorm_curvature_change():
+    """Test HRCRMSNorm with curvature change."""
+    rms = HRCRMSNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    c_in = 1.0
+    c_out = 2.0
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, c_in)
+
+    y = rms(x, c_in=c_in, c_out=c_out)
+
+    assert y.shape == x.shape
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], c_out, atol=1e-5)
+
+
+def test_hrc_rmsnorm_shape_preservation():
+    """Test HRCRMSNorm preserves input shape."""
+    rms = HRCRMSNorm(num_features=16, rngs=nnx.Rngs(0))
+
+    # Test with different batch sizes
+    for batch_size in [8, 16, 32]:
+        x = jax.random.normal(jax.random.PRNGKey(batch_size), (batch_size, 17))
+        x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+        y = rms(x, c_in=1.0, c_out=1.0)
+
+        assert y.shape == x.shape
+
+
+def test_hrc_rmsnorm_gradient():
+    """Test gradients through HRCRMSNorm."""
+    rms = HRCRMSNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+    def loss_fn(model):
+        y = model(x, c_in=1.0, c_out=2.0)
+        return jnp.sum(y**2)
+
+    loss, grads = nnx.value_and_grad(loss_fn)(rms)
+
+    assert jnp.isfinite(loss)
+    # Check that gradients exist for scale parameter
+    assert hasattr(grads.rms, "scale")
+    assert jnp.all(jnp.isfinite(grads.rms.scale[...]))
+
+
+def test_hrc_rmsnorm_jit():
+    """Test HRCRMSNorm works under JIT compilation."""
+    rms = HRCRMSNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    @nnx.jit
+    def forward(model, x, c_in, c_out):
+        return model(x, c_in, c_out)
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+    y = forward(rms, x, 1.0, 2.0)
+
+    assert y.shape == x.shape
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], 2.0, atol=1e-5)
+
+
+def test_hrc_rmsnorm_extreme_curvatures():
+    """Test HRCRMSNorm with extreme curvature ratios."""
+    rms = HRCRMSNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+
+    # Very small to very large curvature
+    x_small = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 0.1)
+    y = rms(x_small, c_in=0.1, c_out=10.0)
+
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], 10.0, atol=1e-4)
+
+    # Very large to very small curvature
+    x_large = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 10.0)
+    y = rms(x_large, c_in=10.0, c_out=0.1)
+
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y[i], 0.1, atol=1e-4)
+
+
+def test_hrc_rmsnorm_vs_layernorm():
+    """Test that HRCRMSNorm and HRCLayerNorm produce different but valid outputs."""
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+
+    rms = HRCRMSNorm(num_features=4, rngs=nnx.Rngs(0))
+    ln = HRCLayerNorm(num_features=4, rngs=nnx.Rngs(0))
+
+    y_rms = rms(x, c_in=1.0, c_out=1.0)
+    y_ln = ln(x, c_in=1.0, c_out=1.0)
+
+    # Both should produce valid manifold points
+    for i in range(32):
+        assert hyperboloid.is_in_manifold(y_rms[i], 1.0, atol=1e-5)
+        assert hyperboloid.is_in_manifold(y_ln[i], 1.0, atol=1e-5)
+
+    # But they should produce different outputs (RMS vs Layer normalization)
+    assert not jnp.allclose(y_rms, y_ln, atol=1e-6)
