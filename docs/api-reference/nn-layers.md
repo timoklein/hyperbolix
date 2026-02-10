@@ -9,6 +9,7 @@ Hyperbolix provides 15+ neural network layer classes and 5 activation functions 
 - **Linear Layers**: Poincaré and Hyperboloid linear transformations
 - **Convolutional Layers**: HCat-based and HRC-based hyperbolic convolutions (2D and 3D)
 - **Hypformer Components**: HTC (Hyperbolic Transformation Component) and HRC (Hyperbolic Regularization Component) with curvature-change support
+- **Positional Encoding**: HOPE (Hyperbolic Rotary PE) and Hypformer learnable positional encodings for Transformers
 - **Regression Layers**: Single-layer classifiers with Riemannian geometry
 - **Activation Functions**: Hyperbolic ReLU, Leaky ReLU, Tanh, Swish, GELU
 - **Helper Functions**: Utilities for regression and conformal factor computation
@@ -216,6 +217,11 @@ The Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Comp
       show_source: true
       heading_level: 4
 
+::: hyperbolix.nn_layers.HRCRMSNorm
+    options:
+      show_source: true
+      heading_level: 4
+
 ::: hyperbolix.nn_layers.HRCDropout
     options:
       show_source: true
@@ -224,7 +230,7 @@ The Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Comp
 ### Hypformer Example
 
 ```python
-from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, hrc_relu
+from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, HRCRMSNorm, hrc_relu
 from hyperbolix.manifolds import hyperboloid
 from flax import nnx
 import jax.numpy as jnp
@@ -238,7 +244,9 @@ class HypformerBlock(nnx.Module):
             out_features=out_dim,
             rngs=rngs
         )
+        # Can use BatchNorm or RMSNorm for normalization
         self.bn = HRCBatchNorm(num_features=out_dim, rngs=rngs)
+        # self.rms = HRCRMSNorm(num_features=out_dim, rngs=rngs)  # Alternative: faster, simpler
 
     def __call__(self, x, c_in=1.0, c_out=2.0, use_running_average=False):
         # Linear transformation with curvature change
@@ -279,6 +287,204 @@ print(output.shape)  # (32, 65) - 64 spatial + 1 time
     - Formula: `space = f_t(x)`, `time = sqrt(||space||^2 + 1/c_out)`
 
     Both support curvature changes (`c_in → c_out`) for flexible network design.
+
+## Positional Encoding
+
+Positional encoding layers for hyperbolic Transformers and attention mechanisms. These layers enable position-aware models on the hyperboloid manifold while preserving geometric structure.
+
+### Lorentzian Residual Connection
+
+::: hyperbolix.nn_layers.lorentz_residual
+    options:
+      show_source: true
+      heading_level: 4
+
+### HOPE (Hyperbolic Rotary Positional Encoding)
+
+::: hyperbolix.nn_layers.hope
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.HyperbolicRoPE
+    options:
+      show_source: true
+      heading_level: 4
+
+### Hypformer Positional Encoding
+
+::: hyperbolix.nn_layers.HypformerPositionalEncoding
+    options:
+      show_source: true
+      heading_level: 4
+
+### HOPE Example
+
+```python
+from hyperbolix.nn_layers import hope, HyperbolicRoPE
+from hyperbolix.manifolds import hyperboloid
+import jax.numpy as jnp
+import jax
+
+# Create sequence of hyperboloid points (batch, seq_len, d+1)
+key = jax.random.PRNGKey(42)
+batch, seq_len, d = 4, 16, 8
+spatial = jax.random.normal(key, (batch, seq_len, d)) * 0.1
+time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
+z = jnp.concatenate([time, spatial], axis=-1)  # (4, 16, 9)
+
+# Position indices
+positions = jnp.arange(seq_len)
+
+# Apply HOPE (functional interface)
+z_encoded = hope(z, positions, c=1.0)
+print(z_encoded.shape)  # (4, 16, 9)
+
+# Or use the NNX module wrapper
+from flax import nnx
+rope = HyperbolicRoPE(dim=d, max_seq_len=64, base=10000.0)
+z_encoded = rope(z, positions, c=1.0)
+
+# Verify manifold constraint
+for b in range(batch):
+    for s in range(seq_len):
+        assert hyperboloid.is_in_manifold(z_encoded[b, s], c=1.0, atol=1e-4)
+
+# Verify relative position property: <HOPE(q,i), HOPE(k,j)>_L depends only on i-j
+q = z[0, 0]  # Single point
+k = z[0, 1]  # Another point
+
+# Same relative offset (=3) at different absolute positions
+q_enc_0 = hope(q[None, None, :], jnp.array([0]), c=1.0)[0, 0]
+k_enc_3 = hope(k[None, None, :], jnp.array([3]), c=1.0)[0, 0]
+
+q_enc_10 = hope(q[None, None, :], jnp.array([10]), c=1.0)[0, 0]
+k_enc_13 = hope(k[None, None, :], jnp.array([13]), c=1.0)[0, 0]
+
+# Minkowski inner products should be equal
+def minkowski_inner(x, y):
+    return -x[0]*y[0] + jnp.sum(x[1:]*y[1:])
+
+ip1 = minkowski_inner(q_enc_0, k_enc_3)
+ip2 = minkowski_inner(q_enc_10, k_enc_13)
+print(jnp.allclose(ip1, ip2, atol=1e-5))  # True
+```
+
+### Hypformer Positional Encoding Example
+
+```python
+from hyperbolix.nn_layers import HypformerPositionalEncoding
+from hyperbolix.manifolds import hyperboloid
+from flax import nnx
+import jax.numpy as jnp
+import jax
+
+# Create positional encoding layer
+d = 8  # spatial dimension
+in_features = d + 1  # ambient dimension (including time)
+pe = HypformerPositionalEncoding(
+    in_features=in_features,
+    out_features=d,  # output spatial dimension
+    rngs=nnx.Rngs(0),
+    init_bound=0.02  # small initialization for stability
+)
+
+# Input: batch of hyperboloid points
+key = jax.random.PRNGKey(42)
+batch_size = 32
+spatial = jax.random.normal(key, (batch_size, d)) * 0.1
+time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
+x = jnp.concatenate([time, spatial], axis=-1)  # (32, 9)
+
+# Apply learnable positional encoding
+x_encoded = pe(x, c=1.0)
+print(x_encoded.shape)  # (32, 9) - shape preserved
+
+# Verify manifold constraint
+is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(x_encoded, 1.0)
+print(is_valid.all())  # True
+
+# The epsilon parameter is learnable
+print(f"Epsilon: {pe.epsilon.value}")  # Initially 1.0
+
+# Use in training loop with gradient updates
+import optax
+optimizer = nnx.Optimizer(pe, optax.adam(1e-3), wrt=nnx.Param)
+
+def loss_fn(model):
+    out = model(x, c=1.0)
+    return jnp.sum(out**2)  # Dummy loss
+
+loss, grads = nnx.value_and_grad(loss_fn)(pe)
+optimizer.update(pe, grads)
+
+print(f"Epsilon after update: {pe.epsilon.value}")  # Changed
+```
+
+### Lorentzian Residual Example
+
+```python
+from hyperbolix.nn_layers import lorentz_residual
+from hyperbolix.manifolds import hyperboloid
+import jax.numpy as jnp
+import jax
+
+# Create two hyperboloid points
+key1, key2 = jax.random.split(jax.random.PRNGKey(42))
+d = 6
+c = 1.0
+
+spatial_x = jax.random.normal(key1, (d,)) * 0.1
+time_x = jnp.sqrt(jnp.sum(spatial_x**2) + 1/c)
+x = jnp.concatenate([time_x[None], spatial_x])
+
+spatial_y = jax.random.normal(key2, (d,)) * 0.1
+time_y = jnp.sqrt(jnp.sum(spatial_y**2) + 1/c)
+y = jnp.concatenate([time_y[None], spatial_y])
+
+# Combine with Lorentzian residual (weighted midpoint)
+result = lorentz_residual(x, y, w_y=0.5, c=c)
+
+# Verify output is on hyperboloid
+assert hyperboloid.is_in_manifold(result, c, atol=1e-5)
+
+# Works with batches too
+x_batch = jax.random.normal(jax.random.PRNGKey(0), (8, d+1))
+y_batch = jax.random.normal(jax.random.PRNGKey(1), (8, d+1))
+
+# Project to manifold
+x_batch = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x_batch, c)
+y_batch = jax.vmap(hyperboloid.proj, in_axes=(0, None))(y_batch, c)
+
+# Apply residual connection
+result_batch = lorentz_residual(x_batch, y_batch, w_y=0.3, c=c)
+print(result_batch.shape)  # (8, 7)
+```
+
+!!! info "Positional Encoding for Hyperbolic Transformers"
+    **HOPE (Hyperbolic Rotary Positional Encoding)**:
+
+    - Deterministic, no learnable parameters
+    - Based on RoPE: applies rotations to spatial components
+    - Preserves relative position information: `⟨HOPE(q,i), HOPE(k,j)⟩_L` depends only on `i-j`
+    - Rotation is an isometry: preserves spatial norms
+    - Identity at position 0
+    - Suitable for long sequences (no learned embeddings to store)
+
+    **HypformerPositionalEncoding**:
+
+    - Learnable, adapts to task
+    - Uses HTCLinear + Lorentzian residual
+    - `epsilon` parameter controls position encoding magnitude
+    - More flexible but requires training
+    - Suitable when position patterns are task-specific
+
+    **Lorentzian Residual**:
+
+    - Building block for both approaches
+    - Computes weighted Lorentzian midpoint
+    - Used for skip connections in hyperbolic Transformers/ResNets
+    - Formula: `ave = x + w_y*y`, normalized to hyperboloid
 
 ## Regression Layers
 
@@ -525,6 +731,7 @@ The neural network layers implement methods from:
 - **Chen et al. (2022)**: "Fully Hyperbolic Neural Networks" - FHCNN linear layers
 - **LResNet (2023)**: "Lorentzian ResNet" - HRC-based convolutions (`LorentzConv2D`)
 - **Hypformer**: "Hyperbolic Transformers" - HTC/HRC components with curvature-change support
+- **Chen et al. (2024)**: "Hyperbolic Embeddings for Learning on Manifolds (HELM)" - HOPE positional encoding and Lorentzian residual connections
 
 ### Key Theoretical Connections
 
