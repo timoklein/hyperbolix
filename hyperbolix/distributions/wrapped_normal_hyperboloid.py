@@ -22,6 +22,7 @@ def sample(
     c: float,
     sample_shape: tuple[int, ...] = (),
     dtype=None,
+    manifold_module=None,
 ) -> Float[Array, "..."]:
     """Sample from wrapped normal distribution on hyperboloid.
 
@@ -70,6 +71,9 @@ def sample(
         >>> z.shape
         (2, 3)
     """
+    # Use provided manifold module or default
+    manifold = manifold_module if manifold_module is not None else hyperboloid
+
     # Determine output dtype
     if dtype is None:
         dtype = mu.dtype
@@ -90,7 +94,7 @@ def sample(
 
     # Step 2: Embed as tangent vector v = [0, v_bar] ∈ T_{μ₀}ℍⁿ at origin
     # v has shape: sample_shape + mu_batch_shape + (n+1,)
-    v = hyperboloid.embed_spatial_0(v_spatial)
+    v = manifold.embed_spatial_0(v_spatial)
 
     # Step 3 & 4: Parallel transport and exponential map
     # We need to apply ptransp_0 and expmap element-wise, matching v and mu
@@ -98,9 +102,9 @@ def sample(
     def transform_single(v_single, mu_single):
         """Transform a single (v, mu) pair."""
         # Step 3: Parallel transport from origin to mu
-        u = hyperboloid.ptransp_0(v_single, mu_single, c)
+        u = manifold.ptransp_0(v_single, mu_single, c)
         # Step 4: Exponential map at mu
-        z = hyperboloid.expmap(u, mu_single, c)
+        z = manifold.expmap(u, mu_single, c)
         return z
 
     if len(sample_shape) == 0 and len(mu_batch_shape) == 0:
@@ -221,6 +225,7 @@ def log_prob(
     mu: Float[Array, "... n_plus_1"],
     sigma: Float[Array, "..."] | float,
     c: float,
+    manifold_module=None,
 ) -> Float[Array, "..."]:
     """Compute log probability of wrapped normal distribution.
 
@@ -261,6 +266,9 @@ def log_prob(
         >>> log_p_batch.shape
         (10,)
     """
+    # Use provided manifold module or default
+    manifold = manifold_module if manifold_module is not None else hyperboloid
+
     # Determine dtype
     dtype = z.dtype
 
@@ -279,17 +287,17 @@ def log_prob(
         n_sample_dims = z.ndim - mu.ndim
 
         # Create vmapped version of logmap
-        logmap_fn = hyperboloid.logmap
+        logmap_fn = manifold.logmap
         for _ in range(n_sample_dims):
             logmap_fn = jax.vmap(logmap_fn, in_axes=(0, None, None))
 
         u = logmap_fn(z, mu, c)
     elif z.ndim == mu.ndim and mu.ndim > 1:
         # Both are batched, vmap over batch dimension
-        u = jax.vmap(lambda zz, mm: hyperboloid.logmap(zz, mm, c))(z, mu)
+        u = jax.vmap(lambda zz, mm: manifold.logmap(zz, mm, c))(z, mu)
     else:
         # Single point
-        u = hyperboloid.logmap(z, mu, c)
+        u = manifold.logmap(z, mu, c)
 
     # Step 2: Parallel transport from mu to origin
     # v = PT_{μ→μ₀}(u)
@@ -299,13 +307,13 @@ def log_prob(
         # Batched, need to vmap
         if mu.ndim > 1:
             # mu is also batched
-            v = jax.vmap(lambda uu, mm: hyperboloid.ptransp(uu, mm, mu_0, c))(u, mu)
+            v = jax.vmap(lambda uu, mm: manifold.ptransp(uu, mm, mu_0, c))(u, mu)
         else:
             # Only u is batched (from sample_shape)
-            v = jax.vmap(lambda uu: hyperboloid.ptransp(uu, mu, mu_0, c))(u)
+            v = jax.vmap(lambda uu: manifold.ptransp(uu, mu, mu_0, c))(u)
     else:
         # Single point
-        v = hyperboloid.ptransp(u, mu, mu_0, c)
+        v = manifold.ptransp(u, mu, mu_0, c)
 
     # Step 3: Extract spatial components from v (remove temporal component)
     # v = [0, v_bar] at origin, so v_spatial = v[..., 1:]

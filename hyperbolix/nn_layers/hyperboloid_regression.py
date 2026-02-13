@@ -6,7 +6,7 @@ import jax
 from flax import nnx
 from jaxtyping import Array, Float
 
-from .helpers import compute_mlr_hyperboloid
+from ..manifolds.hyperboloid import compute_mlr as compute_mlr_hyperboloid
 
 
 class HypRegressionHyperboloid(nnx.Module):

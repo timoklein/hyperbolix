@@ -59,11 +59,13 @@ For numerical accuracy with large distances or near-boundary points:
 - Consider projection after operations to maintain manifold constraints
 """
 
+import math
+
 import jax.lax as lax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import acosh, atanh
+from ..utils.math_utils import acosh, asinh, atanh, cosh, sinh, smooth_clamp
 
 # Default numerical parameters
 MIN_NORM = 1e-15
@@ -552,3 +554,77 @@ def is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float
         Always True
     """
     return jnp.array(True, dtype=bool)
+
+
+# ---------------------------------------------------------------------------
+# Batch-compatible helpers (used by NN layers)
+# ---------------------------------------------------------------------------
+
+
+def conformal_factor(
+    x: Float[Array, "... dim"],
+    c: float,
+) -> Float[Array, "... 1"]:
+    """Numerically stable conformal factor lambda(x) = 2 / (1 - c||x||^2).
+
+    Batch-compatible version that handles arbitrary leading dimensions.
+
+    Args:
+        x: Poincare ball point(s), shape (..., dim)
+        c: Manifold curvature (positive)
+
+    Returns:
+        Conformal factor, shape (..., 1)
+    """
+    dtype = x.dtype
+    c_arr = jnp.asarray(c, dtype=dtype)
+    sqrt_c = jnp.sqrt(c_arr)
+    # Use a single representative element for dtype-dependent eps
+    max_norm_eps = jnp.asarray(_get_max_norm_eps(x.reshape(-1)[:1].squeeze()), dtype=dtype)
+    x_norm_sq = jnp.sum(x**2, axis=-1, keepdims=True)
+    denom_min = 2 * sqrt_c * max_norm_eps - c_arr * max_norm_eps**2
+    denom = jnp.maximum(jnp.asarray(1.0, dtype=dtype) - c_arr * x_norm_sq, denom_min)
+    return 2.0 / denom
+
+
+def compute_mlr_pp(
+    x: Float[Array, "batch in_dim"],
+    z: Float[Array, "out_dim in_dim"],
+    r: Float[Array, "out_dim 1"],
+    c: float,
+    clamping_factor: float,
+    smoothing_factor: float,
+    min_enorm: float = 1e-15,
+) -> Float[Array, "batch out_dim"]:
+    """Compute HNN++ multinomial linear regression on the Poincare ball.
+
+    Args:
+        x: Poincare ball point(s), shape (batch, in_dim)
+        z: Hyperplane tangent normals at origin, shape (out_dim, in_dim)
+        r: Hyperplane translations, shape (out_dim, 1)
+        c: Manifold curvature (positive)
+        clamping_factor: Clamping value for the output
+        smoothing_factor: Smoothing factor for the output
+        min_enorm: Minimum norm to avoid division by zero
+
+    Returns:
+        MLR scores, shape (batch, out_dim)
+
+    References:
+        Shimizu et al. "Hyperbolic neural networks++." arXiv:2006.08210 (2020).
+    """
+    sqrt_c = jnp.sqrt(c)
+    sqrt_c2r = 2 * sqrt_c * r.T  # (1, out_dim)
+    z_norm = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm)  # (out_dim, 1)
+
+    lambda_x = conformal_factor(x, c)  # (batch, 1)
+
+    z_unitx = jnp.einsum("bi,oi->bo", x, z / z_norm)  # (batch, out_dim)
+    asinh_arg = (1 - lambda_x) * sinh(sqrt_c2r) + sqrt_c * lambda_x * cosh(sqrt_c2r) * z_unitx  # (batch, out_dim)
+
+    eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
+    clamp = clamping_factor * float(math.log(2 / eps))
+    asinh_arg = smooth_clamp(asinh_arg, -clamp, clamp, smoothing_factor)  # (batch, out_dim)
+    signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, out_dim)
+    res = 2 * z_norm.T * signed_dist2hyp  # (batch, out_dim)
+    return res

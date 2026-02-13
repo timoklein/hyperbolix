@@ -8,9 +8,10 @@ import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
+from ..manifolds.poincare import compute_mlr_pp as compute_mlr_poincare_pp
+from ..manifolds.poincare import conformal_factor as safe_conformal_factor
 from ..optim import mark_manifold_param
 from ..utils.math_utils import asinh, smooth_clamp
-from .helpers import compute_mlr_poincare_pp, safe_conformal_factor
 
 
 class HypRegressionPoincare(nnx.Module):

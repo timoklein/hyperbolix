@@ -22,6 +22,7 @@ def sample(
     c: float,
     sample_shape: tuple[int, ...] = (),
     dtype=None,
+    manifold_module=None,
 ) -> Float[Array, "..."]:
     """Sample from wrapped normal distribution on Poincaré ball.
 
@@ -71,6 +72,9 @@ def sample(
         >>> z.shape
         (2, 2)
     """
+    # Use provided manifold module or default
+    manifold = manifold_module if manifold_module is not None else poincare
+
     # Determine output dtype
     if dtype is None:
         dtype = mu.dtype
@@ -95,9 +99,9 @@ def sample(
     def transform_single(v_single, mu_single):
         """Transform a single (v, mu) pair."""
         # Map to ball at origin
-        z_0 = poincare.expmap_0(v_single, c)
+        z_0 = manifold.expmap_0(v_single, c)
         # Move to mean using Möbius addition
-        z = poincare.addition(mu_single, z_0, c)
+        z = manifold.addition(mu_single, z_0, c)
         return z
 
     if len(sample_shape) == 0 and len(mu_batch_shape) == 0:
@@ -219,6 +223,7 @@ def log_prob(
     mu: Float[Array, "... n"],
     sigma: Float[Array, "..."] | float,
     c: float,
+    manifold_module=None,
 ) -> Float[Array, "..."]:
     """Compute log probability of wrapped normal distribution on Poincaré ball.
 
@@ -261,6 +266,9 @@ def log_prob(
     """
     import jax.numpy as jnp
 
+    # Use provided manifold module or default
+    manifold = manifold_module if manifold_module is not None else poincare
+
     # Determine dtype
     dtype = z.dtype
 
@@ -274,17 +282,17 @@ def log_prob(
         n_sample_dims = z.ndim - mu.ndim
 
         # Create vmapped version of logmap
-        logmap_fn = poincare.logmap
+        logmap_fn = manifold.logmap
         for _ in range(n_sample_dims):
             logmap_fn = jax.vmap(logmap_fn, in_axes=(0, None, None))
 
         u = logmap_fn(z, mu, c)
     elif z.ndim == mu.ndim and mu.ndim > 1:
         # Both are batched, vmap over batch dimension
-        u = jax.vmap(lambda zz, mm: poincare.logmap(zz, mm, c))(z, mu)
+        u = jax.vmap(lambda zz, mm: manifold.logmap(zz, mm, c))(z, mu)
     else:
         # Single point
-        u = poincare.logmap(z, mu, c)
+        u = manifold.logmap(z, mu, c)
 
     # Step 2: Parallel transport from mu to origin
     # v = PT_{μ→0}(u)
@@ -294,13 +302,13 @@ def log_prob(
         # Batched, need to vmap
         if mu.ndim > 1:
             # mu is also batched
-            v = jax.vmap(lambda uu, mm: poincare.ptransp(uu, mm, mu_0, c))(u, mu)
+            v = jax.vmap(lambda uu, mm: manifold.ptransp(uu, mm, mu_0, c))(u, mu)
         else:
             # Only u is batched (from sample_shape)
-            v = jax.vmap(lambda uu: poincare.ptransp(uu, mu, mu_0, c))(u)
+            v = jax.vmap(lambda uu: manifold.ptransp(uu, mu, mu_0, c))(u)
     else:
         # Single point
-        v = poincare.ptransp(u, mu, mu_0, c)
+        v = manifold.ptransp(u, mu, mu_0, c)
 
     # Step 3: Compute log p(v) where v ~ N(0, Σ)
     # Note: v is already in R^n, no need to extract spatial components like in hyperboloid

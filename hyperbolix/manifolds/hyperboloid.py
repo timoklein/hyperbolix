@@ -39,13 +39,14 @@ Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
 """
 
+import math
 from typing import cast
 
 import jax.lax as lax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import acosh, sinh, smooth_clamp_min
+from ..utils.math_utils import acosh, asinh, cosh, sinh, smooth_clamp, smooth_clamp_min
 
 # Default numerical parameters
 MIN_NORM = 1e-15
@@ -825,3 +826,52 @@ def hcat(
     result = jnp.concatenate([time_new[None], space_concatenated])  # (1 + N*d,) = (dN+1,)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Batch-compatible helpers (used by NN layers)
+# ---------------------------------------------------------------------------
+
+
+def compute_mlr(
+    x: Float[Array, "batch in_dim"],
+    z: Float[Array, "out_dim in_dim_minus_1"],
+    r: Float[Array, "out_dim 1"],
+    c: float,
+    clamping_factor: float,
+    smoothing_factor: float,
+    min_enorm: float = 1e-15,
+) -> Float[Array, "batch out_dim"]:
+    """Compute FHCNN multinomial linear regression on the hyperboloid.
+
+    Args:
+        x: Hyperboloid point(s), shape (batch, in_dim)
+        z: Hyperplane tangent normals at origin (time coord omitted), shape (out_dim, in_dim-1)
+        r: Hyperplane translations, shape (out_dim, 1)
+        c: Manifold curvature (positive)
+        clamping_factor: Clamping value for the output
+        smoothing_factor: Smoothing factor for the output
+        min_enorm: Minimum norm to avoid division by zero
+
+    Returns:
+        MLR scores, shape (batch, out_dim)
+
+    References:
+        Ahmad Bdeir et al. "Fully hyperbolic convolutional neural networks."
+            arXiv:2303.15919 (2023).
+    """
+    sqrt_c = jnp.sqrt(c)
+    sqrt_cr = sqrt_c * r.T  # (1, out_dim)
+    z_norm = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm).T  # (1, out_dim)
+    x0 = x[:, 0:1]  # (batch, 1) - time coordinate
+    x_rem = x[:, 1:]  # (batch, in_dim-1) - space coordinates
+    zx_rem = jnp.einsum("bi,oi->bo", x_rem, z)  # (batch, out_dim)
+    alpha = -x0 * sinh(sqrt_cr) * z_norm + cosh(sqrt_cr) * zx_rem  # (batch, out_dim)
+    asinh_arg = sqrt_c * alpha / z_norm  # (batch, out_dim)
+
+    eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
+    clamp = clamping_factor * float(math.log(2 / eps))
+    asinh_arg = smooth_clamp(asinh_arg, -clamp, clamp, smoothing_factor)  # (batch, out_dim)
+    signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, out_dim)
+    res = z_norm * signed_dist2hyp  # (batch, out_dim)
+    return res

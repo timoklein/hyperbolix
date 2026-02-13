@@ -7,9 +7,9 @@ import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
+from ..manifolds.poincare import compute_mlr_pp as compute_mlr_poincare_pp
 from ..optim import mark_manifold_param
 from ..utils.math_utils import sinh
-from .helpers import compute_mlr_poincare_pp
 
 
 class HypLinearPoincare(nnx.Module):
