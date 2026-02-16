@@ -53,25 +53,26 @@ def tolerance(dtype: jnp.dtype) -> tuple[float, float]:
     ids=["Euclidean", "PoincareBall", "Hyperboloid"],
 )
 def manifold_and_c(request: pytest.FixtureRequest, rng: np.random.Generator):
-    """Fixture providing (manifold_module, curvature) tuples.
+    """Fixture providing (manifold_instance, curvature) tuples.
 
-    Mirrors the PyTorch manifold fixture but returns functional modules
-    instead of class instances. Curvatures are sampled the same way as PyTorch.
+    Uses class-based manifold interfaces with dtype provided by the
+    package-level dtype fixture. Curvatures are sampled the same way as PyTorch.
     """
     manifold_name, _ = request.param
+    dtype = request.getfixturevalue("dtype")
 
     if manifold_name == "euclidean":
         # Euclidean always has c=0
-        return hj.manifolds.euclidean, 0.0
+        return hj.manifolds.Euclidean(dtype=dtype), 0.0
     elif manifold_name == "poincare":
         # Poincaré with random positive curvature (exponential distribution, rate=0.5)
         # Matches PyTorch: torch.empty(1).exponential_(0.5)
         c = float(rng.exponential(scale=2.0))  # scale = 1/rate
-        return hj.manifolds.poincare, c
+        return hj.manifolds.Poincare(dtype=dtype), c
     elif manifold_name == "hyperboloid":
         # Hyperboloid with random positive curvature
         c = float(rng.exponential(scale=2.0))
-        return hj.manifolds.hyperboloid, c
+        return hj.manifolds.Hyperboloid(dtype=dtype), c
     else:
         raise ValueError(f"Unknown manifold: {manifold_name}")
 
@@ -88,13 +89,13 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
     num_pts = 2_500 * 6  # Same as PyTorch
     np_dtype = np.dtype(dtype.name)
 
-    if manifold == hj.manifolds.euclidean:
+    if isinstance(manifold, hj.manifolds.Euclidean):
         # Euclidean: uniform in box [-100, 100]^d
         lower, upper = -100.0, 100.0
         data = rng.uniform(lower, upper, size=(num_pts, dim)).astype(np_dtype)
         return jnp.asarray(data)
 
-    elif manifold == hj.manifolds.poincare:
+    elif isinstance(manifold, hj.manifolds.Poincare):
         # Poincaré ball: uniform sampling using spherical coordinates
         # Matches PyTorch approach
         random_dirs = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)
@@ -106,7 +107,7 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
         proj_batch = jax.vmap(manifold.proj, in_axes=(0, None))
         return proj_batch(points, c)
 
-    elif manifold == hj.manifolds.hyperboloid:
+    elif isinstance(manifold, hj.manifolds.Hyperboloid):
         # Hyperboloid: generate points on upper sheet
         # Mirrors PyTorch approach: generate in Poincaré, scale, convert
         random_dirs = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)

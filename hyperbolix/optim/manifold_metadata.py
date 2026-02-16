@@ -163,7 +163,7 @@ def get_manifold_info(param: nnx.Variable) -> tuple[Any, Any] | None:
     >>> if manifold_info is not None:
     ...     manifold_module, c = manifold_info
     ...     # param lives on a manifold, apply Riemannian operations
-    ...     rgrad = manifold_module.egrad2rgrad(grad, param[...], c)
+    ...     rgrad = manifold_module._egrad2rgrad(grad, param[...], c)
     ... else:
     ...     # param is Euclidean, apply standard operations
     ...     pass

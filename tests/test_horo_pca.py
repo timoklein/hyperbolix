@@ -5,14 +5,20 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.utils.horo_pca import HoroPCA, center_data, compute_frechet_mean
+
+
+@pytest.fixture
+def hyperboloid():
+    """Hyperboloid manifold instance for tests."""
+    return Hyperboloid()
 
 
 class TestComputeFrechetMean:
     """Tests for Fréchet mean computation."""
 
-    def test_frechet_mean_shape(self):
+    def test_frechet_mean_shape(self, hyperboloid):
         """Test that Fréchet mean has correct shape."""
         key = jax.random.PRNGKey(42)
         n_points = 50
@@ -28,7 +34,7 @@ class TestComputeFrechetMean:
 
         assert mean.shape == (1, dim + 1), f"Expected shape (1, {dim + 1}), got {mean.shape}"
 
-    def test_frechet_mean_on_manifold(self):
+    def test_frechet_mean_on_manifold(self, hyperboloid):
         """Test that Fréchet mean lies on the hyperboloid."""
         key = jax.random.PRNGKey(42)
         n_points = 50
@@ -46,7 +52,7 @@ class TestComputeFrechetMean:
         is_valid = hyperboloid.is_in_manifold(mean[0], c, atol=1e-4)
         assert is_valid, "Fréchet mean should lie on the hyperboloid"
 
-    def test_frechet_mean_single_point(self):
+    def test_frechet_mean_single_point(self, hyperboloid):
         """Test that Fréchet mean of a single point is the point itself."""
         key = jax.random.PRNGKey(42)
         dim = 10
@@ -63,7 +69,7 @@ class TestComputeFrechetMean:
         distance = hyperboloid.dist(x[0], mean[0], c, hyperboloid.VERSION_DEFAULT)
         assert distance < 1e-3, f"Distance between mean and single point should be small, got {distance}"
 
-    def test_frechet_mean_origin_cluster(self):
+    def test_frechet_mean_origin_cluster(self, hyperboloid):
         """Test Fréchet mean of points clustered near origin."""
         key = jax.random.PRNGKey(42)
         n_points = 50
@@ -90,7 +96,7 @@ class TestComputeFrechetMean:
 class TestCenterData:
     """Tests for data centering."""
 
-    def test_center_data_shape(self):
+    def test_center_data_shape(self, hyperboloid):
         """Test that centered data has correct shape."""
         key = jax.random.PRNGKey(42)
         n_points = 50
@@ -109,7 +115,7 @@ class TestCenterData:
 
         assert x_centered.shape == x.shape, f"Expected shape {x.shape}, got {x_centered.shape}"
 
-    def test_center_data_on_manifold(self):
+    def test_center_data_on_manifold(self, hyperboloid):
         """Test that centered points remain on hyperboloid."""
         key = jax.random.PRNGKey(42)
         n_points = 50
@@ -128,7 +134,7 @@ class TestCenterData:
         is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None, None))(x_centered, c, 1e-4)
         assert jnp.all(is_valid), "All centered points should lie on the hyperboloid"
 
-    def test_center_data_mean_at_origin(self):
+    def test_center_data_mean_at_origin(self, hyperboloid):
         """Test that centering moves mean close to origin."""
         key = jax.random.PRNGKey(42)
         n_points = 50
@@ -154,7 +160,7 @@ class TestCenterData:
 class TestHoroPCA:
     """Tests for HoroPCA class."""
 
-    def test_initialization_hyperboloid(self):
+    def test_initialization_hyperboloid(self, hyperboloid):
         """Test HoroPCA initialization with hyperboloid manifold."""
         n_components = 5
         n_in_features = 11
@@ -174,7 +180,7 @@ class TestHoroPCA:
         assert model.manifold_name == "hyperboloid"
         assert model.Q[...].shape == (n_components, n_in_features - 1)
 
-    def test_initialization_poincare(self):
+    def test_initialization_poincare(self, hyperboloid):
         """Test HoroPCA initialization with Poincaré manifold."""
         n_components = 5
         n_in_features = 10
@@ -194,7 +200,7 @@ class TestHoroPCA:
         assert model.manifold_name == "poincare"
         assert model.Q[...].shape == (n_components, n_in_features)
 
-    def test_invalid_manifold(self):
+    def test_invalid_manifold(self, hyperboloid):
         """Test that invalid manifold raises error."""
         rngs = nnx.Rngs(42)
 
@@ -207,7 +213,7 @@ class TestHoroPCA:
                 rngs=rngs,
             )
 
-    def test_to_hyperboloid_ideals_shape(self):
+    def test_to_hyperboloid_ideals_shape(self, hyperboloid):
         """Test ideal point conversion shape."""
         n_components = 5
         n_in_features = 11
@@ -233,7 +239,7 @@ class TestHoroPCA:
         assert hyperboloid_ideals.shape == (n_components, n_in_features)
         assert jnp.allclose(hyperboloid_ideals[:, 0], 1.0), "Temporal component should be 1"
 
-    def test_fit_hyperboloid_basic(self):
+    def test_fit_hyperboloid_basic(self, hyperboloid):
         """Test basic fit functionality with hyperboloid."""
         key = jax.random.PRNGKey(42)
         n_points = 100
@@ -264,7 +270,7 @@ class TestHoroPCA:
         assert model.data_mean[...] is not None
         assert model.data_mean[...].shape == (1, n_in_features)
 
-    def test_fit_poincare_basic(self):
+    def test_fit_poincare_basic(self, hyperboloid):
         """Test basic fit functionality with Poincaré ball."""
         key = jax.random.PRNGKey(42)
         n_points = 100
@@ -295,7 +301,7 @@ class TestHoroPCA:
         assert model.data_mean[...] is not None
         assert model.data_mean[...].shape == (1, n_in_features + 1)  # Hyperboloid representation
 
-    def test_rank1_fit_transform_hyperboloid(self):
+    def test_rank1_fit_transform_hyperboloid(self, hyperboloid):
         """Ensure rank-1 configuration trains and transforms without NaNs."""
         key = jax.random.PRNGKey(0)
         n_points = 64
@@ -323,7 +329,7 @@ class TestHoroPCA:
         assert x_transformed.shape == (n_points, 1)
         assert jnp.all(jnp.isfinite(x_transformed))
 
-    def test_rank1_fit_transform_poincare(self):
+    def test_rank1_fit_transform_poincare(self, hyperboloid):
         """Ensure rank-1 configuration works for Poincaré inputs."""
         key = jax.random.PRNGKey(1)
         n_points = 64
@@ -351,7 +357,7 @@ class TestHoroPCA:
         assert x_transformed.shape == (n_points, 1)
         assert jnp.all(jnp.isfinite(x_transformed))
 
-    def test_transform_shape(self):
+    def test_transform_shape(self, hyperboloid):
         """Test that transform produces correct output shape."""
         key = jax.random.PRNGKey(42)
         n_points = 100
@@ -382,7 +388,7 @@ class TestHoroPCA:
             f"Expected shape ({n_points}, {n_components}), got {x_transformed.shape}"
         )
 
-    def test_transform_without_fit_raises(self):
+    def test_transform_without_fit_raises(self, hyperboloid):
         """Test that transform without fit handles missing mean."""
         key = jax.random.PRNGKey(42)
         n_points = 100
@@ -408,7 +414,7 @@ class TestHoroPCA:
         x_transformed = model.transform(x, recompute_mean=True)
         assert x_transformed.shape == (n_points, n_components)
 
-    def test_transform_preserves_approximate_distances(self):
+    def test_transform_preserves_approximate_distances(self, hyperboloid):
         """Test that projection approximately preserves relative distances."""
         key = jax.random.PRNGKey(42)
         n_points = 50
@@ -443,7 +449,7 @@ class TestHoroPCA:
         def poincare_dist(p1, p2):
             from hyperbolix.manifolds import poincare
 
-            return poincare.dist(p1, p2, c, poincare.VERSION_MOBIUS_DIRECT)
+            return poincare._dist(p1, p2, c, poincare.VERSION_MOBIUS_DIRECT)
 
         dist_trans_01 = poincare_dist(x_transformed[0], x_transformed[1])
         dist_trans_02 = poincare_dist(x_transformed[0], x_transformed[2])
@@ -458,7 +464,7 @@ class TestHoroPCA:
             f"Distance ratios differ too much: {ratio_orig:.4f} vs {ratio_trans:.4f}"
         )
 
-    def test_compute_loss_decreases_during_optimization(self):
+    def test_compute_loss_decreases_during_optimization(self, hyperboloid):
         """Test that loss generally decreases during optimization."""
         key = jax.random.PRNGKey(42)
         n_points = 100
@@ -503,7 +509,7 @@ class TestHoroPCA:
 
 @pytest.mark.parametrize("manifold_name", ["hyperboloid", "poincare"])
 @pytest.mark.parametrize("n_components", [3, 5, 7])
-def test_horo_pca_different_dimensions(manifold_name, n_components):
+def test_horo_pca_different_dimensions(hyperboloid, manifold_name, n_components):
     """Test HoroPCA with different dimensionalities."""
     key = jax.random.PRNGKey(42)
     n_points = 80

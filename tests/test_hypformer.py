@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers import (
     HRCBatchNorm,
     HRCDropout,
@@ -24,6 +24,8 @@ from hyperbolix.nn_layers.hyperboloid_activations import (
     hyp_swish,
     hyp_tanh,
 )
+
+hyperboloid = Hyperboloid()
 
 # Manifold constraint tests (most critical)
 

@@ -1,13 +1,15 @@
-"""JAX manifold implementations - pure functional approach."""
+"""JAX manifold implementations - class-based approach with dtype control."""
 
-# Import manifold modules
-from . import euclidean, hyperboloid, isometry_mappings, poincare
-from .precision import with_precision
+# Import manifold classes
+# Import manifold modules for backwards compatibility
+from . import isometry_mappings
+from .euclidean import Euclidean
+from .hyperboloid import Hyperboloid
+from .poincare import Poincare
 
 __all__ = [
-    "euclidean",
-    "hyperboloid",
+    "Euclidean",
+    "Hyperboloid",
+    "Poincare",
     "isometry_mappings",
-    "poincare",
-    "with_precision",
 ]

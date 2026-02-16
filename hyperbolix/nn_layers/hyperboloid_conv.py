@@ -11,6 +11,14 @@ from .hyperboloid_core import hrc
 from .hyperboloid_linear import HypLinearHyperboloidFHCNN
 
 
+def _validate_hyperboloid_manifold(manifold_module: Any) -> None:
+    required_methods = ("expmap_0", "hcat")
+    if not all(hasattr(manifold_module, method) for method in required_methods):
+        raise TypeError(
+            "manifold_module must be a class-based Hyperboloid manifold instance (e.g., hyperbolix.manifolds.Hyperboloid())."
+        )
+
+
 class LorentzConv2D(nnx.Module):
     """
     Lorentz 2D Convolutional Layer using the Hyperbolic Layer (HL) approach.
@@ -143,8 +151,8 @@ class HypConv2DHyperboloid(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The Hyperboloid manifold module
+    manifold_module : object
+        Class-based Hyperboloid manifold instance
     in_channels : int
         Number of input channels
     out_channels : int
@@ -191,6 +199,7 @@ class HypConv2DHyperboloid(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration
+        _validate_hyperboloid_manifold(manifold_module)
         self.manifold = manifold_module
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -222,7 +231,7 @@ class HypConv2DHyperboloid(nnx.Module):
         # Create the linear transformation layer
         # Input: hcat_out_ambient_dim, Output: out_channels
         self.linear = HypLinearHyperboloidFHCNN(
-            manifold_module=manifold_module,
+            manifold_module=self.manifold,
             in_dim=hcat_out_ambient_dim,
             out_dim=out_channels,
             rngs=rngs,
@@ -350,8 +359,8 @@ class HypConv3DHyperboloid(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The Hyperboloid manifold module
+    manifold_module : object
+        Class-based Hyperboloid manifold instance
     in_channels : int
         Number of input channels
     out_channels : int
@@ -398,6 +407,7 @@ class HypConv3DHyperboloid(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration
+        _validate_hyperboloid_manifold(manifold_module)
         self.manifold = manifold_module
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -429,7 +439,7 @@ class HypConv3DHyperboloid(nnx.Module):
         # Create the linear transformation layer
         # Input: hcat_out_ambient_dim, Output: out_channels
         self.linear = HypLinearHyperboloidFHCNN(
-            manifold_module=manifold_module,
+            manifold_module=self.manifold,
             in_dim=hcat_out_ambient_dim,
             out_dim=out_channels,
             rngs=rngs,

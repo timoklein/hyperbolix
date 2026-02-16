@@ -1,33 +1,35 @@
-"""Poincaré Ball manifold - vmap-native pure functional implementation.
+"""Poincaré Ball manifold - class-based API with dtype control.
 
-JAX port with vmap-native API. All functions operate on single points/vectors
-with shape (dim,). Use jax.vmap for batch operations.
+Provides a Poincare class for manifold operations with automatic dtype casting.
+All operations work on single points with shape (dim,). Use jax.vmap for batching.
 
 Convention: ||x||^2 < 1/c with c > 0 and sectional curvature -c.
 
 JIT Compilation & Batching
 ---------------------------
-All functions work with single points and return scalars or vectors.
-Use jax.vmap for batching and jax.jit for compilation:
+Create a Poincare instance with desired dtype, then use its methods:
 
     >>> import jax
     >>> import jax.numpy as jnp
-    >>> from hyperbolix.manifolds import poincare
+    >>> from hyperbolix.manifolds.poincare import Poincare, VERSION_MOBIUS_DIRECT
+    >>>
+    >>> # Create manifold with float32 (default) or float64
+    >>> manifold = Poincare(dtype=jnp.float32)
     >>>
     >>> # Single point operations
     >>> x = jnp.array([0.1, 0.2])
     >>> y = jnp.array([0.3, 0.4])
-    >>> distance = poincare.dist(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
+    >>> distance = manifold.dist(x, y, c=1.0, version_idx=VERSION_MOBIUS_DIRECT)
     >>>
     >>> # Batch operations with vmap
     >>> x_batch = jnp.array([[0.1, 0.2], [0.15, 0.25]])  # (batch, dim)
     >>> y_batch = jnp.array([[0.3, 0.4], [0.35, 0.45]])
-    >>> dist_batched = jax.vmap(poincare.dist, in_axes=(0, 0, None, None))
-    >>> distances = dist_batched(x_batch, y_batch, 1.0, poincare.VERSION_MOBIUS_DIRECT)
+    >>> dist_batched = jax.vmap(manifold.dist, in_axes=(0, 0, None, None))
+    >>> distances = dist_batched(x_batch, y_batch, 1.0, VERSION_MOBIUS_DIRECT)
     >>>
     >>> # JIT compilation
-    >>> dist_jit = jax.jit(poincare.dist, static_argnames=['version_idx'])
-    >>> distance = dist_jit(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
+    >>> dist_jit = jax.jit(manifold.dist, static_argnames=['version_idx'])
+    >>> distance = dist_jit(x, y, c=1.0, version_idx=VERSION_MOBIUS_DIRECT)
 
 Version Constants:
     VERSION_MOBIUS_DIRECT (0): Direct Möbius distance formula (fastest)
@@ -54,13 +56,14 @@ Float32 (~7 significant digits) loses precision in operations like:
 - addition: combines terms with vastly different scales
 
 For numerical accuracy with large distances or near-boundary points:
-- Use float64 when possible
+- Use Poincare(dtype=jnp.float64)
 - Expect ~3% relative error with float32 for distances > 10
 - Consider projection after operations to maintain manifold constraints
 """
 
 import math
 
+import jax
 import jax.lax as lax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
@@ -134,7 +137,7 @@ def _gyration(x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "d
     return z + num / denom
 
 
-def proj(x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _proj(x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Project point onto Poincaré ball by clipping norm.
 
     Args:
@@ -151,7 +154,7 @@ def proj(x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     return jnp.where(cond, x * (max_norm / jnp.maximum(norm, MIN_NORM)), x)
 
 
-def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Möbius gyrovector addition x ⊕ y.
 
     Non-commutative and non-associative!
@@ -174,11 +177,11 @@ def addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[
     num = (1 + 2 * c * xy + c * y2) * x + (1 - c * x2) * y
     denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, MIN_NORM)
     res = num / denom
-    res = proj(res, c)
+    res = _proj(res, c)
     return res
 
 
-def scalar_mul(r: float, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _scalar_mul(r: float, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Scalar multiplication r ⊗ x on Poincaré ball.
 
     Args:
@@ -195,7 +198,7 @@ def scalar_mul(r: float, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"
     x_norm = jnp.maximum(jnp.linalg.norm(x), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * x_norm
     res = jnp.tanh(r * atanh(c_norm_prod)) / c_norm_prod * x
-    res = proj(res, c)
+    res = _proj(res, c)
     return res
 
 
@@ -215,7 +218,7 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float
 def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, ""]:
     """Möbius distance via addition."""
     sqrt_c = jnp.sqrt(c)
-    diff = addition(-x, y, c)
+    diff = _addition(-x, y, c)
     dist_c = atanh(sqrt_c * jnp.linalg.norm(diff))
     return 2 * dist_c / sqrt_c
 
@@ -239,7 +242,7 @@ def _dist_lorentzian_proxy(x: Float[Array, "dim"], y: Float[Array, "dim"], c: fl
     return -2 / c - 2 * xy_mink
 
 
-def dist(
+def _dist(
     x: Float[Array, "dim"],
     y: Float[Array, "dim"],
     c: float,
@@ -285,7 +288,7 @@ def _dist_0_lorentzian_proxy(x: Float[Array, "dim"], c: float) -> Float[Array, "
     return -2 / c + 2 * x0 / jnp.sqrt(c)
 
 
-def dist_0(x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
+def _dist_0(x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
     """Compute geodesic distance from Poincaré ball origin.
 
     Args:
@@ -304,7 +307,7 @@ def dist_0(x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_D
     return lax.switch(version_idx, [_dist_0_mobius, _dist_0_mobius, _dist_0_metric_tensor, _dist_0_lorentzian_proxy], x, c)
 
 
-def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
     Args:
@@ -322,12 +325,12 @@ def expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Ar
     c_norm_prod = jnp.maximum(jnp.sqrt(c) * v_norm, MIN_NORM)
     lambda_x = _conformal_factor(x, c)
     second_term = jnp.tanh(c_norm_prod * lambda_x / 2) / c_norm_prod * v
-    second_term = proj(second_term, c)
-    res = addition(x, second_term, c)
+    second_term = _proj(second_term, c)
+    res = _addition(x, second_term, c)
     return res
 
 
-def expmap_0(v: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _expmap_0(v: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     Args:
@@ -343,11 +346,11 @@ def expmap_0(v: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     v_norm = jnp.linalg.norm(v)
     c_norm_prod = jnp.maximum(jnp.sqrt(c) * v_norm, MIN_NORM)
     res = jnp.tanh(c_norm_prod) / c_norm_prod * v
-    res = proj(res, c)
+    res = _proj(res, c)
     return res
 
 
-def retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Retraction: first-order approximation of exponential map.
 
     Args:
@@ -362,11 +365,11 @@ def retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Floa
         Bécigneul & Ganea. "Riemannian adaptive optimization." ICLR 2019.
     """
     res = x + v
-    res = proj(res, c)
+    res = _proj(res, c)
     return res
 
 
-def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Logarithmic map: map point y to tangent space at point x.
 
     Args:
@@ -380,7 +383,7 @@ def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Ar
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    sub = addition(-x, y, c)
+    sub = _addition(-x, y, c)
     x2y2 = jnp.dot(x, x) * jnp.dot(y, y)
     xy = jnp.dot(x, y)
     num = jnp.linalg.norm(y - x)
@@ -392,7 +395,7 @@ def logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Ar
     return res
 
 
-def logmap_0(y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _logmap_0(y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     Args:
@@ -411,7 +414,7 @@ def logmap_0(y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     return res
 
 
-def ptransp(v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _ptransp(v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from point x to point y.
 
     Args:
@@ -431,7 +434,7 @@ def ptransp(v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim
     return _gyration(y, -x, v, c) * (lambda_x / lambda_y)
 
 
-def ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from origin to point y.
 
     Args:
@@ -450,7 +453,7 @@ def ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float
     return conformal_frac * v
 
 
-def tangent_inner(u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
+def _tangent_inner(u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
     """Compute inner product of tangent vectors u and v at point x.
 
     Args:
@@ -469,7 +472,7 @@ def tangent_inner(u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array
     return lambda_x**2 * jnp.dot(u, v)
 
 
-def tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
+def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
     """Compute norm of tangent vector v at point x.
 
     Args:
@@ -487,7 +490,7 @@ def tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Fl
     return lambda_x * jnp.linalg.norm(v)
 
 
-def egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Convert Euclidean gradient to Riemannian gradient.
 
     Args:
@@ -505,7 +508,7 @@ def egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> 
     return grad / (lambda_x**2)
 
 
-def tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     """Project vector v onto tangent space at point x.
 
     In Poincaré ball, tangent space equals ambient space (identity).
@@ -521,7 +524,7 @@ def tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Fl
     return v
 
 
-def is_in_manifold(x: Float[Array, "dim"], c: float, atol: float = 1e-5) -> Array:
+def _is_in_manifold(x: Float[Array, "dim"], c: float, atol: float = 1e-5) -> Array:
     """Check if point x lies in Poincaré ball.
 
     Args:
@@ -540,7 +543,7 @@ def is_in_manifold(x: Float[Array, "dim"], c: float, atol: float = 1e-5) -> Arra
     return x_sqnorm < 1.0 / c
 
 
-def is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Array:
+def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Array:
     """Check if vector v lies in tangent space at point x.
 
     In Poincaré ball, all vectors are valid tangent vectors.
@@ -561,7 +564,7 @@ def is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float
 # ---------------------------------------------------------------------------
 
 
-def conformal_factor(
+def _conformal_factor_batch(
     x: Float[Array, "... dim"],
     c: float,
 ) -> Float[Array, "... 1"]:
@@ -587,7 +590,7 @@ def conformal_factor(
     return 2.0 / denom
 
 
-def compute_mlr_pp(
+def _compute_mlr_pp(
     x: Float[Array, "batch in_dim"],
     z: Float[Array, "out_dim in_dim"],
     r: Float[Array, "out_dim 1"],
@@ -617,7 +620,7 @@ def compute_mlr_pp(
     sqrt_c2r = 2 * sqrt_c * r.T  # (1, out_dim)
     z_norm = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm)  # (out_dim, 1)
 
-    lambda_x = conformal_factor(x, c)  # (batch, 1)
+    lambda_x = _conformal_factor_batch(x, c)  # (batch, 1)
 
     z_unitx = jnp.einsum("bi,oi->bo", x, z / z_norm)  # (batch, out_dim)
     asinh_arg = (1 - lambda_x) * sinh(sqrt_c2r) + sqrt_c * lambda_x * cosh(sqrt_c2r) * z_unitx  # (batch, out_dim)
@@ -628,3 +631,161 @@ def compute_mlr_pp(
     signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, out_dim)
     res = 2 * z_norm.T * signed_dist2hyp  # (batch, out_dim)
     return res
+
+
+# ---------------------------------------------------------------------------
+# Class-based manifold API
+# ---------------------------------------------------------------------------
+
+
+class Poincare:
+    """Poincaré ball manifold with automatic dtype casting.
+
+    Provides all manifold operations with automatic casting of array inputs
+    to the specified dtype. This eliminates the need for manual casting and
+    provides better numerical stability control.
+
+    Args:
+        dtype: Target JAX dtype for computations (default: jnp.float32)
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds.poincare import Poincare, VERSION_MOBIUS_DIRECT
+        >>>
+        >>> # Create manifold with float64 for better precision
+        >>> manifold = Poincare(dtype=jnp.float64)
+        >>>
+        >>> # Arrays are automatically cast to float64
+        >>> x = jnp.array([0.1, 0.2], dtype=jnp.float32)
+        >>> y = jnp.array([0.3, 0.4], dtype=jnp.float32)
+        >>> d = manifold.dist(x, y, c=1.0)
+        >>> d.dtype  # float64
+    """
+
+    VERSION_MOBIUS_DIRECT = VERSION_MOBIUS_DIRECT
+    VERSION_MOBIUS = VERSION_MOBIUS
+    VERSION_METRIC_TENSOR = VERSION_METRIC_TENSOR
+    VERSION_LORENTZIAN_PROXY = VERSION_LORENTZIAN_PROXY
+
+    def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
+        self.dtype = dtype
+
+    def _cast(self, x: Array) -> Array:
+        """Cast array to target dtype if it's a floating-point array."""
+        if isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, jnp.inexact):
+            return x.astype(self.dtype)
+        return x
+
+    def proj(self, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Project point onto Poincaré ball by clipping norm."""
+        return _proj(self._cast(x), c)
+
+    def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Möbius gyrovector addition x ⊕ y."""
+        return _addition(self._cast(x), self._cast(y), c)
+
+    def scalar_mul(self, r: float, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Scalar multiplication r ⊗ x on Poincaré ball."""
+        return _scalar_mul(r, self._cast(x), c)
+
+    def dist(
+        self,
+        x: Float[Array, "dim"],
+        y: Float[Array, "dim"],
+        c: float,
+        version_idx: int = VERSION_MOBIUS_DIRECT,
+    ) -> Float[Array, ""]:
+        """Compute geodesic distance between Poincaré ball points."""
+        return _dist(self._cast(x), self._cast(y), c, version_idx)
+
+    def _dist(
+        self,
+        x: Float[Array, "dim"],
+        y: Float[Array, "dim"],
+        c: float,
+        version_idx: int = VERSION_MOBIUS_DIRECT,
+    ) -> Float[Array, ""]:
+        """Compatibility alias for legacy module-style API."""
+        return self.dist(x, y, c, version_idx)
+
+    def dist_0(self, x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
+        """Compute geodesic distance from Poincaré ball origin."""
+        return _dist_0(self._cast(x), c, version_idx)
+
+    def _dist_0(self, x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
+        """Compatibility alias for legacy module-style API."""
+        return self.dist_0(x, c, version_idx)
+
+    def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Exponential map: map tangent vector v at point x to manifold."""
+        return _expmap(self._cast(v), self._cast(x), c)
+
+    def expmap_0(self, v: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Exponential map from origin: map tangent vector v at origin to manifold."""
+        return _expmap_0(self._cast(v), c)
+
+    def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Retraction: first-order approximation of exponential map."""
+        return _retraction(self._cast(v), self._cast(x), c)
+
+    def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Logarithmic map: map point y to tangent space at point x."""
+        return _logmap(self._cast(y), self._cast(x), c)
+
+    def logmap_0(self, y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Logarithmic map from origin: map point y to tangent space at origin."""
+        return _logmap_0(self._cast(y), c)
+
+    def ptransp(self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Parallel transport tangent vector v from point x to point y."""
+        return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
+
+    def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Parallel transport tangent vector v from origin to point y."""
+        return _ptransp_0(self._cast(v), self._cast(y), c)
+
+    def tangent_inner(
+        self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: float
+    ) -> Float[Array, ""]:
+        """Compute inner product of tangent vectors u and v at point x."""
+        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
+
+    def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
+        """Compute norm of tangent vector v at point x."""
+        return _tangent_norm(self._cast(v), self._cast(x), c)
+
+    def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Convert Euclidean gradient to Riemannian gradient."""
+        return _egrad2rgrad(self._cast(grad), self._cast(x), c)
+
+    def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+        """Project vector v onto tangent space at point x."""
+        return _tangent_proj(self._cast(v), self._cast(x), c)
+
+    def is_in_manifold(self, x: Float[Array, "dim"], c: float, atol: float = 1e-5) -> Array:
+        """Check if point x lies in Poincaré ball."""
+        return _is_in_manifold(self._cast(x), c, atol)
+
+    def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Array:
+        """Check if vector v lies in tangent space at point x."""
+        return _is_in_tangent_space(self._cast(v), self._cast(x), c)
+
+    def conformal_factor(self, x: Float[Array, "... dim"], c: float) -> Float[Array, "... 1"]:
+        """Numerically stable conformal factor lambda(x) = 2 / (1 - c||x||^2).
+
+        Batch-compatible version that handles arbitrary leading dimensions.
+        """
+        return _conformal_factor_batch(self._cast(x), c)
+
+    def compute_mlr_pp(
+        self,
+        x: Float[Array, "batch in_dim"],
+        z: Float[Array, "out_dim in_dim"],
+        r: Float[Array, "out_dim 1"],
+        c: float,
+        clamping_factor: float,
+        smoothing_factor: float,
+        min_enorm: float = 1e-15,
+    ) -> Float[Array, "batch out_dim"]:
+        """Compute HNN++ multinomial linear regression on the Poincare ball."""
+        return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)

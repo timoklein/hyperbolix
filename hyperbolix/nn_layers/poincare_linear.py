@@ -7,9 +7,16 @@ import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
-from ..manifolds.poincare import compute_mlr_pp as compute_mlr_poincare_pp
 from ..optim import mark_manifold_param
 from ..utils.math_utils import sinh
+
+
+def _validate_poincare_manifold(manifold_module: Any) -> None:
+    required_methods = ("proj", "addition", "expmap_0", "logmap_0", "compute_mlr_pp")
+    if not all(hasattr(manifold_module, method) for method in required_methods):
+        raise TypeError(
+            "manifold_module must be a class-based Poincare manifold instance (e.g., hyperbolix.manifolds.Poincare())."
+        )
 
 
 class HypLinearPoincare(nnx.Module):
@@ -24,8 +31,8 @@ class HypLinearPoincare(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The PoincareBall manifold module
+    manifold_module : object
+        Class-based Poincare manifold instance
     in_dim : int
         Dimension of the input space
     out_dim : int
@@ -61,6 +68,7 @@ class HypLinearPoincare(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
+        _validate_poincare_manifold(manifold_module)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -130,8 +138,8 @@ class HypLinearPoincarePP(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The PoincareBall manifold module
+    manifold_module : object
+        Class-based Poincare manifold instance
     in_dim : int
         Dimension of the input space
     out_dim : int
@@ -172,6 +180,7 @@ class HypLinearPoincarePP(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
+        _validate_poincare_manifold(manifold_module)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -212,7 +221,7 @@ class HypLinearPoincarePP(nnx.Module):
             x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Compute multinomial linear regression
-        v = compute_mlr_poincare_pp(
+        v = self.manifold.compute_mlr_pp(
             x,
             self.weight[...],
             self.bias[...],

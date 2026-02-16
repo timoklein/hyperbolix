@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-import hyperbolix.manifolds.poincare as poincare
+from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import (
     HypLinearPoincare,
     HypLinearPoincarePP,
@@ -18,6 +18,7 @@ jax.config.update("jax_enable_x64", True)
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_forward(dtype):
     """Test HypLinearPoincare forward pass."""
+    poincare = Poincare(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, in_dim, out_dim = 8, 5, 3
 
@@ -41,6 +42,7 @@ def test_hyp_linear_poincare_forward(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_jitted_forward(dtype):
     """Test HypLinearPoincare forward pass under nnx.jit."""
+    poincare = Poincare(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, in_dim, out_dim = 8, 5, 3
 
@@ -63,6 +65,7 @@ def test_hyp_linear_poincare_jitted_forward(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_gradient(dtype):
     """Test HypLinearPoincare has valid gradients."""
+    poincare = Poincare(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, in_dim, out_dim = 4, 5, 3
 
@@ -91,6 +94,7 @@ def test_hyp_linear_poincare_gradient(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_jitted_gradient(dtype):
     """Test HypLinearPoincare gradients under nnx.jit."""
+    poincare = Poincare(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, in_dim, out_dim = 4, 5, 3
 
@@ -115,6 +119,7 @@ def test_hyp_linear_poincare_jitted_gradient(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_pp_forward(dtype):
     """Test HypLinearPoincarePP forward pass."""
+    poincare = Poincare(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, in_dim, out_dim = 8, 5, 3
 
@@ -138,6 +143,7 @@ def test_hyp_linear_poincare_pp_forward(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_pp_jitted_forward(dtype):
     """Test HypLinearPoincarePP forward pass under nnx.jit."""
+    poincare = Poincare(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, in_dim, out_dim = 8, 5, 3
 
@@ -160,6 +166,7 @@ def test_hyp_linear_poincare_pp_jitted_forward(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_pp_jitted_gradient(dtype):
     """Test HypLinearPoincarePP gradients under nnx.jit."""
+    poincare = Poincare(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, in_dim, out_dim = 4, 5, 3
 

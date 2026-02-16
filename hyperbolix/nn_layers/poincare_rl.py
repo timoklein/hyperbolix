@@ -10,6 +10,14 @@ from jaxtyping import Array, Float
 from ..utils.math_utils import asinh
 
 
+def _validate_poincare_manifold(manifold_module: Any) -> None:
+    required_methods = ("proj", "addition", "expmap_0")
+    if not all(hasattr(manifold_module, method) for method in required_methods):
+        raise TypeError(
+            "manifold_module must be a class-based Poincare manifold instance (e.g., hyperbolix.manifolds.Poincare())."
+        )
+
+
 class HypRegressionPoincareHDRL(nnx.Module):
     """
     Hyperbolic Deep Reinforcement Learning multinomial linear regression layer (Poincaré ball model).
@@ -20,8 +28,8 @@ class HypRegressionPoincareHDRL(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The PoincareBall manifold module
+    manifold_module : object
+        Class-based Poincare manifold instance
     in_dim : int
         Dimension of the input space
     out_dim : int
@@ -66,6 +74,7 @@ class HypRegressionPoincareHDRL(nnx.Module):
             raise ValueError(f"version must be either 'standard' or 'rs', got '{version}'")
 
         # Static configuration (treated as compile-time constants for JIT)
+        _validate_poincare_manifold(manifold_module)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim

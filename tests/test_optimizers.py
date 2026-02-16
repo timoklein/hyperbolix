@@ -16,7 +16,8 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import poincare as poincare_module
+from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import HypLinearPoincare
 from hyperbolix.optim import (
     get_manifold_info,
@@ -26,6 +27,8 @@ from hyperbolix.optim import (
 )
 from hyperbolix.optim.riemannian_adam import RAdamState
 from hyperbolix.optim.riemannian_sgd import RSGDState
+
+poincare = Poincare(dtype=jnp.float64)
 
 
 class TestManifoldMetadata:
@@ -44,7 +47,7 @@ class TestManifoldMetadata:
         manifold_info = get_manifold_info(param)
         assert manifold_info is not None
         manifold_module, c = manifold_info
-        assert manifold_module is poincare
+        assert manifold_module is poincare_module
         assert c == 1.0
 
     def test_unmarked_parameter(self):
@@ -71,7 +74,7 @@ class TestManifoldMetadata:
     def test_layer_bias_has_metadata(self):
         """Test that HypLinearPoincare bias has manifold metadata."""
         layer = HypLinearPoincare(
-            poincare,
+            poincare_module,
             in_dim=5,
             out_dim=3,
             rngs=nnx.Rngs(0),
@@ -81,7 +84,7 @@ class TestManifoldMetadata:
         bias_info = get_manifold_info(layer.bias)
         assert bias_info is not None
         manifold_module, c = bias_info
-        assert manifold_module is poincare
+        assert manifold_module is poincare_module
         assert c == 1.0
 
         # Check that weight does NOT have manifold metadata
@@ -314,7 +317,7 @@ class TestNNXIntegration:
         """Test HypLinearPoincare with RSGD via nnx.Optimizer."""
         # Create layer
         layer = HypLinearPoincare(
-            poincare,
+            poincare_module,
             in_dim=5,
             out_dim=3,
             rngs=nnx.Rngs(0),
@@ -349,7 +352,7 @@ class TestNNXIntegration:
     def test_hyplinear_poincare_with_radam(self):
         """Test HypLinearPoincare with RAdam via nnx.Optimizer."""
         layer = HypLinearPoincare(
-            poincare,
+            poincare_module,
             in_dim=5,
             out_dim=3,
             rngs=nnx.Rngs(0),

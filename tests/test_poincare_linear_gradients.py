@@ -13,8 +13,10 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import HypLinearPoincare, HypLinearPoincarePP
+
+poincare = Poincare(dtype=jnp.float64)
 
 
 class TestHypLinearPoincareGradients:
@@ -42,7 +44,13 @@ class TestHypLinearPoincareGradients:
         """Chained layers should produce finite gradients (regression test)."""
         key = jax.random.PRNGKey(0)
         layer1 = HypLinearPoincare(poincare, 10, 20, rngs=nnx.Rngs(key), input_space="tangent")
-        layer2 = HypLinearPoincare(poincare, 20, 10, rngs=nnx.Rngs(jax.random.PRNGKey(1)), input_space="manifold")
+        layer2 = HypLinearPoincare(
+            poincare,
+            20,
+            10,
+            rngs=nnx.Rngs(jax.random.PRNGKey(1)),
+            input_space="manifold",
+        )
 
         x_tangent = jax.random.normal(key, (8, 10)) * 0.5
 
@@ -180,7 +188,13 @@ class TestWorldModelGradients:
                     rngs=rngs,
                     input_space="tangent",
                 )
-                self.hyp_linear2 = HypLinearPoincarePP(poincare, hidden_dim, latent_dim, rngs=rngs, input_space="manifold")
+                self.hyp_linear2 = HypLinearPoincarePP(
+                    poincare,
+                    hidden_dim,
+                    latent_dim,
+                    rngs=rngs,
+                    input_space="manifold",
+                )
 
             def __call__(self, z, action_onehot):
                 z_tangent = poincare.logmap_0(z, self.c)

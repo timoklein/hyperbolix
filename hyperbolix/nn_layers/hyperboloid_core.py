@@ -87,11 +87,12 @@ def hrc(
     --------
     >>> import jax.numpy as jnp
     >>> from hyperbolix.nn_layers.hyperboloid_core import hrc
-    >>> from hyperbolix.manifolds import hyperboloid
+    >>> from hyperbolix.manifolds import Hyperboloid
     >>>
     >>> # Create a point on the hyperboloid
+    >>> manifold = Hyperboloid()
     >>> x = jnp.array([1.05, 0.1, -0.2, 0.15])
-    >>> x = hyperboloid.proj(x, c=1.0)
+    >>> x = manifold.proj(x, c=1.0)
     >>>
     >>> # Apply HRC with ReLU (curvature-preserving)
     >>> y = hrc(x, jax.nn.relu, c_in=1.0, c_out=1.0)
@@ -190,11 +191,12 @@ def htc(
     >>> import jax
     >>> import jax.numpy as jnp
     >>> from hyperbolix.nn_layers.hyperboloid_core import htc
-    >>> from hyperbolix.manifolds import hyperboloid
+    >>> from hyperbolix.manifolds import Hyperboloid
     >>>
     >>> # Create a point on the hyperboloid
+    >>> manifold = Hyperboloid()
     >>> x = jnp.array([1.05, 0.1, -0.2, 0.15])
-    >>> x = hyperboloid.proj(x, c=1.0)
+    >>> x = manifold.proj(x, c=1.0)
     >>>
     >>> # Define a linear transformation
     >>> W = jax.random.normal(jax.random.PRNGKey(0), (3, 4))

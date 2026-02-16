@@ -6,14 +6,13 @@ Adapted for the new single-point API with vmap for batching.
 Fixtures are defined in tests/conftest.py and automatically loaded.
 """
 
-import functools
-
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 import hyperbolix as hj
+import hyperbolix.manifolds.poincare as poincare_impl
 
 # Enable float64 support in JAX
 jax.config.update("jax_enable_x64", True)
@@ -41,21 +40,31 @@ def _batch_is_in_tangent_space(manifold, vectors: jnp.ndarray, points: jnp.ndarr
 
 
 def _dist_fn(manifold):
-    """Return distance function with default version index if needed."""
-    if manifold == hj.manifolds.poincare:
-        return functools.partial(manifold.dist, version_idx=manifold.VERSION_MOBIUS_DIRECT)
-    if manifold == hj.manifolds.hyperboloid:
-        return functools.partial(manifold.dist, version_idx=manifold.VERSION_DEFAULT)
+    """Return distance function.
+
+    Class-based manifolds already provide the desired default distance version.
+    """
     return manifold.dist
 
 
 def _dist_0_fn(manifold):
-    """Return origin distance function with default version index if needed."""
-    if manifold == hj.manifolds.poincare:
-        return functools.partial(manifold.dist_0, version_idx=manifold.VERSION_MOBIUS_DIRECT)
-    if manifold == hj.manifolds.hyperboloid:
-        return functools.partial(manifold.dist_0, version_idx=manifold.VERSION_DEFAULT)
+    """Return origin distance function.
+
+    Class-based manifolds already provide the desired default distance version.
+    """
     return manifold.dist_0
+
+
+def _is_euclidean(manifold) -> bool:
+    return isinstance(manifold, hj.manifolds.Euclidean)
+
+
+def _is_poincare(manifold) -> bool:
+    return isinstance(manifold, hj.manifolds.Poincare)
+
+
+def _is_hyperboloid(manifold) -> bool:
+    return isinstance(manifold, hj.manifolds.Hyperboloid)
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +91,7 @@ def test_proj(manifold_and_c, uniform_points: jnp.ndarray) -> None:
     assert bool(manifold.is_in_manifold(projected_single, c=c))
 
     # For points already on manifold, projection should be close to identity
-    if manifold == hj.manifolds.euclidean:
+    if _is_euclidean(manifold):
         assert jnp.allclose(projected, uniform_points)
         assert jnp.allclose(projected_single, sample)
     else:
@@ -97,7 +106,7 @@ def test_addition(manifold_and_c, tolerance: tuple[float, float], uniform_points
 
     # Note: The addition operation is not well-defined for the Hyperboloid manifold
     # (matches PyTorch test behavior)
-    if manifold == hj.manifolds.hyperboloid:
+    if _is_hyperboloid(manifold):
         pytest.skip("Addition not well-defined for Hyperboloid manifold")
 
     atol, rtol = tolerance
@@ -148,7 +157,7 @@ def test_scalar_mul(
     manifold, c = manifold_and_c
     atol, rtol = tolerance
 
-    if manifold == hj.manifolds.poincare and uniform_points.dtype == jnp.dtype("float32"):
+    if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 2e-2)
 
     # Create scalars - now as 1D array since scalar_mul expects scalar per point
@@ -174,7 +183,7 @@ def test_scalar_mul(
     assert jnp.allclose(result2, result4, atol=atol, rtol=rtol)
 
     # Additional properties for Euclidean and PoincareBall (not Hyperboloid)
-    if manifold in (hj.manifolds.euclidean, hj.manifolds.poincare):
+    if _is_euclidean(manifold) or _is_poincare(manifold):
         # N-Gyroaddition property: n ⊗ x = x ⊕ x ⊕ ... ⊕ x (n times)
         n = rng.integers(3, 10)
         n_sum = jnp.zeros_like(uniform_points)
@@ -219,13 +228,13 @@ def test_scalar_mul(
     # Create epsilon-norm vector
     v_eps_norm = jnp.zeros((1, uniform_points.shape[1]), dtype=uniform_points.dtype)
     v_eps_norm = v_eps_norm.at[0, 0].set(atol)
-    if manifold == hj.manifolds.hyperboloid:
+    if _is_hyperboloid(manifold):
         v_eps_norm = v_eps_norm.at[0, 0].set(v_eps_norm[0, 0] + jnp.sqrt(1.0 / c))
         proj_single = jax.vmap(manifold.proj, in_axes=(0, None))
         v_eps_norm = proj_single(v_eps_norm, c)
 
     # Origin for comparison
-    if manifold == hj.manifolds.hyperboloid:
+    if _is_hyperboloid(manifold):
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
     else:
@@ -251,7 +260,7 @@ def test_scalar_mul(
     assert jnp.allclose(res[1:], jnp.zeros_like(res[1:]), atol=atol, rtol=rtol)
 
     # Stability of multiplication with large scalars
-    if manifold in (hj.manifolds.euclidean, hj.manifolds.poincare):
+    if _is_euclidean(manifold) or _is_poincare(manifold):
         # Note: Hyperboloid manifold may fail is_in_manifold check with large scalars
         # due to numerical instabilities in the Minkowski inner product
         r_large_arr = jnp.ones(uniform_points.shape[0]) * r_large
@@ -281,7 +290,7 @@ def test_gyration(
     manifold, c = manifold_and_c
 
     # The gyration operation is only defined for the PoincareBall manifold
-    if manifold in (hj.manifolds.euclidean, hj.manifolds.hyperboloid):
+    if _is_euclidean(manifold) or _is_hyperboloid(manifold):
         pytest.skip("Gyration operation not defined for Euclidean/Hyperboloid manifold")
 
     atol, rtol = tolerance
@@ -289,7 +298,7 @@ def test_gyration(
 
     # Batch operations using vmap
     addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None))
-    gyration_batch = jax.vmap(manifold._gyration, in_axes=(0, 0, 0, None))
+    gyration_batch = jax.vmap(poincare_impl._gyration, in_axes=(0, 0, 0, None))
     scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
 
     # (Gyro-)commutative law: x ⊕ y = gyr[x,y](y ⊕ x)
@@ -412,7 +421,7 @@ def test_dist_0(manifold_and_c, tolerance: tuple[float, float], uniform_points: 
     dist_batch = jax.vmap(dist_fn, in_axes=(0, 0, None))
 
     # dist_0 should match dist(x, origin)
-    if manifold == hj.manifolds.hyperboloid:
+    if _is_hyperboloid(manifold):
         # Hyperboloid origin: [sqrt(1/c), 0, ..., 0]
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
@@ -450,7 +459,7 @@ def test_expmap_logmap_basic(
     tangent_proj_batch = jax.vmap(manifold.tangent_proj, in_axes=(0, 0, None))
 
     # Origin for consistency checks
-    if manifold == hj.manifolds.hyperboloid:
+    if _is_hyperboloid(manifold):
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
     else:
@@ -462,7 +471,7 @@ def test_expmap_logmap_basic(
     v0 = v.copy()
 
     # Project onto tangent space for Hyperboloid
-    if manifold == hj.manifolds.hyperboloid:
+    if _is_hyperboloid(manifold):
         v0 = tangent_proj_batch(v, origin, c)
         v = tangent_proj_batch(v, uniform_points, c)
 
@@ -470,7 +479,7 @@ def test_expmap_logmap_basic(
     assert _batch_is_in_tangent_space(manifold, v0, origin, c)
 
     # Numerical stability of expmap/expmap_0/retraction
-    if manifold in (hj.manifolds.euclidean, hj.manifolds.poincare):
+    if _is_euclidean(manifold) or _is_poincare(manifold):
         # Note: Hyperboloid may fail is_in_manifold check due to numerical errors
 
         # Expmap
@@ -491,7 +500,7 @@ def test_expmap_logmap_basic(
         assert jnp.all(jnp.isfinite(v0_retr))
 
     # Numerical stability of logmap - check logmap produces finite tangent vectors
-    if manifold == hj.manifolds.poincare and uniform_points.dtype == jnp.dtype("float32"):
+    if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 3e-2)
 
     logmap_y_x = logmap_batch(y, x, c)
@@ -550,7 +559,7 @@ def test_ptransp_preserves_norm(
     tangent_proj_batch = jax.vmap(manifold.tangent_proj, in_axes=(0, 0, None))
 
     # Origin for consistency checks
-    if manifold == hj.manifolds.hyperboloid:
+    if _is_hyperboloid(manifold):
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
     else:
@@ -561,7 +570,7 @@ def test_ptransp_preserves_norm(
     u_random = jnp.asarray(rng.uniform(-bound, bound, size=uniform_points.shape), dtype=uniform_points.dtype)
 
     # Project onto tangent space (necessary for Hyperboloid)
-    if manifold == hj.manifolds.hyperboloid:
+    if _is_hyperboloid(manifold):
         u = tangent_proj_batch(u_random, origin, c)
     else:
         u = u_random
@@ -650,7 +659,7 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     dist_0_batch = jax.vmap(dist_0_fn, in_axes=(0, None))
 
     # Origin for _0 variant tests
-    if manifold == hj.manifolds.hyperboloid:
+    if _is_hyperboloid(manifold):
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
     else:
@@ -660,7 +669,7 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     # near boundary. When points approach ||x|| ≈ 1/√c, the conformal factor λ(x) = 2/(1-c||x||²)
     # can exceed 10,000. The logmap/tangent_norm round-trip (divide by λ, then multiply by λ)
     # loses precision, especially for large distances (>10) involving near-boundary points.
-    if manifold == hj.manifolds.poincare and uniform_points.dtype == jnp.dtype("float32"):
+    if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 3e-2)
 
     # Consistency of tangent_norm with logmap and dist
@@ -702,11 +711,11 @@ def test_is_in_manifold(manifold_and_c, uniform_points: jnp.ndarray) -> None:
     # All uniform points should be on manifold
     assert _batch_is_in_manifold(manifold, uniform_points, c)
 
-    if manifold == hj.manifolds.poincare:
+    if _is_poincare(manifold):
         # Points outside ball should not be on manifold
         outside = jnp.ones_like(uniform_points[0]) * 10.0
         assert not manifold.is_in_manifold(outside, c=c)
-    elif manifold == hj.manifolds.hyperboloid:
+    elif _is_hyperboloid(manifold):
         # Points not on hyperboloid surface should not be on manifold
         outside = jnp.ones_like(uniform_points[0]) * 10.0
         assert not manifold.is_in_manifold(outside, c=c)
