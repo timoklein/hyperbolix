@@ -26,10 +26,13 @@ Both optimizers:
 ### Example
 
 ```python
+import jax.numpy as jnp
 from flax import nnx
 from hyperbolix.optim import riemannian_sgd
 from hyperbolix.nn_layers import HypLinearPoincare
-import hyperbolix.manifolds.poincare as poincare
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
 
 # Create model with hyperbolic parameters
 model = HypLinearPoincare(
@@ -42,7 +45,8 @@ model = HypLinearPoincare(
 # Create Riemannian SGD optimizer
 optimizer = nnx.Optimizer(
     model,
-    riemannian_sgd(learning_rate=0.01, momentum=0.9)
+    riemannian_sgd(learning_rate=0.01, momentum=0.9),
+    wrt=nnx.Param
 )
 
 # Training step
@@ -52,7 +56,7 @@ def train_step(model, optimizer, x, y):
         return jnp.mean((pred - y) ** 2)
 
     loss, grads = nnx.value_and_grad(loss_fn)(model)
-    optimizer.update(grads)
+    optimizer.update(model, grads)
 
     return loss
 ```
@@ -77,10 +81,11 @@ optimizer = nnx.Optimizer(
         b1=0.9,
         b2=0.999,
         eps=1e-8
-    )
+    ),
+    wrt=nnx.Param
 )
 
-# Use in training loop (same as RSGD example)
+# Use in training loop (same as RSGD example, call optimizer.update(model, grads))
 ```
 
 ## Manifold Metadata System
@@ -160,6 +165,11 @@ In practice, exponential maps provide better stability and convergence, especial
 The optimizers seamlessly handle models with both Euclidean and hyperbolic parameters:
 
 ```python
+from hyperbolix.manifolds import Poincare
+from hyperbolix.nn_layers import HypLinearPoincare
+
+poincare = Poincare()
+
 class MixedModel(nnx.Module):
     def __init__(self, rngs):
         # Euclidean linear layer
@@ -177,7 +187,7 @@ class MixedModel(nnx.Module):
         self.fc2 = nnx.Linear(16, 10, rngs=rngs)
 
 # Optimizer handles all parameter types automatically
-optimizer = nnx.Optimizer(model, riemannian_adam(learning_rate=0.001))
+optimizer = nnx.Optimizer(model, riemannian_adam(learning_rate=0.001), wrt=nnx.Param)
 ```
 
 The optimizer will:
@@ -198,7 +208,7 @@ The optimizer will:
             return compute_loss(model, x, y)
 
         loss, grads = nnx.value_and_grad(loss_fn)(model)
-        optimizer.update(grads)
+        optimizer.update(model, grads)
         return loss
     ```
 

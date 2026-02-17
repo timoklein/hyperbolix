@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-import hyperbolix.manifolds.hyperboloid as hyperboloid
-import hyperbolix.manifolds.poincare as poincare
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import (
     HypRegressionHyperboloid,
     HypRegressionPoincare,
@@ -18,6 +18,16 @@ from hyperbolix.nn_layers import (
 jax.config.update("jax_enable_x64", True)
 
 
+def get_poincare(dtype: jnp.dtype) -> Poincare:
+    """Get dtype-specific Poincaré manifold instance."""
+    return Poincare(dtype=dtype)
+
+
+def get_hyperboloid(dtype: jnp.dtype) -> Hyperboloid:
+    """Get dtype-specific Hyperboloid manifold instance."""
+    return Hyperboloid(dtype=dtype)
+
+
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_regression_poincare_forward(dtype):
     """Test HypRegressionPoincare forward pass."""
@@ -26,11 +36,11 @@ def test_hyp_regression_poincare_forward(dtype):
 
     # Create input on manifold
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincare(poincare, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPoincare(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
 
     # Forward pass
     y = layer(x, c=1.0)
@@ -48,10 +58,10 @@ def test_hyp_regression_poincare_jitted_forward(dtype):
     batch_size, in_dim, out_dim = 8, 5, 3
 
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincare(poincare, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPoincare(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
 
     @nnx.jit
     def forward(module, inputs, curvature):
@@ -71,11 +81,11 @@ def test_hyp_regression_poincare_gradient(dtype):
 
     # Create input
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincare(poincare, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPoincare(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
 
     # Define loss function
     def loss_fn(model):
@@ -98,10 +108,10 @@ def test_hyp_regression_poincare_jitted_gradient(dtype):
     batch_size, in_dim, out_dim = 4, 5, 3
 
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincare(poincare, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPoincare(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
 
     @nnx.jit
     def loss_fn(module, inputs, curvature):
@@ -123,11 +133,11 @@ def test_hyp_regression_poincare_pp_forward(dtype):
 
     # Create input on manifold
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincarePP(poincare, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPoincarePP(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
 
     # Forward pass
     y = layer(x, c=1.0)
@@ -145,10 +155,10 @@ def test_hyp_regression_poincare_pp_jitted_forward(dtype):
     batch_size, in_dim, out_dim = 8, 5, 3
 
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincarePP(poincare, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPoincarePP(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
 
     @nnx.jit
     def forward(module, inputs, curvature):
@@ -168,11 +178,11 @@ def test_hyp_regression_poincare_pp_gradient(dtype):
 
     # Create input
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincarePP(poincare, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPoincarePP(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
 
     # Define loss function
     def loss_fn(model):
@@ -195,10 +205,10 @@ def test_hyp_regression_poincare_pp_jitted_gradient(dtype):
     batch_size, in_dim, out_dim = 4, 5, 3
 
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincarePP(poincare, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPoincarePP(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
 
     @nnx.jit
     def loss_fn(module, inputs, curvature):
@@ -221,11 +231,11 @@ def test_hyp_regression_poincare_hdrl_forward(dtype, version):
 
     # Create input on manifold
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincareHDRL(poincare, in_dim, out_dim, rngs=rngs, version=version)
+    layer = HypRegressionPoincareHDRL(get_poincare(dtype), in_dim, out_dim, rngs=rngs, version=version)
 
     # Forward pass
     y = layer(x, c=1.0)
@@ -244,10 +254,10 @@ def test_hyp_regression_poincare_hdrl_jitted_forward(dtype, version):
     batch_size, in_dim, out_dim = 8, 5, 3
 
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincareHDRL(poincare, in_dim, out_dim, rngs=rngs, version=version)
+    layer = HypRegressionPoincareHDRL(get_poincare(dtype), in_dim, out_dim, rngs=rngs, version=version)
 
     @nnx.jit
     def forward(module, inputs, curvature):
@@ -267,11 +277,11 @@ def test_hyp_regression_poincare_hdrl_gradient(dtype):
 
     # Create input
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincareHDRL(poincare, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPoincareHDRL(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
 
     # Define loss function
     def loss_fn(model):
@@ -295,10 +305,10 @@ def test_hyp_regression_poincare_hdrl_jitted_gradient(dtype, version):
     batch_size, in_dim, out_dim = 4, 5, 3
 
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincareHDRL(poincare, in_dim, out_dim, rngs=rngs, version=version)
+    layer = HypRegressionPoincareHDRL(get_poincare(dtype), in_dim, out_dim, rngs=rngs, version=version)
 
     @nnx.jit
     def loss_fn(module, inputs, curvature):
@@ -320,12 +330,12 @@ def test_hyp_regression_hyperboloid_forward(dtype):
 
     # Create input on manifold
     v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    expmap_0_batch = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None), out_axes=0)
+    expmap_0_batch = jax.vmap(get_hyperboloid(dtype).expmap_0, in_axes=(0, None), out_axes=0)
     x = expmap_0_batch(v, 1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypRegressionHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionHyperboloid(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
 
     # Forward pass
     y = layer(x, c=1.0)
@@ -343,11 +353,11 @@ def test_hyp_regression_hyperboloid_jitted_forward(dtype):
     batch_size, in_dim, out_dim = 8, 5, 3
 
     v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    expmap_0_batch = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None), out_axes=0)
+    expmap_0_batch = jax.vmap(get_hyperboloid(dtype).expmap_0, in_axes=(0, None), out_axes=0)
     x = expmap_0_batch(v, 1.0)
 
     rngs = nnx.Rngs(42)
-    layer = HypRegressionHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionHyperboloid(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
 
     @nnx.jit
     def forward(module, inputs, curvature):
@@ -367,12 +377,12 @@ def test_hyp_regression_hyperboloid_gradient(dtype):
 
     # Create input
     v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    expmap_0_batch = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None), out_axes=0)
+    expmap_0_batch = jax.vmap(get_hyperboloid(dtype).expmap_0, in_axes=(0, None), out_axes=0)
     x = expmap_0_batch(v, 1.0)
 
     # Create layer
     rngs = nnx.Rngs(42)
-    layer = HypRegressionHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionHyperboloid(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
 
     # Define loss function
     def loss_fn(model):
@@ -395,11 +405,11 @@ def test_hyp_regression_hyperboloid_jitted_gradient(dtype):
     batch_size, in_dim, out_dim = 4, 5, 3
 
     v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    expmap_0_batch = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None), out_axes=0)
+    expmap_0_batch = jax.vmap(get_hyperboloid(dtype).expmap_0, in_axes=(0, None), out_axes=0)
     x = expmap_0_batch(v, 1.0)
 
     rngs = nnx.Rngs(42)
-    layer = HypRegressionHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionHyperboloid(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
 
     @nnx.jit
     def loss_fn(module, inputs, curvature):
@@ -426,7 +436,7 @@ def test_hyp_regression_hyperboloid_tangent_input(dtype):
 
     # Create layer with tangent input
     rngs = nnx.Rngs(42)
-    layer = HypRegressionHyperboloid(hyperboloid, in_dim, out_dim, rngs=rngs, input_space="tangent")
+    layer = HypRegressionHyperboloid(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs, input_space="tangent")
 
     # Forward pass
     y = layer(v, c=1.0)
@@ -447,12 +457,12 @@ def test_linear_then_regression_poincare(dtype):
 
     # Create input
     x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = poincare.proj(x, c=1.0)
+    x = get_poincare(dtype).proj(x, c=1.0)
 
     # Create layers
     rngs = nnx.Rngs(42)
-    linear = HypLinearPoincare(poincare, in_dim, hidden_dim, rngs=rngs)
-    regression = HypRegressionPoincarePP(poincare, hidden_dim, out_dim, rngs=rngs)
+    linear = HypLinearPoincare(get_poincare(dtype), in_dim, hidden_dim, rngs=rngs)
+    regression = HypRegressionPoincarePP(get_poincare(dtype), hidden_dim, out_dim, rngs=rngs)
 
     # Forward pass
     h = linear(x, c=1.0)

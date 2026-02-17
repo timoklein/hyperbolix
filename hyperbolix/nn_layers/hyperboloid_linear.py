@@ -7,13 +7,15 @@ For the core HTC/HRC functions, see hyperboloid_core module.
 """
 
 from collections.abc import Callable
-from typing import Any
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
+from hyperbolix.manifolds import Manifold
+
+from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import htc
 
 
@@ -31,8 +33,8 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The Hyperboloid manifold module
+    manifold_module : object
+        Class-based Hyperboloid manifold instance
     in_dim : int
         Dimension of the input space
     out_dim : int
@@ -81,7 +83,7 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_dim: int,
         out_dim: int,
         *,
@@ -97,6 +99,7 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
+        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0",))
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -240,14 +243,15 @@ class HTCLinear(nnx.Module):
     --------
     >>> from flax import nnx
     >>> from hyperbolix.nn_layers import HTCLinear
-    >>> from hyperbolix.manifolds import hyperboloid
+    >>> from hyperbolix.manifolds import Hyperboloid
     >>>
     >>> # Create layer
     >>> layer = HTCLinear(in_features=5, out_features=8, rngs=nnx.Rngs(0))
     >>>
     >>> # Forward pass
+    >>> manifold = Hyperboloid()
     >>> x = jnp.ones((32, 5))  # batch of 32 points
-    >>> x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
+    >>> x = jax.vmap(manifold.proj, in_axes=(0, None))(x, 1.0)
     >>> y = layer(x, c_in=1.0, c_out=2.0)
     >>> y.shape
     (32, 9)  # 8 spatial + 1 time

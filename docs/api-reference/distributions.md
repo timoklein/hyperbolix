@@ -34,9 +34,11 @@ The wrapped normal distribution extends the Gaussian distribution to hyperbolic 
 
 ```python
 from hyperbolix.distributions import wrapped_normal_poincare
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
 import jax
 import jax.numpy as jnp
+
+poincare = Poincare()
 
 # Mean on Poincaré ball
 mean = jnp.array([0.2, 0.3])
@@ -47,7 +49,9 @@ std = 0.1
 
 # Sample
 key = jax.random.PRNGKey(42)
-samples = wrapped_normal_poincare.sample(mean_proj, std, c=1.0, key=key, sample_shape=(100,))
+samples = wrapped_normal_poincare.sample(
+    key, mean_proj, std, c=1.0, sample_shape=(100,), manifold_module=poincare
+)
 print(samples.shape)  # (100, 2)
 
 # Samples lie on Poincaré ball
@@ -60,7 +64,7 @@ print(jnp.all(norms < 1.0 / jnp.sqrt(1.0)))  # True
 ```python
 # Compute log probability of samples
 log_probs = jax.vmap(
-    lambda x: wrapped_normal_poincare.log_prob(x, mean_proj, std, c=1.0)
+    lambda x: wrapped_normal_poincare.log_prob(x, mean_proj, std, c=1.0, manifold_module=poincare)
 )(samples)
 print(log_probs.shape)  # (100,)
 
@@ -68,15 +72,18 @@ print(log_probs.shape)  # (100,)
 point_near_mean = poincare.proj(jnp.array([0.21, 0.29]), c=1.0)
 point_far = poincare.proj(jnp.array([0.7, 0.7]), c=1.0)
 
-print(f"Log prob (near): {wrapped_normal_poincare.log_prob(point_near_mean, mean_proj, std, c=1.0):.4f}")
-print(f"Log prob (far): {wrapped_normal_poincare.log_prob(point_far, mean_proj, std, c=1.0):.4f}")
+print(f"Log prob (near): {wrapped_normal_poincare.log_prob(point_near_mean, mean_proj, std, c=1.0, manifold_module=poincare):.4f}")
+print(f"Log prob (far): {wrapped_normal_poincare.log_prob(point_far, mean_proj, std, c=1.0, manifold_module=poincare):.4f}")
 ```
 
 ### Hyperboloid Distribution
 
 ```python
 from hyperbolix.distributions import wrapped_normal_hyperboloid
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds import Hyperboloid
+import jax.numpy as jnp
+
+hyperboloid = Hyperboloid()
 
 # Mean on hyperboloid (ambient coordinates)
 mean_space = jnp.array([0.2, 0.3, -0.1])
@@ -87,11 +94,13 @@ mean_ambient = jnp.concatenate([
 
 # Sample
 key = jax.random.PRNGKey(123)
-samples = wrapped_normal_hyperboloid.sample(mean_ambient, std=0.15, c=1.0, key=key, sample_shape=(50,))
+samples = wrapped_normal_hyperboloid.sample(
+    key, mean_ambient, std=0.15, c=1.0, sample_shape=(50,), manifold_module=hyperboloid
+)
 
 # Compute log probabilities
 log_probs = jax.vmap(
-    lambda x: wrapped_normal_hyperboloid.log_prob(x, mean_ambient, 0.15, c=1.0)
+    lambda x: wrapped_normal_hyperboloid.log_prob(x, mean_ambient, 0.15, c=1.0, manifold_module=hyperboloid)
 )(samples)
 ```
 
@@ -103,9 +112,11 @@ Using wrapped normal distributions in a Variational Autoencoder:
 from flax import nnx
 from hyperbolix.distributions import wrapped_normal_poincare
 from hyperbolix.nn_layers import HypLinearPoincare
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
 import jax
 import jax.numpy as jnp
+
+poincare = Poincare()
 
 class HyperbolicVAE(nnx.Module):
     def __init__(self, latent_dim, rngs):
@@ -130,11 +141,11 @@ class HyperbolicVAE(nnx.Module):
         self.decoder = nnx.Linear(128, 784, rngs=rngs)
 
     def encode(self, x, c):
-        # Returns mean and log_std for latent distribution
+        # Returns mean and std for latent distribution
         h = jax.nn.relu(self.encoder(x))
 
         # Project to Poincaré ball
-        h_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(h, c, None)
+        h_proj = jax.vmap(poincare.proj, in_axes=(0, None))(h, c)
 
         # Mean on Poincaré ball
         mean = self.enc_hyp(h_proj, c)
@@ -163,8 +174,8 @@ class HyperbolicVAE(nnx.Module):
         # Sample latent code
         keys = jax.random.split(key, mean.shape[0])
         z = jax.vmap(
-            lambda m, s, k: wrapped_normal_poincare.sample(m, s, c, k, ())
-        )(mean, std, keys)
+            lambda k, m, s: wrapped_normal_poincare.sample(k, m, s, c, (), manifold_module=poincare)
+        )(keys, mean, std)
 
         # Decode
         recon = self.decode(z, c)
@@ -207,12 +218,13 @@ where $\log_\mu$ is the logarithmic map at $\mu$.
 ### Sampling Algorithm
 
 ```python
-def sample(mean, std, c, key, sample_shape):
+# Conceptual implementation (simplified)
+def sample_concept(key, mean, std, c, sample_shape, manifold):
     # 1. Sample in tangent space at mean
     tangent_sample = std * jax.random.normal(key, sample_shape + mean.shape)
 
     # 2. Exponential map to manifold
-    manifold_sample = manifold.expmap(mean, tangent_sample, c)
+    manifold_sample = manifold.expmap(tangent_sample, mean, c)
 
     return manifold_sample
 ```

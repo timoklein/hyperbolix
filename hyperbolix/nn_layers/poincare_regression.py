@@ -1,16 +1,17 @@
 """Poincaré ball regression layers for JAX/Flax NNX."""
 
 import math
-from typing import Any
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
+from hyperbolix.manifolds.poincare import Poincare
+
 from ..optim import mark_manifold_param
 from ..utils.math_utils import asinh, smooth_clamp
-from .helpers import compute_mlr_poincare_pp, safe_conformal_factor
+from ._helpers import validate_poincare_manifold
 
 
 class HypRegressionPoincare(nnx.Module):
@@ -23,8 +24,8 @@ class HypRegressionPoincare(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The PoincareBall manifold module
+    manifold_module : object
+        Class-based Poincare manifold instance
     in_dim : int
         Dimension of the input space
     out_dim : int
@@ -52,7 +53,7 @@ class HypRegressionPoincare(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Poincare,
         in_dim: int,
         out_dim: int,
         *,
@@ -65,6 +66,10 @@ class HypRegressionPoincare(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
+        validate_poincare_manifold(
+            manifold_module,
+            required_methods=("proj", "addition", "expmap_0", "ptransp_0", "conformal_factor", "compute_mlr_pp"),
+        )
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -143,7 +148,7 @@ class HypRegressionPoincare(nnx.Module):
         a_norm = jnp.linalg.norm(a, ord=2, axis=-1, keepdims=True).clip(min=min_enorm)  # (out_dim, 1)
 
         # Compute conformal factor for sub
-        lambda_sub = safe_conformal_factor(sub, c)  # (batch, out_dim, 1)
+        lambda_sub = self.manifold.conformal_factor(sub, c)  # (batch, out_dim, 1)
 
         # Compute asinh argument
         asinh_arg = sqrt_c * lambda_sub.squeeze(-1) * suba / a_norm.T  # (batch, out_dim)
@@ -157,7 +162,7 @@ class HypRegressionPoincare(nnx.Module):
         signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, out_dim)
 
         # Compute conformal factor for p
-        lambda_p = safe_conformal_factor(p, c)  # (out_dim, 1)
+        lambda_p = self.manifold.conformal_factor(p, c)  # (out_dim, 1)
 
         # Final result
         res = lambda_p.T * a_norm.T * signed_dist2hyp  # (batch, out_dim)
@@ -188,11 +193,11 @@ class HypRegressionPoincare(nnx.Module):
             x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Project bias to manifold (vmap over out_dim dimension)
-        bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias, c)
+        bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias[...], c)  # type: ignore[arg-type]
 
         # Map self.weight from the tangent space at the origin to the tangent space at self.bias
         # vmap over out_dim dimension
-        pt_weight = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(self.weight, bias, c)
+        pt_weight = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(self.weight[...], bias, c)
 
         # Compute the multinomial linear regression score(s)
         res = self._compute_mlr(x, pt_weight, bias, c)
@@ -209,8 +214,8 @@ class HypRegressionPoincarePP(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The PoincareBall manifold module
+    manifold_module : object
+        Class-based Poincare manifold instance
     in_dim : int
         Dimension of the input space
     out_dim : int
@@ -238,7 +243,7 @@ class HypRegressionPoincarePP(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Poincare,
         in_dim: int,
         out_dim: int,
         *,
@@ -251,6 +256,10 @@ class HypRegressionPoincarePP(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
+        validate_poincare_manifold(
+            manifold_module,
+            required_methods=("proj", "addition", "expmap_0", "ptransp_0", "conformal_factor", "compute_mlr_pp"),
+        )
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -289,7 +298,7 @@ class HypRegressionPoincarePP(nnx.Module):
             x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Compute multinomial linear regression
-        res = compute_mlr_poincare_pp(
+        res = self.manifold.compute_mlr_pp(
             x,
             self.weight[...],
             self.bias[...],

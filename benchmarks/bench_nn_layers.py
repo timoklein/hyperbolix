@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-import hyperbolix.manifolds as manifolds
+from hyperbolix.manifolds import Poincare
 from hyperbolix.nn_layers import (
     HypLinearPoincare,
     HypRegressionPoincare,
@@ -23,6 +23,8 @@ from hyperbolix.nn_layers import (
 # ============================================================================
 # Fixtures
 # ============================================================================
+
+poincare = Poincare()
 
 
 @pytest.fixture
@@ -37,7 +39,7 @@ def poincare_linear_layer(dim):
     """Create a Poincaré linear layer."""
     rngs = nnx.Rngs(42)
     return HypLinearPoincare(
-        manifold_module=manifolds.poincare,
+        manifold_module=poincare,
         in_dim=dim,
         out_dim=dim,
         rngs=rngs,
@@ -50,7 +52,7 @@ def poincare_regression_layer(dim):
     """Create a Poincaré regression layer."""
     rngs = nnx.Rngs(42)
     return HypRegressionPoincare(
-        manifold_module=manifolds.poincare,
+        manifold_module=poincare,
         in_dim=dim,
         out_dim=10,  # 10 classes
         rngs=rngs,
@@ -62,14 +64,14 @@ def two_layer_network(dim):
     """Create a 2-layer Poincaré network."""
     rngs = nnx.Rngs(42)
     layer1 = HypLinearPoincare(
-        manifold_module=manifolds.poincare,
+        manifold_module=poincare,
         in_dim=dim,
         out_dim=dim * 2,
         rngs=rngs,
         input_space="manifold",
     )
     layer2 = HypLinearPoincare(
-        manifold_module=manifolds.poincare,
+        manifold_module=poincare,
         in_dim=dim * 2,
         out_dim=dim,
         rngs=rngs,

@@ -37,7 +37,7 @@ from typing import Any
 
 from flax import nnx
 
-# Global manifold registry: maps string identifiers to manifold modules
+# Global manifold registry: maps string identifiers to manifold modules (Python module objects)
 _MANIFOLD_REGISTRY: dict[str, Any] = {}
 
 
@@ -59,7 +59,7 @@ def register_manifold(name: str, manifold_module: Any) -> None:
     _MANIFOLD_REGISTRY[name] = manifold_module
 
 
-def get_manifold_module(name: str) -> Any | None:
+def get_manifold_module(name: str) -> Any:
     """Retrieve a manifold module from the registry.
 
     Parameters
@@ -69,17 +69,17 @@ def get_manifold_module(name: str) -> Any | None:
 
     Returns
     -------
-    manifold_module : Any or None
+    manifold_module : Manifold or None
         The manifold module, or None if not found
     """
     return _MANIFOLD_REGISTRY.get(name)
 
 
-def mark_manifold_param(
-    param: nnx.Param,
+def mark_manifold_param[ParamT](
+    param: nnx.Param[ParamT],
     manifold_type: str,
     curvature: float | Callable[[], Any],
-) -> nnx.Param:
+) -> nnx.Param[ParamT]:
     """Mark an nnx.Param with manifold metadata.
 
     This function attaches manifold information to a parameter's metadata,
@@ -163,7 +163,7 @@ def get_manifold_info(param: nnx.Variable) -> tuple[Any, Any] | None:
     >>> if manifold_info is not None:
     ...     manifold_module, c = manifold_info
     ...     # param lives on a manifold, apply Riemannian operations
-    ...     rgrad = manifold_module.egrad2rgrad(grad, param[...], c)
+    ...     rgrad = manifold_module._egrad2rgrad(grad, param[...], c)
     ... else:
     ...     # param is Euclidean, apply standard operations
     ...     pass
