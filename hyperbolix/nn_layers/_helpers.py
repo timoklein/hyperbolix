@@ -1,10 +1,10 @@
 """Shared helpers for hyperbolic nn layer modules."""
 
-from typing import Any
+from hyperbolix.manifolds import Manifold
 
 
 def _validate_manifold_methods(
-    manifold_module: Any,
+    manifold_module: Manifold,
     required_methods: tuple[str, ...],
     *,
     manifold_name: str,
@@ -14,7 +14,7 @@ def _validate_manifold_methods(
         raise TypeError(f"manifold_module must be a class-based {manifold_name} manifold instance (e.g., {example_instance}).")
 
 
-def validate_hyperboloid_manifold(manifold_module: Any, required_methods: tuple[str, ...]) -> None:
+def validate_hyperboloid_manifold(manifold_module: Manifold, required_methods: tuple[str, ...]) -> None:
     _validate_manifold_methods(
         manifold_module,
         required_methods,
@@ -23,7 +23,7 @@ def validate_hyperboloid_manifold(manifold_module: Any, required_methods: tuple[
     )
 
 
-def validate_poincare_manifold(manifold_module: Any, required_methods: tuple[str, ...]) -> None:
+def validate_poincare_manifold(manifold_module: Manifold, required_methods: tuple[str, ...]) -> None:
     _validate_manifold_methods(
         manifold_module,
         required_methods,

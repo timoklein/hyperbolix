@@ -1,12 +1,13 @@
 """Poincaré ball regression layers for JAX/Flax NNX."""
 
 import math
-from typing import Any
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
+
+from hyperbolix.manifolds import Manifold
 
 from ..optim import mark_manifold_param
 from ..utils.math_utils import asinh, smooth_clamp
@@ -52,7 +53,7 @@ class HypRegressionPoincare(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_dim: int,
         out_dim: int,
         *,
@@ -242,7 +243,7 @@ class HypRegressionPoincarePP(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_dim: int,
         out_dim: int,
         *,

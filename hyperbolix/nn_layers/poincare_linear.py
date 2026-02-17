@@ -1,11 +1,11 @@
 """Poincaré ball linear layers for JAX/Flax NNX."""
 
-from typing import Any
-
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
+
+from hyperbolix.manifolds import Manifold
 
 from ..optim import mark_manifold_param
 from ..utils.math_utils import sinh
@@ -50,7 +50,7 @@ class HypLinearPoincare(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_dim: int,
         out_dim: int,
         *,
@@ -163,7 +163,7 @@ class HypLinearPoincarePP(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_dim: int,
         out_dim: int,
         *,

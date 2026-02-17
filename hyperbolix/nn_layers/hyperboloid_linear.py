@@ -7,12 +7,13 @@ For the core HTC/HRC functions, see hyperboloid_core module.
 """
 
 from collections.abc import Callable
-from typing import Any
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
+
+from hyperbolix.manifolds import Manifold
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import htc
@@ -82,7 +83,7 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_dim: int,
         out_dim: int,
         *,

@@ -1,10 +1,10 @@
 """Hyperboloid regression layers for JAX/Flax NNX."""
 
-from typing import Any
-
 import jax
 from flax import nnx
 from jaxtyping import Array, Float
+
+from hyperbolix.manifolds import Manifold
 
 from ._helpers import validate_hyperboloid_manifold
 
@@ -48,7 +48,7 @@ class HypRegressionHyperboloid(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_dim: int,
         out_dim: int,
         *,

@@ -1,11 +1,11 @@
 """Hyperboloid convolutional layers for JAX/Flax NNX."""
 
-from typing import Any
-
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
+
+from hyperbolix.manifolds import Manifold
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import hrc
@@ -176,7 +176,7 @@ class HypConv2DHyperboloid(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_channels: int,
         out_channels: int,
         kernel_size: int | tuple[int, int],
@@ -384,7 +384,7 @@ class HypConv3DHyperboloid(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_channels: int,
         out_channels: int,
         kernel_size: int | tuple[int, int, int],

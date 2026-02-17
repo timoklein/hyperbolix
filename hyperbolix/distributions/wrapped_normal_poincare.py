@@ -11,6 +11,8 @@ References:
 import jax
 from jaxtyping import Array, Float, PRNGKeyArray
 
+from hyperbolix.manifolds import Manifold
+
 from ._common import sample_gaussian, sigma_to_cov
 
 
@@ -21,7 +23,7 @@ def sample(
     c: float,
     sample_shape: tuple[int, ...] = (),
     dtype=None,
-    manifold_module=None,
+    manifold_module: Manifold | None = None,
 ) -> Float[Array, "..."]:
     """Sample from wrapped normal distribution on Poincaré ball.
 
@@ -228,7 +230,7 @@ def log_prob(
     mu: Float[Array, "... n"],
     sigma: Float[Array, "..."] | float,
     c: float,
-    manifold_module=None,
+    manifold_module: Manifold | None = None,
 ) -> Float[Array, "..."]:
     """Compute log probability of wrapped normal distribution on Poincaré ball.
 

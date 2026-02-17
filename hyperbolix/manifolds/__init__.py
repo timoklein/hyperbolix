@@ -6,10 +6,12 @@ from . import isometry_mappings
 from .euclidean import Euclidean
 from .hyperboloid import Hyperboloid
 from .poincare import Poincare
+from .protocol import Manifold
 
 __all__ = [
     "Euclidean",
     "Hyperboloid",
+    "Manifold",
     "Poincare",
     "isometry_mappings",
 ]

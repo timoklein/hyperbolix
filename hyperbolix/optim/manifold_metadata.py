@@ -37,18 +37,20 @@ from typing import Any
 
 from flax import nnx
 
+from hyperbolix.manifolds import Manifold
+
 # Global manifold registry: maps string identifiers to manifold modules
-_MANIFOLD_REGISTRY: dict[str, Any] = {}
+_MANIFOLD_REGISTRY: dict[str, Manifold] = {}
 
 
-def register_manifold(name: str, manifold_module: Any) -> None:
+def register_manifold(name: str, manifold_module: Manifold) -> None:
     """Register a manifold module in the global registry.
 
     Parameters
     ----------
     name : str
         String identifier for the manifold (e.g., 'poincare', 'hyperboloid')
-    manifold_module : Any
+    manifold_module : Manifold
         The manifold module containing operations like expmap, egrad2rgrad, etc.
 
     Example
@@ -59,7 +61,7 @@ def register_manifold(name: str, manifold_module: Any) -> None:
     _MANIFOLD_REGISTRY[name] = manifold_module
 
 
-def get_manifold_module(name: str) -> Any | None:
+def get_manifold_module(name: str) -> Manifold | None:
     """Retrieve a manifold module from the registry.
 
     Parameters
@@ -69,7 +71,7 @@ def get_manifold_module(name: str) -> Any | None:
 
     Returns
     -------
-    manifold_module : Any or None
+    manifold_module : Manifold or None
         The manifold module, or None if not found
     """
     return _MANIFOLD_REGISTRY.get(name)
@@ -140,7 +142,7 @@ def mark_manifold_param(
     return param
 
 
-def get_manifold_info(param: nnx.Variable) -> tuple[Any, Any] | None:
+def get_manifold_info(param: nnx.Variable) -> tuple[Manifold, Any] | None:
     """Extract manifold information from a parameter's metadata.
 
     Parameters
