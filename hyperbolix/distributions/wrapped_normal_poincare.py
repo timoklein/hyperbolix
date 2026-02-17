@@ -9,6 +9,8 @@ References:
 """
 
 import jax
+import jax.numpy as jnp
+from jax.scipy.stats import multivariate_normal
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
@@ -162,8 +164,6 @@ def _gaussian_log_prob(
     Returns:
         Log probability, shape (...)
     """
-    import jax.numpy as jnp
-    from jax.scipy.stats import multivariate_normal
 
     # Convert sigma parameterization to covariance matrix
     cov = sigma_to_cov(sigma, n, dtype)
@@ -197,7 +197,6 @@ def _log_det_jacobian(
     Returns:
         Log determinant of Jacobian, shape (...)
     """
-    import jax.numpy as jnp
 
     # Compute Euclidean norm of tangent vector
     r = jnp.sqrt(jnp.sum(v**2, axis=-1))
@@ -271,7 +270,6 @@ def log_prob(
         >>> log_p_batch.shape
         (10,)
     """
-    import jax.numpy as jnp
 
     # Use provided manifold module or default class instance
     if manifold_module is not None:

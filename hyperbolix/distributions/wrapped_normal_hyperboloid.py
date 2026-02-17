@@ -9,6 +9,8 @@ References:
 """
 
 import jax
+import jax.numpy as jnp
+from jax.scipy.stats import multivariate_normal
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds.hyperboloid import Hyperboloid, _create_origin
@@ -163,8 +165,6 @@ def _gaussian_log_prob(
     Returns:
         Log probability, shape (...)
     """
-    import jax.numpy as jnp
-    from jax.scipy.stats import multivariate_normal
 
     # Convert sigma parameterization to covariance matrix
     cov = sigma_to_cov(sigma, n, dtype)
@@ -198,7 +198,6 @@ def _log_det_jacobian(
     Returns:
         Log determinant of Jacobian, shape (...)
     """
-    import jax.numpy as jnp
 
     # Compute Minkowski norm: r = sqrt(⟨v, v⟩_L)
     # For tangent vector at origin: v = [0, v_bar], so ⟨v, v⟩_L = -v₀² + ||v_rest||²
