@@ -6,6 +6,7 @@ from flax import nnx
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import mark_manifold_param
 from ..utils.math_utils import sinh
@@ -163,7 +164,7 @@ class HypLinearPoincarePP(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Manifold,
+        manifold_module: Poincare,
         in_dim: int,
         out_dim: int,
         *,

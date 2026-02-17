@@ -693,8 +693,8 @@ class Poincare:
     def scalar_mul(self, r: float, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
         """Scalar multiplication r ⊗ x on Poincaré ball."""
         x = self._cast(x)
-        r = jnp.asarray(r, dtype=x.dtype)
-        return _scalar_mul(r, x, c)
+        r_cast = jnp.asarray(r, dtype=x.dtype)
+        return _scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
 
     def dist(
         self,

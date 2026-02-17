@@ -125,7 +125,7 @@ def test_rsgd_convergence_to_target(use_expmap):
 
         # Apply update
         updates, opt_state = tx.update(grad, opt_state, param)
-        param[...] = param[...] + updates
+        param[...] = param[...] + updates  # type: ignore[operator]
 
     # Check that loss decreased
     final_loss = loss_fn(param[...])
@@ -158,7 +158,7 @@ def test_rsgd_momentum_transport(momentum):
     for _ in range(10):
         grad = jax.grad(loss_fn)(param[...])
         updates, opt_state = tx.update(grad, opt_state, param)
-        param[...] = param[...] + updates
+        param[...] = param[...] + updates  # type: ignore[operator]
 
     # With momentum > 0, the momentum state should be non-zero
     if momentum > 0:
@@ -229,7 +229,7 @@ def test_radam_convergence_to_target(use_expmap):
     for _ in range(50):
         grad = jax.grad(loss_fn)(param[...])
         updates, opt_state = tx.update(grad, opt_state, param)
-        param[...] = param[...] + updates
+        param[...] = param[...] + updates  # type: ignore[operator]
 
     final_loss = loss_fn(param[...])
     assert final_loss < initial_loss * 0.1, f"Loss did not decrease sufficiently: {initial_loss} -> {final_loss}"
@@ -261,7 +261,7 @@ def test_radam_moment_transport():
     for _ in range(10):
         grad = jax.grad(loss_fn)(param[...])
         updates, opt_state = tx.update(grad, opt_state, param)
-        param[...] = param[...] + updates
+        param[...] = param[...] + updates  # type: ignore[operator]
 
     # Check that moments are non-zero
     state = cast(RAdamState, opt_state)
@@ -447,7 +447,7 @@ def test_parameter_stays_on_manifold():
     for _ in range(100):
         grad = jax.grad(loss_fn)(param[...])
         updates, opt_state = tx.update(grad, opt_state, param)
-        param[...] = param[...] + updates
+        param[...] = param[...] + updates  # type: ignore[operator]
 
         # Check at each step
         assert poincare.is_in_manifold(param[...], c), f"Parameter left manifold: {param[...]}"
@@ -469,5 +469,5 @@ def test_zero_gradient():
     updates, opt_state = tx.update(grad, opt_state, param)
 
     # Parameter should not change
-    new_value = param[...] + updates
+    new_value = param[...] + updates  # type: ignore[operator]
     assert jnp.allclose(new_value, param[...])

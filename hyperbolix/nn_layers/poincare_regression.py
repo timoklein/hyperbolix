@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
-from hyperbolix.manifolds import Manifold
+from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import mark_manifold_param
 from ..utils.math_utils import asinh, smooth_clamp
@@ -53,7 +53,7 @@ class HypRegressionPoincare(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Manifold,
+        manifold_module: Poincare,
         in_dim: int,
         out_dim: int,
         *,
@@ -193,11 +193,11 @@ class HypRegressionPoincare(nnx.Module):
             x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Project bias to manifold (vmap over out_dim dimension)
-        bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias, c)
+        bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias[...], c)  # type: ignore[arg-type]
 
         # Map self.weight from the tangent space at the origin to the tangent space at self.bias
         # vmap over out_dim dimension
-        pt_weight = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(self.weight, bias, c)
+        pt_weight = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(self.weight[...], bias, c)
 
         # Compute the multinomial linear regression score(s)
         res = self._compute_mlr(x, pt_weight, bias, c)
@@ -243,7 +243,7 @@ class HypRegressionPoincarePP(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Manifold,
+        manifold_module: Poincare,
         in_dim: int,
         out_dim: int,
         *,

@@ -942,8 +942,8 @@ class Hyperboloid:
     def scalar_mul(self, r: float, x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
         """Scalar multiplication on hyperboloid."""
         x = self._cast(x)
-        r = jnp.asarray(r, dtype=x.dtype)
-        return _scalar_mul(r, x, c)
+        r_cast = jnp.asarray(r, dtype=x.dtype)
+        return _scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
 
     def dist(
         self,

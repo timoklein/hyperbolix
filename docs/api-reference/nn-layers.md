@@ -39,10 +39,12 @@ All layers follow Flax NNX conventions and store manifold module references.
 ### Usage Example
 
 ```python
+import jax
 from flax import nnx
 from hyperbolix.nn_layers import HypLinearPoincare
-from hyperbolix.manifolds import poincare
-import jax.numpy as jnp
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
 
 # Create hyperbolic linear layer
 layer = HypLinearPoincare(
@@ -53,7 +55,7 @@ layer = HypLinearPoincare(
 )
 
 # Forward pass
-x = jax.random.normal(nnx.Rngs(1).params(), (10, 32)) * 0.3
+x = jax.random.normal(jax.random.PRNGKey(1), (10, 32)) * 0.3
 x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
 
 output = layer(x_proj, c=1.0)
@@ -77,10 +79,13 @@ print(output.shape)  # (10, 16)
 ### Usage Example
 
 ```python
-from hyperbolix.nn_layers import HypConv2DHyperboloid
-from hyperbolix.manifolds import hyperboloid
-from flax import nnx
+import jax
 import jax.numpy as jnp
+from hyperbolix.nn_layers import HypConv2DHyperboloid
+from hyperbolix.manifolds import Hyperboloid
+from flax import nnx
+
+hyperboloid = Hyperboloid()
 
 # Create 2D hyperbolic convolution
 conv = HypConv2DHyperboloid(
@@ -92,7 +97,7 @@ conv = HypConv2DHyperboloid(
 )
 
 # Input: (batch, height, width, in_channels)
-x = jax.random.normal(nnx.Rngs(1).params(), (8, 28, 28, 16))
+x = jax.random.normal(jax.random.PRNGKey(1), (8, 28, 28, 16))
 
 # Project to hyperboloid
 x_ambient = jnp.concatenate([
@@ -224,10 +229,13 @@ The Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Comp
 ### Hypformer Example
 
 ```python
-from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, hrc_relu
-from hyperbolix.manifolds import hyperboloid
-from flax import nnx
+import jax
 import jax.numpy as jnp
+from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, hrc_relu
+from hyperbolix.manifolds import Hyperboloid
+from flax import nnx
+
+hyperboloid = Hyperboloid()
 
 class HypformerBlock(nnx.Module):
     """Example using HTC/HRC components with curvature change."""
@@ -257,7 +265,7 @@ class HypformerBlock(nnx.Module):
 block = HypformerBlock(in_dim=33, out_dim=64, rngs=nnx.Rngs(0))
 
 # Input on hyperboloid with curvature 1.0
-x = jax.random.normal(nnx.Rngs(1).params(), (32, 33))
+x = jax.random.normal(jax.random.PRNGKey(1), (32, 33))
 x_proj = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
 
 # Transform to curvature 2.0
@@ -313,9 +321,12 @@ Single-layer classifiers with Riemannian geometry.
 ### Regression Example
 
 ```python
+import jax
 from hyperbolix.nn_layers import HypRegressionPoincare
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
 from flax import nnx
+
+poincare = Poincare()
 
 # Multi-class classification (10 classes)
 regressor = HypRegressionPoincare(
@@ -326,7 +337,7 @@ regressor = HypRegressionPoincare(
 )
 
 # Input: hyperbolic embeddings
-x = jax.random.normal(nnx.Rngs(1).params(), (64, 32)) * 0.3
+x = jax.random.normal(jax.random.PRNGKey(1), (64, 32)) * 0.3
 x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
 
 # Forward pass returns logits
@@ -402,9 +413,12 @@ For advanced use cases requiring curvature transformations:
 **Curvature-Preserving Activation:**
 
 ```python
-from hyperbolix.nn_layers import hyp_relu, hyp_gelu
-from hyperbolix.manifolds import hyperboloid
+import jax
 import jax.numpy as jnp
+from hyperbolix.nn_layers import hyp_relu, hyp_gelu
+from hyperbolix.manifolds import Hyperboloid
+
+hyperboloid = Hyperboloid()
 
 # Points on hyperboloid (ambient coordinates)
 x = jax.random.normal(jax.random.PRNGKey(0), (10, 5))
@@ -448,29 +462,18 @@ print(jnp.allclose(constraint, -1.0/2.0, atol=1e-5))  # True
 
     This avoids expensive exp/log maps while preserving geometry and enabling flexible curvature transformations.
 
-## Helper Functions
-
-Utility functions for manifold operations in neural networks.
-
-::: hyperbolix.nn_layers.helpers
-    options:
-      show_source: true
-      heading_level: 3
-      members:
-        - compute_mlr_poincare_pp
-        - compute_mlr_hyperboloid
-        - safe_conformal_factor
-
 ## Building Models
 
 Example of a complete hyperbolic neural network:
 
 ```python
-from flax import nnx
-from hyperbolix.nn_layers import HypLinearPoincare, hyp_relu
-from hyperbolix.manifolds import poincare
 import jax
 import jax.numpy as jnp
+from flax import nnx
+from hyperbolix.nn_layers import HypLinearPoincare, hyp_relu
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
 
 class HyperbolicNN(nnx.Module):
     def __init__(self, rngs):
@@ -508,7 +511,7 @@ class HyperbolicNN(nnx.Module):
 model = HyperbolicNN(rngs=nnx.Rngs(0))
 
 # Input data (projected to Poincaré ball)
-x = jax.random.normal(nnx.Rngs(1).params(), (32, 784)) * 0.1
+x = jax.random.normal(jax.random.PRNGKey(1), (32, 784)) * 0.1
 x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
 
 output = model(x_proj, c=1.0)

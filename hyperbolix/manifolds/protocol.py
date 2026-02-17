@@ -10,7 +10,7 @@ Structural subtyping ensures that any object with the right methods is accepted.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from jaxtyping import Array, Float
 
@@ -27,7 +27,7 @@ class Manifold(Protocol):
     do not break compatibility.
     """
 
-    dtype: object
+    dtype: Any
 
     def _cast(self, x: Array) -> Array: ...
 
