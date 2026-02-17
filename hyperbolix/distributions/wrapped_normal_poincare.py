@@ -11,7 +11,6 @@ References:
 import jax
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ..manifolds import poincare
 from ._common import sample_gaussian, sigma_to_cov
 
 
@@ -72,8 +71,14 @@ def sample(
         >>> z.shape
         (2, 2)
     """
-    # Use provided manifold module or default
-    manifold = manifold_module if manifold_module is not None else poincare
+    # Use provided manifold module or default class instance
+    if manifold_module is not None:
+        manifold = manifold_module
+    else:
+        from ..manifolds.poincare import Poincare
+
+        _dtype = dtype if dtype is not None else mu.dtype
+        manifold = Poincare(dtype=_dtype)
 
     # Determine output dtype
     if dtype is None:
@@ -266,8 +271,13 @@ def log_prob(
     """
     import jax.numpy as jnp
 
-    # Use provided manifold module or default
-    manifold = manifold_module if manifold_module is not None else poincare
+    # Use provided manifold module or default class instance
+    if manifold_module is not None:
+        manifold = manifold_module
+    else:
+        from ..manifolds.poincare import Poincare
+
+        manifold = Poincare(dtype=z.dtype)
 
     # Determine dtype
     dtype = z.dtype

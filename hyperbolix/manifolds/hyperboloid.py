@@ -406,7 +406,7 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus
     dist0 = _dist_0(y, c=c)
     scale = dist0 / jnp.maximum(y_rest_norm, MIN_NORM)
 
-    v0 = jnp.array([0.0])
+    v0 = jnp.zeros(1, dtype=y.dtype)
     v_rest = scale * y_rest
     res = jnp.concatenate([v0, v_rest])
     origin = _create_origin(c, y.shape[0] - 1, y.dtype)
@@ -919,9 +919,21 @@ class Hyperboloid:
             return x.astype(self.dtype)
         return x
 
+    def create_origin(self, c: float, dim: int) -> Float[Array, "dim_plus_1"]:
+        """Create hyperboloid origin [1/√c, 0, ..., 0]."""
+        return _create_origin(c, dim, self.dtype)
+
+    def minkowski_inner(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"]) -> Float[Array, ""]:
+        """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩."""
+        return _minkowski_inner(self._cast(x), self._cast(y))
+
     def proj(self, x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
         """Project point onto hyperboloid."""
         return _proj(self._cast(x), c)
+
+    def proj_batch(self, x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... dim_plus_1"]:
+        """Project batched points onto hyperboloid (handles arbitrary leading dimensions)."""
+        return _proj_batch(self._cast(x), c)
 
     def addition(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
         """Gyrovector addition on hyperboloid."""
@@ -929,7 +941,9 @@ class Hyperboloid:
 
     def scalar_mul(self, r: float, x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
         """Scalar multiplication on hyperboloid."""
-        return _scalar_mul(r, self._cast(x), c)
+        x = self._cast(x)
+        r = jnp.asarray(r, dtype=x.dtype)
+        return _scalar_mul(r, x, c)
 
     def dist(
         self,

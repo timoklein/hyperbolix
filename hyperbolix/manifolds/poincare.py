@@ -680,13 +680,21 @@ class Poincare:
         """Project point onto Poincaré ball by clipping norm."""
         return _proj(self._cast(x), c)
 
+    def gyration(
+        self, x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: float
+    ) -> Float[Array, "dim"]:
+        """Compute gyration gyr[x,y]z to restore commutativity."""
+        return _gyration(self._cast(x), self._cast(y), self._cast(z), c)
+
     def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
         """Möbius gyrovector addition x ⊕ y."""
         return _addition(self._cast(x), self._cast(y), c)
 
     def scalar_mul(self, r: float, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
         """Scalar multiplication r ⊗ x on Poincaré ball."""
-        return _scalar_mul(r, self._cast(x), c)
+        x = self._cast(x)
+        r = jnp.asarray(r, dtype=x.dtype)
+        return _scalar_mul(r, x, c)
 
     def dist(
         self,

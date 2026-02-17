@@ -77,7 +77,6 @@ jobs:
       matrix:
         test-suite:
           - "test_helpers.py"
-          - "test_horo_pca.py"
           - "test_hyperboloid_activations.py"
           - "test_hyperboloid_conv.py"
           - "test_manifolds.py"

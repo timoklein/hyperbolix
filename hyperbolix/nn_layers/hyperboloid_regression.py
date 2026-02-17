@@ -6,13 +6,7 @@ import jax
 from flax import nnx
 from jaxtyping import Array, Float
 
-
-def _validate_hyperboloid_manifold(manifold_module: Any) -> None:
-    required_methods = ("expmap_0", "compute_mlr")
-    if not all(hasattr(manifold_module, method) for method in required_methods):
-        raise TypeError(
-            "manifold_module must be a class-based Hyperboloid manifold instance (e.g., hyperbolix.manifolds.Hyperboloid())."
-        )
+from ._helpers import validate_hyperboloid_manifold
 
 
 class HypRegressionHyperboloid(nnx.Module):
@@ -67,7 +61,7 @@ class HypRegressionHyperboloid(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
-        _validate_hyperboloid_manifold(manifold_module)
+        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "compute_mlr"))
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim

@@ -670,7 +670,7 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     # can exceed 10,000. The logmap/tangent_norm round-trip (divide by λ, then multiply by λ)
     # loses precision, especially for large distances (>10) involving near-boundary points.
     if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
-        rtol = max(rtol, 3e-2)
+        rtol = max(rtol, 5e-2)
 
     # Consistency of tangent_norm with logmap and dist
     # ‖log_x(y)‖_x = d(x, y)

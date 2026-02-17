@@ -52,14 +52,13 @@ def tolerance(dtype: jnp.dtype) -> tuple[float, float]:
     ],
     ids=["Euclidean", "PoincareBall", "Hyperboloid"],
 )
-def manifold_and_c(request: pytest.FixtureRequest, rng: np.random.Generator):
+def manifold_and_c(request: pytest.FixtureRequest, dtype: jnp.dtype, rng: np.random.Generator):
     """Fixture providing (manifold_instance, curvature) tuples.
 
     Uses class-based manifold interfaces with dtype provided by the
     package-level dtype fixture. Curvatures are sampled the same way as PyTorch.
     """
     manifold_name, _ = request.param
-    dtype = request.getfixturevalue("dtype")
 
     if manifold_name == "euclidean":
         # Euclidean always has c=0

@@ -8,14 +8,7 @@ from flax import nnx
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import asinh
-
-
-def _validate_poincare_manifold(manifold_module: Any) -> None:
-    required_methods = ("proj", "addition", "expmap_0")
-    if not all(hasattr(manifold_module, method) for method in required_methods):
-        raise TypeError(
-            "manifold_module must be a class-based Poincare manifold instance (e.g., hyperbolix.manifolds.Poincare())."
-        )
+from ._helpers import validate_poincare_manifold
 
 
 class HypRegressionPoincareHDRL(nnx.Module):
@@ -74,7 +67,7 @@ class HypRegressionPoincareHDRL(nnx.Module):
             raise ValueError(f"version must be either 'standard' or 'rs', got '{version}'")
 
         # Static configuration (treated as compile-time constants for JIT)
-        _validate_poincare_manifold(manifold_module)
+        validate_poincare_manifold(manifold_module, required_methods=("proj", "addition", "expmap_0"))
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim

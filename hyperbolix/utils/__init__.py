@@ -1,15 +1,11 @@
 """JAX utilities for hyperbolix."""
 
 from .helpers import compute_hyperbolic_delta, compute_pairwise_distances, get_delta
-from .horo_pca import HoroPCA, center_data, compute_frechet_mean
 from .math_utils import acosh, atanh, cosh, sinh, smooth_clamp, smooth_clamp_max, smooth_clamp_min
 
 __all__ = [
-    "HoroPCA",
     "acosh",
     "atanh",
-    "center_data",
-    "compute_frechet_mean",
     "compute_hyperbolic_delta",
     "compute_pairwise_distances",
     "cosh",

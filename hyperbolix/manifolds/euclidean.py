@@ -365,7 +365,9 @@ class Euclidean:
 
     def scalar_mul(self, r: float, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
         """Scalar multiplication."""
-        return _scalar_mul(r, self._cast(x), c)
+        x = self._cast(x)
+        r = jnp.asarray(r, dtype=x.dtype)
+        return _scalar_mul(r, x, c)
 
     def dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
         """Compute distance."""

@@ -11,7 +11,7 @@ References:
 import jax
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ..manifolds import hyperboloid
+from ..manifolds.hyperboloid import Hyperboloid, _create_origin
 from ._common import sample_gaussian, sigma_to_cov
 
 
@@ -71,8 +71,13 @@ def sample(
         >>> z.shape
         (2, 3)
     """
-    # Use provided manifold module or default
-    manifold = manifold_module if manifold_module is not None else hyperboloid
+    # Use provided manifold module or default class instance
+    if manifold_module is not None:
+        manifold = manifold_module
+    else:
+        # Determine output dtype first for class instantiation
+        _dtype = dtype if dtype is not None else mu.dtype
+        manifold = Hyperboloid(dtype=_dtype)
 
     # Determine output dtype
     if dtype is None:
@@ -266,8 +271,11 @@ def log_prob(
         >>> log_p_batch.shape
         (10,)
     """
-    # Use provided manifold module or default
-    manifold = manifold_module if manifold_module is not None else hyperboloid
+    # Use provided manifold module or default class instance
+    if manifold_module is not None:
+        manifold = manifold_module
+    else:
+        manifold = Hyperboloid(dtype=z.dtype)
 
     # Determine dtype
     dtype = z.dtype
@@ -301,7 +309,7 @@ def log_prob(
 
     # Step 2: Parallel transport from mu to origin
     # v = PT_{μ→μ₀}(u)
-    mu_0 = hyperboloid._create_origin(c, n, dtype)
+    mu_0 = _create_origin(c, n, dtype)
 
     if u.ndim > 1:
         # Batched, need to vmap

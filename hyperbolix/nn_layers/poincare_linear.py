@@ -9,14 +9,7 @@ from jaxtyping import Array, Float
 
 from ..optim import mark_manifold_param
 from ..utils.math_utils import sinh
-
-
-def _validate_poincare_manifold(manifold_module: Any) -> None:
-    required_methods = ("proj", "addition", "expmap_0", "logmap_0", "compute_mlr_pp")
-    if not all(hasattr(manifold_module, method) for method in required_methods):
-        raise TypeError(
-            "manifold_module must be a class-based Poincare manifold instance (e.g., hyperbolix.manifolds.Poincare())."
-        )
+from ._helpers import validate_poincare_manifold
 
 
 class HypLinearPoincare(nnx.Module):
@@ -68,7 +61,10 @@ class HypLinearPoincare(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
-        _validate_poincare_manifold(manifold_module)
+        validate_poincare_manifold(
+            manifold_module,
+            required_methods=("proj", "addition", "expmap_0", "logmap_0", "compute_mlr_pp"),
+        )
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -180,7 +176,10 @@ class HypLinearPoincarePP(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
-        _validate_poincare_manifold(manifold_module)
+        validate_poincare_manifold(
+            manifold_module,
+            required_methods=("proj", "addition", "expmap_0", "logmap_0", "compute_mlr_pp"),
+        )
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim

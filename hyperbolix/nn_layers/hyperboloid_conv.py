@@ -7,16 +7,9 @@ import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
+from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import hrc
 from .hyperboloid_linear import HypLinearHyperboloidFHCNN
-
-
-def _validate_hyperboloid_manifold(manifold_module: Any) -> None:
-    required_methods = ("expmap_0", "hcat")
-    if not all(hasattr(manifold_module, method) for method in required_methods):
-        raise TypeError(
-            "manifold_module must be a class-based Hyperboloid manifold instance (e.g., hyperbolix.manifolds.Hyperboloid())."
-        )
 
 
 class LorentzConv2D(nnx.Module):
@@ -199,7 +192,7 @@ class HypConv2DHyperboloid(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration
-        _validate_hyperboloid_manifold(manifold_module)
+        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "hcat"))
         self.manifold = manifold_module
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -407,7 +400,7 @@ class HypConv3DHyperboloid(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration
-        _validate_hyperboloid_manifold(manifold_module)
+        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "hcat"))
         self.manifold = manifold_module
         self.in_channels = in_channels
         self.out_channels = out_channels
