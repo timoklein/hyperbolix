@@ -184,11 +184,11 @@ def _log_det_jacobian(
 ) -> Float[Array, "..."]:
     """Compute log determinant of projection Jacobian.
 
-    Computes log det(∂proj_μ(v)/∂v) = (n-1) * log(sinh(r) / r)
-    where r = ||v||_L is the Minkowski norm.
+    Computes log det(∂proj_μ(v)/∂v) = (n-1) * log(sinh(√c·r) / (√c·r))
+    where r = ||v||_L is the Minkowski norm (= Euclidean norm of spatial components at origin).
 
-    For numerical stability, uses Taylor expansion for small r:
-    log(sinh(r) / r) ≈ r²/6 for r → 0
+    For numerical stability, uses Taylor expansion for small √c·r:
+    log(sinh(√c·r) / (√c·r)) ≈ c·r²/6 for √c·r → 0
 
     Args:
         v: Tangent vector at origin, shape (..., n+1)
@@ -206,19 +206,22 @@ def _log_det_jacobian(
     v_minkowski_sq = jnp.sum(v_spatial**2, axis=-1)  # ||v_bar||²
     r = jnp.sqrt(jnp.maximum(v_minkowski_sq, 1e-15))  # Clip for numerical stability
 
+    # Scale by √c — expmap uses cosh(√c·r)/sinh(√c·r), so Jacobian uses the same
+    sqrt_c_r = jnp.sqrt(c) * r
+
     # Threshold for switching to Taylor expansion
     r_threshold = 1e-3
 
-    # Standard computation: log(sinh(r) / r) = log(sinh(r)) - log(r)
-    log_sinh_r_over_r_standard = jnp.log(jnp.sinh(r)) - jnp.log(r)
+    # Standard computation: log(sinh(√c·r) / (√c·r)) = log(sinh(√c·r)) - log(√c·r)
+    log_sinh_r_over_r_standard = jnp.log(jnp.sinh(sqrt_c_r)) - jnp.log(sqrt_c_r)
 
-    # Taylor expansion for small r: log(sinh(r) / r) ≈ r²/6
-    log_sinh_r_over_r_taylor = (r**2) / 6.0
+    # Taylor expansion for small √c·r: log(sinh(x) / x) ≈ x²/6 where x = √c·r
+    log_sinh_r_over_r_taylor = (c * r**2) / 6.0
 
-    # Use Taylor expansion when r < r_threshold
-    log_sinh_r_over_r = jnp.where(r < r_threshold, log_sinh_r_over_r_taylor, log_sinh_r_over_r_standard)
+    # Use Taylor expansion when √c·r < threshold
+    log_sinh_r_over_r = jnp.where(sqrt_c_r < r_threshold, log_sinh_r_over_r_taylor, log_sinh_r_over_r_standard)
 
-    # log det = (n-1) * log(sinh(r) / r)
+    # log det = (n-1) * log(sinh(√c·r) / (√c·r))
     log_det = (n - 1) * log_sinh_r_over_r
 
     return log_det
