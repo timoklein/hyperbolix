@@ -102,6 +102,12 @@ def sample(
     full_sample_shape = sample_shape + mu_batch_shape
     v = sample_gaussian(key, cov, sample_shape=full_sample_shape, dtype=dtype)
 
+    # Scale Euclidean tangent vector to Riemannian tangent space coordinates.
+    # At origin, the conformal factor λ(0) = 2/(1 - c·0) = 2, so Riemannian
+    # coordinates require dividing by λ(0). This matches the reference (Mathieu et al.
+    # 2019) which does v = v / lambda_x(zero) before the exponential map.
+    v = v / 2.0
+
     # Step 2: Map to ball at origin: z_0 = exp_0(v)
     # Step 3: Move to mean: z = μ ⊕ z_0
 
@@ -184,13 +190,16 @@ def _log_det_jacobian(
     """Compute log determinant of projection Jacobian for Poincaré ball.
 
     Computes log det(∂proj_μ(v)/∂v) = (n-1) * log(sinh(√c·r) / (√c·r))
-    where r = ||v|| is the Euclidean norm of the tangent vector at origin.
+    where r = λ(0)·||v||_E = 2·||v||_E is the Riemannian norm of v at the origin.
+
+    The Riemannian norm is needed because the Jacobian formula uses the geodesic
+    distance, which equals the Riemannian norm of the log-map tangent vector.
 
     For numerical stability, uses Taylor expansion for small √c·r:
     log(sinh(√c·r) / (√c·r)) ≈ (c·r²)/6 for √c·r → 0
 
     Args:
-        v: Tangent vector at origin, shape (..., n)
+        v: Tangent vector at origin in Euclidean coordinates, shape (..., n)
         c: Curvature (positive scalar)
         n: Dimension of Poincaré ball
 
@@ -198,8 +207,11 @@ def _log_det_jacobian(
         Log determinant of Jacobian, shape (...)
     """
 
-    # Compute Euclidean norm of tangent vector
-    r = jnp.sqrt(jnp.sum(v**2, axis=-1))
+    # Compute Riemannian norm of tangent vector at origin.
+    # ||v||_g = λ(0) · ||v||_E = 2 · ||v||_E, since the conformal factor at
+    # the origin is λ(0) = 2. The Jacobian formula uses the Riemannian norm.
+    r_euclid = jnp.sqrt(jnp.sum(v**2, axis=-1))
+    r = 2.0 * r_euclid  # Riemannian norm
 
     # Scale by √c
     sqrt_c = jnp.sqrt(c)
@@ -212,7 +224,7 @@ def _log_det_jacobian(
     log_sinh_over_arg_standard = jnp.log(jnp.sinh(sqrt_c_r)) - jnp.log(sqrt_c_r)
 
     # Taylor expansion for small √c·r: log(sinh(x) / x) ≈ x²/6
-    # Here x = √c·r, so x² = c·r²
+    # Here x = √c·r_riem, so x² = c·r_riem² = c·(2·r_euclid)² = 4·c·r_euclid²
     log_sinh_over_arg_taylor = (c * r**2) / 6.0
 
     # Use Taylor expansion when √c·r < threshold
@@ -321,8 +333,11 @@ def log_prob(
         v = manifold.ptransp(u, mu, mu_0, c)
 
     # Step 3: Compute log p(v) where v ~ N(0, Σ)
-    # Note: v is already in R^n, no need to extract spatial components like in hyperboloid
-    log_p_v = _gaussian_log_prob(v, sigma, n, dtype)
+    # Scale Euclidean tangent vector to Riemannian coordinates before evaluating the
+    # Gaussian. The conformal factor λ(0) = 2 converts between coordinate systems:
+    # v_riem = λ(0) · v_euclid. This inverts the /2 applied during sampling.
+    v_riem = v * 2.0
+    log_p_v = _gaussian_log_prob(v_riem, sigma, n, dtype)
 
     # Step 4: Compute log det Jacobian
     log_det_jac = _log_det_jacobian(v, c, n)
