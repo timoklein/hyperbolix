@@ -47,7 +47,7 @@ from datasets import load_dataset
 from flax import nnx
 from jaxtyping import Array, Float
 
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers import (
     HRCBatchNorm,
     HTCLinear,
@@ -61,6 +61,9 @@ from hyperbolix.optim import riemannian_sgd
 
 # Enable float64 for numerical stability
 jax.config.update("jax_enable_x64", True)
+
+# Class-based manifold instance for NN layers
+hyperboloid = Hyperboloid(dtype=jnp.float64)
 
 
 # ==============================================================================

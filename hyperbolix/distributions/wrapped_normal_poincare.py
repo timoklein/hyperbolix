@@ -9,9 +9,12 @@ References:
 """
 
 import jax
+import jax.numpy as jnp
+from jax.scipy.stats import multivariate_normal
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ..manifolds import poincare
+from hyperbolix.manifolds import Manifold
+
 from ._common import sample_gaussian, sigma_to_cov
 
 
@@ -22,6 +25,7 @@ def sample(
     c: float,
     sample_shape: tuple[int, ...] = (),
     dtype=None,
+    manifold_module: Manifold | None = None,
 ) -> Float[Array, "..."]:
     """Sample from wrapped normal distribution on Poincaré ball.
 
@@ -71,6 +75,15 @@ def sample(
         >>> z.shape
         (2, 2)
     """
+    # Use provided manifold module or default class instance
+    if manifold_module is not None:
+        manifold = manifold_module
+    else:
+        from ..manifolds.poincare import Poincare
+
+        _dtype = dtype if dtype is not None else mu.dtype
+        manifold = Poincare(dtype=_dtype)
+
     # Determine output dtype
     if dtype is None:
         dtype = mu.dtype
@@ -89,15 +102,21 @@ def sample(
     full_sample_shape = sample_shape + mu_batch_shape
     v = sample_gaussian(key, cov, sample_shape=full_sample_shape, dtype=dtype)
 
+    # Scale Euclidean tangent vector to Riemannian tangent space coordinates.
+    # At origin, the conformal factor λ(0) = 2/(1 - c·0) = 2, so Riemannian
+    # coordinates require dividing by λ(0). This matches the reference (Mathieu et al.
+    # 2019) which does v = v / lambda_x(zero) before the exponential map.
+    v = v / 2.0
+
     # Step 2: Map to ball at origin: z_0 = exp_0(v)
     # Step 3: Move to mean: z = μ ⊕ z_0
 
     def transform_single(v_single, mu_single):
         """Transform a single (v, mu) pair."""
         # Map to ball at origin
-        z_0 = poincare.expmap_0(v_single, c)
+        z_0 = manifold.expmap_0(v_single, c)
         # Move to mean using Möbius addition
-        z = poincare.addition(mu_single, z_0, c)
+        z = manifold.addition(mu_single, z_0, c)
         return z
 
     if len(sample_shape) == 0 and len(mu_batch_shape) == 0:
@@ -151,8 +170,6 @@ def _gaussian_log_prob(
     Returns:
         Log probability, shape (...)
     """
-    import jax.numpy as jnp
-    from jax.scipy.stats import multivariate_normal
 
     # Convert sigma parameterization to covariance matrix
     cov = sigma_to_cov(sigma, n, dtype)
@@ -173,23 +190,28 @@ def _log_det_jacobian(
     """Compute log determinant of projection Jacobian for Poincaré ball.
 
     Computes log det(∂proj_μ(v)/∂v) = (n-1) * log(sinh(√c·r) / (√c·r))
-    where r = ||v|| is the Euclidean norm of the tangent vector at origin.
+    where r = λ(0)·||v||_E = 2·||v||_E is the Riemannian norm of v at the origin.
+
+    The Riemannian norm is needed because the Jacobian formula uses the geodesic
+    distance, which equals the Riemannian norm of the log-map tangent vector.
 
     For numerical stability, uses Taylor expansion for small √c·r:
     log(sinh(√c·r) / (√c·r)) ≈ (c·r²)/6 for √c·r → 0
 
     Args:
-        v: Tangent vector at origin, shape (..., n)
+        v: Tangent vector at origin in Euclidean coordinates, shape (..., n)
         c: Curvature (positive scalar)
         n: Dimension of Poincaré ball
 
     Returns:
         Log determinant of Jacobian, shape (...)
     """
-    import jax.numpy as jnp
 
-    # Compute Euclidean norm of tangent vector
-    r = jnp.sqrt(jnp.sum(v**2, axis=-1))
+    # Compute Riemannian norm of tangent vector at origin.
+    # ||v||_g = λ(0) · ||v||_E = 2 · ||v||_E, since the conformal factor at
+    # the origin is λ(0) = 2. The Jacobian formula uses the Riemannian norm.
+    r_euclid = jnp.sqrt(jnp.sum(v**2, axis=-1))
+    r = 2.0 * r_euclid  # Riemannian norm
 
     # Scale by √c
     sqrt_c = jnp.sqrt(c)
@@ -202,7 +224,7 @@ def _log_det_jacobian(
     log_sinh_over_arg_standard = jnp.log(jnp.sinh(sqrt_c_r)) - jnp.log(sqrt_c_r)
 
     # Taylor expansion for small √c·r: log(sinh(x) / x) ≈ x²/6
-    # Here x = √c·r, so x² = c·r²
+    # Here x = √c·r_riem, so x² = c·r_riem² = c·(2·r_euclid)² = 4·c·r_euclid²
     log_sinh_over_arg_taylor = (c * r**2) / 6.0
 
     # Use Taylor expansion when √c·r < threshold
@@ -219,6 +241,7 @@ def log_prob(
     mu: Float[Array, "... n"],
     sigma: Float[Array, "..."] | float,
     c: float,
+    manifold_module: Manifold | None = None,
 ) -> Float[Array, "..."]:
     """Compute log probability of wrapped normal distribution on Poincaré ball.
 
@@ -259,7 +282,14 @@ def log_prob(
         >>> log_p_batch.shape
         (10,)
     """
-    import jax.numpy as jnp
+
+    # Use provided manifold module or default class instance
+    if manifold_module is not None:
+        manifold = manifold_module
+    else:
+        from ..manifolds.poincare import Poincare
+
+        manifold = Poincare(dtype=z.dtype)
 
     # Determine dtype
     dtype = z.dtype
@@ -274,17 +304,17 @@ def log_prob(
         n_sample_dims = z.ndim - mu.ndim
 
         # Create vmapped version of logmap
-        logmap_fn = poincare.logmap
+        logmap_fn = manifold.logmap
         for _ in range(n_sample_dims):
             logmap_fn = jax.vmap(logmap_fn, in_axes=(0, None, None))
 
         u = logmap_fn(z, mu, c)
     elif z.ndim == mu.ndim and mu.ndim > 1:
         # Both are batched, vmap over batch dimension
-        u = jax.vmap(lambda zz, mm: poincare.logmap(zz, mm, c))(z, mu)
+        u = jax.vmap(lambda zz, mm: manifold.logmap(zz, mm, c))(z, mu)
     else:
         # Single point
-        u = poincare.logmap(z, mu, c)
+        u = manifold.logmap(z, mu, c)
 
     # Step 2: Parallel transport from mu to origin
     # v = PT_{μ→0}(u)
@@ -294,17 +324,20 @@ def log_prob(
         # Batched, need to vmap
         if mu.ndim > 1:
             # mu is also batched
-            v = jax.vmap(lambda uu, mm: poincare.ptransp(uu, mm, mu_0, c))(u, mu)
+            v = jax.vmap(lambda uu, mm: manifold.ptransp(uu, mm, mu_0, c))(u, mu)
         else:
             # Only u is batched (from sample_shape)
-            v = jax.vmap(lambda uu: poincare.ptransp(uu, mu, mu_0, c))(u)
+            v = jax.vmap(lambda uu: manifold.ptransp(uu, mu, mu_0, c))(u)
     else:
         # Single point
-        v = poincare.ptransp(u, mu, mu_0, c)
+        v = manifold.ptransp(u, mu, mu_0, c)
 
     # Step 3: Compute log p(v) where v ~ N(0, Σ)
-    # Note: v is already in R^n, no need to extract spatial components like in hyperboloid
-    log_p_v = _gaussian_log_prob(v, sigma, n, dtype)
+    # Scale Euclidean tangent vector to Riemannian coordinates before evaluating the
+    # Gaussian. The conformal factor λ(0) = 2 converts between coordinate systems:
+    # v_riem = λ(0) · v_euclid. This inverts the /2 applied during sampling.
+    v_riem = v * 2.0
+    log_p_v = _gaussian_log_prob(v_riem, sigma, n, dtype)
 
     # Step 4: Compute log det Jacobian
     log_det_jac = _log_det_jacobian(v, c, n)

@@ -218,10 +218,10 @@ def riemannian_adam(
             if manifold_info is not None:
                 manifold_module, c = manifold_info
 
-                rgrad = manifold_module.egrad2rgrad(grad_value, param_value, c)
+                rgrad = manifold_module._egrad2rgrad(grad_value, param_value, c)
                 new_m1 = beta1 * m1_value + (1 - beta1) * rgrad
 
-                rgrad_sq = manifold_module.tangent_inner(rgrad, rgrad, param_value, c)
+                rgrad_sq = manifold_module._tangent_inner(rgrad, rgrad, param_value, c)
                 rgrad_sq = jnp.asarray(rgrad_sq, dtype=rgrad.dtype)
                 rgrad_sq = jnp.broadcast_to(rgrad_sq, m2_value.shape)
                 new_m2 = beta2 * m2_value + (1 - beta2) * rgrad_sq
@@ -233,11 +233,11 @@ def riemannian_adam(
                 lr_cast = lr.astype(direction.dtype)
                 step = -lr_cast * direction
                 if use_expmap:
-                    new_param_value = manifold_module.expmap(step, param_value, c)
+                    new_param_value = manifold_module._expmap(step, param_value, c)
                 else:
-                    new_param_value = manifold_module.retraction(step, param_value, c)
+                    new_param_value = manifold_module._retraction(step, param_value, c)
 
-                transported_m1 = manifold_module.ptransp(new_m1, param_value, new_param_value, c)
+                transported_m1 = manifold_module._ptransp(new_m1, param_value, new_param_value, c)
                 transported_m2 = new_m2
 
                 param_update = new_param_value - param_value

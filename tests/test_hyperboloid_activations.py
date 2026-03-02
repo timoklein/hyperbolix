@@ -4,13 +4,20 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.nn_layers.hyperboloid_activations import (
     hyp_leaky_relu,
     hyp_relu,
     hyp_swish,
     hyp_tanh,
 )
+
+
+@pytest.fixture
+def hyperboloid():
+    """Hyperboloid manifold instance for tests."""
+    return Hyperboloid()
+
 
 # ============================================================================
 # Manifold Constraint Tests (Most Critical)
@@ -20,6 +27,7 @@ from hyperbolix.nn_layers.hyperboloid_activations import (
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_manifold_constraint_single(dtype):
     """Test that hyp_relu output for single point lies on manifold."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     dim = 4
 
@@ -37,6 +45,7 @@ def test_hyp_relu_manifold_constraint_single(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_manifold_constraint_batch(dtype):
     """Test that hyp_relu output for batch lies on manifold."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, dim = 8, 4
 
@@ -55,6 +64,7 @@ def test_hyp_relu_manifold_constraint_batch(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_manifold_constraint_multi_dim(dtype):
     """Test that hyp_relu output for multi-dimensional batch lies on manifold."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch, height, width, dim = 2, 4, 4, 3
 
@@ -73,6 +83,7 @@ def test_hyp_relu_manifold_constraint_multi_dim(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_leaky_relu_manifold_constraint(dtype):
     """Test that hyp_leaky_relu output lies on manifold."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(43)
     batch_size, dim = 8, 4
 
@@ -88,6 +99,7 @@ def test_hyp_leaky_relu_manifold_constraint(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_tanh_manifold_constraint(dtype):
     """Test that hyp_tanh output lies on manifold."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(44)
     batch_size, dim = 8, 4
 
@@ -103,6 +115,7 @@ def test_hyp_tanh_manifold_constraint(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_swish_manifold_constraint(dtype):
     """Test that hyp_swish output lies on manifold."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(45)
     batch_size, dim = 8, 4
 
@@ -124,6 +137,7 @@ def test_hyp_swish_manifold_constraint(dtype):
 @pytest.mark.parametrize("dim", [2, 4, 10])
 def test_hyp_relu_shape_single(dtype, dim):
     """Test that hyp_relu preserves shape for single points."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
 
     v = jax.random.normal(key, (dim,), dtype=dtype) * 0.1
@@ -140,6 +154,7 @@ def test_hyp_relu_shape_single(dtype, dim):
 @pytest.mark.parametrize("dim", [2, 4, 10])
 def test_hyp_relu_shape_batch(dtype, batch_size, dim):
     """Test that hyp_relu preserves shape for batches."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
 
     v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
@@ -154,6 +169,7 @@ def test_hyp_relu_shape_batch(dtype, batch_size, dim):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_shape_multi_dim(dtype):
     """Test that hyp_relu preserves shape for multi-dimensional batches."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch, height, width, dim = 4, 8, 8, 5
 
@@ -174,6 +190,7 @@ def test_hyp_relu_shape_multi_dim(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_formula(dtype):
     """Test that hyp_relu correctly implements the formula."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, dim = 8, 4
     c = 1.0
@@ -193,6 +210,7 @@ def test_hyp_relu_formula(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_negative_components_zeroed(dtype):
     """Test that negative spatial components become zero after hyp_relu."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     # Create a point with some negative spatial components
     x = jnp.array([1.5, 0.3, -0.5, 0.2, -0.1], dtype=dtype)
     # Project to manifold
@@ -213,6 +231,7 @@ def test_hyp_relu_negative_components_zeroed(dtype):
 @pytest.mark.parametrize("negative_slope", [0.01, 0.1, 0.2])
 def test_hyp_leaky_relu_negative_slope(dtype, negative_slope):
     """Test that hyp_leaky_relu correctly applies negative_slope."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, dim = 8, 4
 
@@ -228,6 +247,7 @@ def test_hyp_leaky_relu_negative_slope(dtype, negative_slope):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_tanh_bounded(dtype):
     """Test that hyp_tanh produces bounded spatial components."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, dim = 8, 4
 
@@ -245,6 +265,7 @@ def test_hyp_tanh_bounded(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_swish_smooth_at_zero(dtype):
     """Test that hyp_swish is smooth around zero."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     # Create points near origin
     x1 = jnp.array([1.0, 0.01, 0.01], dtype=dtype)
     x2 = jnp.array([1.0, -0.01, -0.01], dtype=dtype)
@@ -268,6 +289,7 @@ def test_hyp_swish_smooth_at_zero(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_gradients(dtype):
     """Test that hyp_relu has finite gradients."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     dim = 4
 
@@ -287,6 +309,7 @@ def test_hyp_relu_gradients(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_leaky_relu_gradients(dtype):
     """Test that hyp_leaky_relu has finite gradients."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(43)
     dim = 4
 
@@ -306,6 +329,7 @@ def test_hyp_leaky_relu_gradients(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_tanh_gradients(dtype):
     """Test that hyp_tanh has finite gradients."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(44)
     dim = 4
 
@@ -325,6 +349,7 @@ def test_hyp_tanh_gradients(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_swish_gradients(dtype):
     """Test that hyp_swish has finite gradients."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(45)
     dim = 4
 
@@ -349,6 +374,7 @@ def test_hyp_swish_gradients(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_jit(dtype):
     """Test that hyp_relu works with JIT compilation."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, dim = 8, 4
 
@@ -369,6 +395,7 @@ def test_hyp_relu_jit(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_leaky_relu_jit(dtype):
     """Test that hyp_leaky_relu works with JIT compilation."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(43)
     batch_size, dim = 8, 4
 
@@ -389,6 +416,7 @@ def test_hyp_leaky_relu_jit(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_tanh_jit(dtype):
     """Test that hyp_tanh works with JIT compilation."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(44)
     batch_size, dim = 8, 4
 
@@ -409,6 +437,7 @@ def test_hyp_tanh_jit(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_swish_jit(dtype):
     """Test that hyp_swish works with JIT compilation."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(45)
     batch_size, dim = 8, 4
 
@@ -435,6 +464,7 @@ def test_hyp_swish_jit(dtype):
 @pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
 def test_hyp_relu_different_curvatures(dtype, c):
     """Test that hyp_relu works with different curvature values."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, dim = 8, 4
 
@@ -451,6 +481,7 @@ def test_hyp_relu_different_curvatures(dtype, c):
 @pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
 def test_hyp_tanh_different_curvatures(dtype, c):
     """Test that hyp_tanh works with different curvature values."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(44)
     batch_size, dim = 8, 4
 
@@ -471,6 +502,7 @@ def test_hyp_tanh_different_curvatures(dtype, c):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_zero_spatial_components(dtype):
     """Test hyp_relu with zero spatial components."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     # Point at origin
     x = jnp.array([1.0, 0.0, 0.0, 0.0], dtype=dtype)
     x = hyperboloid.proj(x, c=1.0)
@@ -485,6 +517,7 @@ def test_hyp_relu_zero_spatial_components(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_relu_moderate_magnitude(dtype):
     """Test hyp_relu with moderate magnitude inputs."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch_size, dim = 8, 4
 
@@ -502,6 +535,7 @@ def test_hyp_relu_moderate_magnitude(dtype):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_tanh_moderate_magnitude(dtype):
     """Test hyp_tanh with moderate magnitude inputs."""
+    hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(44)
     batch_size, dim = 8, 4
 

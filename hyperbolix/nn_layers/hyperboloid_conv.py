@@ -1,12 +1,13 @@
 """Hyperboloid convolutional layers for JAX/Flax NNX."""
 
-from typing import Any
-
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
+
+from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import hrc
 from .hyperboloid_linear import HypLinearHyperboloidFHCNN
 
@@ -143,8 +144,8 @@ class HypConv2DHyperboloid(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The Hyperboloid manifold module
+    manifold_module : object
+        Class-based Hyperboloid manifold instance
     in_channels : int
         Number of input channels
     out_channels : int
@@ -175,7 +176,7 @@ class HypConv2DHyperboloid(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Hyperboloid,
         in_channels: int,
         out_channels: int,
         kernel_size: int | tuple[int, int],
@@ -191,6 +192,7 @@ class HypConv2DHyperboloid(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration
+        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "hcat"))
         self.manifold = manifold_module
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -222,7 +224,7 @@ class HypConv2DHyperboloid(nnx.Module):
         # Create the linear transformation layer
         # Input: hcat_out_ambient_dim, Output: out_channels
         self.linear = HypLinearHyperboloidFHCNN(
-            manifold_module=manifold_module,
+            manifold_module=self.manifold,
             in_dim=hcat_out_ambient_dim,
             out_dim=out_channels,
             rngs=rngs,
@@ -350,8 +352,8 @@ class HypConv3DHyperboloid(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The Hyperboloid manifold module
+    manifold_module : object
+        Class-based Hyperboloid manifold instance
     in_channels : int
         Number of input channels
     out_channels : int
@@ -382,7 +384,7 @@ class HypConv3DHyperboloid(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Hyperboloid,
         in_channels: int,
         out_channels: int,
         kernel_size: int | tuple[int, int, int],
@@ -398,6 +400,7 @@ class HypConv3DHyperboloid(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration
+        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "hcat"))
         self.manifold = manifold_module
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -429,7 +432,7 @@ class HypConv3DHyperboloid(nnx.Module):
         # Create the linear transformation layer
         # Input: hcat_out_ambient_dim, Output: out_channels
         self.linear = HypLinearHyperboloidFHCNN(
-            manifold_module=manifold_module,
+            manifold_module=self.manifold,
             in_dim=hcat_out_ambient_dim,
             out_dim=out_channels,
             rngs=rngs,

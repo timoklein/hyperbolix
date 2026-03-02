@@ -1,12 +1,12 @@
 """Hyperboloid regression layers for JAX/Flax NNX."""
 
-from typing import Any
-
 import jax
 from flax import nnx
 from jaxtyping import Array, Float
 
-from .helpers import compute_mlr_hyperboloid
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
+
+from ._helpers import validate_hyperboloid_manifold
 
 
 class HypRegressionHyperboloid(nnx.Module):
@@ -19,8 +19,8 @@ class HypRegressionHyperboloid(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The Hyperboloid manifold module
+    manifold_module : object
+        Class-based Hyperboloid manifold instance
     in_dim : int
         Dimension of the input space
     out_dim : int
@@ -48,7 +48,7 @@ class HypRegressionHyperboloid(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Hyperboloid,
         in_dim: int,
         out_dim: int,
         *,
@@ -61,6 +61,7 @@ class HypRegressionHyperboloid(nnx.Module):
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
+        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "compute_mlr"))
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -99,7 +100,7 @@ class HypRegressionHyperboloid(nnx.Module):
             x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Compute multinomial linear regression
-        res = compute_mlr_hyperboloid(
+        res = self.manifold.compute_mlr(
             x,
             self.weight[...],
             self.bias[...],

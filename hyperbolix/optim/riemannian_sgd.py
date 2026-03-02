@@ -187,7 +187,7 @@ def riemannian_sgd(
                 manifold_module, c = manifold_info
 
                 # 1. Convert Euclidean gradient to Riemannian gradient
-                rgrad = manifold_module.egrad2rgrad(grad_value, param_value, c)
+                rgrad = manifold_module._egrad2rgrad(grad_value, param_value, c)
 
                 # 2. Update momentum
                 new_momentum = momentum * mom_value + rgrad
@@ -196,13 +196,13 @@ def riemannian_sgd(
                 lr_cast = lr.astype(new_momentum.dtype)
                 direction = -lr_cast * new_momentum
                 if use_expmap:
-                    new_param_value = manifold_module.expmap(direction, param_value, c)
+                    new_param_value = manifold_module._expmap(direction, param_value, c)
                 else:
-                    new_param_value = manifold_module.retraction(direction, param_value, c)
+                    new_param_value = manifold_module._retraction(direction, param_value, c)
 
                 # 4. Parallel transport momentum to new location
                 if momentum > 0.0:
-                    transported_momentum = manifold_module.ptransp(new_momentum, param_value, new_param_value, c)
+                    transported_momentum = manifold_module._ptransp(new_momentum, param_value, new_param_value, c)
                 else:
                     transported_momentum = new_momentum
 
