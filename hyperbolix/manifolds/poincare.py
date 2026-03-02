@@ -66,6 +66,7 @@ import math
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
+import jax.scipy.special
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import acosh, asinh, atanh, cosh, sinh, smooth_clamp
@@ -634,6 +635,46 @@ def _compute_mlr_pp(
 
 
 # ---------------------------------------------------------------------------
+# Beta-concatenation (HNN++, Shimizu et al. 2020)
+# ---------------------------------------------------------------------------
+
+
+def _beta_concat(points: Float[Array, "M n_i"], c: float) -> Float[Array, "n"]:
+    """Beta-concatenation of M equal-dimensional Poincaré ball points.
+
+    Concatenates M points in the tangent space at the origin with a scaling
+    correction based on the Euler beta function, then maps back to the manifold.
+
+    Args:
+        points: M points on the Poincaré ball, shape (M, n_i). All points
+                must have the same dimension n_i.
+        c: Curvature (positive)
+
+    Returns:
+        Concatenated point on the Poincaré ball, shape (M * n_i,)
+
+    References:
+        Shimizu et al. "Hyperbolic neural networks++." arXiv:2006.08210 (2020).
+    """
+    M, n_i = points.shape
+    n = M * n_i
+
+    # Euler beta function ratio: B(n/2, 1/2) / B(n_i/2, 1/2)
+    beta_n = jax.scipy.special.beta(n / 2.0, 0.5)
+    beta_ni = jax.scipy.special.beta(n_i / 2.0, 0.5)
+    scale = beta_n / beta_ni
+
+    # Map all points to tangent space at origin
+    tangent_vectors = jax.vmap(_logmap_0, in_axes=(0, None))(points, c)  # (M, n_i)
+
+    # Scale and concatenate in tangent space
+    v = (scale * tangent_vectors).reshape(n)  # (n,)
+
+    # Map back to manifold
+    return _expmap_0(v, c)  # (n,)
+
+
+# ---------------------------------------------------------------------------
 # Class-based manifold API
 # ---------------------------------------------------------------------------
 
@@ -797,3 +838,7 @@ class Poincare:
     ) -> Float[Array, "batch out_dim"]:
         """Compute HNN++ multinomial linear regression on the Poincare ball."""
         return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)
+
+    def beta_concat(self, points: Float[Array, "M n_i"], c: float) -> Float[Array, "n"]:
+        """Beta-concatenation of M equal-dimensional Poincaré ball points."""
+        return _beta_concat(self._cast(points), c)
