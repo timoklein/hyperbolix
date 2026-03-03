@@ -1,4 +1,15 @@
-"""Poincaré ball convolutional layers for JAX/Flax NNX."""
+"""Poincaré ball convolutional layers for JAX/Flax NNX.
+
+Implements Poincaré convolution following the reference Poincaré ResNet
+(van Spengler et al. 2023). The key design principle is to operate in
+tangent space between layers for numerical stability, matching the
+reference computation flow:
+
+    tangent input → beta-scale → unfold patches → expmap_0 → HNN++ FC → logmap_0 → tangent output
+
+This avoids the numerically unstable logmap_0 round-trips in beta_concat
+that cause NaN when points approach the Poincaré ball boundary.
+"""
 
 import jax
 import jax.numpy as jnp
@@ -15,14 +26,23 @@ class HypConv2DPoincare(nnx.Module):
     """
     Hyperbolic 2D Convolutional Layer for Poincaré ball model.
 
-    This layer implements hyperbolic convolution using beta-concatenation
-    (from HNN++, Shimizu et al. 2020) and the HNN++ linear layer, following
-    the Poincaré ResNet approach (van Spengler et al. 2023).
+    This layer implements hyperbolic convolution following the Poincaré ResNet
+    (van Spengler et al. 2023) approach: beta-scaling in tangent space,
+    patch extraction, expmap to manifold, HNN++ fully-connected, logmap back
+    to tangent space.
+
+    The layer operates in tangent space internally and returns tangent-space
+    output, matching the reference implementation. This design avoids the
+    numerically unstable logmap_0 round-trips that cause NaN gradients
+    when points approach the Poincaré ball boundary.
 
     Computation steps:
-        1) Extract receptive field (kernel_size x kernel_size) of hyperbolic points
-        2) Apply beta-concatenation to combine receptive field points
-        3) Pass through HNN++ hyperbolic linear layer
+        1) Map to tangent space if input is on manifold
+        2) Scale tangent vectors by beta function ratio (beta-concatenation scaling)
+        3) Extract patches via im2col (zero-padding in tangent space)
+        4) Map concatenated patch vectors to manifold via expmap_0
+        5) Apply HNN++ fully-connected layer
+        6) Map back to tangent space via logmap_0
 
     Parameters
     ----------
@@ -41,8 +61,12 @@ class HypConv2DPoincare(nnx.Module):
     padding : str
         Padding mode, either 'SAME' or 'VALID' (default: 'SAME')
     input_space : str
-        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'tangent').
         Note: This is a static configuration - changing it after initialization requires recompilation.
+    id_init : bool
+        If True, use identity initialization (1/2 * I) for the linear sublayer weights,
+        matching the reference Poincaré ResNet implementation (default: True).
+        The 1/2 factor compensates for the factor of 2 inside the HNN++ distance formula.
     clamping_factor : float
         Clamping factor for the HNN++ linear layer output (default: 1.0)
     smoothing_factor : float
@@ -50,12 +74,18 @@ class HypConv2DPoincare(nnx.Module):
 
     Notes
     -----
+    Output Space:
+        This layer always returns tangent-space output (matching the reference).
+        Between conv layers, use standard activations (e.g., jax.nn.relu) directly
+        on the tangent-space features. Use expmap_0 to map back to the manifold
+        only when needed (e.g., before the classification head).
+
     JIT Compatibility:
         This layer is designed to work with nnx.jit. Configuration parameters (padding, input_space)
         are treated as static and will be baked into the compiled function.
 
     Dimension math:
-        - beta-concat: K^2 points of dim C_in -> single point of dim K^2 * C_in
+        - beta-scaling + patch extraction: (H, W, C_in) → (oh, ow, K^2 * C_in)
         - HNN++ linear: in_dim = K^2 * C_in, out_dim = C_out
 
     References
@@ -74,7 +104,8 @@ class HypConv2DPoincare(nnx.Module):
         rngs: nnx.Rngs,
         stride: int | tuple[int, int] = 1,
         padding: str = "SAME",
-        input_space: str = "manifold",
+        input_space: str = "tangent",
+        id_init: bool = True,
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
     ):
@@ -86,7 +117,7 @@ class HypConv2DPoincare(nnx.Module):
         # Static configuration
         validate_poincare_manifold(
             manifold_module,
-            required_methods=("expmap_0", "logmap_0", "beta_concat", "compute_mlr_pp"),
+            required_methods=("expmap_0", "logmap_0", "compute_mlr_pp"),
         )
         self.manifold = manifold_module
         self.in_channels = in_channels
@@ -106,70 +137,32 @@ class HypConv2DPoincare(nnx.Module):
         else:
             self.stride = stride
 
-        # Compute dimensions for the linear layer
-        # beta-concat: K^2 points of dim C_in -> single point of dim K^2 * C_in
+        # Precompute beta function ratio for tangent-space scaling
+        # B(n/2, 1/2) / B(n_i/2, 1/2) where n = K^2 * C_in, n_i = C_in
         kernel_h, kernel_w = self.kernel_size
         K2 = kernel_h * kernel_w
-        beta_concat_out_dim = K2 * in_channels
+        concat_dim = K2 * in_channels
+        beta_n = jax.scipy.special.beta(concat_dim / 2.0, 0.5)
+        beta_ni = jax.scipy.special.beta(in_channels / 2.0, 0.5)
+        self.beta_scale = beta_n / beta_ni
 
         # HNN++ linear: in_dim = K^2 * C_in, out_dim = C_out
         self.linear = HypLinearPoincarePP(
             manifold_module=self.manifold,
-            in_dim=beta_concat_out_dim,
+            in_dim=concat_dim,
             out_dim=out_channels,
             rngs=rngs,
-            input_space="manifold",  # beta_concat output is always on manifold
+            input_space="manifold",  # input is on manifold after expmap_0
             clamping_factor=clamping_factor,
             smoothing_factor=smoothing_factor,
         )
 
-    def _extract_patches(
-        self,
-        x: Float[Array, "batch height width in_channels"],
-    ) -> Float[Array, "batch out_height out_width kernel_h kernel_w in_channels"]:
-        """Extract patches (receptive fields) from the input using optimized JAX primitives."""
-        batch, height, width, in_channels = x.shape
-        kernel_h, kernel_w = self.kernel_size
-        stride_h, stride_w = self.stride
-
-        # 1. Handle Padding (Manually, to ensure manifold validity)
-        if self.padding == "SAME":
-            out_height = (height + stride_h - 1) // stride_h
-            out_width = (width + stride_w - 1) // stride_w
-            pad_h = max((out_height - 1) * stride_h + kernel_h - height, 0)
-            pad_w = max((out_width - 1) * stride_w + kernel_w - width, 0)
-            pad_top = pad_h // 2
-            pad_bottom = pad_h - pad_top
-            pad_left = pad_w // 2
-            pad_right = pad_w - pad_left
-
-            # Pad with edge values to stay on manifold
-            x = jnp.pad(
-                x,
-                ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                mode="edge",
-            )
-
-        # 2. Extract Patches using LAX primitive (High Performance)
-        # Output shape: (batch, out_height, out_width, in_channels * kernel_h * kernel_w)
-        patches_flat = jax.lax.conv_general_dilated_patches(
-            lhs=x,
-            filter_shape=(kernel_h, kernel_w),
-            window_strides=(stride_h, stride_w),
-            padding="VALID",  # We already padded manually
-            dimension_numbers=("NHWC", "OIHW", "NHWC"),
-        )
-
-        # 3. Reshape to separate kernel dimensions and channels
-        out_h, out_w = patches_flat.shape[1], patches_flat.shape[2]
-
-        # JAX conv_general_dilated_patches output order is "c" + spatial dims from rhs_spec
-        # With rhs_spec="OIHW", the flattened dim order is (in_channels, kernel_h, kernel_w)
-        # We need (kernel_h, kernel_w, in_channels) for downstream processing
-        patches = patches_flat.reshape(batch, out_h, out_w, in_channels, kernel_h, kernel_w)
-        patches = patches.transpose(0, 1, 2, 4, 5, 3)  # (batch, out_h, out_w, kh, kw, in_c)
-
-        return patches
+        # Override weight init with identity initialization from reference
+        # (van Spengler et al. 2023): W = 1/2 * I(C_out, K^2*C_in)
+        # The 1/2 factor compensates for the factor of 2 in the HNN++ distance formula.
+        if id_init:
+            eye = jnp.eye(out_channels, concat_dim)  # (C_out, K^2*C_in)
+            self.linear.weight[...] = 0.5 * eye
 
     def __call__(
         self,
@@ -179,49 +172,67 @@ class HypConv2DPoincare(nnx.Module):
         """
         Forward pass through the Poincaré convolutional layer.
 
+        Follows the reference computation flow: tangent-space beta-scaling,
+        patch extraction, expmap_0, HNN++ FC, logmap_0.
+
         Parameters
         ----------
         x : Array of shape (batch, height, width, in_channels)
-            Input feature map where each pixel is a point on the Poincaré ball
+            Input feature map. Can be tangent-space or manifold points
+            depending on input_space setting.
         c : float
             Manifold curvature (default: 1.0)
 
         Returns
         -------
         out : Array of shape (batch, out_height, out_width, out_channels)
-            Output feature map on the Poincaré ball
+            Output feature map in tangent space at the origin.
+            Use standard activations (e.g., jax.nn.relu) between layers.
         """
-        # Map to manifold if needed (static branch - JIT friendly)
-        if self.input_space == "tangent":
-            # 1. Flatten batch and spatial dims: (B*H*W, C)
-            x_flat = x.reshape(-1, x.shape[-1])
+        # Step 1: Map to tangent space if input is on manifold
+        if self.input_space == "manifold":
+            orig_shape = x.shape
+            x_flat = x.reshape(-1, x.shape[-1])  # (B*H*W, C_in)
+            x_flat = jax.vmap(self.manifold.logmap_0, in_axes=(0, None))(x_flat, c)
+            x = x_flat.reshape(orig_shape)
 
-            # 2. Apply single vmap over the list of vectors
-            x_mapped = jax.vmap(self.manifold.expmap_0, in_axes=(0, None))(x_flat, c)
+        # Now x is in tangent space: (B, H, W, C_in)
 
-            # 3. Reshape back to (B, H, W, C)
-            x = x_mapped.reshape(x.shape)
+        # Step 2: Scale tangent vectors by beta ratio (matching reference)
+        # This replaces the per-point logmap_0→scale→concat→expmap_0 in old beta_concat
+        x = x * self.beta_scale
 
-        # Extract patches (receptive fields)
-        # Shape: (batch, out_h, out_w, kernel_h, kernel_w, in_channels)
-        patches = self._extract_patches(x)
+        # Step 3: Extract patches in tangent space using zero-padding
+        # Zero-padding is natural in tangent space (zero = origin)
+        # Output: (B, oh, ow, K^2 * C_in) - channels already concatenated
+        kernel_h, kernel_w = self.kernel_size
+        stride_h, stride_w = self.stride
 
-        batch, out_h, out_w, kh, kw, in_c = patches.shape
+        patches = jax.lax.conv_general_dilated_patches(
+            lhs=x,
+            filter_shape=(kernel_h, kernel_w),
+            window_strides=(stride_h, stride_w),
+            padding=self.padding,  # JAX handles SAME/VALID zero-padding
+            dimension_numbers=("NHWC", "OIHW", "NHWC"),
+        )
+        # patches shape: (B, oh, ow, C_in * kh * kw)
 
-        # Flatten batch and spatial dims for parallel processing
-        # Shape: (batch * out_h * out_w, kh * kw, in_channels)
-        patches_flat = patches.reshape(-1, kh * kw, in_c)
+        batch, out_h, out_w, concat_dim = patches.shape
 
-        # 1. Apply beta-concatenation
-        # vmap over the flattened spatial/batch dimension
-        # Input: (K^2, C_in) -> Output: (K^2 * C_in,)
-        beta_out = jax.vmap(self.manifold.beta_concat, in_axes=(0, None))(patches_flat, c)
+        # Step 4: Map concatenated patch vectors to manifold via expmap_0
+        patches_flat = patches.reshape(-1, concat_dim)  # (B*oh*ow, K^2*C_in)
+        manifold_pts = jax.vmap(self.manifold.expmap_0, in_axes=(0, None))(
+            patches_flat, c
+        )  # (B*oh*ow, K^2*C_in) on Poincaré ball
 
-        # 2. Apply HNN++ Linear
-        # Input: (batch*out_h*out_w, K^2 * C_in) -> Output: (batch*out_h*out_w, C_out)
-        linear_out = self.linear(beta_out, c)
+        # Step 5: Apply HNN++ fully-connected layer
+        # Input: (B*oh*ow, K^2*C_in) on manifold → Output: (B*oh*ow, C_out) on manifold
+        fc_out = self.linear(manifold_pts, c)
 
-        # 3. Reshape back
-        output = linear_out.reshape(batch, out_h, out_w, self.out_channels)
+        # Step 6: Map back to tangent space (matching reference: logmap0 at end)
+        tangent_out = jax.vmap(self.manifold.logmap_0, in_axes=(0, None))(fc_out, c)  # (B*oh*ow, C_out) in tangent space
+
+        # Reshape to spatial output
+        output = tangent_out.reshape(batch, out_h, out_w, self.out_channels)
 
         return output

@@ -28,6 +28,11 @@ def _make_poincare_points(key, shape, c, dtype):
     return jax.vmap(manifold.expmap_0, in_axes=(0, None))(tangent, c)
 
 
+def _make_tangent_input(key, shape, dtype):
+    """Create random tangent-space input (small vectors near origin)."""
+    return jax.random.normal(key, shape, dtype=dtype) * 0.1
+
+
 # ============================================================================
 # Beta-Concatenation Tests
 # ============================================================================
@@ -95,6 +100,10 @@ def test_beta_concat_output_dimension(M, n_i, dtype):
 # ============================================================================
 # HypConv2DPoincare Layer Tests
 # ============================================================================
+#
+# NOTE: The conv layer now returns tangent-space output (matching the reference
+# Poincaré ResNet implementation). Tests check for finite output and correct
+# shapes, not manifold membership (tangent vectors are unconstrained).
 
 
 @pytest.mark.parametrize("kernel_size", [1, 2, 3])
@@ -103,19 +112,16 @@ def test_beta_concat_output_dimension(M, n_i, dtype):
 def test_hypconv_poincare_output_shape(kernel_size, padding, dtype):
     """Test HypConv2DPoincare output shape with different kernel sizes and padding."""
     key = jax.random.PRNGKey(42)
-    manifold = Poincare(dtype=dtype)
     batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
     c = 1.0
 
-    # Create input on Poincaré ball
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    proj_fn = partial(manifold.proj, c=c)
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0)(x)
+    # Create tangent-space input (default input_space="tangent")
+    x = _make_tangent_input(key, (batch_size, height, width, in_channels), dtype)
 
     # Create layer
     rngs = nnx.Rngs(42)
     layer = HypConv2DPoincare(
-        manifold_module=manifold,
+        manifold_module=Poincare(dtype=dtype),
         in_channels=in_channels,
         out_channels=out_channels,
         kernel_size=kernel_size,
@@ -124,7 +130,7 @@ def test_hypconv_poincare_output_shape(kernel_size, padding, dtype):
     )
 
     # Forward pass
-    y = layer(x_manifold, c=c)
+    y = layer(x, c=c)
 
     # Check output shape
     if padding == "SAME":
@@ -136,20 +142,20 @@ def test_hypconv_poincare_output_shape(kernel_size, padding, dtype):
     assert y.shape == (batch_size, expected_height, expected_width, out_channels), (
         f"Expected shape ({batch_size}, {expected_height}, {expected_width}, {out_channels}), got {y.shape}"
     )
+    # Output is tangent space, should be finite
+    assert jnp.isfinite(y).all(), "Output contains NaN or Inf"
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hypconv_poincare_output_on_manifold(dtype):
-    """Test that all outputs lie on the Poincaré ball."""
+def test_hypconv_poincare_output_mappable_to_manifold(dtype):
+    """Test that output can be mapped to manifold via expmap_0."""
     key = jax.random.PRNGKey(42)
     manifold = Poincare(dtype=dtype)
     batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
     c = 1.0
 
-    # Create input
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    proj_fn = partial(manifold.proj, c=c)
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0)(x)
+    # Create tangent-space input
+    x = _make_tangent_input(key, (batch_size, height, width, in_channels), dtype)
 
     # Create layer
     rngs = nnx.Rngs(42)
@@ -159,15 +165,16 @@ def test_hypconv_poincare_output_on_manifold(dtype):
         out_channels=out_channels,
         kernel_size=2,
         rngs=rngs,
-        padding="SAME",
     )
 
-    # Forward pass
-    y = layer(x_manifold, c=c)
+    # Forward pass (returns tangent space)
+    y = layer(x, c=c)
 
-    # Check all outputs are on manifold
-    is_on_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.is_in_manifold(p, c))))(y)
-    assert is_on_manifold.all(), "Not all outputs lie on the Poincaré ball"
+    # Map to manifold and verify all points are valid
+    y_flat = y.reshape(-1, out_channels)
+    y_manifold = jax.vmap(manifold.expmap_0, in_axes=(0, None))(y_flat, c)
+    is_on_manifold = jax.vmap(lambda p: manifold.is_in_manifold(p, c))(y_manifold)
+    assert is_on_manifold.all(), "Output mapped to manifold is not valid"
 
 
 @pytest.mark.parametrize("stride", [1, 2])
@@ -175,20 +182,17 @@ def test_hypconv_poincare_output_on_manifold(dtype):
 def test_hypconv_poincare_stride(stride, dtype):
     """Test HypConv2DPoincare with different stride values."""
     key = jax.random.PRNGKey(42)
-    manifold = Poincare(dtype=dtype)
     batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
     kernel_size = 3
     c = 1.0
 
-    # Create input
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    proj_fn = partial(manifold.proj, c=c)
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0)(x)
+    # Create tangent-space input
+    x = _make_tangent_input(key, (batch_size, height, width, in_channels), dtype)
 
     # Create layer
     rngs = nnx.Rngs(42)
     layer = HypConv2DPoincare(
-        manifold_module=manifold,
+        manifold_module=Poincare(dtype=dtype),
         in_channels=in_channels,
         out_channels=out_channels,
         kernel_size=kernel_size,
@@ -198,12 +202,13 @@ def test_hypconv_poincare_stride(stride, dtype):
     )
 
     # Forward pass
-    y = layer(x_manifold, c=c)
+    y = layer(x, c=c)
 
     # Check output shape matches expected stride behavior
     expected_height = (height + stride - 1) // stride
     expected_width = (width + stride - 1) // stride
     assert y.shape == (batch_size, expected_height, expected_width, out_channels)
+    assert jnp.isfinite(y).all()
 
 
 @pytest.mark.parametrize("input_space", ["manifold", "tangent"])
@@ -240,28 +245,24 @@ def test_hypconv_poincare_input_space(input_space, dtype):
     # Forward pass
     y = layer(x_input, c=c)
 
-    # Check outputs are on manifold
-    is_on_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.is_in_manifold(p, c))))(y)
-    assert is_on_manifold.all()
+    # Output is in tangent space, should be finite
+    assert jnp.isfinite(y).all(), f"Output contains NaN/Inf for input_space={input_space}"
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hypconv_poincare_gradient(dtype):
     """Test HypConv2DPoincare has valid gradients."""
     key = jax.random.PRNGKey(42)
-    manifold = Poincare(dtype=dtype)
     batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
     c = 1.0
 
-    # Create input
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    proj_fn = partial(manifold.proj, c=c)
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0)(x)
+    # Create tangent-space input
+    x = _make_tangent_input(key, (batch_size, height, width, in_channels), dtype)
 
     # Create layer
     rngs = nnx.Rngs(42)
     layer = HypConv2DPoincare(
-        manifold_module=manifold,
+        manifold_module=Poincare(dtype=dtype),
         in_channels=in_channels,
         out_channels=out_channels,
         kernel_size=2,
@@ -270,35 +271,32 @@ def test_hypconv_poincare_gradient(dtype):
 
     # Define loss function
     def loss_fn(model):
-        y = model(x_manifold, c=c)
+        y = model(x, c=c)
         return jnp.sum(y**2)
 
     # Compute gradients
     loss, grads = nnx.value_and_grad(loss_fn)(layer)
 
     # Check gradients exist and are finite
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.linear.weight[...]).all()
-    assert jnp.isfinite(grads.linear.bias[...]).all()
+    assert jnp.isfinite(loss), f"Loss is not finite: {loss}"
+    assert jnp.isfinite(grads.linear.weight[...]).all(), "Weight gradients contain NaN/Inf"
+    assert jnp.isfinite(grads.linear.bias[...]).all(), "Bias gradients contain NaN/Inf"
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hypconv_poincare_jitted(dtype):
     """Test HypConv2DPoincare under nnx.jit."""
     key = jax.random.PRNGKey(42)
-    manifold = Poincare(dtype=dtype)
     batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
     c = 1.0
 
-    # Create input
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    proj_fn = partial(manifold.proj, c=c)
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0)(x)
+    # Create tangent-space input
+    x = _make_tangent_input(key, (batch_size, height, width, in_channels), dtype)
 
     # Create layer
     rngs = nnx.Rngs(42)
     layer = HypConv2DPoincare(
-        manifold_module=manifold,
+        manifold_module=Poincare(dtype=dtype),
         in_channels=in_channels,
         out_channels=out_channels,
         kernel_size=2,
@@ -310,11 +308,10 @@ def test_hypconv_poincare_jitted(dtype):
         return module(inputs, c=curvature)
 
     # Forward pass
-    y = forward(layer, x_manifold, c)
+    y = forward(layer, x, c)
 
-    # Check outputs are on manifold
-    is_on_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.is_in_manifold(p, c))))(y)
-    assert is_on_manifold.all()
+    # Check output is finite
+    assert jnp.isfinite(y).all(), "JIT output contains NaN/Inf"
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -327,10 +324,8 @@ def test_hypconv_poincare_different_curvatures(dtype):
     curvatures = [0.5, 1.0, 2.0]
 
     for c in curvatures:
-        # Create input
-        x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-        proj_fn = partial(manifold.proj, c=c)
-        x_manifold = jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0)(x)
+        # Create tangent-space input
+        x = _make_tangent_input(key, (batch_size, height, width, in_channels), dtype)
 
         # Create layer
         rngs = nnx.Rngs(42)
@@ -343,9 +338,72 @@ def test_hypconv_poincare_different_curvatures(dtype):
         )
 
         # Forward pass
-        y = layer(x_manifold, c=c)
+        y = layer(x, c=c)
 
-        # Check outputs are on manifold with correct curvature
-        is_in_manifold_fn = partial(manifold.is_in_manifold, c=c)
-        is_on_manifold = jax.vmap(jax.vmap(jax.vmap(is_in_manifold_fn)))(y)
-        assert is_on_manifold.all(), f"Failed for curvature {c}"
+        # Output is tangent space, verify finite
+        assert jnp.isfinite(y).all(), f"Output contains NaN/Inf for curvature {c}"
+
+        # Verify output can be mapped to manifold at this curvature
+        y_flat = y.reshape(-1, out_channels)
+        y_manifold = jax.vmap(manifold.expmap_0, in_axes=(0, None))(y_flat, c)
+        is_on = jax.vmap(partial(manifold.is_in_manifold, c=c))(y_manifold)
+        assert is_on.all(), f"Mapped output not on manifold for curvature {c}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hypconv_poincare_chained_tangent_flow(dtype):
+    """Test chaining two conv layers with standard relu in tangent space.
+
+    This is the primary use case: conv → relu → conv (all in tangent space).
+    """
+    key = jax.random.PRNGKey(42)
+    manifold = Poincare(dtype=dtype)
+    batch_size, height, width = 2, 8, 8
+    c = 1.0
+
+    # Create tangent-space input
+    x = _make_tangent_input(key, (batch_size, height, width, 3), dtype)
+
+    # Two conv layers
+    rngs = nnx.Rngs(42)
+    conv1 = HypConv2DPoincare(
+        manifold_module=manifold,
+        in_channels=3,
+        out_channels=8,
+        kernel_size=3,
+        rngs=rngs,
+        stride=2,
+    )
+    conv2 = HypConv2DPoincare(
+        manifold_module=manifold,
+        in_channels=8,
+        out_channels=16,
+        kernel_size=3,
+        rngs=nnx.Rngs(43),
+        stride=2,
+    )
+
+    # Forward: conv → relu → conv → relu (all tangent space)
+    y = conv1(x, c)
+    y = jax.nn.relu(y)
+    y = conv2(y, c)
+    y = jax.nn.relu(y)
+
+    # Check output
+    expected_h = (height + 1) // 2  # stride=2 SAME
+    expected_h2 = (expected_h + 1) // 2
+    assert y.shape == (batch_size, expected_h2, expected_h2, 16)
+    assert jnp.isfinite(y).all(), "Chained conv output contains NaN/Inf"
+
+    # Gradients through the chain
+    def loss_fn(m1, m2):
+        h = m1(x, c)
+        h = jax.nn.relu(h)
+        h = m2(h, c)
+        return jnp.sum(h**2)
+
+    loss, grads = nnx.value_and_grad(loss_fn, argnums=(0, 1))(conv1, conv2)
+    grads1, grads2 = grads
+    assert jnp.isfinite(loss)
+    assert jnp.isfinite(grads1.linear.weight[...]).all()
+    assert jnp.isfinite(grads2.linear.weight[...]).all()
