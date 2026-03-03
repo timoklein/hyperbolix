@@ -50,11 +50,15 @@ repos:
       # Check for debugger imports
       - id: debug-statements
 
-  # Pyright type checking (optional - can be slow)
-  # Uncomment to enable type checking in pre-commit
-  # - repo: https://github.com/RobertCraigie/pyright-python
-  #   rev: v1.1.390
-  #   hooks:
-  #     - id: pyright
-  #       files: ^hyperbolix/
-  #       additional_dependencies: []
+  # Pyright type checking — mirrors CI exactly (ci.yaml: uv run pyright hyperbolix)
+  # Uses a local hook so pyright runs inside the uv virtualenv with all dependencies available.
+  # The RobertCraigie/pyright-python hook runs in an isolated env and can't resolve jax/jaxtyping.
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        args: [hyperbolix]
+        language: system
+        files: ^hyperbolix/
+        pass_filenames: false

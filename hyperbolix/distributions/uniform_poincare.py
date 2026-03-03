@@ -154,6 +154,7 @@ def _sample_radial_rejection(
         key,
     )
     _, u_accepted, _ = jax.lax.while_loop(cond_fn, body_fn, init_state)
+    u_accepted = jnp.asarray(u_accepted, dtype=dtype)  # narrow type for pyright
 
     r = jnp.acosh(u_accepted + 1.0) / sqrt_c
     return r.reshape(shape)

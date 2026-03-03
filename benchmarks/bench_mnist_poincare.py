@@ -168,7 +168,7 @@ class PoincarePPDirect(nnx.Module):
     (large Euclidean norms would map near the Poincaré ball boundary).
 
     Architecture:
-        Input (784) → scale×0.01
+        Input (784) → scale*0.01
                    → expmap_0 to Poincaré ball (784-dim)
                    → HypLinearPoincarePP(784→64) + poincare_relu
                    → HypLinearPoincarePP(64→64)
