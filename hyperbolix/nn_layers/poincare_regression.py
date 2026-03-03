@@ -268,8 +268,11 @@ class HypRegressionPoincarePP(nnx.Module):
         self.smoothing_factor = smoothing_factor
 
         # Trainable parameters
-        # Tangent space weight
-        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
+        # Tangent space weight — scaled to match reference (van Spengler et al. 2023)
+        # Reference uses std = (2 * in_dim * out_dim)^{-0.5}; unscaled normal(0,1) gives
+        # row norms ≈ sqrt(in_dim) which overwhelms the MLR output scaling.
+        std = 1.0 / jnp.sqrt(2.0 * in_dim * out_dim)
+        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
         # Scalar bias (initialized to small random values)
         self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1)) * 0.01)
 

@@ -66,6 +66,7 @@ import math
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
+import jax.scipy.special
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import acosh, asinh, atanh, cosh, sinh, smooth_clamp
@@ -148,10 +149,11 @@ def _proj(x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
         Projected point with ||x|| < 1/√c, shape (dim,)
     """
     max_norm_eps = _get_max_norm_eps(x)
-    norm = jnp.linalg.norm(x)
+    # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
+    norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
     max_norm = (1.0 / jnp.sqrt(c)) - max_norm_eps
     cond = norm > max_norm
-    return jnp.where(cond, x * (max_norm / jnp.maximum(norm, MIN_NORM)), x)
+    return jnp.where(cond, x * (max_norm / norm), x)
 
 
 def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
@@ -343,8 +345,11 @@ def _expmap_0(v: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    v_norm = jnp.linalg.norm(v)
-    c_norm_prod = jnp.maximum(jnp.sqrt(c) * v_norm, MIN_NORM)
+    # Safe norm: sqrt(||v||² + eps²) has well-defined gradients at v=0,
+    # unlike jnp.linalg.norm(v) which produces NaN gradients (0/0).
+    # This matters when zero tangent vectors arise (e.g., all-black pixel patches).
+    v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    c_norm_prod = jnp.sqrt(c) * v_norm
     res = jnp.tanh(c_norm_prod) / c_norm_prod * v
     res = _proj(res, c)
     return res
@@ -408,8 +413,9 @@ def _logmap_0(y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    y_norm = jnp.linalg.norm(y)
-    c_norm_prod = jnp.maximum(jnp.sqrt(c) * y_norm, MIN_NORM)
+    # Safe norm: sqrt(||y||² + eps²) has well-defined gradients at y=0.
+    y_norm = jnp.sqrt(jnp.sum(y**2) + MIN_NORM**2)
+    c_norm_prod = jnp.sqrt(c) * y_norm
     res = atanh(c_norm_prod) / c_norm_prod * y
     return res
 
@@ -618,12 +624,20 @@ def _compute_mlr_pp(
     """
     sqrt_c = jnp.sqrt(c)
     sqrt_c2r = 2 * sqrt_c * r.T  # (1, out_dim)
-    z_norm = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm)  # (out_dim, 1)
 
-    lambda_x = _conformal_factor_batch(x, c)  # (batch, 1)
+    # Safe norm: sqrt(sum(z²) + eps²) has well-defined gradients at z=0,
+    # unlike jnp.linalg.norm(z).clip(min=eps) which produces NaN gradients
+    # when any weight row is exactly zero (e.g., from identity initialization).
+    z_norm = jnp.sqrt(jnp.sum(z**2, axis=-1, keepdims=True) + min_enorm**2)  # (out_dim, 1)
+
+    # Metric scaling factor: lam = 2(1 - c||x||²) following the reference
+    # (van Spengler et al. 2023). This is NOT the conformal factor λ(x) = 2/(1-c||x||²),
+    # but rather 4/λ(x). The two only agree at the origin where λ=2.
+    x_sqnorm = jnp.sum(x**2, axis=-1, keepdims=True)  # (batch, 1)
+    lam = 2.0 * (1.0 - c * x_sqnorm)  # (batch, 1)
 
     z_unitx = jnp.einsum("bi,oi->bo", x, z / z_norm)  # (batch, out_dim)
-    asinh_arg = (1 - lambda_x) * sinh(sqrt_c2r) + sqrt_c * lambda_x * cosh(sqrt_c2r) * z_unitx  # (batch, out_dim)
+    asinh_arg = sqrt_c * lam * z_unitx * cosh(sqrt_c2r) - (lam - 1) * sinh(sqrt_c2r)  # (batch, out_dim)
 
     eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
     clamp = clamping_factor * float(math.log(2 / eps))
@@ -631,6 +645,46 @@ def _compute_mlr_pp(
     signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, out_dim)
     res = 2 * z_norm.T * signed_dist2hyp  # (batch, out_dim)
     return res
+
+
+# ---------------------------------------------------------------------------
+# Beta-concatenation (HNN++, Shimizu et al. 2020)
+# ---------------------------------------------------------------------------
+
+
+def _beta_concat(points: Float[Array, "M n_i"], c: float) -> Float[Array, "n"]:
+    """Beta-concatenation of M equal-dimensional Poincaré ball points.
+
+    Concatenates M points in the tangent space at the origin with a scaling
+    correction based on the Euler beta function, then maps back to the manifold.
+
+    Args:
+        points: M points on the Poincaré ball, shape (M, n_i). All points
+                must have the same dimension n_i.
+        c: Curvature (positive)
+
+    Returns:
+        Concatenated point on the Poincaré ball, shape (M * n_i,)
+
+    References:
+        Shimizu et al. "Hyperbolic neural networks++." arXiv:2006.08210 (2020).
+    """
+    M, n_i = points.shape
+    n = M * n_i
+
+    # Euler beta function ratio: B(n/2, 1/2) / B(n_i/2, 1/2)
+    beta_n = jax.scipy.special.beta(n / 2.0, 0.5)
+    beta_ni = jax.scipy.special.beta(n_i / 2.0, 0.5)
+    scale = beta_n / beta_ni
+
+    # Map all points to tangent space at origin
+    tangent_vectors = jax.vmap(_logmap_0, in_axes=(0, None))(points, c)  # (M, n_i)
+
+    # Scale and concatenate in tangent space
+    v = (scale * tangent_vectors).reshape(n)  # (n,)
+
+    # Map back to manifold
+    return _expmap_0(v, c)  # (n,)
 
 
 # ---------------------------------------------------------------------------
@@ -797,3 +851,7 @@ class Poincare:
     ) -> Float[Array, "batch out_dim"]:
         """Compute HNN++ multinomial linear regression on the Poincare ball."""
         return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)
+
+    def beta_concat(self, points: Float[Array, "M n_i"], c: float) -> Float[Array, "n"]:
+        """Beta-concatenation of M equal-dimensional Poincaré ball points."""
+        return _beta_concat(self._cast(points), c)
