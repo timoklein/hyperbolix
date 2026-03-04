@@ -16,7 +16,6 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from hyperbolix.manifolds import poincare as poincare_module
 from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import HypLinearPoincare
 from hyperbolix.optim import (
@@ -36,15 +35,15 @@ def test_mark_and_retrieve_metadata():
     # Create a parameter and mark it
     param = mark_manifold_param(
         nnx.Param(jnp.array([0.1, 0.2])),
-        manifold_type="poincare",
+        manifold=poincare,
         curvature=1.0,
     )
 
     # Retrieve metadata
     manifold_info = get_manifold_info(param)
     assert manifold_info is not None
-    manifold_module, c = manifold_info
-    assert manifold_module is poincare_module
+    manifold_instance, c = manifold_info
+    assert manifold_instance is poincare
     assert c == 1.0
 
 
@@ -61,7 +60,7 @@ def test_callable_curvature():
 
     param = mark_manifold_param(
         nnx.Param(jnp.array([0.1, 0.2])),
-        manifold_type="poincare",
+        manifold=poincare,
         curvature=lambda: c_value,
     )
 
@@ -83,8 +82,8 @@ def test_layer_bias_has_metadata():
     # Check that bias has manifold metadata
     bias_info = get_manifold_info(layer.bias)
     assert bias_info is not None
-    manifold_module, c = bias_info
-    assert manifold_module is poincare_module
+    manifold_instance, c = bias_info
+    assert manifold_instance is poincare
     assert c == 1.0
 
     # Check that weight does NOT have manifold metadata
@@ -105,7 +104,7 @@ def test_rsgd_convergence_to_target(use_expmap):
     # Create a parameter and mark it as manifold
     param = mark_manifold_param(
         nnx.Param(x_init),
-        manifold_type="poincare",
+        manifold=poincare,
         curvature=c,
     )
 
@@ -144,7 +143,7 @@ def test_rsgd_momentum_transport(momentum):
 
     param = mark_manifold_param(
         nnx.Param(x_init),
-        manifold_type="poincare",
+        manifold=poincare,
         curvature=c,
     )
 
@@ -176,7 +175,7 @@ def test_rsgd_mixed_parameters():
             self.euclidean = nnx.Param(jnp.array([1.0, 2.0]))
             self.manifold = mark_manifold_param(
                 nnx.Param(jnp.array([0.1, 0.1])),
-                manifold_type="poincare",
+                manifold=poincare,
                 curvature=1.0,
             )
 
@@ -215,7 +214,7 @@ def test_radam_convergence_to_target(use_expmap):
 
     param = mark_manifold_param(
         nnx.Param(x_init),
-        manifold_type="poincare",
+        manifold=poincare,
         curvature=c,
     )
 
@@ -244,7 +243,7 @@ def test_radam_moment_transport():
 
     param = mark_manifold_param(
         nnx.Param(x_init),
-        manifold_type="poincare",
+        manifold=poincare,
         curvature=c,
     )
 
@@ -283,7 +282,7 @@ def test_radam_mixed_parameters():
             self.euclidean = nnx.Param(jnp.array([1.0, 2.0]))
             self.manifold = mark_manifold_param(
                 nnx.Param(jnp.array([0.1, 0.1])),
-                manifold_type="poincare",
+                manifold=poincare,
                 curvature=1.0,
             )
 
@@ -412,7 +411,7 @@ def test_params_required_error():
     """Test that optimizers raise error when params not provided."""
     param = mark_manifold_param(
         nnx.Param(jnp.array([0.1, 0.2])),
-        manifold_type="poincare",
+        manifold=poincare,
         curvature=1.0,
     )
 
@@ -431,7 +430,7 @@ def test_parameter_stays_on_manifold():
     c = 1.0
     param = mark_manifold_param(
         nnx.Param(jnp.array([0.5, 0.5])),  # Start closer to boundary
-        manifold_type="poincare",
+        manifold=poincare,
         curvature=c,
     )
 
@@ -457,7 +456,7 @@ def test_zero_gradient():
     """Test optimizer handles zero gradients gracefully."""
     param = mark_manifold_param(
         nnx.Param(jnp.array([0.1, 0.2])),
-        manifold_type="poincare",
+        manifold=poincare,
         curvature=1.0,
     )
 

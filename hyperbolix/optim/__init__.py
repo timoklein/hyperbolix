@@ -16,10 +16,11 @@ Example:
     >>> from flax import nnx
     >>> from hyperbolix.optim import riemannian_sgd
     >>> from hyperbolix.nn_layers import HypLinearPoincare
-    >>> from hyperbolix.manifolds import poincare
+    >>> from hyperbolix.manifolds.poincare import Poincare
     >>>
     >>> # Create model with manifold parameters
-    >>> layer = HypLinearPoincare(poincare, 10, 5, rngs=nnx.Rngs(0))
+    >>> manifold = Poincare(dtype=jnp.float64)
+    >>> layer = HypLinearPoincare(manifold, 10, 5, rngs=nnx.Rngs(0))
     >>>
     >>> # Create Riemannian optimizer
     >>> tx = riemannian_sgd(learning_rate=0.01, momentum=0.9)
@@ -27,14 +28,10 @@ Example:
 
 Metadata System:
     The metadata system uses Flax NNX's built-in Variable._var_metadata to store
-    manifold information (type and curvature). This enables:
+    manifold information (instance and curvature). This enables:
     - All parameters remain nnx.Param (single variable type)
-    - Automatic serialization with checkpoints
+    - Manifold dtype control is applied during optimization
     - Seamless Optax integration
-
-Manifold Registry:
-    Manifolds are registered by string identifiers for serialization-friendly metadata.
-    The poincare and hyperboloid manifolds are automatically registered on import.
 
 References:
     Bécigneul, Gary, and Octavian-Eugen Ganea. "Riemannian adaptive optimization methods."
@@ -43,34 +40,17 @@ References:
 
 from .manifold_metadata import (
     get_manifold_info,
-    get_manifold_module,
     has_manifold_params,
     mark_manifold_param,
-    register_manifold,
 )
 from .riemannian_adam import riemannian_adam
 from .riemannian_sgd import riemannian_sgd
 
-# Register manifolds on import
-# Import manifold modules and register them
-try:
-    from ..manifolds import hyperboloid, poincare
-
-    register_manifold("poincare", poincare)
-    register_manifold("hyperboloid", hyperboloid)
-except ImportError as e:
-    # If manifolds aren't available, warn but don't fail
-    import warnings
-
-    warnings.warn(f"Could not register manifolds: {e}")
-
 __all__ = [
     "get_manifold_info",
-    "get_manifold_module",
     "has_manifold_params",
     # Metadata utilities
     "mark_manifold_param",
-    "register_manifold",
     "riemannian_adam",
     # Optimizers
     "riemannian_sgd",

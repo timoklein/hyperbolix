@@ -80,7 +80,7 @@ class HypLinearPoincare(nnx.Module):
         # Mark as manifold parameter for Riemannian optimization
         self.bias = mark_manifold_param(
             nnx.Param(jax.random.normal(rngs.params(), (1, out_dim)) * 0.01),
-            manifold_type="poincare",
+            manifold=self.manifold,
             curvature=1.0,  # Default curvature, will be overridden by c parameter in forward pass
         )
 
