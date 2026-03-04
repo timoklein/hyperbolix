@@ -15,9 +15,6 @@ from hyperbolix.manifolds.euclidean import Euclidean
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT, Hyperboloid
 from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT, Poincare
 
-# Enable float64 for these tests
-jax.config.update("jax_enable_x64", True)
-
 
 def test_poincare_jit_dist_method():
     """Verify that Poincare.dist() is JIT-compilable."""

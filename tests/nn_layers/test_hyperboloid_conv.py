@@ -10,10 +10,6 @@ from flax import nnx
 from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers.hyperboloid_conv import HypConv2DHyperboloid, HypConv3DHyperboloid
 
-# Enable float64 for tests
-jax.config.update("jax_enable_x64", True)
-
-
 # ============================================================================
 # HCat Operation Tests
 # ============================================================================

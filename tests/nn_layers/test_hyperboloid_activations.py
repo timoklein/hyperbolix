@@ -12,13 +12,6 @@ from hyperbolix.nn_layers.hyperboloid_activations import (
     hyp_tanh,
 )
 
-
-@pytest.fixture
-def hyperboloid():
-    """Hyperboloid manifold instance for tests."""
-    return Hyperboloid()
-
-
 # ============================================================================
 # Manifold Constraint Tests (Most Critical)
 # ============================================================================

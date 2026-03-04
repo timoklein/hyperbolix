@@ -14,10 +14,6 @@ import pytest
 import hyperbolix as hj
 import hyperbolix.manifolds.poincare as poincare_impl
 
-# Enable float64 support in JAX
-jax.config.update("jax_enable_x64", True)
-
-
 # ---------------------------------------------------------------------------
 # Helper functions
 

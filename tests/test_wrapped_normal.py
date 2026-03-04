@@ -7,10 +7,6 @@ from hyperbolix.distributions import wrapped_normal_hyperboloid, wrapped_normal_
 from hyperbolix.manifolds import Hyperboloid, Poincare
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
 
-# Enable float64 support for numerical precision in tests
-jax.config.update("jax_enable_x64", True)
-
-
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------

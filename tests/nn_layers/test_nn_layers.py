@@ -11,9 +11,6 @@ from hyperbolix.nn_layers import (
     HypLinearPoincarePP,
 )
 
-# Enable float64 for tests
-jax.config.update("jax_enable_x64", True)
-
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_linear_poincare_forward(dtype):

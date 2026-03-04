@@ -14,9 +14,6 @@ from hyperbolix.manifolds import Hyperboloid, Poincare
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
 from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT
 
-# Enable float64 support in JAX for numerical precision
-jax.config.update("jax_enable_x64", True)
-
 hyperboloid = Hyperboloid(dtype=jnp.float64)
 poincare = Poincare(dtype=jnp.float64)
 

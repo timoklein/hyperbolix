@@ -1,6 +1,5 @@
 """Tests for JAX math utilities."""
 
-import jax
 import jax.numpy as jnp
 
 from hyperbolix.utils.math_utils import (
@@ -13,15 +12,9 @@ from hyperbolix.utils.math_utils import (
     smooth_clamp_min,
 )
 
-# Enable float64 support in JAX
-jax.config.update("jax_enable_x64", True)
-
 
 def test_smooth_clamp_min():
     """Test smooth minimum clamping."""
-    print("\\nTesting smooth_clamp_min...")
-
-    # Test basic functionality
     x = jnp.array([-2.0, -1.0, 0.0, 1.0, 2.0])
     min_val = 0.0
     result = smooth_clamp_min(x, min_val)
@@ -35,16 +28,9 @@ def test_smooth_clamp_min():
     # Should be smooth (no discontinuities)
     assert result[0] < result[1] < result[2]  # monotonic
 
-    print(f"  Input:  {x}")
-    print(f"  Output: {result}")
-    print(f"  All values >= {min_val}: {jnp.all(result >= min_val)}")
-    print("  ✓ Smooth minimum clamping works")
-
 
 def test_smooth_clamp_max():
     """Test smooth maximum clamping."""
-    print("\\nTesting smooth_clamp_max...")
-
     x = jnp.array([-2.0, -1.0, 0.0, 1.5, 2.0])
     max_val = 1.0
     result = smooth_clamp_max(x, max_val)
@@ -58,16 +44,9 @@ def test_smooth_clamp_max():
     # Should be smooth (no discontinuities)
     assert result[3] > result[4] or jnp.allclose(result[3], result[4], rtol=1e-5)  # monotonic
 
-    print(f"  Input:  {x}")
-    print(f"  Output: {result}")
-    print(f"  All values <= {max_val}: {jnp.all(result <= max_val + 1e-10)}")
-    print("  ✓ Smooth maximum clamping works")
-
 
 def test_smooth_clamp():
     """Test smooth range clamping."""
-    print("\\nTesting smooth_clamp...")
-
     x = jnp.array([-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0])
     min_val, max_val = -1.5, 1.5
     result = smooth_clamp(x, min_val, max_val)
@@ -80,17 +59,9 @@ def test_smooth_clamp():
     in_range_mask = (x >= min_val) & (x <= max_val)
     assert jnp.allclose(result[in_range_mask], x[in_range_mask], rtol=1e-5)
 
-    print(f"  Input:  {x}")
-    print(f"  Output: {result}")
-    print(f"  Range: [{min_val}, {max_val}]")
-    print(f"  In range: {jnp.all((result >= min_val) & (result <= max_val))}")
-    print("  ✓ Smooth range clamping works")
-
 
 def test_cosh():
     """Test numerically stable cosh."""
-    print("\\nTesting cosh...")
-
     # Test normal values
     x_normal = jnp.array([-2.0, -1.0, 0.0, 1.0, 2.0])
     result_normal = cosh(x_normal)
@@ -108,17 +79,9 @@ def test_cosh():
     assert jnp.allclose(result_extreme[0], result_extreme[4], rtol=1e-5)
     assert jnp.allclose(result_extreme[1], result_extreme[3], rtol=1e-5)
 
-    print(f"  Normal values: {x_normal}")
-    print(f"  Normal cosh: {result_normal}")
-    print(f"  Extreme values: {x_extreme}")
-    print(f"  Extreme cosh (finite): {jnp.all(jnp.isfinite(result_extreme))}")
-    print("  ✓ cosh works")
-
 
 def test_sinh():
     """Test numerically stable sinh."""
-    print("\\nTesting sinh...")
-
     # Test normal values
     x_normal = jnp.array([-2.0, -1.0, 0.0, 1.0, 2.0])
     result_normal = sinh(x_normal)
@@ -137,17 +100,9 @@ def test_sinh():
     assert jnp.allclose(result_extreme[1], -result_extreme[3], rtol=1e-5)
     assert jnp.abs(result_extreme[2]) < 1e-10  # sinh(0) = 0
 
-    print(f"  Normal values: {x_normal}")
-    print(f"  Normal sinh: {result_normal}")
-    print(f"  Extreme values: {x_extreme}")
-    print(f"  Extreme sinh (finite): {jnp.all(jnp.isfinite(result_extreme))}")
-    print("  ✓ sinh works")
-
 
 def test_acosh():
     """Test numerically stable acosh."""
-    print("\\nTesting acosh...")
-
     # Test valid domain values
     x_valid = jnp.array([1.0, 1.5, 2.0, 5.0, 10.0])
     result_valid = acosh(x_valid)
@@ -166,30 +121,16 @@ def test_acosh():
     assert result_invalid[1] == 0.0  # clamped
     assert result_invalid[2] == 0.0  # acosh(1) = 0
 
-    print(f"  Valid domain: {x_valid}")
-    print(f"  Valid acosh: {result_valid}")
-    print(f"  Invalid domain: {x_invalid}")
-    print(f"  Clamped acosh: {result_invalid}")
-    print("  ✓ acosh works")
-
-
-# asinh not implemented in hyperbolix - uses jnp.asinh directly
-# def test_asinh():
-#     """Test asinh (no special handling needed)."""
-#     pass
-
 
 def test_atanh():
     """Test numerically stable atanh."""
-    print("\\nTesting atanh...")
-
     # Test valid domain values
     x_valid = jnp.array([-0.9, -0.5, 0.0, 0.5, 0.9])
     result_valid = atanh(x_valid)
     expected_valid = jnp.atanh(x_valid)
     assert jnp.allclose(result_valid, expected_valid)
 
-    # Test boundary values (should be clamped away from ±1)
+    # Test boundary values (should be clamped away from +/-1)
     x_boundary = jnp.array([-1.1, -1.0, -0.9999, 0.9999, 1.0, 1.1])
     result_boundary = atanh(x_boundary)
 
@@ -200,17 +141,9 @@ def test_atanh():
     assert jnp.allclose(result_boundary[0], -result_boundary[-1], rtol=1e-5)
     assert jnp.abs(result_boundary[2]) < 1e10  # Should be finite but large
 
-    print(f"  Valid domain: {x_valid}")
-    print(f"  Valid atanh: {result_valid}")
-    print(f"  Boundary values: {x_boundary}")
-    print(f"  Clamped atanh (finite): {jnp.all(jnp.isfinite(result_boundary))}")
-    print("  ✓ atanh works")
-
 
 def test_dtype_consistency():
     """Test that functions preserve dtype."""
-    print("\\nTesting dtype consistency...")
-
     for dtype in [jnp.float32, jnp.float64]:
         x = jnp.array([0.5, 1.0, 1.5], dtype=dtype)
 
@@ -220,28 +153,3 @@ def test_dtype_consistency():
         assert sinh(x).dtype == dtype
         assert acosh(x).dtype == dtype
         assert atanh(x * 0.5).dtype == dtype  # Scale to valid domain
-
-        print(f"  ✓ {dtype} dtype preserved across all functions")
-
-    print("  ✓ Dtype consistency verified")
-
-
-def run_all_tests():
-    """Run all math utils tests."""
-    print("=== Testing JAX Math Utils ===\\n")
-
-    test_smooth_clamp_min()
-    test_smooth_clamp_max()
-    test_smooth_clamp()
-    test_cosh()
-    test_sinh()
-    test_acosh()
-    # test_asinh()  # Not implemented - uses jnp.asinh directly
-    test_atanh()
-    test_dtype_consistency()
-
-    print("\\n=== All Tests Passed! ===")
-
-
-if __name__ == "__main__":
-    run_all_tests()

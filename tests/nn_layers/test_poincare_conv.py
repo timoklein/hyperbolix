@@ -10,10 +10,6 @@ from flax import nnx
 from hyperbolix.manifolds import Poincare
 from hyperbolix.nn_layers.poincare_conv import HypConv2DPoincare
 
-# Enable float64 for tests
-jax.config.update("jax_enable_x64", True)
-
-
 # ============================================================================
 # Helper: create random Poincaré ball points
 # ============================================================================
