@@ -13,7 +13,7 @@ import jax.numpy as jnp
 from jax.scipy.stats import multivariate_normal
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ..manifolds.hyperboloid import Hyperboloid, _create_origin
+from ..manifolds.hyperboloid import Hyperboloid
 from ._common import sample_gaussian, sigma_to_cov
 
 
@@ -311,7 +311,7 @@ def log_prob(
 
     # Step 2: Parallel transport from mu to origin
     # v = PT_{μ→μ₀}(u)
-    mu_0 = _create_origin(c, n, dtype)
+    mu_0 = manifold.create_origin(c, n)
 
     if u.ndim > 1:
         # Batched, need to vmap

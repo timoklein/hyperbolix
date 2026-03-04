@@ -6,13 +6,15 @@ import optax
 import pytest
 from flax import nnx
 
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers.hyperboloid_core import lorentz_residual
 from hyperbolix.nn_layers.hyperboloid_positional import (
     HyperbolicRoPE,
     HypformerPositionalEncoding,
     hope,
 )
+
+hyperboloid = Hyperboloid()
 
 # ============================================================================
 # Helper: batch-aware Minkowski inner product
@@ -24,6 +26,15 @@ def _minkowski_inner_batch(x, y):
     return -x[..., 0] * y[..., 0] + jnp.sum(x[..., 1:] * y[..., 1:], axis=-1)
 
 
+def _proj_batch(x, c):
+    """Batch-compatible projection onto the hyperboloid."""
+    # Flatten all leading dims, vmap proj, reshape back
+    original_shape = x.shape
+    x_flat = x.reshape(-1, original_shape[-1])
+    projected = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x_flat, c)
+    return projected.reshape(original_shape)
+
+
 def _make_hyperboloid_points(key, shape, c=1.0, scale=0.1):
     """Generate valid hyperboloid points: shape = (..., dim) for spatial dims."""
     v = jax.random.normal(key, shape) * scale
@@ -31,7 +42,7 @@ def _make_hyperboloid_points(key, shape, c=1.0, scale=0.1):
     # Build ambient vectors: prepend a 1.0 for time, then project
     time = jnp.ones((*shape[:-1], 1))
     ambient = jnp.concatenate([time, v], axis=-1)  # (..., dim+1)
-    return hyperboloid._proj_batch(ambient, c)
+    return _proj_batch(ambient, c)
 
 
 def _make_hyperboloid_seq(key, batch, seq_len, d, c=1.0, scale=0.1):
