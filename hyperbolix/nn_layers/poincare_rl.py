@@ -1,13 +1,14 @@
 """Poincaré ball reinforcement learning layers for JAX/Flax NNX."""
 
-from typing import Any
-
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
+from hyperbolix.manifolds import Manifold
+
 from ..utils.math_utils import asinh
+from ._helpers import validate_poincare_manifold
 
 
 class HypRegressionPoincareHDRL(nnx.Module):
@@ -20,8 +21,8 @@ class HypRegressionPoincareHDRL(nnx.Module):
 
     Parameters
     ----------
-    manifold_module : module
-        The PoincareBall manifold module
+    manifold_module : object
+        Class-based Poincare manifold instance
     in_dim : int
         Dimension of the input space
     out_dim : int
@@ -52,7 +53,7 @@ class HypRegressionPoincareHDRL(nnx.Module):
 
     def __init__(
         self,
-        manifold_module: Any,
+        manifold_module: Manifold,
         in_dim: int,
         out_dim: int,
         *,
@@ -66,6 +67,7 @@ class HypRegressionPoincareHDRL(nnx.Module):
             raise ValueError(f"version must be either 'standard' or 'rs', got '{version}'")
 
         # Static configuration (treated as compile-time constants for JIT)
+        validate_poincare_manifold(manifold_module, required_methods=("proj", "addition", "expmap_0"))
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim

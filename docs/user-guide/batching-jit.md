@@ -16,11 +16,13 @@ Hyperbolix adopts a **vmap-native API design** where all manifold functions oper
 
 ### Single Point Operations
 
-All manifold functions work with individual points:
+All manifold methods work with individual points:
 
 ```python
 import jax.numpy as jnp
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
 
 # Single points (intrinsic coordinates)
 x = jnp.array([0.1, 0.2])  # Shape: (2,)
@@ -42,6 +44,8 @@ Use `jax.vmap` to process batches efficiently:
 
 ```python
 import jax
+
+poincare = Poincare()
 
 # Batch of points
 x_batch = jnp.array([[0.1, 0.2], [0.15, 0.25], [0.05, 0.1]])  # (3, 2)
@@ -73,6 +77,8 @@ The `in_axes` parameter specifies which axes to map over:
 Common patterns:
 
 ```python
+poincare = Poincare()
+
 # Project batch of points
 x_batch = jax.random.normal(jax.random.PRNGKey(0), (100, 16))
 x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
@@ -89,7 +95,7 @@ print(distances.shape)  # (100,)
 v_batch = jax.random.normal(jax.random.PRNGKey(0), (100, 16))
 base_point = jnp.zeros(16)
 points = jax.vmap(
-    lambda v: poincare.expmap(base_point, v, c=1.0)
+    lambda v: poincare.expmap(v, base_point, c=1.0)
 )(v_batch)
 print(points.shape)  # (100, 16)
 ```
@@ -101,10 +107,14 @@ print(points.shape)  # (100, 16)
 Use `jax.jit` to compile functions for 10-100x speedup:
 
 ```python
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
+
 # Without JIT
 distance = poincare.dist(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
 
-# With JIT
+# With JIT (version_idx is static since it controls which kernel to run)
 dist_jit = jax.jit(poincare.dist, static_argnames=['version_idx'])
 distance = dist_jit(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
 ```
@@ -146,6 +156,10 @@ d2 = dist_jit(x2, y2, c=2.5, version_idx=0)  # No recompilation needed
 The order matters for performance:
 
 ```python
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
+
 # Pattern 1: JIT then vmap (RECOMMENDED)
 @jax.jit
 def distance_fn(x, y, c):
@@ -178,7 +192,9 @@ Flax NNX layers automatically handle batching:
 ```python
 from flax import nnx
 from hyperbolix.nn_layers import HypLinearPoincare
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
 
 # Create layer
 layer = HypLinearPoincare(
@@ -189,7 +205,7 @@ layer = HypLinearPoincare(
 )
 
 # Batch input: (batch_size, in_dim)
-x_batch = jax.random.normal(nnx.Rngs(1).params(), (32, 128)) * 0.3
+x_batch = jax.random.normal(jax.random.PRNGKey(1), (32, 128)) * 0.3
 x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
 
 # Forward pass handles batching internally
@@ -203,9 +219,8 @@ Hyperbolic activations are functional and need explicit batching:
 
 ```python
 from hyperbolix.nn_layers import hyp_relu
-from hyperbolix.manifolds import hyperboloid
 
-# Single point
+# Single point (ambient coordinates, d+1 dims for hyperboloid)
 x = jnp.array([1.5, 0.2, 0.3, 0.1])  # Ambient coordinates (4,)
 activated = hyp_relu(x, c=1.0)
 
@@ -213,16 +228,15 @@ activated = hyp_relu(x, c=1.0)
 x_batch = jax.random.normal(jax.random.PRNGKey(0), (32, 4))
 activated_batch = jax.vmap(lambda x: hyp_relu(x, c=1.0))(x_batch)
 print(activated_batch.shape)  # (32, 4)
-
-# Or directly (hyp_relu supports arbitrary shapes)
-activated_batch = hyp_relu(x_batch, c=1.0)  # Also works!
 ```
 
 ### Complete Model with JIT
 
 ```python
-from hyperbolix.nn_layers import HypLinearPoincare
-from hyperbolix.manifolds import poincare
+from hyperbolix.nn_layers import HypLinearPoincare, hyp_relu
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
 
 class HyperbolicClassifier(nnx.Module):
     def __init__(self, rngs):
@@ -250,7 +264,7 @@ def forward(model, x, c):
     return model(x, c)
 
 # Use with batch
-x_batch = jax.random.normal(nnx.Rngs(1).params(), (32, 784)) * 0.1
+x_batch = jax.random.normal(jax.random.PRNGKey(1), (32, 784)) * 0.1
 x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
 logits = forward(model, x_proj, c=1.0)
 print(logits.shape)  # (32, 10)
@@ -258,36 +272,15 @@ print(logits.shape)  # (32, 10)
 
 ## Training Loop Patterns
 
-### Value and Gradient Computation
-
-```python
-# Loss function for single example
-def loss_fn_single(params, x, y, c):
-    pred = model.apply(params, x, c)
-    return jnp.mean((pred - y) ** 2)
-
-# Batched loss with vmap
-def loss_fn_batch(params, x_batch, y_batch, c):
-    losses = jax.vmap(loss_fn_single, in_axes=(None, 0, 0, None))(
-        params, x_batch, y_batch, c
-    )
-    return jnp.mean(losses)
-
-# Compute gradients
-grad_fn = jax.grad(loss_fn_batch)
-grads = grad_fn(params, x_batch, y_batch, c=1.0)
-
-# Or use value_and_grad for both
-@jax.jit
-def compute_loss_and_grads(params, x_batch, y_batch, c):
-    return jax.value_and_grad(loss_fn_batch)(params, x_batch, y_batch, c)
-
-loss, grads = compute_loss_and_grads(params, x_batch, y_batch, c=1.0)
-```
-
 ### Efficient Training Step
 
 ```python
+from flax import nnx
+from hyperbolix.manifolds import Poincare
+from hyperbolix.optim import riemannian_adam
+
+poincare = Poincare()
+
 @jax.jit
 def train_step(model, optimizer, x_batch, y_batch, c):
     """Single training step with JIT compilation."""
@@ -296,7 +289,7 @@ def train_step(model, optimizer, x_batch, y_batch, c):
         return jnp.mean((preds - y_batch) ** 2)
 
     loss, grads = nnx.value_and_grad(loss_fn)(model)
-    optimizer.update(grads)
+    optimizer.update(model, grads)
     return loss
 
 # Training loop

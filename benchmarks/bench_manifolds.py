@@ -14,6 +14,10 @@ import jax.numpy as jnp
 import pytest
 
 import hyperbolix as hj
+from hyperbolix.manifolds import Hyperboloid, Poincare
+
+poincare = Poincare()
+hyperboloid_m = Hyperboloid()
 
 # ============================================================================
 # Poincaré Ball Benchmarks
@@ -26,7 +30,7 @@ def test_poincare_dist_no_jit(benchmark, benchmark_points, curvature):
 
     # vmap over batch dimension: each point is shape (dim,)
     dist_fn = jax.vmap(
-        hj.manifolds.poincare.dist,
+        poincare.dist,
         in_axes=(0, 0, None, None),  # (x: batch, y: batch, c: scalar, version_idx: scalar)
     )
 
@@ -43,7 +47,7 @@ def test_poincare_dist_with_jit(benchmark, benchmark_points, curvature):
 
     dist_fn = jax.jit(
         jax.vmap(
-            hj.manifolds.poincare.dist,
+            poincare.dist,
             in_axes=(0, 0, None, None),
         ),
         static_argnames=["version_idx"],
@@ -65,7 +69,7 @@ def test_poincare_expmap_no_jit(benchmark, benchmark_points, curvature):
 
     # vmap over batch: expmap(v, x, c) for each v[i], x[i]
     expmap_fn = jax.vmap(
-        hj.manifolds.poincare.expmap,
+        poincare.expmap,
         in_axes=(0, 0, None),  # (v: batch, x: batch, c: scalar)
     )
 
@@ -80,7 +84,7 @@ def test_poincare_expmap_with_jit(benchmark, benchmark_points, curvature):
     """Benchmark Poincaré exponential map with JIT."""
     tangent_vecs, base_points = jnp.array_split(benchmark_points, 2)
 
-    expmap_fn = jax.jit(jax.vmap(hj.manifolds.poincare.expmap, in_axes=(0, 0, None)))
+    expmap_fn = jax.jit(jax.vmap(poincare.expmap, in_axes=(0, 0, None)))
 
     # Warmup
     _ = expmap_fn(tangent_vecs, base_points, curvature).block_until_ready()
@@ -99,7 +103,7 @@ def test_poincare_logmap_with_jit(benchmark, benchmark_points, curvature):
     # vmap over batch: logmap(y, x, c) for each y[i], x[i]
     logmap_fn = jax.jit(
         jax.vmap(
-            hj.manifolds.poincare.logmap,
+            poincare.logmap,
             in_axes=(0, 0, None),  # (y: batch, x: batch, c: scalar)
         )
     )
@@ -128,7 +132,7 @@ def test_poincare_dist_versions(benchmark, benchmark_points, curvature, version_
 
     dist_fn = jax.jit(
         jax.vmap(
-            hj.manifolds.poincare.dist,
+            poincare.dist,
             in_axes=(0, 0, None, None),
         ),
         static_argnames=["version_idx"],
@@ -157,7 +161,7 @@ def test_hyperboloid_dist_with_jit(benchmark, benchmark_points, curvature):
 
     # Project to hyperboloid: proj(x, c) for each x[i]
     proj_fn = jax.vmap(
-        hj.manifolds.hyperboloid.proj,
+        hyperboloid_m.proj,
         in_axes=(0, None),  # (x: batch, c: scalar)
     )
     points_a = proj_fn(points_a, curvature)
@@ -165,7 +169,7 @@ def test_hyperboloid_dist_with_jit(benchmark, benchmark_points, curvature):
 
     dist_fn = jax.jit(
         jax.vmap(
-            hj.manifolds.hyperboloid.dist,
+            hyperboloid_m.dist,
             in_axes=(0, 0, None, None),  # (x: batch, y: batch, c: scalar, version_idx: scalar)
         ),
         static_argnames=["version_idx"],

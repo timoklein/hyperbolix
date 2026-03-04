@@ -21,7 +21,10 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 ```python
 import jax
 import jax.numpy as jnp
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
+
+# Create manifold (float32 by default, float64 for higher precision)
+poincare = Poincare()
 
 # Create points on the Poincaré ball
 x = jnp.array([0.1, 0.2])
@@ -29,7 +32,7 @@ y = jnp.array([0.3, -0.1])
 c = 1.0  # Curvature parameter
 
 # Compute distance (single point operation)
-distance = poincare.dist(x, y, c, version_idx=0)
+distance = poincare.dist(x, y, c)
 print(f"Distance: {distance}")
 
 # Batch operations with vmap
@@ -39,7 +42,7 @@ y_batch = jax.random.normal(jax.random.PRNGKey(1), (100, 2)) * 0.3
 # Project to manifold and compute pairwise distances
 x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, c)
 y_proj = jax.vmap(poincare.proj, in_axes=(0, None))(y_batch, c)
-distances = jax.vmap(poincare.dist, in_axes=(0, 0, None, None))(x_proj, y_proj, c, 0)
+distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(x_proj, y_proj, c)
 ```
 
 ## Installation
@@ -56,12 +59,15 @@ Requirements: Python 3.12+, JAX, Flax NNX, Optax
 
 ## Architecture
 
-Hyperbolix follows a **pure functional design**:
+Hyperbolix follows a **class-based manifold design** with functional transformations:
 
 ```python
-# Pure functions, no classes
-import hyperbolix.manifolds.poincare as poincare
-distance = poincare.dist(x, y, c, version)
+# Manifold classes with automatic dtype casting
+from hyperbolix.manifolds import Poincare
+import jax.numpy as jnp
+
+poincare = Poincare(dtype=jnp.float64)  # Optional float64 precision
+distance = poincare.dist(x, y, c=1.0)
 
 # Neural network layers as Flax NNX modules
 from flax import nnx
@@ -97,9 +103,11 @@ output = model(input_data, c=1.0)
 
 ### vmap-native API
 
-Functions operate on **single points** by design. Use `jax.vmap` for batching:
+Methods operate on **single points** by design. Use `jax.vmap` for batching:
 
 ```python
+poincare = Poincare()
+
 # Single point operation
 result = poincare.expmap(x, v, c)
 
@@ -111,12 +119,14 @@ This design enables efficient JIT compilation and clear semantics.
 
 ### Curvature Parameter
 
-The curvature `c` is passed at **call time**, not stored in objects:
+The curvature `c` is passed at **call time**, not stored in the manifold:
 
 ```python
+poincare = Poincare()
+
 # Different curvatures for different calls
-dist_c1 = poincare.dist(x, y, c=1.0, version_idx=0)
-dist_c2 = poincare.dist(x, y, c=2.0, version_idx=0)
+dist_c1 = poincare.dist(x, y, c=1.0)
+dist_c2 = poincare.dist(x, y, c=2.0)
 ```
 
 This allows for learnable curvature in neural networks.

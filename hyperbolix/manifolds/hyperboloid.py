@@ -1,4 +1,4 @@
-"""Hyperboloid manifold - vmap-native pure functional implementation.
+"""Hyperboloid manifold - class-based API with dtype control.
 
 JAX port with vmap-native API. All functions operate on single points/vectors
 in ambient (dim+1)-dimensional space. Use jax.vmap for batch operations.
@@ -12,24 +12,25 @@ Use jax.vmap for batching and jax.jit for compilation:
 
     >>> import jax
     >>> import jax.numpy as jnp
-    >>> from hyperbolix.manifolds import hyperboloid
+    >>> from hyperbolix.manifolds.hyperboloid import Hyperboloid, VERSION_DEFAULT
     >>>
     >>> # Single point operations (points in ambient R^(dim+1))
     >>> x = jnp.array([1.0, 0.1, 0.2])  # Will be projected
     >>> y = jnp.array([1.0, 0.3, 0.4])
-    >>> x = hyperboloid.proj(x, c=1.0)
-    >>> y = hyperboloid.proj(y, c=1.0)
-    >>> distance = hyperboloid.dist(x, y, c=1.0, version_idx=hyperboloid.VERSION_DEFAULT)
+    >>> manifold = Hyperboloid(dtype=jnp.float32)
+    >>> x = manifold.proj(x, c=1.0)
+    >>> y = manifold.proj(y, c=1.0)
+    >>> distance = manifold.dist(x, y, c=1.0, version_idx=VERSION_DEFAULT)
     >>>
     >>> # Batch operations with vmap
     >>> x_batch = jnp.array([[1.0, 0.1, 0.2], [1.0, 0.15, 0.25]])  # (batch, dim+1)
     >>> y_batch = jnp.array([[1.0, 0.3, 0.4], [1.0, 0.35, 0.45]])
-    >>> dist_batched = jax.vmap(hyperboloid.dist, in_axes=(0, 0, None, None))
-    >>> distances = dist_batched(x_batch, y_batch, 1.0, hyperboloid.VERSION_DEFAULT)
+    >>> dist_batched = jax.vmap(manifold.dist, in_axes=(0, 0, None, None))
+    >>> distances = dist_batched(x_batch, y_batch, 1.0, VERSION_DEFAULT)
     >>>
     >>> # JIT compilation
-    >>> dist_jit = jax.jit(hyperboloid.dist, static_argnames=['version_idx'])
-    >>> distance = dist_jit(x, y, c=1.0, version_idx=hyperboloid.VERSION_DEFAULT)
+    >>> dist_jit = jax.jit(manifold.dist, static_argnames=['version_idx'])
+    >>> distance = dist_jit(x, y, c=1.0, version_idx=VERSION_DEFAULT)
 
 Version Constants:
     VERSION_DEFAULT (0): Standard acosh distance with hard clipping
@@ -39,18 +40,20 @@ Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
 """
 
+import math
 from typing import cast
 
+import jax
 import jax.lax as lax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import acosh, sinh, smooth_clamp_min
+from ..utils.math_utils import acosh, asinh, cosh, sinh, smooth_clamp, smooth_clamp_min
 
 # Default numerical parameters
 MIN_NORM = 1e-15
 
-# Version selection constants for dist() and dist_0()
+# Version selection constants for _dist() and _dist_0()
 VERSION_DEFAULT = 0
 VERSION_SMOOTHENED = 1
 
@@ -78,7 +81,7 @@ def _minkowski_inner(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"
     return -x0y0 + x_rest_y_rest
 
 
-def embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plus_1"]:
+def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plus_1"]:
     """Embed spatial vector as tangent vector at origin by prepending zero.
 
     Creates tangent vector v = [0, v_bar] ∈ T_{μ₀}ℍⁿ from spatial vector v_bar ∈ ℝⁿ.
@@ -93,7 +96,7 @@ def embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plu
 
     Examples:
         >>> v_spatial = jnp.array([0.1, 0.2])
-        >>> v_tangent = embed_spatial_0(v_spatial)
+        >>> v_tangent = _embed_spatial_0(v_spatial)
         >>> v_tangent
         Array([0. , 0.1, 0.2], dtype=float32)
     """
@@ -101,7 +104,7 @@ def embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plu
     return jnp.concatenate([zeros, v_spatial], axis=-1)
 
 
-def proj(x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float) -> Float[Array, "dim_plus_1"]:
+def _proj(x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float) -> Float[Array, "dim_plus_1"]:
     """Project point onto hyperboloid by adjusting temporal component.
 
     Args:
@@ -120,7 +123,7 @@ def proj(x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float) -> Float[Ar
 def _proj_batch(x: Float[Array, "... dim_plus_1"], c: Float[Array, ""] | float) -> Float[Array, "... dim_plus_1"]:
     """Project batched points onto hyperboloid by adjusting temporal component.
 
-    Batch-compatible version of proj() that handles arbitrary leading dimensions.
+    Batch-compatible version of _proj() that handles arbitrary leading dimensions.
 
     Args:
         x: Points to project, shape (..., dim+1)
@@ -135,7 +138,7 @@ def _proj_batch(x: Float[Array, "... dim_plus_1"], c: Float[Array, ""] | float) 
     return jnp.concatenate([x0_new, x_rest], axis=-1)
 
 
-def addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Einstein gyrovector addition on hyperboloid.
 
     Args:
@@ -157,11 +160,11 @@ def addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: fl
     gamma = 1.0 / denom
 
     res = x + gamma * (y + (c / (1.0 + sqrt_c)) * mink_inner_xy * x)
-    res = proj(res, c)
+    res = _proj(res, c)
     return res
 
 
-def scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def _scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Scalar multiplication r ⊗ x on hyperboloid.
 
     Args:
@@ -176,13 +179,13 @@ def scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: float) -> Float[Array
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     # Map to tangent space, scale geodesic length, map back
-    v = logmap_0(x, c)
+    v = _logmap_0(x, c)
     v_sqnorm = _minkowski_inner(v, v)
     v_norm = jnp.sqrt(jnp.maximum(v_sqnorm, MIN_NORM))
     unit_tangent = v / v_norm
-    dist0 = dist_0(x, c)
+    dist0 = _dist_0(x, c)
     tangent = r * dist0 * unit_tangent
-    res = expmap_0(tangent, c)
+    res = _expmap_0(tangent, c)
     return res
 
 
@@ -209,7 +212,7 @@ def _dist_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"
     return jnp.where(same, 0.0, res)  # type: ignore[return-value]
 
 
-def dist(
+def _dist(
     x: Float[Array, "dim_plus_1"],
     y: Float[Array, "dim_plus_1"],
     c: Float[Array, ""] | float,
@@ -257,7 +260,7 @@ def _dist_0_smoothened(x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, 
     return jnp.where(at_origin, 0.0, res)  # type: ignore[return-value]
 
 
-def dist_0(x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
+def _dist_0(x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
     """Compute geodesic distance from hyperboloid origin.
 
     Args:
@@ -274,7 +277,7 @@ def dist_0(x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_D
     return lax.switch(version_idx, [_dist_0_default, _dist_0_smoothened], x, c)
 
 
-def expmap(
+def _expmap(
     v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float
 ) -> Float[Array, "dim_plus_1"]:
     """Exponential map: map tangent vector v at point x to manifold.
@@ -300,11 +303,11 @@ def expmap(
     sinh_term = jnp.sinh(c_norm_prod) / denom * v
 
     res = cosh_term + sinh_term
-    res = proj(res, c)
+    res = _proj(res, c)
     return res
 
 
-def expmap_0(v: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def _expmap_0(v: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     Args:
@@ -333,11 +336,11 @@ def expmap_0(v: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_
     res_rest = sinh_scale * v_rest
 
     res = jnp.concatenate([res0[None], res_rest])
-    res = proj(res, c)
+    res = _proj(res, c)
     return res
 
 
-def retraction(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def _retraction(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Retraction: first-order approximation of exponential map.
 
     Args:
@@ -352,11 +355,11 @@ def retraction(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: 
         Bécigneul & Ganea. "Riemannian adaptive optimization." ICLR 2019.
     """
     res = x + v
-    res = proj(res, c)
+    res = _proj(res, c)
     return res
 
 
-def logmap(
+def _logmap(
     y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float
 ) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map: map point y to tangent space at point x.
@@ -373,17 +376,17 @@ def logmap(
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     mink_inner = _minkowski_inner(x, y)
-    dist_xy = dist(x, y, c=c)
+    dist_xy = _dist(x, y, c=c)
     direction = y + c * mink_inner * x
 
     dir_sqnorm = _minkowski_inner(direction, direction)
     dir_norm = jnp.sqrt(jnp.maximum(dir_sqnorm, MIN_NORM))
     res = dist_xy * direction / dir_norm
-    res = tangent_proj(res, x, c)
+    res = _tangent_proj(res, x, c)
     return res
 
 
-def logmap_0(y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def _logmap_0(y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     Args:
@@ -400,18 +403,18 @@ def logmap_0(y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_
     y_rest = y[1:]
     y_rest_norm = jnp.linalg.norm(y_rest)
 
-    dist0 = dist_0(y, c=c)
+    dist0 = _dist_0(y, c=c)
     scale = dist0 / jnp.maximum(y_rest_norm, MIN_NORM)
 
-    v0 = jnp.array([0.0])
+    v0 = jnp.zeros(1, dtype=y.dtype)
     v_rest = scale * y_rest
     res = jnp.concatenate([v0, v_rest])
     origin = _create_origin(c, y.shape[0] - 1, y.dtype)
-    res = tangent_proj(res, origin, c)
+    res = _tangent_proj(res, origin, c)
     return res
 
 
-def ptransp(
+def _ptransp(
     v: Float[Array, "dim_plus_1"],
     x: Float[Array, "dim_plus_1"],
     y: Float[Array, "dim_plus_1"],
@@ -445,11 +448,11 @@ def ptransp(
 
     # res = v + scale * (x + y)
     res = v + scale * (x + y)
-    res = tangent_proj(res, y, c)
+    res = _tangent_proj(res, y, c)
     return res
 
 
-def ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def _ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Parallel transport tangent vector v from origin to point y.
 
     Args:
@@ -483,11 +486,11 @@ def ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: f
 
     # res = v + scale * (y + origin)
     res = v + scale * (y + origin)
-    res = tangent_proj(res, y, c)
+    res = _tangent_proj(res, y, c)
     return res
 
 
-def tangent_inner(
+def _tangent_inner(
     u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
 ) -> Float[Array, ""]:
     """Compute inner product of tangent vectors u and v at point x.
@@ -506,7 +509,7 @@ def tangent_inner(
     return _minkowski_inner(u, v)
 
 
-def tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, ""]:
+def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, ""]:
     """Compute norm of tangent vector v at point x.
 
     Args:
@@ -517,11 +520,11 @@ def tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c
     Returns:
         Riemannian norm ||v||_x, scalar
     """
-    inner = tangent_inner(v, v, x, c)
+    inner = _tangent_inner(v, v, x, c)
     return jnp.sqrt(jnp.clip(inner, min=0.0))
 
 
-def egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+def _egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
     """Convert Euclidean gradient to Riemannian gradient.
 
     Projects Euclidean gradient onto tangent space.
@@ -551,7 +554,7 @@ def egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"],
     return grad_lorentz - coeff * x_normed
 
 
-def tangent_proj(
+def _tangent_proj(
     v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Float[Array, ""] | float
 ) -> Float[Array, "dim_plus_1"]:
     """Project vector v onto tangent space at point x.
@@ -574,7 +577,7 @@ def tangent_proj(
     return v - coeff * x_normed
 
 
-def is_in_manifold(x: Float[Array, "dim_plus_1"], c: float, atol: float = 1e-5) -> Array:
+def _is_in_manifold(x: Float[Array, "dim_plus_1"], c: float, atol: float = 1e-5) -> Array:
     """Check if point x lies on hyperboloid.
 
     Args:
@@ -595,7 +598,7 @@ def is_in_manifold(x: Float[Array, "dim_plus_1"], c: float, atol: float = 1e-5) 
     return jnp.logical_and(valid_constraint, valid_x0)
 
 
-def is_in_tangent_space(
+def _is_in_tangent_space(
     v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float, atol: float | None = None
 ) -> Array:
     """Check if vector v lies in tangent space at point x.
@@ -616,7 +619,7 @@ def is_in_tangent_space(
     return jnp.abs(mink_inner) < tol
 
 
-def lorentz_boost(
+def _lorentz_boost(
     x: Float[Array, "dim_plus_1"],
     v_raw: Float[Array, "dim"],
     c: float,
@@ -680,10 +683,10 @@ def lorentz_boost(
     result = jnp.concatenate([new_t[None], new_s])  # Shape: (dim+1,)
 
     # Project onto manifold to correct numerical drift
-    return proj(result, c)
+    return _proj(result, c)
 
 
-def distance_rescale(
+def _distance_rescale(
     x: Float[Array, "dim_plus_1"],
     c: float,
     x_t_max: float = 2000.0,
@@ -766,10 +769,10 @@ def distance_rescale(
     result = jnp.concatenate([x_t_rescaled[None], x_s_rescaled])  # Shape: (dim+1,)
 
     # Project onto manifold to correct numerical drift
-    return proj(result, c)
+    return _proj(result, c)
 
 
-def hcat(
+def _hcat(
     points: Float[Array, "N n"],
     c: float = 1.0,
 ) -> Float[Array, "dN_plus_1"]:
@@ -825,3 +828,242 @@ def hcat(
     result = jnp.concatenate([time_new[None], space_concatenated])  # (1 + N*d,) = (dN+1,)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Batch-compatible helpers (used by NN layers)
+# ---------------------------------------------------------------------------
+
+
+def _compute_mlr(
+    x: Float[Array, "batch in_dim"],
+    z: Float[Array, "out_dim in_dim_minus_1"],
+    r: Float[Array, "out_dim 1"],
+    c: float,
+    clamping_factor: float,
+    smoothing_factor: float,
+    min_enorm: float = 1e-15,
+) -> Float[Array, "batch out_dim"]:
+    """Compute FHCNN multinomial linear regression on the hyperboloid.
+
+    Args:
+        x: Hyperboloid point(s), shape (batch, in_dim)
+        z: Hyperplane tangent normals at origin (time coord omitted), shape (out_dim, in_dim-1)
+        r: Hyperplane translations, shape (out_dim, 1)
+        c: Manifold curvature (positive)
+        clamping_factor: Clamping value for the output
+        smoothing_factor: Smoothing factor for the output
+        min_enorm: Minimum norm to avoid division by zero
+
+    Returns:
+        MLR scores, shape (batch, out_dim)
+
+    References:
+        Ahmad Bdeir et al. "Fully hyperbolic convolutional neural networks."
+            arXiv:2303.15919 (2023).
+    """
+    sqrt_c = jnp.sqrt(c)
+    sqrt_cr = sqrt_c * r.T  # (1, out_dim)
+    z_norm = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm).T  # (1, out_dim)
+    x0 = x[:, 0:1]  # (batch, 1) - time coordinate
+    x_rem = x[:, 1:]  # (batch, in_dim-1) - space coordinates
+    zx_rem = jnp.einsum("bi,oi->bo", x_rem, z)  # (batch, out_dim)
+    alpha = -x0 * sinh(sqrt_cr) * z_norm + cosh(sqrt_cr) * zx_rem  # (batch, out_dim)
+    asinh_arg = sqrt_c * alpha / z_norm  # (batch, out_dim)
+
+    eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
+    clamp = clamping_factor * float(math.log(2 / eps))
+    asinh_arg = smooth_clamp(asinh_arg, -clamp, clamp, smoothing_factor)  # (batch, out_dim)
+    signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, out_dim)
+    res = z_norm * signed_dist2hyp  # (batch, out_dim)
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Class-based manifold API
+# ---------------------------------------------------------------------------
+
+
+class Hyperboloid:
+    """Hyperboloid manifold with automatic dtype casting.
+
+    Provides all manifold operations with automatic casting of array inputs
+    to the specified dtype. This eliminates the need for manual casting and
+    provides better numerical stability control.
+
+    Args:
+        dtype: Target JAX dtype for computations (default: jnp.float32)
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds.hyperboloid import Hyperboloid, VERSION_DEFAULT
+        >>>
+        >>> # Create manifold with float64 for better precision
+        >>> manifold = Hyperboloid(dtype=jnp.float64)
+        >>>
+        >>> # Arrays are automatically cast to float64
+        >>> x = jnp.array([1.0, 0.1, 0.2], dtype=jnp.float32)
+        >>> x = manifold.proj(x, c=1.0)
+        >>> x.dtype  # float64
+    """
+
+    VERSION_DEFAULT = VERSION_DEFAULT
+    VERSION_SMOOTHENED = VERSION_SMOOTHENED
+
+    def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
+        self.dtype = dtype
+
+    def _cast(self, x: Array) -> Array:
+        """Cast array to target dtype if it's a floating-point array."""
+        if isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, jnp.inexact):
+            return x.astype(self.dtype)
+        return x
+
+    def create_origin(self, c: float, dim: int) -> Float[Array, "dim_plus_1"]:
+        """Create hyperboloid origin [1/√c, 0, ..., 0]."""
+        return _create_origin(c, dim, self.dtype)
+
+    def minkowski_inner(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"]) -> Float[Array, ""]:
+        """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩."""
+        return _minkowski_inner(self._cast(x), self._cast(y))
+
+    def proj(self, x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+        """Project point onto hyperboloid."""
+        return _proj(self._cast(x), c)
+
+    def proj_batch(self, x: Float[Array, "... dim_plus_1"], c: float) -> Float[Array, "... dim_plus_1"]:
+        """Project batched points onto hyperboloid (handles arbitrary leading dimensions)."""
+        return _proj_batch(self._cast(x), c)
+
+    def addition(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+        """Gyrovector addition on hyperboloid."""
+        return _addition(self._cast(x), self._cast(y), c)
+
+    def scalar_mul(self, r: float, x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+        """Scalar multiplication on hyperboloid."""
+        x = self._cast(x)
+        r_cast = jnp.asarray(r, dtype=x.dtype)
+        return _scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
+
+    def dist(
+        self,
+        x: Float[Array, "dim_plus_1"],
+        y: Float[Array, "dim_plus_1"],
+        c: float,
+        version_idx: int = VERSION_DEFAULT,
+    ) -> Float[Array, ""]:
+        """Compute geodesic distance between hyperboloid points."""
+        return _dist(self._cast(x), self._cast(y), c, version_idx)
+
+    def _dist(
+        self,
+        x: Float[Array, "dim_plus_1"],
+        y: Float[Array, "dim_plus_1"],
+        c: float,
+        version_idx: int = VERSION_DEFAULT,
+    ) -> Float[Array, ""]:
+        """Compatibility alias for legacy module-style API."""
+        return self.dist(x, y, c, version_idx)
+
+    def dist_0(self, x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
+        """Compute geodesic distance from hyperboloid origin."""
+        return _dist_0(self._cast(x), c, version_idx)
+
+    def _dist_0(self, x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
+        """Compatibility alias for legacy module-style API."""
+        return self.dist_0(x, c, version_idx)
+
+    def expmap(self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+        """Exponential map: map tangent vector v at point x to manifold."""
+        return _expmap(self._cast(v), self._cast(x), c)
+
+    def expmap_0(self, v: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+        """Exponential map from origin."""
+        return _expmap_0(self._cast(v), c)
+
+    def retraction(self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+        """Retraction: first-order approximation of exponential map."""
+        return _retraction(self._cast(v), self._cast(x), c)
+
+    def logmap(self, y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+        """Logarithmic map: map point y to tangent space at point x."""
+        return _logmap(self._cast(y), self._cast(x), c)
+
+    def logmap_0(self, y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+        """Logarithmic map from origin."""
+        return _logmap_0(self._cast(y), c)
+
+    def ptransp(
+        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float
+    ) -> Float[Array, "dim_plus_1"]:
+        """Parallel transport tangent vector v from point x to point y."""
+        return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
+
+    def ptransp_0(self, v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
+        """Parallel transport tangent vector v from origin to point y."""
+        return _ptransp_0(self._cast(v), self._cast(y), c)
+
+    def tangent_inner(
+        self, u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
+    ) -> Float[Array, ""]:
+        """Compute inner product of tangent vectors u and v at point x."""
+        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
+
+    def tangent_norm(self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, ""]:
+        """Compute norm of tangent vector v at point x."""
+        return _tangent_norm(self._cast(v), self._cast(x), c)
+
+    def egrad2rgrad(
+        self, grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
+    ) -> Float[Array, "dim_plus_1"]:
+        """Convert Euclidean gradient to Riemannian gradient."""
+        return _egrad2rgrad(self._cast(grad), self._cast(x), c)
+
+    def tangent_proj(
+        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float
+    ) -> Float[Array, "dim_plus_1"]:
+        """Project vector v onto tangent space at point x."""
+        return _tangent_proj(self._cast(v), self._cast(x), c)
+
+    def is_in_manifold(self, x: Float[Array, "dim_plus_1"], c: float, atol: float = 1e-4) -> Array:
+        """Check if point x lies on hyperboloid."""
+        return _is_in_manifold(self._cast(x), c, atol)
+
+    def is_in_tangent_space(self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Array:
+        """Check if vector v lies in tangent space at point x."""
+        return _is_in_tangent_space(self._cast(v), self._cast(x), c)
+
+    def lorentz_boost(
+        self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float
+    ) -> Float[Array, "dim_plus_1 dim_plus_1"]:
+        """Compute Lorentz boost matrix."""
+        return _lorentz_boost(self._cast(x), self._cast(y), c)
+
+    def hcat(
+        self,
+        points: Float[Array, "N n"],
+        c: float = 1.0,
+    ) -> Float[Array, "dN_plus_1"]:
+        """Hyperbolic concatenation of N points into one point."""
+        return _hcat(self._cast(points), c)
+
+    def distance_rescale(self, x: Float[Array, "dim_plus_1"], c_in: float, c_out: float) -> Float[Array, "dim_plus_1"]:
+        """Rescale distance from one curvature to another."""
+        return _distance_rescale(self._cast(x), c_in, c_out)
+
+    def embed_spatial_0(self, v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plus_1"]:
+        """Embed spatial vector as tangent vector at origin."""
+        return _embed_spatial_0(self._cast(v_spatial))
+
+    def compute_mlr(
+        self,
+        x: Float[Array, "batch in_dim"],
+        z: Float[Array, "out_dim in_dim_minus_1"],
+        r: Float[Array, "out_dim 1"],
+        c: float,
+        clamping_factor: float,
+        smoothing_factor: float,
+        min_enorm: float = 1e-15,
+    ) -> Float[Array, "batch out_dim"]:
+        """Compute multinomial linear regression on hyperboloid."""
+        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)

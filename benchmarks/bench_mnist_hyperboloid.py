@@ -1,6 +1,6 @@
-"""MNIST benchmark comparing hyperbolic neural network layers.
+"""MNIST benchmark for hyperboloid neural network layers.
 
-Compares multiple variants:
+Compares multiple hyperboloid variants:
 - FHCNNHybrid: FHCNN with Euclidean embedding
 - FHCNNDirect: FHCNN with direct projection
 - HTCHybrid: HTC with Euclidean embedding
@@ -14,23 +14,23 @@ All models use HypRegressionHyperboloid for fully hyperbolic classification.
 Metrics: memory footprint, wallclock time, accuracy
 
 Run with:
-    uv run python benchmarks/bench_mnist_layer_comparison.py [OPTIONS]
+    uv run python benchmarks/bench_mnist_hyperboloid.py [OPTIONS]
 
 Examples:
     # Run all models
-    uv run python benchmarks/bench_mnist_layer_comparison.py
+    uv run python benchmarks/bench_mnist_hyperboloid.py
 
     # Compare convolutional approaches
-    uv run python benchmarks/bench_mnist_layer_comparison.py --fully-hyp-hcat --fully-hyp-lorentz
+    uv run python benchmarks/bench_mnist_hyperboloid.py --fully-hyp-hcat --fully-hyp-lorentz
 
     # Run only FHCNN variants
-    uv run python benchmarks/bench_mnist_layer_comparison.py --fhcnn-hybrid --fhcnn-direct
+    uv run python benchmarks/bench_mnist_hyperboloid.py --fhcnn-hybrid --fhcnn-direct
 
     # Run only CNN model
-    uv run python benchmarks/bench_mnist_layer_comparison.py --fhcnn-cnn
+    uv run python benchmarks/bench_mnist_hyperboloid.py --fhcnn-cnn
 
     # Run HTC models
-    uv run python benchmarks/bench_mnist_layer_comparison.py --htc-hybrid --htc-direct
+    uv run python benchmarks/bench_mnist_hyperboloid.py --htc-hybrid --htc-direct
 """
 
 import argparse
@@ -47,7 +47,7 @@ from datasets import load_dataset
 from flax import nnx
 from jaxtyping import Array, Float
 
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers import (
     HRCBatchNorm,
     HTCLinear,
@@ -61,6 +61,9 @@ from hyperbolix.optim import riemannian_sgd
 
 # Enable float64 for numerical stability
 jax.config.update("jax_enable_x64", True)
+
+# Class-based manifold instance for NN layers
+hyperboloid = Hyperboloid(dtype=jnp.float64)
 
 
 # ==============================================================================
@@ -540,13 +543,13 @@ class FullyHyperbolicCNN_Lorentz(nnx.Module):
         x = x_hyp.reshape(batch_size, h, w, 2)  # (batch, 28, 28, 2)
 
         # First hyperbolic conv block
-        # FIXED: Order changed to Conv → BatchNorm → ReLU (matching author's implementation)
+        # Conv → BatchNorm → ReLU (matching author's implementation)
         x = self.hyp_conv1(x, c)  # (batch, 14, 14, 33)
         x = self.hyp_bn1(x, c_in=c, c_out=c, use_running_average=use_running_average)  # (batch, 14, 14, 33)
         x = hrc_relu(x, c, c)  # HRC ReLU
 
         # Second hyperbolic conv block
-        # FIXED: Order changed to Conv → BatchNorm → ReLU (matching author's implementation)
+        # Conv → BatchNorm → ReLU (matching author's implementation)
         x = self.hyp_conv2(x, c)  # (batch, 7, 7, 65)
         x = self.hyp_bn2(x, c_in=c, c_out=c, use_running_average=use_running_average)  # (batch, 7, 7, 65)
         x = hrc_relu(x, c, c)
@@ -753,13 +756,15 @@ def benchmark_model(
 # ==============================================================================
 
 
-def plot_comparison(results: dict[str, dict[str, Any]]):
+def plot_comparison(results: dict[str, dict[str, Any]], output_path: str):
     """Generate comparison plots.
 
     Parameters
     ----------
     results : dict
         Dictionary mapping model names to their metrics
+    output_path : str
+        Path to save the plot
     """
     _fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
@@ -809,8 +814,8 @@ def plot_comparison(results: dict[str, dict[str, Any]]):
     ax.set_title("Model Capacity Comparison")
 
     plt.tight_layout()
-    plt.savefig("results/mnist_comparison.png", dpi=150, bbox_inches="tight")
-    print("\nPlots saved to results/mnist_comparison.png")
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"\nPlots saved to {output_path}")
 
 
 def print_summary_table(results: dict[str, dict[str, Any]]):
@@ -824,12 +829,12 @@ def print_summary_table(results: dict[str, dict[str, Any]]):
     print("\n" + "=" * 90)
     print("SUMMARY TABLE")
     print("=" * 90)
-    print(f"{'Model':<15} {'Params':<12} {'Memory(MB)':<12} {'Time(s)':<10} {'Final Acc':<12} {'Compile(s)':<12}")
+    print(f"{'Model':<20} {'Params':<12} {'Memory(MB)':<12} {'Time(s)':<10} {'Final Acc':<12} {'Compile(s)':<12}")
     print("-" * 90)
 
     for name, m in results.items():
         print(
-            f"{name:<15} {m['parameters']:<12,} {m['memory_mb']:<12.2f} "
+            f"{name:<20} {m['parameters']:<12,} {m['memory_mb']:<12.2f} "
             f"{m['total_time']:<10.2f} {m['final_accuracy']:<12.4f} "
             f"{m['compile_time']:<12.3f}"
         )
@@ -845,73 +850,40 @@ def print_summary_table(results: dict[str, dict[str, Any]]):
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="MNIST benchmark comparing hyperbolic neural network layers",
+        description="MNIST benchmark comparing hyperboloid neural network layers",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Run all models (default)
-  python benchmarks/bench_mnist_layer_comparison.py
+  python benchmarks/bench_mnist_hyperboloid.py
 
   # Compare convolutional approaches (HCat vs LorentzConv2D)
-  python benchmarks/bench_mnist_layer_comparison.py --fully-hyp-hcat --fully-hyp-lorentz
+  python benchmarks/bench_mnist_hyperboloid.py --fully-hyp-hcat --fully-hyp-lorentz
 
   # Run only FHCNN variants
-  python benchmarks/bench_mnist_layer_comparison.py --fhcnn-hybrid --fhcnn-direct
+  python benchmarks/bench_mnist_hyperboloid.py --fhcnn-hybrid --fhcnn-direct
 
   # Run only CNN model
-  python benchmarks/bench_mnist_layer_comparison.py --fhcnn-cnn
+  python benchmarks/bench_mnist_hyperboloid.py --fhcnn-cnn
 
   # Run HTC models
-  python benchmarks/bench_mnist_layer_comparison.py --htc-hybrid --htc-direct
+  python benchmarks/bench_mnist_hyperboloid.py --htc-hybrid --htc-direct
         """,
     )
 
+    parser.add_argument("--fhcnn-hybrid", action="store_true", help="Run FHCNN with Euclidean embedding")
+    parser.add_argument("--fhcnn-direct", action="store_true", help="Run FHCNN with direct projection")
+    parser.add_argument("--htc-hybrid", action="store_true", help="Run HTC with Euclidean embedding")
+    parser.add_argument("--htc-direct", action="store_true", help="Run HTC with direct projection")
+    parser.add_argument("--fhcnn-cnn", action="store_true", help="Run FHCNN-based CNN with Euclidean embedding and BatchNorm")
     parser.add_argument(
-        "--fhcnn-hybrid",
-        action="store_true",
-        help="Run FHCNN with Euclidean embedding",
+        "--fully-hyp-hcat", action="store_true", help="Run fully hyperbolic CNN using HypConv2D (HCat approach)"
     )
     parser.add_argument(
-        "--fhcnn-direct",
-        action="store_true",
-        help="Run FHCNN with direct projection",
+        "--fully-hyp-lorentz", action="store_true", help="Run fully hyperbolic CNN using LorentzConv2D (HRC approach)"
     )
-    parser.add_argument(
-        "--htc-hybrid",
-        action="store_true",
-        help="Run HTC with Euclidean embedding",
-    )
-    parser.add_argument(
-        "--htc-direct",
-        action="store_true",
-        help="Run HTC with direct projection",
-    )
-    parser.add_argument(
-        "--fhcnn-cnn",
-        action="store_true",
-        help="Run FHCNN-based CNN with Euclidean embedding and BatchNorm",
-    )
-    parser.add_argument(
-        "--fully-hyp-hcat",
-        action="store_true",
-        help="Run fully hyperbolic CNN using HypConv2D (HCat approach)",
-    )
-    parser.add_argument(
-        "--fully-hyp-lorentz",
-        action="store_true",
-        help="Run fully hyperbolic CNN using LorentzConv2D (HRC approach)",
-    )
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Run all models (default if no flags specified)",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for reproducibility (default: 42)",
-    )
+    parser.add_argument("--all", action="store_true", help="Run all models (default if no flags specified)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility (default: 42)")
 
     return parser.parse_args()
 
@@ -950,7 +922,7 @@ def main():
         return
 
     print("=" * 60)
-    print("MNIST Layer Comparison Benchmark")
+    print("MNIST Hyperboloid Layer Benchmark")
     print("=" * 60)
     print(f"\nRunning {len(models)} model(s): {', '.join(name for _, name in models)}")
     print(f"Random seed: {args.seed}")
@@ -966,13 +938,13 @@ def main():
 
     # Save results
     print("\nSaving results...")
-    with open("results/mnist_benchmark_results.json", "w") as f:
+    with open("results/mnist_hyperboloid_results.json", "w") as f:
         json.dump(results, f, indent=2)
-    print("Results saved to results/mnist_benchmark_results.json")
+    print("Results saved to results/mnist_hyperboloid_results.json")
 
     # Generate comparison plots
     print("\nGenerating comparison plots...")
-    plot_comparison(results)
+    plot_comparison(results, "results/mnist_hyperboloid_comparison.png")
 
     # Print summary table
     print_summary_table(results)

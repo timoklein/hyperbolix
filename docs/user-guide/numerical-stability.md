@@ -30,17 +30,17 @@ Hyperbolic geometry presents unique numerical challenges due to the exponential 
 
 ```python
 import jax.numpy as jnp
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
 
 # Float32 (default)
-x = jnp.array([0.1, 0.2], dtype=jnp.float32)
-y = jnp.array([0.8, 0.5], dtype=jnp.float32)
-dist = poincare.dist(x, y, c=1.0, version_idx=0)
+poincare_f32 = Poincare()
+x = jnp.array([0.1, 0.2])
+y = jnp.array([0.8, 0.5])
+dist = poincare_f32.dist(x, y, c=1.0)
 
-# Float64 (high precision)
-x = jnp.array([0.1, 0.2], dtype=jnp.float64)
-y = jnp.array([0.8, 0.5], dtype=jnp.float64)
-dist = poincare.dist(x, y, c=1.0, version_idx=0)
+# Float64 (high precision) — inputs are automatically cast
+poincare_f64 = Poincare(dtype=jnp.float64)
+dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ```
 
 ### Precision Requirements by Distance
@@ -56,10 +56,13 @@ dist = poincare.dist(x, y, c=1.0, version_idx=0)
     If your embeddings have distances from the origin > 7, switch to float64:
 
     ```python
-    distances = jax.vmap(lambda x: poincare.dist(jnp.zeros_like(x), x, c=1.0, version_idx=0))(x_batch)
+    from hyperbolix.manifolds import Poincare
+
+    poincare = Poincare()
+    distances = jax.vmap(lambda x: poincare.dist_0(x, c=1.0))(x_batch)
     max_dist = jnp.max(distances)
     print(f"Max distance from origin: {max_dist:.2f}")
-    # If > 7, consider float64
+    # If > 7, create Poincare(dtype=jnp.float64) instead
     ```
 
 ## The Conformal Factor Problem
@@ -83,8 +86,9 @@ As points move toward the boundary (||x|| → 1/√c), λ(x) explodes:
 
 ```python
 import jax.numpy as jnp
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
 
+poincare = Poincare()
 c = 1.0
 distances = [0, 1, 2, 3, 5, 7, 10]
 
@@ -132,21 +136,27 @@ d=10: ||x||=1.000000, λ(x)=       inf
 **1. Use projection after operations**
 
 ```python
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
 
-# After addition or other operations
-result = poincare.add(x, y, c=1.0)
+poincare = Poincare()
+
+# After Möbius addition or other operations
+result = poincare.addition(x, y, c=1.0)
 result = poincare.proj(result, c=1.0)  # Project back to manifold
 ```
 
 **2. Keep points away from boundary**
 
 ```python
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
+
 # During initialization
-def init_hyperbolic_embeddings(n_points, dim, max_norm=0.8):
+def init_hyperbolic_embeddings(key, n_points, dim, max_norm=0.8):
     """Initialize embeddings safely away from boundary."""
     x = jax.random.normal(key, (n_points, dim)) * 0.1
-    x_proj = jax.vmap(poincare.proj, in_axes=(0, None, None))(x, c=1.0, version_idx=None)
+    x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
 
     # Clip to max_norm to avoid boundary
     norms = jnp.linalg.norm(x_proj, axis=-1, keepdims=True)
@@ -154,17 +164,15 @@ def init_hyperbolic_embeddings(n_points, dim, max_norm=0.8):
     return x_clipped
 ```
 
-**3. Use float64 for critical operations**
+**3. Use float64 manifold for critical operations**
 
 ```python
-# Convert to float64 for numerically sensitive operations
-x_f64 = x.astype(jnp.float64)
-y_f64 = y.astype(jnp.float64)
+from hyperbolix.manifolds import Poincare
+import jax.numpy as jnp
 
-dist_precise = poincare.dist(x_f64, y_f64, c=1.0, version_idx=0)
-
-# Convert back if needed
-dist_f32 = dist_precise.astype(jnp.float32)
+# Create a float64 manifold — inputs are automatically cast
+poincare_f64 = Poincare(dtype=jnp.float64)
+dist_precise = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ```
 
 ## Hyperbolic Function Overflow
@@ -230,13 +238,15 @@ Many manifold operations have multiple mathematically equivalent formulations th
 ### Poincaré Ball Distance Versions
 
 ```python
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
+import jax.numpy as jnp
 
+poincare = Poincare()
 x = jnp.array([0.1, 0.2])
 y = jnp.array([0.3, 0.4])
 c = 1.0
 
-# Version 0: Direct Möbius distance (FASTEST)
+# Version 0: Direct Möbius distance (FASTEST, default)
 d0 = poincare.dist(x, y, c, version_idx=poincare.VERSION_MOBIUS_DIRECT)
 
 # Version 1: Möbius via addition
@@ -245,7 +255,7 @@ d1 = poincare.dist(x, y, c, version_idx=poincare.VERSION_MOBIUS)
 # Version 2: Metric tensor induced
 d2 = poincare.dist(x, y, c, version_idx=poincare.VERSION_METRIC_TENSOR)
 
-# Version 3: Lorentzian proxy
+# Version 3: Lorentzian proxy (best near boundary)
 d3 = poincare.dist(x, y, c, version_idx=poincare.VERSION_LORENTZIAN_PROXY)
 
 print(f"Version 0: {d0:.6f}")
@@ -271,6 +281,9 @@ print(f"Version 3: {d3:.6f}")
 
 ```python
 import jax
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
 
 # IMPORTANT: version_idx must be static for JIT
 @jax.jit
@@ -294,7 +307,7 @@ Operations like addition, linear transformations can push points off the manifol
 ### When to Project
 
 **Always project**:
-- After Möbius addition: `poincare.add()`
+- After Möbius addition: `poincare.addition(x, y, c)`
 - After neural network layers
 - After parameter updates in optimization
 
@@ -307,6 +320,10 @@ Operations like addition, linear transformations can push points off the manifol
 Projection ensures points stay on the manifold by clipping norms:
 
 ```python
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
+
 # Project to Poincaré ball
 x_proj = poincare.proj(x, c=1.0)
 
@@ -316,8 +333,11 @@ x_proj = poincare.proj(x, c=1.0)
 ### Projection in Training
 
 ```python
-from hyperbolix.manifolds import poincare
+from hyperbolix.manifolds import Poincare
+from hyperbolix.nn_layers import HypLinearPoincare
 from flax import nnx
+
+poincare = Poincare()
 
 class HyperbolicModel(nnx.Module):
     def __init__(self, rngs):
@@ -429,38 +449,28 @@ def clip_curvature(c, min_c=0.01, max_c=10.0):
 Each manifold provides `is_in_manifold` for validation:
 
 ```python
-from hyperbolix.manifolds import poincare, hyperboloid
+from hyperbolix.manifolds import Poincare, Hyperboloid
+import jax.numpy as jnp
+
+poincare = Poincare()
+hyperboloid = Hyperboloid()
 
 # Poincaré ball: ||x||² < 1/c
 x = jnp.array([0.5, 0.3])
 assert poincare.is_in_manifold(x, c=1.0, atol=1e-5)
 
-# Hyperboloid: x₀² - Σxᵢ² = 1/c
+# Hyperboloid: -x₀² + Σxᵢ² = -1/c  (with x₀ > 0)
 x_ambient = jnp.array([1.5, 0.2, 0.3, 0.1])  # (dim+1,)
 assert hyperboloid.is_in_manifold(x_ambient, c=1.0, atol=1e-5)
-```
-
-### Automated Checking (Checkify)
-
-Use checkify modules for runtime validation:
-
-```python
-from hyperbolix.manifolds import poincare_checked
-import jax.experimental.checkify as checkify
-
-# Wrap computation
-@checkify.checkify
-def safe_distance(x, y, c):
-    return poincare_checked.dist(x, y, c, version_idx=0)
-
-# Run with error checking
-err, result = safe_distance(x, y, c=1.0)
-err.throw()  # Raises exception if constraint violated
 ```
 
 ### Batch Validation
 
 ```python
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
+
 def validate_batch(x_batch, c=1.0, atol=1e-5):
     """Check if all points in batch satisfy manifold constraint."""
     valid = jax.vmap(lambda x: poincare.is_in_manifold(x, c, atol))(x_batch)
@@ -469,7 +479,6 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
 
     if num_valid < total:
         print(f"WARNING: {total - num_valid}/{total} points off manifold")
-        # Find violating points
         violations = jnp.where(~valid)[0]
         print(f"Violating indices: {violations[:10]}")  # Show first 10
 
@@ -517,13 +526,17 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
 5. **Try different version**:
    ```python
    # Try VERSION_LORENTZIAN_PROXY if VERSION_MOBIUS_DIRECT fails
-   dist = poincare.dist(x, y, c, version_idx=3)
+   from hyperbolix.manifolds import Poincare
+   poincare = Poincare()
+   dist = poincare.dist(x, y, c, version_idx=poincare.VERSION_LORENTZIAN_PROXY)
    ```
 
-6. **Enable checkify**:
+6. **Use float64 manifold**:
    ```python
-   # Use checked manifolds for runtime assertions
-   from hyperbolix.manifolds import poincare_checked
+   from hyperbolix.manifolds import Poincare
+   import jax.numpy as jnp
+   poincare_f64 = Poincare(dtype=jnp.float64)
+   dist = poincare_f64.dist(x, y, c)
    ```
 
 ## See Also

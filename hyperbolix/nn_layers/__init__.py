@@ -18,6 +18,8 @@ from .hyperboloid_linear import HTCLinear, HypLinearHyperboloidFHCNN
 from .hyperboloid_positional import HyperbolicRoPE, HypformerPositionalEncoding, hope
 from .hyperboloid_regression import HypRegressionHyperboloid
 from .hyperboloid_regularization import HRCBatchNorm, HRCDropout, HRCLayerNorm, HRCRMSNorm
+from .poincare_activations import poincare_leaky_relu, poincare_relu, poincare_tanh
+from .poincare_conv import HypConv2DPoincare
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
 from .poincare_rl import HypRegressionPoincareHDRL
@@ -29,6 +31,7 @@ __all__ = [
     "HRCRMSNorm",
     "HTCLinear",
     "HypConv2DHyperboloid",
+    "HypConv2DPoincare",
     "HypConv3DHyperboloid",
     "HypLinearHyperboloidFHCNN",
     "HypLinearPoincare",
@@ -54,4 +57,7 @@ __all__ = [
     "hyp_swish",
     "hyp_tanh",
     "lorentz_residual",
+    "poincare_leaky_relu",
+    "poincare_relu",
+    "poincare_tanh",
 ]

@@ -10,7 +10,7 @@ repos:
       - id: isort
         name: isort (python)
         stages: [pre-commit]
-        files: ^(hyperbolix/|tests/)
+        files: ^(hyperbolix/|tests/|benchmarks/)
         args: [--profile, black, --line-length, "127"]
 
   # Ruff - fast Python linter and formatter
@@ -21,11 +21,11 @@ repos:
       - id: ruff
         args: [--fix]
         types_or: [python, pyi]
-        files: ^(hyperbolix/|tests/)
+        files: ^(hyperbolix/|tests/|benchmarks/)
       # Run the formatter
       - id: ruff-format
         types_or: [python, pyi]
-        files: ^(hyperbolix/|tests/)
+        files: ^(hyperbolix/|tests/|benchmarks/)
 
   # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -50,11 +50,15 @@ repos:
       # Check for debugger imports
       - id: debug-statements
 
-  # Pyright type checking (optional - can be slow)
-  # Uncomment to enable type checking in pre-commit
-  # - repo: https://github.com/RobertCraigie/pyright-python
-  #   rev: v1.1.390
-  #   hooks:
-  #     - id: pyright
-  #       files: ^hyperbolix/
-  #       additional_dependencies: []
+  # Pyright type checking — mirrors CI exactly (ci.yaml: uv run pyright hyperbolix)
+  # Uses a local hook so pyright runs inside the uv virtualenv with all dependencies available.
+  # The RobertCraigie/pyright-python hook runs in an isolated env and can't resolve jax/jaxtyping.
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        args: [hyperbolix]
+        language: system
+        files: ^hyperbolix/
+        pass_filenames: false
