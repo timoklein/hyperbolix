@@ -15,12 +15,12 @@ References:
 
 import jax
 import jax.numpy as jnp
-from jax.scipy.stats import multivariate_normal
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
 
-from ._common import sample_gaussian, sigma_to_cov
+from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
+from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r
 
 
 def sample(
@@ -121,109 +121,7 @@ def sample(
         z_D = manifold.addition(mu_D, z_0_D, c)
         return z_D
 
-    if len(sample_shape) == 0 and len(mu_batch_shape) == 0:
-        # Single point, no batching
-        z_SBD = transform_single(v_SBD, mu)
-    elif len(sample_shape) == 0:
-        # No sample_shape but batched mu: v_SBD is (*B, D), mu is (*B, D)
-        vmapped_fn = transform_single
-        for _ in mu_batch_shape:
-            vmapped_fn = jax.vmap(vmapped_fn)
-        z_SBD = vmapped_fn(v_SBD, mu)
-    else:
-        # v_SBD is (*S, *B, D), mu is (*B, D)
-        # First, vmap over mu_batch_shape dimensions (both v and mu have these)
-        vmapped_fn = transform_single
-        for _ in mu_batch_shape:
-            vmapped_fn = jax.vmap(vmapped_fn)
-
-        # Then vmap over sample_shape dimensions (only v has these, mu is broadcast)
-        for _ in sample_shape:
-            vmapped_fn = jax.vmap(vmapped_fn, in_axes=(0, None))
-
-        z_SBD = vmapped_fn(v_SBD, mu)
-
-    return z_SBD
-
-
-def _gaussian_log_prob(
-    v: Float[Array, "... n"],
-    sigma: Float[Array, "..."] | float,
-    n: int,
-    dtype,
-) -> Float[Array, "..."]:
-    """Compute log probability of zero-mean Gaussian.
-
-    For v ~ N(0, Σ), computes:
-    log p(v) = -n/2 * log(2π) - 1/2 * log|Σ| - 1/2 * v^T Σ^(-1) v
-
-    Args:
-        v: Vector(s) in tangent space, shape (..., n)
-        sigma: Covariance parameterization (scalar, 1D, or 2D)
-        n: Dimension
-        dtype: Data type
-
-    Returns:
-        Log probability, shape (...)
-    """
-
-    cov_DD = sigma_to_cov(sigma, n, dtype)
-    mean_D = jnp.zeros(n, dtype=dtype)
-    return jnp.asarray(multivariate_normal.logpdf(v, mean_D, cov_DD))
-
-
-def _log_det_jacobian(
-    v: Float[Array, "... n"],
-    c: float,
-    n: int,
-) -> Float[Array, "..."]:
-    """Compute log determinant of projection Jacobian for Poincaré ball.
-
-    Computes log det(∂proj_μ(v)/∂v) = (n-1) * log(sinh(√c·r) / (√c·r))
-    where r = λ(0)·||v||_E = 2·||v||_E is the Riemannian norm of v at the origin.
-
-    The Riemannian norm is needed because the Jacobian formula uses the geodesic
-    distance, which equals the Riemannian norm of the log-map tangent vector.
-
-    For numerical stability, uses Taylor expansion for small √c·r:
-    log(sinh(√c·r) / (√c·r)) ≈ (c·r²)/6 for √c·r → 0
-
-    Args:
-        v: Tangent vector at origin in Euclidean coordinates, shape (..., n)
-        c: Curvature (positive scalar)
-        n: Dimension of Poincaré ball
-
-    Returns:
-        Log determinant of Jacobian, shape (...)
-    """
-
-    # Compute Riemannian norm of tangent vector at origin.
-    # ||v||_g = λ(0) · ||v||_E = 2 · ||v||_E, since the conformal factor at
-    # the origin is λ(0) = 2. The Jacobian formula uses the Riemannian norm.
-    r_euclid_B = jnp.sqrt(jnp.sum(v**2, axis=-1))  # (...,) — sum over D
-    r_B = 2.0 * r_euclid_B  # Riemannian norm
-
-    # Scale by √c
-    sqrt_c = jnp.sqrt(c)
-    sqrt_c_r_B = sqrt_c * r_B
-
-    # Threshold for switching to Taylor expansion
-    threshold = 1e-3
-
-    # Standard computation: log(sinh(√c·r) / (√c·r)) = log(sinh(√c·r)) - log(√c·r)
-    log_ratio_standard_B = jnp.log(jnp.sinh(sqrt_c_r_B)) - jnp.log(sqrt_c_r_B)
-
-    # Taylor expansion for small √c·r: log(sinh(x) / x) ≈ x²/6
-    # Here x = √c·r_riem, so x² = c·r_riem² = c·(2·r_euclid)² = 4·c·r_euclid²
-    log_ratio_taylor_B = (c * r_B**2) / 6.0
-
-    # Use Taylor expansion when √c·r < threshold
-    log_ratio_B = jnp.where(sqrt_c_r_B < threshold, log_ratio_taylor_B, log_ratio_standard_B)
-
-    # log det = (n-1) * log(sinh(√c·r) / (√c·r))
-    log_det_B = (n - 1) * log_ratio_B
-
-    return log_det_B
+    return _batched_transform(transform_single, v_SBD, mu, sample_shape, mu_batch_shape)
 
 
 def log_prob(
@@ -313,10 +211,12 @@ def log_prob(
     # Step 3: Compute log p(v) where v ~ N(0, Σ)
     # Scale to Riemannian coordinates: v_riem = λ(0) · v_euclid = 2 · v
     v_riem_SBD = v_SBD * 2.0
-    log_p_v_SB = _gaussian_log_prob(v_riem_SBD, sigma, n, dtype)
+    log_p_v_SB = gaussian_log_prob(v_riem_SBD, sigma, n, dtype)
 
     # Step 4: Compute log det Jacobian
-    log_det_jac_SB = _log_det_jacobian(v_SBD, c, n)
+    # Riemannian norm r = λ(0) · ||v||_E = 2 · ||v||_E
+    r_SB = 2.0 * jnp.sqrt(jnp.sum(v_SBD**2, axis=-1))
+    log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 5: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
     log_p_z_SB = log_p_v_SB - log_det_jac_SB

@@ -34,14 +34,12 @@ Kingma, Diederik P., and Jimmy Ba. "Adam: A method for stochastic optimization."
     arXiv preprint arXiv:1412.6980 (2014).
 """
 
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 import optax
-from flax import nnx
-from jax import tree_util
 
-from .manifold_metadata import get_manifold_info
+from ._riemannian_base import make_riemannian_optimizer
 
 
 class RAdamState(NamedTuple):
@@ -127,145 +125,52 @@ def riemannian_adam(
     - Parameters stay on manifold after updates (via expmap/retraction + projection)
     """
 
-    def init_fn(params: Any) -> RAdamState:
-        """Initialize optimizer state.
+    def manifold_leaf_fn(rgrad, moments, param_value, manifold_module, c, lr, count):
+        m1_value, m2_value = moments
 
-        Parameters
-        ----------
-        params : Any
-            Pytree of parameters
+        # First moment: EMA of Riemannian gradients
+        new_m1 = beta1 * m1_value + (1 - beta1) * rgrad
 
-        Returns
-        -------
-        state : RAdamState
-            Initial optimizer state with zero moments and count
-        """
-        # Initialize moments as zeros with same structure as params
-        m1 = tree_util.tree_map(lambda p: jnp.zeros_like(p), params)
-        m2 = tree_util.tree_map(lambda p: jnp.zeros_like(p), params)
-        count = jnp.zeros([], jnp.int32)
-        return RAdamState(m1=m1, m2=m2, count=count)
+        # Second moment: EMA of tangent inner product (scalar broadcast to param shape)
+        rgrad_sq = manifold_module.tangent_inner(rgrad, rgrad, param_value, c)
+        rgrad_sq = jnp.asarray(rgrad_sq, dtype=rgrad.dtype)
+        rgrad_sq = jnp.broadcast_to(rgrad_sq, m2_value.shape)
+        new_m2 = beta2 * m2_value + (1 - beta2) * rgrad_sq
 
-    def update_fn(
-        updates: Any,
-        state: RAdamState,
-        params: Any | None = None,
-    ) -> tuple[Any, RAdamState]:
-        """Apply Riemannian Adam update.
+        # Bias correction
+        bias_correction1 = 1 - beta1**count
+        bias_correction2 = 1 - beta2**count
+        m1_hat = new_m1 / bias_correction1
+        m2_hat = new_m2 / bias_correction2
 
-        Parameters
-        ----------
-        updates : Any
-            Pytree of gradients (typically from nnx.grad)
-        state : RAdamState
-            Current optimizer state
-        params : Any, optional
-            Pytree of parameters (required for Riemannian operations)
+        # Direction (expmap/retraction applied by base)
+        lr_cast = lr.astype(m1_hat.dtype)
+        direction = -lr_cast * m1_hat / (jnp.sqrt(m2_hat) + eps)
 
-        Returns
-        -------
-        updates : Any
-            Pytree of parameter updates (new_param - old_param)
-        new_state : RAdamState
-            Updated optimizer state
+        # Parallel transport m1 only (index 0); m2 stays (no transport)
+        return direction, (new_m1, new_m2), (0,)
 
-        Raises
-        ------
-        ValueError
-            If params is None (required for Riemannian operations)
-        """
-        if params is None:
-            raise ValueError("Riemannian Adam requires params to be provided in update step")
+    def euclidean_leaf_fn(grad_value, moments, lr, count):
+        m1_value, m2_value = moments
 
-        # Increment step count
-        count_inc = state.count + 1
+        new_m1 = beta1 * m1_value + (1 - beta1) * grad_value
+        new_m2 = beta2 * m2_value + (1 - beta2) * (grad_value**2)
 
-        # Get learning rate (handle both static value and schedule)
-        if callable(learning_rate):
-            lr_value = learning_rate(count_inc)
-        else:
-            lr_value = cast(float, learning_rate)
-        lr = jnp.asarray(lr_value)
+        bias_correction1 = 1 - beta1**count
+        bias_correction2 = 1 - beta2**count
+        m1_hat = new_m1 / bias_correction1
+        m2_hat = new_m2 / bias_correction2
 
-        # Bias correction terms
-        bias_correction1 = 1 - beta1**count_inc
-        bias_correction2 = 1 - beta2**count_inc
+        lr_cast = lr.astype(m1_hat.dtype)
+        param_update = -lr_cast * m1_hat / (jnp.sqrt(m2_hat) + eps)
 
-        # Flatten the pytrees so we can process leaves in lock-step while preserving structure.
-        def is_variable_leaf(x):
-            return isinstance(x, nnx.Variable)
+        return param_update, (new_m1, new_m2)
 
-        grad_leaves, treedef = tree_util.tree_flatten(updates, is_leaf=is_variable_leaf)
-        m1_leaves, treedef_m1 = tree_util.tree_flatten(state.m1, is_leaf=is_variable_leaf)
-        m2_leaves, treedef_m2 = tree_util.tree_flatten(state.m2, is_leaf=is_variable_leaf)
-        param_leaves, treedef_params = tree_util.tree_flatten(params, is_leaf=is_variable_leaf)
-
-        if not (treedef == treedef_m1 == treedef_m2 == treedef_params):
-            raise ValueError("Gradient, moment, and parameter pytrees must share the same structure.")
-
-        param_update_leaves = []
-        new_m1_leaves = []
-        new_m2_leaves = []
-
-        for grad_value, m1_value, m2_value, param_variable in zip(
-            grad_leaves, m1_leaves, m2_leaves, param_leaves, strict=True
-        ):
-            # Default to treating parameters as Euclidean tensors
-            manifold_info = None
-            if hasattr(param_variable, "_var_metadata"):
-                manifold_info = get_manifold_info(param_variable)
-                param_value = param_variable[...] if isinstance(param_variable, nnx.Variable) else param_variable
-            else:
-                param_value = param_variable[...] if isinstance(param_variable, nnx.Variable) else param_variable
-
-            if manifold_info is not None:
-                manifold_module, c = manifold_info
-
-                rgrad = manifold_module.egrad2rgrad(grad_value, param_value, c)
-                new_m1 = beta1 * m1_value + (1 - beta1) * rgrad
-
-                rgrad_sq = manifold_module.tangent_inner(rgrad, rgrad, param_value, c)
-                rgrad_sq = jnp.asarray(rgrad_sq, dtype=rgrad.dtype)
-                rgrad_sq = jnp.broadcast_to(rgrad_sq, m2_value.shape)
-                new_m2 = beta2 * m2_value + (1 - beta2) * rgrad_sq
-
-                m1_hat = new_m1 / bias_correction1
-                m2_hat = new_m2 / bias_correction2
-                direction = m1_hat / (jnp.sqrt(m2_hat) + eps)
-
-                lr_cast = lr.astype(direction.dtype)
-                step = -lr_cast * direction
-                if use_expmap:
-                    new_param_value = manifold_module.expmap(step, param_value, c)
-                else:
-                    new_param_value = manifold_module.retraction(step, param_value, c)
-
-                transported_m1 = manifold_module.ptransp(new_m1, param_value, new_param_value, c)
-                transported_m2 = new_m2
-
-                param_update = new_param_value - param_value
-            else:
-                new_m1 = beta1 * m1_value + (1 - beta1) * grad_value
-                new_m2 = beta2 * m2_value + (1 - beta2) * (grad_value**2)
-
-                m1_hat = new_m1 / bias_correction1
-                m2_hat = new_m2 / bias_correction2
-
-                lr_cast = lr.astype(m1_hat.dtype)
-                param_update = -lr_cast * m1_hat / (jnp.sqrt(m2_hat) + eps)
-                transported_m1 = new_m1
-                transported_m2 = new_m2
-
-            param_update_leaves.append(param_update)
-            new_m1_leaves.append(transported_m1)
-            new_m2_leaves.append(transported_m2)
-
-        param_updates = tree_util.tree_unflatten(treedef, param_update_leaves)
-        new_m1 = tree_util.tree_unflatten(treedef, new_m1_leaves)
-        new_m2 = tree_util.tree_unflatten(treedef, new_m2_leaves)
-
-        new_state = RAdamState(m1=new_m1, m2=new_m2, count=count_inc)
-
-        return param_updates, new_state
-
-    return optax.GradientTransformation(init_fn, cast(Any, update_fn))
+    return make_riemannian_optimizer(
+        n_moments=2,
+        state_cls=RAdamState,
+        manifold_leaf_fn=manifold_leaf_fn,
+        euclidean_leaf_fn=euclidean_leaf_fn,
+        learning_rate=learning_rate,
+        use_expmap=use_expmap,
+    )

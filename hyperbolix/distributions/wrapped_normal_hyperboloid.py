@@ -16,11 +16,11 @@ References:
 
 import jax
 import jax.numpy as jnp
-from jax.scipy.stats import multivariate_normal
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds.hyperboloid import Hyperboloid
-from ._common import sample_gaussian, sigma_to_cov
+from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
+from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r
 
 
 def sample(
@@ -109,7 +109,6 @@ def sample(
     v_SBA = manifold.embed_spatial_0(v_spatial_SBD)
 
     # Step 3 & 4: Parallel transport and exponential map
-    # We need to apply ptransp_0 and expmap element-wise, matching v and mu
 
     def transform_single(v_A, mu_A):
         """Transform a single (v, mu) pair."""
@@ -117,104 +116,7 @@ def sample(
         z_A = manifold.expmap(u_A, mu_A, c)  # Step 4: exponential map at mu
         return z_A
 
-    if len(sample_shape) == 0 and len(mu_batch_shape) == 0:
-        # Single point, no batching
-        z_SBA = transform_single(v_SBA, mu)
-    elif len(sample_shape) == 0:
-        # No sample_shape but batched mu: v_SBA is (*B, A), mu is (*B, A)
-        vmapped_fn = transform_single
-        for _ in mu_batch_shape:
-            vmapped_fn = jax.vmap(vmapped_fn)
-        z_SBA = vmapped_fn(v_SBA, mu)
-    else:
-        # v_SBA is (*S, *B, A), mu is (*B, A)
-        # First, vmap over mu_batch_shape dimensions (both v and mu have these)
-        vmapped_fn = transform_single
-        for _ in mu_batch_shape:
-            vmapped_fn = jax.vmap(vmapped_fn)
-
-        # Then vmap over sample_shape dimensions (only v has these, mu is broadcast)
-        for _ in sample_shape:
-            vmapped_fn = jax.vmap(vmapped_fn, in_axes=(0, None))
-
-        z_SBA = vmapped_fn(v_SBA, mu)
-
-    return z_SBA
-
-
-def _gaussian_log_prob(
-    v_spatial: Float[Array, "... n"],
-    sigma: Float[Array, "..."] | float,
-    n: int,
-    dtype,
-) -> Float[Array, "..."]:
-    """Compute log probability of zero-mean Gaussian.
-
-    For v ~ N(0, Σ), computes:
-    log p(v) = -n/2 * log(2π) - 1/2 * log|Σ| - 1/2 * v^T Σ^(-1) v
-
-    Args:
-        v_spatial: Spatial vector(s), shape (..., n)
-        sigma: Covariance parameterization (scalar, 1D, or 2D)
-        n: Spatial dimension
-        dtype: Data type
-
-    Returns:
-        Log probability, shape (...)
-    """
-
-    cov_DD = sigma_to_cov(sigma, n, dtype)
-    mean_D = jnp.zeros(n, dtype=dtype)
-    return jnp.asarray(multivariate_normal.logpdf(v_spatial, mean_D, cov_DD))
-
-
-def _log_det_jacobian(
-    v: Float[Array, "... n_plus_1"],
-    c: float,
-    n: int,
-) -> Float[Array, "..."]:
-    """Compute log determinant of projection Jacobian.
-
-    Computes log det(∂proj_μ(v)/∂v) = (n-1) * log(sinh(√c·r) / (√c·r))
-    where r = ||v||_L is the Minkowski norm (= Euclidean norm of spatial components at origin).
-
-    For numerical stability, uses Taylor expansion for small √c·r:
-    log(sinh(√c·r) / (√c·r)) ≈ c·r²/6 for √c·r → 0
-
-    Args:
-        v: Tangent vector at origin, shape (..., n+1)
-        c: Curvature (positive scalar)
-        n: Spatial dimension (manifold dimension)
-
-    Returns:
-        Log determinant of Jacobian, shape (...)
-    """
-
-    # Compute Minkowski norm: r = sqrt(⟨v, v⟩_L)
-    # For tangent vector at origin: v = [0, v_bar], so ⟨v, v⟩_L = ||v_bar||²
-    v_spatial_SBD = v[..., 1:]  # Extract spatial components, (..., D)
-    v_minkowski_sq_SB = jnp.sum(v_spatial_SBD**2, axis=-1)  # (...,) — sum over D
-    r_SB = jnp.sqrt(jnp.maximum(v_minkowski_sq_SB, 1e-15))
-
-    # Scale by √c — expmap uses cosh(√c·r)/sinh(√c·r), so Jacobian uses the same
-    sqrt_c_r_SB = jnp.sqrt(c) * r_SB
-
-    # Threshold for switching to Taylor expansion
-    r_threshold = 1e-3
-
-    # Standard computation: log(sinh(√c·r) / (√c·r)) = log(sinh(√c·r)) - log(√c·r)
-    log_ratio_standard_SB = jnp.log(jnp.sinh(sqrt_c_r_SB)) - jnp.log(sqrt_c_r_SB)
-
-    # Taylor expansion for small √c·r: log(sinh(x) / x) ≈ x²/6 where x = √c·r
-    log_ratio_taylor_SB = (c * r_SB**2) / 6.0
-
-    # Use Taylor expansion when √c·r < threshold
-    log_ratio_SB = jnp.where(sqrt_c_r_SB < r_threshold, log_ratio_taylor_SB, log_ratio_standard_SB)
-
-    # log det = (n-1) * log(sinh(√c·r) / (√c·r))
-    log_det_SB = (n - 1) * log_ratio_SB
-
-    return log_det_SB
+    return _batched_transform(transform_single, v_SBA, mu, sample_shape, mu_batch_shape)
 
 
 def log_prob(
@@ -275,10 +177,6 @@ def log_prob(
     # Extract spatial dimension
     n = mu.shape[-1] - 1  # Spatial dimension
 
-    # Handle batching with vmap if needed
-    # For now, assume z and mu have compatible shapes
-    # If z has extra leading dimensions (samples), we need to vmap
-
     # Step 1: Map z to tangent space at mu: u = log_μ(z), shape (..., A)
     if z.ndim > mu.ndim:
         n_sample_dims = z.ndim - mu.ndim
@@ -306,10 +204,12 @@ def log_prob(
     v_spatial_SBD = v_SBA[..., 1:]
 
     # Step 4: Compute log p(v) where v ~ N(0, Σ)
-    log_p_v_SB = _gaussian_log_prob(v_spatial_SBD, sigma, n, dtype)
+    log_p_v_SB = gaussian_log_prob(v_spatial_SBD, sigma, n, dtype)
 
     # Step 5: Compute log det Jacobian
-    log_det_jac_SB = _log_det_jacobian(v_SBA, c, n)
+    # Minkowski norm at origin: r = ||v_spatial|| (since v = [0, v_bar])
+    r_SB = jnp.sqrt(jnp.maximum(jnp.sum(v_spatial_SBD**2, axis=-1), 1e-15))
+    log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 6: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
     log_p_z_SB = log_p_v_SB - log_det_jac_SB

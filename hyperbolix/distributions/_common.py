@@ -6,6 +6,7 @@ Dimension key:
 
 import jax
 import jax.numpy as jnp
+from jax.scipy.stats import multivariate_normal
 from jaxtyping import Array, Float, PRNGKeyArray
 
 
@@ -64,3 +65,28 @@ def sample_gaussian(
     n = cov.shape[0]
     mean_N = jnp.zeros(n, dtype=dtype or cov.dtype)
     return jax.random.multivariate_normal(key, mean_N, cov, shape=sample_shape, dtype=dtype)
+
+
+def gaussian_log_prob(
+    v: Float[Array, "... n"],
+    sigma: Float[Array, "..."] | float,
+    n: int,
+    dtype,
+) -> Float[Array, "..."]:
+    """Compute log probability of zero-mean Gaussian.
+
+    For v ~ N(0, Sigma), computes:
+    log p(v) = -n/2 * log(2pi) - 1/2 * log|Sigma| - 1/2 * v^T Sigma^(-1) v
+
+    Args:
+        v: Vector(s) in tangent space, shape (..., n)
+        sigma: Covariance parameterization (scalar, 1D, or 2D)
+        n: Dimension
+        dtype: Data type
+
+    Returns:
+        Log probability, shape (...)
+    """
+    cov_DD = sigma_to_cov(sigma, n, dtype)
+    mean_D = jnp.zeros(n, dtype=dtype)
+    return jnp.asarray(multivariate_normal.logpdf(v, mean_D, cov_DD))
