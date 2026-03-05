@@ -47,5 +47,5 @@ All notable changes to Hyperbolix will be documented in this file.
 ### References
 - Based on research by Ganea et al. (2018), Bécigneul & Ganea (2019), Bdeir et al. (2023)
 
-[Unreleased]: https://github.com/hyperbolix/hyperbolix/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/hyperbolix/hyperbolix/releases/tag/v0.1.0
+[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/timoklein/hyperbolix/releases/tag/v0.1.0

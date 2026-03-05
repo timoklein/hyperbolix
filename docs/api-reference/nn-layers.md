@@ -506,9 +506,11 @@ Positional encoding layers for hyperbolic Transformers and attention mechanisms.
 
 ```python
 from hyperbolix.nn_layers import hope, HyperbolicRoPE
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds import Hyperboloid
 import jax.numpy as jnp
 import jax
+
+hyperboloid = Hyperboloid()
 
 # Create sequence of hyperboloid points (batch, seq_len, d+1)
 key = jax.random.PRNGKey(42)
@@ -558,8 +560,10 @@ print(jnp.allclose(ip1, ip2, atol=1e-5))  # True
 
 ```python
 from hyperbolix.nn_layers import HypformerPositionalEncoding
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds import Hyperboloid
 from flax import nnx
+
+hyperboloid = Hyperboloid()
 import jax.numpy as jnp
 import jax
 
@@ -609,9 +613,11 @@ print(f"Epsilon after update: {pe.epsilon.value}")  # Changed
 
 ```python
 from hyperbolix.nn_layers import lorentz_residual
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds import Hyperboloid
 import jax.numpy as jnp
 import jax
+
+hyperboloid = Hyperboloid()
 
 # Create two hyperboloid points
 key1, key2 = jax.random.split(jax.random.PRNGKey(42))
