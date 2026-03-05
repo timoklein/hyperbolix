@@ -4,6 +4,7 @@ import jax.numpy as jnp
 
 from hyperbolix.utils.math_utils import (
     acosh,
+    asinh,
     atanh,
     cosh,
     sinh,
@@ -140,6 +141,24 @@ def test_atanh():
     # Should be antisymmetric
     assert jnp.allclose(result_boundary[0], -result_boundary[-1], rtol=1e-5)
     assert jnp.abs(result_boundary[2]) < 1e10  # Should be finite but large
+
+
+def test_asinh():
+    """Test numerically stable asinh."""
+    # Roundtrip: asinh(sinh(x)) ≈ x for normal values
+    x_normal = jnp.array([-2.0, -1.0, 0.0, 1.0, 2.0])
+    result_roundtrip = asinh(sinh(x_normal))
+    assert jnp.allclose(result_roundtrip, x_normal, rtol=1e-5)
+
+    # Extreme values should not produce inf or nan
+    x_extreme = jnp.array([-1000.0, -100.0, 0.0, 100.0, 1000.0], dtype=jnp.float32)
+    result_extreme = asinh(x_extreme)
+    assert jnp.all(jnp.isfinite(result_extreme))
+
+    # Dtype preservation
+    for dtype in [jnp.float32, jnp.float64]:
+        x = jnp.array([0.5, 1.0, 1.5], dtype=dtype)
+        assert asinh(x).dtype == dtype
 
 
 def test_dtype_consistency():

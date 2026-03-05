@@ -70,6 +70,7 @@ import jax.scipy.special
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import acosh, asinh, atanh, cosh, sinh, smooth_clamp
+from ._base import ManifoldBase
 
 # Default numerical parameters
 MIN_NORM = 1e-15
@@ -687,7 +688,7 @@ def _beta_concat(points: Float[Array, "M n_i"], c: float) -> Float[Array, "n"]:
 # ---------------------------------------------------------------------------
 
 
-class Poincare:
+class Poincare(ManifoldBase):
     """Poincaré ball manifold with automatic dtype casting.
 
     Provides all manifold operations with automatic casting of array inputs
@@ -715,15 +716,6 @@ class Poincare:
     VERSION_MOBIUS = VERSION_MOBIUS
     VERSION_METRIC_TENSOR = VERSION_METRIC_TENSOR
     VERSION_LORENTZIAN_PROXY = VERSION_LORENTZIAN_PROXY
-
-    def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
-        self.dtype = dtype
-
-    def _cast(self, x: Array) -> Array:
-        """Cast array to target dtype if it's a floating-point array."""
-        if isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, jnp.inexact):
-            return x.astype(self.dtype)
-        return x
 
     def proj(self, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
         """Project point onto Poincaré ball by clipping norm."""
@@ -755,23 +747,9 @@ class Poincare:
         """Compute geodesic distance between Poincaré ball points."""
         return _dist(self._cast(x), self._cast(y), c, version_idx)
 
-    def _dist(
-        self,
-        x: Float[Array, "dim"],
-        y: Float[Array, "dim"],
-        c: float,
-        version_idx: int = VERSION_MOBIUS_DIRECT,
-    ) -> Float[Array, ""]:
-        """Compatibility alias for legacy module-style API."""
-        return self.dist(x, y, c, version_idx)
-
     def dist_0(self, x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
         """Compute geodesic distance from Poincaré ball origin."""
         return _dist_0(self._cast(x), c, version_idx)
-
-    def _dist_0(self, x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
-        """Compatibility alias for legacy module-style API."""
-        return self.dist_0(x, c, version_idx)
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
         """Exponential map: map tangent vector v at point x to manifold."""

@@ -41,14 +41,13 @@ Use version_idx as static argument for JIT (static_argnames=['version_idx']).
 """
 
 import math
-from typing import cast
 
-import jax
 import jax.lax as lax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import acosh, asinh, cosh, sinh, smooth_clamp, smooth_clamp_min
+from ._base import ManifoldBase
 
 # Default numerical parameters
 MIN_NORM = 1e-15
@@ -619,149 +618,6 @@ def _is_in_tangent_space(
     return jnp.abs(mink_inner) < tol
 
 
-def _lorentz_boost(
-    x: Float[Array, "dim_plus_1"],
-    v_raw: Float[Array, "dim"],
-    c: float,
-) -> Float[Array, "dim_plus_1"]:
-    """Apply Lorentz boost to a single hyperboloid point.
-
-    The Lorentz boost matrix is:
-        B = [[gamma,       -gamma*v^T              ],
-             [-gamma*v,     I + (gamma^2/(1+gamma))*v*v^T ]]
-
-    where gamma = 1/sqrt(1 - ||v||^2), ||v|| < 1.
-
-    Args:
-        x: Single hyperboloid point in ambient space, shape (dim+1,)
-            Satisfies: -x₀² + ‖x_rest‖² = -1/c
-        v_raw: Velocity vector (unclipped), shape (dim,)
-        c: Manifold curvature (positive)
-
-    Returns:
-        Boosted point on hyperboloid, shape (dim+1,)
-
-    Notes:
-        The velocity is projected to ensure ‖v‖ < 1 - ε for numerical stability.
-        The output is projected onto the manifold to correct numerical drift.
-
-        For batch operations, use jax.vmap:
-            >>> lorentz_boost_batched = jax.vmap(lorentz_boost, in_axes=(0, None, None))
-            >>> boosted = lorentz_boost_batched(x_batch, v, c)
-
-    References:
-        Ahmad Bdeir, et al. "Fully hyperbolic convolutional neural networks for computer vision."
-            arXiv preprint arXiv:2303.15919 (2023).
-    """
-    # Numerical stability constant for velocity projection
-    epsilon = 1e-5
-
-    # Project velocity to ensure norm < 1 - epsilon
-    v_norm = jnp.linalg.norm(v_raw)
-    scale = jnp.minimum(1.0, (1.0 - epsilon) / jnp.maximum(v_norm, MIN_NORM))
-    v_D = v_raw * scale
-
-    # Compute gamma = 1/√(1 - ‖v‖²)
-    v_sqnorm = jnp.dot(v_D, v_D)
-    gamma = 1.0 / jnp.sqrt(jnp.maximum(1.0 - v_sqnorm, MIN_NORM))
-
-    # Split input into time and spatial components
-    x_t = x[0]  # scalar
-    x_s_D = x[1:]
-
-    # Boost formula: B·x where B is the Lorentz boost matrix
-    v_dot_xs = jnp.dot(v_D, x_s_D)  # scalar
-
-    new_t = gamma * x_t - gamma * v_dot_xs  # scalar
-    new_s_D = -gamma * v_D * x_t + x_s_D + (gamma**2 / (1.0 + gamma)) * v_D * v_dot_xs
-
-    result_A = jnp.concatenate([new_t[None], new_s_D])
-
-    # Project onto manifold to correct numerical drift
-    return _proj(result_A, c)
-
-
-def _distance_rescale(
-    x: Float[Array, "dim_plus_1"],
-    c: float,
-    x_t_max: float = 2000.0,
-    slope: float = 1.0,
-) -> Float[Array, "dim_plus_1"]:
-    """Apply distance rescaling to bound hyperbolic distances (Eq. 2-3).
-
-    Rescales distances from origin using:
-        D_rescaled = m · tanh(D · atanh(0.99) / (s·m))
-
-    where m = D_max (computed from x_t_max) and s = slope.
-
-    Then reconstructs spatial components:
-        x_s_rescaled = x_s · sinh(√c · D_rescaled) / sinh(√c · D)
-
-    Args:
-        x: Single hyperboloid point, shape (dim+1,)
-        c: Manifold curvature (positive)
-        x_t_max: Maximum time coordinate (default: 2000.0)
-        slope: Rescaling slope parameter (default: 1.0)
-
-    Returns:
-        Rescaled point on hyperboloid, shape (dim+1,)
-
-    Notes:
-        For points at or very near the origin (D ≈ 0), the point is returned
-        unchanged to avoid numerical instability from 0/0 in the scale computation.
-        The output is projected onto the manifold to correct numerical drift.
-
-        For batch operations, use jax.vmap:
-            >>> distance_rescale_batched = jax.vmap(distance_rescale, in_axes=(0, None, None, None))
-            >>> rescaled = distance_rescale_batched(x_batch, c, x_t_max, slope)
-
-    References:
-        Equation 2-3 from "Fully Hyperbolic CNNs" (Ahmad Bdeir et al., 2023).
-    """
-    sqrt_c = jnp.sqrt(c)
-
-    # Extract time and spatial components
-    x_t = x[0]  # scalar
-    x_s_D = x[1:]
-
-    # Compute distance from origin: D = acosh(√c · x_t) / √c
-    arg_acosh = smooth_clamp_min(sqrt_c * x_t, 1.0)
-    dist = acosh(arg_acosh) / sqrt_c  # scalar
-
-    # Compute max distance: D_max = acosh(√c · x_t_max) / √c
-    arg_acosh_max = smooth_clamp_min(sqrt_c * x_t_max, 1.0)
-    dist_max = acosh(arg_acosh_max) / sqrt_c  # scalar
-
-    # Eq. 2: D_rescaled = D_max · tanh(D · atanh(0.99) / (slope · D_max))
-    dist_max_safe = jnp.maximum(dist_max, MIN_NORM)
-    slope_safe = jnp.maximum(slope, MIN_NORM)
-
-    atanh_val = jnp.atanh(0.99)
-    arg_tanh = dist * atanh_val / (slope_safe * dist_max_safe)
-    dist_rescaled = dist_max * jnp.tanh(arg_tanh)  # scalar
-
-    # Eq. 3: scale = sinh(√c · D_rescaled) / sinh(√c · D)
-    sinh_rescaled = sinh(sqrt_c * dist_rescaled)  # scalar
-    sinh_original = sinh(sqrt_c * dist)  # scalar
-
-    # Origin edge case: when D ≈ 0, L'Hopital gives scale ≈ atanh(0.99) / slope
-    is_near_origin = sinh_original < 1e-6
-    scale_normal = sinh_rescaled / jnp.maximum(sinh_original, MIN_NORM)
-    scale_origin = atanh_val / slope_safe
-    scale = cast(Array, jnp.where(is_near_origin, scale_origin, scale_normal))  # scalar
-
-    x_s_rescaled_D = x_s_D * scale
-
-    # Reconstruct time: x_t_rescaled = √(‖x_s_rescaled‖² + 1/c)
-    x_s_sqnorm = jnp.dot(x_s_rescaled_D, x_s_rescaled_D)  # scalar
-    x_t_rescaled = jnp.sqrt(jnp.maximum(x_s_sqnorm + 1.0 / c, MIN_NORM))  # scalar
-
-    result_A = jnp.concatenate([x_t_rescaled[None], x_s_rescaled_D])
-
-    # Project onto manifold to correct numerical drift
-    return _proj(result_A, c)
-
-
 def _hcat(
     points: Float[Array, "N n"],
     c: float = 1.0,
@@ -866,7 +722,7 @@ def _compute_mlr(
 # ---------------------------------------------------------------------------
 
 
-class Hyperboloid:
+class Hyperboloid(ManifoldBase):
     """Hyperboloid manifold with automatic dtype casting.
 
     Provides all manifold operations with automatic casting of array inputs
@@ -891,15 +747,6 @@ class Hyperboloid:
 
     VERSION_DEFAULT = VERSION_DEFAULT
     VERSION_SMOOTHENED = VERSION_SMOOTHENED
-
-    def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
-        self.dtype = dtype
-
-    def _cast(self, x: Array) -> Array:
-        """Cast array to target dtype if it's a floating-point array."""
-        if isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, jnp.inexact):
-            return x.astype(self.dtype)
-        return x
 
     def create_origin(self, c: float, dim: int) -> Float[Array, "dim_plus_1"]:
         """Create hyperboloid origin [1/√c, 0, ..., 0]."""
@@ -937,23 +784,9 @@ class Hyperboloid:
         """Compute geodesic distance between hyperboloid points."""
         return _dist(self._cast(x), self._cast(y), c, version_idx)
 
-    def _dist(
-        self,
-        x: Float[Array, "dim_plus_1"],
-        y: Float[Array, "dim_plus_1"],
-        c: float,
-        version_idx: int = VERSION_DEFAULT,
-    ) -> Float[Array, ""]:
-        """Compatibility alias for legacy module-style API."""
-        return self.dist(x, y, c, version_idx)
-
     def dist_0(self, x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
         """Compute geodesic distance from hyperboloid origin."""
         return _dist_0(self._cast(x), c, version_idx)
-
-    def _dist_0(self, x: Float[Array, "dim_plus_1"], c: float, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
-        """Compatibility alias for legacy module-style API."""
-        return self.dist_0(x, c, version_idx)
 
     def expmap(self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus_1"]:
         """Exponential map: map tangent vector v at point x to manifold."""
@@ -1015,12 +848,6 @@ class Hyperboloid:
         """Check if vector v lies in tangent space at point x."""
         return _is_in_tangent_space(self._cast(v), self._cast(x), c)
 
-    def lorentz_boost(
-        self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: float
-    ) -> Float[Array, "dim_plus_1 dim_plus_1"]:
-        """Compute Lorentz boost matrix."""
-        return _lorentz_boost(self._cast(x), self._cast(y), c)
-
     def hcat(
         self,
         points: Float[Array, "N n"],
@@ -1028,10 +855,6 @@ class Hyperboloid:
     ) -> Float[Array, "dN_plus_1"]:
         """Hyperbolic concatenation of N points into one point."""
         return _hcat(self._cast(points), c)
-
-    def distance_rescale(self, x: Float[Array, "dim_plus_1"], c_in: float, c_out: float) -> Float[Array, "dim_plus_1"]:
-        """Rescale distance from one curvature to another."""
-        return _distance_rescale(self._cast(x), c_in, c_out)
 
     def embed_spatial_0(self, v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plus_1"]:
         """Embed spatial vector as tangent vector at origin."""
