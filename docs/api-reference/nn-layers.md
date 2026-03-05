@@ -347,7 +347,7 @@ print(output.shape)  # (32, 65) - 64 spatial + 1 time
 
 ## Attention Layers
 
-Three hyperbolic attention variants from the Hypformer paper (Yang et al. 2025, Section 4.3). All operate on hyperboloid points and support independent curvatures for input (`c_in`), attention computation (`c_attn`), and output (`c_out`).
+Three hyperbolic attention variants from the Hypformer paper (Yang et al. 2025, Section 4.3). All operate on hyperboloid points and support independent curvatures for input (`c_in`), attention computation (`c_attn`), and output (`c_out`). All variants support **causal (autoregressive) masking** via the `causal=True` flag, making them suitable for language models and sequence generation tasks.
 
 ### Core Utilities
 
@@ -440,12 +440,35 @@ for b in range(B):
         assert hyperboloid.is_in_manifold(y[b, n], c=1.0, atol=1e-4)
 ```
 
+#### Causal (Autoregressive) Attention
+
+All three variants support causal masking via `causal=True`. Position `n` can only attend to positions `m ≤ n`, which is required for autoregressive tasks like language modeling.
+
+```python
+# Bidirectional (default) — each token attends to all tokens
+y_bidir = softmax_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0, causal=False)
+
+# Causal — position n only attends to positions 0..n
+y_causal = softmax_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0, causal=True)
+
+# Causal is JIT-compatible
+@nnx.jit
+def forward(model, inp):
+    return model(inp, c_in=1.0, c_attn=1.0, c_out=1.0, causal=True)
+```
+
+!!! info "Causal masking implementations"
+    The three variants implement causal masking differently:
+
+    - **`HyperbolicSoftmaxAttention`** and **`HyperbolicFullAttention`**: Apply a lower-triangular `-inf` mask to the score matrix before softmax — O(N²) in both causal and non-causal mode.
+    - **`HyperbolicLinearAttention`**: Uses a cumulative-sum recurrence (`jax.lax.scan`) following Katharopoulos et al. (2020): `S_i = Σ_{j≤i} φ(K_j) V_j^T` computed in O(1) per step → **O(N) total**, making it especially well-suited for long autoregressive sequences.
+
 !!! info "Choosing an Attention Variant"
-    | Variant | Complexity | Mechanism | Best For |
-    |---------|-----------|-----------|----------|
-    | `HyperbolicLinearAttention` | O(N) | Kernel trick + focus function φ | Long sequences, efficiency |
-    | `HyperbolicSoftmaxAttention` | O(N²) | Standard softmax on spatial components | Short sequences, simplicity |
-    | `HyperbolicFullAttention` | O(N²) | Lorentzian inner product + midpoint | Maximum geometric fidelity |
+    | Variant | Complexity | Causal complexity | Mechanism | Best For |
+    |---------|-----------|-------------------|-----------|----------|
+    | `HyperbolicLinearAttention` | O(N) | **O(N)** | Kernel trick + focus function φ | Long sequences, autoregressive models |
+    | `HyperbolicSoftmaxAttention` | O(N²) | O(N²) | Standard softmax on spatial components | Short sequences, simplicity |
+    | `HyperbolicFullAttention` | O(N²) | O(N²) | Lorentzian inner product + midpoint | Maximum geometric fidelity |
 
     All variants support independent curvatures: `c_in` for input, `c_attn` for Q/K/V projections, `c_out` for output.
 

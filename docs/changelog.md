@@ -17,6 +17,11 @@ All notable changes to Hyperbolix will be documented in this file.
 - Class-based manifold API with automatic dtype casting (`Poincare`, `Hyperboloid`, `Euclidean`)
 - Isometry mappings between Poincaré ball and hyperboloid models
 - `Manifold` structural protocol for type-safe manifold dispatch
+- **Causal attention masking** (`causal=True`) for all three hyperbolic attention variants:
+    - `HyperbolicSoftmaxAttention`: lower-triangular `-inf` mask before softmax
+    - `HyperbolicFullAttention`: lower-triangular `-inf` mask on Lorentzian similarity scores
+    - `HyperbolicLinearAttention`: O(N) cumulative-sum recurrence via `jax.lax.scan` (Katharopoulos et al. 2020), keeping O(N) complexity in causal mode
+- Tiny Shakespeare character-level benchmark (`benchmarks/bench_shakespeare_attention.py`) comparing all four model variants (Euclidean + 3 hyperbolic) with causal attention
 
 ### Changed
 - **Breaking**: Manifold public functions renamed to private (`dist()` → `_dist()`); use class methods instead
