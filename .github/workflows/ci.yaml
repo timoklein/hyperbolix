@@ -84,10 +84,14 @@ jobs:
           - "test_wrapped_normal.py"
           # NN layer tests (moved to subdirectory)
           - "nn_layers/test_hyperboloid_activations.py"
+          - "nn_layers/test_hyperboloid_attention.py"
           - "nn_layers/test_hyperboloid_conv.py"
+          - "nn_layers/test_hyperboloid_positional.py"
+          - "nn_layers/test_hypformer.py"
           - "nn_layers/test_nn_layers.py"
-          - "nn_layers/test_regression_layers.py"
           - "nn_layers/test_poincare_conv.py"
+          - "nn_layers/test_poincare_linear_gradients.py"
+          - "nn_layers/test_regression_layers.py"
 
     steps:
       - uses: actions/checkout@v4

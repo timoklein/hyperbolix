@@ -4,11 +4,12 @@ Hyperbolic neural network layers built with Flax NNX.
 
 ## Overview
 
-Hyperbolix provides 15+ neural network layer classes and 5 activation functions for building hyperbolic deep learning models:
+Hyperbolix provides 20+ neural network layer classes and 5 activation functions for building hyperbolic deep learning models:
 
 - **Linear Layers**: Poincaré and Hyperboloid linear transformations
 - **Convolutional Layers**: HCat-based and HRC-based hyperbolic convolutions (2D and 3D)
 - **Hypformer Components**: HTC (Hyperbolic Transformation Component) and HRC (Hyperbolic Regularization Component) with curvature-change support
+- **Attention Layers**: Three hyperbolic attention variants (linear O(N), softmax O(N²), full Lorentzian O(N²)) from the Hypformer paper
 - **Positional Encoding**: HOPE (Hyperbolic Rotary PE) and Hypformer learnable positional encodings for Transformers
 - **Regression Layers**: Single-layer classifiers with Riemannian geometry
 - **Activation Functions**: Hyperbolic ReLU, Leaky ReLU, Tanh, Swish, GELU
@@ -343,6 +344,110 @@ print(output.shape)  # (32, 65) - 64 spatial + 1 time
     - Formula: `space = f_t(x)`, `time = sqrt(||space||^2 + 1/c_out)`
 
     Both support curvature changes (`c_in → c_out`) for flexible network design.
+
+## Attention Layers
+
+Three hyperbolic attention variants from the Hypformer paper (Yang et al. 2025, Section 4.3). All operate on hyperboloid points and support independent curvatures for input (`c_in`), attention computation (`c_attn`), and output (`c_out`).
+
+### Core Utilities
+
+::: hyperbolix.nn_layers.spatial_to_hyperboloid
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.lorentz_midpoint
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.focus_transform
+    options:
+      show_source: true
+      heading_level: 4
+
+### Attention Modules
+
+::: hyperbolix.nn_layers.HyperbolicLinearAttention
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.HyperbolicSoftmaxAttention
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.HyperbolicFullAttention
+    options:
+      show_source: true
+      heading_level: 4
+
+### Attention Example
+
+```python
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from hyperbolix.manifolds import Hyperboloid
+from hyperbolix.nn_layers import (
+    HyperbolicLinearAttention,
+    HyperbolicSoftmaxAttention,
+    HyperbolicFullAttention,
+)
+
+hyperboloid = Hyperboloid()
+
+# Input: (batch, seq_len, ambient_dim) on the hyperboloid
+B, N, A_in, D_out = 4, 8, 9, 8  # 8-dim spatial + 1 time
+key = jax.random.PRNGKey(0)
+spatial = jax.random.normal(key, (B, N, A_in - 1)) * 0.1
+time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
+x = jnp.concatenate([time, spatial], axis=-1)  # (B, N, A_in)
+
+# O(N) linear attention with focus function — fastest, main Hypformer contribution
+linear_attn = HyperbolicLinearAttention(
+    in_features=A_in,
+    out_features=D_out,
+    num_heads=2,
+    power=2.0,
+    rngs=nnx.Rngs(0),
+)
+y = linear_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0)
+print(y.shape)  # (4, 8, 9) — D_out spatial + 1 time
+
+# O(N²) softmax attention in the spatial domain
+softmax_attn = HyperbolicSoftmaxAttention(
+    in_features=A_in,
+    out_features=D_out,
+    num_heads=2,
+    rngs=nnx.Rngs(0),
+)
+y = softmax_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0)
+
+# O(N²) full Lorentzian attention — operates entirely on hyperboloid points
+full_attn = HyperbolicFullAttention(
+    in_features=A_in,
+    out_features=D_out,
+    num_heads=2,
+    rngs=nnx.Rngs(0),
+)
+y = full_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0)
+
+# Verify outputs are on the hyperboloid
+for b in range(B):
+    for n in range(N):
+        assert hyperboloid.is_in_manifold(y[b, n], c=1.0, atol=1e-4)
+```
+
+!!! info "Choosing an Attention Variant"
+    | Variant | Complexity | Mechanism | Best For |
+    |---------|-----------|-----------|----------|
+    | `HyperbolicLinearAttention` | O(N) | Kernel trick + focus function φ | Long sequences, efficiency |
+    | `HyperbolicSoftmaxAttention` | O(N²) | Standard softmax on spatial components | Short sequences, simplicity |
+    | `HyperbolicFullAttention` | O(N²) | Lorentzian inner product + midpoint | Maximum geometric fidelity |
+
+    All variants support independent curvatures: `c_in` for input, `c_attn` for Q/K/V projections, `c_out` for output.
 
 ## Positional Encoding
 

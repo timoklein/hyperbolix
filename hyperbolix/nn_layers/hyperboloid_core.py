@@ -24,6 +24,86 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 
+def spatial_to_hyperboloid(
+    spatial: Float[Array, "... D"],
+    c_in: float,
+    c_out: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... D_plus_1"]:
+    """Scale spatial components and reconstruct time to produce a hyperboloid point.
+
+    Extracts the common tail of ``hrc``/``htc``: curvature scaling + time
+    reconstruction via the hyperboloid constraint.
+
+    Parameters
+    ----------
+    spatial : Array, shape (..., D)
+        Spatial components (no time coordinate).
+    c_in : float
+        Source curvature (positive).
+    c_out : float
+        Target curvature (positive).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    Returns
+    -------
+    Array, shape (..., D+1)
+        Points on the hyperboloid with curvature ``c_out``.
+    """
+    scale = jnp.sqrt(c_in / c_out)
+    scaled_D = scale * spatial  # (..., D)
+
+    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
+    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
+
+    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D+1)
+
+
+def lorentz_midpoint(
+    points: Float[Array, "... M A"],
+    weights: Float[Array, "... N M"],
+    c: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... N A"]:
+    """Weighted Lorentzian midpoint over M points.
+
+    Generalises :func:`lorentz_residual` (which handles two points) to an
+    arbitrary weighted combination used by full attention aggregation and
+    multi-head averaging.
+
+    Formula (HELM, Chen et al. 2024):
+        ``h = weights @ points``  (weighted sum)
+        ``mu = h / (sqrt(c) * ||h||_L)``
+
+    where ``||h||_L = sqrt(-<h,h>_L)`` and ``<h,h>_L = -h_0^2 + ||h_s||^2``.
+
+    Parameters
+    ----------
+    points : Array, shape (..., M, A)
+        Points on the hyperboloid with curvature ``c``.  ``A = d + 1``.
+    weights : Array, shape (..., N, M)
+        Combination weights (e.g. attention weights, uniform ``1/M``).
+    c : float
+        Curvature parameter (positive).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    Returns
+    -------
+    Array, shape (..., N, A)
+        Midpoints on the hyperboloid with curvature ``c``.
+    """
+    # h = sum_m w_{n,m} * points_m  →  (..., N, A)
+    h_NA = jnp.einsum("...nm,...ma->...na", weights, points)
+
+    # Minkowski squared norm: <h,h>_L = -h_0^2 + ||h_s||^2  (should be < 0)
+    mink_1 = -(h_NA[..., 0:1] ** 2) + jnp.sum(h_NA[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., N, 1)
+    denom_1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_1), eps))  # (..., N, 1)
+
+    return h_NA / denom_1  # (..., N, A)
+
+
 def lorentz_residual(
     x: Float[Array, "... dim_plus_1"],
     y: Float[Array, "... dim_plus_1"],
