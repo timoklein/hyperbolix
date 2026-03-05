@@ -333,3 +333,61 @@ def print_summary_table(results: dict[str, dict[str, Any]]):
         )
 
     print("=" * 90)
+
+
+# ==============================================================================
+# Shakespeare Data Loading
+# ==============================================================================
+
+
+def load_shakespeare_data(seq_len: int = 128):
+    """Load Tiny Shakespeare as character-level sequences.
+
+    Parameters
+    ----------
+    seq_len : int
+        Sequence length for input chunks (targets are shifted by 1).
+
+    Returns
+    -------
+    train_inputs : jax.Array, shape (num_train, seq_len)
+        Training input token IDs.
+    train_targets : jax.Array, shape (num_train, seq_len)
+        Training target token IDs (shifted by 1).
+    val_inputs : jax.Array, shape (num_val, seq_len)
+        Validation input token IDs.
+    val_targets : jax.Array, shape (num_val, seq_len)
+        Validation target token IDs.
+    vocab_size : int
+        Number of unique characters.
+    char2idx : dict
+        Character to index mapping.
+    """
+    print("  Loading Tiny Shakespeare dataset...")
+    dataset = load_dataset("Trelis/tiny-shakespeare")
+
+    # Concatenate all text rows
+    train_text = "\n".join(dataset["train"]["Text"])
+    val_text = "\n".join(dataset["test"]["Text"])
+
+    # Character-level tokenization
+    chars = sorted(set(train_text + val_text))
+    vocab_size = len(chars)
+    char2idx = {ch: i for i, ch in enumerate(chars)}
+
+    print(f"  Vocab size: {vocab_size}, Train chars: {len(train_text)}, Val chars: {len(val_text)}")
+
+    def tokenize_and_chunk(text, sl):
+        tokens = np.array([char2idx[ch] for ch in text], dtype=np.int32)
+        # Non-overlapping chunks of length seq_len + 1
+        n_chunks = len(tokens) // (sl + 1)
+        tokens = tokens[: n_chunks * (sl + 1)]
+        chunks = tokens.reshape(n_chunks, sl + 1)
+        return jnp.array(chunks[:, :-1]), jnp.array(chunks[:, 1:])
+
+    train_inputs, train_targets = tokenize_and_chunk(train_text, seq_len)
+    val_inputs, val_targets = tokenize_and_chunk(val_text, seq_len)
+
+    print(f"  Train sequences: {train_inputs.shape[0]}, Val sequences: {val_inputs.shape[0]}")
+
+    return train_inputs, train_targets, val_inputs, val_targets, vocab_size, char2idx

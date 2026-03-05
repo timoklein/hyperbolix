@@ -1,0 +1,27 @@
+{
+  "Hyp-Full": {
+    "model": "Hyp-Full",
+    "parameters": 93253,
+    "memory_mb": 0.6770362854003906,
+    "compile_time": 2.066096968999773,
+    "train_losses": [
+      2.582241609145436
+    ],
+    "val_losses": [
+      2.3199491552422464
+    ],
+    "val_accuracies": [
+      0.3254454533042054
+    ],
+    "val_perplexities": [
+      10.175156939531062
+    ],
+    "epoch_times": [
+      48.425831374000154
+    ],
+    "total_time": 48.425831374000154,
+    "final_val_loss": 2.3199491552422464,
+    "final_val_accuracy": 0.3254454533042054,
+    "final_val_perplexity": 10.175156939531062
+  }
+}

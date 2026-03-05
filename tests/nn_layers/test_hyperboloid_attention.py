@@ -329,8 +329,9 @@ def test_attn_mechanisms_differ():
 class _AttentionClassifier(nnx.Module):
     """Tiny model: attention → pool → classify. For overfit tests only."""
 
-    def __init__(self, attn, ambient_out, num_classes, *, rngs):
+    def __init__(self, attn, ambient_out, num_classes, *, rngs, causal=False):
         self.attn = attn
+        self.causal = causal
         self.head = HypRegressionHyperboloid(
             hyperboloid,
             ambient_out,
@@ -339,14 +340,14 @@ class _AttentionClassifier(nnx.Module):
         )
 
     def __call__(self, x_BNA, c=1.0):
-        attended_BNA = self.attn(x_BNA, c_in=c, c_attn=c, c_out=c)  # (B, N, A)
+        attended_BNA = self.attn(x_BNA, c_in=c, c_attn=c, c_out=c, causal=self.causal)  # (B, N, A)
         # Pool: mean spatial across sequence, reconstruct time
         pooled_spatial_BD = attended_BNA[..., 1:].mean(axis=1)  # (B, D)
         pooled_BA = spatial_to_hyperboloid(pooled_spatial_BD, c, c)  # (B, A)
         return self.head(pooled_BA, c)  # (B, num_classes)
 
 
-def _run_overfit(attn_cls, num_steps=300, learning_rate=3e-3):
+def _run_overfit(attn_cls, num_steps=300, learning_rate=3e-3, causal=False):
     """Train a tiny attention classifier to memorise 16 random examples.
 
     Returns (initial_loss, final_loss).
@@ -360,7 +361,7 @@ def _run_overfit(attn_cls, num_steps=300, learning_rate=3e-3):
     labels_B = jax.random.randint(jax.random.PRNGKey(100), (B,), 0, num_classes)
 
     attn = _make_attn(attn_cls, A_in, D_out, num_heads=2, rngs=rngs)
-    model = _AttentionClassifier(attn, D_out + 1, num_classes, rngs=rngs)
+    model = _AttentionClassifier(attn, D_out + 1, num_classes, rngs=rngs, causal=causal)
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate), wrt=nnx.Param)
 
     @nnx.jit
@@ -390,3 +391,105 @@ def test_attn_overfit(cls):
     """Each attention variant can memorise a tiny dataset (loss drops >50%)."""
     initial_loss, final_loss = _run_overfit(cls)
     assert final_loss < initial_loss * 0.5, f"Loss did not drop enough: {initial_loss:.4f} → {final_loss:.4f}"
+
+
+# ===================================================================
+# Causal masking tests
+# ===================================================================
+
+
+@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
+def test_causal_no_future_leakage(cls):
+    """Output at position n must not change when tokens at positions m > n are modified."""
+    B, N, A_in, D_out = 2, 6, 6, 5
+    c = 1.0
+    rngs = nnx.Rngs(0)
+    model = _make_attn(cls, A_in, D_out, num_heads=2, rngs=rngs)
+
+    key1, key2 = jax.random.split(jax.random.PRNGKey(20))
+    x_orig = _make_hyp_points(key1, B, N, A_in, c)
+    x_modified = _make_hyp_points(key2, B, N, A_in, c)
+
+    # Replace tokens at positions 3..N-1 with different values
+    x_future_changed = x_orig.at[:, 3:, :].set(x_modified[:, 3:, :])
+
+    y_orig = model(x_orig, c_in=c, c_attn=c, c_out=c, causal=True)
+    y_changed = model(x_future_changed, c_in=c, c_attn=c, c_out=c, causal=True)
+
+    # Positions 0, 1, 2 should be unchanged (they can't see positions 3+)
+    assert jnp.allclose(y_orig[:, :3, :], y_changed[:, :3, :], atol=1e-5), (
+        "Causal output at early positions changed when only future tokens were modified"
+    )
+    # Position 3+ should differ (they see different inputs at their own position)
+    assert not jnp.allclose(y_orig[:, 3:, :], y_changed[:, 3:, :], atol=1e-4), (
+        "Causal output at modified positions did not change"
+    )
+
+
+QUADRATIC_ATTN_CLASSES = [HyperbolicSoftmaxAttention, HyperbolicFullAttention]
+
+
+@pytest.mark.parametrize("cls", QUADRATIC_ATTN_CLASSES, ids=lambda c: c.__name__)
+def test_causal_matches_truncated(cls):
+    """Causal output at position n matches bidirectional output on tokens [0..n]."""
+    B, N, A_in, D_out = 1, 5, 6, 5
+    c = 1.0
+    rngs = nnx.Rngs(0)
+    model = _make_attn(cls, A_in, D_out, num_heads=1, rngs=rngs)
+
+    x = _make_hyp_points(jax.random.PRNGKey(21), B, N, A_in, c)
+    y_causal = model(x, c_in=c, c_attn=c, c_out=c, causal=True)
+
+    # For each position n, run bidirectional on x[:, :n+1, :]
+    for n in range(N):
+        x_trunc = x[:, : n + 1, :]
+        y_bidir = model(x_trunc, c_in=c, c_attn=c, c_out=c, causal=False)
+        assert jnp.allclose(y_causal[:, n, :], y_bidir[:, n, :], atol=1e-4), (
+            f"Causal output at position {n} doesn't match bidirectional on [0..{n}]"
+        )
+
+
+@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
+def test_causal_first_token_self_only(cls):
+    """First token in causal mode sees only itself, regardless of sequence length."""
+    B, A_in, D_out = 2, 6, 5
+    c = 1.0
+    rngs = nnx.Rngs(0)
+    model = _make_attn(cls, A_in, D_out, num_heads=1, rngs=rngs)
+
+    key = jax.random.PRNGKey(22)
+    x_short = _make_hyp_points(key, B, 1, A_in, c)  # N=1
+    # Longer sequence with same first token
+    x_long = _make_hyp_points(jax.random.PRNGKey(23), B, 8, A_in, c)
+    x_long = x_long.at[:, 0, :].set(x_short[:, 0, :])
+
+    y_short = model(x_short, c_in=c, c_attn=c, c_out=c, causal=True)  # (B, 1, A)
+    y_long = model(x_long, c_in=c, c_attn=c, c_out=c, causal=True)  # (B, 8, A)
+
+    assert jnp.allclose(y_short[:, 0, :], y_long[:, 0, :], atol=1e-5), (
+        "First token output differs between N=1 and N=8 in causal mode"
+    )
+
+
+@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
+def test_causal_overfit(cls):
+    """Causal attention can still overfit a tiny dataset."""
+    initial_loss, final_loss = _run_overfit(cls, causal=True)
+    assert final_loss < initial_loss * 0.5, f"Causal loss did not drop: {initial_loss:.4f} → {final_loss:.4f}"
+
+
+@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
+def test_causal_jit_compatible(cls):
+    """Causal mode works under jax.jit."""
+    B, N, A_in, D_out = 2, 4, 6, 5
+    rngs = nnx.Rngs(0)
+    model = _make_attn(cls, A_in, D_out, num_heads=1, rngs=rngs)
+    x = _make_hyp_points(jax.random.PRNGKey(24), B, N, A_in, c=1.0)
+
+    @nnx.jit
+    def forward(m, inp):
+        return m(inp, c_in=1.0, c_attn=1.0, c_out=1.0, causal=True)
+
+    y = forward(model, x)
+    assert y.shape == (B, N, D_out + 1)
+    assert jnp.all(jnp.isfinite(y))

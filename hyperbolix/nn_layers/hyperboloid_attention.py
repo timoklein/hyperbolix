@@ -147,6 +147,7 @@ class _HyperbolicAttentionBase(nnx.Module):
         c_in: float = 1.0,
         c_attn: float = 1.0,
         c_out: float = 1.0,
+        causal: bool = False,
     ) -> Float[Array, "B N A_out"]:
         """Forward pass.
 
@@ -160,6 +161,9 @@ class _HyperbolicAttentionBase(nnx.Module):
             Intermediate attention curvature.
         c_out : float
             Output curvature.
+        causal : bool
+            If True, apply causal masking so position n only attends to
+            positions m <= n (autoregressive attention).
 
         Returns
         -------
@@ -167,7 +171,7 @@ class _HyperbolicAttentionBase(nnx.Module):
             Output on the hyperboloid with curvature ``c_out``.
         """
         query_BNHA, key_BNHA, value_BNHA = self._project_qkv(x, c_in, c_attn)
-        return self._attend(query_BNHA, key_BNHA, value_BNHA, c_attn, c_out)
+        return self._attend(query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal)
 
     def _attend(
         self,
@@ -176,6 +180,7 @@ class _HyperbolicAttentionBase(nnx.Module):
         value_BNHA: Float[Array, "B N H A"],
         c_attn: float,
         c_out: float,
+        causal: bool = False,
     ) -> Float[Array, "B N A_out"]:
         raise NotImplementedError
 
@@ -233,7 +238,7 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         # Spatial residual projection ψ: D → D (shared across heads)
         self.residual_proj = nnx.Linear(out_features, out_features, rngs=rngs)
 
-    def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out):
+    def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
 
         # 1. Strip spatial, apply focus to query and key (not value)
@@ -244,14 +249,43 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         focused_query_BNHD = focus_transform(query_spatial_BNHD, self.temperature[...], self.power, eps)
         focused_key_BNHD = focus_transform(key_spatial_BNHD, self.temperature[...], self.power, eps)
 
-        # 2. Linear attention via kernel trick: φ(Q)(φ(K)^T V) / φ(Q)(φ(K)^T 1)
-        key_value_product_BHDE = jnp.einsum("bnhd,bnhe->bhde", focused_key_BNHD, value_spatial_BNHD)  # (B, H, D, D)
-        numerator_BNHD = jnp.einsum("bnhd,bhde->bnhe", focused_query_BNHD, key_value_product_BHDE)  # (B, N, H, D)
+        if causal:
+            # Causal linear attention via cumulative sum (Katharopoulos et al. 2020)
+            # S_i = sum_{j<=i} phi(K_j) V_j^T,  Z_i = sum_{j<=i} phi(K_j)
+            # V'_i = phi(Q_i)^T S_i / (phi(Q_i)^T Z_i)
+            # Rearrange to (N, B, H, D) for scan over sequence dim
+            fk_NBHD = jnp.transpose(focused_key_BNHD, (1, 0, 2, 3))  # (N, B, H, D)
+            fq_NBHD = jnp.transpose(focused_query_BNHD, (1, 0, 2, 3))
+            fv_NBHD = jnp.transpose(value_spatial_BNHD, (1, 0, 2, 3))
 
-        key_sum_BHD = focused_key_BNHD.sum(axis=1)  # (B, H, D)
-        denominator_BNH1 = jnp.einsum("bnhd,bhd->bnh", focused_query_BNHD, key_sum_BHD)[..., None]  # (B, N, H, 1)
+            D = focused_key_BNHD.shape[-1]
+            B_size = focused_key_BNHD.shape[0]
+            H = focused_key_BNHD.shape[2]
 
-        output_spatial_BNHD = numerator_BNHD / (denominator_BNH1 + eps)  # (B, N, H, D)
+            def scan_step(carry, inputs):
+                S_BHDE, z_BHD = carry
+                k_BHD, v_BHD = inputs
+                S_BHDE = S_BHDE + jnp.einsum("bhd,bhe->bhde", k_BHD, v_BHD)
+                z_BHD = z_BHD + k_BHD
+                return (S_BHDE, z_BHD), (S_BHDE, z_BHD)
+
+            init_S = jnp.zeros((B_size, H, D, D))
+            init_z = jnp.zeros((B_size, H, D))
+            _, (S_cum_NBHDE, z_cum_NBHD) = jax.lax.scan(scan_step, (init_S, init_z), (fk_NBHD, fv_NBHD))
+
+            # output_n = Q_n @ S_n / (Q_n @ z_n + eps)
+            num_NBHD = jnp.einsum("nbhd,nbhde->nbhe", fq_NBHD, S_cum_NBHDE)  # (N, B, H, D)
+            den_NBH1 = jnp.einsum("nbhd,nbhd->nbh", fq_NBHD, z_cum_NBHD)[..., None]  # (N, B, H, 1)
+            output_spatial_BNHD = jnp.transpose(num_NBHD / (den_NBH1 + eps), (1, 0, 2, 3))  # (B, N, H, D)
+        else:
+            # 2. Bidirectional linear attention via kernel trick: φ(Q)(φ(K)^T V) / φ(Q)(φ(K)^T 1)
+            key_value_product_BHDE = jnp.einsum("bnhd,bnhe->bhde", focused_key_BNHD, value_spatial_BNHD)  # (B, H, D, D)
+            numerator_BNHD = jnp.einsum("bnhd,bhde->bnhe", focused_query_BNHD, key_value_product_BHDE)  # (B, N, H, D)
+
+            key_sum_BHD = focused_key_BNHD.sum(axis=1)  # (B, H, D)
+            denominator_BNH1 = jnp.einsum("bnhd,bhd->bnh", focused_query_BNHD, key_sum_BHD)[..., None]  # (B, N, H, 1)
+
+            output_spatial_BNHD = numerator_BNHD / (denominator_BNH1 + eps)  # (B, N, H, D)
 
         # 3. Spatial residual: Z̃_s = Z_s + ψ(V_s)
         output_spatial_BNHD = output_spatial_BNHD + self.residual_proj(value_spatial_BNHD)
@@ -311,7 +345,7 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         # Spatial residual projection ψ: D → D (shared across heads)
         self.residual_proj = nnx.Linear(out_features, out_features, rngs=rngs)
 
-    def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out):
+    def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
 
         query_spatial_BNHD = query_BNHA[..., 1:]  # (B, N, H, D)
@@ -322,6 +356,10 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
 
         # Scaled dot-product attention: softmax(Q_s K_s^T / √D) V_s
         scores_BNHM = jnp.einsum("bnhd,bmhd->bnhm", query_spatial_BNHD, key_spatial_BNHD) / jnp.sqrt(float(head_dim))
+        if causal:
+            N = scores_BNHM.shape[1]
+            mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
+            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, -1e9)
         attn_weights_BNHM = jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
         output_spatial_BNHD = jnp.einsum("bnhm,bmhd->bnhd", attn_weights_BNHM, value_spatial_BNHD)  # (B, N, H, D)
 
@@ -382,7 +420,7 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         self.scale = nnx.Param(jnp.array(1.0))
         self.attn_bias = nnx.Param(jnp.array(0.0))
 
-    def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out):
+    def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
         B, N, H, _A = value_BNHA.shape
 
@@ -391,6 +429,9 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
             "bnhd,bmhd->bnhm", query_BNHA[..., 1:], key_BNHA[..., 1:]
         )  # (B, N, H, M)
         scores_BNHM = (2.0 + 2.0 * lorentz_inner_BNHM) / (self.scale[...] + eps) + self.attn_bias[...]
+        if causal:
+            mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
+            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, -1e9)
         attn_weights_BNHM = jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
 
         # 2. Weighted Lorentzian midpoint per head
