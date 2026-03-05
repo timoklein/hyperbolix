@@ -10,6 +10,50 @@ Hyperbolix provides wrapped normal distributions for probabilistic modeling on h
 - Bayesian neural networks on manifolds
 - Uncertainty quantification in hyperbolic embeddings
 
+## Riemannian Uniform Distribution
+
+### Poincaré Uniform
+
+::: hyperbolix.distributions.uniform_poincare
+    options:
+      show_source: true
+      heading_level: 4
+
+Samples uniformly with respect to the Riemannian volume measure within a geodesic ball $B(\text{center}, R)$ on the Poincaré ball. Uses geodesic polar decomposition: direction from $S^{n-1}$ (Muller method), radial component from $p(r) \propto \sinh^{n-1}(\sqrt{c}\,r)$.
+
+- For $n=2$: closed-form radial sampling via $u = \cosh(\sqrt{c}\,r) - 1$
+- For $n \geq 3$: rejection sampling with `jax.lax.while_loop` (JIT-compatible)
+
+**Usage:**
+
+```python
+from hyperbolix.distributions import uniform_poincare
+from hyperbolix.manifolds import Poincare
+import jax
+import jax.numpy as jnp
+
+poincare = Poincare()
+key = jax.random.PRNGKey(42)
+
+# Sample 100 points uniformly from geodesic ball B(origin, R=1.0) in 2D
+samples = uniform_poincare.sample(key, n=100, c=1.0, R=1.0, dim=2)
+print(samples.shape)  # (100, 2)
+
+# All samples inside the geodesic ball
+is_valid = jax.vmap(poincare.is_in_manifold, in_axes=(0, None))(samples, 1.0)
+print(is_valid.all())  # True
+
+# Volume of geodesic ball (2D closed-form: 2π(cosh R - 1)/c)
+vol = uniform_poincare.volume(c=1.0, n=2, R=1.0)
+print(vol)  # ~3.086
+
+# Log probability (constant inside ball, -inf outside)
+log_p = jax.vmap(lambda x: uniform_poincare.log_prob(x, c=1.0, R=1.0))(samples)
+print(jnp.allclose(log_p, log_p[0]))  # True — uniform
+```
+
+**Use cases**: Uniform priors for hyperbolic VAEs, test/validation sampling, hyperparameter search in hyperbolic spaces.
+
 ## Wrapped Normal Distribution
 
 The wrapped normal distribution extends the Gaussian distribution to hyperbolic manifolds by wrapping Euclidean Gaussians via the exponential map.

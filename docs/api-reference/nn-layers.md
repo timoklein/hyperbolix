@@ -91,23 +91,24 @@ hyperboloid = Hyperboloid()
 # Create 2D hyperbolic convolution
 conv = HypConv2DHyperboloid(
     manifold_module=hyperboloid,
+    in_channels=16,
     out_channels=32,
     kernel_size=(3, 3),
     stride=(1, 1),
     rngs=nnx.Rngs(0)
 )
 
-# Input: (batch, height, width, in_channels)
+# Input: (batch, height, width, in_channels) — ambient dim = in_channels+1
 x = jax.random.normal(jax.random.PRNGKey(1), (8, 28, 28, 16))
 
 # Project to hyperboloid
 x_ambient = jnp.concatenate([
     jnp.sqrt(jnp.sum(x**2, axis=-1, keepdims=True) + 1.0),
     x
-], axis=-1)
+], axis=-1)  # (8, 28, 28, 17)
 
-# Forward pass
-output = conv(x_ambient, c=1.0, use_tangent_input=False)
+# Forward pass (input_space="manifold" by default)
+output = conv(x_ambient, c=1.0)
 print(output.shape)  # (8, 28, 28, 32×9+1) - dimension grows!
 ```
 
@@ -118,6 +119,53 @@ print(output.shape)  # (8, 28, 28, 32×9+1) - dimension grows!
     - Output: `(d×N)+1` dimensions where `N = kernel_height × kernel_width`
 
     For 3×3 kernel: 3D input → 28D output. Use small kernels or add dimensionality reduction layers.
+
+### Poincaré Convolution
+
+::: hyperbolix.nn_layers.HypConv2DPoincare
+    options:
+      show_source: true
+      heading_level: 4
+
+`HypConv2DPoincare` extracts patches, applies beta-concatenation (HNN++, Shimizu et al. 2020) over the receptive field, then passes through a `HypLinearPoincarePP` layer. Dimension math: `K² × C_in → C_out` where `K` is the kernel size.
+
+**Key Differences from Hyperboloid Convolutions:**
+
+| Feature | HypConv2DPoincare | HypConv2DHyperboloid |
+|---------|-------------------|----------------------|
+| **Model** | Poincaré ball | Hyperboloid |
+| **Aggregation** | Beta-concatenation | HCat (Lorentz concatenation) |
+| **Dimension** | Preserved | Grows: `(d-1)×K²+1` |
+| **Default input** | Tangent space | Manifold (ambient) |
+
+### Usage Example
+
+```python
+import jax
+import jax.numpy as jnp
+from hyperbolix.nn_layers import HypConv2DPoincare
+from hyperbolix.manifolds import Poincare
+from flax import nnx
+
+poincare = Poincare()
+
+# Create Poincaré 2D convolution
+conv = HypConv2DPoincare(
+    manifold_module=poincare,
+    in_channels=16,
+    out_channels=32,
+    kernel_size=3,
+    stride=1,
+    rngs=nnx.Rngs(0)
+)
+
+# Input: (batch, height, width, in_channels) in tangent space (default input_space="tangent")
+x = jax.random.normal(jax.random.PRNGKey(1), (8, 28, 28, 16)) * 0.1
+
+# Forward pass — returns tangent-space output
+output = conv(x, c=1.0)
+print(output.shape)  # (8, 28, 28, 32)
+```
 
 ### LorentzConv2D (HRC-Based)
 
@@ -236,13 +284,10 @@ The Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Comp
 
 ```python
 from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, HRCRMSNorm, hrc_relu
-from hyperbolix.manifolds import hyperboloid
+from hyperbolix.manifolds import Hyperboloid
 from flax import nnx
 import jax
 import jax.numpy as jnp
-from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, hrc_relu
-from hyperbolix.manifolds import Hyperboloid
-from flax import nnx
 
 hyperboloid = Hyperboloid()
 
@@ -584,6 +629,25 @@ Hyperbolic activation functions that preserve manifold constraints. All activati
       heading_level: 4
 
 ::: hyperbolix.nn_layers.hyp_gelu
+    options:
+      show_source: true
+      heading_level: 4
+
+### Poincaré Activations
+
+Thin wrappers that apply standard activations in the Poincaré tangent space via `logmap_0 → activation → expmap_0`.
+
+::: hyperbolix.nn_layers.poincare_relu
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.poincare_leaky_relu
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.poincare_tanh
     options:
       show_source: true
       heading_level: 4
