@@ -1,4 +1,8 @@
-"""Common utilities for wrapped normal distributions."""
+"""Common utilities for wrapped normal distributions.
+
+Dimension key:
+  N: spatial/manifold dimension
+"""
 
 import jax
 import jax.numpy as jnp
@@ -26,18 +30,18 @@ def sigma_to_cov(
     Raises:
         ValueError: If sigma dimensions don't match expected dimension n
     """
-    sigma_array = jnp.asarray(sigma, dtype=dtype)
+    sigma_arr = jnp.asarray(sigma, dtype=dtype)
 
-    if sigma_array.ndim == 0:  # Scalar -> isotropic covariance sigma^2 I
-        return (sigma_array**2) * jnp.eye(n, dtype=dtype)
-    elif sigma_array.ndim == 1:  # Vector -> diagonal covariance
-        if sigma_array.shape[0] != n:
-            raise ValueError(f"Diagonal sigma must have length {n}, got {sigma_array.shape[0]}")
-        return jnp.diag(sigma_array**2)
+    if sigma_arr.ndim == 0:  # Scalar -> isotropic covariance sigma^2 I
+        return (sigma_arr**2) * jnp.eye(n, dtype=dtype)
+    elif sigma_arr.ndim == 1:  # Vector -> diagonal covariance
+        if sigma_arr.shape[0] != n:
+            raise ValueError(f"Diagonal sigma must have length {n}, got {sigma_arr.shape[0]}")
+        return jnp.diag(sigma_arr**2)
     else:  # Matrix -> full covariance
-        if sigma_array.shape[-2:] != (n, n):
-            raise ValueError(f"Covariance matrix must be ({n}, {n}), got {sigma_array.shape}")
-        return sigma_array
+        if sigma_arr.shape[-2:] != (n, n):
+            raise ValueError(f"Covariance matrix must be ({n}, {n}), got {sigma_arr.shape}")
+        return sigma_arr
 
 
 def sample_gaussian(
@@ -58,5 +62,5 @@ def sample_gaussian(
         Samples from N(0, cov), shape sample_shape + (n,)
     """
     n = cov.shape[0]
-    mean = jnp.zeros(n, dtype=dtype or cov.dtype)
-    return jax.random.multivariate_normal(key, mean, cov, shape=sample_shape, dtype=dtype)
+    mean_N = jnp.zeros(n, dtype=dtype or cov.dtype)
+    return jax.random.multivariate_normal(key, mean_N, cov, shape=sample_shape, dtype=dtype)

@@ -18,6 +18,9 @@ Algorithm (for manifold parameters):
 
 For Euclidean parameters, standard SGD is applied.
 
+Note: Tensor variables in update_single_leaf match the parameter shape (P),
+which varies per leaf. Scalars (lr, count) have no suffix.
+
 References
 ----------
 Bécigneul, Gary, and Octavian-Eugen Ganea. "Riemannian adaptive optimization methods."

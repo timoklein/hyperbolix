@@ -657,33 +657,28 @@ def _lorentz_boost(
     epsilon = 1e-5
 
     # Project velocity to ensure norm < 1 - epsilon
-    # Formula: v = v_raw * min(1, (1 - epsilon) / |v_raw|)
     v_norm = jnp.linalg.norm(v_raw)
     scale = jnp.minimum(1.0, (1.0 - epsilon) / jnp.maximum(v_norm, MIN_NORM))
-    v = v_raw * scale
+    v_D = v_raw * scale
 
     # Compute gamma = 1/√(1 - ‖v‖²)
-    v_sqnorm = jnp.dot(v, v)
+    v_sqnorm = jnp.dot(v_D, v_D)
     gamma = 1.0 / jnp.sqrt(jnp.maximum(1.0 - v_sqnorm, MIN_NORM))
 
     # Split input into time and spatial components
     x_t = x[0]  # scalar
-    x_s = x[1:]  # Shape: (dim,)
+    x_s_D = x[1:]
 
-    # Compute v·x_s
-    v_dot_xs = jnp.dot(v, x_s)  # scalar
+    # Boost formula: B·x where B is the Lorentz boost matrix
+    v_dot_xs = jnp.dot(v_D, x_s_D)  # scalar
 
-    # New time component: gamma*x_t - gamma*(v.x_s)
     new_t = gamma * x_t - gamma * v_dot_xs  # scalar
+    new_s_D = -gamma * v_D * x_t + x_s_D + (gamma**2 / (1.0 + gamma)) * v_D * v_dot_xs
 
-    # New spatial component: -gamma*v*x_t + x_s + (gamma^2/(1+gamma))*v*(v.x_s)
-    new_s = -gamma * v * x_t + x_s + (gamma**2 / (1.0 + gamma)) * v * v_dot_xs  # Shape: (dim,)
-
-    # Concatenate time and spatial components
-    result = jnp.concatenate([new_t[None], new_s])  # Shape: (dim+1,)
+    result_A = jnp.concatenate([new_t[None], new_s_D])
 
     # Project onto manifold to correct numerical drift
-    return _proj(result, c)
+    return _proj(result_A, c)
 
 
 def _distance_rescale(
@@ -727,49 +722,44 @@ def _distance_rescale(
 
     # Extract time and spatial components
     x_t = x[0]  # scalar
-    x_s = x[1:]  # Shape: (dim,)
+    x_s_D = x[1:]
 
     # Compute distance from origin: D = acosh(√c · x_t) / √c
     arg_acosh = smooth_clamp_min(sqrt_c * x_t, 1.0)
-    D = acosh(arg_acosh) / sqrt_c  # scalar
+    dist = acosh(arg_acosh) / sqrt_c  # scalar
 
     # Compute max distance: D_max = acosh(√c · x_t_max) / √c
     arg_acosh_max = smooth_clamp_min(sqrt_c * x_t_max, 1.0)
-    D_max = acosh(arg_acosh_max) / sqrt_c
+    dist_max = acosh(arg_acosh_max) / sqrt_c  # scalar
 
-    # Apply Eq. 2: D_rescaled = D_max · tanh(D · atanh(0.99) / (slope · D_max))
-    # Clamp to avoid division by zero
-    D_max_safe = jnp.maximum(D_max, MIN_NORM)
+    # Eq. 2: D_rescaled = D_max · tanh(D · atanh(0.99) / (slope · D_max))
+    dist_max_safe = jnp.maximum(dist_max, MIN_NORM)
     slope_safe = jnp.maximum(slope, MIN_NORM)
 
     atanh_val = jnp.atanh(0.99)
-    arg_tanh = D * atanh_val / (slope_safe * D_max_safe)
-    D_rescaled = D_max * jnp.tanh(arg_tanh)  # scalar
+    arg_tanh = dist * atanh_val / (slope_safe * dist_max_safe)
+    dist_rescaled = dist_max * jnp.tanh(arg_tanh)  # scalar
 
-    # Rescale spatial components (Eq. 3): scale = sinh(√c · D_rescaled) / sinh(√c · D)
-    sinh_rescaled = sinh(sqrt_c * D_rescaled)  # scalar
-    sinh_original = sinh(sqrt_c * D)  # scalar
+    # Eq. 3: scale = sinh(√c · D_rescaled) / sinh(√c · D)
+    sinh_rescaled = sinh(sqrt_c * dist_rescaled)  # scalar
+    sinh_original = sinh(sqrt_c * dist)  # scalar
 
-    # Handle origin edge case: when D ≈ 0, both sinh values are ≈ 0
-    # Use L'Hopital's rule: lim(D->0) sinh(a*D_rescaled)/sinh(a*D) = D_rescaled/D
-    # For D ≈ 0, D_rescaled ≈ D * atanh(0.99) / slope, so scale ≈ atanh(0.99) / slope
-    # We use a smooth transition: when sinh_original is small, fall back to this limit
+    # Origin edge case: when D ≈ 0, L'Hopital gives scale ≈ atanh(0.99) / slope
     is_near_origin = sinh_original < 1e-6
     scale_normal = sinh_rescaled / jnp.maximum(sinh_original, MIN_NORM)
-    scale_origin = atanh_val / slope_safe  # Limit value at origin
+    scale_origin = atanh_val / slope_safe
     scale = cast(Array, jnp.where(is_near_origin, scale_origin, scale_normal))  # scalar
 
-    x_s_rescaled = x_s * scale  # Shape: (dim,)
+    x_s_rescaled_D = x_s_D * scale
 
-    # Reconstruct time component: x_t_rescaled = √(‖x_s_rescaled‖² + 1/c)
-    x_s_sqnorm = jnp.dot(x_s_rescaled, x_s_rescaled)  # scalar
+    # Reconstruct time: x_t_rescaled = √(‖x_s_rescaled‖² + 1/c)
+    x_s_sqnorm = jnp.dot(x_s_rescaled_D, x_s_rescaled_D)  # scalar
     x_t_rescaled = jnp.sqrt(jnp.maximum(x_s_sqnorm + 1.0 / c, MIN_NORM))  # scalar
 
-    # Combine time and spatial components
-    result = jnp.concatenate([x_t_rescaled[None], x_s_rescaled])  # Shape: (dim+1,)
+    result_A = jnp.concatenate([x_t_rescaled[None], x_s_rescaled_D])
 
     # Project onto manifold to correct numerical drift
-    return _proj(result, c)
+    return _proj(result_A, c)
 
 
 def _hcat(
@@ -808,26 +798,18 @@ def _hcat(
     """
     N, _ambient_dim = points.shape
 
-    # Extract time components (first coordinate of each point)
-    time_components = points[:, 0]  # (N,)
+    time_N = points[:, 0]
+    space_ND = points[:, 1:]
 
-    # Extract space components (remaining coordinates of each point)
-    space_components = points[:, 1:]  # (N, d)
-
-    # Compute new time coordinate using the formula
-    # Note: MINUS (N-1)/c, not plus!
-    # Numerical stability: clamp to MIN_NORM to handle points very close to origin
-    time_sq_sum = jnp.sum(time_components**2) - (N - 1) / c
+    # New time: sqrt(sum(x_i[0]^2) - (N-1)/c)
+    time_sq_sum = jnp.sum(time_N**2) - (N - 1) / c
     time_new = jnp.sqrt(jnp.maximum(time_sq_sum, MIN_NORM))  # scalar
 
-    # Concatenate all space components: [x_1[1:], x_2[1:], ..., x_N[1:]]
-    space_concatenated = space_components.reshape(-1)  # (N*d,)
+    space_flat_ND = space_ND.reshape(-1)  # (N*d,)
 
-    # Combine: [time_new, space_concatenated]
-    # Use time_new[None] instead of jnp.array([time_new]) to avoid extra allocation
-    result = jnp.concatenate([time_new[None], space_concatenated])  # (1 + N*d,) = (dN+1,)
+    result_A = jnp.concatenate([time_new[None], space_flat_ND])  # (1 + N*d,) = (dN+1,)
 
-    return result
+    return result_A
 
 
 # ---------------------------------------------------------------------------
@@ -863,20 +845,20 @@ def _compute_mlr(
             arXiv:2303.15919 (2023).
     """
     sqrt_c = jnp.sqrt(c)
-    sqrt_cr = sqrt_c * r.T  # (1, out_dim)
-    z_norm = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm).T  # (1, out_dim)
-    x0 = x[:, 0:1]  # (batch, 1) - time coordinate
-    x_rem = x[:, 1:]  # (batch, in_dim-1) - space coordinates
-    zx_rem = jnp.einsum("bi,oi->bo", x_rem, z)  # (batch, out_dim)
-    alpha = -x0 * sinh(sqrt_cr) * z_norm + cosh(sqrt_cr) * zx_rem  # (batch, out_dim)
-    asinh_arg = sqrt_c * alpha / z_norm  # (batch, out_dim)
+    sqrt_cr_1P = sqrt_c * r.T  # r:(P,1) → r.T:(1,P)
+    z_norm_1P = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm).T  # (1,P)
+    x0_B1 = x[:, 0:1]  # time coordinate
+    x_rem_BD = x[:, 1:]  # space coordinates, D = in_dim-1
+    zx_rem_BP = jnp.einsum("bi,oi->bo", x_rem_BD, z)
+    alpha_BP = -x0_B1 * sinh(sqrt_cr_1P) * z_norm_1P + cosh(sqrt_cr_1P) * zx_rem_BP
+    asinh_arg_BP = sqrt_c * alpha_BP / z_norm_1P
 
     eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
     clamp = clamping_factor * float(math.log(2 / eps))
-    asinh_arg = smooth_clamp(asinh_arg, -clamp, clamp, smoothing_factor)  # (batch, out_dim)
-    signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, out_dim)
-    res = z_norm * signed_dist2hyp  # (batch, out_dim)
-    return res
+    asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, smoothing_factor)
+    signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c
+    res_BP = z_norm_1P * signed_dist2hyp_BP
+    return res_BP
 
 
 # ---------------------------------------------------------------------------

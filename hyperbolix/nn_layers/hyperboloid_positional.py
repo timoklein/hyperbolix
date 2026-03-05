@@ -122,12 +122,12 @@ def _apply_rotary_interleaved(
     Array, shape (..., d)
         Rotated spatial components.
     """
-    x_pairs = x.reshape(*x.shape[:-1], -1, 2)  # (..., d//2, 2)
-    x1 = x_pairs[..., 0]  # (..., d//2)
-    x2 = x_pairs[..., 1]  # (..., d//2)
-    y1 = x1 * cos_vals - x2 * sin_vals  # rotation
-    y2 = x1 * sin_vals + x2 * cos_vals
-    return jnp.stack([y1, y2], axis=-1).reshape(x.shape)  # (..., d)
+    x_pairs_F2 = x.reshape(*x.shape[:-1], -1, 2)  # (..., F, 2) where F = d//2
+    x1_F = x_pairs_F2[..., 0]  # (..., F)
+    x2_F = x_pairs_F2[..., 1]  # (..., F)
+    y1_F = x1_F * cos_vals - x2_F * sin_vals  # 2D rotation per pair
+    y2_F = x1_F * sin_vals + x2_F * cos_vals
+    return jnp.stack([y1_F, y2_F], axis=-1).reshape(x.shape)  # (..., d)
 
 
 def hope(
@@ -170,24 +170,23 @@ def hope(
     ----------
     Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
     """
-    spatial = z[..., 1:]  # (..., seq, d)
-    d = spatial.shape[-1]
+    spatial_SD = z[..., 1:]  # (..., S, D) where S=seq, D=spatial dim
+    d = spatial_SD.shape[-1]
 
     # Frequency schedule: theta_i = 1 / base^(2i/d)
-    freqs = 1.0 / (base ** (jnp.arange(0, d, 2) / d))  # (d//2,)
-    angles = positions[:, None] * freqs[None, :]  # (seq, d//2)
-    cos_vals = jnp.cos(angles)  # (seq, d//2)
-    sin_vals = jnp.sin(angles)  # (seq, d//2)
+    freqs_F = 1.0 / (base ** (jnp.arange(0, d, 2) / d))  # (F,) where F = d//2
+    angles_SF = positions[:, None] * freqs_F[None, :]  # (S, F)
+    cos_SF = jnp.cos(angles_SF)
+    sin_SF = jnp.sin(angles_SF)
 
     # Rotate spatial components (interleaved pairs)
-    rotated = _apply_rotary_interleaved(spatial, cos_vals, sin_vals)  # (..., seq, d)
+    rotated_SD = _apply_rotary_interleaved(spatial_SD, cos_SF, sin_SF)  # (..., S, D)
 
     # Reconstruct time: t = sqrt(||rotated||^2 + 1/c)
-    # Rotation preserves norms so this equals original time, but we recompute for safety
-    norm_sq = jnp.sum(rotated**2, axis=-1, keepdims=True)  # (..., seq, 1)
-    time = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c, eps))  # (..., seq, 1)
+    norm_sq_S1 = jnp.sum(rotated_SD**2, axis=-1, keepdims=True)  # (..., S, 1)
+    time_S1 = jnp.sqrt(jnp.maximum(norm_sq_S1 + 1.0 / c, eps))  # (..., S, 1)
 
-    return jnp.concatenate([time, rotated], axis=-1)  # (..., seq, d+1)
+    return jnp.concatenate([time_S1, rotated_SD], axis=-1)  # (..., S, A)
 
 
 class HyperbolicRoPE(nnx.Module):

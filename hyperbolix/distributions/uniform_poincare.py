@@ -9,6 +9,12 @@ The radial density is p(r) ∝ sinh^{n-1}(√c·r) on [0, R].  A substitution
 u = cosh(√c·r) - 1 simplifies sampling:
   - n = 2: u is uniform on [0, cosh(√c·R) - 1]  (closed-form)
   - n ≥ 3: rejection sampling with acceptance ∝ (u·(u+2))^{(n-2)/2}
+
+Dimension key:
+  S: sample dimensions (from sample_shape)
+  D: spatial/manifold dimension (n)
+  Q: quadrature points (64 for GL)
+  T: total flattened samples (for rejection sampling)
 """
 
 import jax
@@ -60,9 +66,9 @@ def volume(c: float, n: int, R: float) -> Float[Array, ""]:
     sqrt_c = jnp.sqrt(jnp.float64(c))
 
     # Map GL nodes from [-1, 1] to [0, R]: r = R/2 · (t + 1)
-    r_nodes = (R / 2.0) * (_GL_NODES + 1.0)
-    integrand = jnp.sinh(sqrt_c * r_nodes) ** (n - 1)
-    integral = (R / 2.0) * jnp.sum(_GL_WEIGHTS * integrand)
+    r_nodes_Q = (R / 2.0) * (_GL_NODES + 1.0)
+    integrand_Q = jnp.sinh(sqrt_c * r_nodes_Q) ** (n - 1)
+    integral = (R / 2.0) * jnp.sum(_GL_WEIGHTS * integrand_Q)
 
     vol = omega / sqrt_c ** (n - 1) * integral
     return vol
@@ -78,10 +84,10 @@ def _sample_uniform_direction(
     dtype,
 ) -> Float[Array, "... n"]:
     """Sample directions uniformly on S^{n-1} via the Muller method."""
-    z = jax.random.normal(key, shape=(*shape, n), dtype=dtype)
-    norm = jnp.sqrt(jnp.sum(z**2, axis=-1, keepdims=True))
-    norm = jnp.maximum(norm, 1e-15)
-    return z / norm
+    z_SD = jax.random.normal(key, shape=(*shape, n), dtype=dtype)
+    norm_S1 = jnp.sqrt(jnp.sum(z_SD**2, axis=-1, keepdims=True))  # (*S, 1)
+    norm_S1 = jnp.maximum(norm_S1, 1e-15)
+    return z_SD / norm_S1
 
 
 # ---------------------------------------------------------------------------
@@ -100,9 +106,9 @@ def _sample_radial_n2(
     """
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=dtype))
     u_max = jnp.cosh(sqrt_c * R) - 1.0
-    u = jax.random.uniform(key, shape=shape, dtype=dtype, minval=0.0, maxval=u_max)
-    r = jnp.acosh(u + 1.0) / sqrt_c
-    return r
+    u_S = jax.random.uniform(key, shape=shape, dtype=dtype, minval=0.0, maxval=u_max)
+    r_S = jnp.acosh(u_S + 1.0) / sqrt_c
+    return r_S
 
 
 def _sample_radial_rejection(
@@ -132,32 +138,32 @@ def _sample_radial_rejection(
         total *= s
 
     def body_fn(state):
-        accepted, samples, loop_key = state
+        accepted_T, samples_T, loop_key = state
         k1, k2, loop_key = jax.random.split(loop_key, 3)
-        u = jax.random.uniform(k1, shape=(total,), dtype=dtype, minval=0.0, maxval=u_max)
-        alpha = jax.random.uniform(k2, shape=(total,), dtype=dtype)
-        accept_prob = ((u * (u + 2.0)) / ref_val) ** exponent
-        accept_mask = alpha < accept_prob
+        u_T = jax.random.uniform(k1, shape=(total,), dtype=dtype, minval=0.0, maxval=u_max)
+        alpha_T = jax.random.uniform(k2, shape=(total,), dtype=dtype)
+        accept_prob_T = ((u_T * (u_T + 2.0)) / ref_val) ** exponent
+        accept_mask_T = alpha_T < accept_prob_T
         # Fill in not-yet-accepted positions
-        new_mask = accept_mask & ~accepted
-        samples = jnp.where(new_mask, u, samples)
-        accepted = accepted | accept_mask
-        return accepted, samples, loop_key
+        new_mask_T = accept_mask_T & ~accepted_T
+        samples_T = jnp.where(new_mask_T, u_T, samples_T)
+        accepted_T = accepted_T | accept_mask_T
+        return accepted_T, samples_T, loop_key
 
     def cond_fn(state):
-        accepted, _, _ = state
-        return ~jnp.all(accepted)
+        accepted_T, _, _ = state
+        return ~jnp.all(accepted_T)
 
     init_state = (
         jnp.zeros(total, dtype=jnp.bool_),
         jnp.zeros(total, dtype=dtype),
         key,
     )
-    _, u_accepted, _ = jax.lax.while_loop(cond_fn, body_fn, init_state)
-    u_accepted = jnp.asarray(u_accepted, dtype=dtype)  # narrow type for pyright
+    _, u_accepted_T, _ = jax.lax.while_loop(cond_fn, body_fn, init_state)
+    u_accepted_T = jnp.asarray(u_accepted_T, dtype=dtype)  # narrow type for pyright
 
-    r = jnp.acosh(u_accepted + 1.0) / sqrt_c
-    return r.reshape(shape)
+    r_T = jnp.acosh(u_accepted_T + 1.0) / sqrt_c
+    return r_T.reshape(shape)
 
 
 def _sample_radial(
@@ -236,21 +242,21 @@ def sample(
     k1, k2 = jax.random.split(key)
 
     # 1. Direction on S^{n-1}
-    directions = _sample_uniform_direction(k1, n, sample_shape, dtype)  # (*shape, n)
+    directions_SD = _sample_uniform_direction(k1, n, sample_shape, dtype)
 
     # 2. Geodesic radii
-    radii = _sample_radial(k2, c, n, R, sample_shape, dtype)  # (*shape,)
+    radii_S = _sample_radial(k2, c, n, R, sample_shape, dtype)
 
     # 3. Tangent vectors: t = (r/2) · u
     # The /2 compensates for expmap_0 mapping ||v|| → geodesic distance 2·||v||
-    tangents = (radii[..., None] / 2.0) * directions  # (*shape, n)
+    tangents_SD = (radii_S[..., None] / 2.0) * directions_SD  # (*S, 1) * (*S, D)
 
     # 4-5. Map to ball and translate to center
-    def _map_single(t):
-        x0 = manifold.expmap_0(t, c)
+    def _map_single(t_D):
+        x0_D = manifold.expmap_0(t_D, c)
         if center is not None:
-            return manifold.addition(center, x0, c)
-        return x0
+            return manifold.addition(center, x0_D, c)
+        return x0_D
 
     # vmap over all sample dimensions
     mapped_fn = _map_single
@@ -258,11 +264,11 @@ def sample(
         mapped_fn = jax.vmap(mapped_fn)
 
     if sample_shape:
-        result = mapped_fn(tangents)
+        result_SD = mapped_fn(tangents_SD)
     else:
-        result = _map_single(tangents)
+        result_SD = _map_single(tangents_SD)
 
-    return result
+    return result_SD
 
 
 def log_prob(
@@ -297,22 +303,20 @@ def log_prob(
 
     # Compute geodesic distance from center
     if center is not None:
-        # Vectorized distance computation
         if x.ndim > 1:
             dist_fn = jax.vmap(lambda xi: manifold.dist(xi, center, c))
-            d = dist_fn(x)
+            d_SB = dist_fn(x)
         else:
-            d = manifold.dist(x, center, c)
+            d_SB = manifold.dist(x, center, c)
     else:
         if x.ndim > 1:
             dist_fn = jax.vmap(lambda xi: manifold.dist_0(xi, c))
-            d = dist_fn(x)
+            d_SB = dist_fn(x)
         else:
-            d = manifold.dist_0(x, c)
+            d_SB = manifold.dist_0(x, c)
 
-    vol = volume(c, n, R)
-    log_vol = jnp.log(vol)
+    log_vol = jnp.log(volume(c, n, R))
 
     # -log(vol) inside ball, -inf outside
-    inside = d <= R
-    return jnp.where(inside, -log_vol, -jnp.inf)
+    inside_SB = d_SB <= R
+    return jnp.where(inside_SB, -log_vol, -jnp.inf)

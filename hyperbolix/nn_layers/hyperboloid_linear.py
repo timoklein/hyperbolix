@@ -149,45 +149,38 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         if self.activation is not None:
             x = self.activation(x)
 
-        # Linear transformation
-        x = jnp.einsum("bi,oi->bo", x, self.weight) + self.bias  # (batch, out_dim)
+        # Linear transformation: (B, in_dim) → (B, out_dim)
+        x_BO = jnp.einsum("bi,oi->bo", x, self.weight) + self.bias
 
-        # Extract time and space coordinates
-        x0 = x[:, 0:1]  # (batch, 1)
-        x_rem = x[:, 1:]  # (batch, out_dim - 1)
+        # Split into time and space: x0 is first coord, x_rem is spatial
+        x0_B1 = x_BO[:, 0:1]  # (B, 1) — time coordinate
+        x_rem_BD = x_BO[:, 1:]  # (B, D) where D = out_dim - 1
 
         # Static branch - JIT friendly
         if self.normalize:
-            # Normalize space coordinates
-            x_rem_norm = jnp.linalg.norm(x_rem, ord=2, axis=-1, keepdims=True)  # (batch, 1)
+            x_rem_norm_B1 = jnp.linalg.norm(x_rem_BD, ord=2, axis=-1, keepdims=True)  # (B, 1)
 
-            # Ensure scale is positive (handle both learnable and non-learnable scale)
+            # Learnable sigmoid scaling
             scale_val = self.scale[...] if isinstance(self.scale, nnx.Param) else self.scale
-            scale = jnp.exp(scale_val) * jax.nn.sigmoid(x0)  # (batch, 1)
+            scale_B1 = jnp.exp(scale_val) * jax.nn.sigmoid(x0_B1)  # (B, 1)
 
-            # Compute time coordinate
-            res0 = jnp.sqrt(scale**2 + 1 / c + self.eps)  # (batch, 1)
+            res0_B1 = jnp.sqrt(scale_B1**2 + 1 / c + self.eps)  # (B, 1)
+            res_rem_BD = scale_B1 * x_rem_BD / x_rem_norm_B1  # (B, D)
 
-            # Compute normalized space coordinates
-            res_rem = scale * x_rem / x_rem_norm  # (batch, out_dim - 1)
+            res_BA = jnp.concatenate([res0_B1, res_rem_BD], axis=-1)  # (B, A)
 
-            res = jnp.concatenate([res0, res_rem], axis=-1)  # (batch, out_dim)
+            # Cast near-zero-norm vectors to origin
+            origin_time_B1 = jnp.sqrt(1 / c) * jnp.ones_like(res0_B1)
+            origin_BA = jnp.concatenate([origin_time_B1, jnp.zeros_like(res_rem_BD)], axis=-1)
 
-            # Cast vectors with small space norm to the origin
-            # Create origin point
-            origin_time = jnp.sqrt(1 / c) * jnp.ones_like(res0)
-            origin_space = jnp.zeros_like(res_rem)
-            origin = jnp.concatenate([origin_time, origin_space], axis=-1)
-
-            # Apply mask where x_rem_norm is very small (data-dependent control flow - JIT compatible with jnp.where)
-            mask = x_rem_norm <= 1e-5
-            res = jnp.where(mask, origin, res)
+            mask_B1 = x_rem_norm_B1 <= 1e-5
+            res_BA = jnp.where(mask_B1, origin_BA, res_BA)
         else:
-            # Compute the time component from the space component and concatenate
-            res0 = jnp.sqrt(jnp.sum(x_rem**2, axis=-1, keepdims=True) + 1 / c)  # (batch, 1)
-            res = jnp.concatenate([res0, x_rem], axis=-1)  # (batch, out_dim)
+            # Reconstruct time from space: x₀ = sqrt(||x_rem||² + 1/c)
+            res0_B1 = jnp.sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True) + 1 / c)  # (B, 1)
+            res_BA = jnp.concatenate([res0_B1, x_rem_BD], axis=-1)  # (B, A)
 
-        return res
+        return res_BA
 
 
 class HTCLinear(nnx.Module):

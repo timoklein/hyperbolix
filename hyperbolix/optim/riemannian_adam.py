@@ -23,6 +23,9 @@ Algorithm (for manifold parameters):
 
 For Euclidean parameters, standard Adam is applied.
 
+Note: Tensor variables in the update loop match the parameter shape (P),
+which varies per leaf. Scalars (lr, count, bias_correction) have no suffix.
+
 References
 ----------
 Bécigneul, Gary, and Octavian-Eugen Ganea. "Riemannian adaptive optimization methods."

@@ -63,11 +63,11 @@ def lorentz_residual(
     ----------
     Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
     """
-    ave = x + w_y * y  # (..., d+1)
+    ave_A = x + w_y * y  # (..., A) where A = d+1
     # Minkowski inner: -ave_0^2 + ||ave_s||^2
-    mink = -(ave[..., 0:1] ** 2) + jnp.sum(ave[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., 1)
-    denom = jnp.sqrt(jnp.maximum(c * jnp.abs(mink), eps))  # (..., 1)
-    return ave / denom  # (..., d+1)
+    mink_1 = -(ave_A[..., 0:1] ** 2) + jnp.sum(ave_A[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., 1)
+    denom_1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_1), eps))  # (..., 1)
+    return ave_A / denom_1  # (..., A)
 
 
 def hrc(
@@ -151,27 +151,19 @@ def hrc(
     ...     return jax.nn.gelu(z) * 0.5
     >>> y = hrc(x, custom_act, c_in=1.0, c_out=0.5)
     """
-    # Extract spatial components
-    x_space = x[..., 1:]
+    x_space_D = x[..., 1:]  # (..., D) spatial components
 
-    # Apply Euclidean function to spatial components
-    out_space = f_r(x_space)
+    out_space_D = f_r(x_space_D)  # (..., D') — may change dim
 
-    # Scale spatial components for curvature transformation
+    # Scale for curvature transformation: sqrt(c_in / c_out)
     scale = jnp.sqrt(c_in / c_out)
-    scaled_space = scale * out_space
+    scaled_D = scale * out_space_D  # (..., D')
 
-    # Compute norm squared of scaled spatial components
-    norm_sq = jnp.sum(scaled_space**2, axis=-1)
+    # Reconstruct time via hyperboloid constraint: x₀ = sqrt(||x_rest||² + 1/c_out)
+    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
+    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
 
-    # Reconstruct time component using hyperboloid constraint
-    # Constraint: -x₀² + ||x_rest||² = -1/c_out
-    # => x₀ = sqrt(||x_rest||² + 1/c_out)
-    x0_sq = norm_sq + 1.0 / c_out
-    x0 = jnp.sqrt(jnp.maximum(x0_sq, eps))
-
-    # Concatenate time and spatial components
-    return jnp.concatenate([x0[..., None], scaled_space], axis=-1)
+    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D'+1)
 
 
 def htc(
@@ -254,20 +246,15 @@ def htc(
     >>> y.shape
     (4,)  # (3 spatial + 1 time)
     """
-    # Apply Euclidean transformation to full input
-    # f_t: (in_dim+1,) → (out_dim,)
-    out = f_t(x)
+    # f_t: (..., A_in) → (..., D_out) where A_in = in_dim+1
+    out_D = f_t(x)
 
-    # Scale output for curvature transformation
+    # Scale for curvature transformation
     scale = jnp.sqrt(c_in / c_out)
-    scaled_out = scale * out
+    scaled_D = scale * out_D  # (..., D_out)
 
-    # Compute norm squared of scaled output
-    norm_sq = jnp.sum(scaled_out**2, axis=-1)
+    # Reconstruct time via hyperboloid constraint: x₀ = sqrt(||space||² + 1/c_out)
+    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
+    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
 
-    # Reconstruct time component using hyperboloid constraint
-    x0_sq = norm_sq + 1.0 / c_out
-    x0 = jnp.sqrt(jnp.maximum(x0_sq, eps))
-
-    # Concatenate time and spatial components
-    return jnp.concatenate([x0[..., None], scaled_out], axis=-1)
+    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D_out+1)

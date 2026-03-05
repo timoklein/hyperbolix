@@ -3,6 +3,11 @@
 Simpler implementation than hyperboloid - no parallel transport needed!
 Uses exponential map and Möbius addition.
 
+Dimension key:
+  S: sample dimensions (from sample_shape)
+  B: batch dimensions (from mu batch shape)
+  D: spatial/manifold dimension (n)
+
 References:
     Mathieu et al. "Continuous Hierarchical Representations with Poincaré Variational Auto-Encoders"
     NeurIPS 2019. https://arxiv.org/abs/1901.06033
@@ -96,46 +101,37 @@ def sample(
     mu_batch_shape = mu.shape[:-1]
 
     # Step 1: Sample v ~ N(0, Σ) ∈ R^n (directly in tangent space at origin)
-    # Need to sample enough noise vectors for sample_shape AND batch dimensions of mu
-    # Full noise shape: sample_shape + mu_batch_shape + (n,)
-    cov = sigma_to_cov(sigma, n, dtype)
+    # Full noise shape: sample_shape + mu_batch_shape + (n,) = (*S, *B, D)
+    cov_DD = sigma_to_cov(sigma, n, dtype)
     full_sample_shape = sample_shape + mu_batch_shape
-    v = sample_gaussian(key, cov, sample_shape=full_sample_shape, dtype=dtype)
+    v_SBD = sample_gaussian(key, cov_DD, sample_shape=full_sample_shape, dtype=dtype)
 
     # Scale Euclidean tangent vector to Riemannian tangent space coordinates.
     # At origin, the conformal factor λ(0) = 2/(1 - c·0) = 2, so Riemannian
     # coordinates require dividing by λ(0). This matches the reference (Mathieu et al.
     # 2019) which does v = v / lambda_x(zero) before the exponential map.
-    v = v / 2.0
+    v_SBD = v_SBD / 2.0
 
     # Step 2: Map to ball at origin: z_0 = exp_0(v)
     # Step 3: Move to mean: z = μ ⊕ z_0
 
-    def transform_single(v_single, mu_single):
+    def transform_single(v_D, mu_D):
         """Transform a single (v, mu) pair."""
-        # Map to ball at origin
-        z_0 = manifold.expmap_0(v_single, c)
-        # Move to mean using Möbius addition
-        z = manifold.addition(mu_single, z_0, c)
-        return z
+        z_0_D = manifold.expmap_0(v_D, c)
+        z_D = manifold.addition(mu_D, z_0_D, c)
+        return z_D
 
     if len(sample_shape) == 0 and len(mu_batch_shape) == 0:
         # Single point, no batching
-        z = transform_single(v, mu)
+        z_SBD = transform_single(v_SBD, mu)
     elif len(sample_shape) == 0:
-        # No sample_shape but batched mu
-        # v has shape mu_batch_shape + (n,), mu has shape mu_batch_shape + (n,)
-        # vmap over all batch dimensions
+        # No sample_shape but batched mu: v_SBD is (*B, D), mu is (*B, D)
         vmapped_fn = transform_single
         for _ in mu_batch_shape:
             vmapped_fn = jax.vmap(vmapped_fn)
-        z = vmapped_fn(v, mu)
+        z_SBD = vmapped_fn(v_SBD, mu)
     else:
-        # Have sample_shape (and possibly batched mu)
-        # v has shape sample_shape + mu_batch_shape + (n,)
-        # mu has shape mu_batch_shape + (n,)
-        # Need to vmap over sample_shape dims (broadcasting mu) then over batch dims
-
+        # v_SBD is (*S, *B, D), mu is (*B, D)
         # First, vmap over mu_batch_shape dimensions (both v and mu have these)
         vmapped_fn = transform_single
         for _ in mu_batch_shape:
@@ -145,9 +141,9 @@ def sample(
         for _ in sample_shape:
             vmapped_fn = jax.vmap(vmapped_fn, in_axes=(0, None))
 
-        z = vmapped_fn(v, mu)
+        z_SBD = vmapped_fn(v_SBD, mu)
 
-    return z
+    return z_SBD
 
 
 def _gaussian_log_prob(
@@ -171,15 +167,9 @@ def _gaussian_log_prob(
         Log probability, shape (...)
     """
 
-    # Convert sigma parameterization to covariance matrix
-    cov = sigma_to_cov(sigma, n, dtype)
-
-    # Zero mean
-    mean = jnp.zeros(n, dtype=dtype)
-
-    # Compute log probability using JAX built-in
-    # Cast to Array to satisfy type checker
-    return jnp.asarray(multivariate_normal.logpdf(v, mean, cov))
+    cov_DD = sigma_to_cov(sigma, n, dtype)
+    mean_D = jnp.zeros(n, dtype=dtype)
+    return jnp.asarray(multivariate_normal.logpdf(v, mean_D, cov_DD))
 
 
 def _log_det_jacobian(
@@ -210,30 +200,30 @@ def _log_det_jacobian(
     # Compute Riemannian norm of tangent vector at origin.
     # ||v||_g = λ(0) · ||v||_E = 2 · ||v||_E, since the conformal factor at
     # the origin is λ(0) = 2. The Jacobian formula uses the Riemannian norm.
-    r_euclid = jnp.sqrt(jnp.sum(v**2, axis=-1))
-    r = 2.0 * r_euclid  # Riemannian norm
+    r_euclid_B = jnp.sqrt(jnp.sum(v**2, axis=-1))  # (...,) — sum over D
+    r_B = 2.0 * r_euclid_B  # Riemannian norm
 
     # Scale by √c
     sqrt_c = jnp.sqrt(c)
-    sqrt_c_r = sqrt_c * r
+    sqrt_c_r_B = sqrt_c * r_B
 
     # Threshold for switching to Taylor expansion
     threshold = 1e-3
 
     # Standard computation: log(sinh(√c·r) / (√c·r)) = log(sinh(√c·r)) - log(√c·r)
-    log_sinh_over_arg_standard = jnp.log(jnp.sinh(sqrt_c_r)) - jnp.log(sqrt_c_r)
+    log_ratio_standard_B = jnp.log(jnp.sinh(sqrt_c_r_B)) - jnp.log(sqrt_c_r_B)
 
     # Taylor expansion for small √c·r: log(sinh(x) / x) ≈ x²/6
     # Here x = √c·r_riem, so x² = c·r_riem² = c·(2·r_euclid)² = 4·c·r_euclid²
-    log_sinh_over_arg_taylor = (c * r**2) / 6.0
+    log_ratio_taylor_B = (c * r_B**2) / 6.0
 
     # Use Taylor expansion when √c·r < threshold
-    log_sinh_over_arg = jnp.where(sqrt_c_r < threshold, log_sinh_over_arg_taylor, log_sinh_over_arg_standard)
+    log_ratio_B = jnp.where(sqrt_c_r_B < threshold, log_ratio_taylor_B, log_ratio_standard_B)
 
     # log det = (n-1) * log(sinh(√c·r) / (√c·r))
-    log_det = (n - 1) * log_sinh_over_arg
+    log_det_B = (n - 1) * log_ratio_B
 
-    return log_det
+    return log_det_B
 
 
 def log_prob(
@@ -297,53 +287,38 @@ def log_prob(
     # Extract dimension
     n = mu.shape[-1]  # Dimension of Poincaré ball
 
-    # Step 1: Map z to tangent space at mu using logarithmic map
-    # u = log_μ(z)
+    # Step 1: Map z to tangent space at mu: u = log_μ(z), shape (..., D)
     if z.ndim > mu.ndim:
-        # z has sample dimensions, need to vmap over them
         n_sample_dims = z.ndim - mu.ndim
-
-        # Create vmapped version of logmap
         logmap_fn = manifold.logmap
         for _ in range(n_sample_dims):
             logmap_fn = jax.vmap(logmap_fn, in_axes=(0, None, None))
-
-        u = logmap_fn(z, mu, c)
+        u_SBD = logmap_fn(z, mu, c)
     elif z.ndim == mu.ndim and mu.ndim > 1:
-        # Both are batched, vmap over batch dimension
-        u = jax.vmap(lambda zz, mm: manifold.logmap(zz, mm, c))(z, mu)
+        u_SBD = jax.vmap(lambda zz, mm: manifold.logmap(zz, mm, c))(z, mu)
     else:
-        # Single point
-        u = manifold.logmap(z, mu, c)
+        u_SBD = manifold.logmap(z, mu, c)
 
-    # Step 2: Parallel transport from mu to origin
-    # v = PT_{μ→0}(u)
-    mu_0 = jnp.zeros(n, dtype=dtype)  # Origin is zero vector in Poincaré ball
+    # Step 2: Parallel transport from mu to origin: v = PT_{μ→0}(u)
+    mu_0_D = jnp.zeros(n, dtype=dtype)
 
-    if u.ndim > 1:
-        # Batched, need to vmap
+    if u_SBD.ndim > 1:
         if mu.ndim > 1:
-            # mu is also batched
-            v = jax.vmap(lambda uu, mm: manifold.ptransp(uu, mm, mu_0, c))(u, mu)
+            v_SBD = jax.vmap(lambda uu, mm: manifold.ptransp(uu, mm, mu_0_D, c))(u_SBD, mu)
         else:
-            # Only u is batched (from sample_shape)
-            v = jax.vmap(lambda uu: manifold.ptransp(uu, mu, mu_0, c))(u)
+            v_SBD = jax.vmap(lambda uu: manifold.ptransp(uu, mu, mu_0_D, c))(u_SBD)
     else:
-        # Single point
-        v = manifold.ptransp(u, mu, mu_0, c)
+        v_SBD = manifold.ptransp(u_SBD, mu, mu_0_D, c)
 
     # Step 3: Compute log p(v) where v ~ N(0, Σ)
-    # Scale Euclidean tangent vector to Riemannian coordinates before evaluating the
-    # Gaussian. The conformal factor λ(0) = 2 converts between coordinate systems:
-    # v_riem = λ(0) · v_euclid. This inverts the /2 applied during sampling.
-    v_riem = v * 2.0
-    log_p_v = _gaussian_log_prob(v_riem, sigma, n, dtype)
+    # Scale to Riemannian coordinates: v_riem = λ(0) · v_euclid = 2 · v
+    v_riem_SBD = v_SBD * 2.0
+    log_p_v_SB = _gaussian_log_prob(v_riem_SBD, sigma, n, dtype)
 
     # Step 4: Compute log det Jacobian
-    log_det_jac = _log_det_jacobian(v, c, n)
+    log_det_jac_SB = _log_det_jacobian(v_SBD, c, n)
 
-    # Step 5: Compute final log probability
-    # log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
-    log_p_z = log_p_v - log_det_jac
+    # Step 5: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
+    log_p_z_SB = log_p_v_SB - log_det_jac_SB
 
-    return log_p_z
+    return log_p_z_SB

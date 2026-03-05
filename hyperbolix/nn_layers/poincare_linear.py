@@ -1,4 +1,9 @@
-"""Poincaré ball linear layers for JAX/Flax NNX."""
+"""Poincaré ball linear layers for JAX/Flax NNX.
+
+Dimension key:
+  B: batch size       I: input dimension
+  O: output dimension
+"""
 
 import jax
 import jax.numpy as jnp
@@ -104,24 +109,24 @@ class HypLinearPoincare(nnx.Module):
         res : Array of shape (batch, out_dim)
             Output on the Poincaré ball manifold
         """
-        # Project bias to manifold (bias is (1, out_dim), squeeze to (out_dim,))
-        bias = self.manifold.proj(self.bias.squeeze(0), c)
+        # Project bias to manifold (bias is (1, O), squeeze to (O,))
+        bias_O = self.manifold.proj(self.bias.squeeze(0), c)
 
         # Map to tangent space if needed (static branch - JIT friendly)
         if self.input_space == "manifold":
-            x = jax.vmap(self.manifold.logmap_0, in_axes=(0, None), out_axes=0)(x, c)
+            x_BI = jax.vmap(self.manifold.logmap_0, in_axes=(0, None), out_axes=0)(x, c)
+        else:
+            x_BI = x
 
         # Matrix-vector multiplication in tangent space at origin
-        # (batch, in_dim) @ (in_dim, out_dim) -> (batch, out_dim)
-        x = jnp.einsum("bi,oi->bo", x, self.weight)
+        x_BO = jnp.einsum("bi,oi->bo", x_BI, self.weight)  # (B, I) @ (I, O) -> (B, O)
 
         # Map back to manifold
-        x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
+        x_BO = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BO, c)
 
         # Manifold bias addition (Möbius addition for Poincaré)
-        # Broadcast bias to match batch dimension
-        res = jax.vmap(self.manifold.addition, in_axes=(0, None, None), out_axes=0)(x, bias, c)
-        return res
+        res_BO = jax.vmap(self.manifold.addition, in_axes=(0, None, None), out_axes=0)(x_BO, bias_O, c)
+        return res_BO
 
 
 class HypLinearPoincarePP(nnx.Module):
@@ -232,12 +237,12 @@ class HypLinearPoincarePP(nnx.Module):
 
         # Generalized linear transformation
         sqrt_c = jnp.sqrt(c)
-        w = sinh(sqrt_c * v) / sqrt_c  # (batch, out_dim)
-        w2 = jnp.sum(w**2, axis=-1, keepdims=True)  # (batch, 1)
-        denom = 1 + jnp.sqrt(1 + c * w2)  # (batch, 1)
-        res = w / denom  # (batch, out_dim)
+        w_BO = sinh(sqrt_c * v) / sqrt_c
+        w2_B1 = jnp.sum(w_BO**2, axis=-1, keepdims=True)
+        denom_B1 = 1 + jnp.sqrt(1 + c * w2_B1)
+        res_BO = w_BO / denom_B1  # (B, 1) broadcasts over (B, O)
 
         # Project results to the manifold
-        res = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(res, c)
+        res_BO = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(res_BO, c)
 
-        return res
+        return res_BO
