@@ -3,12 +3,6 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag to publish (e.g. v0.2.0)"
-        required: false
-        default: ""
 
 jobs:
   build:
