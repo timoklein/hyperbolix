@@ -7,7 +7,8 @@ on:
     inputs:
       tag:
         description: "Tag to publish (e.g. v0.2.0)"
-        required: true
+        required: false
+        default: ""
 
 jobs:
   build:
@@ -15,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
