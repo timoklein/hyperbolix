@@ -6,6 +6,7 @@ from flax import nnx
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.optim.manifold_metadata import mark_manifold_param
 
 from ..utils.math_utils import asinh
 from ._helpers import validate_poincare_manifold
@@ -78,8 +79,11 @@ class HypRegressionPoincareHDRL(nnx.Module):
         # Tangent space weight
         self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
         # Manifold bias (initialized to small random values)
-        # FIXME: Not using ManifoldParameter
-        self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01)
+        self.bias = mark_manifold_param(
+            nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01),
+            manifold=self.manifold,
+            curvature=1.0,
+        )
 
     def _dist2hyperplane(
         self,

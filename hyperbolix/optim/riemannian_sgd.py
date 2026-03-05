@@ -18,20 +18,21 @@ Algorithm (for manifold parameters):
 
 For Euclidean parameters, standard SGD is applied.
 
+Note: Tensor variables in update_single_leaf match the parameter shape (P),
+which varies per leaf. Scalars (lr, count) have no suffix.
+
 References
 ----------
 Bécigneul, Gary, and Octavian-Eugen Ganea. "Riemannian adaptive optimization methods."
     arXiv preprint arXiv:1810.00760 (2018).
 """
 
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 import optax
-from flax import nnx
-from jax import tree_util
 
-from .manifold_metadata import get_manifold_info
+from ._riemannian_base import make_riemannian_optimizer
 
 
 class RSGDState(NamedTuple):
@@ -107,146 +108,27 @@ def riemannian_sgd(
     - Parameters stay on manifold after updates (via expmap/retraction + projection)
     """
 
-    def init_fn(params: Any) -> RSGDState:
-        """Initialize optimizer state.
+    def manifold_leaf_fn(rgrad, moments, param_value, manifold_module, c, lr, count):
+        (mom_value,) = moments
+        new_mom = momentum * mom_value + rgrad
+        lr_cast = lr.astype(new_mom.dtype)
+        direction = -lr_cast * new_mom
+        # Parallel transport momentum only if momentum > 0
+        ptransp_indices = (0,) if momentum > 0.0 else ()
+        return direction, (new_mom,), ptransp_indices
 
-        Parameters
-        ----------
-        params : Any
-            Pytree of parameters
+    def euclidean_leaf_fn(grad_value, moments, lr, count):
+        (mom_value,) = moments
+        new_mom = momentum * mom_value + grad_value
+        lr_cast = lr.astype(new_mom.dtype)
+        param_update = -lr_cast * new_mom
+        return param_update, (new_mom,)
 
-        Returns
-        -------
-        state : RSGDState
-            Initial optimizer state with zero momentum
-        """
-        momentum = tree_util.tree_map(lambda p: jnp.zeros_like(p), params)
-        count = jnp.zeros([], jnp.int32)
-        return RSGDState(momentum=momentum, count=count)
-
-    def update_fn(
-        updates: Any,
-        state: RSGDState,
-        params: Any | None = None,
-    ) -> tuple[Any, RSGDState]:
-        """Apply Riemannian SGD update.
-
-        Parameters
-        ----------
-        updates : Any
-            Pytree of gradients (typically from nnx.grad)
-        state : RSGDState
-            Current optimizer state
-        params : Any, optional
-            Pytree of parameters (required for Riemannian operations)
-
-        Returns
-        -------
-        updates : Any
-            Pytree of parameter updates (new_param - old_param)
-        new_state : RSGDState
-            Updated optimizer state
-
-        Raises
-        ------
-        ValueError
-            If params is None (required for Riemannian operations)
-        """
-        if params is None:
-            raise ValueError("Riemannian SGD requires params to be provided in update step")
-
-        # Increment step count
-        count_inc = state.count + 1
-
-        # Get learning rate (handle both static value and schedule)
-        if callable(learning_rate):
-            lr_value = learning_rate(count_inc)
-        else:
-            lr_value = cast(float, learning_rate)
-        lr = jnp.asarray(lr_value)
-
-        # We need to traverse the params pytree to access Variable metadata
-        # while simultaneously mapping over the gradients and momentum
-        def update_single_leaf(grad_value, mom_value, param_variable):
-            """Update a single leaf parameter.
-
-            Note: param_variable may be an nnx.Variable or a plain array depending on
-            how nnx.Optimizer structures the pytree.
-            """
-            # Check if this parameter has manifold metadata
-            manifold_info = None
-            param_value = grad_value  # Default: use grad structure
-
-            if hasattr(param_variable, "_var_metadata"):
-                # param_variable is an nnx.Variable with potential metadata
-                manifold_info = get_manifold_info(param_variable)
-                param_value = param_variable[...] if isinstance(param_variable, nnx.Variable) else param_variable
-
-            if manifold_info is not None:
-                # Riemannian parameter update
-                manifold_module, c = manifold_info
-
-                # 1. Convert Euclidean gradient to Riemannian gradient
-                rgrad = manifold_module._egrad2rgrad(grad_value, param_value, c)
-
-                # 2. Update momentum
-                new_momentum = momentum * mom_value + rgrad
-
-                # 3. Move on manifold using exponential map or retraction
-                lr_cast = lr.astype(new_momentum.dtype)
-                direction = -lr_cast * new_momentum
-                if use_expmap:
-                    new_param_value = manifold_module._expmap(direction, param_value, c)
-                else:
-                    new_param_value = manifold_module._retraction(direction, param_value, c)
-
-                # 4. Parallel transport momentum to new location
-                if momentum > 0.0:
-                    transported_momentum = manifold_module._ptransp(new_momentum, param_value, new_param_value, c)
-                else:
-                    transported_momentum = new_momentum
-
-                # Return the update (new - old) and transported momentum
-                param_update = new_param_value - param_value
-                return (param_update, transported_momentum)
-
-            else:
-                # Euclidean parameter update (standard SGD with momentum)
-                # momentum update: m = momentum * m + grad
-                new_momentum = momentum * mom_value + grad_value
-
-                # parameter update: param = param - lr * m
-                lr_cast = lr.astype(new_momentum.dtype)
-                param_update = -lr_cast * new_momentum
-
-                return (param_update, new_momentum)
-
-        # Apply update to all parameters
-        # Use tree_map with is_leaf to handle nnx.Variable nodes correctly
-        results = tree_util.tree_map(
-            update_single_leaf,
-            updates,  # gradients (arrays)
-            state.momentum,  # old momentum (arrays)
-            params,  # parameters (Variables with metadata)
-            is_leaf=lambda x: isinstance(x, nnx.Variable),
-        )
-
-        # Separate the tuple results
-        # Each leaf in results is a tuple (param_update, new_momentum)
-        # Use is_leaf to treat tuples as leaves so we can extract their components
-        param_updates = tree_util.tree_map(
-            lambda r: r[0],
-            results,
-            is_leaf=lambda x: isinstance(x, tuple),
-        )
-        new_momentum = tree_util.tree_map(
-            lambda r: r[1],
-            results,
-            is_leaf=lambda x: isinstance(x, tuple),
-        )
-
-        new_state = RSGDState(momentum=new_momentum, count=count_inc)
-
-        return param_updates, new_state
-
-    return optax.GradientTransformation(init_fn, cast(Any, update_fn))
+    return make_riemannian_optimizer(
+        n_moments=1,
+        state_cls=RSGDState,
+        manifold_leaf_fn=manifold_leaf_fn,
+        euclidean_leaf_fn=euclidean_leaf_fn,
+        learning_rate=learning_rate,
+        use_expmap=use_expmap,
+    )

@@ -9,8 +9,7 @@ All functions work with single points and return scalars or vectors.
 Use jax.vmap for batching:
 
     >>> import jax
-    >>> import jax
-import jax.numpy as jnp
+    >>> import jax.numpy as jnp
     >>> from hyperbolix.manifolds.euclidean import Euclidean
     >>>
     >>> # Single point operations
@@ -28,9 +27,10 @@ import jax.numpy as jnp
 See jax_migration.md for comprehensive usage patterns.
 """
 
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
+
+from ._base import ManifoldBase
 
 
 def _proj(x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
@@ -327,7 +327,7 @@ def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: floa
 # ---------------------------------------------------------------------------
 
 
-class Euclidean:
+class Euclidean(ManifoldBase):
     """Euclidean manifold with automatic dtype casting.
 
     Provides all manifold operations with automatic casting of array inputs
@@ -345,15 +345,6 @@ class Euclidean:
         >>> y = jnp.array([3.0, 4.0])
         >>> d = manifold.dist(x, y)
     """
-
-    def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
-        self.dtype = dtype
-
-    def _cast(self, x: Array) -> Array:
-        """Cast array to target dtype if it's a floating-point array."""
-        if isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, jnp.inexact):
-            return x.astype(self.dtype)
-        return x
 
     def proj(self, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
         """Project point onto Euclidean space (identity)."""

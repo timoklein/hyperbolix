@@ -1,4 +1,10 @@
-"""Poincaré ball regression layers for JAX/Flax NNX."""
+"""Poincaré ball regression layers for JAX/Flax NNX.
+
+Dimension key:
+  B: batch size
+  D: spatial/manifold dimension (in_dim)
+  P: number of hyperplanes / output classes (out_dim)
+"""
 
 import math
 
@@ -84,7 +90,7 @@ class HypRegressionPoincare(nnx.Module):
         # Mark as manifold parameter for Riemannian optimization
         self.bias = mark_manifold_param(
             nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01),
-            manifold_type="poincare",
+            manifold=self.manifold,
             curvature=1.0,  # Default curvature, will be overridden by c parameter in forward pass
         )
 
@@ -125,48 +131,43 @@ class HypRegressionPoincare(nnx.Module):
         sqrt_c = jnp.sqrt(c)
 
         # Compute Möbius subtraction: -p ⊕ x for each (x, p_i) pair
-        # p is (out_dim, in_dim), x is (batch, in_dim)
-        # We need to compute -p[i] ⊕ x[j] for all i, j
-        # Result shape: (batch, out_dim, in_dim)
-        p_neg = -p  # (out_dim, in_dim)
+        p_neg_PD = -p
 
         # Vectorize over both batch and out_dim dimensions
-        # vmap over batch dimension (axis 0 of x), then over out_dim (axis 0 of p_neg)
         addition_fn = jax.vmap(
             jax.vmap(self.manifold.addition, in_axes=(None, 0, None), out_axes=0),
             in_axes=(0, None, None),
             out_axes=0,
         )
-        sub = addition_fn(p_neg, x, c)  # (out_dim, batch, in_dim)
-        sub = jnp.transpose(sub, (1, 0, 2))  # (batch, out_dim, in_dim)
+        sub_PBD = addition_fn(p_neg_PD, x, c)  # (P, B, D)
+        sub_BPD = jnp.transpose(sub_PBD, (1, 0, 2))  # (B, P, D)
 
-        # Compute inner product with a: sum(sub * a, axis=-1)
-        # sub is (batch, out_dim, in_dim), a is (out_dim, in_dim)
-        suba = jnp.sum(sub * a[None, :, :], axis=-1)  # (batch, out_dim)
+        # Inner product with a: sum(sub * a, axis=-1)
+        suba_BP = jnp.sum(sub_BPD * a[None, :, :], axis=-1)  # (B, P)
 
-        # Compute norm of a
-        a_norm = jnp.linalg.norm(a, ord=2, axis=-1, keepdims=True).clip(min=min_enorm)  # (out_dim, 1)
+        # Norm of a
+        a_norm_P1 = jnp.linalg.norm(a, ord=2, axis=-1, keepdims=True).clip(min=min_enorm)  # (P, 1)
 
-        # Compute conformal factor for sub
-        lambda_sub = self.manifold.conformal_factor(sub, c)  # (batch, out_dim, 1)
+        # Conformal factor for sub
+        lambda_sub_BP1 = self.manifold.conformal_factor(sub_BPD, c)  # (B, P, 1)
 
-        # Compute asinh argument
-        asinh_arg = sqrt_c * lambda_sub.squeeze(-1) * suba / a_norm.T  # (batch, out_dim)
+        # asinh argument
+        asinh_arg_BP = sqrt_c * lambda_sub_BP1.squeeze(-1) * suba_BP / a_norm_P1.T  # (B, P)
 
-        # Improve performance by smoothly clamping the input of asinh()
+        # Smoothly clamp the input of asinh()
         eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
         clamp = self.clamping_factor * float(math.log(2 / eps))
-        asinh_arg = smooth_clamp(asinh_arg, -clamp, clamp, self.smoothing_factor)
+        asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, self.smoothing_factor)
 
-        # Compute signed distance to hyperplane
-        signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, out_dim)
+        # Signed distance to hyperplane
+        signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c  # (B, P)
 
-        # Compute conformal factor for p
-        lambda_p = self.manifold.conformal_factor(p, c)  # (out_dim, 1)
+        # Conformal factor for p
+        lambda_p_P1 = self.manifold.conformal_factor(p, c)  # (P, 1)
 
-        # Final result
-        res = lambda_p.T * a_norm.T * signed_dist2hyp  # (batch, out_dim)
-        return res
+        # Final result: .T broadcasts (1, P) over (B, P)
+        res_BP = lambda_p_P1.T * a_norm_P1.T * signed_dist2hyp_BP  # (B, P)
+        return res_BP
 
     def __call__(
         self,
@@ -193,15 +194,14 @@ class HypRegressionPoincare(nnx.Module):
             x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Project bias to manifold (vmap over out_dim dimension)
-        bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias[...], c)  # type: ignore[arg-type]
+        bias_PD = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias[...], c)  # type: ignore[arg-type]
 
-        # Map self.weight from the tangent space at the origin to the tangent space at self.bias
-        # vmap over out_dim dimension
-        pt_weight = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(self.weight[...], bias, c)
+        # Parallel transport weight from tangent space at origin to tangent space at bias
+        pt_weight_PD = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(self.weight[...], bias_PD, c)
 
         # Compute the multinomial linear regression score(s)
-        res = self._compute_mlr(x, pt_weight, bias, c)
-        return res
+        res_BP = self._compute_mlr(x, pt_weight_PD, bias_PD, c)
+        return res_BP
 
 
 class HypRegressionPoincarePP(nnx.Module):

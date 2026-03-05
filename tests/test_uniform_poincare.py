@@ -7,8 +7,6 @@ import pytest
 from hyperbolix.distributions import uniform_poincare
 from hyperbolix.manifolds.poincare import Poincare
 
-jax.config.update("jax_enable_x64", True)
-
 
 # ---------------------------------------------------------------------------
 # Volume tests

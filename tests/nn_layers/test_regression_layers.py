@@ -14,9 +14,6 @@ from hyperbolix.nn_layers import (
     HypRegressionPoincarePP,
 )
 
-# Enable float64 for tests
-jax.config.update("jax_enable_x64", True)
-
 
 def get_poincare(dtype: jnp.dtype) -> Poincare:
     """Get dtype-specific Poincaré manifold instance."""

@@ -24,6 +24,132 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 
+def spatial_to_hyperboloid(
+    spatial: Float[Array, "... D"],
+    c_in: float,
+    c_out: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... D_plus_1"]:
+    """Scale spatial components and reconstruct time to produce a hyperboloid point.
+
+    Extracts the common tail of ``hrc``/``htc``: curvature scaling + time
+    reconstruction via the hyperboloid constraint.
+
+    Parameters
+    ----------
+    spatial : Array, shape (..., D)
+        Spatial components (no time coordinate).
+    c_in : float
+        Source curvature (positive).
+    c_out : float
+        Target curvature (positive).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    Returns
+    -------
+    Array, shape (..., D+1)
+        Points on the hyperboloid with curvature ``c_out``.
+    """
+    scale = jnp.sqrt(c_in / c_out)
+    scaled_D = scale * spatial  # (..., D)
+
+    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
+    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
+
+    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D+1)
+
+
+def lorentz_midpoint(
+    points: Float[Array, "... M A"],
+    weights: Float[Array, "... N M"],
+    c: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... N A"]:
+    """Weighted Lorentzian midpoint over M points.
+
+    Generalises :func:`lorentz_residual` (which handles two points) to an
+    arbitrary weighted combination used by full attention aggregation and
+    multi-head averaging.
+
+    Formula (HELM, Chen et al. 2024):
+        ``h = weights @ points``  (weighted sum)
+        ``mu = h / (sqrt(c) * ||h||_L)``
+
+    where ``||h||_L = sqrt(-<h,h>_L)`` and ``<h,h>_L = -h_0^2 + ||h_s||^2``.
+
+    Parameters
+    ----------
+    points : Array, shape (..., M, A)
+        Points on the hyperboloid with curvature ``c``.  ``A = d + 1``.
+    weights : Array, shape (..., N, M)
+        Combination weights (e.g. attention weights, uniform ``1/M``).
+    c : float
+        Curvature parameter (positive).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    Returns
+    -------
+    Array, shape (..., N, A)
+        Midpoints on the hyperboloid with curvature ``c``.
+    """
+    # h = sum_m w_{n,m} * points_m  →  (..., N, A)
+    h_NA = jnp.einsum("...nm,...ma->...na", weights, points)
+
+    # Minkowski squared norm: <h,h>_L = -h_0^2 + ||h_s||^2  (should be < 0)
+    mink_1 = -(h_NA[..., 0:1] ** 2) + jnp.sum(h_NA[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., N, 1)
+    denom_1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_1), eps))  # (..., N, 1)
+
+    return h_NA / denom_1  # (..., N, A)
+
+
+def lorentz_residual(
+    x: Float[Array, "... dim_plus_1"],
+    y: Float[Array, "... dim_plus_1"],
+    w_y: float | Float[Array, ""],
+    c: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... dim_plus_1"]:
+    """Lorentzian midpoint-based residual connection (LResNet from HELM).
+
+    Computes the weighted Lorentzian midpoint of x and y, projecting back
+    to the hyperboloid:
+
+        ave = x + w_y * y
+        result = ave / sqrt(c * |<ave, ave>_L|)
+
+    where <a, a>_L = -a_0^2 + ||a_s||^2 is the Minkowski inner product.
+
+    Parameters
+    ----------
+    x : Array, shape (..., d+1)
+        Points on hyperboloid with curvature c.
+    y : Array, shape (..., d+1)
+        Points on hyperboloid with curvature c (to be added with weight w_y).
+    w_y : float or scalar Array
+        Weight for the y contribution.
+    c : float
+        Curvature parameter (positive, c > 0).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    Returns
+    -------
+    Array, shape (..., d+1)
+        Points on hyperboloid with curvature c.
+
+    References
+    ----------
+    Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+    """
+    ave_A = x + w_y * y  # (..., A) where A = d+1
+    # Minkowski inner: -ave_0^2 + ||ave_s||^2
+    mink_1 = -(ave_A[..., 0:1] ** 2) + jnp.sum(ave_A[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., 1)
+    denom_1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_1), eps))  # (..., 1)
+    return ave_A / denom_1  # (..., A)
+
+
 def hrc(
     x: Float[Array, "... dim_plus_1"],
     f_r: Callable[[Float[Array, "..."]], Float[Array, "..."]],
@@ -105,27 +231,19 @@ def hrc(
     ...     return jax.nn.gelu(z) * 0.5
     >>> y = hrc(x, custom_act, c_in=1.0, c_out=0.5)
     """
-    # Extract spatial components
-    x_space = x[..., 1:]
+    x_space_D = x[..., 1:]  # (..., D) spatial components
 
-    # Apply Euclidean function to spatial components
-    out_space = f_r(x_space)
+    out_space_D = f_r(x_space_D)  # (..., D') — may change dim
 
-    # Scale spatial components for curvature transformation
+    # Scale for curvature transformation: sqrt(c_in / c_out)
     scale = jnp.sqrt(c_in / c_out)
-    scaled_space = scale * out_space
+    scaled_D = scale * out_space_D  # (..., D')
 
-    # Compute norm squared of scaled spatial components
-    norm_sq = jnp.sum(scaled_space**2, axis=-1)
+    # Reconstruct time via hyperboloid constraint: x₀ = sqrt(||x_rest||² + 1/c_out)
+    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
+    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
 
-    # Reconstruct time component using hyperboloid constraint
-    # Constraint: -x₀² + ||x_rest||² = -1/c_out
-    # => x₀ = sqrt(||x_rest||² + 1/c_out)
-    x0_sq = norm_sq + 1.0 / c_out
-    x0 = jnp.sqrt(jnp.maximum(x0_sq, eps))
-
-    # Concatenate time and spatial components
-    return jnp.concatenate([x0[..., None], scaled_space], axis=-1)
+    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D'+1)
 
 
 def htc(
@@ -208,20 +326,15 @@ def htc(
     >>> y.shape
     (4,)  # (3 spatial + 1 time)
     """
-    # Apply Euclidean transformation to full input
-    # f_t: (in_dim+1,) → (out_dim,)
-    out = f_t(x)
+    # f_t: (..., A_in) → (..., D_out) where A_in = in_dim+1
+    out_D = f_t(x)
 
-    # Scale output for curvature transformation
+    # Scale for curvature transformation
     scale = jnp.sqrt(c_in / c_out)
-    scaled_out = scale * out
+    scaled_D = scale * out_D  # (..., D_out)
 
-    # Compute norm squared of scaled output
-    norm_sq = jnp.sum(scaled_out**2, axis=-1)
+    # Reconstruct time via hyperboloid constraint: x₀ = sqrt(||space||² + 1/c_out)
+    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
+    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
 
-    # Reconstruct time component using hyperboloid constraint
-    x0_sq = norm_sq + 1.0 / c_out
-    x0 = jnp.sqrt(jnp.maximum(x0_sq, eps))
-
-    # Concatenate time and spatial components
-    return jnp.concatenate([x0[..., None], scaled_out], axis=-1)
+    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D_out+1)

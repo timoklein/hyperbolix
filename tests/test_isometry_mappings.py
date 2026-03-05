@@ -10,9 +10,12 @@ import jax.numpy as jnp
 import pytest
 
 import hyperbolix as hj
+from hyperbolix.manifolds import Hyperboloid, Poincare
+from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
+from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT
 
-# Enable float64 support in JAX for numerical precision
-jax.config.update("jax_enable_x64", True)
+hyperboloid = Hyperboloid(dtype=jnp.float64)
+poincare = Poincare(dtype=jnp.float64)
 
 
 @pytest.fixture
@@ -54,7 +57,7 @@ def hyperboloid_points(curvature: float):
     hyperboloid_pts = to_hyperboloid_batch(samples, c)
 
     # Verify points are on hyperboloid
-    is_valid = jax.vmap(hj.manifolds.hyperboloid._is_in_manifold, in_axes=(0, None))
+    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))
     assert jnp.all(is_valid(hyperboloid_pts, c)), "Generated hyperboloid points are invalid"
 
     return hyperboloid_pts
@@ -77,7 +80,7 @@ def poincare_points(curvature: float):
     poincare_pts = samples * (max_norm / jnp.maximum(norms, 1.0))
 
     # Verify points are in Poincaré ball
-    is_valid = jax.vmap(hj.manifolds.poincare._is_in_manifold, in_axes=(0, None))
+    is_valid = jax.vmap(poincare.is_in_manifold, in_axes=(0, None))
     assert jnp.all(is_valid(poincare_pts, c)), "Generated Poincaré points are invalid"
 
     return poincare_pts
@@ -98,7 +101,7 @@ def test_hyperboloid_to_poincare_manifold_validity(
     poincare_pts = to_poincare_batch(hyperboloid_points, c)
 
     # Verify all converted points are in Poincaré ball
-    is_valid = jax.vmap(hj.manifolds.poincare._is_in_manifold, in_axes=(0, None))
+    is_valid = jax.vmap(poincare.is_in_manifold, in_axes=(0, None))
     assert jnp.all(is_valid(poincare_pts, c)), "Converted points are not in Poincaré ball"
 
 
@@ -117,7 +120,7 @@ def test_poincare_to_hyperboloid_manifold_validity(
     hyperboloid_pts = to_hyperboloid_batch(poincare_points, c)
 
     # Verify all converted points are on hyperboloid
-    is_valid = jax.vmap(hj.manifolds.hyperboloid._is_in_manifold, in_axes=(0, None))
+    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))
     assert jnp.all(is_valid(hyperboloid_pts, c)), "Converted points are not on hyperboloid"
 
 
@@ -232,15 +235,11 @@ def test_isometry_preserves_distances(
     y_poinc = to_poincare_batch(y_hyp, c)
 
     # Compute distances in hyperboloid model
-    dist_hyp_fn = jax.vmap(
-        lambda x, y: hj.manifolds.hyperboloid._dist(x, y, c, version_idx=hj.manifolds.hyperboloid.VERSION_DEFAULT)
-    )
+    dist_hyp_fn = jax.vmap(lambda x, y: hyperboloid.dist(x, y, c, version_idx=VERSION_DEFAULT))
     distances_hyperboloid = dist_hyp_fn(x_hyp, y_hyp)
 
     # Compute distances in Poincaré model
-    dist_poinc_fn = jax.vmap(
-        lambda x, y: hj.manifolds.poincare._dist(x, y, c, version_idx=hj.manifolds.poincare.VERSION_MOBIUS_DIRECT)
-    )
+    dist_poinc_fn = jax.vmap(lambda x, y: poincare.dist(x, y, c, version_idx=VERSION_MOBIUS_DIRECT))
     distances_poincare = dist_poinc_fn(x_poinc, y_poinc)
 
     # Verify distances are preserved
@@ -266,15 +265,11 @@ def test_isometry_preserves_distance_from_origin(
     poincare_pts = to_poincare_batch(hyperboloid_points, c)
 
     # Compute distance from origin in hyperboloid model
-    dist_0_hyp = jax.vmap(
-        lambda x: hj.manifolds.hyperboloid._dist_0(x, c, version_idx=hj.manifolds.hyperboloid.VERSION_DEFAULT)
-    )
+    dist_0_hyp = jax.vmap(lambda x: hyperboloid.dist_0(x, c, version_idx=VERSION_DEFAULT))
     distances_hyperboloid = dist_0_hyp(hyperboloid_points)
 
     # Compute distance from origin in Poincaré model
-    dist_0_poinc = jax.vmap(
-        lambda x: hj.manifolds.poincare._dist_0(x, c, version_idx=hj.manifolds.poincare.VERSION_MOBIUS_DIRECT)
-    )
+    dist_0_poinc = jax.vmap(lambda x: poincare.dist_0(x, c, version_idx=VERSION_MOBIUS_DIRECT))
     distances_poincare = dist_0_poinc(poincare_pts)
 
     # Verify distances are preserved
@@ -358,7 +353,7 @@ def test_dimension_consistency():
         x_hyp = x_hyp.at[1].set(0.1)  # Small perturbation
 
         # Project to hyperboloid
-        x_hyp = hj.manifolds.hyperboloid._proj(x_hyp, c)
+        x_hyp = hyperboloid.proj(x_hyp, c)
 
         # Convert to Poincaré (should be dim-dimensional)
         y_poinc = hj.manifolds.isometry_mappings.hyperboloid_to_poincare(x_hyp, c)

@@ -8,9 +8,6 @@ from hyperbolix.manifolds import poincare as poincare_module
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
 
-# Enable float64 for these tests
-jax.config.update("jax_enable_x64", True)
-
 
 class TestPoincareClassConstants:
     """Test that module constants are still accessible."""

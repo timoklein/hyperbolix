@@ -70,6 +70,7 @@ import jax.scipy.special
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import acosh, asinh, atanh, cosh, sinh, smooth_clamp
+from ._base import ManifoldBase
 
 # Default numerical parameters
 MIN_NORM = 1e-15
@@ -124,18 +125,18 @@ def _gyration(x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "d
         Ungar. "A gyrovector space approach to hyperbolic geometry." 2022.
     """
     c2 = c**2
-    x2 = jnp.dot(x, x)
-    y2 = jnp.dot(y, y)
-    xy = jnp.dot(x, y)
-    xz = jnp.dot(x, z)
-    yz = jnp.dot(y, z)
+    x_sqnorm = jnp.dot(x, x)  # scalar
+    y_sqnorm = jnp.dot(y, y)  # scalar
+    xy = jnp.dot(x, y)  # scalar
+    xz = jnp.dot(x, z)  # scalar
+    yz = jnp.dot(y, z)  # scalar
 
-    a = -c2 * xz * y2 + c * yz + 2 * c2 * xy * yz
-    b = -c2 * yz * x2 - c * xz
-    num = 2 * (a * x + b * y)
-    denom = jnp.maximum(1 + 2 * c * xy + c2 * x2 * y2, MIN_NORM)
+    coeff_x = -c2 * xz * y_sqnorm + c * yz + 2 * c2 * xy * yz  # scalar
+    coeff_y = -c2 * yz * x_sqnorm - c * xz  # scalar
+    num_D = 2 * (coeff_x * x + coeff_y * y)  # (D,)
+    denom = jnp.maximum(1 + 2 * c * xy + c2 * x_sqnorm * y_sqnorm, MIN_NORM)  # scalar
 
-    return z + num / denom
+    return z + num_D / denom
 
 
 def _proj(x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
@@ -588,12 +589,11 @@ def _conformal_factor_batch(
     dtype = x.dtype
     c_arr = jnp.asarray(c, dtype=dtype)
     sqrt_c = jnp.sqrt(c_arr)
-    # Use a single representative element for dtype-dependent eps
     max_norm_eps = jnp.asarray(_get_max_norm_eps(x.reshape(-1)[:1].squeeze()), dtype=dtype)
-    x_norm_sq = jnp.sum(x**2, axis=-1, keepdims=True)
+    x_norm_sq_1 = jnp.sum(x**2, axis=-1, keepdims=True)  # (..., 1)
     denom_min = 2 * sqrt_c * max_norm_eps - c_arr * max_norm_eps**2
-    denom = jnp.maximum(jnp.asarray(1.0, dtype=dtype) - c_arr * x_norm_sq, denom_min)
-    return 2.0 / denom
+    denom_1 = jnp.maximum(jnp.asarray(1.0, dtype=dtype) - c_arr * x_norm_sq_1, denom_min)  # (..., 1)
+    return 2.0 / denom_1
 
 
 def _compute_mlr_pp(
@@ -623,28 +623,24 @@ def _compute_mlr_pp(
         Shimizu et al. "Hyperbolic neural networks++." arXiv:2006.08210 (2020).
     """
     sqrt_c = jnp.sqrt(c)
-    sqrt_c2r = 2 * sqrt_c * r.T  # (1, out_dim)
+    sqrt_c2r_1P = 2 * sqrt_c * r.T  # (1, P) — r is (P, 1), .T broadcasts
 
-    # Safe norm: sqrt(sum(z²) + eps²) has well-defined gradients at z=0,
-    # unlike jnp.linalg.norm(z).clip(min=eps) which produces NaN gradients
-    # when any weight row is exactly zero (e.g., from identity initialization).
-    z_norm = jnp.sqrt(jnp.sum(z**2, axis=-1, keepdims=True) + min_enorm**2)  # (out_dim, 1)
+    # Safe norm: sqrt(sum(z²) + eps²) avoids NaN gradients at z=0
+    z_norm_P1 = jnp.sqrt(jnp.sum(z**2, axis=-1, keepdims=True) + min_enorm**2)  # (P, 1)
 
-    # Metric scaling factor: lam = 2(1 - c||x||²) following the reference
-    # (van Spengler et al. 2023). This is NOT the conformal factor λ(x) = 2/(1-c||x||²),
-    # but rather 4/λ(x). The two only agree at the origin where λ=2.
-    x_sqnorm = jnp.sum(x**2, axis=-1, keepdims=True)  # (batch, 1)
-    lam = 2.0 * (1.0 - c * x_sqnorm)  # (batch, 1)
+    # Metric scaling factor: lam = 2(1 - c||x||²) (NOT the conformal factor)
+    x_sqnorm_B1 = jnp.sum(x**2, axis=-1, keepdims=True)  # (B, 1)
+    lam_B1 = 2.0 * (1.0 - c * x_sqnorm_B1)  # (B, 1)
 
-    z_unitx = jnp.einsum("bi,oi->bo", x, z / z_norm)  # (batch, out_dim)
-    asinh_arg = sqrt_c * lam * z_unitx * cosh(sqrt_c2r) - (lam - 1) * sinh(sqrt_c2r)  # (batch, out_dim)
+    z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1)  # (B, P)
+    asinh_arg_BP = sqrt_c * lam_B1 * z_unitx_BP * cosh(sqrt_c2r_1P) - (lam_B1 - 1) * sinh(sqrt_c2r_1P)  # (B, P)
 
     eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
     clamp = clamping_factor * float(math.log(2 / eps))
-    asinh_arg = smooth_clamp(asinh_arg, -clamp, clamp, smoothing_factor)  # (batch, out_dim)
-    signed_dist2hyp = asinh(asinh_arg) / sqrt_c  # (batch, out_dim)
-    res = 2 * z_norm.T * signed_dist2hyp  # (batch, out_dim)
-    return res
+    asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, smoothing_factor)  # (B, P)
+    signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c  # (B, P)
+    res_BP = 2 * z_norm_P1.T * signed_dist2hyp_BP  # z_norm.T broadcasts (1, P) over (B, P)
+    return res_BP
 
 
 # ---------------------------------------------------------------------------
@@ -670,7 +666,7 @@ def _beta_concat(points: Float[Array, "M n_i"], c: float) -> Float[Array, "n"]:
         Shimizu et al. "Hyperbolic neural networks++." arXiv:2006.08210 (2020).
     """
     M, n_i = points.shape
-    n = M * n_i
+    n = M * n_i  # concatenated dimension
 
     # Euler beta function ratio: B(n/2, 1/2) / B(n_i/2, 1/2)
     beta_n = jax.scipy.special.beta(n / 2.0, 0.5)
@@ -678,13 +674,13 @@ def _beta_concat(points: Float[Array, "M n_i"], c: float) -> Float[Array, "n"]:
     scale = beta_n / beta_ni
 
     # Map all points to tangent space at origin
-    tangent_vectors = jax.vmap(_logmap_0, in_axes=(0, None))(points, c)  # (M, n_i)
+    tangent_MD = jax.vmap(_logmap_0, in_axes=(0, None))(points, c)  # (M, n_i)
 
     # Scale and concatenate in tangent space
-    v = (scale * tangent_vectors).reshape(n)  # (n,)
+    v_N = (scale * tangent_MD).reshape(n)  # (M*n_i,)
 
     # Map back to manifold
-    return _expmap_0(v, c)  # (n,)
+    return _expmap_0(v_N, c)  # (M*n_i,)
 
 
 # ---------------------------------------------------------------------------
@@ -692,7 +688,7 @@ def _beta_concat(points: Float[Array, "M n_i"], c: float) -> Float[Array, "n"]:
 # ---------------------------------------------------------------------------
 
 
-class Poincare:
+class Poincare(ManifoldBase):
     """Poincaré ball manifold with automatic dtype casting.
 
     Provides all manifold operations with automatic casting of array inputs
@@ -720,15 +716,6 @@ class Poincare:
     VERSION_MOBIUS = VERSION_MOBIUS
     VERSION_METRIC_TENSOR = VERSION_METRIC_TENSOR
     VERSION_LORENTZIAN_PROXY = VERSION_LORENTZIAN_PROXY
-
-    def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
-        self.dtype = dtype
-
-    def _cast(self, x: Array) -> Array:
-        """Cast array to target dtype if it's a floating-point array."""
-        if isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, jnp.inexact):
-            return x.astype(self.dtype)
-        return x
 
     def proj(self, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
         """Project point onto Poincaré ball by clipping norm."""
@@ -760,23 +747,9 @@ class Poincare:
         """Compute geodesic distance between Poincaré ball points."""
         return _dist(self._cast(x), self._cast(y), c, version_idx)
 
-    def _dist(
-        self,
-        x: Float[Array, "dim"],
-        y: Float[Array, "dim"],
-        c: float,
-        version_idx: int = VERSION_MOBIUS_DIRECT,
-    ) -> Float[Array, ""]:
-        """Compatibility alias for legacy module-style API."""
-        return self.dist(x, y, c, version_idx)
-
     def dist_0(self, x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
         """Compute geodesic distance from Poincaré ball origin."""
         return _dist_0(self._cast(x), c, version_idx)
-
-    def _dist_0(self, x: Float[Array, "dim"], c: float, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
-        """Compatibility alias for legacy module-style API."""
-        return self.dist_0(x, c, version_idx)
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
         """Exponential map: map tangent vector v at point x to manifold."""

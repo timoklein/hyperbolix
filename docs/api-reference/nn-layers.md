@@ -4,11 +4,13 @@ Hyperbolic neural network layers built with Flax NNX.
 
 ## Overview
 
-Hyperbolix provides 15+ neural network layer classes and 5 activation functions for building hyperbolic deep learning models:
+Hyperbolix provides 20+ neural network layer classes and 5 activation functions for building hyperbolic deep learning models:
 
 - **Linear Layers**: Poincaré and Hyperboloid linear transformations
 - **Convolutional Layers**: HCat-based and HRC-based hyperbolic convolutions (2D and 3D)
 - **Hypformer Components**: HTC (Hyperbolic Transformation Component) and HRC (Hyperbolic Regularization Component) with curvature-change support
+- **Attention Layers**: Three hyperbolic attention variants (linear O(N), softmax O(N²), full Lorentzian O(N²)) from the Hypformer paper
+- **Positional Encoding**: HOPE (Hyperbolic Rotary PE) and Hypformer learnable positional encodings for Transformers
 - **Regression Layers**: Single-layer classifiers with Riemannian geometry
 - **Activation Functions**: Hyperbolic ReLU, Leaky ReLU, Tanh, Swish, GELU
 - **Helper Functions**: Utilities for regression and conformal factor computation
@@ -90,23 +92,24 @@ hyperboloid = Hyperboloid()
 # Create 2D hyperbolic convolution
 conv = HypConv2DHyperboloid(
     manifold_module=hyperboloid,
+    in_channels=16,
     out_channels=32,
     kernel_size=(3, 3),
     stride=(1, 1),
     rngs=nnx.Rngs(0)
 )
 
-# Input: (batch, height, width, in_channels)
+# Input: (batch, height, width, in_channels) — ambient dim = in_channels+1
 x = jax.random.normal(jax.random.PRNGKey(1), (8, 28, 28, 16))
 
 # Project to hyperboloid
 x_ambient = jnp.concatenate([
     jnp.sqrt(jnp.sum(x**2, axis=-1, keepdims=True) + 1.0),
     x
-], axis=-1)
+], axis=-1)  # (8, 28, 28, 17)
 
-# Forward pass
-output = conv(x_ambient, c=1.0, use_tangent_input=False)
+# Forward pass (input_space="manifold" by default)
+output = conv(x_ambient, c=1.0)
 print(output.shape)  # (8, 28, 28, 32×9+1) - dimension grows!
 ```
 
@@ -117,6 +120,53 @@ print(output.shape)  # (8, 28, 28, 32×9+1) - dimension grows!
     - Output: `(d×N)+1` dimensions where `N = kernel_height × kernel_width`
 
     For 3×3 kernel: 3D input → 28D output. Use small kernels or add dimensionality reduction layers.
+
+### Poincaré Convolution
+
+::: hyperbolix.nn_layers.HypConv2DPoincare
+    options:
+      show_source: true
+      heading_level: 4
+
+`HypConv2DPoincare` extracts patches, applies beta-concatenation (HNN++, Shimizu et al. 2020) over the receptive field, then passes through a `HypLinearPoincarePP` layer. Dimension math: `K² × C_in → C_out` where `K` is the kernel size.
+
+**Key Differences from Hyperboloid Convolutions:**
+
+| Feature | HypConv2DPoincare | HypConv2DHyperboloid |
+|---------|-------------------|----------------------|
+| **Model** | Poincaré ball | Hyperboloid |
+| **Aggregation** | Beta-concatenation | HCat (Lorentz concatenation) |
+| **Dimension** | Preserved | Grows: `(d-1)×K²+1` |
+| **Default input** | Tangent space | Manifold (ambient) |
+
+### Usage Example
+
+```python
+import jax
+import jax.numpy as jnp
+from hyperbolix.nn_layers import HypConv2DPoincare
+from hyperbolix.manifolds import Poincare
+from flax import nnx
+
+poincare = Poincare()
+
+# Create Poincaré 2D convolution
+conv = HypConv2DPoincare(
+    manifold_module=poincare,
+    in_channels=16,
+    out_channels=32,
+    kernel_size=3,
+    stride=1,
+    rngs=nnx.Rngs(0)
+)
+
+# Input: (batch, height, width, in_channels) in tangent space (default input_space="tangent")
+x = jax.random.normal(jax.random.PRNGKey(1), (8, 28, 28, 16)) * 0.1
+
+# Forward pass — returns tangent-space output
+output = conv(x, c=1.0)
+print(output.shape)  # (8, 28, 28, 32)
+```
 
 ### LorentzConv2D (HRC-Based)
 
@@ -221,6 +271,11 @@ The Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Comp
       show_source: true
       heading_level: 4
 
+::: hyperbolix.nn_layers.HRCRMSNorm
+    options:
+      show_source: true
+      heading_level: 4
+
 ::: hyperbolix.nn_layers.HRCDropout
     options:
       show_source: true
@@ -229,11 +284,11 @@ The Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Comp
 ### Hypformer Example
 
 ```python
-import jax
-import jax.numpy as jnp
-from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, hrc_relu
+from hyperbolix.nn_layers import HTCLinear, HRCBatchNorm, HRCRMSNorm, hrc_relu
 from hyperbolix.manifolds import Hyperboloid
 from flax import nnx
+import jax
+import jax.numpy as jnp
 
 hyperboloid = Hyperboloid()
 
@@ -246,7 +301,9 @@ class HypformerBlock(nnx.Module):
             out_features=out_dim,
             rngs=rngs
         )
+        # Can use BatchNorm or RMSNorm for normalization
         self.bn = HRCBatchNorm(num_features=out_dim, rngs=rngs)
+        # self.rms = HRCRMSNorm(num_features=out_dim, rngs=rngs)  # Alternative: faster, simpler
 
     def __call__(self, x, c_in=1.0, c_out=2.0, use_running_average=False):
         # Linear transformation with curvature change
@@ -287,6 +344,337 @@ print(output.shape)  # (32, 65) - 64 spatial + 1 time
     - Formula: `space = f_t(x)`, `time = sqrt(||space||^2 + 1/c_out)`
 
     Both support curvature changes (`c_in → c_out`) for flexible network design.
+
+## Attention Layers
+
+Three hyperbolic attention variants from the Hypformer paper (Yang et al. 2025, Section 4.3). All operate on hyperboloid points and support independent curvatures for input (`c_in`), attention computation (`c_attn`), and output (`c_out`). All variants support **causal (autoregressive) masking** via the `causal=True` flag, making them suitable for language models and sequence generation tasks.
+
+### Core Utilities
+
+::: hyperbolix.nn_layers.spatial_to_hyperboloid
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.lorentz_midpoint
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.focus_transform
+    options:
+      show_source: true
+      heading_level: 4
+
+### Attention Modules
+
+::: hyperbolix.nn_layers.HyperbolicLinearAttention
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.HyperbolicSoftmaxAttention
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.HyperbolicFullAttention
+    options:
+      show_source: true
+      heading_level: 4
+
+### Attention Example
+
+```python
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from hyperbolix.manifolds import Hyperboloid
+from hyperbolix.nn_layers import (
+    HyperbolicLinearAttention,
+    HyperbolicSoftmaxAttention,
+    HyperbolicFullAttention,
+)
+
+hyperboloid = Hyperboloid()
+
+# Input: (batch, seq_len, ambient_dim) on the hyperboloid
+B, N, A_in, D_out = 4, 8, 9, 8  # 8-dim spatial + 1 time
+key = jax.random.PRNGKey(0)
+spatial = jax.random.normal(key, (B, N, A_in - 1)) * 0.1
+time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
+x = jnp.concatenate([time, spatial], axis=-1)  # (B, N, A_in)
+
+# O(N) linear attention with focus function — fastest, main Hypformer contribution
+linear_attn = HyperbolicLinearAttention(
+    in_features=A_in,
+    out_features=D_out,
+    num_heads=2,
+    power=2.0,
+    rngs=nnx.Rngs(0),
+)
+y = linear_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0)
+print(y.shape)  # (4, 8, 9) — D_out spatial + 1 time
+
+# O(N²) softmax attention in the spatial domain
+softmax_attn = HyperbolicSoftmaxAttention(
+    in_features=A_in,
+    out_features=D_out,
+    num_heads=2,
+    rngs=nnx.Rngs(0),
+)
+y = softmax_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0)
+
+# O(N²) full Lorentzian attention — operates entirely on hyperboloid points
+full_attn = HyperbolicFullAttention(
+    in_features=A_in,
+    out_features=D_out,
+    num_heads=2,
+    rngs=nnx.Rngs(0),
+)
+y = full_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0)
+
+# Verify outputs are on the hyperboloid
+for b in range(B):
+    for n in range(N):
+        assert hyperboloid.is_in_manifold(y[b, n], c=1.0, atol=1e-4)
+```
+
+#### Causal (Autoregressive) Attention
+
+All three variants support causal masking via `causal=True`. Position `n` can only attend to positions `m ≤ n`, which is required for autoregressive tasks like language modeling.
+
+```python
+# Bidirectional (default) — each token attends to all tokens
+y_bidir = softmax_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0, causal=False)
+
+# Causal — position n only attends to positions 0..n
+y_causal = softmax_attn(x, c_in=1.0, c_attn=1.0, c_out=1.0, causal=True)
+
+# Causal is JIT-compatible
+@nnx.jit
+def forward(model, inp):
+    return model(inp, c_in=1.0, c_attn=1.0, c_out=1.0, causal=True)
+```
+
+!!! info "Causal masking implementations"
+    The three variants implement causal masking differently:
+
+    - **`HyperbolicSoftmaxAttention`** and **`HyperbolicFullAttention`**: Apply a lower-triangular `-inf` mask to the score matrix before softmax — O(N²) in both causal and non-causal mode.
+    - **`HyperbolicLinearAttention`**: Uses a cumulative-sum recurrence (`jax.lax.scan`) following Katharopoulos et al. (2020): `S_i = Σ_{j≤i} φ(K_j) V_j^T` computed in O(1) per step → **O(N) total**, making it especially well-suited for long autoregressive sequences.
+
+!!! info "Choosing an Attention Variant"
+    | Variant | Complexity | Causal complexity | Mechanism | Best For |
+    |---------|-----------|-------------------|-----------|----------|
+    | `HyperbolicLinearAttention` | O(N) | **O(N)** | Kernel trick + focus function φ | Long sequences, autoregressive models |
+    | `HyperbolicSoftmaxAttention` | O(N²) | O(N²) | Standard softmax on spatial components | Short sequences, simplicity |
+    | `HyperbolicFullAttention` | O(N²) | O(N²) | Lorentzian inner product + midpoint | Maximum geometric fidelity |
+
+    All variants support independent curvatures: `c_in` for input, `c_attn` for Q/K/V projections, `c_out` for output.
+
+## Positional Encoding
+
+Positional encoding layers for hyperbolic Transformers and attention mechanisms. These layers enable position-aware models on the hyperboloid manifold while preserving geometric structure.
+
+### Lorentzian Residual Connection
+
+::: hyperbolix.nn_layers.lorentz_residual
+    options:
+      show_source: true
+      heading_level: 4
+
+### HOPE (Hyperbolic Rotary Positional Encoding)
+
+::: hyperbolix.nn_layers.hope
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.HyperbolicRoPE
+    options:
+      show_source: true
+      heading_level: 4
+
+### Hypformer Positional Encoding
+
+::: hyperbolix.nn_layers.HypformerPositionalEncoding
+    options:
+      show_source: true
+      heading_level: 4
+
+### HOPE Example
+
+```python
+from hyperbolix.nn_layers import hope, HyperbolicRoPE
+from hyperbolix.manifolds import Hyperboloid
+import jax.numpy as jnp
+import jax
+
+hyperboloid = Hyperboloid()
+
+# Create sequence of hyperboloid points (batch, seq_len, d+1)
+key = jax.random.PRNGKey(42)
+batch, seq_len, d = 4, 16, 8
+spatial = jax.random.normal(key, (batch, seq_len, d)) * 0.1
+time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
+z = jnp.concatenate([time, spatial], axis=-1)  # (4, 16, 9)
+
+# Position indices
+positions = jnp.arange(seq_len)
+
+# Apply HOPE (functional interface)
+z_encoded = hope(z, positions, c=1.0)
+print(z_encoded.shape)  # (4, 16, 9)
+
+# Or use the NNX module wrapper
+from flax import nnx
+rope = HyperbolicRoPE(dim=d, max_seq_len=64, base=10000.0)
+z_encoded = rope(z, positions, c=1.0)
+
+# Verify manifold constraint
+for b in range(batch):
+    for s in range(seq_len):
+        assert hyperboloid.is_in_manifold(z_encoded[b, s], c=1.0, atol=1e-4)
+
+# Verify relative position property: <HOPE(q,i), HOPE(k,j)>_L depends only on i-j
+q = z[0, 0]  # Single point
+k = z[0, 1]  # Another point
+
+# Same relative offset (=3) at different absolute positions
+q_enc_0 = hope(q[None, None, :], jnp.array([0]), c=1.0)[0, 0]
+k_enc_3 = hope(k[None, None, :], jnp.array([3]), c=1.0)[0, 0]
+
+q_enc_10 = hope(q[None, None, :], jnp.array([10]), c=1.0)[0, 0]
+k_enc_13 = hope(k[None, None, :], jnp.array([13]), c=1.0)[0, 0]
+
+# Minkowski inner products should be equal
+def minkowski_inner(x, y):
+    return -x[0]*y[0] + jnp.sum(x[1:]*y[1:])
+
+ip1 = minkowski_inner(q_enc_0, k_enc_3)
+ip2 = minkowski_inner(q_enc_10, k_enc_13)
+print(jnp.allclose(ip1, ip2, atol=1e-5))  # True
+```
+
+### Hypformer Positional Encoding Example
+
+```python
+from hyperbolix.nn_layers import HypformerPositionalEncoding
+from hyperbolix.manifolds import Hyperboloid
+from flax import nnx
+
+hyperboloid = Hyperboloid()
+import jax.numpy as jnp
+import jax
+
+# Create positional encoding layer
+d = 8  # spatial dimension
+in_features = d + 1  # ambient dimension (including time)
+pe = HypformerPositionalEncoding(
+    in_features=in_features,
+    out_features=d,  # output spatial dimension
+    rngs=nnx.Rngs(0),
+    init_bound=0.02  # small initialization for stability
+)
+
+# Input: batch of hyperboloid points
+key = jax.random.PRNGKey(42)
+batch_size = 32
+spatial = jax.random.normal(key, (batch_size, d)) * 0.1
+time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
+x = jnp.concatenate([time, spatial], axis=-1)  # (32, 9)
+
+# Apply learnable positional encoding
+x_encoded = pe(x, c=1.0)
+print(x_encoded.shape)  # (32, 9) - shape preserved
+
+# Verify manifold constraint
+is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(x_encoded, 1.0)
+print(is_valid.all())  # True
+
+# The epsilon parameter is learnable
+print(f"Epsilon: {pe.epsilon.value}")  # Initially 1.0
+
+# Use in training loop with gradient updates
+import optax
+optimizer = nnx.Optimizer(pe, optax.adam(1e-3), wrt=nnx.Param)
+
+def loss_fn(model):
+    out = model(x, c=1.0)
+    return jnp.sum(out**2)  # Dummy loss
+
+loss, grads = nnx.value_and_grad(loss_fn)(pe)
+optimizer.update(pe, grads)
+
+print(f"Epsilon after update: {pe.epsilon.value}")  # Changed
+```
+
+### Lorentzian Residual Example
+
+```python
+from hyperbolix.nn_layers import lorentz_residual
+from hyperbolix.manifolds import Hyperboloid
+import jax.numpy as jnp
+import jax
+
+hyperboloid = Hyperboloid()
+
+# Create two hyperboloid points
+key1, key2 = jax.random.split(jax.random.PRNGKey(42))
+d = 6
+c = 1.0
+
+spatial_x = jax.random.normal(key1, (d,)) * 0.1
+time_x = jnp.sqrt(jnp.sum(spatial_x**2) + 1/c)
+x = jnp.concatenate([time_x[None], spatial_x])
+
+spatial_y = jax.random.normal(key2, (d,)) * 0.1
+time_y = jnp.sqrt(jnp.sum(spatial_y**2) + 1/c)
+y = jnp.concatenate([time_y[None], spatial_y])
+
+# Combine with Lorentzian residual (weighted midpoint)
+result = lorentz_residual(x, y, w_y=0.5, c=c)
+
+# Verify output is on hyperboloid
+assert hyperboloid.is_in_manifold(result, c, atol=1e-5)
+
+# Works with batches too
+x_batch = jax.random.normal(jax.random.PRNGKey(0), (8, d+1))
+y_batch = jax.random.normal(jax.random.PRNGKey(1), (8, d+1))
+
+# Project to manifold
+x_batch = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x_batch, c)
+y_batch = jax.vmap(hyperboloid.proj, in_axes=(0, None))(y_batch, c)
+
+# Apply residual connection
+result_batch = lorentz_residual(x_batch, y_batch, w_y=0.3, c=c)
+print(result_batch.shape)  # (8, 7)
+```
+
+!!! info "Positional Encoding for Hyperbolic Transformers"
+    **HOPE (Hyperbolic Rotary Positional Encoding)**:
+
+    - Deterministic, no learnable parameters
+    - Based on RoPE: applies rotations to spatial components
+    - Preserves relative position information: `⟨HOPE(q,i), HOPE(k,j)⟩_L` depends only on `i-j`
+    - Rotation is an isometry: preserves spatial norms
+    - Identity at position 0
+    - Suitable for long sequences (no learned embeddings to store)
+
+    **HypformerPositionalEncoding**:
+
+    - Learnable, adapts to task
+    - Uses HTCLinear + Lorentzian residual
+    - `epsilon` parameter controls position encoding magnitude
+    - More flexible but requires training
+    - Suitable when position patterns are task-specific
+
+    **Lorentzian Residual**:
+
+    - Building block for both approaches
+    - Computes weighted Lorentzian midpoint
+    - Used for skip connections in hyperbolic Transformers/ResNets
+    - Formula: `ave = x + w_y*y`, normalized to hyperboloid
 
 ## Regression Layers
 
@@ -375,6 +763,25 @@ Hyperbolic activation functions that preserve manifold constraints. All activati
       heading_level: 4
 
 ::: hyperbolix.nn_layers.hyp_gelu
+    options:
+      show_source: true
+      heading_level: 4
+
+### Poincaré Activations
+
+Thin wrappers that apply standard activations in the Poincaré tangent space via `logmap_0 → activation → expmap_0`.
+
+::: hyperbolix.nn_layers.poincare_relu
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.poincare_leaky_relu
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.poincare_tanh
     options:
       show_source: true
       heading_level: 4
@@ -528,6 +935,7 @@ The neural network layers implement methods from:
 - **Chen et al. (2022)**: "Fully Hyperbolic Neural Networks" - FHCNN linear layers
 - **LResNet (2023)**: "Lorentzian ResNet" - HRC-based convolutions (`LorentzConv2D`)
 - **Hypformer**: "Hyperbolic Transformers" - HTC/HRC components with curvature-change support
+- **Chen et al. (2024)**: "Hyperbolic Embeddings for Learning on Manifolds (HELM)" - HOPE positional encoding and Lorentzian residual connections
 
 ### Key Theoretical Connections
 
