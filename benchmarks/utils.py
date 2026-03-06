@@ -7,6 +7,7 @@ used by both hyperboloid and Poincaré MNIST benchmarks.
 import time
 from typing import Any
 
+import grain.python as grain
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -23,34 +24,30 @@ from hyperbolix.optim import riemannian_sgd
 # ==============================================================================
 
 
-def load_mnist_data(batch_size: int = 128):
-    """Load MNIST using HuggingFace datasets.
+class MNISTPreprocess(grain.MapTransform):
+    """Flatten 28x28 PIL image to 784 float32 and normalize; cast label to int32."""
 
-    Parameters
-    ----------
-    batch_size : int
-        Batch size for training and evaluation
+    def map(self, sample):
+        image = np.array(sample["image"]).flatten().astype(np.float32) / 255.0
+        label = np.int32(sample["label"])
+        return {"image": image, "label": label}
+
+
+def load_mnist_data():
+    """Load MNIST using HuggingFace datasets and return grain MapDatasets.
 
     Returns
     -------
-    train_data : Dataset
-        Training dataset with flattened and normalized images
-    test_data : Dataset
-        Test dataset with flattened and normalized images
+    train_data : grain.MapDataset
+        Training dataset (preprocessed, ready for .shuffle/.batch/.to_iter_dataset)
+    test_data : grain.MapDataset
+        Test dataset (preprocessed, ready for .batch/.to_iter_dataset)
     """
     print("  Loading MNIST dataset from HuggingFace...")
     dataset = load_dataset("mnist")
 
-    def prepare_batch(batch):
-        # Flatten (28x28 → 784) and normalize [0, 255] → [0, 1]
-        images = np.array(batch["image"])  # (batch, 28, 28)
-        x = images.reshape(-1, 784).astype(np.float32) / 255.0  # (batch, 784)
-        y = np.array(batch["label"]).astype(np.int32)
-        return {"image": x, "label": y}
-
-    # Prepare datasets without .with_format() to avoid extra dimensions
-    train_data = dataset["train"].map(prepare_batch, batched=True)
-    test_data = dataset["test"].map(prepare_batch, batched=True)
+    train_data = grain.MapDataset.source(dataset["train"]).map(MNISTPreprocess())
+    test_data = grain.MapDataset.source(dataset["test"]).map(MNISTPreprocess())
 
     print(f"  Training samples: {len(train_data)}")
     print(f"  Test samples: {len(test_data)}")
@@ -77,7 +74,7 @@ def train_step(model: nnx.Module, optimizer: nnx.Optimizer, x: Array, y: Array, 
     return loss
 
 
-def train_epoch(model: nnx.Module, optimizer: nnx.Optimizer, data_loader: Any, c: float = 1.0) -> dict[str, float]:
+def train_epoch(model: nnx.Module, optimizer: nnx.Optimizer, train_iter, c: float = 1.0) -> dict[str, float]:
     """Train for one epoch.
 
     Parameters
@@ -86,8 +83,8 @@ def train_epoch(model: nnx.Module, optimizer: nnx.Optimizer, data_loader: Any, c
         Model to train
     optimizer : nnx.Optimizer
         Optimizer for parameter updates
-    data_loader : Dataset
-        Training dataset
+    train_iter : iterable
+        Iterable of batched dicts with 'image' and 'label' keys
     c : float
         Curvature parameter
 
@@ -99,12 +96,9 @@ def train_epoch(model: nnx.Module, optimizer: nnx.Optimizer, data_loader: Any, c
     epoch_start = time.perf_counter()
 
     losses = []
-    for batch in data_loader.iter(batch_size=128):
+    for batch in train_iter:
         x = jnp.array(batch["image"])
         y = jnp.array(batch["label"])
-        # Squeeze extra dimension if present
-        if x.ndim == 3 and x.shape[-1] == 1:
-            x = x.squeeze(-1)
         loss = train_step(model, optimizer, x, y, c)
         losses.append(float(loss))
 
@@ -112,15 +106,15 @@ def train_epoch(model: nnx.Module, optimizer: nnx.Optimizer, data_loader: Any, c
     return {"loss": np.mean(losses), "time": epoch_time}
 
 
-def evaluate(model: nnx.Module, data_loader: Any, c: float = 1.0) -> float:
+def evaluate(model: nnx.Module, eval_iter, c: float = 1.0) -> float:
     """Compute accuracy on dataset.
 
     Parameters
     ----------
     model : nnx.Module
         Model to evaluate
-    data_loader : Dataset
-        Dataset to evaluate on
+    eval_iter : iterable
+        Iterable of batched dicts with 'image' and 'label' keys
     c : float
         Curvature parameter
 
@@ -132,12 +126,9 @@ def evaluate(model: nnx.Module, data_loader: Any, c: float = 1.0) -> float:
     correct = 0
     total = 0
 
-    for batch in data_loader.iter(batch_size=128):
+    for batch in eval_iter:
         x = jnp.array(batch["image"])
         y = jnp.array(batch["label"])
-        # Squeeze extra dimension if present
-        if x.ndim == 3 and x.shape[-1] == 1:
-            x = x.squeeze(-1)
         # Evaluation mode: use_running_average=True for BatchNorm
         logits = model(x, c, use_running_average=True)
         preds = jnp.argmax(logits, axis=-1)
@@ -173,10 +164,11 @@ def estimate_memory_mb(model: nnx.Module) -> float:
 def benchmark_model(
     model_class: type[nnx.Module],
     model_name: str,
-    train_data: Any,
-    test_data: Any,
+    train_data,
+    test_data,
     seed: int = 42,
     c: float = 1.0,
+    batch_size: int = 128,
 ) -> dict[str, Any]:
     """Run full benchmark for one model variant.
 
@@ -186,14 +178,16 @@ def benchmark_model(
         Model class to benchmark
     model_name : str
         Name for logging
-    train_data : Dataset
-        Training dataset
-    test_data : Dataset
-        Test dataset
+    train_data : grain.MapDataset
+        Training dataset (preprocessed)
+    test_data : grain.MapDataset
+        Test dataset (preprocessed)
     seed : int
         Random seed for reproducibility
     c : float
         Curvature parameter
+    batch_size : int
+        Batch size for training and evaluation
 
     Returns
     -------
@@ -218,8 +212,8 @@ def benchmark_model(
     }
 
     # JIT compilation timing (first call)
-    x_dummy = jnp.ones((128, 784))
-    y_dummy = jnp.zeros(128, dtype=jnp.int32)
+    x_dummy = jnp.ones((batch_size, 784))
+    y_dummy = jnp.zeros(batch_size, dtype=jnp.int32)
 
     compile_start = time.perf_counter()
     _ = train_step(model, optimizer, x_dummy, y_dummy, c)
@@ -229,8 +223,11 @@ def benchmark_model(
 
     # Training loop (5 epochs)
     for epoch in range(5):
-        epoch_metrics = train_epoch(model, optimizer, train_data, c=c)
-        val_acc = evaluate(model, test_data, c=c)
+        train_iter = train_data.shuffle(seed=seed + epoch).batch(batch_size, drop_remainder=True).to_iter_dataset()
+        epoch_metrics = train_epoch(model, optimizer, train_iter, c=c)
+
+        eval_iter = test_data.batch(batch_size, drop_remainder=False).to_iter_dataset()
+        val_acc = evaluate(model, eval_iter, c=c)
 
         metrics["train_losses"].append(epoch_metrics["loss"])
         metrics["train_times"].append(epoch_metrics["time"])
@@ -340,8 +337,22 @@ def print_summary_table(results: dict[str, dict[str, Any]]):
 # ==============================================================================
 
 
+class SequencePairSource(grain.RandomAccessDataSource):
+    """Wraps paired numpy arrays for grain random access."""
+
+    def __init__(self, inputs: np.ndarray, targets: np.ndarray):
+        self._inputs = inputs
+        self._targets = targets
+
+    def __getitem__(self, idx):
+        return {"input": self._inputs[idx], "target": self._targets[idx]}
+
+    def __len__(self):
+        return len(self._inputs)
+
+
 def load_shakespeare_data(seq_len: int = 128):
-    """Load Tiny Shakespeare as character-level sequences.
+    """Load Tiny Shakespeare as character-level sequences using grain.
 
     Parameters
     ----------
@@ -350,14 +361,10 @@ def load_shakespeare_data(seq_len: int = 128):
 
     Returns
     -------
-    train_inputs : jax.Array, shape (num_train, seq_len)
-        Training input token IDs.
-    train_targets : jax.Array, shape (num_train, seq_len)
-        Training target token IDs (shifted by 1).
-    val_inputs : jax.Array, shape (num_val, seq_len)
-        Validation input token IDs.
-    val_targets : jax.Array, shape (num_val, seq_len)
-        Validation target token IDs.
+    train_ds : grain.MapDataset
+        Training dataset (ready for .shuffle/.batch/.to_iter_dataset)
+    val_ds : grain.MapDataset
+        Validation dataset (ready for .batch/.to_iter_dataset)
     vocab_size : int
         Number of unique characters.
     char2idx : dict
@@ -383,11 +390,14 @@ def load_shakespeare_data(seq_len: int = 128):
         n_chunks = len(tokens) // (sl + 1)
         tokens = tokens[: n_chunks * (sl + 1)]
         chunks = tokens.reshape(n_chunks, sl + 1)
-        return jnp.array(chunks[:, :-1]), jnp.array(chunks[:, 1:])
+        return chunks[:, :-1], chunks[:, 1:]
 
     train_inputs, train_targets = tokenize_and_chunk(train_text, seq_len)
     val_inputs, val_targets = tokenize_and_chunk(val_text, seq_len)
 
     print(f"  Train sequences: {train_inputs.shape[0]}, Val sequences: {val_inputs.shape[0]}")
 
-    return train_inputs, train_targets, val_inputs, val_targets, vocab_size, char2idx
+    train_ds = grain.MapDataset.source(SequencePairSource(train_inputs, train_targets))
+    val_ds = grain.MapDataset.source(SequencePairSource(val_inputs, val_targets))
+
+    return train_ds, val_ds, vocab_size, char2idx

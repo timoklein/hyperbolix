@@ -269,8 +269,15 @@ def shakespeare_train_step(model, optimizer, x_BN, y_BN):
     return loss
 
 
-def shakespeare_evaluate(model, val_inputs, val_targets, batch_size: int = 64):
+def shakespeare_evaluate(model, val_iter):
     """Evaluate model on validation set.
+
+    Parameters
+    ----------
+    model : nnx.Module
+        Model to evaluate
+    val_iter : iterable
+        Iterable of batched dicts with 'input' and 'target' keys
 
     Returns
     -------
@@ -281,9 +288,9 @@ def shakespeare_evaluate(model, val_inputs, val_targets, batch_size: int = 64):
     total_tokens = 0
     n_batches = 0
 
-    for i in range(0, len(val_inputs), batch_size):
-        x_BN = val_inputs[i : i + batch_size]
-        y_BN = val_targets[i : i + batch_size]
+    for batch in val_iter:
+        x_BN = jnp.array(batch["input"])
+        y_BN = jnp.array(batch["target"])
         logits_BNV = model(x_BN)
         loss = optax.softmax_cross_entropy_with_integer_labels(logits_BNV, y_BN).mean()
         preds_BN = jnp.argmax(logits_BNV, axis=-1)
@@ -307,13 +314,13 @@ def shakespeare_evaluate(model, val_inputs, val_targets, batch_size: int = 64):
 def run_shakespeare_benchmark(
     model_name: str,
     model: nnx.Module,
-    train_inputs,
-    train_targets,
-    val_inputs,
-    val_targets,
+    train_ds,
+    val_ds,
     *,
+    seed: int = 42,
     epochs: int = 10,
     batch_size: int = 64,
+    seq_len: int = 128,
     learning_rate: float = 3e-4,
 ) -> dict[str, Any]:
     """Run full Shakespeare benchmark for one model."""
@@ -327,9 +334,9 @@ def run_shakespeare_benchmark(
 
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate), wrt=nnx.Param)
 
-    # JIT compilation timing
-    x_dummy = train_inputs[:batch_size]
-    y_dummy = train_targets[:batch_size]
+    # JIT compilation timing with dummy data
+    x_dummy = jnp.zeros((batch_size, seq_len), dtype=jnp.int32)
+    y_dummy = jnp.zeros((batch_size, seq_len), dtype=jnp.int32)
     compile_start = time.perf_counter()
     _ = shakespeare_train_step(model, optimizer, x_dummy, y_dummy)
     compile_time = time.perf_counter() - compile_start
@@ -347,26 +354,22 @@ def run_shakespeare_benchmark(
         "epoch_times": [],
     }
 
-    n_train = len(train_inputs)
     for epoch in range(epochs):
         epoch_start = time.perf_counter()
 
-        # Shuffle training data
-        perm = np.random.permutation(n_train)
+        train_iter = train_ds.shuffle(seed=seed + epoch).batch(batch_size, drop_remainder=True).to_iter_dataset()
         epoch_losses = []
-        for i in range(0, n_train, batch_size):
-            idx = perm[i : i + batch_size]
-            if len(idx) < batch_size:
-                continue  # skip incomplete batch
-            x_BN = train_inputs[idx]
-            y_BN = train_targets[idx]
+        for batch in train_iter:
+            x_BN = jnp.array(batch["input"])
+            y_BN = jnp.array(batch["target"])
             loss = shakespeare_train_step(model, optimizer, x_BN, y_BN)
             epoch_losses.append(float(loss))
 
         epoch_time = time.perf_counter() - epoch_start
         train_loss = float(np.mean(epoch_losses))
 
-        val_metrics = shakespeare_evaluate(model, val_inputs, val_targets, batch_size)
+        val_iter = val_ds.batch(batch_size, drop_remainder=False).to_iter_dataset()
+        val_metrics = shakespeare_evaluate(model, val_iter)
 
         metrics["train_losses"].append(train_loss)
         metrics["val_losses"].append(val_metrics["val_loss"])
@@ -511,7 +514,7 @@ def main():
     print(f"  curvature={args.curvature}, seed={args.seed}")
 
     # Load data
-    train_inputs, train_targets, val_inputs, val_targets, vocab_size, _char2idx = load_shakespeare_data(args.seq_len)
+    train_ds, val_ds, vocab_size, _char2idx = load_shakespeare_data(args.seq_len)
 
     results = {}
     rngs = nnx.Rngs(params=args.seed, dropout=args.seed + 1)
@@ -524,12 +527,12 @@ def main():
         results["Euclidean"] = run_shakespeare_benchmark(
             "Euclidean",
             model,
-            train_inputs,
-            train_targets,
-            val_inputs,
-            val_targets,
+            train_ds,
+            val_ds,
+            seed=args.seed,
             epochs=args.epochs,
             batch_size=args.batch_size,
+            seq_len=args.seq_len,
             learning_rate=args.lr,
         )
 
@@ -558,12 +561,12 @@ def main():
         results[name] = run_shakespeare_benchmark(
             name,
             model,
-            train_inputs,
-            train_targets,
-            val_inputs,
-            val_targets,
+            train_ds,
+            val_ds,
+            seed=args.seed,
             epochs=args.epochs,
             batch_size=args.batch_size,
+            seq_len=args.seq_len,
             learning_rate=args.lr,
         )
 

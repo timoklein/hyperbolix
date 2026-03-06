@@ -387,7 +387,7 @@ def main():
         print(f"\n{'=' * 60}")
         print(f"Benchmarking {name}")
         print("=" * 60)
-        results[name] = benchmark_model(model_class, name, train_data, test_data, seed=args.seed, c=DEFAULT_C)
+        results[name] = benchmark_model(model_class, name, train_data, test_data, seed=args.seed, c=DEFAULT_C, batch_size=128)
 
     # Save results
     print("\nSaving results...")
