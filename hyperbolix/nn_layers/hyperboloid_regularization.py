@@ -12,12 +12,16 @@ Key components:
 - HRCLayerNorm: Hyperbolic layer normalization with curvature change
 - HRCRMSNorm: Hyperbolic RMS normalization with curvature change
 - HRCBatchNorm: Hyperbolic batch normalization with curvature change
+- FGGMeanOnlyBatchNorm: Mean-only batch normalization for FGG-LNN (no variance division)
 
 References
 ----------
 Hypformer paper (citation to be added)
+Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026), Section 4.4.
+Salimans & Kingma "Weight Normalization" (2016).
 """
 
+import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
@@ -338,3 +342,95 @@ class HRCBatchNorm(nnx.Module):
             return self.bn(z, use_running_average=use_running_average)
 
         return hrc(x, bn_fn, c_in, c_out, self.eps)
+
+
+class FGGMeanOnlyBatchNorm(nnx.Module):
+    """Mean-only batch normalization for FGG-LNN layers.
+
+    Subtracts the batch mean from spatial components without dividing by variance,
+    then adds a learnable bias. This avoids the instability that standard BatchNorm
+    causes in hyperbolic space (exponentially large/small variance denominators)
+    while still centering activations for stable training.
+
+    Designed to pair with weight normalization (``FGGLinear(use_weight_norm=True)``),
+    which handles magnitude control. Together they replace standard BatchNorm in
+    fully hyperbolic FGG-LNN networks.
+
+    Formula (applied to spatial components via HRC):
+        ``y = x - E[x] + bias``
+
+    Parameters
+    ----------
+    num_features : int
+        Number of spatial features (D, not D+1).
+    momentum : float, optional
+        Exponential moving average momentum for running mean (default: 0.99).
+        Update: ``running_mean = momentum * running_mean + (1 - momentum) * batch_mean``.
+    eps : float, optional
+        Numerical stability floor for HRC time reconstruction (default: 1e-7).
+
+    References
+    ----------
+    Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026), §4.4.
+    Salimans & Kingma "Weight Normalization" (2016).
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        *,
+        momentum: float = 0.99,
+        eps: float = 1e-7,
+    ):
+        self.num_features = num_features
+        self.momentum = momentum
+        self.eps = eps
+
+        # Learnable bias (shift after centering)
+        self.bias = nnx.Param(jnp.zeros((num_features,)))
+        # Running mean for eval mode
+        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,)))
+
+    def __call__(
+        self,
+        x: Float[Array, "batch dim_plus_1"],
+        c_in: float = 1.0,
+        c_out: float = 1.0,
+        use_running_average: bool = False,
+    ) -> Float[Array, "batch dim_plus_1"]:
+        """Apply mean-only batch normalization via HRC.
+
+        Parameters
+        ----------
+        x : Array, shape (B, D+1) or (B, ..., D+1)
+            Input points on hyperboloid with curvature ``c_in``.
+        c_in : float, optional
+            Input curvature (default: 1.0).
+        c_out : float, optional
+            Output curvature (default: 1.0).
+        use_running_average : bool, optional
+            If True, use running mean (eval mode). If False, compute from
+            batch and update running mean (train mode). Default: False.
+
+        Returns
+        -------
+        Array, same shape as input
+            Points on hyperboloid with curvature ``c_out``.
+        """
+
+        def mean_only_bn(z):
+            # z: spatial components, shape (..., D)
+            if use_running_average:
+                mean = self.running_mean[...]
+            else:
+                # Compute mean over all dims except the last (feature) dim
+                # Flatten leading dims for mean computation
+                z_flat = z.reshape(-1, z.shape[-1])  # (N, D)
+                mean = jnp.mean(z_flat, axis=0)  # (D,)
+
+                # Update running mean (EMA)
+                self.running_mean[...] = self.momentum * self.running_mean[...] + (1.0 - self.momentum) * mean
+
+            return z - mean + self.bias[...]
+
+        return hrc(x, mean_only_bn, c_in, c_out, self.eps)

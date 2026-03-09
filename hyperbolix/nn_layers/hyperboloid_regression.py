@@ -1,12 +1,21 @@
-"""Hyperboloid regression layers for JAX/Flax NNX."""
+"""Hyperboloid regression layers for JAX/Flax NNX.
+
+Dimension key:
+  B: batch size
+  I: in_spatial (in_features - 1)    K: num_classes
+  Ai: in_ambient (in_features)
+"""
 
 import jax
+import jax.numpy as jnp
 from flax import nnx
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.utils.math_utils import asinh as safe_asinh
 
 from ._helpers import validate_hyperboloid_manifold
+from .hyperboloid_core import build_spacelike_V
 
 
 class HypRegressionHyperboloid(nnx.Module):
@@ -110,3 +119,100 @@ class HypRegressionHyperboloid(nnx.Module):
         )
 
         return res
+
+
+class FGGLorentzMLR(nnx.Module):
+    """Fast and Geometrically Grounded Lorentz multinomial logistic regression.
+
+    Outputs Euclidean logits (signed scaled distances to hyperplanes) using the
+    FGG spacelike V construction. Unlike ``HypRegressionHyperboloid``, this layer
+    uses the distance-to-hyperplane formulation matching the reference fc_mlr
+    (``signed_dist2hyperplanes_scaled_angle``).
+
+    Forward pass (matching reference fc_mlr):
+        1. Build V_mink from (z, a)
+        2. mink = x @ V_mink   (Minkowski inner products)
+        3. logits = asinh(sqrt(c) * mink) / sqrt(c)   (signed scaled distances)
+
+    Parameters
+    ----------
+    in_features : int
+        Input ambient dimension (D_in + 1), including time component.
+    num_classes : int
+        Number of output classes.
+    rngs : nnx.Rngs
+        Random number generators for parameter initialization.
+    reset_params : str, optional
+        Weight initialization scheme for hyperplane normals: ``"mlr"``
+        (normal, std=sqrt(5/I)) or ``"default"`` (uniform) (default: ``"mlr"``).
+    init_bias : float, optional
+        Initial value for bias entries (default: 0.5).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    References
+    ----------
+    Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026), Eq. 23.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        num_classes: int,
+        *,
+        rngs: nnx.Rngs,
+        reset_params: str = "mlr",
+        init_bias: float = 0.5,
+        eps: float = 1e-7,
+    ):
+        if reset_params not in ("default", "mlr"):
+            raise ValueError(f"reset_params must be 'default' or 'mlr', got '{reset_params}'")
+
+        in_spatial = in_features - 1  # I
+        self.in_features = in_features
+        self.num_classes = num_classes
+        self.eps = eps
+
+        # Hyperplane normals (spatial) and bias offsets
+        key = rngs.params()
+        if reset_params == "mlr":
+            # Reference: N(0, sqrt(5/I)) for spatial weights
+            std = jnp.sqrt(5.0 / in_spatial)
+            self.z = nnx.Param(jax.random.normal(key, (in_spatial, num_classes)) * std)
+        else:  # default
+            stdv = 1.0 / jnp.sqrt(jnp.array(in_spatial, dtype=jnp.float32))
+            self.z = nnx.Param(jax.random.uniform(key, (in_spatial, num_classes), minval=-stdv, maxval=stdv))
+        self.a = nnx.Param(jnp.full((num_classes,), init_bias))
+
+    def __call__(
+        self,
+        x_BAi: Float[Array, "batch in_features"],
+        c: float = 1.0,
+    ) -> Float[Array, "batch num_classes"]:
+        """Forward pass returning Euclidean logits.
+
+        Parameters
+        ----------
+        x_BAi : Array, shape (B, Ai)
+            Input points on the hyperboloid with curvature ``c``.
+        c : float, optional
+            Curvature parameter (default: 1.0).
+
+        Returns
+        -------
+        logits_BK : Array, shape (B, K)
+            Euclidean logits (signed scaled distances to hyperplanes).
+        """
+        # 1. Build V_mink from (z, a)
+        V_AiK = build_spacelike_V(self.z[...], self.a[...], c, self.eps)  # (Ai, K)
+        # Cast V to match input dtype (avoids float32/float64 scatter warnings)
+        V_AiK = V_AiK.astype(x_BAi.dtype)
+
+        # 2. Minkowski inner products
+        mink_BK = x_BAi @ V_AiK  # (B, K)
+
+        # 3. Signed scaled distances (matching reference fc_mlr: no norm scaling)
+        sqrt_c = jnp.sqrt(c)
+        logits_BK = safe_asinh(sqrt_c * mink_BK) / sqrt_c  # (B, K)
+
+        return logits_BK
