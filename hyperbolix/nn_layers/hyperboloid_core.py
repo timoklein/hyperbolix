@@ -1,7 +1,8 @@
 """Core Hypformer operations for hyperboloid manifolds.
 
 This module contains the foundational HRC (Hyperbolic Regularization Component) and
-HTC (Hyperbolic Transformation Component) operations from the Hypformer paper. These
+HTC (Hyperbolic Transformation Component) operations from the Hypformer paper, as well
+as the spacelike V-matrix construction from FGG-LNN (Klis et al. 2026). These
 are the building blocks used throughout the library for creating hyperbolic neural
 network layers with curvature-change support.
 
@@ -9,19 +10,84 @@ Key Components
 --------------
 - **hrc**: Wraps Euclidean operations on spatial components only
 - **htc**: Wraps Euclidean operations on full hyperboloid points
+- **build_spacelike_V**: Constructs spacelike weight vectors for FGG layers
 
-Both functions enable curvature transformations (c_in → c_out) and avoid expensive
-exp/log maps by using constraint-based time reconstruction.
+Both HRC/HTC functions enable curvature transformations (c_in → c_out) and avoid
+expensive exp/log maps by using constraint-based time reconstruction.
 
 References
 ----------
 Hypformer paper (citation to be added)
+Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026)
 """
 
 from collections.abc import Callable
 
 import jax.numpy as jnp
 from jaxtyping import Array, Float
+
+from hyperbolix.utils.math_utils import cosh as safe_cosh
+from hyperbolix.utils.math_utils import sinh as safe_sinh
+
+
+def build_spacelike_V(
+    U_IO: Float[Array, "I O"],
+    b_O: Float[Array, "O"],
+    c: float,
+    eps: float = 1e-7,
+) -> Float[Array, "Ai O"]:
+    """Build spacelike V matrix with Minkowski metric absorbed.
+
+    Constructs the spacelike weight vectors from Euclidean weights U and bias b
+    via parallel transport (Eq. 12, Klis et al. 2026). The Minkowski metric
+    signature diag(-1, +1, ..., +1) is absorbed into the time row so that the
+    forward pass reduces to a single ``x @ V`` matmul.
+
+    Parameters
+    ----------
+    U_IO : Array, shape (I, O)
+        Euclidean weight matrix. I = in_spatial, O = out_spatial.
+    b_O : Array, shape (O,)
+        Bias per output neuron.
+    c : float
+        Curvature parameter (positive).
+    eps : float, optional
+        Numerical stability floor for column norms (default: 1e-7).
+
+    Returns
+    -------
+    V_AiO : Array, shape (I+1, O)
+        Spacelike V matrix with negated time row (Minkowski metric absorbed).
+        Columns are v^(i) with ``v_time_mink = -||w|| * sinh(arg)``.
+
+    References
+    ----------
+    Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026), Eq. 12.
+    """
+    # Dimension key: I=in_spatial, O=out_spatial, Ai=in_ambient (I+1)
+
+    # Column norms of U: ||w^(i)||_E
+    norm_sq_O = jnp.sum(U_IO**2, axis=0)  # (O,)
+    norm_O = jnp.sqrt(norm_sq_O + eps)  # (O,) gradient-safe (never 0)
+
+    # Smooth gate: 0 for zero-norm columns, ~1 for normal columns.
+    # Ensures arg→0 smoothly when U column→0 (no weight → no bias transport).
+    gate_O = norm_sq_O / (norm_sq_O + eps)  # (O,)
+
+    # Argument for sinh/cosh: -sqrt(c) * b / ||w||, gated for zero columns
+    arg_O = jnp.clip(-jnp.sqrt(c) * b_O * gate_O / norm_O, -100.0, 100.0)  # (O,)
+
+    # Time row: negate to absorb Minkowski metric I_{1,D}
+    # v_time = ||w|| * sinh(arg), v_time_mink = -v_time
+    v_time_mink_O = -norm_O * safe_sinh(arg_O)  # (O,)
+
+    # Spatial rows: w^(i) * cosh(arg)
+    v_space_IO = U_IO * safe_cosh(arg_O)[None, :]  # (I, O)
+
+    # Stack: [v_time_mink; v_space] -> (I+1, O) = (Ai, O)
+    V_AiO = jnp.concatenate([v_time_mink_O[None, :], v_space_IO], axis=0)  # (Ai, O)
+
+    return V_AiO
 
 
 def spatial_to_hyperboloid(

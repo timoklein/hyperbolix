@@ -49,6 +49,10 @@ from benchmarks.utils import (
 )
 from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers import (
+    FGGConv2D,
+    FGGLinear,
+    FGGLorentzMLR,
+    FGGMeanOnlyBatchNorm,
     HRCBatchNorm,
     HTCLinear,
     HypConv2DHyperboloid,
@@ -530,6 +534,195 @@ class FullyHyperbolicCNN_Lorentz(nnx.Module):
         return self.output(x, c)  # (batch, 10)
 
 
+class FGGHybrid(nnx.Module):
+    """FGG-LNN with Euclidean embedding.
+
+    Architecture:
+        Input (784) → Euclidean Linear(784→32) + ReLU
+                   → Project to Hyperboloid (32→33)
+                   → FGGLinear(33→65, relu)
+                   → FGGLinear(65→65, relu)
+                   → FGGLorentzMLR(65→10 classes)
+    """
+
+    def __init__(self, rngs: nnx.Rngs):
+        self.embed = nnx.Linear(784, 32, rngs=rngs)  # Euclidean embedding
+        self.hyp1 = FGGLinear(33, 65, rngs=rngs, activation=jax.nn.relu, reset_params="eye")
+        self.hyp2 = FGGLinear(65, 65, rngs=rngs, activation=jax.nn.relu, reset_params="eye")
+        self.output = FGGLorentzMLR(65, 10, rngs=rngs)
+
+    def __call__(
+        self, x: Float[Array, "batch 784"], c: float = 1.0, use_running_average: bool = False
+    ) -> Float[Array, "batch 10"]:
+        # Embed in Euclidean space
+        x = jax.nn.relu(self.embed(x))  # (batch, 32)
+
+        # Project to hyperboloid via constraint
+        time_coord = jnp.sqrt(jnp.sum(x**2, axis=-1, keepdims=True) + 1 / c)  # (batch, 1)
+        x = jnp.concatenate([time_coord, x], axis=-1)  # (batch, 33)
+
+        # FGG layers (activation baked in)
+        x = self.hyp1(x, c)  # (batch, 65)
+        x = self.hyp2(x, c)  # (batch, 65)
+
+        # FGG MLR classification
+        return self.output(x, c)  # (batch, 10)
+
+
+class FGGDirect(nnx.Module):
+    """FGG-LNN with direct projection.
+
+    Architecture:
+        Input (784) → Constraint-based projection to Hyperboloid (784→785)
+                   → FGGLinear(785→65, relu)
+                   → FGGLinear(65→65, relu)
+                   → FGGLorentzMLR(65→10 classes)
+    """
+
+    def __init__(self, rngs: nnx.Rngs):
+        self.hyp1 = FGGLinear(785, 65, rngs=rngs, activation=jax.nn.relu, reset_params="kaiming")
+        self.hyp2 = FGGLinear(65, 65, rngs=rngs, activation=jax.nn.relu, reset_params="eye")
+        self.output = FGGLorentzMLR(65, 10, rngs=rngs)
+
+    def __call__(
+        self, x: Float[Array, "batch 784"], c: float = 1.0, use_running_average: bool = False
+    ) -> Float[Array, "batch 10"]:
+        # Constraint-based projection: time = sqrt(||space||^2 + 1/c)
+        time_coord = jnp.sqrt(jnp.sum(x**2, axis=-1, keepdims=True) + 1 / c)  # (batch, 1)
+        x = jnp.concatenate([time_coord, x], axis=-1)  # (batch, 785)
+
+        # FGG layers
+        x = self.hyp1(x, c)  # (batch, 65)
+        x = self.hyp2(x, c)  # (batch, 65)
+
+        # FGG MLR classification
+        return self.output(x, c)  # (batch, 10)
+
+
+class FGGCNNHybrid(nnx.Module):
+    """FGG-LNN CNN with Euclidean stem.
+
+    Architecture:
+        Input (28x28x1) → Euclidean Conv(1→32, stride=2) + ReLU + BatchNorm → 14x14x32
+                        → Euclidean Conv(32→64, stride=2) + ReLU + BatchNorm → 7x7x64
+                        → Global Average Pooling → (batch, 64)
+                        → Project to Hyperboloid (64→65)
+                        → FGGLinear(65→65, relu)
+                        → FGGLorentzMLR(65→10 classes)
+    """
+
+    def __init__(self, rngs: nnx.Rngs):
+        # Euclidean stem
+        self.conv1 = nnx.Conv(in_features=1, out_features=32, kernel_size=(3, 3), strides=(2, 2), padding="SAME", rngs=rngs)
+        self.bn1 = nnx.BatchNorm(32, rngs=rngs)
+        self.conv2 = nnx.Conv(in_features=32, out_features=64, kernel_size=(3, 3), strides=(2, 2), padding="SAME", rngs=rngs)
+        self.bn2 = nnx.BatchNorm(64, rngs=rngs)
+
+        # Hyperbolic head
+        self.hyp1 = FGGLinear(65, 65, rngs=rngs, activation=jax.nn.relu, reset_params="eye")
+        self.output = FGGLorentzMLR(65, 10, rngs=rngs)
+
+    def __call__(
+        self, x: Float[Array, "batch 784"], c: float = 1.0, use_running_average: bool = False
+    ) -> Float[Array, "batch 10"]:
+        x = x.reshape(-1, 28, 28, 1)  # (batch, 28, 28, 1)
+
+        # Euclidean feature extraction
+        x = jax.nn.relu(self.conv1(x))  # (batch, 14, 14, 32)
+        x = self.bn1(x, use_running_average=use_running_average)
+        x = jax.nn.relu(self.conv2(x))  # (batch, 7, 7, 64)
+        x = self.bn2(x, use_running_average=use_running_average)
+
+        # Global average pooling
+        x = jnp.mean(x, axis=(1, 2))  # (batch, 64)
+
+        # Project to hyperboloid
+        time_coord = jnp.sqrt(jnp.sum(x**2, axis=-1, keepdims=True) + 1 / c)  # (batch, 1)
+        x = jnp.concatenate([time_coord, x], axis=-1)  # (batch, 65)
+
+        # FGG layers
+        x = self.hyp1(x, c)  # (batch, 65)
+        return self.output(x, c)  # (batch, 10)
+
+
+class FullyHyperbolicCNN_FGG(nnx.Module):
+    """Fully hyperbolic CNN using FGGConv2D (HCat + FGGLinear).
+
+    End-to-end hyperbolic CNN where convolutions use FGGConv2D, matching
+    the FGG-LNN reference architecture with Weight Norm + Mean-only BatchNorm
+    (paper §4.4, Salimans & Kingma 2016).
+
+    Architecture:
+        Input (28x28x1) → Project each pixel to Hyperboloid (28x28x2)
+                        → FGGConv2D (2→33, stride=2, relu, weight_norm) + MeanOnlyBN → 14x14x33
+                        → FGGConv2D (33→65, stride=2, relu, weight_norm) + MeanOnlyBN → 7x7x65
+                        → Global Average Pooling (spatial pool + time reconstruct)
+                        → FGGLinear(65→65, relu, weight_norm)
+                        → FGGLorentzMLR(65→10 classes)
+    """
+
+    def __init__(self, rngs: nnx.Rngs):
+        self.hyp_conv1 = FGGConv2D(
+            hyperboloid,
+            in_channels=2,
+            out_channels=33,
+            kernel_size=3,
+            rngs=rngs,
+            stride=2,
+            padding="SAME",
+            activation=jax.nn.relu,
+            reset_params="kaiming",
+            use_weight_norm=True,
+        )
+        self.hyp_bn1 = FGGMeanOnlyBatchNorm(32)
+
+        self.hyp_conv2 = FGGConv2D(
+            hyperboloid,
+            in_channels=33,
+            out_channels=65,
+            kernel_size=3,
+            rngs=rngs,
+            stride=2,
+            padding="SAME",
+            activation=jax.nn.relu,
+            reset_params="kaiming",
+            use_weight_norm=True,
+        )
+        self.hyp_bn2 = FGGMeanOnlyBatchNorm(64)
+
+        self.hyp_linear = FGGLinear(65, 65, rngs=rngs, activation=jax.nn.relu, reset_params="eye", use_weight_norm=True)
+        self.output = FGGLorentzMLR(65, 10, rngs=rngs)
+
+    def __call__(
+        self, x: Float[Array, "batch 784"], c: float = 1.0, use_running_average: bool = False
+    ) -> Float[Array, "batch 10"]:
+        x = x.reshape(-1, 28, 28, 1)  # (batch, 28, 28, 1)
+
+        # Project each pixel to hyperboloid
+        batch_size, h, w, _ = x.shape
+        x_flat = x.reshape(batch_size * h * w)
+        time_coords = jnp.sqrt(x_flat**2 + 1 / c)
+        x_hyp = jnp.stack([time_coords, x_flat], axis=-1)
+        x = x_hyp.reshape(batch_size, h, w, 2)  # (batch, 28, 28, 2)
+
+        # FGG conv blocks with mean-only BN (paper §4.4)
+        x = self.hyp_conv1(x, c)  # (batch, 14, 14, 33)
+        x = self.hyp_bn1(x, c_in=c, c_out=c, use_running_average=use_running_average)
+
+        x = self.hyp_conv2(x, c)  # (batch, 7, 7, 65)
+        x = self.hyp_bn2(x, c_in=c, c_out=c, use_running_average=use_running_average)
+
+        # Global average pooling (spatial pool + time reconstruct)
+        x_space = x[..., 1:]  # (batch, 7, 7, 64)
+        x_space_pooled = jnp.mean(x_space, axis=(1, 2))  # (batch, 64)
+        time_coord = jnp.sqrt(jnp.sum(x_space_pooled**2, axis=-1, keepdims=True) + 1 / c)
+        x = jnp.concatenate([time_coord, x_space_pooled], axis=-1)  # (batch, 65)
+
+        # FGG linear + MLR
+        x = self.hyp_linear(x, c)  # (batch, 65)
+        return self.output(x, c)  # (batch, 10)
+
+
 # ==============================================================================
 # Main
 # ==============================================================================
@@ -570,6 +763,10 @@ Examples:
     parser.add_argument(
         "--fully-hyp-lorentz", action="store_true", help="Run fully hyperbolic CNN using LorentzConv2D (HRC approach)"
     )
+    parser.add_argument("--fgg-hybrid", action="store_true", help="Run FGG-LNN with Euclidean embedding")
+    parser.add_argument("--fgg-direct", action="store_true", help="Run FGG-LNN with direct projection")
+    parser.add_argument("--fgg-cnn", action="store_true", help="Run FGG-LNN CNN with Euclidean stem")
+    parser.add_argument("--fully-hyp-fgg", action="store_true", help="Run fully hyperbolic CNN using FGGConv2D")
     parser.add_argument("--all", action="store_true", help="Run all models (default if no flags specified)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility (default: 42)")
 
@@ -590,6 +787,10 @@ def main():
         or args.fhcnn_cnn
         or args.fully_hyp_hcat
         or args.fully_hyp_lorentz
+        or args.fgg_hybrid
+        or args.fgg_direct
+        or args.fgg_cnn
+        or args.fully_hyp_fgg
     )
 
     # Build list of models to benchmark
@@ -601,6 +802,10 @@ def main():
         (FHCNNCNNHybrid, "FHCNN-CNN-Hybrid", args.fhcnn_cnn or run_all),
         (FullyHyperbolicCNN_HCat, "FullyHyp-HCat", args.fully_hyp_hcat or run_all),
         (FullyHyperbolicCNN_Lorentz, "FullyHyp-Lorentz", args.fully_hyp_lorentz or run_all),
+        (FGGHybrid, "FGG-Hybrid", args.fgg_hybrid or run_all),
+        (FGGDirect, "FGG-Direct", args.fgg_direct or run_all),
+        (FGGCNNHybrid, "FGG-CNN-Hybrid", args.fgg_cnn or run_all),
+        (FullyHyperbolicCNN_FGG, "FullyHyp-FGG", args.fully_hyp_fgg or run_all),
     ]
 
     models = [(cls, name) for cls, name, should_run in available_models if should_run]

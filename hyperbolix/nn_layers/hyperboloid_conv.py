@@ -7,6 +7,8 @@ Dimension key:
   A: ambient dimension (in_channels or hcat output dim)
 """
 
+from collections.abc import Callable
+
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -16,7 +18,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import hrc
-from .hyperboloid_linear import HypLinearHyperboloidFHCNN
+from .hyperboloid_linear import FGGLinear, HypLinearHyperboloidFHCNN
 
 
 class LorentzConv2D(nnx.Module):
@@ -530,3 +532,193 @@ class HypConv3DHyperboloid(nnx.Module):
         output_BZHWC = linear_out_NC.reshape(batch, out_d, out_h, out_w, self.out_channels)
 
         return output_BZHWC
+
+
+class FGGConv2D(nnx.Module):
+    """Fast and Geometrically Grounded Lorentz 2D convolutional layer.
+
+    Uses HCat (Lorentz direct concatenation) to combine receptive field points,
+    then applies FGGLinear for the channel mixing. This matches the reference
+    implementation pattern from Klis et al. 2026.
+
+    Computation steps:
+        1) Extract receptive field patches, pad with manifold origin if needed
+        2) Apply HCat (Lorentz direct concatenation) to combine patch points
+        3) Pass through FGGLinear for channel transformation
+
+    Parameters
+    ----------
+    manifold_module : Hyperboloid
+        Class-based Hyperboloid manifold instance.
+    in_channels : int
+        Input ambient channels (D_in + 1), including time component.
+    out_channels : int
+        Output ambient channels (D_out + 1), including time component.
+    kernel_size : int or tuple[int, int]
+        Size of the convolutional kernel.
+    rngs : nnx.Rngs
+        Random number generators for parameter initialization.
+    stride : int or tuple[int, int], optional
+        Stride of the convolution (default: 1).
+    padding : str, optional
+        Padding mode: ``"SAME"`` or ``"VALID"`` (default: ``"SAME"``).
+    pad_mode : str, optional
+        How to fill padding pixels: ``"origin"`` fills with the manifold
+        origin ``(sqrt(1/c), 0, ..., 0)`` (matching reference), ``"edge"``
+        replicates border values (default: ``"origin"``).
+    activation : Callable or None, optional
+        Euclidean activation for the FGGLinear (default: None).
+    reset_params : str, optional
+        Weight init for FGGLinear: ``"eye"``, ``"xavier"``, ``"kaiming"``,
+        ``"lorentz_kaiming"``, or ``"mlr"`` (default: ``"kaiming"``).
+    use_weight_norm : bool, optional
+        Weight normalization in FGGLinear (default: False).
+    init_bias : float, optional
+        Initial bias for FGGLinear (default: 0.5).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    References
+    ----------
+    Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026).
+    """
+
+    def __init__(
+        self,
+        manifold_module: Hyperboloid,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | tuple[int, int],
+        *,
+        rngs: nnx.Rngs,
+        stride: int | tuple[int, int] = 1,
+        padding: str = "SAME",
+        pad_mode: str = "origin",
+        activation: Callable | None = None,
+        reset_params: str = "kaiming",
+        use_weight_norm: bool = False,
+        init_bias: float = 0.5,
+        eps: float = 1e-7,
+    ):
+        if padding not in ("SAME", "VALID"):
+            raise ValueError(f"padding must be 'SAME' or 'VALID', got '{padding}'")
+        if pad_mode not in ("origin", "edge"):
+            raise ValueError(f"pad_mode must be 'origin' or 'edge', got '{pad_mode}'")
+
+        validate_hyperboloid_manifold(manifold_module, required_methods=("hcat",))
+        self.manifold = manifold_module
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.padding = padding
+        self.pad_mode = pad_mode
+        self.eps = eps
+
+        if isinstance(kernel_size, int):
+            self.kernel_size = (kernel_size, kernel_size)
+        else:
+            self.kernel_size = kernel_size
+
+        if isinstance(stride, int):
+            self.stride = (stride, stride)
+        else:
+            self.stride = stride
+
+        # HCat output ambient dim: (in_channels - 1) * kh * kw + 1
+        kh, kw = self.kernel_size
+        hcat_out_ambient = (in_channels - 1) * kh * kw + 1
+
+        # FGGLinear for channel transformation
+        self.fgg_linear = FGGLinear(
+            hcat_out_ambient,
+            out_channels,
+            rngs=rngs,
+            activation=activation,
+            reset_params=reset_params,
+            use_weight_norm=use_weight_norm,
+            init_bias=init_bias,
+            eps=eps,
+        )
+
+    def _extract_patches(
+        self,
+        x: Float[Array, "batch height width in_channels"],
+        c: float,
+    ) -> Float[Array, "batch out_height out_width kernel_h kernel_w in_channels"]:
+        """Extract patches, padding with manifold origin or edge replication for SAME mode."""
+        batch, height, width, in_channels = x.shape
+        kh, kw = self.kernel_size
+        stride_h, stride_w = self.stride
+
+        if self.padding == "SAME":
+            out_height = (height + stride_h - 1) // stride_h
+            out_width = (width + stride_w - 1) // stride_w
+            pad_h = max((out_height - 1) * stride_h + kh - height, 0)
+            pad_w = max((out_width - 1) * stride_w + kw - width, 0)
+            pad_top = pad_h // 2
+            pad_bottom = pad_h - pad_top
+            pad_left = pad_w // 2
+            pad_right = pad_w - pad_left
+
+            if self.pad_mode == "origin":
+                # Pad with manifold origin: (√(1/c), 0, ..., 0)
+                padded_h = height + pad_h
+                padded_w = width + pad_w
+                padded = jnp.zeros((batch, padded_h, padded_w, in_channels))
+                padded = padded.at[..., 0].set(jnp.sqrt(1.0 / c))
+                x = padded.at[:, pad_top : pad_top + height, pad_left : pad_left + width, :].set(x)
+            else:  # edge
+                x = jnp.pad(
+                    x,
+                    ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                    mode="edge",
+                )
+
+        # Extract patches: (B, H, W, C*kh*kw)
+        patches_flat = jax.lax.conv_general_dilated_patches(
+            lhs=x,
+            filter_shape=(kh, kw),
+            window_strides=(stride_h, stride_w),
+            padding="VALID",
+            dimension_numbers=("NHWC", "OIHW", "NHWC"),
+        )
+
+        out_h, out_w = patches_flat.shape[1], patches_flat.shape[2]
+        patches_BHWCkhkw = patches_flat.reshape(batch, out_h, out_w, in_channels, kh, kw)
+        patches_BHWkhkwC = patches_BHWCkhkw.transpose(0, 1, 2, 4, 5, 3)
+
+        return patches_BHWkhkwC
+
+    def __call__(
+        self,
+        x: Float[Array, "batch height width in_channels"],
+        c: float = 1.0,
+    ) -> Float[Array, "batch out_height out_width out_channels"]:
+        """Forward pass through the FGG convolutional layer.
+
+        Parameters
+        ----------
+        x : Array, shape (B, H, W, in_channels)
+            Input feature map on the hyperboloid.
+        c : float, optional
+            Curvature parameter (default: 1.0).
+
+        Returns
+        -------
+        out : Array, shape (B, H', W', out_channels)
+            Output feature map on the hyperboloid.
+        """
+        # Extract patches: (B, H', W', kh, kw, C)
+        patches = self._extract_patches(x, c)
+        batch, out_h, out_w, kh, kw, in_c = patches.shape
+
+        # Flatten batch+spatial: (B*H'*W', K, C) where K = kh*kw
+        patches_flat_NKC = patches.reshape(-1, kh * kw, in_c)
+
+        # HCat: (K, C) -> (hcat_dim,) per patch
+        hcat_out_NA = jax.vmap(self.manifold.hcat, in_axes=(0, None))(patches_flat_NKC, c)
+
+        # FGGLinear: (hcat_dim,) -> (out_channels,)
+        linear_out_NC = self.fgg_linear(hcat_out_NA, c)
+
+        # Reshape back to spatial
+        return linear_out_NC.reshape(batch, out_h, out_w, self.out_channels)

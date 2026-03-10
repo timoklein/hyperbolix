@@ -1,9 +1,15 @@
 """Hyperboloid linear layers for JAX/Flax NNX.
 
 This module contains linear transformation layers for the hyperboloid manifold,
-including the Hyperbolic Transformation Component (HTC) module from the Hypformer paper.
+including the Hyperbolic Transformation Component (HTC) module from the Hypformer paper
+and the FGG linear layer from Klis et al. 2026.
 
 For the core HTC/HRC functions, see hyperboloid_core module.
+
+Dimension key:
+  B: batch size
+  I: in_spatial (in_features - 1)    O: out_spatial (out_features - 1)
+  Ai: in_ambient (in_features)       Ao: out_ambient (out_features)
 """
 
 from collections.abc import Callable
@@ -16,7 +22,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds import Manifold
 
 from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import htc
+from .hyperboloid_core import build_spacelike_V, htc
 
 
 class HypLinearHyperboloidFHCNN(nnx.Module):
@@ -301,3 +307,166 @@ class HTCLinear(nnx.Module):
             return out
 
         return htc(x, linear_fn, c_in, c_out, self.eps)
+
+
+class FGGLinear(nnx.Module):
+    """Fast and Geometrically Grounded Lorentz linear layer.
+
+    Implements the FGG linear layer from Klis et al. 2026. The key insight is that
+    the sinh/arcsinh cancellation in the Lorentzian activation chain simplifies the
+    forward pass to: matmul with spacelike V matrix -> Euclidean activation ->
+    time reconstruction. This achieves linear growth of hyperbolic distance (vs
+    logarithmic for Chen et al. 2022) and ~3x faster training/inference.
+
+    Forward pass:
+        1. Build spacelike V matrix from (U, b) with Minkowski metric absorbed
+        2. z = x @ V   (Minkowski inner products via a single matmul)
+        3. z = h(z)     (Euclidean activation, e.g. ReLU)
+        4. y_0 = sqrt(||z||^2 + 1/c)   (time reconstruction)
+        5. y = [y_0, z]   (on hyperboloid)
+
+    Parameters
+    ----------
+    in_features : int
+        Input ambient dimension (D_in + 1), including time component.
+    out_features : int
+        Output ambient dimension (D_out + 1), including time component.
+    rngs : nnx.Rngs
+        Random number generators for parameter initialization.
+    activation : Callable or None, optional
+        Euclidean activation function applied after matmul (default: None).
+    reset_params : str, optional
+        Weight initialization scheme: ``"eye"``, ``"xavier"``, ``"kaiming"``,
+        ``"lorentz_kaiming"``, or ``"mlr"`` (default: ``"eye"``).
+    use_weight_norm : bool, optional
+        If True, reparameterize U as ``g * v / ||v||`` for weight normalization
+        (default: False).
+    init_bias : float, optional
+        Initial value for bias entries (default: 0.5).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    References
+    ----------
+    Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026).
+
+    Examples
+    --------
+    >>> from flax import nnx
+    >>> from hyperbolix.nn_layers import FGGLinear
+    >>> import jax.numpy as jnp
+    >>>
+    >>> layer = FGGLinear(33, 65, rngs=nnx.Rngs(0), activation=jax.nn.relu)
+    >>> x = jnp.ones((8, 33))
+    >>> # project to hyperboloid
+    >>> x = x.at[:, 0].set(jnp.sqrt(jnp.sum(x[:, 1:]**2, axis=-1) + 1.0))
+    >>> y = layer(x, c=1.0)
+    >>> y.shape
+    (8, 65)
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        rngs: nnx.Rngs,
+        activation: Callable[[jax.Array], jax.Array] | None = None,
+        reset_params: str = "eye",
+        use_weight_norm: bool = False,
+        init_bias: float = 0.5,
+        eps: float = 1e-7,
+    ):
+        if reset_params not in ("eye", "xavier", "kaiming", "lorentz_kaiming", "mlr"):
+            raise ValueError(
+                f"reset_params must be 'eye', 'xavier', 'kaiming', 'lorentz_kaiming', or 'mlr', got '{reset_params}'"
+            )
+
+        in_spatial = in_features - 1  # I
+        out_spatial = out_features - 1  # O
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.activation = activation
+        self.use_weight_norm = use_weight_norm
+        self.eps = eps
+
+        # Initialize Euclidean weight U: (I, O)
+        key = rngs.params()
+        if reset_params == "eye":
+            U_init = 0.5 * jnp.eye(in_spatial, out_spatial)
+        elif reset_params == "xavier":
+            std = jnp.sqrt(1.0 / (in_spatial + out_spatial))
+            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
+        elif reset_params == "kaiming":
+            std = jnp.sqrt(2.0 / in_spatial)
+            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
+        elif reset_params == "lorentz_kaiming":
+            std = jnp.sqrt(1.0 / in_spatial)
+            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
+        else:  # mlr
+            std = jnp.sqrt(5.0 / in_spatial)
+            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
+
+        # Weight normalization: decompose U = softplus(g) * v / ||v||
+        if use_weight_norm:
+            # Reference: v from reset_params (normalized in forward), g fixed magnitude
+            self.v = nnx.Param(U_init)  # (I, O) direction
+            g_init_val = jnp.sqrt(1.0 / (in_spatial + out_spatial))
+            self.g = nnx.Param(jnp.full((out_spatial,), g_init_val))  # (O,)
+        else:
+            self.U = nnx.Param(U_init)  # (I, O)
+
+        # Bias: init to init_bias
+        self.b = nnx.Param(jnp.full((out_spatial,), init_bias))  # (O,)
+
+    def _get_U(self) -> jax.Array:
+        """Return the effective weight matrix, handling weight normalization."""
+        if self.use_weight_norm:
+            v_IO = self.v[...]  # (I, O)
+            g_O = self.g[...]  # (O,)
+            g_pos_O = jax.nn.softplus(g_O)  # (O,) force positive magnitudes
+            v_norm_O = jnp.sqrt(jnp.sum(v_IO**2, axis=0) + self.eps)  # (O,)
+            return g_pos_O[None, :] * v_IO / v_norm_O[None, :]  # (I, O)
+        return self.U[...]  # (I, O)
+
+    def __call__(
+        self,
+        x_BAi: Float[Array, "batch in_features"],
+        c: float = 1.0,
+    ) -> Float[Array, "batch out_features"]:
+        """Forward pass through the FGG linear layer.
+
+        Parameters
+        ----------
+        x_BAi : Array, shape (B, Ai)
+            Input points on the hyperboloid with curvature ``c``.
+            Ai = in_features (ambient dimension).
+        c : float, optional
+            Curvature parameter (default: 1.0).
+
+        Returns
+        -------
+        y_BAo : Array, shape (B, Ao)
+            Output points on the hyperboloid with curvature ``c``.
+            Ao = out_features (ambient dimension).
+        """
+        # 1. Get effective U (handle weight norm)
+        U_IO = self._get_U()  # (I, O)
+
+        # 2. Build V_mink from (U, b) — Minkowski metric absorbed
+        V_AiO = build_spacelike_V(U_IO, self.b[...], c, self.eps)  # (Ai, O)
+        # Cast V to match input dtype (avoids float32/float64 scatter warnings)
+        V_AiO = V_AiO.astype(x_BAi.dtype)
+
+        # 3. Minkowski inner products via matmul (metric in V)
+        z_BO = x_BAi @ V_AiO  # (B, O)
+
+        # 4. Apply Euclidean activation (Lorentzian wrapping implicit via cancellation)
+        if self.activation is not None:
+            z_BO = self.activation(z_BO)
+
+        # 5. Reconstruct hyperboloid point: spatial = z, time from constraint
+        y_0_B1 = jnp.sqrt(jnp.sum(z_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
+
+        return jnp.concatenate([y_0_B1, z_BO], axis=-1)  # (B, Ao)

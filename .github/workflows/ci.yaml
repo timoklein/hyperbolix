@@ -91,6 +91,7 @@ jobs:
           - "nn_layers/test_nn_layers.py"
           - "nn_layers/test_poincare_conv.py"
           - "nn_layers/test_poincare_linear_gradients.py"
+          - "nn_layers/test_hyperboloid_fgg.py"
           - "nn_layers/test_regression_layers.py"
 
     steps:

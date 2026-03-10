@@ -6,12 +6,13 @@ Hyperbolic neural network layers built with Flax NNX.
 
 Hyperbolix provides 20+ neural network layer classes and 5 activation functions for building hyperbolic deep learning models:
 
-- **Linear Layers**: Poincaré and Hyperboloid linear transformations
-- **Convolutional Layers**: HCat-based and HRC-based hyperbolic convolutions (2D and 3D)
+- **Linear Layers**: Poincaré and Hyperboloid linear transformations, including FGG (Fast and Geometrically Grounded) layers
+- **Convolutional Layers**: HCat-based, HRC-based, and FGG hyperbolic convolutions (2D and 3D)
 - **Hypformer Components**: HTC (Hyperbolic Transformation Component) and HRC (Hyperbolic Regularization Component) with curvature-change support
+- **FGG Components**: `FGGLinear`, `FGGConv2D`, `FGGMeanOnlyBatchNorm` from Klis et al. (2026) — linear-distance growth, ~3× faster than prior work
 - **Attention Layers**: Three hyperbolic attention variants (linear O(N), softmax O(N²), full Lorentzian O(N²)) from the Hypformer paper
 - **Positional Encoding**: HOPE (Hyperbolic Rotary PE) and Hypformer learnable positional encodings for Transformers
-- **Regression Layers**: Single-layer classifiers with Riemannian geometry
+- **Regression Layers**: Single-layer classifiers with Riemannian geometry, including `FGGLorentzMLR`
 - **Activation Functions**: Hyperbolic ReLU, Leaky ReLU, Tanh, Swish, GELU
 - **Helper Functions**: Utilities for regression and conformal factor computation
 
@@ -34,6 +35,13 @@ All layers follow Flax NNX conventions and store manifold module references.
 ### Hyperboloid Linear
 
 ::: hyperbolix.nn_layers.HypLinearHyperboloidFHCNN
+    options:
+      show_source: true
+      heading_level: 4
+
+### FGG Linear (Klis et al. 2026)
+
+::: hyperbolix.nn_layers.FGGLinear
     options:
       show_source: true
       heading_level: 4
@@ -168,6 +176,22 @@ output = conv(x, c=1.0)
 print(output.shape)  # (8, 28, 28, 32)
 ```
 
+### FGGConv2D (Klis et al. 2026)
+
+::: hyperbolix.nn_layers.FGGConv2D
+    options:
+      show_source: true
+      heading_level: 4
+
+`FGGConv2D` combines HCat patch extraction with `FGGLinear` for channel mixing. Unlike `HypConv2DHyperboloid`, it uses the FGG spacelike-V construction, achieving linear growth of hyperbolic distance rather than logarithmic. Supports manifold-origin padding (`pad_mode="origin"`) matching the reference implementation.
+
+| Feature | FGGConv2D | HypConv2DHyperboloid |
+|---------|-----------|----------------------|
+| **Linear layer** | FGGLinear (V-matrix) | HypLinearHyperboloidFHCNN |
+| **Distance growth** | Linear | Logarithmic |
+| **Default padding** | Manifold origin | Edge replication |
+| **Weight norm** | Optional (`use_weight_norm`) | No |
+
 ### LorentzConv2D (HRC-Based)
 
 ::: hyperbolix.nn_layers.LorentzConv2D
@@ -277,6 +301,11 @@ The Hyperbolic Transformation Component (HTC) and Hyperbolic Regularization Comp
       heading_level: 4
 
 ::: hyperbolix.nn_layers.HRCDropout
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.FGGMeanOnlyBatchNorm
     options:
       show_source: true
       heading_level: 4
@@ -699,12 +728,89 @@ Single-layer classifiers with Riemannian geometry.
       show_source: true
       heading_level: 4
 
+### FGG Lorentz MLR (Klis et al. 2026)
+
+::: hyperbolix.nn_layers.FGGLorentzMLR
+    options:
+      show_source: true
+      heading_level: 4
+
 ### Reinforcement Learning
 
 ::: hyperbolix.nn_layers.HypRegressionPoincareHDRL
     options:
       show_source: true
       heading_level: 4
+
+### FGG Usage Example
+
+```python
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from hyperbolix.manifolds import Hyperboloid
+from hyperbolix.nn_layers import FGGLinear, FGGConv2D, FGGLorentzMLR, FGGMeanOnlyBatchNorm
+
+hyperboloid = Hyperboloid()
+rngs = nnx.Rngs(0)
+
+# --- FGGLinear: FC layer with linear hyperbolic distance growth ---
+linear = FGGLinear(
+    in_features=33,   # 32 spatial + 1 time
+    out_features=65,  # 64 spatial + 1 time
+    rngs=rngs,
+    activation=jax.nn.relu,
+    reset_params="lorentz_kaiming",
+)
+x_B33 = jnp.ones((8, 33))
+x_B33 = x_B33.at[:, 0].set(jnp.sqrt(jnp.sum(x_B33[:, 1:]**2, axis=-1) + 1.0))
+y_B65 = linear(x_B33, c=1.0)
+print(y_B65.shape)  # (8, 65)
+
+# --- FGGConv2D: 2D conv with manifold-origin padding ---
+conv = FGGConv2D(
+    manifold_module=hyperboloid,
+    in_channels=33,
+    out_channels=65,
+    kernel_size=3,
+    rngs=rngs,
+    activation=jax.nn.relu,
+    pad_mode="origin",   # manifold origin padding (reference default)
+)
+x_BHWC = jnp.zeros((4, 14, 14, 33))
+x_BHWC = x_BHWC.at[..., 0].set(1.0)  # valid origin point at c=1
+y_BHWC = conv(x_BHWC, c=1.0)
+print(y_BHWC.shape)  # (4, 14, 14, 65)
+
+# --- FGGLorentzMLR: classification head ---
+mlr = FGGLorentzMLR(
+    in_features=65,
+    num_classes=10,
+    rngs=rngs,
+    reset_params="mlr",   # N(0, sqrt(5/I)) — reference default
+    init_bias=0.5,
+)
+logits_B10 = mlr(y_BHWC.reshape(-1, 65), c=1.0)
+print(logits_B10.shape)  # (784, 10)
+
+# --- FGGMeanOnlyBatchNorm: pairs with FGGLinear(use_weight_norm=True) ---
+# num_features is the SPATIAL (out) dimension
+bn = FGGMeanOnlyBatchNorm(num_features=64, rngs=rngs)
+y_normed = bn(y_B65, c_in=1.0, c_out=1.0, use_running_average=False)
+print(y_normed.shape)  # (8, 65)
+```
+
+!!! info "FGG Layer Family"
+    The four FGG components from Klis et al. (2026) form a complete layer stack:
+
+    | Layer | Role | Key params |
+    |-------|------|-----------|
+    | `FGGLinear` | Fully-connected | `reset_params`, `use_weight_norm`, `activation` |
+    | `FGGConv2D` | 2D convolution | `pad_mode="origin"`, wraps `FGGLinear` |
+    | `FGGLorentzMLR` | Classification head | `reset_params="mlr"`, `init_bias=0.5` |
+    | `FGGMeanOnlyBatchNorm` | Batch normalization | pairs with `use_weight_norm=True` |
+
+    **Core insight**: the sinh/arcsinh cancellation in the Lorentzian activation chain reduces the forward pass to a single matmul with a spacelike V matrix, Euclidean activation, then time reconstruction — achieving linear (not logarithmic) growth of hyperbolic distance.
 
 ### Regression Example
 
@@ -934,8 +1040,9 @@ The neural network layers implement methods from:
 - **Bdeir et al. (2023)**: "Fully Hyperbolic Convolutional Neural Networks for Computer Vision" - HCat-based convolutions (`HypConv2DHyperboloid`)
 - **Chen et al. (2022)**: "Fully Hyperbolic Neural Networks" - FHCNN linear layers
 - **LResNet (2023)**: "Lorentzian ResNet" - HRC-based convolutions (`LorentzConv2D`)
-- **Hypformer**: "Hyperbolic Transformers" - HTC/HRC components with curvature-change support
+- **Hypformer (Yang et al. 2025)**: "Hyperbolic Transformers" - HTC/HRC components with curvature-change support
 - **Chen et al. (2024)**: "Hyperbolic Embeddings for Learning on Manifolds (HELM)" - HOPE positional encoding and Lorentzian residual connections
+- **Klis et al. (2026)**: "Fast and Geometrically Grounded Lorentz Neural Networks" - `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `FGGMeanOnlyBatchNorm`; sinh/arcsinh cancellation for linear hyperbolic distance growth
 
 ### Key Theoretical Connections
 
