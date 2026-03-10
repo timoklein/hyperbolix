@@ -32,6 +32,7 @@ jobs:
   publish-testpypi:
     needs: build
     runs-on: ubuntu-latest
+    continue-on-error: true  # TestPyPI sometimes returns 503 even on success
     environment: testpypi
     permissions:
       id-token: write
