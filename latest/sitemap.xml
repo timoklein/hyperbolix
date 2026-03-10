@@ -2,66 +2,66 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/changelog/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/developer-guide/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/getting-started/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/mathematical-background/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/api-reference/distributions/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/api-reference/manifolds/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/api-reference/nn-layers/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/api-reference/optimizers/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/api-reference/utils/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/user-guide/batching-jit/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/user-guide/manifolds/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/user-guide/nn-layers/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/user-guide/numerical-stability/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/user-guide/optimizers/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
     <url>
          <loc>https://hyperbolix.github.io/hyperbolix/latest/user-guide/training-workflows/</loc>
-         <lastmod>2026-03-06</lastmod>
+         <lastmod>2026-03-10</lastmod>
     </url>
 </urlset>
