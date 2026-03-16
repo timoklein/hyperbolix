@@ -88,7 +88,15 @@ class ManifoldParam(nnx.Param):
     ...         )
     """
 
-    pass
+    def __init__(
+        self,
+        value: Any,
+        *,
+        manifold: Manifold,
+        curvature: float | Callable[[], Any],
+        **metadata: Any,
+    ) -> None:
+        super().__init__(value, manifold=manifold, curvature=curvature, **metadata)
 
 
 def mark_manifold_param(
