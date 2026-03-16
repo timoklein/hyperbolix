@@ -87,7 +87,7 @@ def test_layer_bias_has_metadata():
     assert c == 1.0
 
     # Check that weight does NOT have manifold metadata
-    weight_info = get_manifold_info(layer.weight)
+    weight_info = get_manifold_info(layer.kernel)
     assert weight_info is None
 
 
@@ -341,7 +341,7 @@ def test_hyplinear_poincare_with_rsgd():
     assert final_loss < initial_loss
 
     # Check bias is still on manifold
-    assert poincare.is_in_manifold(layer.bias[...].squeeze(0), 1.0)
+    assert poincare.is_in_manifold(layer.bias[...], 1.0)
 
 
 def test_hyplinear_poincare_with_radam():
@@ -372,7 +372,7 @@ def test_hyplinear_poincare_with_radam():
 
     final_loss = loss_fn(layer)
     assert final_loss < initial_loss
-    assert poincare.is_in_manifold(layer.bias[...].squeeze(0), 1.0)
+    assert poincare.is_in_manifold(layer.bias[...], 1.0)
 
 
 def test_jit_compilation():

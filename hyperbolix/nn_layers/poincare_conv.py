@@ -168,7 +168,7 @@ class HypConv2DPoincare(nnx.Module):
         # The 1/2 factor compensates for the factor of 2 in the HNN++ distance formula.
         if id_init:
             eye = jnp.eye(out_channels, concat_dim)  # (C_out, K^2*C_in)
-            self.linear.weight[...] = 0.5 * eye
+            self.linear.kernel[...] = 0.5 * eye
 
     def __call__(
         self,

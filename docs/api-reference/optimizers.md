@@ -90,48 +90,49 @@ optimizer = nnx.Optimizer(
 
 ## Manifold Metadata System
 
-Hyperbolix uses Flax NNX's `Variable._var_metadata` system to tag manifold parameters. This enables automatic manifold detection during optimization.
+Hyperbolix uses `ManifoldParam`, an `nnx.Param` subclass, to tag parameters that live on a Riemannian manifold. The optimizers detect these via `isinstance` checks.
 
 ### How It Works
 
 ```python
-from hyperbolix.optim.manifold_metadata import PoincareMetadata
+from hyperbolix.optim import ManifoldParam
 
-# Layer automatically tags hyperbolic parameters
+# Layer tags hyperbolic parameters using ManifoldParam
 class HypLinearPoincare(nnx.Module):
     def __init__(self, manifold_module, in_dim, out_dim, *, rngs):
         self.manifold = manifold_module
 
-        # Weight is Euclidean
-        self.weight = nnx.Param(
-            nnx.initializers.xavier_uniform()(rngs.params(), (in_dim, out_dim))
+        # Kernel is Euclidean (plain nnx.Param)
+        self.kernel = nnx.Param(
+            jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01
         )
 
-        # Bias lives on Poincaré ball (tagged with metadata)
-        self.bias = nnx.Param(
+        # Bias lives on Poincaré ball (ManifoldParam)
+        self.bias = ManifoldParam(
             jnp.zeros(out_dim),
-            metadata=PoincareMetadata()
+            manifold=manifold_module,
+            curvature=1.0,
         )
 ```
 
 The optimizer automatically:
 
-1. Detects parameters with manifold metadata
+1. Detects `ManifoldParam` instances
 2. Applies Riemannian gradient updates (expmap/retraction)
 3. Performs parallel transport for momentum/adaptive moments
-4. Falls back to Euclidean updates for unmarked parameters
+4. Falls back to Euclidean updates for plain `nnx.Param` parameters
 
-### Available Metadata
+### API Reference
 
 ::: hyperbolix.optim.manifold_metadata
     options:
       show_source: true
       heading_level: 4
       members:
-        - ManifoldMetadata
-        - EuclideanMetadata
-        - PoincareMetadata
-        - HyperboloidMetadata
+        - ManifoldParam
+        - mark_manifold_param
+        - get_manifold_info
+        - has_manifold_params
 
 ## Expmap vs Retraction
 
@@ -194,7 +195,7 @@ The optimizer will:
 
 - Apply standard Adam updates to `fc1` and `fc2` parameters
 - Apply Riemannian Adam updates to `hyp.bias` (tagged with metadata)
-- Apply Euclidean Adam updates to `hyp.weight` (no metadata)
+- Apply Euclidean Adam updates to `hyp.kernel` (no metadata)
 
 ## Performance Considerations
 

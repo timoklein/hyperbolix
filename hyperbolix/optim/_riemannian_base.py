@@ -18,7 +18,7 @@ import optax
 from flax import nnx
 from jax import tree_util
 
-from .manifold_metadata import get_manifold_info
+from .manifold_metadata import ManifoldParam, get_manifold_info
 
 
 def _resolve_lr(learning_rate: float | optax.Schedule, count: jnp.ndarray) -> jnp.ndarray:
@@ -35,7 +35,7 @@ def _extract_param_and_manifold(param_variable):
         (param_value, manifold_info) where manifold_info is (manifold_module, c) or None
     """
     manifold_info = None
-    if hasattr(param_variable, "_var_metadata"):
+    if isinstance(param_variable, ManifoldParam):
         manifold_info = get_manifold_info(param_variable)
     param_value = param_variable[...] if isinstance(param_variable, nnx.Variable) else param_variable
     return param_value, manifold_info
