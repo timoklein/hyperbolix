@@ -79,8 +79,8 @@ class HypRegressionHyperboloid(nnx.Module):
         self.smoothing_factor = smoothing_factor
 
         # Trainable parameters
-        # weight lies in the tangent space of the Hyperboloid origin, so the time coordinate along axis is zero
-        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim - 1)))
+        # kernel lies in the tangent space of the Hyperboloid origin, so the time coordinate along axis is zero
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim - 1)))
         # Scalar bias (initialized to small random values)
         self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1)) * 0.01)
 
@@ -111,7 +111,7 @@ class HypRegressionHyperboloid(nnx.Module):
         # Compute multinomial linear regression
         res = self.manifold.compute_mlr(
             x,
-            self.weight[...],
+            self.kernel[...],
             self.bias[...],
             c,
             self.clamping_factor,
@@ -178,11 +178,11 @@ class FGGLorentzMLR(nnx.Module):
         if reset_params == "mlr":
             # Reference: N(0, sqrt(5/I)) for spatial weights
             std = jnp.sqrt(5.0 / in_spatial)
-            self.z = nnx.Param(jax.random.normal(key, (in_spatial, num_classes)) * std)
+            self.kernel = nnx.Param(jax.random.normal(key, (in_spatial, num_classes)) * std)
         else:  # default
             stdv = 1.0 / jnp.sqrt(jnp.array(in_spatial, dtype=jnp.float32))
-            self.z = nnx.Param(jax.random.uniform(key, (in_spatial, num_classes), minval=-stdv, maxval=stdv))
-        self.a = nnx.Param(jnp.full((num_classes,), init_bias))
+            self.kernel = nnx.Param(jax.random.uniform(key, (in_spatial, num_classes), minval=-stdv, maxval=stdv))
+        self.bias = nnx.Param(jnp.full((num_classes,), init_bias))
 
     def __call__(
         self,
@@ -204,7 +204,7 @@ class FGGLorentzMLR(nnx.Module):
             Euclidean logits (signed scaled distances to hyperplanes).
         """
         # 1. Build V_mink from (z, a)
-        V_AiK = build_spacelike_V(self.z[...], self.a[...], c, self.eps)  # (Ai, K)
+        V_AiK = build_spacelike_V(self.kernel[...], self.bias[...], c, self.eps)  # (Ai, K)
         # Cast V to match input dtype (avoids float32/float64 scatter warnings)
         V_AiK = V_AiK.astype(x_BAi.dtype)
 

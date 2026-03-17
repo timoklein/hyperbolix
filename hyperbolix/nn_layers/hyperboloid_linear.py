@@ -117,7 +117,7 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         # Trainable parameters
         bound = 0.02
         weight_init = jax.random.uniform(rngs.params(), (out_dim, in_dim), minval=-bound, maxval=bound)
-        self.weight = nnx.Param(weight_init)
+        self.kernel = nnx.Param(weight_init)
         self.bias = nnx.Param(jnp.zeros((1, out_dim)))
 
         # Scale parameter for sigmoid
@@ -156,7 +156,7 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
             x = self.activation(x)
 
         # Linear transformation: (B, in_dim) → (B, out_dim)
-        x_BO = jnp.einsum("bi,oi->bo", x, self.weight) + self.bias
+        x_BO = jnp.einsum("bi,oi->bo", x, self.kernel) + self.bias
 
         # Split into time and space: x0 is first coord, x_rem is spatial
         x0_B1 = x_BO[:, 0:1]  # (B, 1) — time coordinate
@@ -408,27 +408,27 @@ class FGGLinear(nnx.Module):
             std = jnp.sqrt(5.0 / in_spatial)
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
 
-        # Weight normalization: decompose U = softplus(g) * v / ||v||
+        # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
         if use_weight_norm:
-            # Reference: v from reset_params (normalized in forward), g fixed magnitude
-            self.v = nnx.Param(U_init)  # (I, O) direction
+            # Reference: kernel_dir from reset_params (normalized in forward), kernel_scale fixed magnitude
+            self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
             g_init_val = jnp.sqrt(1.0 / (in_spatial + out_spatial))
-            self.g = nnx.Param(jnp.full((out_spatial,), g_init_val))  # (O,)
+            self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val))  # (O,)
         else:
-            self.U = nnx.Param(U_init)  # (I, O)
+            self.kernel = nnx.Param(U_init)  # (I, O)
 
         # Bias: init to init_bias
-        self.b = nnx.Param(jnp.full((out_spatial,), init_bias))  # (O,)
+        self.bias = nnx.Param(jnp.full((out_spatial,), init_bias))  # (O,)
 
-    def _get_U(self) -> jax.Array:
+    def _get_kernel(self) -> jax.Array:
         """Return the effective weight matrix, handling weight normalization."""
         if self.use_weight_norm:
-            v_IO = self.v[...]  # (I, O)
-            g_O = self.g[...]  # (O,)
+            v_IO = self.kernel_dir[...]  # (I, O)
+            g_O = self.kernel_scale[...]  # (O,)
             g_pos_O = jax.nn.softplus(g_O)  # (O,) force positive magnitudes
             v_norm_O = jnp.sqrt(jnp.sum(v_IO**2, axis=0) + self.eps)  # (O,)
             return g_pos_O[None, :] * v_IO / v_norm_O[None, :]  # (I, O)
-        return self.U[...]  # (I, O)
+        return self.kernel[...]  # (I, O)
 
     def __call__(
         self,
@@ -451,11 +451,11 @@ class FGGLinear(nnx.Module):
             Output points on the hyperboloid with curvature ``c``.
             Ao = out_features (ambient dimension).
         """
-        # 1. Get effective U (handle weight norm)
-        U_IO = self._get_U()  # (I, O)
+        # 1. Get effective kernel (handle weight norm)
+        U_IO = self._get_kernel()  # (I, O)
 
-        # 2. Build V_mink from (U, b) — Minkowski metric absorbed
-        V_AiO = build_spacelike_V(U_IO, self.b[...], c, self.eps)  # (Ai, O)
+        # 2. Build V_mink from (kernel, bias) — Minkowski metric absorbed
+        V_AiO = build_spacelike_V(U_IO, self.bias[...], c, self.eps)  # (Ai, O)
         # Cast V to match input dtype (avoids float32/float64 scatter warnings)
         V_AiO = V_AiO.astype(x_BAi.dtype)
 

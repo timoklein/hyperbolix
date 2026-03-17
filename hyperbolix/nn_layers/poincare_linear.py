@@ -13,7 +13,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.poincare import Poincare
 
-from ..optim import mark_manifold_param
+from ..optim import ManifoldParam
 from ..utils.math_utils import sinh
 from ._helpers import validate_poincare_manifold
 
@@ -80,13 +80,12 @@ class HypLinearPoincare(nnx.Module):
         # Tangent space weight (Euclidean) - initialized with std = 1/sqrt(fan_in)
         # to prevent outputs from saturating at the Poincaré ball boundary
         std = 1.0 / jnp.sqrt(in_dim)
-        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
         # Manifold bias (initialized to small random values to avoid gradient issues at origin)
-        # Mark as manifold parameter for Riemannian optimization
-        self.bias = mark_manifold_param(
-            nnx.Param(jax.random.normal(rngs.params(), (1, out_dim)) * 0.01),
+        self.bias = ManifoldParam(
+            jax.random.normal(rngs.params(), (out_dim,)) * 0.01,
             manifold=self.manifold,
-            curvature=1.0,  # Default curvature, will be overridden by c parameter in forward pass
+            curvature=1.0,
         )
 
     def __call__(
@@ -109,8 +108,8 @@ class HypLinearPoincare(nnx.Module):
         res : Array of shape (batch, out_dim)
             Output on the Poincaré ball manifold
         """
-        # Project bias to manifold (bias is (1, O), squeeze to (O,))
-        bias_O = self.manifold.proj(self.bias.squeeze(0), c)
+        # Project bias to manifold
+        bias_O = self.manifold.proj(self.bias[...], c)
 
         # Map to tangent space if needed (static branch - JIT friendly)
         if self.input_space == "manifold":
@@ -119,7 +118,7 @@ class HypLinearPoincare(nnx.Module):
             x_BI = x
 
         # Matrix-vector multiplication in tangent space at origin
-        x_BO = jnp.einsum("bi,oi->bo", x_BI, self.weight)  # (B, I) @ (I, O) -> (B, O)
+        x_BO = jnp.einsum("bi,oi->bo", x_BI, self.kernel)  # (B, I) @ (I, O) -> (B, O)
 
         # Map back to manifold
         x_BO = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BO, c)
@@ -197,7 +196,7 @@ class HypLinearPoincarePP(nnx.Module):
         # Tangent space weight - initialized with std = 1/sqrt(fan_in)
         # to prevent outputs from saturating at the Poincaré ball boundary
         std = 1.0 / jnp.sqrt(in_dim)
-        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
         # Scalar bias
         self.bias = nnx.Param(jnp.zeros((out_dim, 1)))
 
@@ -228,7 +227,7 @@ class HypLinearPoincarePP(nnx.Module):
         # Compute multinomial linear regression
         v = self.manifold.compute_mlr_pp(
             x,
-            self.weight[...],
+            self.kernel[...],
             self.bias[...],
             c,
             self.clamping_factor,

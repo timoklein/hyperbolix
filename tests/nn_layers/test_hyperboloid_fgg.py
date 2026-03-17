@@ -435,8 +435,8 @@ def test_cancellation_equivalence(c):
     y_simplified = layer(x, c=c)
 
     # Full chain path: arcsinh -> identity -> sinh -> reconstruct
-    U_IO = layer._get_U()
-    V_AiO = build_spacelike_V(U_IO, layer.b[...], c, layer.eps)
+    U_IO = layer._get_kernel()
+    V_AiO = build_spacelike_V(U_IO, layer.bias[...], c, layer.eps)
     z_BO = x @ V_AiO  # Minkowski inner products
 
     sqrt_c = jnp.sqrt(c)
@@ -464,14 +464,16 @@ def test_fgg_linear_weight_norm_init_magnitude():
     layer = FGGLinear(in_features, out_features, rngs=nnx.Rngs(0), use_weight_norm=True)
 
     g_expected = jnp.sqrt(1.0 / (in_spatial + out_spatial))
-    assert jnp.allclose(layer.g[...], g_expected), f"g init should be {g_expected}, got {layer.g[...]}"
+    assert jnp.allclose(layer.kernel_scale[...], g_expected), (
+        f"kernel_scale init should be {g_expected}, got {layer.kernel_scale[...]}"
+    )
 
 
 def test_fgg_linear_weight_norm_softplus_positive():
     """Weight norm effective magnitude (softplus(g)) is always positive."""
     # Use kaiming init so all columns are non-zero (eye has zero cols when O > I)
     layer = FGGLinear(17, 33, rngs=nnx.Rngs(0), use_weight_norm=True, reset_params="kaiming")
-    U_IO = layer._get_U()
+    U_IO = layer._get_kernel()
     col_norms = jnp.sqrt(jnp.sum(U_IO**2, axis=0))
     assert jnp.all(col_norms > 0), "All effective column magnitudes must be positive"
 
@@ -485,11 +487,13 @@ def test_fgg_mlr_mlr_init():
     """FGGLorentzMLR with mlr init uses normal distribution with correct std."""
     mlr = FGGLorentzMLR(65, 10, rngs=nnx.Rngs(0), reset_params="mlr")
     # z should be N(0, sqrt(5/64)), check std is in a reasonable range
-    z_std = jnp.std(mlr.z[...])
+    kernel_std = jnp.std(mlr.kernel[...])
     expected_std = jnp.sqrt(5.0 / 64)
-    assert jnp.abs(z_std - expected_std) < 0.1 * expected_std, f"z std={z_std:.4f} should be near {expected_std:.4f}"
+    assert jnp.abs(kernel_std - expected_std) < 0.1 * expected_std, (
+        f"kernel std={kernel_std:.4f} should be near {expected_std:.4f}"
+    )
     # bias should be constant 0.5
-    assert jnp.allclose(mlr.a[...], 0.5)
+    assert jnp.allclose(mlr.bias[...], 0.5)
 
 
 def test_fgg_mlr_default_init():

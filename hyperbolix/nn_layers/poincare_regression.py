@@ -15,7 +15,7 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
 
-from ..optim import mark_manifold_param
+from ..optim import ManifoldParam
 from ..utils.math_utils import asinh, smooth_clamp
 from ._helpers import validate_poincare_manifold
 
@@ -85,13 +85,12 @@ class HypRegressionPoincare(nnx.Module):
 
         # Trainable parameters
         # Tangent space weight (Euclidean)
-        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
         # Manifold bias (initialized to small random values)
-        # Mark as manifold parameter for Riemannian optimization
-        self.bias = mark_manifold_param(
-            nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01),
+        self.bias = ManifoldParam(
+            jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01,
             manifold=self.manifold,
-            curvature=1.0,  # Default curvature, will be overridden by c parameter in forward pass
+            curvature=1.0,
         )
 
     def _compute_mlr(
@@ -197,7 +196,7 @@ class HypRegressionPoincare(nnx.Module):
         bias_PD = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias[...], c)  # type: ignore[arg-type]
 
         # Parallel transport weight from tangent space at origin to tangent space at bias
-        pt_weight_PD = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(self.weight[...], bias_PD, c)
+        pt_weight_PD = jax.vmap(self.manifold.ptransp_0, in_axes=(0, 0, None), out_axes=0)(self.kernel[...], bias_PD, c)
 
         # Compute the multinomial linear regression score(s)
         res_BP = self._compute_mlr(x, pt_weight_PD, bias_PD, c)
@@ -272,7 +271,7 @@ class HypRegressionPoincarePP(nnx.Module):
         # Reference uses std = (2 * in_dim * out_dim)^{-0.5}; unscaled normal(0,1) gives
         # row norms ≈ sqrt(in_dim) which overwhelms the MLR output scaling.
         std = 1.0 / jnp.sqrt(2.0 * in_dim * out_dim)
-        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
         # Scalar bias (initialized to small random values)
         self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1)) * 0.01)
 
@@ -303,7 +302,7 @@ class HypRegressionPoincarePP(nnx.Module):
         # Compute multinomial linear regression
         res = self.manifold.compute_mlr_pp(
             x,
-            self.weight[...],
+            self.kernel[...],
             self.bias[...],
             c,
             self.clamping_factor,

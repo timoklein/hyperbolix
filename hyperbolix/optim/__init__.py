@@ -2,10 +2,10 @@
 
 This package provides Riemannian optimization algorithms (SGD, Adam) that work
 seamlessly with Flax NNX and Optax. The optimizers automatically detect manifold
-parameters via metadata and apply appropriate Riemannian operations.
+parameters via ``ManifoldParam`` and apply appropriate Riemannian operations.
 
 Key Features:
-- Automatic manifold detection via parameter metadata
+- Automatic manifold detection via ``ManifoldParam`` (``nnx.Param`` subclass)
 - Standard Optax GradientTransformation interface
 - Compatible with nnx.Optimizer wrapper
 - Supports mixed Euclidean/Riemannian parameters
@@ -26,19 +26,13 @@ Example:
     >>> tx = riemannian_sgd(learning_rate=0.01, momentum=0.9)
     >>> optimizer = nnx.Optimizer(layer, tx, wrt=nnx.Param)
 
-Metadata System:
-    The metadata system uses Flax NNX's built-in Variable._var_metadata to store
-    manifold information (instance and curvature). This enables:
-    - All parameters remain nnx.Param (single variable type)
-    - Manifold dtype control is applied during optimization
-    - Seamless Optax integration
-
 References:
     Bécigneul, Gary, and Octavian-Eugen Ganea. "Riemannian adaptive optimization methods."
         arXiv preprint arXiv:1810.00760 (2018).
 """
 
 from .manifold_metadata import (
+    ManifoldParam,
     get_manifold_info,
     has_manifold_params,
     mark_manifold_param,
@@ -47,6 +41,7 @@ from .riemannian_adam import riemannian_adam
 from .riemannian_sgd import riemannian_sgd
 
 __all__ = [
+    "ManifoldParam",
     "get_manifold_info",
     "has_manifold_params",
     # Metadata utilities

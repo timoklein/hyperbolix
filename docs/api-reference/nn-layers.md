@@ -705,6 +705,50 @@ print(result_batch.shape)  # (8, 7)
     - Used for skip connections in hyperbolic Transformers/ResNets
     - Formula: `ave = x + w_y*y`, normalized to hyperboloid
 
+## Hybrid Euclidean-Hyperbolic
+
+### Hyper++ Feature Scaling
+
+::: hyperbolix.nn_layers.HyperPPFeatureScaling
+    options:
+      show_source: true
+      heading_level: 4
+
+`HyperPPFeatureScaling` is applied after the last Euclidean layer and before `expmap_0` to either the Poincaré ball or Hyperboloid. It operates entirely in Euclidean space but uses hyperbolic geometry to bound the output norm via `rho_max = atanh(alpha) / sqrt(c)`.
+
+### Usage Example
+
+```python
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from hyperbolix.nn_layers import HyperPPFeatureScaling
+from hyperbolix.manifolds import Poincare
+
+poincare = Poincare()
+
+# Parameter-free mode (RMSNorm + tanh + dim scaling only)
+layer = HyperPPFeatureScaling(dim=64, rngs=nnx.Rngs(0))
+x = jax.random.normal(jax.random.PRNGKey(0), (32, 64))
+scaled = layer(x, c=1.0)
+
+# With learned rescaling (adds rho_max * sigmoid(xi(x)) * x)
+layer = HyperPPFeatureScaling(dim=64, alpha=0.9, rngs=nnx.Rngs(0))
+scaled = layer(x, c=0.1)
+
+# Map to Poincaré ball
+expmap_batch = jax.vmap(poincare.expmap_0, in_axes=(0, None))
+points = expmap_batch(scaled, 0.1)
+```
+
+!!! info "Pipeline Steps"
+    1. **RMSNorm** (parameter-free): normalizes feature magnitudes
+    2. **Lipschitz activation** (default `tanh`, configurable): bounds per-component values
+    3. **Dimension scaling** (`1/sqrt(d)`): ensures norm doesn't grow with dimension
+    4. **Learned rescaling** (when `alpha` is set): `rho_max * sigmoid(xi_theta(x)) * x` where `rho_max = atanh(alpha) / sqrt(c)`
+
+    When `alpha is None`, the layer is entirely parameter-free. When set, only `xi_theta` (a linear projection to scalar) has learnable parameters.
+
 ## Regression Layers
 
 Single-layer classifiers with Riemannian geometry.

@@ -6,7 +6,7 @@ from flax import nnx
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
-from hyperbolix.optim.manifold_metadata import mark_manifold_param
+from hyperbolix.optim.manifold_metadata import ManifoldParam
 
 from ..utils.math_utils import asinh
 from ._helpers import validate_poincare_manifold
@@ -77,10 +77,10 @@ class HypRegressionPoincareHDRL(nnx.Module):
 
         # Trainable parameters
         # Tangent space weight
-        self.weight = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
         # Manifold bias (initialized to small random values)
-        self.bias = mark_manifold_param(
-            nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01),
+        self.bias = ManifoldParam(
+            jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01,
             manifold=self.manifold,
             curvature=1.0,
         )
@@ -232,5 +232,5 @@ class HypRegressionPoincareHDRL(nnx.Module):
         bias = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(self.bias[...], c)
 
         # Compute MLR scores
-        res = self._compute_mlr(x, self.weight[...], bias, c)
+        res = self._compute_mlr(x, self.kernel[...], bias, c)
         return res
