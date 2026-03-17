@@ -1,5 +1,6 @@
 """Hyperbolic neural network layers for JAX/Flax NNX."""
 
+from .hybrid_regularization import HyperPPFeatureScaling
 from .hyperboloid_activations import (
     hrc_gelu,
     hrc_leaky_relu,
@@ -50,6 +51,7 @@ __all__ = [
     "HypRegressionPoincare",
     "HypRegressionPoincareHDRL",
     "HypRegressionPoincarePP",
+    "HyperPPFeatureScaling",
     "HyperbolicFullAttention",
     "HyperbolicLinearAttention",
     "HyperbolicRoPE",
