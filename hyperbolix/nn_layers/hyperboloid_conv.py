@@ -609,7 +609,7 @@ class FGGConv2D(nnx.Module):
         padding: str = "SAME",
         pad_mode: str = "origin",
         activation: Callable | None = None,
-        reset_params: str = "kaiming",
+        reset_params: str = "lorentz_kaiming",
         use_weight_norm: bool = False,
         init_bias: float = 0.5,
         eps: float = 1e-7,
@@ -654,26 +654,27 @@ class FGGConv2D(nnx.Module):
         self.use_weight_norm = use_weight_norm
 
         # Initialize Euclidean weight U: (I, O)
+        # Reference computes std from ambient dimensions (hcat_out_ambient, out_channels)
         key = rngs.params()
         if reset_params == "eye":
             U_init = 0.5 * jnp.eye(in_spatial, out_spatial)
         elif reset_params == "xavier":
-            std = jnp.sqrt(1.0 / (in_spatial + out_spatial))
+            std = jnp.sqrt(1.0 / (hcat_out_ambient + out_channels))
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
         elif reset_params == "kaiming":
-            std = jnp.sqrt(2.0 / in_spatial)
+            std = jnp.sqrt(2.0 / hcat_out_ambient)
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
         elif reset_params == "lorentz_kaiming":
-            std = jnp.sqrt(1.0 / in_spatial)
+            std = jnp.sqrt(1.0 / hcat_out_ambient)
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
         else:  # mlr
-            std = jnp.sqrt(5.0 / in_spatial)
+            std = jnp.sqrt(5.0 / hcat_out_ambient)
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
 
         # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
         if use_weight_norm:
             self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
-            g_init_val = jnp.sqrt(1.0 / (in_spatial + out_spatial))
+            g_init_val = jnp.sqrt(1.0 / (hcat_out_ambient + out_channels))
             self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val))  # (O,)
         else:
             self.kernel = nnx.Param(U_init)  # (I, O)

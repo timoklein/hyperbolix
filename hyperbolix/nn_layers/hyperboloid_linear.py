@@ -466,27 +466,28 @@ class FGGLinear(nnx.Module):
         self.eps = eps
 
         # Initialize Euclidean weight U: (I, O)
+        # Reference computes std from ambient dimensions (in_features, out_features)
         key = rngs.params()
         if reset_params == "eye":
             U_init = 0.5 * jnp.eye(in_spatial, out_spatial)
         elif reset_params == "xavier":
-            std = jnp.sqrt(1.0 / (in_spatial + out_spatial))
+            std = jnp.sqrt(1.0 / (in_features + out_features))
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
         elif reset_params == "kaiming":
-            std = jnp.sqrt(2.0 / in_spatial)
+            std = jnp.sqrt(2.0 / in_features)
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
         elif reset_params == "lorentz_kaiming":
-            std = jnp.sqrt(1.0 / in_spatial)
+            std = jnp.sqrt(1.0 / in_features)
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
         else:  # mlr
-            std = jnp.sqrt(5.0 / in_spatial)
+            std = jnp.sqrt(5.0 / in_features)
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
 
         # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
         if use_weight_norm:
             # Reference: kernel_dir from reset_params (normalized in forward), kernel_scale fixed magnitude
             self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
-            g_init_val = jnp.sqrt(1.0 / (in_spatial + out_spatial))
+            g_init_val = jnp.sqrt(1.0 / (in_features + out_features))
             self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val))  # (O,)
         else:
             self.kernel = nnx.Param(U_init)  # (I, O)

@@ -174,13 +174,13 @@ class FGGLorentzMLR(nnx.Module):
         self.eps = eps
 
         # Hyperplane normals (spatial) and bias offsets
+        # Reference computes std from ambient dimension (in_features)
         key = rngs.params()
         if reset_params == "mlr":
-            # Reference: N(0, sqrt(5/I)) for spatial weights
-            std = jnp.sqrt(5.0 / in_spatial)
+            std = jnp.sqrt(5.0 / in_features)
             self.kernel = nnx.Param(jax.random.normal(key, (in_spatial, num_classes)) * std)
         else:  # default
-            stdv = 1.0 / jnp.sqrt(jnp.array(in_spatial, dtype=jnp.float32))
+            stdv = 1.0 / jnp.sqrt(jnp.array(in_features, dtype=jnp.float32))
             self.kernel = nnx.Param(jax.random.uniform(key, (in_spatial, num_classes), minval=-stdv, maxval=stdv))
         self.bias = nnx.Param(jnp.full((num_classes,), init_bias))
 
