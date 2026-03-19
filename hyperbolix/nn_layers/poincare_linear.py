@@ -128,6 +128,40 @@ class HypLinearPoincare(nnx.Module):
         return res_BO
 
 
+def _poincare_pp_forward(
+    x_BI: Float[Array, "batch in_dim"],
+    kernel_OI: Array,
+    bias_O1: Array,
+    manifold: Poincare,
+    c: float,
+    input_space: str,
+    clamping_factor: float,
+    smoothing_factor: float,
+) -> Float[Array, "batch out_dim"]:
+    """Pure-function HNN++ forward pass.
+
+    Used by both HypLinearPoincarePP and HypConv2DPoincare.
+    """
+    # Map to manifold if needed (static branch - JIT friendly)
+    if input_space == "tangent":
+        x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BI, c)
+
+    # Compute multinomial linear regression
+    v = manifold.compute_mlr_pp(x_BI, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
+
+    # Generalized linear transformation
+    sqrt_c = jnp.sqrt(c)
+    w_BO = sinh(sqrt_c * v) / sqrt_c
+    w2_B1 = jnp.sum(w_BO**2, axis=-1, keepdims=True)
+    denom_B1 = 1 + jnp.sqrt(1 + c * w2_B1)
+    res_BO = w_BO / denom_B1  # (B, 1) broadcasts over (B, O)
+
+    # Project results to the manifold
+    res_BO = jax.vmap(manifold.proj, in_axes=(0, None), out_axes=0)(res_BO, c)
+
+    return res_BO
+
+
 class HypLinearPoincarePP(nnx.Module):
     """
     Hyperbolic Neural Networks ++ fully connected layer (Poincaré ball model).
@@ -220,28 +254,13 @@ class HypLinearPoincarePP(nnx.Module):
         res : Array of shape (batch, out_dim)
             Output on the Poincaré ball manifold
         """
-        # Map to manifold if needed (static branch - JIT friendly)
-        if self.input_space == "tangent":
-            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
-
-        # Compute multinomial linear regression
-        v = self.manifold.compute_mlr_pp(
+        return _poincare_pp_forward(
             x,
             self.kernel[...],
             self.bias[...],
+            self.manifold,
             c,
+            self.input_space,
             self.clamping_factor,
             self.smoothing_factor,
         )
-
-        # Generalized linear transformation
-        sqrt_c = jnp.sqrt(c)
-        w_BO = sinh(sqrt_c * v) / sqrt_c
-        w2_B1 = jnp.sum(w_BO**2, axis=-1, keepdims=True)
-        denom_B1 = 1 + jnp.sqrt(1 + c * w2_B1)
-        res_BO = w_BO / denom_B1  # (B, 1) broadcasts over (B, O)
-
-        # Project results to the manifold
-        res_BO = jax.vmap(self.manifold.proj, in_axes=(0, None), out_axes=0)(res_BO, c)
-
-        return res_BO

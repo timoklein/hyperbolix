@@ -25,6 +25,107 @@ from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc
 
 
+def _fhcnn_forward(
+    x_BI: Float[Array, "batch in_dim"],
+    kernel_OI: Array,
+    bias_1O: Array,
+    manifold: Manifold,
+    c: float,
+    input_space: str,
+    activation: Callable[[Array], Array] | None,
+    normalize: bool,
+    scale_val: float | Array,
+    eps: float,
+) -> Float[Array, "batch out_dim"]:
+    """Pure-function FHCNN forward pass.
+
+    Used by both HypLinearHyperboloidFHCNN and HypConv2DHyperboloid/HypConv3DHyperboloid.
+    """
+    # Map to manifold if needed (static branch - JIT friendly)
+    if input_space == "tangent":
+        x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BI, c)
+
+    # Apply activation if provided (static branch - JIT friendly)
+    if activation is not None:
+        x_BI = activation(x_BI)
+
+    # Linear transformation: (B, in_dim) -> (B, out_dim)
+    x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O
+
+    # Split into time and space: x0 is first coord, x_rem is spatial
+    x0_B1 = x_BO[:, 0:1]  # (B, 1) -- time coordinate
+    x_rem_BD = x_BO[:, 1:]  # (B, D) where D = out_dim - 1
+
+    # Static branch - JIT friendly
+    if normalize:
+        x_rem_norm_B1 = jnp.linalg.norm(x_rem_BD, ord=2, axis=-1, keepdims=True)  # (B, 1)
+
+        # Learnable sigmoid scaling
+        scale_B1 = jnp.exp(scale_val) * jax.nn.sigmoid(x0_B1)  # (B, 1)
+
+        res0_B1 = jnp.sqrt(scale_B1**2 + 1 / c + eps)  # (B, 1)
+        res_rem_BD = scale_B1 * x_rem_BD / x_rem_norm_B1  # (B, D)
+
+        res_BA = jnp.concatenate([res0_B1, res_rem_BD], axis=-1)  # (B, A)
+
+        # Cast near-zero-norm vectors to origin
+        origin_time_B1 = jnp.sqrt(1 / c) * jnp.ones_like(res0_B1)
+        origin_BA = jnp.concatenate([origin_time_B1, jnp.zeros_like(res_rem_BD)], axis=-1)
+
+        mask_B1 = x_rem_norm_B1 <= 1e-5
+        res_BA = jnp.where(mask_B1, origin_BA, res_BA)
+    else:
+        # Reconstruct time from space: x0 = sqrt(||x_rem||^2 + 1/c)
+        res0_B1 = jnp.sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True) + 1 / c)  # (B, 1)
+        res_BA = jnp.concatenate([res0_B1, x_rem_BD], axis=-1)  # (B, A)
+
+    return res_BA
+
+
+def _get_effective_kernel(
+    kernel: Array | None,
+    kernel_dir: Array | None,
+    kernel_scale: Array | None,
+    use_weight_norm: bool,
+    eps: float,
+) -> Array:
+    """Compute effective weight matrix, handling weight normalization."""
+    if use_weight_norm:
+        assert kernel_scale is not None and kernel_dir is not None
+        g_pos_O = jax.nn.softplus(kernel_scale)  # (O,) force positive magnitudes
+        v_norm_O = jnp.sqrt(jnp.sum(kernel_dir**2, axis=0) + eps)  # (O,)
+        return g_pos_O[None, :] * kernel_dir / v_norm_O[None, :]  # (I, O)
+    assert kernel is not None
+    return kernel
+
+
+def _fgg_linear_forward(
+    x_BAi: Float[Array, "batch in_features"],
+    U_IO: Array,
+    bias_O: Array,
+    c: float,
+    activation: Callable[[jax.Array], jax.Array] | None,
+    eps: float,
+) -> Float[Array, "batch out_features"]:
+    """Pure-function FGG forward: build_spacelike_V -> matmul -> activation -> time reconstruct."""
+    # Build V_mink from (kernel, bias) -- Minkowski metric absorbed
+    V_AiO = build_spacelike_V(U_IO, bias_O, c, eps)  # (Ai, O)
+    # Cast V to match input dtype (avoids float32/float64 scatter warnings)
+    V_AiO = V_AiO.astype(x_BAi.dtype)
+
+    # Minkowski inner products via matmul (metric in V)
+    z_BO = x_BAi @ V_AiO  # (B, O)
+
+    # Apply Euclidean activation (Lorentzian wrapping implicit via cancellation)
+    if activation is not None:
+        z_BO = activation(z_BO)
+
+    # Reconstruct hyperboloid point: spatial = z, time from constraint
+    y_0_B1 = jnp.sqrt(jnp.sum(z_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
+
+    return jnp.concatenate([y_0_B1, z_BO], axis=-1)  # (B, Ao)
+
+
 class HypLinearHyperboloidFHCNN(nnx.Module):
     """
     Fully Hyperbolic Convolutional Neural Networks fully connected layer (Hyperboloid model).
@@ -147,46 +248,19 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         res : Array of shape (batch, out_dim)
             Output on the Hyperboloid manifold
         """
-        # Map to manifold if needed (static branch - JIT friendly)
-        if self.input_space == "tangent":
-            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
-
-        # Apply activation if provided (static branch - JIT friendly)
-        if self.activation is not None:
-            x = self.activation(x)
-
-        # Linear transformation: (B, in_dim) → (B, out_dim)
-        x_BO = jnp.einsum("bi,oi->bo", x, self.kernel) + self.bias
-
-        # Split into time and space: x0 is first coord, x_rem is spatial
-        x0_B1 = x_BO[:, 0:1]  # (B, 1) — time coordinate
-        x_rem_BD = x_BO[:, 1:]  # (B, D) where D = out_dim - 1
-
-        # Static branch - JIT friendly
-        if self.normalize:
-            x_rem_norm_B1 = jnp.linalg.norm(x_rem_BD, ord=2, axis=-1, keepdims=True)  # (B, 1)
-
-            # Learnable sigmoid scaling
-            scale_val = self.scale[...] if isinstance(self.scale, nnx.Param) else self.scale
-            scale_B1 = jnp.exp(scale_val) * jax.nn.sigmoid(x0_B1)  # (B, 1)
-
-            res0_B1 = jnp.sqrt(scale_B1**2 + 1 / c + self.eps)  # (B, 1)
-            res_rem_BD = scale_B1 * x_rem_BD / x_rem_norm_B1  # (B, D)
-
-            res_BA = jnp.concatenate([res0_B1, res_rem_BD], axis=-1)  # (B, A)
-
-            # Cast near-zero-norm vectors to origin
-            origin_time_B1 = jnp.sqrt(1 / c) * jnp.ones_like(res0_B1)
-            origin_BA = jnp.concatenate([origin_time_B1, jnp.zeros_like(res_rem_BD)], axis=-1)
-
-            mask_B1 = x_rem_norm_B1 <= 1e-5
-            res_BA = jnp.where(mask_B1, origin_BA, res_BA)
-        else:
-            # Reconstruct time from space: x₀ = sqrt(||x_rem||² + 1/c)
-            res0_B1 = jnp.sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True) + 1 / c)  # (B, 1)
-            res_BA = jnp.concatenate([res0_B1, x_rem_BD], axis=-1)  # (B, A)
-
-        return res_BA
+        scale_val = self.scale[...] if isinstance(self.scale, nnx.Param) else self.scale
+        return _fhcnn_forward(
+            x,
+            self.kernel[...],
+            self.bias[...],
+            self.manifold,
+            c,
+            self.input_space,
+            self.activation,
+            self.normalize,
+            scale_val,
+            self.eps,
+        )
 
 
 class HTCLinear(nnx.Module):
@@ -422,13 +496,13 @@ class FGGLinear(nnx.Module):
 
     def _get_kernel(self) -> jax.Array:
         """Return the effective weight matrix, handling weight normalization."""
-        if self.use_weight_norm:
-            v_IO = self.kernel_dir[...]  # (I, O)
-            g_O = self.kernel_scale[...]  # (O,)
-            g_pos_O = jax.nn.softplus(g_O)  # (O,) force positive magnitudes
-            v_norm_O = jnp.sqrt(jnp.sum(v_IO**2, axis=0) + self.eps)  # (O,)
-            return g_pos_O[None, :] * v_IO / v_norm_O[None, :]  # (I, O)
-        return self.kernel[...]  # (I, O)
+        return _get_effective_kernel(
+            self.kernel[...] if not self.use_weight_norm else None,
+            self.kernel_dir[...] if self.use_weight_norm else None,
+            self.kernel_scale[...] if self.use_weight_norm else None,
+            self.use_weight_norm,
+            self.eps,
+        )
 
     def __call__(
         self,
@@ -451,22 +525,5 @@ class FGGLinear(nnx.Module):
             Output points on the hyperboloid with curvature ``c``.
             Ao = out_features (ambient dimension).
         """
-        # 1. Get effective kernel (handle weight norm)
         U_IO = self._get_kernel()  # (I, O)
-
-        # 2. Build V_mink from (kernel, bias) — Minkowski metric absorbed
-        V_AiO = build_spacelike_V(U_IO, self.bias[...], c, self.eps)  # (Ai, O)
-        # Cast V to match input dtype (avoids float32/float64 scatter warnings)
-        V_AiO = V_AiO.astype(x_BAi.dtype)
-
-        # 3. Minkowski inner products via matmul (metric in V)
-        z_BO = x_BAi @ V_AiO  # (B, O)
-
-        # 4. Apply Euclidean activation (Lorentzian wrapping implicit via cancellation)
-        if self.activation is not None:
-            z_BO = self.activation(z_BO)
-
-        # 5. Reconstruct hyperboloid point: spatial = z, time from constraint
-        y_0_B1 = jnp.sqrt(jnp.sum(z_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
-
-        return jnp.concatenate([y_0_B1, z_BO], axis=-1)  # (B, Ao)
+        return _fgg_linear_forward(x_BAi, U_IO, self.bias[...], c, self.activation, self.eps)
