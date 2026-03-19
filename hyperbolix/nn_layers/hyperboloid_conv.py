@@ -18,7 +18,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import hrc
-from .hyperboloid_linear import FGGLinear, HypLinearHyperboloidFHCNN
+from .hyperboloid_linear import _fgg_linear_forward, _fhcnn_forward, _get_effective_kernel
 
 
 class LorentzConv2D(nnx.Module):
@@ -230,17 +230,13 @@ class HypConv2DHyperboloid(nnx.Module):
         d = in_channels - 1  # Input manifold dimension
         hcat_out_ambient_dim = d * N + 1  # HCat output ambient dimension
 
-        # Create the linear transformation layer
-        # Input: hcat_out_ambient_dim, Output: out_channels
-        self.linear = HypLinearHyperboloidFHCNN(
-            manifold_module=self.manifold,
-            in_dim=hcat_out_ambient_dim,
-            out_dim=out_channels,
-            rngs=rngs,
-            input_space="manifold",  # HCat output is always on manifold
-            learnable_scale=False,
-            normalize=False,
+        # Trainable parameters — owned directly for flat parameter paths
+        bound = 0.02
+        self.kernel = nnx.Param(
+            jax.random.uniform(rngs.params(), (out_channels, hcat_out_ambient_dim), minval=-bound, maxval=bound)
         )
+        self.bias = nnx.Param(jnp.zeros((1, out_channels)))
+        self.scale = 2.3  # not learnable (matches FHCNN default)
 
     def _extract_patches(
         self,
@@ -322,7 +318,18 @@ class HypConv2DHyperboloid(nnx.Module):
         hcat_out_NA = jax.vmap(self.manifold.hcat, in_axes=(0, None))(patches_flat_NKC, c)  # (B*H*W, hcat_dim)
 
         # Linear: (hcat_dim,) -> (out_channels,)
-        linear_out_NC = self.linear(hcat_out_NA, c)  # (B*H*W, out_channels)
+        linear_out_NC = _fhcnn_forward(
+            hcat_out_NA,
+            self.kernel[...],
+            self.bias[...],
+            self.manifold,
+            c,
+            "manifold",
+            None,
+            False,
+            self.scale,
+            1e-5,
+        )  # (B*H*W, out_channels)
 
         # Reshape back to spatial
         output_BHWC = linear_out_NC.reshape(batch, out_h, out_w, self.out_channels)
@@ -422,17 +429,13 @@ class HypConv3DHyperboloid(nnx.Module):
         d = in_channels - 1  # Input manifold dimension
         hcat_out_ambient_dim = d * N + 1  # HCat output ambient dimension
 
-        # Create the linear transformation layer
-        # Input: hcat_out_ambient_dim, Output: out_channels
-        self.linear = HypLinearHyperboloidFHCNN(
-            manifold_module=self.manifold,
-            in_dim=hcat_out_ambient_dim,
-            out_dim=out_channels,
-            rngs=rngs,
-            input_space="manifold",  # HCat output is always on manifold
-            learnable_scale=False,
-            normalize=False,
+        # Trainable parameters — owned directly for flat parameter paths
+        bound = 0.02
+        self.kernel = nnx.Param(
+            jax.random.uniform(rngs.params(), (out_channels, hcat_out_ambient_dim), minval=-bound, maxval=bound)
         )
+        self.bias = nnx.Param(jnp.zeros((1, out_channels)))
+        self.scale = 2.3  # not learnable (matches FHCNN default)
 
     def _extract_patches(
         self,
@@ -526,7 +529,18 @@ class HypConv3DHyperboloid(nnx.Module):
         hcat_out_NA = jax.vmap(self.manifold.hcat, in_axes=(0, None))(patches_flat_NKC, c)  # (B*Z*H*W, hcat_dim)
 
         # Linear: (hcat_dim,) -> (out_channels,)
-        linear_out_NC = self.linear(hcat_out_NA, c)  # (B*Z*H*W, out_channels)
+        linear_out_NC = _fhcnn_forward(
+            hcat_out_NA,
+            self.kernel[...],
+            self.bias[...],
+            self.manifold,
+            c,
+            "manifold",
+            None,
+            False,
+            self.scale,
+            1e-5,
+        )  # (B*Z*H*W, out_channels)
 
         # Reshape back to spatial
         output_BZHWC = linear_out_NC.reshape(batch, out_d, out_h, out_w, self.out_channels)
@@ -595,7 +609,7 @@ class FGGConv2D(nnx.Module):
         padding: str = "SAME",
         pad_mode: str = "origin",
         activation: Callable | None = None,
-        reset_params: str = "kaiming",
+        reset_params: str = "lorentz_kaiming",
         use_weight_norm: bool = False,
         init_bias: float = 0.5,
         eps: float = 1e-7,
@@ -627,17 +641,45 @@ class FGGConv2D(nnx.Module):
         kh, kw = self.kernel_size
         hcat_out_ambient = (in_channels - 1) * kh * kw + 1
 
-        # FGGLinear for channel transformation
-        self.fgg_linear = FGGLinear(
-            hcat_out_ambient,
-            out_channels,
-            rngs=rngs,
-            activation=activation,
-            reset_params=reset_params,
-            use_weight_norm=use_weight_norm,
-            init_bias=init_bias,
-            eps=eps,
-        )
+        # Trainable parameters — owned directly for flat parameter paths
+        if reset_params not in ("eye", "xavier", "kaiming", "lorentz_kaiming", "mlr"):
+            raise ValueError(
+                f"reset_params must be 'eye', 'xavier', 'kaiming', 'lorentz_kaiming', or 'mlr', got '{reset_params}'"
+            )
+
+        in_spatial = hcat_out_ambient - 1  # I
+        out_spatial = out_channels - 1  # O
+
+        self.activation = activation
+        self.use_weight_norm = use_weight_norm
+
+        # Initialize Euclidean weight U: (I, O)
+        # Reference computes std from ambient dimensions (hcat_out_ambient, out_channels)
+        key = rngs.params()
+        if reset_params == "eye":
+            U_init = 0.5 * jnp.eye(in_spatial, out_spatial)
+        elif reset_params == "xavier":
+            std = jnp.sqrt(1.0 / (hcat_out_ambient + out_channels))
+            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
+        elif reset_params == "kaiming":
+            std = jnp.sqrt(2.0 / hcat_out_ambient)
+            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
+        elif reset_params == "lorentz_kaiming":
+            std = jnp.sqrt(1.0 / hcat_out_ambient)
+            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
+        else:  # mlr
+            std = jnp.sqrt(5.0 / hcat_out_ambient)
+            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
+
+        # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
+        if use_weight_norm:
+            self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
+            g_init_val = jnp.sqrt(1.0 / (hcat_out_ambient + out_channels))
+            self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val))  # (O,)
+        else:
+            self.kernel = nnx.Param(U_init)  # (I, O)
+
+        self.bias = nnx.Param(jnp.full((out_spatial,), init_bias))  # (O,)
 
     def _extract_patches(
         self,
@@ -717,8 +759,15 @@ class FGGConv2D(nnx.Module):
         # HCat: (K, C) -> (hcat_dim,) per patch
         hcat_out_NA = jax.vmap(self.manifold.hcat, in_axes=(0, None))(patches_flat_NKC, c)
 
-        # FGGLinear: (hcat_dim,) -> (out_channels,)
-        linear_out_NC = self.fgg_linear(hcat_out_NA, c)
+        # FGG forward: (hcat_dim,) -> (out_channels,)
+        U_IO = _get_effective_kernel(
+            getattr(self, "kernel", None),
+            getattr(self, "kernel_dir", None),
+            getattr(self, "kernel_scale", None),
+            self.use_weight_norm,
+            self.eps,
+        )
+        linear_out_NC = _fgg_linear_forward(hcat_out_NA, U_IO, self.bias[...], c, self.activation, self.eps)
 
         # Reshape back to spatial
         return linear_out_NC.reshape(batch, out_h, out_w, self.out_channels)

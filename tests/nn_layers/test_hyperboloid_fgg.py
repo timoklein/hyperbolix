@@ -460,10 +460,9 @@ def test_cancellation_equivalence(c):
 def test_fgg_linear_weight_norm_init_magnitude():
     """Weight norm g is initialized to fixed sqrt(1/(I+O)), not column norms of U."""
     in_features, out_features = 33, 65
-    in_spatial, out_spatial = 32, 64
     layer = FGGLinear(in_features, out_features, rngs=nnx.Rngs(0), use_weight_norm=True)
 
-    g_expected = jnp.sqrt(1.0 / (in_spatial + out_spatial))
+    g_expected = jnp.sqrt(1.0 / (in_features + out_features))
     assert jnp.allclose(layer.kernel_scale[...], g_expected), (
         f"kernel_scale init should be {g_expected}, got {layer.kernel_scale[...]}"
     )

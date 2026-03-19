@@ -25,7 +25,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds.poincare import Poincare
 
 from ._helpers import validate_poincare_manifold
-from .poincare_linear import HypLinearPoincarePP
+from .poincare_linear import _poincare_pp_forward
 
 
 class HypConv2DPoincare(nnx.Module):
@@ -152,23 +152,21 @@ class HypConv2DPoincare(nnx.Module):
         beta_ni = jax.scipy.special.beta(in_channels / 2.0, 0.5)
         self.beta_scale = beta_n / beta_ni
 
-        # HNN++ linear: in_dim = K^2 * C_in, out_dim = C_out
-        self.linear = HypLinearPoincarePP(
-            manifold_module=self.manifold,
-            in_dim=concat_dim,
-            out_dim=out_channels,
-            rngs=rngs,
-            input_space="manifold",  # input is on manifold after expmap_0
-            clamping_factor=clamping_factor,
-            smoothing_factor=smoothing_factor,
-        )
+        self.clamping_factor = clamping_factor
+        self.smoothing_factor = smoothing_factor
 
-        # Override weight init with identity initialization from reference
-        # (van Spengler et al. 2023): W = 1/2 * I(C_out, K^2*C_in)
-        # The 1/2 factor compensates for the factor of 2 in the HNN++ distance formula.
+        # Trainable parameters — owned directly for flat parameter paths
+        # Weight initialization: identity from reference (van Spengler et al. 2023)
+        # or scaled normal std = 1/sqrt(fan_in)
         if id_init:
-            eye = jnp.eye(out_channels, concat_dim)  # (C_out, K^2*C_in)
-            self.linear.kernel[...] = 0.5 * eye
+            # W = 1/2 * I(C_out, K^2*C_in)
+            # The 1/2 factor compensates for the factor of 2 in the HNN++ distance formula.
+            kernel_init = 0.5 * jnp.eye(out_channels, concat_dim)
+        else:
+            std = 1.0 / jnp.sqrt(concat_dim)
+            kernel_init = jax.random.normal(rngs.params(), (out_channels, concat_dim)) * std
+        self.kernel = nnx.Param(kernel_init)
+        self.bias = nnx.Param(jnp.zeros((out_channels, 1)))
 
     def __call__(
         self,
@@ -228,7 +226,16 @@ class HypConv2DPoincare(nnx.Module):
         )  # (N, K²·C_in) on Poincaré ball
 
         # Step 5: HNN++ FC — (N, K²·C_in) on manifold → (N, C_out) on manifold
-        fc_out_NC = self.linear(manifold_pts_NKC, c)
+        fc_out_NC = _poincare_pp_forward(
+            manifold_pts_NKC,
+            self.kernel[...],
+            self.bias[...],
+            self.manifold,
+            c,
+            "manifold",
+            self.clamping_factor,
+            self.smoothing_factor,
+        )
 
         # Step 6: Map back to tangent space
         tangent_out_NC = jax.vmap(self.manifold.logmap_0, in_axes=(0, None))(fc_out_NC, c)  # (N, C_out)

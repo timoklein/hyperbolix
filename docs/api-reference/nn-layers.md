@@ -831,7 +831,7 @@ mlr = FGGLorentzMLR(
     in_features=65,
     num_classes=10,
     rngs=rngs,
-    reset_params="mlr",   # N(0, sqrt(5/I)) — reference default
+    reset_params="mlr",   # N(0, sqrt(5/Ai)) where Ai = in_features (ambient)
     init_bias=0.5,
 )
 logits_B10 = mlr(y_BHWC.reshape(-1, 65), c=1.0)

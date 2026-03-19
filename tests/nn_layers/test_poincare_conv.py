@@ -275,8 +275,8 @@ def test_hypconv_poincare_gradient(dtype):
 
     # Check gradients exist and are finite
     assert jnp.isfinite(loss), f"Loss is not finite: {loss}"
-    assert jnp.isfinite(grads.linear.kernel[...]).all(), "Weight gradients contain NaN/Inf"
-    assert jnp.isfinite(grads.linear.bias[...]).all(), "Bias gradients contain NaN/Inf"
+    assert jnp.isfinite(grads.kernel[...]).all(), "Weight gradients contain NaN/Inf"
+    assert jnp.isfinite(grads.bias[...]).all(), "Bias gradients contain NaN/Inf"
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -401,5 +401,5 @@ def test_hypconv_poincare_chained_tangent_flow(dtype):
     loss, grads = nnx.value_and_grad(loss_fn, argnums=(0, 1))(conv1, conv2)
     grads1, grads2 = grads
     assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads1.linear.kernel[...]).all()
-    assert jnp.isfinite(grads2.linear.kernel[...]).all()
+    assert jnp.isfinite(grads1.kernel[...]).all()
+    assert jnp.isfinite(grads2.kernel[...]).all()
