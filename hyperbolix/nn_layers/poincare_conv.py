@@ -150,7 +150,7 @@ class HypConv2DPoincare(nnx.Module):
         concat_dim = K2 * in_channels
         beta_n = jax.scipy.special.beta(concat_dim / 2.0, 0.5)
         beta_ni = jax.scipy.special.beta(in_channels / 2.0, 0.5)
-        self.beta_scale = beta_n / beta_ni
+        self.beta_scale = float(beta_n / beta_ni)
 
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor

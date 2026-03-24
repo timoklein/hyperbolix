@@ -12,7 +12,7 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 ## Features
 
 - 🌐 **3 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid
-- 🧠 **13+ Neural Network Layers**: Linear, convolutional (2D/3D), regression
+- 🧠 **13+ Neural Network Layers**: Linear, convolutional, regression
 - ⚡ **4 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish
 - 📈 **Riemannian Optimizers**: RAdam and RSGD with automatic manifold detection
 - 🚀 **Pure JAX/Flax NNX**: vmap-native API, JIT-compatible (10-100x speedup)
