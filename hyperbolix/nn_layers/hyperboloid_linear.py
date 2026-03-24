@@ -39,7 +39,7 @@ def _fhcnn_forward(
 ) -> Float[Array, "batch out_dim"]:
     """Pure-function FHCNN forward pass.
 
-    Used by both HypLinearHyperboloidFHCNN and HypConv2DHyperboloid/HypConv3DHyperboloid.
+    Used by both HypLinearHyperboloidFHCNN and HypConv2DHyperboloid.
     """
     # Map to manifold if needed (static branch - JIT friendly)
     if input_space == "tangent":

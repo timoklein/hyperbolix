@@ -7,7 +7,7 @@ Hyperbolic neural network layers built with Flax NNX.
 Hyperbolix provides 20+ neural network layer classes and 5 activation functions for building hyperbolic deep learning models:
 
 - **Linear Layers**: Poincaré and Hyperboloid linear transformations, including FGG (Fast and Geometrically Grounded) layers
-- **Convolutional Layers**: HCat-based, HRC-based, and FGG hyperbolic convolutions (2D and 3D)
+- **Convolutional Layers**: HCat-based, HRC-based, and FGG hyperbolic convolutions
 - **Hypformer Components**: HTC (Hyperbolic Transformation Component) and HRC (Hyperbolic Regularization Component) with curvature-change support
 - **FGG Components**: `FGGLinear`, `FGGConv2D`, `FGGMeanOnlyBatchNorm` from Klis et al. (2026) — linear-distance growth, ~3× faster than prior work
 - **Attention Layers**: Three hyperbolic attention variants (linear O(N), softmax O(N²), full Lorentzian O(N²)) from the Hypformer paper
@@ -77,11 +77,6 @@ print(output.shape)  # (10, 16)
 ### Hyperboloid Convolutions
 
 ::: hyperbolix.nn_layers.HypConv2DHyperboloid
-    options:
-      show_source: true
-      heading_level: 4
-
-::: hyperbolix.nn_layers.HypConv3DHyperboloid
     options:
       show_source: true
       heading_level: 4

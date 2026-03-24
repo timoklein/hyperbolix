@@ -61,7 +61,6 @@ All tensor/array local variables in function bodies use **shape suffixes** — s
 | `A` | ambient dimension (`dim+1`, hyperboloid time+space) |
 | `H` | output height |
 | `W` | output width |
-| `Z` | output depth (3D conv) |
 | `C` | channels |
 | `K` | kernel elements (`kh×kw`) |
 | `N` | number of points |
