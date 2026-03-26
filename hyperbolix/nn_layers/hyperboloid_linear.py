@@ -20,6 +20,8 @@ from flax import nnx
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.utils.math_utils import sinh
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc
@@ -80,6 +82,38 @@ def _fhcnn_forward(
         res_BA = jnp.concatenate([res0_B1, x_rem_BD], axis=-1)  # (B, A)
 
     return res_BA
+
+
+def _hyperboloid_pp_forward(
+    x_BAi: Float[Array, "batch in_dim"],
+    kernel_OI: Array,
+    bias_O1: Array,
+    manifold: Hyperboloid,
+    c: float,
+    input_space: str,
+    clamping_factor: float,
+    smoothing_factor: float,
+) -> Float[Array, "batch out_dim"]:
+    """Pure-function HNN++ forward pass for the hyperboloid model.
+
+    Used by HypLinearHyperboloidPP. Computes MLR scores then maps back
+    to the hyperboloid via element-wise sinh diffeomorphism.
+    """
+    # Map to manifold if needed (static branch - JIT friendly)
+    if input_space == "tangent":
+        x_BAi = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BAi, c)
+
+    # Compute multinomial logistic regression scores: (B, O) where O = out_dim-1
+    v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
+
+    # Element-wise sinh diffeomorphism (NOT expmap_0 which applies sinh to norm)
+    sqrt_c = jnp.sqrt(c)
+    res_rem_BO = sinh(sqrt_c * v_BO) / sqrt_c  # (B, O) spatial components
+
+    # Reconstruct time from hyperboloid constraint: -x0^2 + ||x_s||^2 = -1/c
+    res0_B1 = jnp.sqrt(jnp.sum(res_rem_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
+
+    return jnp.concatenate([res0_B1, res_rem_BO], axis=-1)  # (B, Ao)
 
 
 def _get_effective_kernel(
@@ -260,6 +294,107 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
             self.normalize,
             scale_val,
             self.eps,
+        )
+
+
+class HypLinearHyperboloidPP(nnx.Module):
+    """
+    Hyperbolic Neural Networks ++ fully connected layer (Hyperboloid model).
+
+    Computation steps:
+        0) Project the input tensor onto the manifold (optional)
+        1) Compute the multinomial linear regression score(s) via ``compute_mlr``
+        2) Apply element-wise sinh diffeomorphism to obtain spatial coordinates
+        3) Reconstruct time coordinate from the hyperboloid constraint
+
+    Parameters
+    ----------
+    manifold_module : object
+        Class-based Hyperboloid manifold instance
+    in_dim : int
+        Full input dimension (ambient, d+1)
+    out_dim : int
+        Full output dimension (ambient, d+1)
+    rngs : nnx.Rngs
+        Random number generators for parameter initialization
+    input_space : str
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+    clamping_factor : float
+        Clamping factor for the multinomial linear regression output (default: 1.0)
+    smoothing_factor : float
+        Smoothing factor for the multinomial linear regression output (default: 50.0)
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space,
+        clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
+
+    References
+    ----------
+    Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++."
+        arXiv preprint arXiv:2006.08210 (2020).
+    """
+
+    def __init__(
+        self,
+        manifold_module: Hyperboloid,
+        in_dim: int,
+        out_dim: int,
+        *,
+        rngs: nnx.Rngs,
+        input_space: str = "manifold",
+        clamping_factor: float = 1.0,
+        smoothing_factor: float = 50.0,
+    ):
+        if input_space not in ["tangent", "manifold"]:
+            raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
+
+        # Static configuration (treated as compile-time constants for JIT)
+        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "compute_mlr"))
+        self.manifold = manifold_module
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.input_space = input_space
+        self.clamping_factor = clamping_factor
+        self.smoothing_factor = smoothing_factor
+
+        # Trainable parameters — standard normal init (Shimizu et al. 2020)
+        in_spatial = in_dim - 1
+        out_spatial = out_dim - 1
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_spatial, in_spatial)))
+        self.bias = nnx.Param(jnp.zeros((out_spatial, 1)))
+
+    def __call__(
+        self,
+        x: Float[Array, "batch in_dim"],
+        c: float = 1.0,
+    ) -> Float[Array, "batch out_dim"]:
+        """
+        Forward pass through the HNN++ hyperboloid linear layer.
+
+        Parameters
+        ----------
+        x : Array of shape (batch, in_dim)
+            Input tensor. x.shape[-1] must equal self.in_dim.
+        c : float
+            Manifold curvature (default: 1.0)
+
+        Returns
+        -------
+        res : Array of shape (batch, out_dim)
+            Output on the Hyperboloid manifold
+        """
+        return _hyperboloid_pp_forward(
+            x,
+            self.kernel[...],
+            self.bias[...],
+            self.manifold,
+            c,
+            self.input_space,
+            self.clamping_factor,
+            self.smoothing_factor,
         )
 
 

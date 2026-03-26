@@ -19,9 +19,9 @@ from .hyperboloid_attention import (
     HyperbolicSoftmaxAttention,
     focus_transform,
 )
-from .hyperboloid_conv import FGGConv2D, HypConv2DHyperboloid, LorentzConv2D
+from .hyperboloid_conv import FGGConv2D, HypConv2DHyperboloid, HypConv2DHyperboloidPP, LorentzConv2D
 from .hyperboloid_core import build_spacelike_V, hrc, htc, lorentz_midpoint, lorentz_residual, spatial_to_hyperboloid
-from .hyperboloid_linear import FGGLinear, HTCLinear, HypLinearHyperboloidFHCNN
+from .hyperboloid_linear import FGGLinear, HTCLinear, HypLinearHyperboloidFHCNN, HypLinearHyperboloidPP
 from .hyperboloid_positional import HyperbolicRoPE, HypformerPositionalEncoding, hope
 from .hyperboloid_regression import FGGLorentzMLR, HypRegressionHyperboloid
 from .hyperboloid_regularization import FGGMeanOnlyBatchNorm, HRCBatchNorm, HRCDropout, HRCLayerNorm, HRCRMSNorm
@@ -29,7 +29,6 @@ from .poincare_activations import poincare_leaky_relu, poincare_relu, poincare_t
 from .poincare_conv import HypConv2DPoincare
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
-from .poincare_rl import HypRegressionPoincareHDRL
 
 __all__ = [
     "FGGConv2D",
@@ -42,13 +41,14 @@ __all__ = [
     "HRCRMSNorm",
     "HTCLinear",
     "HypConv2DHyperboloid",
+    "HypConv2DHyperboloidPP",
     "HypConv2DPoincare",
     "HypLinearHyperboloidFHCNN",
+    "HypLinearHyperboloidPP",
     "HypLinearPoincare",
     "HypLinearPoincarePP",
     "HypRegressionHyperboloid",
     "HypRegressionPoincare",
-    "HypRegressionPoincareHDRL",
     "HypRegressionPoincarePP",
     "HyperPPFeatureScaling",
     "HyperbolicFullAttention",

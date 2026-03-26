@@ -10,7 +10,6 @@ from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import (
     HypRegressionHyperboloid,
     HypRegressionPoincare,
-    HypRegressionPoincareHDRL,
     HypRegressionPoincarePP,
 )
 
@@ -206,106 +205,6 @@ def test_hyp_regression_poincare_pp_jitted_gradient(dtype):
 
     rngs = nnx.Rngs(42)
     layer = HypRegressionPoincarePP(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
-
-    @nnx.jit
-    def loss_fn(module, inputs, curvature):
-        y = module(inputs, c=curvature)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("version", ["standard", "rs"])
-def test_hyp_regression_poincare_hdrl_forward(dtype, version):
-    """Test HypRegressionPoincareHDRL forward pass."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 5, 3
-
-    # Create input on manifold
-    x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = get_poincare(dtype).proj(x, c=1.0)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincareHDRL(get_poincare(dtype), in_dim, out_dim, rngs=rngs, version=version)
-
-    # Forward pass
-    y = layer(x, c=1.0)
-
-    # Check output shape
-    assert y.shape == (batch_size, out_dim)
-    # Check output is finite
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("version", ["standard", "rs"])
-def test_hyp_regression_poincare_hdrl_jitted_forward(dtype, version):
-    """Test HypRegressionPoincareHDRL forward pass under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 5, 3
-
-    x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = get_poincare(dtype).proj(x, c=1.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincareHDRL(get_poincare(dtype), in_dim, out_dim, rngs=rngs, version=version)
-
-    @nnx.jit
-    def forward(module, inputs, curvature):
-        return module(inputs, c=curvature)
-
-    y = forward(layer, x, 1.0)
-
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_regression_poincare_hdrl_gradient(dtype):
-    """Test HypRegressionPoincareHDRL has valid gradients."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 4, 5, 3
-
-    # Create input
-    x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = get_poincare(dtype).proj(x, c=1.0)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincareHDRL(get_poincare(dtype), in_dim, out_dim, rngs=rngs)
-
-    # Define loss function
-    def loss_fn(model):
-        y = model(x, c=1.0)
-        return jnp.sum(y**2)
-
-    # Compute gradients
-    loss, grads = nnx.value_and_grad(loss_fn)(layer)
-
-    # Check gradients exist and are finite
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("version", ["standard", "rs"])
-def test_hyp_regression_poincare_hdrl_jitted_gradient(dtype, version):
-    """Test HypRegressionPoincareHDRL gradients under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 4, 5, 3
-
-    x = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = get_poincare(dtype).proj(x, c=1.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypRegressionPoincareHDRL(get_poincare(dtype), in_dim, out_dim, rngs=rngs, version=version)
 
     @nnx.jit
     def loss_fn(module, inputs, curvature):

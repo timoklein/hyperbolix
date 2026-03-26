@@ -46,7 +46,7 @@ import jax.lax as lax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import acosh, asinh, cosh, sinh, smooth_clamp, smooth_clamp_min
+from ..utils.math_utils import acosh, cosh, sinh, smooth_clamp, smooth_clamp_min
 from ._base import ManifoldBase
 
 # Default numerical parameters
@@ -298,8 +298,8 @@ def _expmap(
     c_norm_prod = sqrt_c * v_norm
 
     denom = jnp.maximum(c_norm_prod, MIN_NORM)
-    cosh_term = jnp.cosh(c_norm_prod) * x
-    sinh_term = jnp.sinh(c_norm_prod) / denom * v
+    cosh_term = cosh(c_norm_prod) * x
+    sinh_term = sinh(c_norm_prod) / denom * v
 
     res = cosh_term + sinh_term
     res = _proj(res, c)
@@ -326,12 +326,12 @@ def _expmap_0(v: Float[Array, "dim_plus_1"], c: float) -> Float[Array, "dim_plus
     c_norm_prod = sqrt_c * v_norm
 
     denom = jnp.maximum(c_norm_prod, MIN_NORM)
-    sinh_scale = jnp.sinh(c_norm_prod) / denom
+    sinh_scale = sinh(c_norm_prod) / denom
 
     v0 = v[0]
     v_rest = v[1:]
 
-    res0 = jnp.cosh(c_norm_prod) / sqrt_c + sinh_scale * v0
+    res0 = cosh(c_norm_prod) / sqrt_c + sinh_scale * v0
     res_rest = sinh_scale * v_rest
 
     res = jnp.concatenate([res0[None], res_rest])
@@ -712,7 +712,7 @@ def _compute_mlr(
     eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
     clamp = clamping_factor * float(math.log(2 / eps))
     asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, smoothing_factor)
-    signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c
+    signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c
     res_BP = z_norm_1P * signed_dist2hyp_BP
     return res_BP
 
