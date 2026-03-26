@@ -12,7 +12,6 @@ from flax import nnx
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import asinh as safe_asinh
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V
@@ -213,6 +212,6 @@ class FGGLorentzMLR(nnx.Module):
 
         # 3. Signed scaled distances (matching reference fc_mlr: no norm scaling)
         sqrt_c = jnp.sqrt(c)
-        logits_BK = safe_asinh(sqrt_c * mink_BK) / sqrt_c  # (B, K)
+        logits_BK = jnp.asinh(sqrt_c * mink_BK) / sqrt_c  # (B, K)
 
         return logits_BK

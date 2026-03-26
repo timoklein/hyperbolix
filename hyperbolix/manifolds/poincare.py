@@ -69,7 +69,7 @@ import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import acosh, asinh, atanh, cosh, sinh, smooth_clamp
+from ..utils.math_utils import acosh, atanh, cosh, sinh, smooth_clamp
 from ._base import ManifoldBase
 
 # Default numerical parameters
@@ -638,7 +638,7 @@ def _compute_mlr_pp(
     eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
     clamp = clamping_factor * float(math.log(2 / eps))
     asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, smoothing_factor)  # (B, P)
-    signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c  # (B, P)
+    signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c  # (B, P)
     res_BP = 2 * z_norm_P1.T * signed_dist2hyp_BP  # z_norm.T broadcasts (1, P) over (B, P)
     return res_BP
 

@@ -122,19 +122,6 @@ def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
 
 
 @jax.jit
-def asinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
-    """Inverse hyperbolic sine. Domain=(-inf, inf).
-
-    Args:
-        x: Input array of any shape
-
-    Returns:
-        asinh(x)
-    """
-    return jnp.asinh(x)
-
-
-@jax.jit
 def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic tangent with domain clamping. Domain=(-1, 1).
 
