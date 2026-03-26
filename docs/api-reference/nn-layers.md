@@ -86,6 +86,11 @@ print(output.shape)  # (10, 16)
       show_source: true
       heading_level: 4
 
+::: hyperbolix.nn_layers.HypConv2DHyperboloidPP
+    options:
+      show_source: true
+      heading_level: 4
+
 ### Usage Example
 
 ```python
