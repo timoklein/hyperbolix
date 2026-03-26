@@ -29,7 +29,6 @@ from .poincare_activations import poincare_leaky_relu, poincare_relu, poincare_t
 from .poincare_conv import HypConv2DPoincare
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
-from .poincare_rl import HypRegressionPoincareHDRL
 
 __all__ = [
     "FGGConv2D",
@@ -48,7 +47,6 @@ __all__ = [
     "HypLinearPoincarePP",
     "HypRegressionHyperboloid",
     "HypRegressionPoincare",
-    "HypRegressionPoincareHDRL",
     "HypRegressionPoincarePP",
     "HyperPPFeatureScaling",
     "HyperbolicFullAttention",
