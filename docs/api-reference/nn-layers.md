@@ -39,6 +39,11 @@ All layers follow Flax NNX conventions and store manifold module references.
       show_source: true
       heading_level: 4
 
+::: hyperbolix.nn_layers.HypLinearHyperboloidPP
+    options:
+      show_source: true
+      heading_level: 4
+
 ### FGG Linear (Klis et al. 2026)
 
 ::: hyperbolix.nn_layers.FGGLinear

@@ -21,7 +21,7 @@ from .hyperboloid_attention import (
 )
 from .hyperboloid_conv import FGGConv2D, HypConv2DHyperboloid, LorentzConv2D
 from .hyperboloid_core import build_spacelike_V, hrc, htc, lorentz_midpoint, lorentz_residual, spatial_to_hyperboloid
-from .hyperboloid_linear import FGGLinear, HTCLinear, HypLinearHyperboloidFHCNN
+from .hyperboloid_linear import FGGLinear, HTCLinear, HypLinearHyperboloidFHCNN, HypLinearHyperboloidPP
 from .hyperboloid_positional import HyperbolicRoPE, HypformerPositionalEncoding, hope
 from .hyperboloid_regression import FGGLorentzMLR, HypRegressionHyperboloid
 from .hyperboloid_regularization import FGGMeanOnlyBatchNorm, HRCBatchNorm, HRCDropout, HRCLayerNorm, HRCRMSNorm
@@ -43,6 +43,7 @@ __all__ = [
     "HypConv2DHyperboloid",
     "HypConv2DPoincare",
     "HypLinearHyperboloidFHCNN",
+    "HypLinearHyperboloidPP",
     "HypLinearPoincare",
     "HypLinearPoincarePP",
     "HypRegressionHyperboloid",
