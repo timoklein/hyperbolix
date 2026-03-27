@@ -8,6 +8,7 @@ Hyperbolix provides 20+ neural network layer classes and 5 activation functions 
 
 - **Linear Layers**: Poincaré and Hyperboloid linear transformations, including FGG (Fast and Geometrically Grounded) layers
 - **Convolutional Layers**: HCat-based, HRC-based, and FGG hyperbolic convolutions
+- **Normalization**: Poincaré batch normalization (`PoincareBatchNorm2D`), HRC-wrapped norms, and FGG mean-only batch norm
 - **Hypformer Components**: HTC (Hyperbolic Transformation Component) and HRC (Hyperbolic Regularization Component) with curvature-change support
 - **FGG Components**: `FGGLinear`, `FGGConv2D`, `FGGMeanOnlyBatchNorm` from Klis et al. (2026) — linear-distance growth, ~3× faster than prior work
 - **Attention Layers**: Three hyperbolic attention variants (linear O(N), softmax O(N²), full Lorentzian O(N²)) from the Hypformer paper
@@ -179,6 +180,57 @@ x = jax.random.normal(jax.random.PRNGKey(1), (8, 28, 28, 16)) * 0.1
 # Forward pass — returns tangent-space output
 output = conv(x, c=1.0)
 print(output.shape)  # (8, 28, 28, 32)
+```
+
+### Poincaré Batch Normalization
+
+::: hyperbolix.nn_layers.PoincareBatchNorm2D
+    options:
+      show_source: true
+      heading_level: 4
+
+`PoincareBatchNorm2D` operates in tangent space (matching conv layer I/O), mapping to the manifold internally for geometric operations: Einstein midpoint, Fréchet variance, parallel transport, and variance rescaling. Use between Poincaré convolution layers following the reference ResNet pattern: `conv → bn → relu → conv → bn → skip`.
+
+::: hyperbolix.nn_layers.poincare_midpoint
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.frechet_variance
+    options:
+      show_source: true
+      heading_level: 4
+
+#### Poincaré BatchNorm Example
+
+```python
+from hyperbolix.nn_layers import HypConv2DPoincare, PoincareBatchNorm2D
+from hyperbolix.manifolds import Poincare
+from flax import nnx
+import jax
+
+poincare = Poincare()
+
+# ResNet-style block: conv → bn → relu
+conv = HypConv2DPoincare(
+    manifold_module=poincare,
+    in_channels=16, out_channels=16,
+    kernel_size=3, rngs=nnx.Rngs(0),
+)
+bn = PoincareBatchNorm2D(poincare, num_features=16)
+
+# Input: tangent-space features (B, H, W, C)
+x = jax.random.normal(jax.random.PRNGKey(0), (4, 8, 8, 16)) * 0.1
+
+# Training: use_running_average=False (default)
+h = conv(x, c=0.1)
+h = bn(h, c=0.1)
+h = jax.nn.relu(h)
+
+# Evaluation: use_running_average=True
+h_eval = conv(x, c=0.1)
+h_eval = bn(h_eval, c=0.1, use_running_average=True)
+h_eval = jax.nn.relu(h_eval)
 ```
 
 ### FGGConv2D (Klis et al. 2026)

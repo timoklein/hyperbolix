@@ -26,6 +26,7 @@ from .hyperboloid_positional import HyperbolicRoPE, HypformerPositionalEncoding,
 from .hyperboloid_regression import FGGLorentzMLR, HypRegressionHyperboloid
 from .hyperboloid_regularization import FGGMeanOnlyBatchNorm, HRCBatchNorm, HRCDropout, HRCLayerNorm, HRCRMSNorm
 from .poincare_activations import poincare_leaky_relu, poincare_relu, poincare_tanh
+from .poincare_batchnorm import PoincareBatchNorm2D, frechet_variance, poincare_midpoint
 from .poincare_conv import HypConv2DPoincare
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
@@ -57,8 +58,10 @@ __all__ = [
     "HyperbolicSoftmaxAttention",
     "HypformerPositionalEncoding",
     "LorentzConv2D",
+    "PoincareBatchNorm2D",
     "build_spacelike_V",
     "focus_transform",
+    "frechet_variance",
     "hope",
     "hrc",
     "hrc_gelu",
@@ -75,6 +78,7 @@ __all__ = [
     "lorentz_midpoint",
     "lorentz_residual",
     "poincare_leaky_relu",
+    "poincare_midpoint",
     "poincare_relu",
     "poincare_tanh",
     "spatial_to_hyperboloid",
