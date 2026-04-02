@@ -40,6 +40,11 @@ All layers follow Flax NNX conventions and store manifold module references.
       show_source: true
       heading_level: 4
 
+::: hyperbolix.nn_layers.HypLinearHyperboloidFHNN
+    options:
+      show_source: true
+      heading_level: 4
+
 ::: hyperbolix.nn_layers.HypLinearHyperboloidPP
     options:
       show_source: true
@@ -83,6 +88,11 @@ print(output.shape)  # (10, 16)
 ### Hyperboloid Convolutions
 
 ::: hyperbolix.nn_layers.HypConv2DHyperboloid
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.HypConv2DHyperboloidFHNN
     options:
       show_source: true
       heading_level: 4
