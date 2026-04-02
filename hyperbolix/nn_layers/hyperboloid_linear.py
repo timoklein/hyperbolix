@@ -84,6 +84,68 @@ def _fhcnn_forward(
     return res_BA
 
 
+def _fhnn_forward(
+    x_BI: Float[Array, "batch in_dim"],
+    kernel_OI: Array,
+    bias_1O: Array,
+    manifold: Manifold,
+    c: float,
+    input_space: str,
+    activation: Callable[[Array], Array] | None,
+    dropout_fn: Callable[[Array], Array] | None,
+    scale_val: Array,
+    eps: float,
+) -> Float[Array, "batch out_dim"]:
+    """Pure-function FHNN forward pass (Chen et al. 2021).
+
+    Time-primary parameterization: the time coordinate is computed via scaled
+    sigmoid with an additive floor at 1/sqrt(c), and spatial coordinates are
+    rescaled so the output lies on the hyperboloid.
+    """
+    # Map to manifold if needed (static branch - JIT friendly)
+    if input_space == "tangent":
+        x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BI, c)
+
+    # Apply activation if provided (static branch - JIT friendly)
+    if activation is not None:
+        x_BI = activation(x_BI)
+
+    # Apply dropout if provided (static branch - JIT friendly)
+    if dropout_fn is not None:
+        x_BI = dropout_fn(x_BI)
+
+    # Linear transformation: (B, in_dim) -> (B, out_dim)
+    z_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O  # (B, O)
+
+    # Split into time logit and spatial components
+    z0_B1 = z_BO[:, 0:1]  # (B, 1)
+    z_rem_BD = z_BO[:, 1:]  # (B, D) where D = out_dim - 1
+
+    # Time coordinate via scaled sigmoid with floor at 1/sqrt(c)
+    # y0 > 1/sqrt(c) guaranteed by construction (additive floor, not max)
+    y0_B1 = jnp.exp(scale_val) * jax.nn.sigmoid(z0_B1) + 1.0 / jnp.sqrt(c) + eps  # (B, 1)
+
+    # Target spatial norm from hyperboloid constraint: ||y_s||^2 = y0^2 - 1/c
+    # Always real since y0 > 1/sqrt(c) + eps => y0^2 > 1/c
+    target_norm_B1 = jnp.sqrt(y0_B1**2 - 1.0 / c)  # (B, 1)
+
+    # Rescale spatial to satisfy hyperboloid constraint
+    z_rem_norm_B1 = jnp.linalg.norm(z_rem_BD, ord=2, axis=-1, keepdims=True)  # (B, 1)
+    z_rem_norm_safe_B1 = jnp.maximum(z_rem_norm_B1, eps)  # avoid division by zero
+    y_rem_BD = target_norm_B1 / z_rem_norm_safe_B1 * z_rem_BD  # (B, D)
+
+    # Concatenate time and spatial
+    res_BA = jnp.concatenate([y0_B1, y_rem_BD], axis=-1)  # (B, out_dim)
+
+    # Origin fallback: near-zero spatial norm -> hyperboloid origin
+    origin_time_B1 = jnp.full_like(y0_B1, 1.0 / jnp.sqrt(c))
+    origin_BA = jnp.concatenate([origin_time_B1, jnp.zeros_like(y_rem_BD)], axis=-1)
+    mask_B1 = z_rem_norm_B1 <= eps
+    res_BA = jnp.where(mask_B1, origin_BA, res_BA)
+
+    return res_BA
+
+
 def _hyperboloid_pp_forward(
     x_BAi: Float[Array, "batch in_dim"],
     kernel_OI: Array,
@@ -293,6 +355,156 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
             self.activation,
             self.normalize,
             scale_val,
+            self.eps,
+        )
+
+
+class HypLinearHyperboloidFHNN(nnx.Module):
+    """Fully Hyperbolic Neural Networks linear layer (Chen et al. 2021).
+
+    Time-primary parameterization: the time coordinate is computed via scaled
+    sigmoid with an additive floor at 1/sqrt(c), and spatial coordinates are
+    rescaled so the output lies on the hyperboloid.
+
+    Computation steps:
+        0) Project the input tensor to the manifold (optional)
+        1) Apply activation (optional)
+        2) Apply dropout (optional)
+        3) Linear transform: z = W @ x + b
+        4) Time: y0 = exp(scale) * sigmoid(z0) + 1/sqrt(c) + eps
+        5) Spatial: y_rem = sqrt(y0^2 - 1/c) / ||z_rem|| * z_rem
+        6) Output: [y0, y_rem] on the hyperboloid
+
+    Parameters
+    ----------
+    manifold_module : object
+        Class-based Hyperboloid manifold instance
+    in_dim : int
+        Ambient input dimension (d+1, including time)
+    out_dim : int
+        Ambient output dimension (d+1, including time)
+    rngs : nnx.Rngs
+        Random number generators for parameter initialization
+    input_space : str
+        Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+    init_scale : float
+        Initial value for the learnable sigmoid scale (default: 2.3)
+    eps : float
+        Numerical stability epsilon (default: 1e-5)
+    activation : callable or None
+        Activation function to apply before the linear transformation (default: None).
+        Note: This is a static configuration - changing it after initialization requires recompilation.
+    dropout_rate : float or None
+        Dropout rate applied before the linear transformation (default: None).
+
+    Notes
+    -----
+    JIT Compatibility:
+        This layer is designed to work with nnx.jit. Configuration parameters (input_space,
+        activation) are treated as static and will be baked into the compiled function.
+
+    Weight Initialization:
+        Weights are initialized as tangent vectors at the hyperboloid origin: U(-0.02, 0.02)
+        with the time column (column 0) zeroed. This matches the Chen et al. 2021 init.
+
+    Relationship to FHCNN:
+        Both FHNN and FHCNN ensure outputs lie on the hyperboloid, but differ in which
+        coordinate is primary. FHNN controls the time coordinate via sigmoid with an additive
+        floor at 1/sqrt(c), then derives the spatial norm from the hyperboloid constraint.
+        FHCNN (normalize=True) controls the spatial norm via sigmoid, then derives time.
+
+    See Also
+    --------
+    HypLinearHyperboloidFHCNN : FHCNN layer with spatial-primary parameterization.
+    HypLinearHyperboloidPP : HNN++ layer using MLR + sinh diffeomorphism.
+
+    References
+    ----------
+    Weize Chen, et al. "Fully hyperbolic neural networks."
+        arXiv preprint arXiv:2105.14686 (2021).
+    """
+
+    def __init__(
+        self,
+        manifold_module: Manifold,
+        in_dim: int,
+        out_dim: int,
+        *,
+        rngs: nnx.Rngs,
+        input_space: str = "manifold",
+        init_scale: float = 2.3,
+        eps: float = 1e-5,
+        activation: Callable[[Array], Array] | None = None,
+        dropout_rate: float | None = None,
+    ):
+        if input_space not in ["tangent", "manifold"]:
+            raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
+
+        # Static configuration (treated as compile-time constants for JIT)
+        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0",))
+        self.manifold = manifold_module
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.input_space = input_space
+        self.eps = eps
+        self.activation = activation
+
+        # FHNN weight init: U(-0.02, 0.02) with time column zeroed (tangent vectors at origin)
+        bound = 0.02
+        weight_init = jax.random.uniform(rngs.params(), (out_dim, in_dim), minval=-bound, maxval=bound)
+        weight_init = weight_init.at[:, 0].set(0.0)
+        self.kernel = nnx.Param(weight_init)
+        self.bias = nnx.Param(jnp.zeros((1, out_dim)))
+
+        # Learnable scale for the sigmoid (always learnable in FHNN)
+        self.scale = nnx.Param(jnp.array(init_scale))
+
+        # Optional dropout
+        if dropout_rate is not None and dropout_rate > 0:
+            self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
+        else:
+            self.dropout = None
+
+    def __call__(
+        self,
+        x: Float[Array, "batch in_dim"],
+        c: float = 1.0,
+        deterministic: bool = True,
+    ) -> Float[Array, "batch out_dim"]:
+        """Forward pass through the FHNN hyperbolic linear layer.
+
+        Parameters
+        ----------
+        x : Array of shape (batch, in_dim)
+            Input tensor. x.shape[-1] must equal self.in_dim.
+        c : float
+            Manifold curvature (default: 1.0)
+        deterministic : bool
+            If True, dropout is disabled (default: True).
+
+        Returns
+        -------
+        res : Array of shape (batch, out_dim)
+            Output on the Hyperboloid manifold
+        """
+        # Build dropout closure for the pure function
+        dropout_module = self.dropout
+        if dropout_module is not None:
+            dropout_fn = lambda z: dropout_module(z, deterministic=deterministic)  # noqa: E731
+        else:
+            dropout_fn = None
+
+        return _fhnn_forward(
+            x,
+            self.kernel[...],
+            self.bias[...],
+            self.manifold,
+            c,
+            self.input_space,
+            self.activation,
+            dropout_fn,
+            self.scale[...],
             self.eps,
         )
 
