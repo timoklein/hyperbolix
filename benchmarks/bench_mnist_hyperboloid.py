@@ -60,6 +60,7 @@ from hyperbolix.nn_layers import (
     HypRegressionHyperboloid,
     LorentzConv2D,
     hrc_relu,
+    hyp_avg_pool2d,
 )
 
 # Enable float64 for numerical stability
@@ -424,13 +425,7 @@ class FullyHyperbolicCNN_HCat(nnx.Module):
         x = self.hyp_bn2(x, c_in=c, c_out=c, use_running_average=use_running_average)  # (batch, 7, 7, 65)
 
         # Global average pooling in hyperbolic space
-        # Extract spatial components, pool, reconstruct time
-        x_space = x[..., 1:]  # (batch, 7, 7, 64)
-        x_space_pooled = jnp.mean(x_space, axis=(1, 2))  # (batch, 64)
-
-        # Reconstruct as hyperboloid point
-        time_coord = jnp.sqrt(jnp.sum(x_space_pooled**2, axis=-1, keepdims=True) + 1 / c)  # (batch, 1)
-        x = jnp.concatenate([time_coord, x_space_pooled], axis=-1)  # (batch, 65)
+        x = hyp_avg_pool2d(x, c)  # (batch, 65)
 
         # Hyperbolic linear layer
         x = self.hyp_linear(x, c)  # (batch, 65)
@@ -518,13 +513,7 @@ class FullyHyperbolicCNN_Lorentz(nnx.Module):
         x = hrc_relu(x, c, c)
 
         # Global average pooling in hyperbolic space
-        # Extract spatial components, pool, reconstruct time
-        x_space = x[..., 1:]  # (batch, 7, 7, 64)
-        x_space_pooled = jnp.mean(x_space, axis=(1, 2))  # (batch, 64)
-
-        # Reconstruct as hyperboloid point
-        time_coord = jnp.sqrt(jnp.sum(x_space_pooled**2, axis=-1, keepdims=True) + 1 / c)  # (batch, 1)
-        x = jnp.concatenate([time_coord, x_space_pooled], axis=-1)  # (batch, 65)
+        x = hyp_avg_pool2d(x, c)  # (batch, 65)
 
         # Hyperbolic linear layer
         x = self.hyp_linear(x, c)  # (batch, 65)
@@ -712,11 +701,8 @@ class FullyHyperbolicCNN_FGG(nnx.Module):
         x = self.hyp_conv2(x, c)  # (batch, 7, 7, 65)
         x = self.hyp_bn2(x, c_in=c, c_out=c, use_running_average=use_running_average)
 
-        # Global average pooling (spatial pool + time reconstruct)
-        x_space = x[..., 1:]  # (batch, 7, 7, 64)
-        x_space_pooled = jnp.mean(x_space, axis=(1, 2))  # (batch, 64)
-        time_coord = jnp.sqrt(jnp.sum(x_space_pooled**2, axis=-1, keepdims=True) + 1 / c)
-        x = jnp.concatenate([time_coord, x_space_pooled], axis=-1)  # (batch, 65)
+        # Global average pooling in hyperbolic space
+        x = hyp_avg_pool2d(x, c)  # (batch, 65)
 
         # FGG linear + MLR
         x = self.hyp_linear(x, c)  # (batch, 65)
