@@ -216,6 +216,84 @@ def lorentz_residual(
     return ave_A / denom_1  # (..., A)
 
 
+def hyp_avg_pool2d(
+    x: Float[Array, "... H W dim_plus_1"],
+    c: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... dim_plus_1"]:
+    """Global average pooling over 2D spatial dimensions on the hyperboloid.
+
+    Averages the spatial components over the height and width dimensions,
+    then reconstructs the time component via the hyperboloid constraint.
+    This is the HRC pattern with ``f_r = mean_over_spatial``:
+
+    .. math::
+
+        \\text{space} = \\text{mean}_{H,W}(x[..., 1:])
+
+        x_0 = \\sqrt{\\|\\text{space}\\|^2 + 1/c}
+
+        \\text{output} = [x_0, \\text{space}]
+
+    The function expects the **NHWC** layout used throughout hyperbolix:
+    ``(..., H, W, ambient_dim)`` where ``ambient_dim = spatial_dim + 1``.
+
+    This operation is **hyperboloid-only** because it relies on the time/spatial
+    decomposition ``x[..., 0]`` (time) and ``x[..., 1:]`` (spatial). Poincaré
+    ball points do not have a time component. To pool Poincaré features, first
+    convert to hyperboloid via
+    :func:`~hyperbolix.manifolds.isometry_mappings.poincare_to_hyperboloid`,
+    pool, then convert back.
+
+    Parameters
+    ----------
+    x : Array, shape (..., H, W, dim+1)
+        Hyperboloid feature map with curvature ``c``.  The last axis is
+        the ambient dimension (time + spatial).  The two axes before it
+        are the spatial height ``H`` and width ``W``.
+    c : float
+        Curvature parameter (positive, c > 0).
+    eps : float, optional
+        Numerical stability floor for the time reconstruction
+        (default: 1e-7).
+
+    Returns
+    -------
+    Array, shape (..., dim+1)
+        Pooled hyperboloid points with curvature ``c``.
+
+    See Also
+    --------
+    spatial_to_hyperboloid : Low-level curvature scaling + time reconstruction.
+    hrc : General HRC wrapper for arbitrary Euclidean functions.
+    lorentz_midpoint : Weighted Lorentzian midpoint (geometrically exact aggregation).
+
+    Examples
+    --------
+    >>> import jax
+    >>> import jax.numpy as jnp
+    >>> from hyperbolix.manifolds import Hyperboloid
+    >>> from hyperbolix.nn_layers.hyperboloid_core import hyp_avg_pool2d
+    >>>
+    >>> hyperboloid = Hyperboloid(dtype=jnp.float32)
+    >>> key = jax.random.PRNGKey(0)
+    >>> v = jax.random.normal(key, (4, 7, 7, 64), dtype=jnp.float32) * 0.1
+    >>> x = jax.vmap(jax.vmap(jax.vmap(
+    ...     hyperboloid.expmap_0, in_axes=(0, None)
+    ... ), in_axes=(0, None)), in_axes=(0, None))(v, 1.0)
+    >>> x.shape
+    (4, 7, 7, 65)
+    >>> y = hyp_avg_pool2d(x, c=1.0)
+    >>> y.shape
+    (4, 65)
+    """
+    # Dimension key: H=height, W=width, D=spatial_dim, A=ambient_dim (D+1)
+
+    x_space_HWD = x[..., 1:]  # (..., H, W, D) — drop time coordinate
+    x_pooled_D = jnp.mean(x_space_HWD, axis=(-3, -2))  # (..., D)
+    return spatial_to_hyperboloid(x_pooled_D, c_in=c, c_out=c, eps=eps)  # (..., D+1)
+
+
 def hrc(
     x: Float[Array, "... dim_plus_1"],
     f_r: Callable[[Float[Array, "..."]], Float[Array, "..."]],

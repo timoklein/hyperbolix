@@ -20,7 +20,15 @@ from .hyperboloid_attention import (
     focus_transform,
 )
 from .hyperboloid_conv import FGGConv2D, HypConv2DHyperboloid, HypConv2DHyperboloidFHNN, HypConv2DHyperboloidPP, LorentzConv2D
-from .hyperboloid_core import build_spacelike_V, hrc, htc, lorentz_midpoint, lorentz_residual, spatial_to_hyperboloid
+from .hyperboloid_core import (
+    build_spacelike_V,
+    hrc,
+    htc,
+    hyp_avg_pool2d,
+    lorentz_midpoint,
+    lorentz_residual,
+    spatial_to_hyperboloid,
+)
 from .hyperboloid_linear import (
     FGGLinear,
     HTCLinear,
@@ -78,6 +86,7 @@ __all__ = [
     "hrc_swish",
     "hrc_tanh",
     "htc",
+    "hyp_avg_pool2d",
     "hyp_gelu",
     "hyp_leaky_relu",
     "hyp_relu",
