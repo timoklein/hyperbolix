@@ -6,6 +6,7 @@ from . import isometry_mappings
 from .euclidean import Euclidean
 from .hyperboloid import Hyperboloid
 from .poincare import Poincare
+from .proper_velocity import ProperVelocity
 from .protocol import Manifold
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "Hyperboloid",
     "Manifold",
     "Poincare",
+    "ProperVelocity",
     "isometry_mappings",
 ]

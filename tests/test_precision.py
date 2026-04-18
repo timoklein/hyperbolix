@@ -5,8 +5,10 @@ import jax.numpy as jnp
 
 from hyperbolix.manifolds import hyperboloid as hyperboloid_module
 from hyperbolix.manifolds import poincare as poincare_module
+from hyperbolix.manifolds import proper_velocity as proper_velocity_module
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
+from hyperbolix.manifolds.proper_velocity import ProperVelocity
 
 
 class TestPoincareClassConstants:
@@ -23,6 +25,11 @@ class TestPoincareClassConstants:
         assert hasattr(hyperboloid_module, "VERSION_DEFAULT")
         assert hasattr(hyperboloid_module, "VERSION_SMOOTHENED")
         assert hasattr(hyperboloid_module, "MIN_NORM")
+
+    def test_proper_velocity_module_constants(self):
+        """Verify PV constants are available from module."""
+        assert hasattr(proper_velocity_module, "VERSION_DEFAULT")
+        assert hasattr(proper_velocity_module, "MIN_NORM")
 
 
 class TestPoincarePrecision:
@@ -98,6 +105,76 @@ class TestHyperboloidPrecision:
         assert result.dtype == jnp.float64
 
 
+class TestProperVelocityPrecision:
+    """Test auto-casting for Proper Velocity operations."""
+
+    def test_dist_float64_output(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        x = jnp.array([0.1, 0.2])  # float32
+        y = jnp.array([0.3, 0.4])  # float32
+        d = manifold.dist(x, y, c=1.0)
+        assert d.dtype == jnp.float64
+
+    def test_proj_float64_output(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        x = jnp.array([0.9, 0.1])  # float32
+        result = manifold.proj(x, c=1.0)
+        assert result.dtype == jnp.float64
+
+    def test_expmap_float64_output(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        v = jnp.array([0.1, 0.2])
+        x = jnp.array([0.05, 0.05])
+        result = manifold.expmap(v, x, c=1.0)
+        assert result.dtype == jnp.float64
+
+    def test_logmap_float64_output(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        x = jnp.array([0.1, 0.2])
+        y = jnp.array([0.3, 0.4])
+        result = manifold.logmap(y, x, c=1.0)
+        assert result.dtype == jnp.float64
+
+    def test_addition_float64_output(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        x = jnp.array([0.1, 0.2])
+        y = jnp.array([0.05, 0.05])
+        result = manifold.addition(x, y, c=1.0)
+        assert result.dtype == jnp.float64
+
+    def test_scalar_mul_float64_output(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        x = jnp.array([0.1, 0.2])
+        result = manifold.scalar_mul(0.5, x, c=1.0)
+        assert result.dtype == jnp.float64
+
+    def test_ptransp_float64_output(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        v = jnp.array([0.05, 0.05])
+        x = jnp.array([0.1, 0.2])
+        y = jnp.array([0.3, 0.4])
+        result = manifold.ptransp(v, x, y, c=1.0)
+        assert result.dtype == jnp.float64
+
+    def test_tangent_inner_float64_output(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        u = jnp.array([0.1, 0.2])
+        v = jnp.array([0.05, 0.05])
+        x = jnp.array([0.2, 0.3])
+        result = manifold.tangent_inner(u, v, x, c=1.0)
+        assert result.dtype == jnp.float64
+
+    def test_dist_values_match(self):
+        """Verify class version produces same values as manual casting."""
+        manifold = ProperVelocity(dtype=jnp.float64)
+        x = jnp.array([0.1, 0.2])
+        y = jnp.array([0.3, 0.4])
+
+        d_class = manifold.dist(x, y, c=1.0)
+        d_manual = proper_velocity_module._dist(x.astype(jnp.float64), y.astype(jnp.float64), c=1.0)
+        assert jnp.allclose(d_class, d_manual)
+
+
 class TestVmapJitCompat:
     """Test that class-based manifolds work with jax.vmap and jax.jit."""
 
@@ -148,6 +225,26 @@ class TestVmapJitCompat:
         assert distances.shape == (2,)
         assert distances.dtype == jnp.float64
 
+    def test_vmap_proper_velocity_dist(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        x_batch = jnp.array([[0.1, 0.2], [0.15, 0.25]])
+        y_batch = jnp.array([[0.3, 0.4], [0.35, 0.45]])
+
+        dist_fn = jax.vmap(manifold.dist, in_axes=(0, 0, None))
+        distances = dist_fn(x_batch, y_batch, 1.0)
+
+        assert distances.shape == (2,)
+        assert distances.dtype == jnp.float64
+
+    def test_jit_proper_velocity_dist(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        x = jnp.array([0.1, 0.2])
+        y = jnp.array([0.3, 0.4])
+
+        dist_jit = jax.jit(manifold.dist)
+        d = dist_jit(x, y, c=1.0)
+        assert d.dtype == jnp.float64
+
 
 class TestMLRFunctions:
     """Test that MLR functions work correctly via class methods."""
@@ -181,6 +278,19 @@ class TestMLRFunctions:
         x = jax.random.normal(k1, (4, 4))  # batch=4, in_dim=4 (ambient)
         x = jax.vmap(manifold.proj, in_axes=(0, None))(x, 1.0)
         z = jax.random.normal(k2, (5, 3)) * 0.1  # out_dim=5, in_dim-1=3
+        r = jax.random.normal(k3, (5, 1)) * 0.01
+
+        result = manifold.compute_mlr(x, z, r, c=1.0, clamping_factor=1.0, smoothing_factor=50.0)
+        assert result.shape == (4, 5)
+        assert jnp.all(jnp.isfinite(result))
+        assert result.dtype == jnp.float64
+
+    def test_proper_velocity_compute_mlr(self):
+        manifold = ProperVelocity(dtype=jnp.float64)
+        key = jax.random.PRNGKey(0)
+        k1, k2, k3 = jax.random.split(key, 3)
+        x = jax.random.normal(k1, (4, 3)) * 0.3  # batch=4, in_dim=3
+        z = jax.random.normal(k2, (5, 3)) * 0.1  # out_dim=5, in_dim=3 (PV has no time coord)
         r = jax.random.normal(k3, (5, 1)) * 0.01
 
         result = manifold.compute_mlr(x, z, r, c=1.0, clamping_factor=1.0, smoothing_factor=50.0)

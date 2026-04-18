@@ -14,6 +14,7 @@ import jax.numpy as jnp
 from hyperbolix.manifolds.euclidean import Euclidean
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT, Hyperboloid
 from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT, Poincare
+from hyperbolix.manifolds.proper_velocity import ProperVelocity
 
 
 def test_poincare_jit_dist_method():
@@ -453,3 +454,244 @@ def test_bound_method_jit():
 
     assert d.dtype == jnp.float64
     assert jnp.isfinite(d)
+
+
+# ---------------------------------------------------------------------------
+# ProperVelocity: JIT / vmap / grad / dtype
+# ---------------------------------------------------------------------------
+
+
+def test_proper_velocity_jit_dist_method():
+    """Verify that ProperVelocity.dist() is JIT-compilable."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+    x = jnp.array([0.1, 0.2])
+    y = jnp.array([0.3, 0.4])
+
+    dist_jit = jax.jit(manifold.dist)
+    d = dist_jit(x, y, c=1.0)
+
+    assert d.dtype == jnp.float64
+    assert jnp.isfinite(d)
+    assert d > 0
+
+
+def test_proper_velocity_jit_expmap_method():
+    """Verify that ProperVelocity.expmap() is JIT-compilable."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+    v = jnp.array([0.05, 0.05])
+    x = jnp.array([0.1, 0.2])
+
+    expmap_jit = jax.jit(manifold.expmap)
+    result = expmap_jit(v, x, c=1.0)
+
+    assert result.dtype == jnp.float64
+    assert result.shape == (2,)
+    assert jnp.all(jnp.isfinite(result))
+
+
+def test_proper_velocity_jit_logmap_method():
+    """Verify that ProperVelocity.logmap() is JIT-compilable."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+    x = jnp.array([0.1, 0.2])
+    y = jnp.array([0.3, 0.4])
+
+    logmap_jit = jax.jit(manifold.logmap)
+    result = logmap_jit(y, x, c=1.0)
+
+    assert result.dtype == jnp.float64
+    assert result.shape == (2,)
+    assert jnp.all(jnp.isfinite(result))
+
+
+def test_proper_velocity_jit_no_recompilation_same_instance():
+    """Verify same PV instance doesn't trigger recompilation."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+    dist_jit = jax.jit(manifold.dist)
+
+    x1 = jnp.array([0.1, 0.2])
+    y1 = jnp.array([0.3, 0.4])
+    d1 = dist_jit(x1, y1, c=1.0)
+
+    x2 = jnp.array([0.15, 0.25])
+    y2 = jnp.array([0.35, 0.45])
+    d2 = dist_jit(x2, y2, c=1.0)
+
+    assert d1.dtype == jnp.float64
+    assert d2.dtype == jnp.float64
+    assert jnp.isfinite(d1)
+    assert jnp.isfinite(d2)
+    assert not jnp.allclose(d1, d2)
+
+
+def test_proper_velocity_vmap_dist_method():
+    """Verify that ProperVelocity.dist() works with vmap."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+    x_batch = jnp.array([[0.1, 0.2], [0.15, 0.25]])
+    y_batch = jnp.array([[0.3, 0.4], [0.35, 0.45]])
+
+    dist_batched = jax.vmap(manifold.dist, in_axes=(0, 0, None))
+    distances = dist_batched(x_batch, y_batch, 1.0)
+
+    assert distances.shape == (2,)
+    assert distances.dtype == jnp.float64
+    assert jnp.all(jnp.isfinite(distances))
+    assert jnp.all(distances > 0)
+
+
+def test_proper_velocity_vmap_expmap_method():
+    """Verify that ProperVelocity.expmap() works with vmap."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+    v_batch = jnp.array([[0.05, 0.05], [0.06, 0.06]])
+    x_batch = jnp.array([[0.1, 0.2], [0.15, 0.25]])
+
+    expmap_batched = jax.vmap(manifold.expmap, in_axes=(0, 0, None))
+    results = expmap_batched(v_batch, x_batch, 1.0)
+
+    assert results.shape == (2, 2)
+    assert results.dtype == jnp.float64
+    assert jnp.all(jnp.isfinite(results))
+
+
+def test_proper_velocity_vmap_jit_combined():
+    """Verify that PV vmap and JIT compose."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+    x_batch = jnp.array([[0.1, 0.2], [0.15, 0.25]])
+    y_batch = jnp.array([[0.3, 0.4], [0.35, 0.45]])
+
+    @jax.jit
+    def compute_dists(x, y):
+        return jax.vmap(manifold.dist, in_axes=(0, 0, None))(x, y, 1.0)
+
+    distances = compute_dists(x_batch, y_batch)
+    assert distances.shape == (2,)
+    assert distances.dtype == jnp.float64
+    assert jnp.all(jnp.isfinite(distances))
+
+
+def test_proper_velocity_grad_through_dist():
+    """Verify gradients flow through ProperVelocity.dist()."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+
+    def loss_fn(x):
+        y = jnp.array([0.3, 0.4])
+        return manifold.dist(x, y, c=1.0)
+
+    x = jnp.array([0.1, 0.2])
+    grad = jax.grad(loss_fn)(x)
+
+    assert grad.shape == (2,)
+    assert grad.dtype == jnp.float64
+    assert jnp.all(jnp.isfinite(grad))
+    assert jnp.linalg.norm(grad) > 0
+
+
+def test_proper_velocity_grad_through_expmap():
+    """Verify gradients flow through ProperVelocity.expmap()."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+
+    def loss_fn(v):
+        x = jnp.array([0.1, 0.2])
+        y = manifold.expmap(v, x, c=1.0)
+        return jnp.sum(y**2)
+
+    v = jnp.array([0.05, 0.05])
+    grad = jax.grad(loss_fn)(v)
+
+    assert grad.shape == (2,)
+    assert grad.dtype == jnp.float64
+    assert jnp.all(jnp.isfinite(grad))
+
+
+def test_proper_velocity_grad_through_logmap():
+    """Verify gradients flow through ProperVelocity.logmap()."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+
+    def loss_fn(y):
+        x = jnp.array([0.1, 0.2])
+        v = manifold.logmap(y, x, c=1.0)
+        return jnp.sum(v**2)
+
+    y = jnp.array([0.3, 0.4])
+    grad = jax.grad(loss_fn)(y)
+
+    assert grad.shape == (2,)
+    assert grad.dtype == jnp.float64
+    assert jnp.all(jnp.isfinite(grad))
+
+
+def test_proper_velocity_grad_through_addition():
+    """Verify gradients flow through ProperVelocity.addition()."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+
+    def loss_fn(x):
+        y = jnp.array([0.3, 0.4])
+        return jnp.sum(manifold.addition(x, y, c=1.0) ** 2)
+
+    x = jnp.array([0.1, 0.2])
+    grad = jax.grad(loss_fn)(x)
+
+    assert grad.shape == (2,)
+    assert grad.dtype == jnp.float64
+    assert jnp.all(jnp.isfinite(grad))
+    assert jnp.linalg.norm(grad) > 0
+
+
+def test_proper_velocity_value_and_grad():
+    """Verify value_and_grad works with PV methods."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+
+    def loss_fn(x):
+        y = jnp.array([0.3, 0.4])
+        return manifold.dist(x, y, c=1.0)
+
+    x = jnp.array([0.1, 0.2])
+    value, grad = jax.value_and_grad(loss_fn)(x)
+
+    assert value.shape == ()
+    assert value.dtype == jnp.float64
+    assert grad.shape == (2,)
+    assert grad.dtype == jnp.float64
+
+
+def test_proper_velocity_dtype_casting_float32_to_float64():
+    """Verify float32 arrays are cast to float64 when using float64 PV manifold."""
+    manifold = ProperVelocity(dtype=jnp.float64)
+    x = jnp.array([0.1, 0.2], dtype=jnp.float32)
+    y = jnp.array([0.3, 0.4], dtype=jnp.float32)
+
+    d = manifold.dist(x, y, c=1.0)
+    assert d.dtype == jnp.float64
+
+
+def test_proper_velocity_dtype_casting_preserves_float32():
+    """Verify float32 PV manifold preserves float32."""
+    manifold = ProperVelocity(dtype=jnp.float32)
+    x = jnp.array([0.1, 0.2], dtype=jnp.float32)
+    y = jnp.array([0.3, 0.4], dtype=jnp.float32)
+
+    d = manifold.dist(x, y, c=1.0)
+    assert d.dtype == jnp.float32
+
+
+def test_proper_velocity_cross_dtype_jit_compiles_per_dtype():
+    """Verify PV JIT compiles separately per dtype and values match."""
+    pv_f32 = ProperVelocity(dtype=jnp.float32)
+    pv_f64 = ProperVelocity(dtype=jnp.float64)
+
+    x = jnp.array([0.1, 0.2])
+    y = jnp.array([0.3, 0.4])
+
+    @jax.jit
+    def dist_f32(x, y):
+        return pv_f32.dist(x, y, c=1.0)
+
+    @jax.jit
+    def dist_f64(x, y):
+        return pv_f64.dist(x, y, c=1.0)
+
+    d_f32 = dist_f32(x, y)
+    d_f64 = dist_f64(x, y)
+
+    assert d_f32.dtype == jnp.float32
+    assert d_f64.dtype == jnp.float64
+    assert jnp.allclose(d_f32, d_f64, rtol=1e-5)
