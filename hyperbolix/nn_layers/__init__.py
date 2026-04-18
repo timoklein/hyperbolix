@@ -44,6 +44,8 @@ from .poincare_batchnorm import PoincareBatchNorm2D, frechet_variance, poincare_
 from .poincare_conv import HypConv2DPoincare
 from .poincare_linear import HypLinearPoincare, HypLinearPoincarePP
 from .poincare_regression import HypRegressionPoincare, HypRegressionPoincarePP
+from .pv_linear import HypLinearPV
+from .pv_regression import HypRegressionPV
 
 __all__ = [
     "FGGConv2D",
@@ -62,9 +64,11 @@ __all__ = [
     "HypLinearHyperboloidFHCNN",
     "HypLinearHyperboloidFHNN",
     "HypLinearHyperboloidPP",
+    "HypLinearPV",
     "HypLinearPoincare",
     "HypLinearPoincarePP",
     "HypRegressionHyperboloid",
+    "HypRegressionPV",
     "HypRegressionPoincare",
     "HypRegressionPoincarePP",
     "HyperPPFeatureScaling",
