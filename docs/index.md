@@ -6,8 +6,8 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 
 ## Features
 
-- **3 Manifolds**: Euclidean, Poincaré Ball, and Hyperboloid with complete geometric operations
-- **Neural Network Layers**: 13+ hyperbolic layers including linear, convolutional, and regression layers
+- **4 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, and Proper Velocity with complete geometric operations
+- **Neural Network Layers**: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers
 - **Activation Functions**: 4 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish)
 - **Riemannian Optimizers**: RAdam and RSGD with automatic manifold parameter detection
 - **Wrapped Normal Distributions**: For probabilistic modeling on hyperbolic manifolds

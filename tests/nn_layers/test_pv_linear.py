@@ -217,6 +217,42 @@ def test_pv_linear_rejects_bad_input_space():
         HypLinearPV(_manifold(jnp.float32), 3, 2, rngs=nnx.Rngs(0), input_space="nope")
 
 
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_pv_linear_init_default_he(dtype):
+    """Default kernel init is He(in_dim); bias is uniform U(-1e-3, 1e-3).
+
+    Default changed from the paper's z ~ N(0, 1e-2) to He scaling so deep
+    fully-hyperbolic PV stacks preserve variance under ReLU. Use the
+    ``kernel_init_std`` override to restore the paper recipe (appropriate
+    when this layer is the final classification layer before a softmax
+    cross-entropy loss).
+    """
+    in_dim, out_dim = 64, 32
+    layer = HypLinearPV(_manifold(dtype), in_dim, out_dim, rngs=nnx.Rngs(42))
+
+    kernel = layer.kernel[...]
+    bias = layer.bias[...]
+
+    assert kernel.shape == (out_dim, in_dim)
+    assert bias.shape == (out_dim, 1)
+    expected_std = (2.0 / in_dim) ** 0.5
+    empirical_std = float(jnp.std(kernel))
+    assert 0.5 * expected_std < empirical_std < 1.5 * expected_std, (
+        f"kernel std {empirical_std:.3e} not within 0.5x..1.5x He target {expected_std:.3e}"
+    )
+    assert jnp.max(jnp.abs(bias)) <= 1e-3
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_pv_linear_init_paper_override(dtype):
+    """``kernel_init_std=1e-2`` reproduces the paper's PVManifoldMLR recipe."""
+    in_dim, out_dim = 64, 32
+    layer = HypLinearPV(_manifold(dtype), in_dim, out_dim, rngs=nnx.Rngs(42), kernel_init_std=1e-2)
+
+    kernel = layer.kernel[...]
+    assert jnp.max(jnp.abs(kernel)) < 0.1, f"kernel too large for std=1e-2 override: max={jnp.max(jnp.abs(kernel))}"
+
+
 def test_pv_linear_rejects_non_pv_manifold():
     class Fake:
         pass

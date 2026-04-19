@@ -5,6 +5,11 @@ All notable changes to Hyperbolix will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Proper Velocity (PV) manifold** (`hyperbolix.manifolds.ProperVelocity`) — unconstrained $\mathbb{R}^n$ model of hyperbolic geometry from Chen et al. (2026), with complete geometric operations: `addition`, `scalar_mul`, `dist`, `expmap`/`logmap` (at origin and arbitrary base points), `ptransp`/`ptransp_0`, `egrad2rgrad`, and Riemannian inner product
+- **Proper Velocity neural-network layers**:
+    - `HypLinearPV`: PV fully-connected layer (Thm 5.3 / Eq. 22)
+    - `HypConv2DPV`: PV 2D convolution with raw Euclidean patch concatenation (Sec 5.3) — no beta-scaling, dimension-preserving
+    - `HypRegressionPV`: PV multinomial-logistic-regression head (Thm 5.2 / Eq. 19)
 - MkDocs Material documentation system
 - Complete API reference documentation
 - Getting Started guide

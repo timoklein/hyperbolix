@@ -93,6 +93,15 @@ class HypLinearPV(nnx.Module):
         Clamping factor for the MLR output (default: 1.0).
     smoothing_factor : float
         Smoothing factor for the MLR output (default: 50.0).
+    kernel_init_std : float | None
+        Standard deviation for the Gaussian kernel init. If ``None`` (default),
+        uses He scaling ``sqrt(2 / in_dim)`` so stacked layers preserve variance
+        under ReLU activations (for small MLR arguments the PV output reduces to
+        an Euclidean linear map, so standard He analysis applies). Pass a
+        specific value (e.g. ``1e-2``) when using this layer as the final
+        classification/regression layer directly before a softmax/MSE loss —
+        that matches the paper's ``PVManifoldMLR.reset_parameters`` recipe,
+        which is tuned for receiving ``O(1)``-variance features.
 
     Notes
     -----
@@ -116,6 +125,7 @@ class HypLinearPV(nnx.Module):
         inner_activation: Callable[[Array], Array] | None = None,
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        kernel_init_std: float | None = None,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -132,11 +142,12 @@ class HypLinearPV(nnx.Module):
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
 
-        # Kernel init: std = (2 · in_dim · out_dim)^{-0.5} (matches hyperbolix convention
-        # for Poincaré layers; small-norm kernels keep the asinh argument near zero at init).
-        std = 1.0 / jnp.sqrt(2.0 * in_dim * out_dim)
+        # Kernel init: He(in_dim) by default so deep stacks preserve variance
+        # under ReLU. Override via ``kernel_init_std`` when using as a final
+        # classification layer — see the ``kernel_init_std`` docstring above.
+        # Bias init is uniform U(-1e-3, 1e-3), matching the paper reference.
+        std = (2.0 / in_dim) ** 0.5 if kernel_init_std is None else kernel_init_std
         self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
-        # Bias: small uniform U(-1e-3, 1e-3) (matches paper reference PVManifoldMLR init).
         self.bias = nnx.Param(jax.random.uniform(rngs.params(), (out_dim, 1), minval=-1e-3, maxval=1e-3))
 
     def __call__(

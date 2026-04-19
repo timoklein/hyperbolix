@@ -4,11 +4,12 @@ This page documents the core manifold operations in Hyperbolix. Each manifold is
 
 ## Overview
 
-Hyperbolix provides three manifold classes:
+Hyperbolix provides four manifold classes:
 
 - **Euclidean**: Flat Euclidean space (baseline)
 - **Poincaré Ball**: Conformal model of hyperbolic space
 - **Hyperboloid**: Lorentz/Minkowski model of hyperbolic space
+- **Proper Velocity**: Unconstrained $\mathbb{R}^n$ model from special relativity (Chen et al. 2026)
 
 All manifolds share a common interface defined by the `Manifold` protocol and support:
 
@@ -64,6 +65,27 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
     - `hcat`: Lorentz direct concatenation for convolutions
 
 ::: hyperbolix.manifolds.hyperboloid.Hyperboloid
+    options:
+      show_source: true
+      heading_level: 3
+
+## Proper Velocity
+
+The Proper Velocity (PV) model — an **unconstrained** $\mathbb{R}^n$ representation of hyperbolic geometry rooted in special relativity's proper velocity (Ungar 2022, Ch. 10). PV is algebraically a gyrovector space isomorphic to the Poincaré ball via $\pi(x) = (\beta_x / (1 + \beta_x)) \cdot x$, and carries a Riemannian metric making that isomorphism an isometry.
+
+!!! note "Why Proper Velocity?"
+    Unlike the bounded Poincaré ball (points must stay in the open unit ball) and the constrained hyperboloid (points must satisfy $\langle x, x \rangle_L = -1/c$), PV points live in all of $\mathbb{R}^n$ with no constraint. This gives:
+
+    - **No projection step** after updates — the manifold *is* $\mathbb{R}^n$
+    - **Better numerical stability** for large radii (no boundary collapse, no Lorentz constraint drift)
+    - **Drop-in with Euclidean optimizers** — the retraction reduces to $x + v$
+
+    The metric $g_x(u,v) = \langle u, v\rangle - c\beta_x^2\langle x,u\rangle\langle x,v\rangle$ still gives sectional curvature $-c$; only the coordinates change.
+
+!!! info "Convention"
+    The paper uses curvature $K < 0$ with $\beta_x = 1/\sqrt{1 - K\|x\|^2}$. Hyperbolix keeps the $c > 0$ convention (sectional curvature $-c$), substituting $K = -c$, so $\beta_x = 1/\sqrt{1 + c\|x\|^2}$.
+
+::: hyperbolix.manifolds.proper_velocity.ProperVelocity
     options:
       show_source: true
       heading_level: 3
@@ -149,6 +171,37 @@ y = poincare.expmap(v, x, c=1.0)
 
 # Logarithmic map (inverse operation)
 v_recovered = poincare.logmap(y, x, c=1.0)
+```
+
+### Proper Velocity Operations
+
+```python
+import jax
+import jax.numpy as jnp
+from hyperbolix.manifolds import ProperVelocity
+
+pv = ProperVelocity()
+c = 1.0
+
+# Points live in unconstrained R^n — no projection step needed
+x = jnp.array([0.3, 0.5])
+y = jnp.array([-0.2, 0.4])
+
+# Geodesic distance (asinh form — stable over all of R^n)
+d = pv.dist(x, y, c)
+
+# Exp/log maps at the origin
+v = jnp.array([0.1, -0.2])
+y_moved = pv.expmap_0(v, c)
+v_recovered = pv.logmap_0(y_moved, c)
+
+# Euclidean gradient -> Riemannian gradient under the PV metric
+grad_euc = jnp.array([1.0, 0.0])
+grad_riem = pv.egrad2rgrad(grad_euc, x, c)
+
+# Retraction is exact Euclidean addition (PV is unconstrained)
+x_next = pv.retraction(v, x, c)
+assert jnp.allclose(x_next, x + v)
 ```
 
 ### Isometry Mappings
