@@ -1250,6 +1250,13 @@
 <h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v0.1.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
 <h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
 <ul>
+<li><strong>Proper Velocity (PV) manifold</strong> (<code>hyperbolix.manifolds.ProperVelocity</code>) — unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> model of hyperbolic geometry from Chen et al. (2026), with complete geometric operations: <code>addition</code>, <code>scalar_mul</code>, <code>dist</code>, <code>expmap</code>/<code>logmap</code> (at origin and arbitrary base points), <code>ptransp</code>/<code>ptransp_0</code>, <code>egrad2rgrad</code>, and Riemannian inner product</li>
+<li><strong>Proper Velocity neural-network layers</strong>:<ul>
+<li><code>HypLinearPV</code>: PV fully-connected layer (Thm 5.3 / Eq. 22)</li>
+<li><code>HypConv2DPV</code>: PV 2D convolution with raw Euclidean patch concatenation (Sec 5.3) — no beta-scaling, dimension-preserving</li>
+<li><code>HypRegressionPV</code>: PV multinomial-logistic-regression head (Thm 5.2 / Eq. 19)</li>
+</ul>
+</li>
 <li>MkDocs Material documentation system</li>
 <li>Complete API reference documentation</li>
 <li>Getting Started guide</li>
