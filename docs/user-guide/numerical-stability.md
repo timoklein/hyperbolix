@@ -175,6 +175,53 @@ poincare_f64 = Poincare(dtype=jnp.float64)
 dist_precise = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ```
 
+## Proper Velocity: An Unconstrained Alternative
+
+The Proper Velocity (PV) model (Chen et al. 2026) sidesteps the conformal-factor and boundary problems above by representing hyperbolic geometry in **unconstrained $\mathbb{R}^n$**. Points carry no norm constraint, so there is no boundary to drift toward and no $\lambda(x) \to \infty$ singularity.
+
+Use `ProperVelocity` when your features or embeddings reach large geodesic distances from the origin and float32 precision must be preserved.
+
+### Why PV Stays Stable at Large Radii
+
+| Issue (Poincaré / Hyperboloid) | PV behavior |
+|--------------------------------|-------------|
+| $\lambda(x) = 2/(1 - c\|x\|^2) \to \infty$ near boundary | $\beta_x = 1/\sqrt{1 + c\|x\|^2}$, bounded in $(0, 1]$, smooth everywhere |
+| Catastrophic cancellation in $1 - c\|x\|^2$ | No boundary; $1 + c\|x\|^2$ grows monotonically |
+| Hyperboloid constraint drift after Euclidean update | PV is $\mathbb{R}^n$ — any finite vector is a valid point |
+| `atanh` clamp required at the boundary | Geodesic distance uses `asinh`, stable on all of $\mathbb{R}$ |
+
+The PV distance formula
+$$
+d(0, x) = \frac{1}{\sqrt{c}} \cdot \mathrm{asinh}(\sqrt{c}\,\|x\|)
+$$
+remains finite and accurate in float32 for $\|x\|$ up to at least $10^2$ — covered by `test_pv_stability_at_large_norms` in the test suite.
+
+### Example
+
+```python
+import jax
+import jax.numpy as jnp
+from hyperbolix.manifolds import ProperVelocity
+
+pv = ProperVelocity()
+c = 1.0
+
+# PV tolerates large-norm inputs where Poincaré would hit the boundary.
+x_large = jnp.array([50.0, 0.0, 0.0])
+d = pv.dist_0(x_large, c)      # ~ 4.61 — finite, accurate
+y = pv.logmap_0(x_large, c)    # finite tangent vector
+x_rec = pv.expmap_0(y, c)      # round-trips to x_large
+```
+
+### Choosing a Manifold for Stability
+
+- **Poincaré ball**: compact, bounded — fine for small distances ($<5$) and visualization; clamp or use float64 past that.
+- **Hyperboloid**: unbounded radius, but the constraint $\langle x, x\rangle_L = -1/c$ must be maintained and can drift under Euclidean updates.
+- **Proper Velocity**: unconstrained $\mathbb{R}^n$, stable at large radii, exact Euclidean retraction (plain `optax.adam` / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large.
+
+!!! note "Training PV layers"
+    `HypLinearPV`, `HypConv2DPV`, and `HypRegressionPV` store their weights as plain `nnx.Param` (not `ManifoldParam`). Use a standard `nnx.Optimizer(model, optax.adam(lr), wrt=nnx.Param)` — no `riemannian_adam` / `riemannian_sgd` wrapper is required.
+
 ## Hyperbolic Function Overflow
 
 ### The Problem
@@ -498,6 +545,7 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
     - ✅ **Use `VERSION_MOBIUS_DIRECT` for Poincaré distance** unless issues arise
     - ✅ **Clip curvature** if learnable (0.01 < c < 10.0)
     - ✅ **Initialize embeddings conservatively** (small norms)
+    - ✅ **Prefer `ProperVelocity` for large-radius features** — unconstrained $\mathbb{R}^n$ avoids the boundary entirely and trains with plain `optax.adam`
 
 ## Debugging Numerical Issues
 

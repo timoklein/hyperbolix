@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import optax
 import pytest
 from flax import nnx
 
@@ -299,3 +300,56 @@ def test_pv_linear_identity_at_zero_bias_and_zero_input(dtype):
     y = layer(x, c=1.0)
     atol = 1e-5 if dtype == jnp.float32 else 1e-12
     assert jnp.allclose(y, jnp.zeros_like(y), atol=atol)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_pv_linear_trains_with_euclidean_adam(dtype):
+    """Euclidean Adam drives an MSE regression loss down on HypLinearPV + HypRegressionPV.
+
+    PV layers expose plain ``nnx.Param`` (not ``ManifoldParam``) because the PV
+    retraction is exact Euclidean addition (paper Sec 4). A vanilla
+    ``optax.adam`` optimizer must therefore be sufficient to train them — no
+    Riemannian wrapper needed. This guards that contract.
+    """
+    from hyperbolix.nn_layers import HypRegressionPV
+
+    batch_size, in_dim, hidden_dim, out_dim = 32, 6, 8, 3
+    manifold = _manifold(dtype)
+    c = 1.0
+
+    key = jax.random.PRNGKey(0)
+    k_x, k_t = jax.random.split(key)
+    x = jax.random.normal(k_x, (batch_size, in_dim), dtype=dtype) * 0.3
+    target = jax.random.normal(k_t, (batch_size, out_dim), dtype=dtype) * 0.5
+
+    class TinyPVModel(nnx.Module):
+        def __init__(self, rngs: nnx.Rngs):
+            self.linear = HypLinearPV(manifold, in_dim, hidden_dim, rngs=rngs)
+            self.head = HypRegressionPV(manifold, hidden_dim, out_dim, rngs=rngs)
+
+        def __call__(self, inputs, curvature):
+            h = self.linear(inputs, c=curvature)
+            return self.head(h, c=curvature)
+
+    model = TinyPVModel(nnx.Rngs(42))
+    optimizer = nnx.Optimizer(model, optax.adam(1e-2), wrt=nnx.Param)
+
+    def loss_fn(m):
+        y = m(x, c)
+        return jnp.mean((y - target) ** 2)
+
+    @nnx.jit
+    def step(m, opt):
+        loss, grads = nnx.value_and_grad(loss_fn)(m)
+        opt.update(m, grads)
+        return loss
+
+    initial_loss = float(loss_fn(model))
+    for _ in range(200):
+        step(model, optimizer)
+    final_loss = float(loss_fn(model))
+
+    assert jnp.isfinite(final_loss)
+    assert final_loss < 0.5 * initial_loss, (
+        f"Euclidean Adam on PV layers failed to reduce MSE: initial={initial_loss:.4f}, final={final_loss:.4f}"
+    )
