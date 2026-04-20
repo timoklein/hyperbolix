@@ -30,3 +30,12 @@ def validate_poincare_manifold(manifold_module: Manifold, required_methods: tupl
         manifold_name="Poincare",
         example_instance="hyperbolix.manifolds.Poincare()",
     )
+
+
+def validate_pv_manifold(manifold_module: Manifold, required_methods: tuple[str, ...]) -> None:
+    _validate_manifold_methods(
+        manifold_module,
+        required_methods,
+        manifold_name="ProperVelocity",
+        example_instance="hyperbolix.manifolds.ProperVelocity()",
+    )

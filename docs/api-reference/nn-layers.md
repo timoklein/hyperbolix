@@ -6,14 +6,15 @@ Hyperbolic neural network layers built with Flax NNX.
 
 Hyperbolix provides 20+ neural network layer classes and 5 activation functions for building hyperbolic deep learning models:
 
-- **Linear Layers**: Poincaré and Hyperboloid linear transformations, including FGG (Fast and Geometrically Grounded) layers
-- **Convolutional Layers**: HCat-based, HRC-based, and FGG hyperbolic convolutions
+- **Linear Layers**: Poincaré, Hyperboloid, and Proper Velocity linear transformations, including FGG (Fast and Geometrically Grounded) layers
+- **Convolutional Layers**: HCat-based, HRC-based, FGG, and Proper Velocity hyperbolic convolutions
 - **Normalization**: Poincaré batch normalization (`PoincareBatchNorm2D`), HRC-wrapped norms, and FGG mean-only batch norm
 - **Hypformer Components**: HTC (Hyperbolic Transformation Component) and HRC (Hyperbolic Regularization Component) with curvature-change support
 - **FGG Components**: `FGGLinear`, `FGGConv2D`, `FGGMeanOnlyBatchNorm` from Klis et al. (2026) — linear-distance growth, ~3× faster than prior work
+- **Proper Velocity Components**: `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV` from Chen et al. (2026) — unconstrained $\mathbb{R}^n$ geometry with exact Euclidean retraction
 - **Attention Layers**: Three hyperbolic attention variants (linear O(N), softmax O(N²), full Lorentzian O(N²)) from the Hypformer paper
 - **Positional Encoding**: HOPE (Hyperbolic Rotary PE) and Hypformer learnable positional encodings for Transformers
-- **Regression Layers**: Single-layer classifiers with Riemannian geometry, including `FGGLorentzMLR`
+- **Regression Layers**: Single-layer classifiers with Riemannian geometry, including `FGGLorentzMLR` and `HypRegressionPV`
 - **Activation Functions**: Hyperbolic ReLU, Leaky ReLU, Tanh, Swish, GELU
 - **Helper Functions**: Utilities for regression and conformal factor computation
 
@@ -53,6 +54,15 @@ All layers follow Flax NNX conventions and store manifold module references.
 ### FGG Linear (Klis et al. 2026)
 
 ::: hyperbolix.nn_layers.FGGLinear
+    options:
+      show_source: true
+      heading_level: 4
+
+### Proper Velocity Linear (Chen et al. 2026)
+
+`HypLinearPV` implements the PV fully-connected layer from Chen et al. 2026 (Thm 5.3 / Eq. 22): $y_k = (1/\sqrt{c}) \cdot \sinh(\sqrt{c} \cdot v_k(x))$ where $v_k(x)$ is the PV multinomial-logistic-regression signed margin. Because PV is an unconstrained $\mathbb{R}^n$ model, inputs and outputs live in Euclidean space with no projection step.
+
+::: hyperbolix.nn_layers.HypLinearPV
     options:
       show_source: true
       heading_level: 4
@@ -258,6 +268,23 @@ h_eval = jax.nn.relu(h_eval)
 | **Distance growth** | Linear | Logarithmic | Logarithmic |
 | **Default padding** | Manifold origin | Edge replication | Edge replication |
 | **Weight norm** | Optional (`use_weight_norm`) | No | No |
+
+### Proper Velocity Convolution (Chen et al. 2026)
+
+`HypConv2DPV` implements the PV 2D convolution from Chen et al. 2026 (Sec 5.3). Because PV's geometry is unconstrained ($\mathbb{R}^n$), patch concatenation coincides with Euclidean concatenation — **no beta-scaling step is required** (unlike `HypConv2DPoincare`). Outputs live on the PV manifold, so activations can be applied directly between conv layers without expmap/logmap round-trips.
+
+::: hyperbolix.nn_layers.HypConv2DPV
+    options:
+      show_source: true
+      heading_level: 4
+
+| Feature | HypConv2DPV | HypConv2DPoincare | HypConv2DHyperboloid |
+|---------|-------------|-------------------|----------------------|
+| **Model** | Proper Velocity ($\mathbb{R}^n$) | Poincaré ball | Hyperboloid |
+| **Aggregation** | Raw Euclidean concat | Beta-concatenation | HCat (Lorentz concat) |
+| **Dimension** | Preserved | Preserved | Grows: $(d-1) K^2 + 1$ |
+| **Default input** | Manifold | Tangent space | Manifold (ambient) |
+| **Output** | PV manifold | Tangent space | Hyperboloid (ambient) |
 
 ### LorentzConv2D (HRC-Based)
 
@@ -847,6 +874,68 @@ Single-layer classifiers with Riemannian geometry.
       show_source: true
       heading_level: 4
 
+### Proper Velocity Regression (Chen et al. 2026)
+
+`HypRegressionPV` implements the PV multinomial-logistic-regression layer (Thm 5.2 / Eq. 19). The output is the Euclidean signed margin to each PV hyperplane, intended for a standard softmax-cross-entropy loss.
+
+::: hyperbolix.nn_layers.HypRegressionPV
+    options:
+      show_source: true
+      heading_level: 4
+
+#### PV Usage Example
+
+```python
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from hyperbolix.manifolds import ProperVelocity
+from hyperbolix.nn_layers import HypConv2DPV, HypLinearPV, HypRegressionPV
+
+pv = ProperVelocity()
+rngs = nnx.Rngs(0)
+c = 1.0
+
+# --- HypConv2DPV: dimension-preserving hyperbolic convolution ---
+conv = HypConv2DPV(
+    manifold_module=pv,
+    in_channels=16,
+    out_channels=32,
+    kernel_size=3,
+    rngs=rngs,
+    input_space="tangent",  # lift Euclidean features via expmap_0
+)
+x = jax.random.normal(jax.random.PRNGKey(1), (8, 28, 28, 16)) * 0.1
+h = conv(x, c=c)
+print(h.shape)  # (8, 28, 28, 32) — on the PV manifold
+
+# --- HypLinearPV: fully-connected PV layer ---
+linear = HypLinearPV(
+    manifold_module=pv,
+    in_dim=32,
+    out_dim=64,
+    rngs=rngs,
+)
+h_flat = h.reshape(-1, 32)
+h_fc = linear(h_flat, c=c)
+print(h_fc.shape)  # (8*28*28, 64)
+
+# --- HypRegressionPV: classification head (Euclidean logits) ---
+mlr = HypRegressionPV(
+    manifold_module=pv,
+    in_dim=64,
+    out_dim=10,
+    rngs=rngs,
+)
+logits = mlr(h_fc, c=c)
+print(logits.shape)  # (8*28*28, 10) — feed to softmax cross-entropy
+```
+
+!!! tip "When to Use Proper Velocity"
+    - **Large-radius features** — the unbounded $\mathbb{R}^n$ coordinates avoid both the Poincaré boundary ($\lambda \to 0$) and hyperboloid constraint drift.
+    - **Standard Euclidean optimizers** — the retraction is exact Euclidean addition, so Adam/SGD on PV parameters needs no Riemannian wrapper.
+    - **Simple conv stacks** — raw Euclidean concat replaces beta-scaling/HCat, and no dimension growth per layer.
+
 ### FGG Usage Example
 
 ```python
@@ -1148,6 +1237,7 @@ The neural network layers implement methods from:
 - **Hypformer (Yang et al. 2025)**: "Hyperbolic Transformers" - HTC/HRC components with curvature-change support
 - **Chen et al. (2024)**: "Hyperbolic Embeddings for Learning on Manifolds (HELM)" - HOPE positional encoding and Lorentzian residual connections
 - **Klis et al. (2026)**: "Fast and Geometrically Grounded Lorentz Neural Networks" - `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `FGGMeanOnlyBatchNorm`; sinh/arcsinh cancellation for linear hyperbolic distance growth
+- **Chen et al. (2026)**: "Proper Velocity Neural Networks" - `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV`; unconstrained $\mathbb{R}^n$ model of hyperbolic geometry with exact Euclidean retraction
 
 ### Key Theoretical Connections
 

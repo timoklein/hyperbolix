@@ -11,9 +11,9 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 
 ## Features
 
-- 🌐 **3 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid
-- 🧠 **13+ Neural Network Layers**: Linear, convolutional, regression
-- ⚡ **4 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish
+- 🌐 **4 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity
+- 🧠 **20+ Neural Network Layers**: Linear, convolutional, regression, attention, positional encoding, PV
+- ⚡ **5 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish, GELU
 - 📈 **Riemannian Optimizers**: RAdam and RSGD with automatic manifold detection
 - 🚀 **Pure JAX/Flax NNX**: vmap-native API, JIT-compatible (10-100x speedup)
 - ✅ **1,400+ tests passing** with comprehensive benchmark suite
@@ -101,6 +101,8 @@ Implements methods from:
 - Shimizu et al. (2020): Hyperbolic Neural Networks++
 - Bdeir et al. (2023): Fully Hyperbolic CNNs
 - Bdeir et al. (2025): Robust Hyperbolic Learning
+- Klis et al. (2026): Fast and Geometrically Grounded Lorentz Neural Networks
+- Chen et al. (2026): Proper Velocity Neural Networks
 
 See individual module docstrings for detailed references.
 

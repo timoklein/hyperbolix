@@ -63,6 +63,15 @@ def _is_hyperboloid(manifold) -> bool:
     return isinstance(manifold, hj.manifolds.Hyperboloid)
 
 
+def _is_pv(manifold) -> bool:
+    return isinstance(manifold, hj.manifolds.ProperVelocity)
+
+
+def _is_gyrovector(manifold) -> bool:
+    """Manifolds that carry a gyrovector-space structure (non-trivial scalar mul axioms)."""
+    return _is_euclidean(manifold) or _is_poincare(manifold) or _is_pv(manifold)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 
@@ -153,7 +162,7 @@ def test_scalar_mul(
     manifold, c = manifold_and_c
     atol, rtol = tolerance
 
-    if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
+    if (_is_poincare(manifold) or _is_pv(manifold)) and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 2e-2)
 
     # Create scalars - now as 1D array since scalar_mul expects scalar per point
@@ -178,8 +187,8 @@ def test_scalar_mul(
     result4 = scalar_mul_batch(r2 * r1, uniform_points, c)
     assert jnp.allclose(result2, result4, atol=atol, rtol=rtol)
 
-    # Additional properties for Euclidean and PoincareBall (not Hyperboloid)
-    if _is_euclidean(manifold) or _is_poincare(manifold):
+    # Additional gyrovector properties (Euclidean, Poincaré, PV — not Hyperboloid)
+    if _is_gyrovector(manifold):
         # N-Gyroaddition property: n ⊗ x = x ⊕ x ⊕ ... ⊕ x (n times)
         n = rng.integers(3, 10)
         n_sum = jnp.zeros_like(uniform_points)
@@ -256,7 +265,7 @@ def test_scalar_mul(
     assert jnp.allclose(res[1:], jnp.zeros_like(res[1:]), atol=atol, rtol=rtol)
 
     # Stability of multiplication with large scalars
-    if _is_euclidean(manifold) or _is_poincare(manifold):
+    if _is_gyrovector(manifold):
         # Note: Hyperboloid manifold may fail is_in_manifold check with large scalars
         # due to numerical instabilities in the Minkowski inner product
         r_large_arr = jnp.ones(uniform_points.shape[0]) * r_large
@@ -285,9 +294,11 @@ def test_gyration(
     """
     manifold, c = manifold_and_c
 
-    # The gyration operation is only defined for the PoincareBall manifold
-    if _is_euclidean(manifold) or _is_hyperboloid(manifold):
-        pytest.skip("Gyration operation not defined for Euclidean/Hyperboloid manifold")
+    # The gyration operation is only defined for the PoincareBall manifold here
+    # (PV has its own, distinct gyration algebra; we don't exercise it via the
+    # Möbius _gyration helper used in this test).
+    if _is_euclidean(manifold) or _is_hyperboloid(manifold) or _is_pv(manifold):
+        pytest.skip("Möbius gyration test only defined for PoincareBall manifold")
 
     atol, rtol = tolerance
     x, y, z, a = _split(uniform_points, 4)
@@ -461,8 +472,9 @@ def test_expmap_logmap_basic(
     else:
         origin = jnp.zeros_like(uniform_points)
 
-    # Create random tangent vectors
-    bound = 10
+    # Create random tangent vectors. PV has no tanh-like saturation in expmap,
+    # so sinh(√c·||v||) overflows for large bounds — use a smaller range there.
+    bound = 1.0 if _is_pv(manifold) else 10
     v = jnp.asarray(rng.uniform(-bound, bound, size=uniform_points.shape), dtype=uniform_points.dtype)
     v0 = v.copy()
 
@@ -475,7 +487,7 @@ def test_expmap_logmap_basic(
     assert _batch_is_in_tangent_space(manifold, v0, origin, c)
 
     # Numerical stability of expmap/expmap_0/retraction
-    if _is_euclidean(manifold) or _is_poincare(manifold):
+    if _is_gyrovector(manifold):
         # Note: Hyperboloid may fail is_in_manifold check due to numerical errors
 
         # Expmap
@@ -496,7 +508,7 @@ def test_expmap_logmap_basic(
         assert jnp.all(jnp.isfinite(v0_retr))
 
     # Numerical stability of logmap - check logmap produces finite tangent vectors
-    if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
+    if (_is_poincare(manifold) or _is_pv(manifold)) and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 3e-2)
 
     logmap_y_x = logmap_batch(y, x, c)
@@ -665,7 +677,7 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     # near boundary. When points approach ||x|| ≈ 1/√c, the conformal factor λ(x) = 2/(1-c||x||²)
     # can exceed 10,000. The logmap/tangent_norm round-trip (divide by λ, then multiply by λ)
     # loses precision, especially for large distances (>10) involving near-boundary points.
-    if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
+    if (_is_poincare(manifold) or _is_pv(manifold)) and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 5e-2)
 
     # Consistency of tangent_norm with logmap and dist
@@ -715,3 +727,9 @@ def test_is_in_manifold(manifold_and_c, uniform_points: jnp.ndarray) -> None:
         # Points not on hyperboloid surface should not be on manifold
         outside = jnp.ones_like(uniform_points[0]) * 10.0
         assert not manifold.is_in_manifold(outside, c=c)
+    elif _is_pv(manifold):
+        # PV is unconstrained: only non-finite points are off-manifold.
+        nan_point = uniform_points[0].at[0].set(jnp.nan)
+        assert not bool(manifold.is_in_manifold(nan_point, c=c))
+        inf_point = uniform_points[0].at[0].set(jnp.inf)
+        assert not bool(manifold.is_in_manifold(inf_point, c=c))

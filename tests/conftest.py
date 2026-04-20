@@ -49,8 +49,9 @@ def tolerance(dtype: jnp.dtype) -> tuple[float, float]:
         ("euclidean", 0.0),
         ("poincare", 1.0),
         ("hyperboloid", 1.0),
+        ("pv", 1.0),
     ],
-    ids=["Euclidean", "PoincareBall", "Hyperboloid"],
+    ids=["Euclidean", "PoincareBall", "Hyperboloid", "ProperVelocity"],
 )
 def manifold_and_c(request: pytest.FixtureRequest, dtype: jnp.dtype, rng: np.random.Generator):
     """Fixture providing (manifold_instance, curvature) tuples.
@@ -72,6 +73,10 @@ def manifold_and_c(request: pytest.FixtureRequest, dtype: jnp.dtype, rng: np.ran
         # Hyperboloid with random positive curvature
         c = float(rng.exponential(scale=2.0))
         return hj.manifolds.Hyperboloid(dtype=dtype), c
+    elif manifold_name == "pv":
+        # Proper Velocity with random positive curvature (same distribution as Poincaré)
+        c = float(rng.exponential(scale=2.0))
+        return hj.manifolds.ProperVelocity(dtype=dtype), c
     else:
         raise ValueError(f"Unknown manifold: {manifold_name}")
 
@@ -137,6 +142,14 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
         # Project to ensure they're on the manifold
         proj_batch = jax.vmap(manifold.proj, in_axes=(0, None))
         return proj_batch(points, c)
+
+    elif isinstance(manifold, hj.manifolds.ProperVelocity):
+        # Proper Velocity: unconstrained ℝⁿ. Gaussian samples scaled to 1/√c keep
+        # typical geodesic distance to origin of order asinh(1) ~ 0.88, mirroring
+        # the hyperbolic manifolds' "moderate distance" regime.
+        data = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)
+        data = data / np.sqrt(c)
+        return jnp.asarray(data, dtype=dtype)
 
     else:
         raise ValueError("Unknown manifold module")
