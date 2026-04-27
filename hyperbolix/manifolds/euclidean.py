@@ -331,7 +331,7 @@ class Euclidean(ManifoldBase):
     """Euclidean manifold with automatic dtype casting.
 
     Provides all manifold operations with automatic casting of array inputs
-    to the specified dtype.
+    to the specified dtype. Curvature is always fixed at 0.0.
 
     Args:
         dtype: Target JAX dtype for computations (default: jnp.float32)
@@ -345,6 +345,9 @@ class Euclidean(ManifoldBase):
         >>> y = jnp.array([3.0, 4.0])
         >>> d = manifold.dist(x, y)
     """
+
+    def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
+        super().__init__(dtype, c=0.0, learnable=False)
 
     def proj(self, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
         """Project point onto Euclidean space (identity)."""
