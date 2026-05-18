@@ -315,25 +315,6 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../mathematical-background/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Mathematical Background
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
       <a href="../../developer-guide/" class="md-tabs__link">
         
   
@@ -645,10 +626,76 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#tldr" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topics
+        TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-use-what" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When to Use What
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-modern-layers-dont-need-riemannian-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Modern Layers Don't Need Riemannian Optimization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#learnable-curvature-is-also-euclidean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learnable Curvature Is Also Euclidean
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-legacy-ganea-exception" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Legacy Ganea Exception
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
       
     </span>
   </a>
@@ -963,33 +1010,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../../mathematical-background/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Mathematical Background
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../../developer-guide/" class="md-nav__link">
         
   
@@ -1064,10 +1084,76 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#tldr" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topics
+        TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-use-what" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When to Use What
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-modern-layers-dont-need-riemannian-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Modern Layers Don't Need Riemannian Optimization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#learnable-curvature-is-also-euclidean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learnable Curvature Is Also Euclidean
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-legacy-ganea-exception" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Legacy Ganea Exception
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Pitfalls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
       
     </span>
   </a>
@@ -1095,20 +1181,125 @@
 
 
 <h1 id="riemannian-optimizers-user-guide">Riemannian Optimizers User Guide<a class="headerlink" href="#riemannian-optimizers-user-guide" title="Permanent link">&para;</a></h1>
-<p>Guide to training with Riemannian optimizers.</p>
-<div class="admonition note">
-<p class="admonition-title">Work in Progress</p>
-<p>This page is under construction. See the <a href="../../api-reference/optimizers/">API Reference</a> for complete documentation.</p>
-</div>
-<h2 id="topics">Topics<a class="headerlink" href="#topics" title="Permanent link">&para;</a></h2>
+<p>Almost no Hyperbolix user needs a Riemannian optimizer. This page exists to tell
+you when you're in the rare case that does.</p>
+<p>For per-optimizer signatures, see the
+<a href="../../api-reference/optimizers/">Optimizers API reference</a>.</p>
+<h2 id="tldr">TL;DR<a class="headerlink" href="#tldr" title="Permanent link">&para;</a></h2>
+<p><strong>Use <code>optax.adam</code> (or any Euclidean Optax optimizer).</strong> That includes:</p>
 <ul>
-<li>Manifold metadata system</li>
-<li>Mixed Euclidean/Riemannian optimization</li>
-<li>Expmap vs retraction</li>
-<li>Learning rate scheduling</li>
-<li>Convergence tips</li>
+<li>All modern NN layers — <code>HTCLinear</code>, <code>FGGLinear</code>, <code>HypConv2DHyperboloid*</code>,
+  <code>HypLinearHyperboloidPP</code>, <code>HypLinearPoincarePP</code>, <code>HypLinearPV</code>, all
+  attention / normalization / regression heads.</li>
+<li>Learnable curvature (<code>Hyperboloid(c=1.0, learnable=True)</code> and the same on
+  Poincaré / PV).</li>
 </ul>
-<p>[Content coming soon]</p>
+<p><strong>The single exception</strong>: the legacy Ganea-style Poincaré layers
+(<code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>) parameterize weights <em>directly
+on the Poincaré ball</em>, so they need <code>riemannian_adam</code> (or <code>riemannian_sgd</code>).
+You can usually just migrate to the <code>PP</code> equivalents and stay with
+<code>optax.adam</code>.</p>
+<h2 id="when-to-use-what">When to Use What<a class="headerlink" href="#when-to-use-what" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setup</th>
+<th>Optimizer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Any modern hyperbolic NN (HTC, FGG, HCat, PP, HRC, PV)</td>
+<td><code>optax.adam</code></td>
+</tr>
+<tr>
+<td>Learnable curvature (any manifold)</td>
+<td><code>optax.adam</code></td>
+</tr>
+<tr>
+<td>Mixed Euclidean / hyperbolic networks</td>
+<td><code>optax.adam</code></td>
+</tr>
+<tr>
+<td>Legacy <code>HypLinearPoincare</code> / <code>HypRegressionPoincare</code></td>
+<td><code>riemannian_adam</code></td>
+</tr>
+</tbody>
+</table>
+<p>That's the whole decision.</p>
+<h2 id="why-modern-layers-dont-need-riemannian-optimization">Why Modern Layers Don't Need Riemannian Optimization<a class="headerlink" href="#why-modern-layers-dont-need-riemannian-optimization" title="Permanent link">&para;</a></h2>
+<p>Modern hyperbolic layers (HTC, FGG, HNN++, HCat, PV) store their weights as
+<strong>Euclidean tensors</strong> and apply the hyperbolic transformation inside the
+forward pass. The weights themselves never live on a manifold — they're just
+flat parameter tensors with Euclidean gradients. Standard Adam handles them
+correctly.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">optax</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">flax</span><span class="w"> </span><span class="kn">import</span> <span class="n">nnx</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Standard setup — works for every modern layer family</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">model</span> <span class="o">=</span> <span class="n">HTCClassifier</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="learnable-curvature-is-also-euclidean">Learnable Curvature Is Also Euclidean<a class="headerlink" href="#learnable-curvature-is-also-euclidean" title="Permanent link">&para;</a></h2>
+<p>A common confusion: surely learnable curvature needs Riemannian optimization?
+No. Curvature is stored as a single Euclidean <code>nnx.Param</code> (<code>_c_raw</code>) and
+reparameterized through <code>softplus</code> to stay positive. The <code>_c_raw</code> parameter
+gets a normal Euclidean gradient and a normal Adam update — there's nothing
+to project, nothing on a manifold.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># _c_raw is a plain nnx.Param</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># ... build model ...</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Curvature is updated by Adam alongside all other parameters.</span>
+</span></code></pre></div>
+<h2 id="the-legacy-ganea-exception">The Legacy Ganea Exception<a class="headerlink" href="#the-legacy-ganea-exception" title="Permanent link">&para;</a></h2>
+<p><code>HypLinearPoincare</code> and <code>HypRegressionPoincare</code> (Ganea et al. 2018) store
+their weights as <strong>points on the Poincaré ball</strong>. Each gradient step needs to
+respect the ball constraint, which is exactly what <code>riemannian_adam</code>
+provides. To use them:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">riemannian_adam</span><span class="p">,</span> <span class="n">mark_manifold_param</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Tag manifold-valued parameters during model init</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">mark_manifold_param</span><span class="p">(</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">init_value</span><span class="p">),</span> <span class="n">manifold</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span> <span class="n">curvature</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># Riemannian optimizer auto-dispatches: tagged params get Riemannian updates,</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># everything else gets Euclidean Adam.</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+</span></code></pre></div>
+<p>The optimizer walks the model state, applies Riemannian updates wherever it
+finds a <code>ManifoldParam</code> tag, and falls back to standard Adam everywhere else.
+You don't need separate optimizers for the Euclidean and manifold parts.</p>
+<div class="admonition tip">
+<p class="admonition-title">Prefer the <code>PP</code> migration</p>
+<p>If you're picking the legacy Ganea layer for new work, almost always swap
+it for <code>HypLinearPoincarePP</code> / <code>HypRegressionPoincarePP</code> instead. The
+<code>PP</code> variants compute the same operation with Euclidean weights, removing
+the need for Riemannian optimization entirely. The numerics are typically
+cleaner and the optimizer setup is simpler.</p>
+</div>
+<h2 id="common-pitfalls">Common Pitfalls<a class="headerlink" href="#common-pitfalls" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Using <code>riemannian_adam</code> for HTC / FGG / PP / PV layers.</strong> Adds compute
+   for no benefit (and occasionally slightly worse numerics). Use
+   <code>optax.adam</code>.</li>
+<li><strong>Forgetting <code>mark_manifold_param</code> on legacy layer weights.</strong> Without the
+   tag, <code>riemannian_adam</code> falls back to Euclidean Adam on a manifold-valued
+   tensor — the weights drift off the ball within a few steps.</li>
+<li><strong>Expecting <code>riemannian_adam</code> to need a separate optimizer for the
+   Euclidean parts.</strong> It doesn't. One optimizer with <code>wrt=nnx.Param</code> handles
+   everything; dispatch is via the <code>ManifoldParam</code> tag.</li>
+</ol>
+<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><a href="../../api-reference/optimizers/">API Reference: Optimizers</a></strong> — full
+  signatures for <code>riemannian_adam</code>, <code>riemannian_sgd</code>, <code>ManifoldParam</code>,
+  <code>mark_manifold_param</code>.</li>
+<li><strong><a href="../nn-layers/">NN Layers Guide</a></strong> — layer-family overview, including
+  which families use Euclidean weights.</li>
+<li><strong><a href="../manifolds/#working-with-curvature">Manifolds Guide</a></strong> — learnable
+  curvature mechanics.</li>
+</ul>
 
 
 

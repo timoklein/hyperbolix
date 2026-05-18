@@ -313,25 +313,6 @@
   
   
     <li class="md-tabs__item">
-      <a href="mathematical-background/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Mathematical Background
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
       <a href="developer-guide/" class="md-tabs__link">
         
   
@@ -558,6 +539,28 @@
     <span class="md-ellipsis">
       
         Curvature Parameter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#learnable-curvature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learnable Curvature
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mixed-curvature-product-spaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mixed-Curvature Product Spaces
       
     </span>
   </a>
@@ -1096,33 +1099,6 @@
   
   
     <li class="md-nav__item">
-      <a href="mathematical-background/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Mathematical Background
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="developer-guide/" class="md-nav__link">
         
   
@@ -1286,6 +1262,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#learnable-curvature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learnable Curvature
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mixed-curvature-product-spaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mixed-Curvature Product Spaces
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#manifold-operations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1370,7 +1368,8 @@
 <p>Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing manifold operations, neural network layers, and Riemannian optimizers for hyperbolic geometry. Built with Flax NNX and Optax for modern JAX workflows.</p>
 <h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>4 Manifolds</strong>: Euclidean, Poincaré Ball, Hyperboloid, and Proper Velocity with complete geometric operations</li>
+<li><strong>5 Manifolds</strong>: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, and Product Manifold (mixed-curvature composition) — all with complete geometric operations</li>
+<li><strong>Learnable Curvature</strong>: Pass <code>learnable=True</code> to make a manifold's curvature a trainable <code>nnx.Param</code> (softplus reparameterization)</li>
 <li><strong>Neural Network Layers</strong>: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers</li>
 <li><strong>Activation Functions</strong>: 4 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish)</li>
 <li><strong>Riemannian Optimizers</strong>: RAdam and RSGD with automatic manifold parameter detection</li>
@@ -1378,7 +1377,7 @@
 <li><strong>Pure JAX/Flax NNX</strong>: No PyTorch dependency, fully compatible with JAX ecosystem</li>
 <li><strong>vmap-native API</strong>: Efficient batching through JAX's functional paradigm</li>
 <li><strong>JIT-compatible</strong>: All operations support JIT compilation for performance</li>
-<li><strong>Comprehensive Test Suite</strong>: 1,400+ tests with 100% pass rate</li>
+<li><strong>Comprehensive Test Suite</strong>: 4,400+ tests (parametrized across seeds, dtypes, manifolds) with 100% pass rate</li>
 </ul>
 <h2 id="quick-example">Quick Example<a class="headerlink" href="#quick-example" title="Permanent link">&para;</a></h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
@@ -1435,18 +1434,73 @@
 </span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="n">output</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">input_data</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="project-status">Project Status<a class="headerlink" href="#project-status" title="Permanent link">&para;</a></h2>
-<p><strong>All core functionality is complete!</strong></p>
-<ul>
-<li>✅ Phase 1: Manifolds (978 passing tests)</li>
-<li>✅ Phase 2: Riemannian Optimizers (20 passing tests)</li>
-<li>✅ Phase 3a: Neural Network Layers (44 passing tests)</li>
-<li>✅ Phase 3b: Regression Layers (22 passing tests)</li>
-<li>✅ Hyperboloid Convolutions (68 passing tests)</li>
-<li>✅ Lorentz Convolutions (66 passing tests)</li>
-<li>✅ Hyperboloid Activations (86 passing tests)</li>
-<li>✅ CI/CD Pipeline with benchmarking</li>
-<li>✅ Clean, unified codebase structure</li>
-</ul>
+<p><strong>Active development — current release: v0.6.0.</strong> Core functionality is complete and stable; new layers and manifolds are added incrementally. See the <a href="changelog/">Changelog</a> for the full release history.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Status</th>
+<th>Shipped in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Class-based manifolds (Euclidean, Poincaré, Hyperboloid)</td>
+<td>✅ Stable</td>
+<td>v0.3.0</td>
+</tr>
+<tr>
+<td>Riemannian optimizers (RSGD, RAdam)</td>
+<td>✅ Stable</td>
+<td>v0.1.4</td>
+</tr>
+<tr>
+<td>Hyperbolic linear / convolutional layers</td>
+<td>✅ Stable</td>
+<td>v0.1.4</td>
+</tr>
+<tr>
+<td>Hyperboloid attention + hyperbolic transformer blocks</td>
+<td>✅ Stable</td>
+<td>v0.2.0</td>
+</tr>
+<tr>
+<td>Isometry mappings (Poincaré ↔ Hyperboloid)</td>
+<td>✅ Stable</td>
+<td>v0.2.0</td>
+</tr>
+<tr>
+<td>FGG-LNN layers (Klis et al. 2026)</td>
+<td>✅ Stable</td>
+<td>v0.3.0</td>
+</tr>
+<tr>
+<td>Poincaré BatchNorm2d, FHCNN layers, hyperbolic avg-pool</td>
+<td>✅ Stable</td>
+<td>v0.5.x</td>
+</tr>
+<tr>
+<td>Proper Velocity manifold + PV layers (Chen et al. 2026)</td>
+<td>✅ Stable</td>
+<td>v0.5.3</td>
+</tr>
+<tr>
+<td>Learnable curvature (softplus-reparametrized <code>nnx.Param</code>)</td>
+<td>✅ Stable</td>
+<td>v0.6.0</td>
+</tr>
+<tr>
+<td>Product manifolds (Gu et al. 2019, mixed-curvature composition)</td>
+<td>🚧 Unreleased</td>
+<td>next</td>
+</tr>
+<tr>
+<td>CI/CD pipeline with benchmarking</td>
+<td>✅ Stable</td>
+<td>v0.1.4</td>
+</tr>
+</tbody>
+</table>
 <h2 id="key-concepts">Key Concepts<a class="headerlink" href="#key-concepts" title="Permanent link">&para;</a></h2>
 <h3 id="vmap-native-api">vmap-native API<a class="headerlink" href="#vmap-native-api" title="Permanent link">&para;</a></h3>
 <p>Methods operate on <strong>single points</strong> by design. Use <code>jax.vmap</code> for batching:</p>
@@ -1467,7 +1521,29 @@
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">dist_c1</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">dist_c2</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
 </span></code></pre></div>
-<p>This allows for learnable curvature in neural networks.</p>
+<h3 id="learnable-curvature">Learnable Curvature<a class="headerlink" href="#learnable-curvature" title="Permanent link">&para;</a></h3>
+<p>Curvature can also be made trainable per manifold instance. The raw parameter
+is stored as an <code>nnx.Param</code> and reparameterized through <code>softplus</code> to stay
+positive — gradients flow into the loss automatically:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Hyperboloid</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">c</span> <span class="o">=</span> <span class="n">manifold</span><span class="o">.</span><span class="n">c</span>          <span class="c1"># softplus(_c_raw) ≈ 1.0; a traced array under JIT</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># When passed through any nnx.Optimizer with wrt=nnx.Param,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># the curvature is updated each step alongside other params.</span>
+</span></code></pre></div>
+<h3 id="mixed-curvature-product-spaces">Mixed-Curvature Product Spaces<a class="headerlink" href="#mixed-curvature-product-spaces" title="Permanent link">&para;</a></h3>
+<p>Compose heterogeneous factors (each with its own curvature, optionally
+learnable) into a single product manifold (Gu et al. 2019):</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProductManifold</span><span class="p">,</span> <span class="n">Hyperboloid</span><span class="p">,</span> <span class="n">Poincare</span><span class="p">,</span> <span class="n">Euclidean</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">product</span> <span class="o">=</span> <span class="n">ProductManifold</span><span class="p">(</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="p">(</span><span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="mi">5</span><span class="p">),</span>  <span class="c1"># learnable hyperbolic factor</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="p">(</span><span class="n">Poincare</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">),</span> <span class="mi">3</span><span class="p">),</span>                     <span class="c1"># fixed-curvature Poincaré factor</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="p">(</span><span class="n">Euclidean</span><span class="p">(),</span> <span class="mi">4</span><span class="p">),</span>                         <span class="c1"># flat factor</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">)</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">d</span> <span class="o">=</span> <span class="n">product</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>  <span class="c1"># sqrt(sum d_i^2) over factors</span>
+</span></code></pre></div>
 <h3 id="manifold-operations">Manifold Operations<a class="headerlink" href="#manifold-operations" title="Permanent link">&para;</a></h3>
 <p>Each manifold provides:</p>
 <ul>
@@ -1486,12 +1562,12 @@
 </ul>
 <h2 id="citation">Citation<a class="headerlink" href="#citation" title="Permanent link">&para;</a></h2>
 <p>If you use Hyperbolix in your research, please cite:</p>
-<div class="language-bibtex highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nc">@software</span><span class="p">{</span><span class="nl">hyperbolix2026</span><span class="p">,</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="na">title</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{Hyperbolix: Hyperbolic Deep Learning in JAX}</span><span class="p">,</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="na">author</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{Klein, Timo and Lang, Thomas and Shkabrii, Andrii}</span><span class="p">,</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="na">year</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{2026}</span><span class="p">,</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="na">url</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{https://github.com/hyperbolix/hyperbolix}</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="p">}</span>
+<div class="language-bibtex highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nc">@software</span><span class="p">{</span><span class="nl">hyperbolix2026</span><span class="p">,</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="na">title</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{Hyperbolix: Hyperbolic Deep Learning in JAX}</span><span class="p">,</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="na">author</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{Klein, Timo and Lang, Thomas and Shkabrii, Andrii}</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="na">year</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{2026}</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="na">url</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{https://github.com/hyperbolix/hyperbolix}</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="p">}</span>
 </span></code></pre></div>
 <h2 id="license">License<a class="headerlink" href="#license" title="Permanent link">&para;</a></h2>
 <p>MIT License. See LICENSE for details.</p>

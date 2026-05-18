@@ -84,7 +84,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#training-workflows-guide" class="md-skip">
+        <a href="#training-workflows" class="md-skip">
           Skip to content
         </a>
       
@@ -306,25 +306,6 @@
         </a>
       </li>
     
-  
-
-      
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
-      <a href="../../mathematical-background/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Mathematical Background
-
-      </a>
-    </li>
   
 
       
@@ -729,10 +710,54 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#minimal-training-loop" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topics
+        Minimal Training Loop
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#benchmark-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark Map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hyperparameters-that-actually-matter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hyperparameters That Actually Matter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-training-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Training Failures
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
       
     </span>
   </a>
@@ -963,33 +988,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../../mathematical-background/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Mathematical Background
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../../developer-guide/" class="md-nav__link">
         
   
@@ -1064,10 +1062,54 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#minimal-training-loop" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topics
+        Minimal Training Loop
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#benchmark-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benchmark Map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hyperparameters-that-actually-matter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hyperparameters That Actually Matter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-training-failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Training Failures
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
       
     </span>
   </a>
@@ -1094,21 +1136,199 @@
   
 
 
-<h1 id="training-workflows-guide">Training Workflows Guide<a class="headerlink" href="#training-workflows-guide" title="Permanent link">&para;</a></h1>
-<p>End-to-end training examples and patterns.</p>
-<div class="admonition note">
-<p class="admonition-title">Work in Progress</p>
-<p>This page is under construction.</p>
-</div>
-<h2 id="topics">Topics<a class="headerlink" href="#topics" title="Permanent link">&para;</a></h2>
+<h1 id="training-workflows">Training Workflows<a class="headerlink" href="#training-workflows" title="Permanent link">&para;</a></h1>
+<p>A hyperbolic training loop is just a normal Flax NNX + Optax loop. The
+specifics that differ from Euclidean training are small: pass curvature at
+call time, optionally project, and pick reasonable hyperparameters per
+manifold. This page shows a minimal working loop, points to the benchmark
+files for advanced patterns, and lists the failures you'll actually hit.</p>
+<h2 id="minimal-training-loop">Minimal Training Loop<a class="headerlink" href="#minimal-training-loop" title="Permanent link">&para;</a></h2>
+<p>The following classifier trains on synthetic data and is verified to drop the
+loss from ~2.5 to &lt;0.05 in 200 steps. Copy, run, modify.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">optax</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">flax</span><span class="w"> </span><span class="kn">import</span> <span class="n">nnx</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Hyperboloid</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">HTCLinear</span><span class="p">,</span> <span class="n">HRCLayerNorm</span><span class="p">,</span> <span class="n">HypRegressionHyperboloid</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="k">class</span><span class="w"> </span><span class="nc">HTCClassifier</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ambient</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">num_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        <span class="n">spatial</span> <span class="o">=</span> <span class="n">ambient</span> <span class="o">-</span> <span class="mi">1</span>                                 <span class="c1"># HTC out_features is spatial</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">fc1</span> <span class="o">=</span> <span class="n">HTCLinear</span><span class="p">(</span><span class="n">in_features</span><span class="o">=</span><span class="n">ambient</span><span class="p">,</span> <span class="n">out_features</span><span class="o">=</span><span class="n">spatial</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">norm</span> <span class="o">=</span> <span class="n">HRCLayerNorm</span><span class="p">(</span><span class="n">num_features</span><span class="o">=</span><span class="n">spatial</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">fc2</span> <span class="o">=</span> <span class="n">HTCLinear</span><span class="p">(</span><span class="n">in_features</span><span class="o">=</span><span class="n">ambient</span><span class="p">,</span> <span class="n">out_features</span><span class="o">=</span><span class="n">spatial</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">head</span> <span class="o">=</span> <span class="n">HypRegressionHyperboloid</span><span class="p">(</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>            <span class="n">manifold_module</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>            <span class="n">in_dim</span><span class="o">=</span><span class="n">ambient</span><span class="p">,</span> <span class="n">out_dim</span><span class="o">=</span><span class="n">num_classes</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        <span class="p">)</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc1</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c_in</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">c_out</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">c_in</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">c_out</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc2</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">c_in</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">c_out</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="k">def</span><span class="w"> </span><span class="nf">make_synthetic</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">n</span><span class="p">,</span> <span class="n">spatial</span><span class="p">,</span> <span class="n">num_classes</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">):</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    <span class="n">k1</span><span class="p">,</span> <span class="n">k2</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    <span class="n">feats</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">k1</span><span class="p">,</span> <span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">spatial</span><span class="p">))</span> <span class="o">*</span> <span class="mf">0.3</span>        <span class="c1"># small-norm Euclidean features</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>    <span class="n">time</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">feats</span><span class="o">**</span><span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">+</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">time</span><span class="p">,</span> <span class="n">feats</span><span class="p">],</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>              <span class="c1"># constraint projection -&gt; ambient</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">k2</span><span class="p">,</span> <span class="p">(</span><span class="n">spatial</span><span class="p">,</span> <span class="n">num_classes</span><span class="p">))</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>    <span class="n">y</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">feats</span> <span class="o">@</span> <span class="n">w</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>    <span class="k">return</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a><span class="c1"># Setup</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a><span class="n">spatial</span><span class="p">,</span> <span class="n">ambient</span><span class="p">,</span> <span class="n">num_classes</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">33</span><span class="p">,</span> <span class="mi">10</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a><span class="n">rngs</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a><span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="o">=</span> <span class="n">make_synthetic</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">PRNGKey</span><span class="p">(</span><span class="mi">42</span><span class="p">),</span> <span class="n">n</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span> <span class="n">spatial</span><span class="o">=</span><span class="n">spatial</span><span class="p">,</span> <span class="n">num_classes</span><span class="o">=</span><span class="n">num_classes</span><span class="p">)</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a><span class="n">model</span> <span class="o">=</span> <span class="n">HTCClassifier</span><span class="p">(</span><span class="n">ambient</span><span class="o">=</span><span class="n">ambient</span><span class="p">,</span> <span class="n">num_classes</span><span class="o">=</span><span class="n">num_classes</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>
+</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a>
+</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a><span class="k">def</span><span class="w"> </span><span class="nf">loss_fn</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
+</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a>    <span class="k">return</span> <span class="n">optax</span><span class="o">.</span><span class="n">softmax_cross_entropy_with_integer_labels</span><span class="p">(</span><span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">y</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>
+</span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a>
+</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a><span class="nd">@nnx</span><span class="o">.</span><span class="n">jit</span>
+</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a><span class="k">def</span><span class="w"> </span><span class="nf">train_step</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
+</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>    <span class="n">loss</span><span class="p">,</span> <span class="n">grads</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">value_and_grad</span><span class="p">(</span><span class="n">loss_fn</span><span class="p">)(</span><span class="n">model</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a>    <span class="n">optimizer</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">grads</span><span class="p">)</span>
+</span><span id="__span-0-55"><a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a>    <span class="k">return</span> <span class="n">loss</span>
+</span><span id="__span-0-56"><a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a>
+</span><span id="__span-0-57"><a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a>
+</span><span id="__span-0-58"><a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a><span class="k">for</span> <span class="n">step</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">200</span><span class="p">):</span>
+</span><span id="__span-0-59"><a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a>    <span class="n">loss</span> <span class="o">=</span> <span class="n">train_step</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+</span><span id="__span-0-60"><a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a>    <span class="k">if</span> <span class="n">step</span> <span class="o">%</span> <span class="mi">40</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;step </span><span class="si">{</span><span class="n">step</span><span class="si">:</span><span class="s2">3d</span><span class="si">}</span><span class="s2">: loss = </span><span class="si">{</span><span class="n">loss</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Two things worth pointing out:</p>
 <ul>
-<li>Complete training loops</li>
-<li>Loss functions</li>
-<li>Validation strategies</li>
-<li>Integration with Optax</li>
-<li>Multi-GPU training</li>
+<li><strong>Curvature is passed at call time</strong>, not stored on the layer. That's why
+  the <code>__call__</code> signatures take <code>c_in</code> / <code>c_out</code> (or <code>c</code>).</li>
+<li><strong>Inputs are constructed as ambient points</strong> via the constraint projection
+  (<code>x_0 = sqrt(||spatial||^2 + 1/c)</code>). This is Pattern B from the
+  <a href="../manifolds/#going-euclidean-manifold">Manifolds guide</a> — appropriate for
+  inputs that aren't guaranteed small-norm. Use <code>expmap_0</code> instead when your
+  features come from a small-norm Euclidean embedding.</li>
 </ul>
-<p>[Content coming soon]</p>
+<h2 id="benchmark-map">Benchmark Map<a class="headerlink" href="#benchmark-map" title="Permanent link">&para;</a></h2>
+<p>For end-to-end examples on real data, the benchmarks in <code>benchmarks/</code> are the
+authoritative reference. Each file is a self-contained training script.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What it demonstrates</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bench_mnist_hyperboloid.py</code></td>
+<td>Hyperboloid CNN — both <code>FHCNNHybrid</code> (Euclidean stem → <code>expmap_0</code> → hyperbolic head) and <code>FullyHyperbolicCNN_*</code> (constraint projection at input, hyperbolic throughout)</td>
+</tr>
+<tr>
+<td><code>bench_mnist_poincare.py</code></td>
+<td>Poincaré CNN with per-layer learnable curvature at <code>init_c=0.1</code> (van Spengler 2023 recipe)</td>
+</tr>
+<tr>
+<td><code>bench_mnist_pv.py</code></td>
+<td>PV CNN — unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> training with no projection step</td>
+</tr>
+<tr>
+<td><code>bench_shakespeare_attention.py</code></td>
+<td>Hyperbolic transformer (causal attention) with all four variants: Euclidean baseline + softmax / full / linear hyperbolic attention</td>
+</tr>
+</tbody>
+</table>
+<p>The micro-benchmarks (<code>bench_manifolds.py</code>, <code>bench_nn_layers.py</code>) test
+per-operation performance, not training workflows.</p>
+<h2 id="hyperparameters-that-actually-matter">Hyperparameters That Actually Matter<a class="headerlink" href="#hyperparameters-that-actually-matter" title="Permanent link">&para;</a></h2>
+<p>Most defaults from Euclidean training transfer. The exceptions:</p>
+<table>
+<thead>
+<tr>
+<th>Hyperparameter</th>
+<th>Recommendation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Learning rate</strong></td>
+<td>Adam <code>1e-3</code> works as a starting point for HTC / HCat / PP / PV. For deep Poincaré nets at <code>c=0.1</code>, try <code>5e-4</code>–<code>1e-3</code></td>
+</tr>
+<tr>
+<td><strong>Gradient clipping</strong></td>
+<td>Norm-clip at <code>1.0</code> is a safe default; not strictly required for most setups</td>
+</tr>
+<tr>
+<td><strong>Curvature init</strong></td>
+<td>Hyperboloid: <code>c=1.0</code>. PV: <code>c=1.0</code>. Poincaré (deep nets): <code>c=0.1</code> with <code>learnable=True</code> per layer</td>
+</tr>
+<tr>
+<td><strong>Float precision</strong></td>
+<td><code>float32</code> is fine for Hyperboloid and PV at modest depths. Use <code>Poincare(dtype=jnp.float64)</code> for high curvature, deep nets, or boundary-near training. See <a href="../numerical-stability/">Numerical Stability</a></td>
+</tr>
+<tr>
+<td><strong>Layer init</strong></td>
+<td>Keep each family's default (HTC uses small uniform, PP uses scaled normal, etc.). Standard He/Xavier is too large for hyperbolic layers — see the <a href="../nn-layers/#initialization-scales">NN Layers guide</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="common-training-failures">Common Training Failures<a class="headerlink" href="#common-training-failures" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NaN loss in the first step</td>
+<td>Init too large, or <code>version_idx</code> left dynamic under JIT</td>
+<td>Verify per-family init defaults; bind <code>version_idx</code> with <code>functools.partial</code> before JIT</td>
+</tr>
+<tr>
+<td>Stuck at random-chance accuracy (Poincaré)</td>
+<td>Curvature too high — features hit the boundary where the conformal factor collapses</td>
+<td>Set <code>Poincare(c=0.1, learnable=True)</code>, ideally per layer</td>
+</tr>
+<tr>
+<td>Loss explodes after some warmup (Hyperboloid float32)</td>
+<td>Lorentz-constraint drift accumulated past the layer's tolerance</td>
+<td>Periodically call <code>manifold.proj(x, c)</code> between blocks, or switch to float64</td>
+</tr>
+<tr>
+<td>Loss is decreasing on training data but eval is wild</td>
+<td>Float precision mismatch between train and eval</td>
+<td>Make sure both code paths use the same dtype on inputs and manifold</td>
+</tr>
+<tr>
+<td>Using <code>riemannian_adam</code> for <code>HTC</code> / <code>FGG</code> / <code>PP</code> / <code>PV</code> layers</td>
+<td>Wrong optimizer for Euclidean-weighted layers</td>
+<td>Switch to <code>optax.adam</code> — see <a href="../optimizers/">Optimizers Guide</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><a href="../nn-layers/">NN Layers Guide</a></strong> — choosing layers, composition patterns, channel conventions.</li>
+<li><strong><a href="../optimizers/">Optimizers Guide</a></strong> — when (rarely) you need Riemannian
+  optimization.</li>
+<li><strong><a href="../numerical-stability/">Numerical Stability Guide</a></strong> — float32 vs.
+  float64, clamping strategies.</li>
+<li><strong><a href="../manifolds/">Manifolds Guide</a></strong> — manifold operations, curvature
+  workflows, common pitfalls.</li>
+<li><strong><code>benchmarks/</code></strong> — full training scripts for hyperboloid CNN, Poincaré CNN,
+  PV CNN, and hyperbolic transformer on MNIST / Shakespeare.</li>
+</ul>
 
 
 

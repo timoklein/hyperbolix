@@ -315,25 +315,6 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../mathematical-background/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Mathematical Background
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
       <a href="../../developer-guide/" class="md-tabs__link">
         
   
@@ -617,10 +598,276 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#choosing-a-layer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topics
+        Choosing a Layer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Choosing a Layer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#linear-fully-connected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Linear / Fully Connected
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#convolutional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convolutional
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#regression-classification-head" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regression / Classification Head
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#attention-normalization-positional-encoding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attention, Normalization, Positional Encoding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-families-at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer Families at a Glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#channel-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channel Conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#initialization-scales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Initialization Scales
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-euclidean-hyperbolic-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Euclidean ↔ Hyperbolic Boundary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Euclidean ↔ Hyperbolic Boundary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#proper-velocity-when-to-use-expmap_0-and-when-not-to" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proper Velocity: when to use expmap_0 (and when not to)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#composition-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Composition Patterns
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Composition Patterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pattern-1-htc-hyperboloid-classifier-recommended-starter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 1: HTC hyperboloid classifier (recommended starter)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-2-hybrid-cnn-backbone-poincare-head" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 2: Hybrid CNN backbone + Poincaré head
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-3-hyperbolic-transformer-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 3: Hyperbolic transformer block
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-4-per-layer-learnable-curvature-deep-poincare-nets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 4: Per-layer learnable curvature (deep Poincaré nets)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Pitfalls
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common Pitfalls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-wrong-channel-count-ambient-vs-spatial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Wrong channel count (ambient vs. spatial)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-reaching-for-a-riemannian-optimizer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Reaching for a Riemannian optimizer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-forgetting-version_idx-is-static" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Forgetting version_idx is static
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-mixing-layer-families-incoherently" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Mixing layer families incoherently
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-using-a-euclidean-dropout-layernorm-on-hyperboloid-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Using a Euclidean Dropout / LayerNorm on hyperboloid points
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-forgetting-to-project-the-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Forgetting to project the input
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
       
     </span>
   </a>
@@ -963,33 +1210,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../../mathematical-background/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Mathematical Background
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../../developer-guide/" class="md-nav__link">
         
   
@@ -1064,10 +1284,276 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#choosing-a-layer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topics
+        Choosing a Layer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Choosing a Layer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#linear-fully-connected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Linear / Fully Connected
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#convolutional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convolutional
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#regression-classification-head" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regression / Classification Head
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#attention-normalization-positional-encoding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attention, Normalization, Positional Encoding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-families-at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer Families at a Glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#channel-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channel Conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#initialization-scales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Initialization Scales
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-euclidean-hyperbolic-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Euclidean ↔ Hyperbolic Boundary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Euclidean ↔ Hyperbolic Boundary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#proper-velocity-when-to-use-expmap_0-and-when-not-to" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proper Velocity: when to use expmap_0 (and when not to)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#composition-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Composition Patterns
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Composition Patterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pattern-1-htc-hyperboloid-classifier-recommended-starter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 1: HTC hyperboloid classifier (recommended starter)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-2-hybrid-cnn-backbone-poincare-head" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 2: Hybrid CNN backbone + Poincaré head
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-3-hyperbolic-transformer-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 3: Hyperbolic transformer block
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pattern-4-per-layer-learnable-curvature-deep-poincare-nets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern 4: Per-layer learnable curvature (deep Poincaré nets)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Pitfalls
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common Pitfalls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-wrong-channel-count-ambient-vs-spatial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Wrong channel count (ambient vs. spatial)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-reaching-for-a-riemannian-optimizer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Reaching for a Riemannian optimizer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-forgetting-version_idx-is-static" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Forgetting version_idx is static
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-mixing-layer-families-incoherently" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Mixing layer families incoherently
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-using-a-euclidean-dropout-layernorm-on-hyperboloid-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Using a Euclidean Dropout / LayerNorm on hyperboloid points
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-forgetting-to-project-the-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Forgetting to project the input
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
       
     </span>
   </a>
@@ -1095,20 +1581,513 @@
 
 
 <h1 id="neural-network-layers-user-guide">Neural Network Layers User Guide<a class="headerlink" href="#neural-network-layers-user-guide" title="Permanent link">&para;</a></h1>
-<p>Guide to building hyperbolic neural networks.</p>
-<div class="admonition note">
-<p class="admonition-title">Work in Progress</p>
-<p>This page is under construction. See the <a href="../../api-reference/nn-layers/">API Reference</a> for complete documentation.</p>
+<p>Synthesis content for building hyperbolic networks — choosing among the 20+
+layers, the boundary between Euclidean and hyperbolic computation, and the
+composition patterns that aren't obvious from any single layer's docstring.</p>
+<p>For per-layer signatures, init defaults, and call semantics, see the
+<a href="../../api-reference/nn-layers/">NN Layers API reference</a>.</p>
+<h2 id="choosing-a-layer">Choosing a Layer<a class="headerlink" href="#choosing-a-layer" title="Permanent link">&para;</a></h2>
+<p>Three axes matter, in this order: <strong>which manifold</strong>, <strong>fully-hyperbolic vs.
+hybrid</strong>, and <strong>which speed/expressiveness trade-off</strong> within that family. The
+tables below collapse this into per-task decisions.</p>
+<h3 id="linear-fully-connected">Linear / Fully Connected<a class="headerlink" href="#linear-fully-connected" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Manifold</th>
+<th>When to pick</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HTCLinear</code></td>
+<td>Hyperboloid</td>
+<td><strong>Default</strong> for hyperboloid FC — simple, robust, just works. Also supports cross-curvature (<code>c_in != c_out</code>) for Hypformer blocks</td>
+</tr>
+<tr>
+<td><code>FGGLinear</code></td>
+<td>Hyperboloid</td>
+<td>Advanced — ~3× faster but trickier (init-sensitive, requires the <code>0.5·eye</code> default and <code>lorentz_kaiming</code> to converge). Use once you have a working HTC baseline</td>
+</tr>
+<tr>
+<td><code>HypLinearHyperboloidPP</code></td>
+<td>Hyperboloid</td>
+<td>Deep hyperboloid networks following the HNN++ formulation</td>
+</tr>
+<tr>
+<td><code>HypLinearPoincarePP</code></td>
+<td>Poincaré</td>
+<td><strong>Default</strong> for Poincaré FC — Euclidean-parameterized weights, works with <code>optax.adam</code></td>
+</tr>
+<tr>
+<td><code>HypLinearPoincare</code></td>
+<td>Poincaré</td>
+<td>Legacy Ganea 2018 — manifold-valued weights, requires <code>riemannian_adam</code>. Prefer <code>PP</code></td>
+</tr>
+<tr>
+<td><code>HypLinearPV</code></td>
+<td>Proper Velocity</td>
+<td>PV networks — Euclidean weights, He init</td>
+</tr>
+</tbody>
+</table>
+<h3 id="convolutional">Convolutional<a class="headerlink" href="#convolutional" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Manifold</th>
+<th>When to pick</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HypConv2DHyperboloid</code></td>
+<td>Hyperboloid</td>
+<td><strong>Default</strong> for hyperboloid conv — well-established HCat formulation, robust across configurations</td>
+</tr>
+<tr>
+<td><code>HypConv2DHyperboloidPP</code> / <code>HypConv2DHyperboloidFHNN</code></td>
+<td>Hyperboloid</td>
+<td>Variants of the HCat conv following specific paper formulations (HNN++, FHNN); reach for these when reproducing those papers</td>
+</tr>
+<tr>
+<td><code>FGGConv2D</code></td>
+<td>Hyperboloid</td>
+<td>Advanced — HCat expressiveness with FGG's speed, but inherits FGG's init sensitivity</td>
+</tr>
+<tr>
+<td><code>HypConv2DPoincare</code></td>
+<td>Poincaré</td>
+<td>Standard for Poincaré CNNs (no faster variant exists)</td>
+</tr>
+<tr>
+<td><code>HypConv2DPV</code></td>
+<td>Proper Velocity</td>
+<td>PV CNNs — raw Euclidean patch concatenation, no β-scaling</td>
+</tr>
+<tr>
+<td><code>LorentzConv2D</code></td>
+<td>Hyperboloid</td>
+<td>Legacy / benchmarking only — HRC-based hack kept for comparing against older code. Not recommended for new work</td>
+</tr>
+</tbody>
+</table>
+<h3 id="regression-classification-head">Regression / Classification Head<a class="headerlink" href="#regression-classification-head" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>When to pick</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HypRegressionHyperboloid</code></td>
+<td><strong>Default</strong> for hyperboloid classification — well-established MLR over Lorentzian hyperplanes, just works</td>
+</tr>
+<tr>
+<td><code>FGGLorentzMLR</code></td>
+<td>FGG-style MLR head — pair with FGG linear stack if you've already adopted the FGG family</td>
+</tr>
+<tr>
+<td><code>HypRegressionPoincarePP</code></td>
+<td><strong>Default</strong> for Poincaré classification — HNN++ formulation</td>
+</tr>
+<tr>
+<td><code>HypRegressionPV</code></td>
+<td>PV classification head — small <code>std=1e-2</code> init</td>
+</tr>
+<tr>
+<td><code>HypRegressionPoincare</code></td>
+<td>Legacy Ganea — prefer <code>PP</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="attention-normalization-positional-encoding">Attention, Normalization, Positional Encoding<a class="headerlink" href="#attention-normalization-positional-encoding" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Use case</th>
+<th>Layer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Long sequences, linear-complexity attention</td>
+<td><code>HyperbolicLinearAttention</code> (O(N))</td>
+</tr>
+<tr>
+<td>Most geometrically faithful attention</td>
+<td><code>HyperbolicFullAttention</code> (O(N²))</td>
+</tr>
+<tr>
+<td>Softmax attention with hyperbolic queries/keys</td>
+<td><code>HyperbolicSoftmaxAttention</code></td>
+</tr>
+<tr>
+<td>Normalization between hyperboloid layers</td>
+<td><code>HRCLayerNorm</code>, <code>HRCRMSNorm</code>, <code>HRCBatchNorm</code></td>
+</tr>
+<tr>
+<td>Normalization between Poincaré conv layers</td>
+<td><code>PoincareBatchNorm2D</code></td>
+</tr>
+<tr>
+<td>Dropout on hyperboloid features</td>
+<td><code>HRCDropout</code></td>
+</tr>
+<tr>
+<td>Rotary positional encoding (hyperbolic)</td>
+<td><code>HyperbolicRoPE</code> / <code>hope</code></td>
+</tr>
+<tr>
+<td>Learnable positional encoding (Hypformer-style)</td>
+<td><code>HypformerPositionalEncoding</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">Single best default</p>
+<p>For a new hyperbolic classifier:
+<code>HTCLinear</code> → <code>HRCLayerNorm</code> → <code>HTCLinear</code> → <code>HypRegressionHyperboloid</code> on
+Hyperboloid at <code>c=1.0</code>. The HTC/HRC family is the most robust starting
+point — simple, well-tuned defaults, and converges across a wide range of
+configurations. Move to FGG only if you need the speedup and are willing
+to babysit the init.</p>
 </div>
-<h2 id="topics">Topics<a class="headerlink" href="#topics" title="Permanent link">&para;</a></h2>
+<h2 id="layer-families-at-a-glance">Layer Families at a Glance<a class="headerlink" href="#layer-families-at-a-glance" title="Permanent link">&para;</a></h2>
+<p>The four families differ in what space the <em>weights</em> live in, which controls
+optimizer choice:</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Weight space</th>
+<th>Optimizer</th>
+<th>Examples</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>HRC / HTC</strong> (Hypformer)</td>
+<td>Euclidean</td>
+<td><code>optax.adam</code></td>
+<td><code>HTCLinear</code>, <code>HRC*</code>, normalization</td>
+<td><strong>Robust starting family</strong></td>
+</tr>
+<tr>
+<td><strong>HCat</strong> (Bdeir 2023)</td>
+<td>Euclidean</td>
+<td><code>optax.adam</code></td>
+<td><code>HypConv2DHyperboloid*</code></td>
+<td><strong>Robust conv family</strong></td>
+</tr>
+<tr>
+<td><strong>HNN++</strong> (Shimizu 2020 / van Spengler 2023)</td>
+<td>Euclidean</td>
+<td><code>optax.adam</code></td>
+<td><code>*PP</code> variants on both manifolds</td>
+<td>Standard for Poincaré</td>
+</tr>
+<tr>
+<td><strong>PV</strong> (Chen et al. 2026)</td>
+<td>Euclidean</td>
+<td><code>optax.adam</code></td>
+<td><code>HypLinearPV</code>, <code>HypConv2DPV</code></td>
+<td>Use when you want PV's unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span></td>
+</tr>
+<tr>
+<td><strong>FGG</strong> (Klis et al. 2026)</td>
+<td>Euclidean</td>
+<td><code>optax.adam</code></td>
+<td><code>FGGLinear</code>, <code>FGGConv2D</code>, <code>FGGLorentzMLR</code></td>
+<td>Advanced — fastest, but init-sensitive</td>
+</tr>
+<tr>
+<td><strong>Ganea (legacy)</strong></td>
+<td>On Poincaré</td>
+<td><code>riemannian_adam</code></td>
+<td><code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code></td>
+<td>Legacy — prefer <code>PP</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Bottom line:</strong> every modern layer parameterizes weights in Euclidean space.
+Standard <code>optax.adam</code> works. See the <a href="../optimizers/">Riemannian Optimizers guide</a>
+<em>(WIP)</em> for the rare cases where manifold-valued parameters appear.</p>
+<h2 id="channel-conventions">Channel Conventions<a class="headerlink" href="#channel-conventions" title="Permanent link">&para;</a></h2>
+<p>The single most common bug in layer construction is passing the wrong channel
+count — ambient (d+1) vs. spatial (d). The full table lives in the
+<a href="../manifolds/#convention-cheat-sheet">Manifolds guide</a>; the short form:</p>
 <ul>
-<li>Layer architecture patterns</li>
-<li>Hyperbolic convolutions (HCat operation)</li>
-<li>Activation functions</li>
-<li>Model composition</li>
-<li>Best practices</li>
+<li><strong>Hyperboloid layers</strong> (<code>FGGLinear</code>, <code>LorentzConv2D</code>, <code>HTCLinear</code>, <code>HypLinearHyperboloid*</code>) take <strong>ambient (d+1)</strong>.</li>
+<li><strong>HRC normalization</strong> (<code>HRCLayerNorm</code>, <code>HRCBatchNorm</code>, etc.) takes <strong>spatial (d)</strong>.</li>
+<li><strong>Poincaré and PV layers</strong> take <strong>spatial (d)</strong> (no time component).</li>
 </ul>
-<p>[Content coming soon]</p>
+<p>Example: a hyperboloid network with 32 latent spatial dims:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">fc1</span> <span class="o">=</span> <span class="n">FGGLinear</span><span class="p">(</span><span class="n">in_features</span><span class="o">=</span><span class="mi">33</span><span class="p">,</span> <span class="n">out_features</span><span class="o">=</span><span class="mi">33</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>   <span class="c1"># ambient</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">norm</span> <span class="o">=</span> <span class="n">HRCLayerNorm</span><span class="p">(</span><span class="n">num_features</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>               <span class="c1"># spatial</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">fc2</span> <span class="o">=</span> <span class="n">FGGLinear</span><span class="p">(</span><span class="n">in_features</span><span class="o">=</span><span class="mi">33</span><span class="p">,</span> <span class="n">out_features</span><span class="o">=</span><span class="mi">33</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>   <span class="c1"># ambient</span>
+</span></code></pre></div>
+<h2 id="initialization-scales">Initialization Scales<a class="headerlink" href="#initialization-scales" title="Permanent link">&para;</a></h2>
+<p>Standard Euclidean inits (He, Xavier) are <strong>too large for hyperbolic layers</strong>:
+they push the first-layer output toward the Poincaré boundary or far up the
+hyperboloid, where distances and gradients explode. Each family ships with a
+hyperbolic-aware default — keep it unless you have a reason to change it.</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Default init</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FGGLinear</code></td>
+<td><code>lorentz_kaiming</code>, <code>std=sqrt(1/in_features)</code> (ambient); default initial weight is <code>0.5·eye</code>, bias <code>0.5</code></td>
+<td>Keeps the spacelike V matrix near identity; preserves initial point magnitudes</td>
+</tr>
+<tr>
+<td><code>HypLinear*PP</code></td>
+<td>Standard normal <code>std=1.0</code> (Shimizu 2020 reference)</td>
+<td>Tuned empirically for HNN++ formulation</td>
+</tr>
+<tr>
+<td><code>HypLinearPoincare*</code></td>
+<td>Scaled normal <code>std=(2·in·out)^{-0.5}</code> (van Spengler 2023)</td>
+<td>Keeps row norms small so outputs stay away from the boundary</td>
+</tr>
+<tr>
+<td><code>HypLinearHyperboloidFHCNN</code>, <code>HTCLinear</code></td>
+<td>Small uniform <code>U(-0.02, 0.02)</code></td>
+<td>Keeps points near the apex <code>[1/sqrt(c), 0, …]</code> initially</td>
+</tr>
+<tr>
+<td><code>HypLinear*PV</code></td>
+<td>He init</td>
+<td>PV is unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span>; standard scales work</td>
+</tr>
+<tr>
+<td><code>HypRegressionPV</code></td>
+<td><code>std=1e-2</code></td>
+<td>MLR head: small scores at init</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">Don't override init with He/Xavier on hyperbolic layers</p>
+<p>If you wrap a hyperbolic layer in code that auto-applies a default Flax
+init, you will see <code>NaN</code> losses within the first few steps. The
+constructor's <code>kernel_init</code> argument exists for tuning, not for swapping
+in a Euclidean default.</p>
+</div>
+<h2 id="the-euclidean-hyperbolic-boundary">The Euclidean ↔ Hyperbolic Boundary<a class="headerlink" href="#the-euclidean-hyperbolic-boundary" title="Permanent link">&para;</a></h2>
+<p>Most networks aren't <em>fully</em> hyperbolic. The question is <strong>where you cross the
+boundary</strong> between Euclidean and hyperbolic computation:</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Boundary location</th>
+<th>Typical use case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Fully hyperbolic</strong></td>
+<td>Inputs are already on-manifold (e.g. embedding table on Poincaré)</td>
+<td>Knowledge graph embeddings, hierarchy learning</td>
+</tr>
+<tr>
+<td><strong>Hyperbolic head</strong></td>
+<td>After a Euclidean backbone (CNN/Transformer) → <code>expmap_0</code> or constraint projection → hyperbolic classifier</td>
+<td>ImageNet-scale CNNs with hyperbolic MLR (van Spengler 2023)</td>
+</tr>
+<tr>
+<td><strong>Hyperbolic backbone</strong></td>
+<td>At input via <code>expmap_0</code> per-pixel, then fully-hyperbolic through to a Euclidean logits layer</td>
+<td>FullyHyperbolicCNN on MNIST</td>
+</tr>
+<tr>
+<td><strong>Hybrid (sandwiched)</strong></td>
+<td>Euclidean stem → small Euclidean embed → <code>expmap_0</code> → hyperbolic block → <code>logmap_0</code> → Euclidean head</td>
+<td>When you want hyperbolic geometry only mid-network</td>
+</tr>
+</tbody>
+</table>
+<p>The boundary lift itself is covered in the
+<a href="../manifolds/#going-euclidean-manifold">Manifolds guide</a> (Pattern A vs B).
+For the hybrid case on Hyperboloid, <code>HyperPPFeatureScaling</code> is the canonical
+recipe to prepare Euclidean features before <code>expmap_0</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">HyperPPFeatureScaling</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">scale</span> <span class="o">=</span> <span class="n">HyperPPFeatureScaling</span><span class="p">(</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">dim</span><span class="o">=</span><span class="n">feature_dim</span><span class="p">,</span> <span class="n">manifold_module</span><span class="o">=</span><span class="n">hyperboloid</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">)</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">x_euclidean</span> <span class="o">=</span> <span class="n">scale</span><span class="p">(</span><span class="n">x_euclidean</span><span class="p">)</span>               <span class="c1"># RMSNorm + activation + dim scaling</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">x_manifold</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">v</span><span class="p">:</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">expmap_0</span><span class="p">(</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">v</span><span class="p">]),</span> <span class="n">c</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="p">))(</span><span class="n">x_euclidean</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="proper-velocity-when-to-use-expmap_0-and-when-not-to">Proper Velocity: when to use <code>expmap_0</code> (and when not to)<a class="headerlink" href="#proper-velocity-when-to-use-expmap_0-and-when-not-to" title="Permanent link">&para;</a></h3>
+<p>PV has its own rule because PV points live in unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> —
+there's no "outside the manifold" to project from. Whether you apply
+<code>expmap_0</code> at the boundary depends on the rest of the architecture:</p>
+<table>
+<thead>
+<tr>
+<th>Architecture</th>
+<th>Apply <code>expmap_0</code> at input?</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Fully hyperbolic PV</strong> (PV layers all the way through)</td>
+<td>✅ <strong>Yes</strong>, once at the beginning</td>
+<td>Establishes the proper-velocity coordinate frame; downstream PV layers assume their inputs were lifted from Euclidean tangent vectors</td>
+</tr>
+<tr>
+<td><strong>Hybrid PV</strong> (Euclidean backbone → PV head, or Euclidean ↔ PV alternating)</td>
+<td>❌ <strong>No</strong> — pass Euclidean features directly to PV layers</td>
+<td>The PV layer's metric already accounts for the geometry of its inputs; an explicit <code>expmap_0</code> here is redundant and can hurt training</td>
+</tr>
+</tbody>
+</table>
+<p>In other words: <code>expmap_0</code> is the <strong>once-per-network</strong> entry into the PV
+coordinate frame, not a per-layer adapter. If your network has a Euclidean
+stem feeding a PV classifier, hand the raw Euclidean activations to the PV
+layer; if your entire network is PV, lift once at the input and stay in PV
+coordinates from there on.</p>
+<h2 id="composition-patterns">Composition Patterns<a class="headerlink" href="#composition-patterns" title="Permanent link">&para;</a></h2>
+<h3 id="pattern-1-htc-hyperboloid-classifier-recommended-starter">Pattern 1: HTC hyperboloid classifier (recommended starter)<a class="headerlink" href="#pattern-1-htc-hyperboloid-classifier-recommended-starter" title="Permanent link">&para;</a></h3>
+<p>The HTC/HRC family is the most robust default — well-established, forgiving of
+init, and converges across a wide range of configurations.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">HTCClassifier</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">hidden</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">num_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>        <span class="c1"># in_dim, hidden are AMBIENT (d+1)</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">fc1</span> <span class="o">=</span> <span class="n">HTCLinear</span><span class="p">(</span><span class="n">in_features</span><span class="o">=</span><span class="n">in_dim</span><span class="p">,</span> <span class="n">out_features</span><span class="o">=</span><span class="n">hidden</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">norm</span> <span class="o">=</span> <span class="n">HRCLayerNorm</span><span class="p">(</span><span class="n">num_features</span><span class="o">=</span><span class="n">hidden</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>  <span class="c1"># SPATIAL</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">fc2</span> <span class="o">=</span> <span class="n">HTCLinear</span><span class="p">(</span><span class="n">in_features</span><span class="o">=</span><span class="n">hidden</span><span class="p">,</span> <span class="n">out_features</span><span class="o">=</span><span class="n">hidden</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">head</span> <span class="o">=</span> <span class="n">HypRegressionHyperboloid</span><span class="p">(</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>            <span class="n">manifold_module</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>            <span class="n">in_features</span><span class="o">=</span><span class="n">hidden</span><span class="p">,</span> <span class="n">out_features</span><span class="o">=</span><span class="n">num_classes</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>        <span class="p">)</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x_BAi</span><span class="p">:</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">,</span> <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">:</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc1</span><span class="p">(</span><span class="n">x_BAi</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc2</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># (B, num_classes) Euclidean logits</span>
+</span></code></pre></div>
+<h3 id="pattern-2-hybrid-cnn-backbone-poincare-head">Pattern 2: Hybrid CNN backbone + Poincaré head<a class="headerlink" href="#pattern-2-hybrid-cnn-backbone-poincare-head" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">HybridCNN</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_classes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">stem</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>  <span class="c1"># Euclidean</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">pool</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>               <span class="c1"># GAP</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>              <span class="c1"># per van Spengler</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">head</span> <span class="o">=</span> <span class="n">HypRegressionPoincarePP</span><span class="p">(</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>            <span class="n">manifold_module</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">poincare</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>            <span class="n">in_dim</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">out_dim</span><span class="o">=</span><span class="n">num_classes</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>        <span class="p">)</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">images</span><span class="p">:</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">:</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>        <span class="n">features</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pool</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">relu</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stem</span><span class="p">(</span><span class="n">images</span><span class="p">)))</span>  <span class="c1"># (B, 64) Euclidean</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>        <span class="n">x_poincare</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">poincare</span><span class="o">.</span><span class="n">expmap_0</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">))(</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>            <span class="n">features</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">poincare</span><span class="o">.</span><span class="n">c</span><span class="p">,</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>        <span class="p">)</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="n">x_poincare</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">poincare</span><span class="o">.</span><span class="n">c</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="pattern-3-hyperbolic-transformer-block">Pattern 3: Hyperbolic transformer block<a class="headerlink" href="#pattern-3-hyperbolic-transformer-block" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">HypTransformerBlock</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dim_ambient</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">n_heads</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>        <span class="n">d_spatial</span> <span class="o">=</span> <span class="n">dim_ambient</span> <span class="o">-</span> <span class="mi">1</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">attn_norm</span> <span class="o">=</span> <span class="n">HRCLayerNorm</span><span class="p">(</span><span class="n">num_features</span><span class="o">=</span><span class="n">d_spatial</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">attn</span> <span class="o">=</span> <span class="n">HyperbolicSoftmaxAttention</span><span class="p">(</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>            <span class="n">in_features</span><span class="o">=</span><span class="n">dim_ambient</span><span class="p">,</span> <span class="n">n_heads</span><span class="o">=</span><span class="n">n_heads</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>        <span class="p">)</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">mlp_norm</span> <span class="o">=</span> <span class="n">HRCLayerNorm</span><span class="p">(</span><span class="n">num_features</span><span class="o">=</span><span class="n">d_spatial</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">mlp_in</span> <span class="o">=</span> <span class="n">HTCLinear</span><span class="p">(</span><span class="n">in_features</span><span class="o">=</span><span class="n">dim_ambient</span><span class="p">,</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>                                <span class="n">out_features</span><span class="o">=</span><span class="mi">4</span> <span class="o">*</span> <span class="n">dim_ambient</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">mlp_out</span> <span class="o">=</span> <span class="n">HTCLinear</span><span class="p">(</span><span class="n">in_features</span><span class="o">=</span><span class="mi">4</span> <span class="o">*</span> <span class="n">dim_ambient</span><span class="p">,</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>                                 <span class="n">out_features</span><span class="o">=</span><span class="n">dim_ambient</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x_BLAi</span><span class="p">:</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">,</span> <span class="n">c</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">:</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">attn</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">attn_norm</span><span class="p">(</span><span class="n">x_BLAi</span><span class="p">,</span> <span class="n">c</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>        <span class="n">x_BLAi</span> <span class="o">=</span> <span class="n">lorentz_residual</span><span class="p">(</span><span class="n">x_BLAi</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>              <span class="c1"># Möbius-style residual</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mlp_out</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mlp_in</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mlp_norm</span><span class="p">(</span><span class="n">x_BLAi</span><span class="p">,</span> <span class="n">c</span><span class="p">),</span> <span class="n">c</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>        <span class="k">return</span> <span class="n">lorentz_residual</span><span class="p">(</span><span class="n">x_BLAi</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="pattern-4-per-layer-learnable-curvature-deep-poincare-nets">Pattern 4: Per-layer learnable curvature (deep Poincaré nets)<a class="headerlink" href="#pattern-4-per-layer-learnable-curvature-deep-poincare-nets" title="Permanent link">&para;</a></h3>
+<p>When stacking many Poincaré layers, give each block its own learnable curvature
+to avoid the conformal-factor collapse near the boundary:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">HypResBlock</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">m1</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">m2</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">conv1</span> <span class="o">=</span> <span class="n">HypConv2DPoincare</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">m1</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>                                       <span class="n">kernel_size</span><span class="o">=</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bn1</span> <span class="o">=</span> <span class="n">PoincareBatchNorm2D</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">m1</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">conv2</span> <span class="o">=</span> <span class="n">HypConv2DPoincare</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">m2</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>                                       <span class="n">kernel_size</span><span class="o">=</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bn2</span> <span class="o">=</span> <span class="n">PoincareBatchNorm2D</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">m2</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="common-pitfalls">Common Pitfalls<a class="headerlink" href="#common-pitfalls" title="Permanent link">&para;</a></h2>
+<h3 id="1-wrong-channel-count-ambient-vs-spatial">1. Wrong channel count (ambient vs. spatial)<a class="headerlink" href="#1-wrong-channel-count-ambient-vs-spatial" title="Permanent link">&para;</a></h3>
+<p>By far the most common construction bug. If a hyperboloid layer raises an
+incomprehensible shape error during the first call, check whether you passed
+spatial dim (<code>d</code>) where it wanted ambient (<code>d+1</code>), or vice versa.</p>
+<h3 id="2-reaching-for-a-riemannian-optimizer">2. Reaching for a Riemannian optimizer<a class="headerlink" href="#2-reaching-for-a-riemannian-optimizer" title="Permanent link">&para;</a></h3>
+<p>Modern layers don't need one. The Euclidean defaults — <code>optax.adam</code>,
+<code>optax.adamw</code> — work for FGG, HNN++, HRC/HTC, and PV layers. Use
+<code>riemannian_adam</code> only when parameters live directly on a manifold (typically a
+hyperbolic embedding table); see the <a href="../optimizers/">Optimizers guide</a> <em>(WIP)</em>.</p>
+<h3 id="3-forgetting-version_idx-is-static">3. Forgetting <code>version_idx</code> is static<a class="headerlink" href="#3-forgetting-version_idx-is-static" title="Permanent link">&para;</a></h3>
+<p>Several Poincaré ops (<code>dist</code>, <code>expmap</code>, <code>logmap</code>) take a <code>version_idx</code> selecting
+between multiple formulations. Under JIT, this argument must be <strong>static</strong>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># ❌ Traces a new graph on every call</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">jit_fn</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">idx</span><span class="p">))</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># ✅ Bind the variant before JIT-ing</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="n">dist_v0</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">jit_fn</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">dist_v0</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="4-mixing-layer-families-incoherently">4. Mixing layer families incoherently<a class="headerlink" href="#4-mixing-layer-families-incoherently" title="Permanent link">&para;</a></h3>
+<p>Stacking <code>HypLinearPoincare</code> (manifold-valued weights, expects
+<code>riemannian_adam</code>) on top of <code>HypLinearPoincarePP</code> (Euclidean weights, expects
+<code>optax.adam</code>) gives you a model where one optimizer is wrong for half the
+parameters. Pick one family per network and stay in it; <code>mark_manifold_param</code>
+lets the Riemannian optimizer auto-dispatch correctly if you genuinely need a
+mix, but the simpler fix is to migrate the legacy layers to their <code>PP</code>
+equivalents.</p>
+<h3 id="5-using-a-euclidean-dropout-layernorm-on-hyperboloid-points">5. Using a Euclidean <code>Dropout</code> / <code>LayerNorm</code> on hyperboloid points<a class="headerlink" href="#5-using-a-euclidean-dropout-layernorm-on-hyperboloid-points" title="Permanent link">&para;</a></h3>
+<p>A point on the hyperboloid satisfies <span class="arithmatex">\(\langle x, x \rangle_L = -1/c\)</span> —
+elementwise zeroing or affine normalization breaks the constraint and produces
+silent NaNs downstream. Use the manifold-aware variants: <code>HRCDropout</code>,
+<code>HRCLayerNorm</code>, <code>HRCRMSNorm</code>, <code>HRCBatchNorm</code>. (Poincaré has its own
+<code>PoincareBatchNorm2D</code> for conv stacks.)</p>
+<h3 id="6-forgetting-to-project-the-input">6. Forgetting to project the input<a class="headerlink" href="#6-forgetting-to-project-the-input" title="Permanent link">&para;</a></h3>
+<p>If you build a hyperboloid point by hand (e.g. constraint projection from a
+Euclidean backbone) and feed it to a hyperbolic layer, float32 drift can violate
+the Lorentz constraint after a few training steps. Cheap insurance:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">x_BAi</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="o">.</span><span class="n">proj</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">))(</span><span class="n">x_BAi</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># ... feed into hyperbolic layers</span>
+</span></code></pre></div>
+<p><code>proj</code> is idempotent on valid points and adds negligible cost.</p>
+<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><a href="../../api-reference/nn-layers/">API Reference: NN Layers</a></strong> — full constructor and call signatures</li>
+<li><strong><a href="../manifolds/">Manifolds Guide</a></strong> — convention cheat-sheet, Euclidean→manifold lifts, isometry mappings</li>
+<li><strong><a href="../numerical-stability/">Numerical Stability Guide</a></strong> — when to use float64, clamping, safe norms</li>
+<li><strong><a href="../optimizers/">Riemannian Optimizers Guide</a></strong> <em>(WIP)</em> — when (rarely) you need Riemannian optimization</li>
+</ul>
 
 
 

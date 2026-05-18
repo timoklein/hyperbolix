@@ -315,25 +315,6 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../mathematical-background/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Mathematical Background
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
       <a href="../../developer-guide/" class="md-tabs__link">
         
   
@@ -589,10 +570,176 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#choosing-a-manifold" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topics
+        Choosing a Manifold
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convention-cheat-sheet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convention Cheat-Sheet
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-with-curvature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working with Curvature
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Working with Curvature">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#static-vs-learnable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Static vs. learnable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-c10-works-and-when-it-doesnt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When c=1.0 works and when it doesn't
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#curvature-in-productmanifold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Curvature in ProductManifold
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#going-euclidean-manifold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Going Euclidean → Manifold
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hyperboloid-poincare-use-the-isometry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hyperboloid ↔ Poincaré: Use the Isometry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Pitfalls
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common Pitfalls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-raw-jnpacosh-jnpatanh-instead-of-the-hyperbolix-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Raw jnp.acosh / jnp.atanh instead of the hyperbolix versions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-re-implementing-distance-from-scratch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Re-implementing distance from scratch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-riemannian-optimizer-for-layers-that-dont-need-one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Riemannian optimizer for layers that don't need one
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-skipping-proj-after-manual-point-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Skipping proj after manual point construction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-picking-a-slow-layer-when-a-fast-equivalent-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Picking a slow layer when a fast equivalent exists
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
       
     </span>
   </a>
@@ -963,33 +1110,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../../mathematical-background/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Mathematical Background
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../../developer-guide/" class="md-nav__link">
         
   
@@ -1064,10 +1184,176 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#choosing-a-manifold" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topics
+        Choosing a Manifold
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convention-cheat-sheet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convention Cheat-Sheet
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-with-curvature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working with Curvature
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Working with Curvature">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#static-vs-learnable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Static vs. learnable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-c10-works-and-when-it-doesnt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When c=1.0 works and when it doesn't
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#curvature-in-productmanifold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Curvature in ProductManifold
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#going-euclidean-manifold" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Going Euclidean → Manifold
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hyperboloid-poincare-use-the-isometry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hyperboloid ↔ Poincaré: Use the Isometry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Pitfalls
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common Pitfalls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-raw-jnpacosh-jnpatanh-instead-of-the-hyperbolix-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Raw jnp.acosh / jnp.atanh instead of the hyperbolix versions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-re-implementing-distance-from-scratch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Re-implementing distance from scratch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-riemannian-optimizer-for-layers-that-dont-need-one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Riemannian optimizer for layers that don't need one
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-skipping-proj-after-manual-point-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Skipping proj after manual point construction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-picking-a-slow-layer-when-a-fast-equivalent-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Picking a slow layer when a fast equivalent exists
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See Also
       
     </span>
   </a>
@@ -1095,20 +1381,336 @@
 
 
 <h1 id="manifolds-user-guide">Manifolds User Guide<a class="headerlink" href="#manifolds-user-guide" title="Permanent link">&para;</a></h1>
-<p>Detailed guide on working with manifolds in Hyperbolix.</p>
-<div class="admonition note">
-<p class="admonition-title">Work in Progress</p>
-<p>This page is under construction. See the <a href="../../api-reference/manifolds/">API Reference</a> for complete documentation.</p>
+<p>Synthesis content for working with manifolds across the library — choosing a
+manifold, conventions you have to get right, curvature workflows, and the
+patterns that aren't obvious from any single docstring.</p>
+<p>For per-method signatures and full API surface, see the
+<a href="../../api-reference/manifolds/">Manifolds API reference</a>.</p>
+<h2 id="choosing-a-manifold">Choosing a Manifold<a class="headerlink" href="#choosing-a-manifold" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Use case</th>
+<th>Recommended manifold</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tree / hierarchy with bounded depth</td>
+<td><code>Poincare</code> (small <code>c</code>)</td>
+<td>Bounded ball matches bounded data; conformal model is intuitive for visualization</td>
+</tr>
+<tr>
+<td>Continuous-depth or unbounded radii</td>
+<td><code>Hyperboloid</code> or <code>ProperVelocity</code></td>
+<td>No boundary collapse for large norms</td>
+</tr>
+<tr>
+<td>Heterogeneous structure (mixed tree + cycles + flat)</td>
+<td><code>ProductManifold</code></td>
+<td>Mixed curvatures fit mixed-structure data (Gu et al. 2019)</td>
+</tr>
+<tr>
+<td>Cross-curvature transformations (<code>c_in != c_out</code>)</td>
+<td><code>Hyperboloid</code> + <code>HTCLinear</code></td>
+<td>Native cross-curvature support in HTC layers</td>
+</tr>
+<tr>
+<td>Drop-in numerical stability</td>
+<td><code>ProperVelocity</code></td>
+<td>Unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span>; no projection or constraint drift</td>
+</tr>
+<tr>
+<td>You don't know which to pick</td>
+<td><code>Hyperboloid</code> (or <code>ProperVelocity</code>)</td>
+<td>Robust at <code>c=1.0</code>; PV adds no-projection convenience</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">Single best default</p>
+<p>Start with <code>Hyperboloid(c=1.0)</code> for new hyperbolic models. It's well-behaved
+at the default curvature, has the fastest layers (<code>FGGLinear</code>, <code>LorentzConv2D</code>),
+and avoids the boundary-collapse issues of Poincaré at <code>c=1.0</code>.</p>
 </div>
-<h2 id="topics">Topics<a class="headerlink" href="#topics" title="Permanent link">&para;</a></h2>
+<h2 id="convention-cheat-sheet">Convention Cheat-Sheet<a class="headerlink" href="#convention-cheat-sheet" title="Permanent link">&para;</a></h2>
+<p>The single biggest source of layer-construction bugs in Hyperbolix is the
+<strong>ambient vs. spatial dimension</strong> distinction. Different layer families take
+different conventions:</p>
+<table>
+<thead>
+<tr>
+<th>Layer / Op family</th>
+<th>Channel arg</th>
+<th>Convention</th>
+<th>Example: 32 spatial dims</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FGGLinear</code>, <code>LorentzConv2D</code>, <code>HTCLinear</code>, <code>HypLinearHyperboloid*</code></td>
+<td><code>in_features</code></td>
+<td><strong>Ambient (d+1)</strong> — includes time</td>
+<td><code>33</code></td>
+</tr>
+<tr>
+<td><code>HRCBatchNorm</code>, <code>HRCLayerNorm</code> (Hyperboloid normalization)</td>
+<td><code>num_features</code></td>
+<td><strong>Spatial (d)</strong> — excludes time</td>
+<td><code>32</code></td>
+</tr>
+<tr>
+<td><code>HypLinearPoincare*</code>, <code>HypConv2DPoincare</code>, <code>HypRegressionPoincare*</code></td>
+<td><code>in_dim</code></td>
+<td><strong>Spatial (d)</strong> — Poincaré has no time</td>
+<td><code>32</code></td>
+</tr>
+<tr>
+<td><code>HypLinearPV</code>, <code>HypConv2DPV</code>, <code>HypRegressionPV</code></td>
+<td><code>in_dim</code></td>
+<td><strong>Spatial (d)</strong></td>
+<td><code>32</code></td>
+</tr>
+<tr>
+<td><code>hyp_avg_pool2d</code> (Hyperboloid global pool)</td>
+<td>NHWC channels</td>
+<td><strong>Ambient (d+1)</strong></td>
+<td><code>33</code></td>
+</tr>
+<tr>
+<td><code>ProductManifold</code> factor <code>dim</code></td>
+<td>per-factor</td>
+<td><strong>Same as the factor's layer</strong> (ambient for Hyperboloid, spatial otherwise)</td>
+<td><code>33</code> for <code>Hyperboloid</code>, <code>32</code> for <code>Poincare</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">HRC vs HTC normalization</p>
+<p>Both <code>HRCBatchNorm</code> and the <code>HTC</code>-flavored normalizers exist, but they
+take <strong>different conventions</strong>:</p>
 <ul>
-<li>Distance computation strategies</li>
-<li>Exponential and logarithmic maps</li>
-<li>Parallel transport</li>
-<li>Choosing the right manifold</li>
-<li>Numerical stability considerations</li>
+<li><strong>HRC</strong> ops see only spatial components <code>x[..., 1:]</code> — pass spatial dim.</li>
+<li><strong>HTC</strong> ops see the full ambient point — pass ambient dim.</li>
 </ul>
-<p>[Content coming soon]</p>
+<p>Reconstructing a valid Hyperboloid point is handled internally for both;
+you only have to get the channel argument right at construction.</p>
+</div>
+<p>Curvature convention is uniform across all manifolds: <code>c &gt; 0</code> means sectional
+curvature <span class="arithmatex">\(-c\)</span> (so larger <code>c</code> → more curved). <code>Euclidean</code> ignores <code>c</code> entirely.</p>
+<h2 id="working-with-curvature">Working with Curvature<a class="headerlink" href="#working-with-curvature" title="Permanent link">&para;</a></h2>
+<h3 id="static-vs-learnable">Static vs. learnable<a class="headerlink" href="#static-vs-learnable" title="Permanent link">&para;</a></h3>
+<p>All three hyperbolic manifolds support both fixed and learnable curvature
+through the same API:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Fixed curvature (default)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>               <span class="c1"># m.c is a Python float</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>                  <span class="c1"># ditto</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">ProperVelocity</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>            <span class="c1"># ditto</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Learnable curvature: stored as nnx.Param via softplus reparameterization</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">ProperVelocity</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="c1"># Either way, the current value is accessible the same way:</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">c_now</span> <span class="o">=</span> <span class="n">manifold</span><span class="o">.</span><span class="n">c</span>   <span class="c1"># float if fixed; traced jax.Array if learnable</span>
+</span></code></pre></div>
+<p>Learnable curvature is broadly useful and works with any standard <code>nnx.Optimizer</code>
+(no Riemannian optimizer required for the curvature itself — it's a Euclidean
+<code>nnx.Param</code>):</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># manifold._c_raw will be optimized alongside other params automatically.</span>
+</span></code></pre></div>
+<h3 id="when-c10-works-and-when-it-doesnt">When <code>c=1.0</code> works and when it doesn't<a class="headerlink" href="#when-c10-works-and-when-it-doesnt" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Manifold</th>
+<th><code>c=1.0</code> default behavior</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Hyperboloid</code></td>
+<td>Stable across most workloads</td>
+<td>Unbounded; no boundary collapse</td>
+</tr>
+<tr>
+<td><code>ProperVelocity</code></td>
+<td>Stable</td>
+<td>Unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span>; PV's safe-norm formulation tolerates wide ranges</td>
+</tr>
+<tr>
+<td><code>Poincare</code></td>
+<td><strong>Often too aggressive for deep nets</strong></td>
+<td>Conformal factor <span class="arithmatex">\(\lambda = 2/(1 - c\|x\|^2)\)</span> collapses near boundary, killing MLR signal</td>
+</tr>
+</tbody>
+</table>
+<p>For Poincaré in deep networks, the <strong>van Spengler et al. (2023)</strong> convention
+is <code>init_c=0.1</code> with a separate <code>Poincare(c=...)</code> per layer, often with
+<code>learnable=True</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Per-layer Poincaré curvature, all learnable</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">HypResNetBlock</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>        <span class="c1"># Each layer carries its own (initially small) curvature</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold_a</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold_b</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">conv_a</span> <span class="o">=</span> <span class="n">HypConv2DPoincare</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">manifold_a</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">conv_b</span> <span class="o">=</span> <span class="n">HypConv2DPoincare</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">manifold_b</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="curvature-in-productmanifold">Curvature in <code>ProductManifold</code><a class="headerlink" href="#curvature-in-productmanifold" title="Permanent link">&para;</a></h3>
+<p>A <code>ProductManifold</code> has <strong>no single <code>c</code></strong> — accessing <code>.c</code> raises <code>TypeError</code>.
+Use one of:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">product</span><span class="o">.</span><span class="n">curvatures</span>           <span class="c1"># tuple of all factor curvatures</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">product</span><span class="o">.</span><span class="n">factors</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">c</span>         <span class="c1"># specific factor&#39;s curvature</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">product</span><span class="o">.</span><span class="n">component_dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="c1"># per-factor distance vector (before reduction)</span>
+</span></code></pre></div>
+<p>Per-factor learnability is controlled via the 5-tuple form of
+<code>from_signature</code>, letting you mix learnable and fixed curvatures:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">mixed</span> <span class="o">=</span> <span class="n">ProductManifold</span><span class="o">.</span><span class="n">from_signature</span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="p">(</span><span class="n">Hyperboloid</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="kc">True</span><span class="p">),</span>   <span class="c1"># 4 copies, curvatures learnable</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="p">(</span><span class="n">Poincare</span><span class="p">,</span>    <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span>  <span class="c1"># 2 copies, curvatures fixed</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="p">(</span><span class="n">Euclidean</span><span class="p">,</span>   <span class="mi">8</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>              <span class="c1"># 1 copy, c/learnable irrelevant</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="going-euclidean-manifold">Going Euclidean → Manifold<a class="headerlink" href="#going-euclidean-manifold" title="Permanent link">&para;</a></h2>
+<p>A frequent confusion: there are several ways to map a Euclidean feature
+vector onto a hyperbolic manifold, and they are <strong>not interchangeable</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>When to use</th>
+<th>Caveats</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>manifold.expmap_0(v, c)</code></td>
+<td>Small-norm Euclidean features near the origin</td>
+<td><code>expmap_0</code> involves <span class="arithmatex">\(\sinh\)</span>/<span class="arithmatex">\(\cosh\)</span>; large norms blow up exponentially</td>
+</tr>
+<tr>
+<td>Constraint projection (Hyperboloid only): <code>[sqrt(\|\|x\|\|² + 1/c), x]</code></td>
+<td>Large-norm features, CNN feature maps, ImageNet-scale</td>
+<td>Not a geodesic; just enforces the Lorentz constraint. Use when expmap_0 would saturate</td>
+</tr>
+<tr>
+<td><code>manifold.proj(x, c)</code></td>
+<td>Cleaning up an already-near-manifold point (numerical drift)</td>
+<td>Identity for Euclidean; clamp-to-ball for Poincaré; constraint enforcement for Hyperboloid</td>
+</tr>
+<tr>
+<td><code>manifold.expmap(v, x, c)</code></td>
+<td>Moving along a geodesic from an existing manifold point <code>x</code></td>
+<td>Requires <code>x</code> already on-manifold</td>
+</tr>
+</tbody>
+</table>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Pattern A: small-norm features (typical for an embedding layer or MLP head)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">x_euclidean</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">input_dim</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)(</span><span class="n">x</span><span class="p">)</span>  <span class="c1"># small-norm</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">x_manifold</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">v</span><span class="p">:</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">expmap_0</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">v</span><span class="p">]),</span> <span class="n">c</span><span class="p">))(</span><span class="n">x_euclidean</span><span class="p">)</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># Pattern B: large-norm features (typical for a CNN backbone)</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">features</span> <span class="o">=</span> <span class="n">cnn_stem</span><span class="p">(</span><span class="n">images</span><span class="p">)</span>                            <span class="c1"># large activations</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="n">time_coord</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">features</span><span class="o">**</span><span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">+</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">x_manifold</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">time_coord</span><span class="p">,</span> <span class="n">features</span><span class="p">],</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Both patterns appear in the MNIST benchmark (<code>benchmarks/bench_mnist_hyperboloid.py</code>):
+<code>FHCNNHybrid</code> uses Pattern A after a small Euclidean embedding;
+<code>FullyHyperbolicCNN_*</code> uses Pattern B per-pixel from raw image values.</p>
+<h2 id="hyperboloid-poincare-use-the-isometry">Hyperboloid ↔ Poincaré: Use the Isometry<a class="headerlink" href="#hyperboloid-poincare-use-the-isometry" title="Permanent link">&para;</a></h2>
+<p>When you need to switch models (e.g., move from a Hyperboloid CNN backbone
+to a Poincaré classifier head), <strong>do not</strong> route through <code>logmap_0 → expmap_0</code>
+on the other manifold. Use the direct isometry:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">isometry_mappings</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># Hyperboloid (d+1) → Poincaré (d) — distance preserving, ~10x faster than logmap/expmap</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">x_poincare</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">hyperboloid_to_poincare</span><span class="p">(</span><span class="n">x_hyperboloid</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># Reverse direction</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">x_hyperboloid</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">poincare_to_hyperboloid</span><span class="p">(</span><span class="n">x_poincare</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span></code></pre></div>
+<p>The <code>logmap → expmap</code> route is lossy (tangent-space round-trip accumulates
+numerical error) and slower. The isometry is exact.</p>
+<h2 id="common-pitfalls">Common Pitfalls<a class="headerlink" href="#common-pitfalls" title="Permanent link">&para;</a></h2>
+<h3 id="1-raw-jnpacosh-jnpatanh-instead-of-the-hyperbolix-versions">1. Raw <code>jnp.acosh</code> / <code>jnp.atanh</code> instead of the hyperbolix versions<a class="headerlink" href="#1-raw-jnpacosh-jnpatanh-instead-of-the-hyperbolix-versions" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># ❌ NaN at domain boundaries (inner_product &lt; 1 for acosh, |x| &gt;= 1 for atanh)</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">d</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">acosh</span><span class="p">(</span><span class="n">inner_product</span><span class="p">)</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># ✅ Clamped and stable</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.math_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">acosh</span><span class="p">,</span> <span class="n">atanh</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">d</span> <span class="o">=</span> <span class="n">acosh</span><span class="p">(</span><span class="n">inner_product</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Always use <code>hyperbolix.utils.math_utils</code> (<code>acosh</code>, <code>atanh</code>, <code>sinh</code>, <code>cosh</code>)
+when implementing custom hyperbolic ops.</p>
+<h3 id="2-re-implementing-distance-from-scratch">2. Re-implementing distance from scratch<a class="headerlink" href="#2-re-implementing-distance-from-scratch" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># ❌ Hand-rolled — likely numerically unstable</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">norm_sq</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">x</span> <span class="o">-</span> <span class="n">y</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">d</span> <span class="o">=</span> <span class="n">some_formula</span><span class="p">(</span><span class="n">norm_sq</span><span class="p">)</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="c1"># ✅ Use the manifold&#39;s vetted, dtype-aware implementation</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="n">d</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="3-riemannian-optimizer-for-layers-that-dont-need-one">3. Riemannian optimizer for layers that don't need one<a class="headerlink" href="#3-riemannian-optimizer-for-layers-that-dont-need-one" title="Permanent link">&para;</a></h3>
+<p>Most modern layers (<code>FGG*</code>, <code>*PP</code>, <code>HRC*</code>, <code>HTC*</code>, <code>*PV</code>) parameterize weights
+in <strong>Euclidean space</strong> internally. They do NOT need a Riemannian optimizer:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># ✅ Standard Euclidean Adam works for all modern layers</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Only use <code>riemannian_adam</code> / <code>riemannian_sgd</code> when parameters live <strong>directly
+on the manifold</strong> — typically hyperbolic embedding tables wrapped in
+<code>ManifoldParam(value, manifold=..., curvature=...)</code>. The legacy
+<code>HypLinearPoincare</code> (Ganea-style) is the only NN layer whose weights are
+manifold-valued; prefer <code>HypLinearPoincarePP</code> / <code>FGGLinear</code> to avoid the
+need entirely.</p>
+<h3 id="4-skipping-proj-after-manual-point-construction">4. Skipping <code>proj</code> after manual point construction<a class="headerlink" href="#4-skipping-proj-after-manual-point-construction" title="Permanent link">&para;</a></h3>
+<p>If you build a hyperboloid point by hand from spatial coordinates
+(<code>[sqrt(...), spatial...]</code>), it's correct in float64 but may drift in float32.
+After several training steps, accumulated drift can violate
+<code>&lt;x, x&gt;_L = -1/c</code>. Periodic re-projection via <code>manifold.proj</code> is cheap and
+keeps points on-manifold:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">x</span> <span class="o">=</span> <span class="n">manifold</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># cheap; idempotent on already-valid points</span>
+</span></code></pre></div>
+<h3 id="5-picking-a-slow-layer-when-a-fast-equivalent-exists">5. Picking a slow layer when a fast equivalent exists<a class="headerlink" href="#5-picking-a-slow-layer-when-a-fast-equivalent-exists" title="Permanent link">&para;</a></h3>
+<p>Within each layer family, prefer the variant with the highest reported speed
+in the <a href="../../api-reference/nn-layers/">API reference</a>:</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Slow</th>
+<th>Fast</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hyperboloid linear</td>
+<td><code>HypLinearHyperboloid*</code></td>
+<td><code>FGGLinear</code> (~3× faster), <code>HTCLinear</code> (cross-curvature)</td>
+</tr>
+<tr>
+<td>Hyperboloid convolution</td>
+<td><code>HypConv2DHyperboloid</code> (HCat)</td>
+<td><code>LorentzConv2D</code> (~2.5× faster), <code>FGGConv2D</code></td>
+</tr>
+<tr>
+<td>Poincaré convolution</td>
+<td><code>HypConv2DPoincare</code></td>
+<td>(no faster variant; this is the standard)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><a href="../../api-reference/manifolds/">API Reference: Manifolds</a></strong> — full method signatures and docstrings.</li>
+<li><strong><a href="../numerical-stability/">Numerical Stability Guide</a></strong> — when to use float64, conformal factor pitfalls, clamping strategies.</li>
+<li><strong><a href="../batching-jit/">Batching &amp; JIT Guide</a></strong> — <code>jax.vmap</code> patterns, JIT static arguments, version_idx static-ness.</li>
+<li><strong><a href="../training-workflows/">Training Workflows</a></strong> <em>(WIP)</em> — end-to-end training examples.</li>
+</ul>
 
 
 
