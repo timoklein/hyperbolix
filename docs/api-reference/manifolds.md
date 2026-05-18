@@ -4,18 +4,20 @@ This page documents the core manifold operations in Hyperbolix. Each manifold is
 
 ## Overview
 
-Hyperbolix provides four manifold classes:
+Hyperbolix provides four base manifold classes plus a composition class:
 
 - **Euclidean**: Flat Euclidean space (baseline)
 - **Poincaré Ball**: Conformal model of hyperbolic space
 - **Hyperboloid**: Lorentz/Minkowski model of hyperbolic space
 - **Proper Velocity**: Unconstrained $\mathbb{R}^n$ model from special relativity (Chen et al. 2026)
+- **Product Manifold**: Heterogeneous-curvature product spaces $M_1 \times M_2 \times \dots \times M_n$ (Gu et al. 2019)
 
 All manifolds share a common interface defined by the `Manifold` protocol and support:
 
 - **Automatic dtype casting**: Pass `dtype=jnp.float64` for higher precision
 - **vmap-native methods**: Methods operate on single points; use `jax.vmap` for batching
 - **JIT compatibility**: All methods are JIT-compilable
+- **Optionally learnable curvature**: Pass `learnable=True` to base manifolds (Poincaré, Hyperboloid, Proper Velocity) to make $c$ a trainable `nnx.Param` via softplus reparameterization
 
 ## Manifold Protocol
 
@@ -86,6 +88,30 @@ The Proper Velocity (PV) model — an **unconstrained** $\mathbb{R}^n$ represent
     The paper uses curvature $K < 0$ with $\beta_x = 1/\sqrt{1 - K\|x\|^2}$. Hyperbolix keeps the $c > 0$ convention (sectional curvature $-c$), substituting $K = -c$, so $\beta_x = 1/\sqrt{1 + c\|x\|^2}$.
 
 ::: hyperbolix.manifolds.proper_velocity.ProperVelocity
+    options:
+      show_source: true
+      heading_level: 3
+
+## Product Manifold
+
+Heterogeneous-curvature product space $P = M_1 \times M_2 \times \dots \times M_n$ where each factor $M_i$ can be any base manifold (Poincaré, Hyperboloid, Euclidean, Proper Velocity) with its own curvature $c_i$. Points are represented as flat concatenated arrays of shape `(total_dim,)`; factor curvatures are managed independently via each sub-manifold's `c` property and may be made individually learnable.
+
+The geodesic distance on a product Riemannian manifold is Pythagorean over component distances:
+
+$$d_P(x, y) \;=\; \sqrt{\sum_{i=1}^{n} d_{M_i}(x_i, y_i)^2}$$
+
+where $x_i$, $y_i$ are the per-factor slices of the flat points.
+
+!!! note "Per-factor curvatures"
+    `ProductManifold` does *not* expose a single `c` attribute (accessing `.c` raises `TypeError`). Use `product.curvatures` to get all factor curvatures, `product.factors[i].c` to access a specific one, or `product.component_dist(x, y)` to get the per-factor distance vector before reducing.
+
+!!! info "Convention"
+    The `c` argument on protocol methods (e.g. `product.dist(x, y, c=0.0)`) is accepted for `Manifold`-protocol compatibility but **ignored** — each factor uses its own curvature stored on the sub-manifold instance. This mirrors how `Euclidean` accepts but ignores `c`.
+
+!!! tip "Mixed learnability"
+    Use the 5-tuple form of `from_signature` to make some factors' curvatures learnable while keeping others fixed (e.g. learn hyperbolic curvatures but freeze a Poincaré factor at $c=0.1$). Euclidean factors silently ignore the curvature/learnable fields.
+
+::: hyperbolix.manifolds.product.ProductManifold
     options:
       show_source: true
       heading_level: 3
@@ -202,6 +228,41 @@ grad_riem = pv.egrad2rgrad(grad_euc, x, c)
 # Retraction is exact Euclidean addition (PV is unconstrained)
 x_next = pv.retraction(v, x, c)
 assert jnp.allclose(x_next, x + v)
+```
+
+### Product Manifolds (Mixed Curvature)
+
+```python
+import jax
+import jax.numpy as jnp
+from hyperbolix.manifolds import (
+    ProductManifold, Hyperboloid, Poincare, Euclidean,
+)
+
+# Build P = H^5(c=1.0) x P^3(c=0.1) x E^4
+product = ProductManifold(
+    (Hyperboloid(c=1.0), 5),  # 5 = ambient dim (d+1) for hyperboloid
+    (Poincare(c=0.1), 3),     # 3 = spatial dim for poincaré
+    (Euclidean(), 4),         # 4 = standard euclidean dim
+)
+
+# A point on the product is a flat (total_dim,) array
+o = product.origin()           # shape (12,)
+print(product.curvatures)      # (1.0, 0.1, 0.0)
+
+# Pythagorean product distance: d_P = sqrt(sum d_i^2)
+x = product.origin()
+y = product.origin()  # generated elsewhere; here we use o for illustration
+d_l2 = product.dist(x, y)               # scalar
+d_per_factor = product.component_dist(x, y)  # shape (3,) per-factor distances
+
+# Per-factor learnable curvature: Hyperboloid learns, Poincaré stays fixed
+mixed = ProductManifold.from_signature(
+    (Hyperboloid, 5, 4, 1.0, True),   # 4 copies of H^4(c=1.0), curvatures learnable
+    (Poincare,    3, 2, 0.1, False),  # 2 copies of P^3(c=0.1), curvatures fixed
+    (Euclidean,   4, 1),              # 1 copy of E^4 — c/learnable fields ignored
+)
+# Each learnable factor exposes a softplus-parametrized `_c_raw` nnx.Param.
 ```
 
 ### Isometry Mappings

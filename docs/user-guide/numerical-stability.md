@@ -592,4 +592,3 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
 - [Batching & JIT](batching-jit.md): Performance optimization patterns
 - [Manifolds API](../api-reference/manifolds.md): Manifold function reference
 - [Training Workflows](training-workflows.md): End-to-end training examples
-- [Mathematical Background](../mathematical-background.md): Theory and formulas

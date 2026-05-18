@@ -123,6 +123,5 @@ nav:
       - Optimizers: api-reference/optimizers.md
       - Distributions: api-reference/distributions.md
       - Utilities: api-reference/utils.md
-  - Mathematical Background: mathematical-background.md
   - Developer Guide: developer-guide.md
   - Changelog: changelog.md
