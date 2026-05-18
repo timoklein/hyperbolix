@@ -52,7 +52,8 @@ uv run pytest
 
 # Specific test suite
 uv run pytest tests/test_manifolds.py
-uv run pytest tests/test_nn_layers.py
+uv run pytest tests/nn_layers/                          # all NN layer tests
+uv run pytest tests/nn_layers/test_hyperboloid_fgg.py   # one file
 
 # Fast tests only (skip slow parametrizations)
 uv run pytest -k "dim2"
@@ -156,13 +157,14 @@ uv sync --locked --dev
 ### Fix Pre-commit Hook Issues
 
 ```bash
-# Pre-commit failed? Hooks auto-fixed files:
+# Pre-commit failed? Hooks auto-fixed files. Re-stage and re-commit:
 git add <modified-files>
-git commit -m "your message"  # Will succeed now
-
-# Skip hooks (emergency only!)
-git commit --no-verify -m "your message"
+git commit -m "your message"
 ```
+
+Do not use `--no-verify` to bypass hook failures. Investigate the failure and
+fix the underlying issue — the hooks catch real problems (lint errors,
+type-check failures, large files).
 
 ### Debug Test Failures
 
@@ -258,6 +260,98 @@ uv run pytest benchmarks/ --benchmark-only --benchmark-save=before
 uv run pytest benchmarks/ --benchmark-only --benchmark-compare=before
 ```
 
+## Extending Hyperbolix
+
+This section covers the three most common contributor tasks: adding a manifold,
+adding a neural network layer, and contributing documentation.
+
+### Adding a New Manifold
+
+1. **Implement the `Manifold` protocol** (`hyperbolix/manifolds/protocol.py`)
+   on a new class. Required methods, all single-point `(dim,) → scalar` or
+   `(dim,) → (dim,)`:
+    - `proj`, `dist`, `dist_0`
+    - `expmap`, `expmap_0`, `logmap`, `logmap_0`
+    - `addition`, `scalar_mul`, `retraction`
+    - `ptransp`, `ptransp_0`
+    - `tangent_inner`, `tangent_norm`, `tangent_proj`
+    - `egrad2rgrad`, `is_in_manifold`
+    - `c` property and `_cast` (inherit from `ManifoldBase` to get these
+      plus dtype-casting machinery for free)
+2. **Add to exports**: `hyperbolix/manifolds/__init__.py`.
+3. **Wire into tests**: extend `manifold_and_c` in `tests/conftest.py` so
+   your manifold gets exercised by the shared test suite (parametrized over
+   seeds, dtypes, dims, and random curvatures).
+4. **Add the manifold-specific test file** under `tests/` covering operations
+   not covered by the shared suite (e.g. `tests/test_my_manifold.py`).
+5. **Document it**:
+    - API reference: add a `:::` autoreference block in
+      `docs/api-reference/manifolds.md`.
+    - User guide: add a row to the "Choosing a Manifold" decision table in
+      `docs/user-guide/manifolds.md` and to the convention cheat-sheet.
+
+Optionally, support `learnable=True` by reparameterizing curvature through
+`softplus` and storing `_c_raw` as an `nnx.Param` (see `ManifoldBase`
+implementation).
+
+### Adding a New NN Layer
+
+1. **Pick the channel convention** matching the layer family (Hyperboloid
+   layers take ambient `d+1`; Poincaré / PV / normalization layers take
+   spatial `d`). See [Manifolds Guide §
+   Convention Cheat-Sheet](docs/user-guide/manifolds.md#convention-cheat-sheet).
+2. **Use the family's init scale.** Standard He/Xavier is too large for
+   hyperbolic layers; reuse the convention of the closest family (small
+   uniform for HTC, `lorentz_kaiming` for FGG, scaled normal for Poincaré
+   PP, etc.). See `docs/user-guide/nn-layers.md#initialization-scales`.
+3. **Layer constructor conventions**:
+    - Accept `manifold_module` (a `Manifold`-protocol instance), not raw
+      functions
+    - Accept `rngs: nnx.Rngs` keyword-only
+    - Name trainable params `kernel` and `bias` (Flax NNX convention; the
+      `simplify-conv-layers` work standardized this across conv layers too)
+    - Accept `c` (or `c_in` / `c_out`) at **call time**, not in `__init__`
+4. **Add tests** under `tests/nn_layers/test_<your_layer>.py`, parametrized
+   over the standard fixtures (`seed_jax`, `dtype`, `manifold_and_c`).
+   Include at minimum: forward shape, JIT compatibility, gradient finite-ness,
+   and an init-distribution sanity check.
+5. **Export** from `hyperbolix/nn_layers/__init__.py` and add to its `__all__`.
+6. **Document it**:
+    - API reference: add a `:::` autoreference in
+      `docs/api-reference/nn-layers.md`.
+    - User guide: add a row to the relevant decision table in
+      `docs/user-guide/nn-layers.md`.
+
+### Documentation Workflow
+
+The docs site is built with MkDocs + Material + mkdocstrings.
+
+```bash
+# Live-reload local preview
+uv run mkdocs serve
+
+# Strict build (matches CI; fails on broken cross-links and warnings)
+uv run mkdocs build --strict
+```
+
+Where content goes:
+
+- **`docs/user-guide/`** — synthesis content. Decision tables, conventions,
+  composition patterns, pitfalls. *Not* per-symbol reference docs.
+- **`docs/api-reference/`** — mostly `:::` autoreference blocks. Add a
+  one-paragraph intro for each new module; mkdocstrings handles signatures
+  and docstrings automatically.
+- **`docs/getting-started.md` / `docs/index.md`** — only update for
+  user-facing feature launches (a new manifold counts; an internal refactor
+  doesn't).
+- **`docs/changelog.md`** — every feature, breaking change, or notable bug
+  fix gets an `[Unreleased]` entry under `### Added` / `### Changed` /
+  `### Fixed`.
+
+Always run `uv run mkdocs build --strict` before pushing docs changes — the
+CI docs build uses the same flag, and dead cross-links between guide pages
+fail the build.
+
 ## Troubleshooting
 
 ### Pre-commit Hook Fails
@@ -330,9 +424,9 @@ git push
 
 ### Branch Strategy
 
-- `main` - Production-ready code
-- `nn-layers` - Neural network layer development (current)
-- Feature branches - Use descriptive names: `feature/optimizer-port`, `fix/float32-stability`
+- `main` — release-tracked production code; release tags follow `vMAJOR.MINOR.PATCH`
+- Feature branches — `feature/<short-name>` (e.g. `feature/product-manifolds`)
+- Fix branches — `fix/<short-name>` (e.g. `fix/float32-stability`)
 
 ## Resources
 
@@ -340,5 +434,4 @@ git push
 - **Pyright Config**: `pyproject.toml` → `[tool.pyright]`
 - **Pre-commit Config**: `.pre-commit-config.yaml`
 - **Benchmark Guide**: `benchmarks/README.md`
-- **Migration Plan**: `jax_migration.md`
-- **Project Handoff**: `handoff.md`
+- **User Documentation**: `docs/` (built with `uv run mkdocs serve`)
