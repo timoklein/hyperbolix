@@ -731,6 +731,10 @@ class Hyperboloid(ManifoldBase):
 
     Args:
         dtype: Target JAX dtype for computations (default: jnp.float32)
+        c: Initial curvature value (default: 1.0). Must be positive.
+        learnable: If True, curvature becomes a trainable ``nnx.Param``
+            optimized via softplus reparameterization. Access via the
+            ``c`` property. Default: False.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -739,10 +743,9 @@ class Hyperboloid(ManifoldBase):
         >>> # Create manifold with float64 for better precision
         >>> manifold = Hyperboloid(dtype=jnp.float64)
         >>>
-        >>> # Arrays are automatically cast to float64
-        >>> x = jnp.array([1.0, 0.1, 0.2], dtype=jnp.float32)
-        >>> x = manifold.proj(x, c=1.0)
-        >>> x.dtype  # float64
+        >>> # Learnable curvature
+        >>> manifold = Hyperboloid(c=1.0, learnable=True)
+        >>> c = manifold.c  # returns softplus(raw) ≈ 1.0
     """
 
     VERSION_DEFAULT = VERSION_DEFAULT

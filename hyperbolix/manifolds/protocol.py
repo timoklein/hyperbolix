@@ -29,6 +29,9 @@ class Manifold(Protocol):
 
     dtype: Any
 
+    @property
+    def c(self) -> Any: ...
+
     def _cast(self, x: Array) -> Array: ...
 
     # -- Geometry --------------------------------------------------------

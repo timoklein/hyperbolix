@@ -500,6 +500,10 @@ class ProperVelocity(ManifoldBase):
 
     Args:
         dtype: Target JAX dtype for computations (default: ``jnp.float32``).
+        c: Initial curvature value (default: 1.0). Must be positive.
+        learnable: If True, curvature becomes a trainable ``nnx.Param``
+            optimized via softplus reparameterization. Access via the
+            ``c`` property. Default: False.
 
     Examples:
         >>> import jax.numpy as jnp
