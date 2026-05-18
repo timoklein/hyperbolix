@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import optax
 import pytest
 from flax import nnx
 
@@ -218,6 +219,159 @@ class TestEuclidean:
         state = nnx.state(m, nnx.Param)
         flat = nnx.to_flat_state(state)
         assert len(flat) == 0
+
+
+class TestTrainingIntegration:
+    """Verify curvature actually updates during optimizer steps."""
+
+    def test_poincare_curvature_trains(self):
+        from hyperbolix.nn_layers import HypLinearPoincarePP, HypRegressionPoincarePP
+
+        manifold = Poincare(c=1.0, learnable=True)
+
+        class Model(nnx.Module):
+            def __init__(self, m, rngs: nnx.Rngs):
+                self.manifold = m
+                self.fc = HypLinearPoincarePP(m, 4, 3, rngs=rngs)
+                self.head = HypRegressionPoincarePP(m, 3, 2, rngs=rngs)
+
+            def __call__(self, x):
+                c = self.manifold.c
+                h = self.fc(x, c)
+                return self.head(h, c)
+
+        model = Model(manifold, nnx.Rngs(0))
+        optimizer = nnx.Optimizer(model, optax.adam(1e-2), wrt=nnx.Param)
+
+        key = jax.random.PRNGKey(0)
+        x = jax.random.normal(key, (16, 4), dtype=jnp.float32) * 0.1
+        target = jax.random.normal(jax.random.PRNGKey(1), (16, 2), dtype=jnp.float32)
+
+        def loss_fn(m):
+            logits = m(x)
+            return jnp.mean((logits - target) ** 2)
+
+        c_before = float(manifold.c)
+        for _ in range(20):
+            _, grads = nnx.value_and_grad(loss_fn)(model)
+            optimizer.update(model, grads)
+
+        c_after = float(manifold.c)
+        assert c_before != c_after, f"Curvature did not change: {c_before}"
+        assert jnp.isfinite(jnp.array(c_after))
+        assert c_after > 0
+
+    def test_hyperboloid_curvature_trains(self):
+        from hyperbolix.nn_layers import FGGLinear, FGGLorentzMLR
+
+        manifold = Hyperboloid(c=1.0, learnable=True)
+
+        class Model(nnx.Module):
+            def __init__(self, m, rngs: nnx.Rngs):
+                self.manifold = m
+                self.fc = FGGLinear(5, 4, rngs=rngs, activation=jax.nn.relu)
+                self.head = FGGLorentzMLR(4, 3, rngs=rngs)
+
+            def __call__(self, x):
+                c = self.manifold.c
+                h = self.fc(x, c)
+                return self.head(h, c)
+
+        model = Model(manifold, nnx.Rngs(0))
+        optimizer = nnx.Optimizer(model, optax.adam(1e-2), wrt=nnx.Param)
+
+        key = jax.random.PRNGKey(0)
+        x_spatial = jax.random.normal(key, (16, 4), dtype=jnp.float32) * 0.1
+        x = manifold.proj_batch(
+            jnp.concatenate([jnp.ones((16, 1), dtype=jnp.float32), x_spatial], axis=-1),
+            1.0,
+        )
+        target = jax.random.randint(jax.random.PRNGKey(1), (16,), 0, 3)
+
+        def loss_fn(m):
+            logits = m(x)
+            return optax.softmax_cross_entropy_with_integer_labels(logits, target).mean()
+
+        c_before = float(manifold.c)
+        for _ in range(20):
+            _, grads = nnx.value_and_grad(loss_fn)(model)
+            optimizer.update(model, grads)
+
+        c_after = float(manifold.c)
+        assert c_before != c_after, f"Curvature did not change: {c_before}"
+        assert jnp.isfinite(jnp.array(c_after))
+        assert c_after > 0
+
+    def test_pv_curvature_trains(self):
+        from hyperbolix.nn_layers import HypLinearPV, HypRegressionPV
+
+        manifold = ProperVelocity(c=1.0, learnable=True)
+
+        class Model(nnx.Module):
+            def __init__(self, m, rngs: nnx.Rngs):
+                self.manifold = m
+                self.fc = HypLinearPV(m, 4, 3, rngs=rngs)
+                self.head = HypRegressionPV(m, 3, 2, rngs=rngs)
+
+            def __call__(self, x):
+                c = self.manifold.c
+                h = self.fc(x, c=c)
+                return self.head(h, c=c)
+
+        model = Model(manifold, nnx.Rngs(0))
+        optimizer = nnx.Optimizer(model, optax.adam(1e-2), wrt=nnx.Param)
+
+        key = jax.random.PRNGKey(0)
+        x = jax.random.normal(key, (16, 4), dtype=jnp.float32) * 0.3
+        target = jax.random.normal(jax.random.PRNGKey(1), (16, 2), dtype=jnp.float32)
+
+        def loss_fn(m):
+            y = m(x)
+            return jnp.mean((y - target) ** 2)
+
+        c_before = float(manifold.c)
+        for _ in range(20):
+            _, grads = nnx.value_and_grad(loss_fn)(model)
+            optimizer.update(model, grads)
+
+        c_after = float(manifold.c)
+        assert c_before != c_after, f"Curvature did not change: {c_before}"
+        assert jnp.isfinite(jnp.array(c_after))
+        assert c_after > 0
+
+    def test_shared_curvature_trains(self):
+        """Two layers sharing one manifold — curvature updates once per step."""
+        from hyperbolix.nn_layers import HypLinearPoincarePP
+
+        manifold = Poincare(c=0.1, learnable=True)
+
+        class Model(nnx.Module):
+            def __init__(self, m, rngs: nnx.Rngs):
+                self.manifold = m
+                self.l1 = HypLinearPoincarePP(m, 4, 3, rngs=nnx.Rngs(0))
+                self.l2 = HypLinearPoincarePP(m, 3, 2, rngs=nnx.Rngs(1))
+
+            def __call__(self, x):
+                c = self.manifold.c
+                h = self.l1(x, c)
+                return jnp.sum(self.l2(h, c))
+
+        model = Model(manifold, nnx.Rngs(0))
+        optimizer = nnx.Optimizer(model, optax.adam(1e-2), wrt=nnx.Param)
+
+        x = jnp.ones((8, 4), dtype=jnp.float32) * 0.1
+
+        def loss_fn(m):
+            return m(x)
+
+        c_before = float(manifold.c)
+        for _ in range(20):
+            _, grads = nnx.value_and_grad(loss_fn)(model)
+            optimizer.update(model, grads)
+
+        c_after = float(manifold.c)
+        assert c_before != c_after, f"Shared curvature did not change: {c_before}"
+        assert c_after > 0
 
 
 class TestValidation:
