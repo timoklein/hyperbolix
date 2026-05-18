@@ -6,7 +6,8 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 
 ## Features
 
-- **4 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, and Proper Velocity with complete geometric operations
+- **5 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, and Product Manifold (mixed-curvature composition) — all with complete geometric operations
+- **Learnable Curvature**: Pass `learnable=True` to make a manifold's curvature a trainable `nnx.Param` (softplus reparameterization)
 - **Neural Network Layers**: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers
 - **Activation Functions**: 4 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish)
 - **Riemannian Optimizers**: RAdam and RSGD with automatic manifold parameter detection
@@ -14,7 +15,7 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 - **Pure JAX/Flax NNX**: No PyTorch dependency, fully compatible with JAX ecosystem
 - **vmap-native API**: Efficient batching through JAX's functional paradigm
 - **JIT-compatible**: All operations support JIT compilation for performance
-- **Comprehensive Test Suite**: 1,400+ tests with 100% pass rate
+- **Comprehensive Test Suite**: 4,400+ tests (parametrized across seeds, dtypes, manifolds) with 100% pass rate
 
 ## Quick Example
 
@@ -84,17 +85,21 @@ output = model(input_data, c=1.0)
 
 ## Project Status
 
-**All core functionality is complete!**
+**Active development — current release: v0.6.0.** Core functionality is complete and stable; new layers and manifolds are added incrementally. See the [Changelog](changelog.md) for the full release history.
 
-- ✅ Phase 1: Manifolds (978 passing tests)
-- ✅ Phase 2: Riemannian Optimizers (20 passing tests)
-- ✅ Phase 3a: Neural Network Layers (44 passing tests)
-- ✅ Phase 3b: Regression Layers (22 passing tests)
-- ✅ Hyperboloid Convolutions (68 passing tests)
-- ✅ Lorentz Convolutions (66 passing tests)
-- ✅ Hyperboloid Activations (86 passing tests)
-- ✅ CI/CD Pipeline with benchmarking
-- ✅ Clean, unified codebase structure
+| Capability | Status | Shipped in |
+|---|---|---|
+| Class-based manifolds (Euclidean, Poincaré, Hyperboloid) | ✅ Stable | v0.3.0 |
+| Riemannian optimizers (RSGD, RAdam) | ✅ Stable | v0.1.4 |
+| Hyperbolic linear / convolutional layers | ✅ Stable | v0.1.4 |
+| Hyperboloid attention + hyperbolic transformer blocks | ✅ Stable | v0.2.0 |
+| Isometry mappings (Poincaré ↔ Hyperboloid) | ✅ Stable | v0.2.0 |
+| FGG-LNN layers (Klis et al. 2026) | ✅ Stable | v0.3.0 |
+| Poincaré BatchNorm2d, FHCNN layers, hyperbolic avg-pool | ✅ Stable | v0.5.x |
+| Proper Velocity manifold + PV layers (Chen et al. 2026) | ✅ Stable | v0.5.3 |
+| Learnable curvature (softplus-reparametrized `nnx.Param`) | ✅ Stable | v0.6.0 |
+| Product manifolds (Gu et al. 2019, mixed-curvature composition) | 🚧 Unreleased | next |
+| CI/CD pipeline with benchmarking | ✅ Stable | v0.1.4 |
 
 ## Key Concepts
 
@@ -126,7 +131,36 @@ dist_c1 = poincare.dist(x, y, c=1.0)
 dist_c2 = poincare.dist(x, y, c=2.0)
 ```
 
-This allows for learnable curvature in neural networks.
+### Learnable Curvature
+
+Curvature can also be made trainable per manifold instance. The raw parameter
+is stored as an `nnx.Param` and reparameterized through `softplus` to stay
+positive — gradients flow into the loss automatically:
+
+```python
+from hyperbolix.manifolds import Hyperboloid
+
+manifold = Hyperboloid(c=1.0, learnable=True)
+c = manifold.c          # softplus(_c_raw) ≈ 1.0; a traced array under JIT
+# When passed through any nnx.Optimizer with wrt=nnx.Param,
+# the curvature is updated each step alongside other params.
+```
+
+### Mixed-Curvature Product Spaces
+
+Compose heterogeneous factors (each with its own curvature, optionally
+learnable) into a single product manifold (Gu et al. 2019):
+
+```python
+from hyperbolix.manifolds import ProductManifold, Hyperboloid, Poincare, Euclidean
+
+product = ProductManifold(
+    (Hyperboloid(c=1.0, learnable=True), 5),  # learnable hyperbolic factor
+    (Poincare(c=0.1), 3),                     # fixed-curvature Poincaré factor
+    (Euclidean(), 4),                         # flat factor
+)
+d = product.dist(x, y)  # sqrt(sum d_i^2) over factors
+```
 
 ### Manifold Operations
 
