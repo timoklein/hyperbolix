@@ -324,7 +324,15 @@ class ProductManifold(nnx.Module):
         return jnp.sum(self.component_dist(x, y))
 
     def dist_min(self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"]) -> Float[Array, ""]:
-        """Min product distance: d = min d_i."""
+        """Min product distance: d = min d_i.
+
+        Warning:
+            This is NOT a true metric: positive-definiteness fails. Two
+            distinct points ``x != y`` that agree on any single factor
+            (``x_i == y_i``) yield ``d = 0``. Use only when the
+            "closest-factor" interpretation is semantically intended;
+            for an actual distance use ``dist`` (L2) or ``dist_l1``.
+        """
         return jnp.min(self.component_dist(x, y))
 
     # -- Validation --------------------------------------------------------
@@ -356,23 +364,43 @@ class ProductManifold(nnx.Module):
     ) -> "ProductManifold":
         """Create product manifold from a signature specification.
 
-        Each spec is ``(ManifoldClass, dim, count)`` or
-        ``(ManifoldClass, dim, count, curvature)``.
-        Euclidean factors ignore the curvature field.
+        Each spec is one of:
+          - ``(ManifoldClass, dim, count)`` — uses ``c=1.0`` and global ``learnable``.
+          - ``(ManifoldClass, dim, count, curvature)`` — sets ``c``, uses global ``learnable``.
+          - ``(ManifoldClass, dim, count, curvature, learnable)`` — overrides
+            the global ``learnable`` flag for this spec only.
+
+        Euclidean factors silently ignore the ``curvature`` and ``learnable``
+        fields (Euclidean has fixed ``c=0`` and no learnable curvature; see
+        ``Euclidean.__init__``).
 
         Args:
-            *specs: Signature tuples.
-            learnable: Whether curvatures are learnable (default: False).
+            *specs: Signature tuples (3-, 4-, or 5-tuple as described above).
+            learnable: Global default for whether curvatures are learnable.
+                Used when a spec does not supply an explicit override (i.e.
+                3- or 4-tuple). Default: False.
             dtype: Target JAX dtype.
 
         Returns:
             ProductManifold instance.
 
         Examples:
-            >>> # (H^3)^8 x (P^2)^4 x E^8
+            Uniform learnability (current behavior preserved):
+
+            >>> # (H^3)^8 x (P^2)^4 x E^8, all hyperbolic factors learnable
             >>> pm = ProductManifold.from_signature(
             ...     (Hyperboloid, 3, 8, 1.0),
             ...     (Poincare, 2, 4, 0.1),
+            ...     (Euclidean, 8, 1),
+            ...     learnable=True,
+            ... )
+
+            Per-factor learnability via 5-tuples (mixed):
+
+            >>> # Hyperboloid factors learn curvature, Poincare factors fixed
+            >>> pm = ProductManifold.from_signature(
+            ...     (Hyperboloid, 3, 8, 1.0, True),
+            ...     (Poincare, 2, 4, 0.1, False),
             ...     (Euclidean, 8, 1),
             ... )
         """
@@ -383,18 +411,26 @@ class ProductManifold(nnx.Module):
             if len(spec) == 3:
                 manifold_cls, dim, count = spec
                 curvature = 1.0
+                learnable_override: bool | None = None
             elif len(spec) == 4:
                 manifold_cls, dim, count, curvature = spec
+                learnable_override = None
+            elif len(spec) == 5:
+                manifold_cls, dim, count, curvature, learnable_override = spec
             else:
                 raise ValueError(
-                    f"Expected (ManifoldClass, dim, count) or (ManifoldClass, dim, count, curvature), got {len(spec)}-tuple"
+                    "Expected 3-tuple (ManifoldClass, dim, count), 4-tuple "
+                    "(ManifoldClass, dim, count, curvature), or 5-tuple "
+                    f"(ManifoldClass, dim, count, curvature, learnable); got {len(spec)}-tuple"
                 )
+
+            factor_learnable = learnable if learnable_override is None else learnable_override
 
             for _ in range(count):
                 if issubclass(manifold_cls, Euclidean):
                     instance = manifold_cls(dtype=dtype)
                 else:
-                    instance = manifold_cls(dtype=dtype, c=curvature, learnable=learnable)
+                    instance = manifold_cls(dtype=dtype, c=curvature, learnable=factor_learnable)
                 factors.append((instance, dim))
 
         return cls(*factors, dtype=dtype)
@@ -405,7 +441,6 @@ class ProductManifold(nnx.Module):
         parts = []
         for m, d in zip(self._factors, self._dims, strict=True):
             name = type(m).__name__
-            c_str = f", c={m.c}" if not isinstance(m.c, property) else ""
-            parts.append(f"{name}(dim={d}{c_str})")
+            parts.append(f"{name}(dim={d}, c={m.c})")
         signature = " x ".join(parts)
         return f"ProductManifold({signature}, total_dim={self._total_dim})"
