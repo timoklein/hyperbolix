@@ -7,7 +7,7 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 ## Features
 
 - **5 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, and Product Manifold (mixed-curvature composition) — all with complete geometric operations
-- **Learnable Curvature**: Pass `learnable=True` to make a manifold's curvature a trainable `nnx.Param` (softplus reparameterization)
+- **Learnable Curvature**: Use `learnable_curvature()` / `get_curvature()` helpers to add trainable curvature to any model (softplus reparameterization)
 - **Neural Network Layers**: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers
 - **Activation Functions**: 4 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish)
 - **Riemannian Optimizers**: RAdam and RSGD with automatic manifold parameter detection
@@ -133,31 +133,37 @@ dist_c2 = poincare.dist(x, y, c=2.0)
 
 ### Learnable Curvature
 
-Curvature can also be made trainable per manifold instance. The raw parameter
-is stored as an `nnx.Param` and reparameterized through `softplus` to stay
-positive — gradients flow into the loss automatically:
+Curvature can be made trainable via the `learnable_curvature()` /
+`get_curvature()` helpers. Store the parameter on your `nnx.Module` and
+pass the recovered positive value to manifold operations:
 
 ```python
+from hyperbolix import learnable_curvature, get_curvature
 from hyperbolix.manifolds import Hyperboloid
 
-manifold = Hyperboloid(c=1.0, learnable=True)
-c = manifold.c          # softplus(_c_raw) ≈ 1.0; a traced array under JIT
-# When passed through any nnx.Optimizer with wrt=nnx.Param,
-# the curvature is updated each step alongside other params.
+class Model(nnx.Module):
+    def __init__(self, rngs):
+        self.manifold = Hyperboloid(c=1.0)
+        self.c_raw = learnable_curvature(init_c=1.0)   # nnx.Param on the model
+        self.fc = FGGLinear(33, 65, rngs=rngs)
+
+    def __call__(self, x):
+        c = get_curvature(self.c_raw)                   # softplus → positive
+        return self.fc(x, c=c)
 ```
 
 ### Mixed-Curvature Product Spaces
 
-Compose heterogeneous factors (each with its own curvature, optionally
-learnable) into a single product manifold (Gu et al. 2019):
+Compose heterogeneous factors (each with its own curvature) into a single
+product manifold (Gu et al. 2019):
 
 ```python
 from hyperbolix.manifolds import ProductManifold, Hyperboloid, Poincare, Euclidean
 
 product = ProductManifold(
-    (Hyperboloid(c=1.0, learnable=True), 5),  # learnable hyperbolic factor
-    (Poincare(c=0.1), 3),                     # fixed-curvature Poincaré factor
-    (Euclidean(), 4),                         # flat factor
+    (Hyperboloid(c=1.0), 5),   # hyperbolic factor
+    (Poincare(c=0.1), 3),     # Poincaré factor
+    (Euclidean(), 4),          # flat factor
 )
 d = product.dist(x, y)  # sqrt(sum d_i^2) over factors
 ```

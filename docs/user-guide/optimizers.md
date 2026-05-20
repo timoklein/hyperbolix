@@ -13,8 +13,7 @@ For per-optimizer signatures, see the
 - All modern NN layers — `HTCLinear`, `FGGLinear`, `HypConv2DHyperboloid*`,
   `HypLinearHyperboloidPP`, `HypLinearPoincarePP`, `HypLinearPV`, all
   attention / normalization / regression heads.
-- Learnable curvature (`Hyperboloid(c=1.0, learnable=True)` and the same on
-  Poincaré / PV).
+- Learnable curvature (via `learnable_curvature()` / `get_curvature()` helpers).
 
 **The single exception**: the legacy Ganea-style Poincaré layers
 (`HypLinearPoincare`, `HypRegressionPoincare`) parameterize weights *directly
@@ -53,14 +52,19 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 ## Learnable Curvature Is Also Euclidean
 
 A common confusion: surely learnable curvature needs Riemannian optimization?
-No. Curvature is stored as a single Euclidean `nnx.Param` (`_c_raw`) and
-reparameterized through `softplus` to stay positive. The `_c_raw` parameter
-gets a normal Euclidean gradient and a normal Adam update — there's nothing
-to project, nothing on a manifold.
+No. The `learnable_curvature()` helper creates a plain Euclidean `nnx.Param`
+reparameterized through `softplus` to stay positive. It gets a normal
+Euclidean gradient and a normal Adam update — there's nothing to project,
+nothing on a manifold.
 
 ```python
-manifold = Hyperboloid(c=1.0, learnable=True)   # _c_raw is a plain nnx.Param
-# ... build model ...
+from hyperbolix import learnable_curvature, get_curvature
+
+class Model(nnx.Module):
+    def __init__(self, ...):
+        self.c_raw = learnable_curvature(init_c=1.0)  # plain nnx.Param
+        ...
+
 optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 # Curvature is updated by Adam alongside all other parameters.
 ```

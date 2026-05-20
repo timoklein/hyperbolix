@@ -55,31 +55,37 @@ curvature $-c$ (so larger `c` → more curved). `Euclidean` ignores `c` entirely
 
 ### Static vs. learnable
 
-All three hyperbolic manifolds support both fixed and learnable curvature
-through the same API:
+Manifolds are **pure geometric utilities** (plain Python classes, not `nnx.Module`).
+They hold a fixed curvature value. For **learnable curvature**, use the
+`learnable_curvature()` / `get_curvature()` helpers and store the parameter
+on your `nnx.Module`:
 
 ```python
-# Fixed curvature (default)
-manifold = Hyperboloid(c=1.0)               # m.c is a Python float
-manifold = Poincare(c=0.1)                  # ditto
-manifold = ProperVelocity(c=1.0)            # ditto
+from hyperbolix import learnable_curvature, get_curvature
+from hyperbolix.manifolds import Hyperboloid, Poincare
 
-# Learnable curvature: stored as nnx.Param via softplus reparameterization
-manifold = Hyperboloid(c=1.0, learnable=True)
-manifold = Poincare(c=0.1, learnable=True)
-manifold = ProperVelocity(c=1.0, learnable=True)
+# Fixed curvature (default) — manifold.c is a Python float
+manifold = Hyperboloid(c=1.0)
+manifold = Poincare(c=0.1)
 
-# Either way, the current value is accessible the same way:
-c_now = manifold.c   # float if fixed; traced jax.Array if learnable
+# Learnable curvature: store the nnx.Param on your model
+class Model(nnx.Module):
+    def __init__(self, rngs):
+        self.manifold = Hyperboloid(c=1.0)       # static geometric utility
+        self.c_raw = learnable_curvature(1.0)     # nnx.Param on the model
+        self.fc = FGGLinear(33, 65, rngs=rngs)
+
+    def __call__(self, x):
+        c = get_curvature(self.c_raw)             # softplus → positive
+        return self.fc(x, c=c)
 ```
 
-Learnable curvature is broadly useful and works with any standard `nnx.Optimizer`
-(no Riemannian optimizer required for the curvature itself — it's a Euclidean
-`nnx.Param`):
+The curvature parameter is Euclidean and works with any standard `nnx.Optimizer`
+(no Riemannian optimizer required):
 
 ```python
 optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
-# manifold._c_raw will be optimized alongside other params automatically.
+# self.c_raw is optimized alongside other params automatically.
 ```
 
 ### When `c=1.0` works and when it doesn't
@@ -91,18 +97,22 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 | `Poincare` | **Often too aggressive for deep nets** | Conformal factor $\lambda = 2/(1 - c\|x\|^2)$ collapses near boundary, killing MLR signal |
 
 For Poincaré in deep networks, the **van Spengler et al. (2023)** convention
-is `init_c=0.1` with a separate `Poincare(c=...)` per layer, often with
-`learnable=True`:
+is `init_c=0.1` with learnable per-layer curvatures:
 
 ```python
-# Per-layer Poincaré curvature, all learnable
+from hyperbolix import learnable_curvature, get_curvature
+
 class HypResNetBlock(nnx.Module):
     def __init__(self, rngs: nnx.Rngs):
-        # Each layer carries its own (initially small) curvature
-        self.manifold_a = Poincare(c=0.1, learnable=True)
-        self.manifold_b = Poincare(c=0.1, learnable=True)
-        self.conv_a = HypConv2DPoincare(self.manifold_a, ..., rngs=rngs)
-        self.conv_b = HypConv2DPoincare(self.manifold_b, ..., rngs=rngs)
+        self.manifold = Poincare(c=0.1)
+        self.c_a = learnable_curvature(init_c=0.1)
+        self.c_b = learnable_curvature(init_c=0.1)
+        self.conv_a = HypConv2DPoincare(self.manifold, ..., rngs=rngs)
+        self.conv_b = HypConv2DPoincare(self.manifold, ..., rngs=rngs)
+
+    def __call__(self, x):
+        h = self.conv_a(x, get_curvature(self.c_a))
+        return self.conv_b(h, get_curvature(self.c_b))
 ```
 
 ### Curvature in `ProductManifold`
@@ -116,16 +126,60 @@ product.factors[i].c         # specific factor's curvature
 product.component_dist(x, y) # per-factor distance vector (before reduction)
 ```
 
-Per-factor learnability is controlled via the 5-tuple form of
-`from_signature`, letting you mix learnable and fixed curvatures:
+For learnable per-factor curvatures, store the parameters on your model:
 
 ```python
-mixed = ProductManifold.from_signature(
-    (Hyperboloid, 5, 4, 1.0, True),   # 4 copies, curvatures learnable
-    (Poincare,    3, 2, 0.1, False),  # 2 copies, curvatures fixed
-    (Euclidean,   8, 1),              # 1 copy, c/learnable irrelevant
-)
+from hyperbolix import learnable_curvature, get_curvature
+from hyperbolix.manifolds import Hyperboloid, Poincare, ProductManifold
+
+class Model(nnx.Module):
+    def __init__(self, rngs):
+        self.pm = ProductManifold(
+            (Hyperboloid(c=1.0), 3),
+            (Poincare(c=0.5), 2),
+        )
+        self.c_h = learnable_curvature(init_c=1.0)
+        self.c_p = learnable_curvature(init_c=0.5)
+
+    def __call__(self, x, y):
+        c_h = get_curvature(self.c_h)
+        c_p = get_curvature(self.c_p)
+        x_parts = self.pm.split(x)
+        y_parts = self.pm.split(y)
+        d_h = self.pm.factors[0].dist(x_parts[0], y_parts[0], c_h)
+        d_p = self.pm.factors[1].dist(x_parts[1], y_parts[1], c_p)
+        return d_h + d_p
 ```
+
+### Custom curvature parameterization
+
+The built-in `learnable_curvature()` uses softplus reparameterization, which
+guarantees positivity without clamping. If you need a different
+parameterization (e.g., the log/exp scheme from
+[MERU](https://arxiv.org/abs/2304.09172)), manage the curvature parameter
+yourself and pass it to manifold operations:
+
+```python
+import math
+import jax.numpy as jnp
+from flax import nnx
+
+class MERUStyleModel(nnx.Module):
+    def __init__(self, init_c: float = 1.0):
+        self.manifold = Hyperboloid()  # fixed c, unused
+        self._log_c = nnx.Param(jnp.array(math.log(init_c)))
+        self._c_bounds = (math.log(init_c / 10), math.log(init_c * 10))
+
+    @property
+    def c(self):
+        return jnp.exp(jnp.clip(self._log_c, *self._c_bounds))
+
+    def __call__(self, x, y):
+        return self.manifold.dist(x, y, self.c)
+```
+
+All manifold methods accept `c` as a dynamic argument, so the manifold's
+own `.c` value is bypassed entirely.
 
 ## Going Euclidean → Manifold
 

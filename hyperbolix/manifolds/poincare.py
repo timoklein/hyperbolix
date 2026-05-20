@@ -697,10 +697,7 @@ class Poincare(ManifoldBase):
 
     Args:
         dtype: Target JAX dtype for computations (default: jnp.float32)
-        c: Initial curvature value (default: 1.0). Must be positive.
-        learnable: If True, curvature becomes a trainable ``nnx.Param``
-            optimized via softplus reparameterization. Access via the
-            ``c`` property. Default: False.
+        c: Curvature value (default: 1.0). Must be positive.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -709,9 +706,9 @@ class Poincare(ManifoldBase):
         >>> # Create manifold with float64 for better precision
         >>> manifold = Poincare(dtype=jnp.float64)
         >>>
-        >>> # Learnable curvature (van Spengler et al. 2023)
-        >>> manifold = Poincare(c=0.1, learnable=True)
-        >>> c = manifold.c  # returns softplus(raw) ≈ 0.1
+        >>> # Static curvature
+        >>> manifold = Poincare(c=0.1)
+        >>> c = manifold.c  # returns 0.1
     """
 
     VERSION_MOBIUS_DIRECT = VERSION_MOBIUS_DIRECT

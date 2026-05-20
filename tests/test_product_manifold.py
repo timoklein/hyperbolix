@@ -14,6 +14,7 @@ import optax
 import pytest
 from flax import nnx
 
+from hyperbolix import get_curvature, learnable_curvature
 from hyperbolix.manifolds import (
     Euclidean,
     Hyperboloid,
@@ -204,54 +205,13 @@ class TestConstruction:
         assert all(isinstance(f, Poincare) for f in pm.factors[4:7])
         assert isinstance(pm.factors[7], Euclidean)
 
-    def test_from_signature_learnable(self):
-        pm = ProductManifold.from_signature(
-            (Hyperboloid, 3, 2, 1.0),
-            learnable=True,
-        )
-        assert all(hasattr(f, "_c_raw") for f in pm.factors)
-
-    def test_from_signature_per_factor_learnable_mixed(self):
-        """5-tuple per-spec override: Hyperboloid learns, Poincare fixed."""
-        pm = ProductManifold.from_signature(
-            (Hyperboloid, 3, 2, 1.0, True),
-            (Poincare, 2, 3, 0.1, False),
-        )
-        # Hyperboloid factors carry a softplus-parametrized nnx.Param.
-        for f in pm.factors[:2]:
-            assert isinstance(f, Hyperboloid)
-            assert hasattr(f, "_c_raw")
-            assert f._learnable is True
-        # Poincare factors store a plain scalar.
-        for f in pm.factors[2:]:
-            assert isinstance(f, Poincare)
-            assert not hasattr(f, "_c_raw")
-            assert f._learnable is False
-
-    def test_from_signature_per_factor_learnable_overrides_global(self):
-        """5-tuple override beats the global ``learnable`` argument."""
-        pm = ProductManifold.from_signature(
-            (Hyperboloid, 3, 1, 1.0, False),  # explicit False overrides global True
-            (Poincare, 2, 1, 0.1),  # no override -> follows global True
-            learnable=True,
-        )
-        assert pm.factors[0]._learnable is False
-        assert pm.factors[1]._learnable is True
-
-    def test_from_signature_5tuple_euclidean_ignores_learnable(self):
-        """Euclidean silently ignores the curvature and learnable slots."""
-        pm = ProductManifold.from_signature(
-            (Euclidean, 4, 2, 0.7, True),  # both extra fields ignored
-        )
-        for f in pm.factors:
-            assert isinstance(f, Euclidean)
-            assert f._learnable is False
-            assert f.c == 0.0
-            assert not hasattr(f, "_c_raw")
-
     def test_from_signature_invalid_tuple_length_raises(self):
         with pytest.raises(ValueError, match="3-tuple"):
-            ProductManifold.from_signature((Hyperboloid, 3, 2, 1.0, True, "extra"))
+            ProductManifold.from_signature((Hyperboloid, 3, 2, 1.0, "extra"))
+
+    def test_not_nnx_module(self):
+        pm = ProductManifold((Hyperboloid(), 5), (Poincare(), 3))
+        assert not isinstance(pm, nnx.Module)
 
     def test_repr(self):
         p = ProductManifold((Hyperboloid(c=1.0), 5), (Poincare(c=0.1), 3))
@@ -663,41 +623,53 @@ class TestGradients:
         assert jnp.all(jnp.isfinite(g))
 
     def test_learnable_curvature_gradient(self):
-        """Gradients flow to learnable curvature parameters.
+        """Gradients flow to learnable curvature parameters via helpers.
 
-        Verified through the public NNX API:
-          1) ``nnx.value_and_grad`` produces a State with the expected number
-             of Param leaves (one per learnable factor).
-          2) All gradient leaves are finite and at least one is non-trivial.
-          3) After a single SGD step, the observable curvatures change —
-             confirming the autograd path reaches ``_c_raw`` and the
-             optimizer applies the update.
+        Uses ``learnable_curvature()``/``get_curvature()`` stored on an
+        nnx.Module wrapper. Verifies:
+          1) Grad leaves are finite and non-trivial.
+          2) An SGD step actually moves the curvatures.
         """
         pm = ProductManifold(
-            (Hyperboloid(c=1.0, learnable=True, dtype=jnp.float64), 3),
-            (Poincare(c=0.5, learnable=True, dtype=jnp.float64), 2),
+            (Hyperboloid(c=1.0, dtype=jnp.float64), 3),
+            (Poincare(c=0.5, dtype=jnp.float64), 2),
             dtype=jnp.float64,
         )
-        rng = np.random.default_rng(123)
-        x = _make_product_point(pm, rng)
-        y = _make_product_point(pm, rng)
+        rng_np = np.random.default_rng(123)
+        x = _make_product_point(pm, rng_np)
+        y = _make_product_point(pm, rng_np)
 
-        def loss_fn(model):
-            return model.dist(x, y, 0.0)
+        class CurvModel(nnx.Module):
+            def __init__(self):
+                self.pm = pm
+                self.c_h = learnable_curvature(init_c=1.0)
+                self.c_p = learnable_curvature(init_c=0.5)
 
-        c_before = jnp.array([float(pm.factors[i].c) for i in range(2)])
+            def __call__(self, x_, y_):
+                c_h = get_curvature(self.c_h)
+                c_p = get_curvature(self.c_p)
+                x_parts = self.pm.split(x_)
+                y_parts = self.pm.split(y_)
+                d_h = self.pm.factors[0].dist(x_parts[0], y_parts[0], c_h)
+                d_p = self.pm.factors[1].dist(x_parts[1], y_parts[1], c_p)
+                return d_h + d_p
 
-        _, grads = nnx.value_and_grad(loss_fn)(pm)
-        grad_leaves = jax.tree.leaves(grads)
-        # Exactly one Param leaf per learnable factor (the softplus pre-image).
+        model = CurvModel()
+        c_before = jnp.array([float(get_curvature(model.c_h)), float(get_curvature(model.c_p))])
+
+        def loss_fn(m):
+            return m(x, y)
+
+        _, grads = nnx.value_and_grad(loss_fn)(model)
+        grad_state = nnx.state(grads, nnx.Param)
+        grad_leaves = jax.tree.leaves(grad_state)
         assert len(grad_leaves) == 2, f"expected 2 param gradients, got {len(grad_leaves)}"
         assert all(jnp.all(jnp.isfinite(g)) for g in grad_leaves)
         assert any(jnp.any(jnp.abs(g) > 1e-10) for g in grad_leaves)
 
-        # Observational check: an SGD step actually moves the curvatures.
-        optimizer = nnx.Optimizer(pm, optax.sgd(learning_rate=1.0), wrt=nnx.Param)
-        optimizer.update(pm, grads)
-        c_after = jnp.array([float(pm.factors[i].c) for i in range(2)])
+        optimizer = nnx.Optimizer(model, optax.sgd(learning_rate=1.0), wrt=nnx.Param)
+        optimizer.update(model, grads)
+        c_after = jnp.array([float(get_curvature(model.c_h)), float(get_curvature(model.c_p))])
         assert jnp.all(jnp.isfinite(c_after))
         assert jnp.any(jnp.abs(c_after - c_before) > 1e-6)
 

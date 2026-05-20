@@ -347,7 +347,7 @@ class Euclidean(ManifoldBase):
     """
 
     def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
-        super().__init__(dtype, c=0.0, learnable=False)
+        super().__init__(dtype, c=0.0)
 
     def proj(self, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
         """Project point onto Euclidean space (identity)."""

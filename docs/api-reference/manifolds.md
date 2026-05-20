@@ -17,7 +17,7 @@ All manifolds share a common interface defined by the `Manifold` protocol and su
 - **Automatic dtype casting**: Pass `dtype=jnp.float64` for higher precision
 - **vmap-native methods**: Methods operate on single points; use `jax.vmap` for batching
 - **JIT compatibility**: All methods are JIT-compilable
-- **Optionally learnable curvature**: Pass `learnable=True` to base manifolds (Poincaré, Hyperboloid, Proper Velocity) to make $c$ a trainable `nnx.Param` via softplus reparameterization
+- **Learnable curvature**: Use `learnable_curvature()` / `get_curvature()` helpers to add trainable curvature to any model (softplus reparameterization)
 
 ## Manifold Protocol
 
@@ -256,13 +256,13 @@ y = product.origin()  # generated elsewhere; here we use o for illustration
 d_l2 = product.dist(x, y)               # scalar
 d_per_factor = product.component_dist(x, y)  # shape (3,) per-factor distances
 
-# Per-factor learnable curvature: Hyperboloid learns, Poincaré stays fixed
+# Repeated-factor construction via from_signature
 mixed = ProductManifold.from_signature(
-    (Hyperboloid, 5, 4, 1.0, True),   # 4 copies of H^4(c=1.0), curvatures learnable
-    (Poincare,    3, 2, 0.1, False),  # 2 copies of P^3(c=0.1), curvatures fixed
-    (Euclidean,   4, 1),              # 1 copy of E^4 — c/learnable fields ignored
+    (Hyperboloid, 5, 4, 1.0),   # 4 copies of H^4(c=1.0)
+    (Poincare,    3, 2, 0.1),   # 2 copies of P^3(c=0.1)
+    (Euclidean,   4, 1),         # 1 copy of E^4
 )
-# Each learnable factor exposes a softplus-parametrized `_c_raw` nnx.Param.
+# For learnable curvature, use learnable_curvature() on your nnx.Module.
 ```
 
 ### Isometry Mappings

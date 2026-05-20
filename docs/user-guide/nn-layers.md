@@ -201,22 +201,26 @@ class HTCClassifier(nnx.Module):
 ### Pattern 2: Hybrid CNN backbone + Poincaré head
 
 ```python
+from hyperbolix import learnable_curvature, get_curvature
+
 class HybridCNN(nnx.Module):
     def __init__(self, num_classes: int, *, rngs: nnx.Rngs):
         self.stem = nnx.Conv(3, 64, kernel_size=(3, 3), rngs=rngs)  # Euclidean
         self.pool = lambda x: jnp.mean(x, axis=(1, 2))               # GAP
-        self.poincare = Poincare(c=0.1, learnable=True)              # per van Spengler
+        self.poincare = Poincare(c=0.1)
+        self.c_raw = learnable_curvature(init_c=0.1)                  # per van Spengler
         self.head = HypRegressionPoincarePP(
             manifold_module=self.poincare,
             in_dim=64, out_dim=num_classes, rngs=rngs,
         )
 
     def __call__(self, images: jax.Array) -> jax.Array:
+        c = get_curvature(self.c_raw)
         features = self.pool(jax.nn.relu(self.stem(images)))  # (B, 64) Euclidean
         x_poincare = jax.vmap(self.poincare.expmap_0, in_axes=(0, None))(
-            features, self.poincare.c,
+            features, c,
         )
-        return self.head(x_poincare, self.poincare.c)
+        return self.head(x_poincare, c)
 ```
 
 ### Pattern 3: Hyperbolic transformer block
@@ -248,16 +252,19 @@ When stacking many Poincaré layers, give each block its own learnable curvature
 to avoid the conformal-factor collapse near the boundary:
 
 ```python
+from hyperbolix import learnable_curvature, get_curvature
+
 class HypResBlock(nnx.Module):
     def __init__(self, channels: int, *, rngs: nnx.Rngs):
-        self.m1 = Poincare(c=0.1, learnable=True)
-        self.m2 = Poincare(c=0.1, learnable=True)
-        self.conv1 = HypConv2DPoincare(self.m1, channels, channels,
+        self.manifold = Poincare(c=0.1)
+        self.c1 = learnable_curvature(init_c=0.1)
+        self.c2 = learnable_curvature(init_c=0.1)
+        self.conv1 = HypConv2DPoincare(self.manifold, channels, channels,
                                        kernel_size=(3, 3), rngs=rngs)
-        self.bn1 = PoincareBatchNorm2D(self.m1, channels, rngs=rngs)
-        self.conv2 = HypConv2DPoincare(self.m2, channels, channels,
+        self.bn1 = PoincareBatchNorm2D(self.manifold, channels, rngs=rngs)
+        self.conv2 = HypConv2DPoincare(self.manifold, channels, channels,
                                        kernel_size=(3, 3), rngs=rngs)
-        self.bn2 = PoincareBatchNorm2D(self.m2, channels, rngs=rngs)
+        self.bn2 = PoincareBatchNorm2D(self.manifold, channels, rngs=rngs)
 ```
 
 ## Common Pitfalls

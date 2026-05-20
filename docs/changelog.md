@@ -4,9 +4,14 @@ All notable changes to Hyperbolix will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Manifolds are now plain Python classes** (not `nnx.Module`). This structurally prevents shared-manifold bugs in `nnx.scan`/`nnx.fori_loop` — manifolds become static graphdef attributes with no state pytree entries
+- **`learnable=True` removed** from manifold constructors. Use `learnable_curvature()` / `get_curvature()` helpers instead — store the `nnx.Param` on your model. See the [Manifolds User Guide](user-guide/manifolds.md#static-vs-learnable)
+- **`ProductManifold`** is now a plain class; `from_signature` accepts 3- and 4-tuple specs only (5-tuple `learnable` override removed)
+
 ### Added
-- **Product manifold** (`hyperbolix.manifolds.ProductManifold`) — heterogeneous-curvature composition $M_1 \times M_2 \times \dots \times M_n$ where each factor may be any base manifold with its own curvature (Gu et al. 2019). Points are flat concatenated arrays of shape `(total_dim,)`; the protocol-required `c` argument is accepted for compatibility but ignored. Provides Pythagorean L2 geodesic distance plus auxiliary `dist_l1` / `dist_min` / `component_dist` reductions, full per-factor decomposition of `expmap`/`logmap`/`ptransp`/`proj`/`egrad2rgrad`/`tangent_inner`, an `origin()` helper, and a `from_signature` factory accepting 3-, 4-, and 5-tuple specs (the 5-tuple form `(cls, dim, count, c, learnable)` overrides the global `learnable` per spec, enabling mixed learnability)
-- **Learnable curvature** for `Poincare`, `Hyperboloid`, and `ProperVelocity` — pass `learnable=True` to store curvature as a trainable `nnx.Param` (`_c_raw`) reparametrized through `softplus` to stay positive. The current value is exposed via the standard `.c` property and traces through any `jax.grad`/`nnx.value_and_grad`. Works transparently with `nnx.Optimizer(..., wrt=nnx.Param)` and with `ProductManifold` (per-factor independent curvatures)
+- **`learnable_curvature(init_c)`** and **`get_curvature(c_raw)`** — curvature utility helpers in `hyperbolix.utils.curvature`, also exported at top level (`from hyperbolix import learnable_curvature, get_curvature`). Softplus reparameterization ensures positivity; works with any `nnx.Optimizer`
+- **Product manifold** (`hyperbolix.manifolds.ProductManifold`) — heterogeneous-curvature composition $M_1 \times M_2 \times \dots \times M_n$ where each factor may be any base manifold with its own curvature (Gu et al. 2019). Points are flat concatenated arrays of shape `(total_dim,)`; the protocol-required `c` argument is accepted for compatibility but ignored. Provides Pythagorean L2 geodesic distance plus auxiliary `dist_l1` / `dist_min` / `component_dist` reductions, full per-factor decomposition of `expmap`/`logmap`/`ptransp`/`proj`/`egrad2rgrad`/`tangent_inner`, an `origin()` helper, and a `from_signature` factory accepting 3- and 4-tuple specs
 - **Proper Velocity (PV) manifold** (`hyperbolix.manifolds.ProperVelocity`) — unconstrained $\mathbb{R}^n$ model of hyperbolic geometry from Chen et al. (2026), with complete geometric operations: `addition`, `scalar_mul`, `dist`, `expmap`/`logmap` (at origin and arbitrary base points), `ptransp`/`ptransp_0`, `egrad2rgrad`, and Riemannian inner product
 - **Proper Velocity neural-network layers**:
     - `HypLinearPV`: PV fully-connected layer (Thm 5.3 / Eq. 22)

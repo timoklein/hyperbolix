@@ -108,7 +108,7 @@ Most defaults from Euclidean training transfer. The exceptions:
 |---|---|
 | **Learning rate** | Adam `1e-3` works as a starting point for HTC / HCat / PP / PV. For deep Poincaré nets at `c=0.1`, try `5e-4`–`1e-3` |
 | **Gradient clipping** | Norm-clip at `1.0` is a safe default; not strictly required for most setups |
-| **Curvature init** | Hyperboloid: `c=1.0`. PV: `c=1.0`. Poincaré (deep nets): `c=0.1` with `learnable=True` per layer |
+| **Curvature init** | Hyperboloid: `c=1.0`. PV: `c=1.0`. Poincaré (deep nets): `c=0.1` with `learnable_curvature(0.1)` per layer |
 | **Float precision** | `float32` is fine for Hyperboloid and PV at modest depths. Use `Poincare(dtype=jnp.float64)` for high curvature, deep nets, or boundary-near training. See [Numerical Stability](numerical-stability.md) |
 | **Layer init** | Keep each family's default (HTC uses small uniform, PP uses scaled normal, etc.). Standard He/Xavier is too large for hyperbolic layers — see the [NN Layers guide](nn-layers.md#initialization-scales) |
 
@@ -117,7 +117,7 @@ Most defaults from Euclidean training transfer. The exceptions:
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | NaN loss in the first step | Init too large, or `version_idx` left dynamic under JIT | Verify per-family init defaults; bind `version_idx` with `functools.partial` before JIT |
-| Stuck at random-chance accuracy (Poincaré) | Curvature too high — features hit the boundary where the conformal factor collapses | Set `Poincare(c=0.1, learnable=True)`, ideally per layer |
+| Stuck at random-chance accuracy (Poincaré) | Curvature too high — features hit the boundary where the conformal factor collapses | Use `Poincare(c=0.1)` with `learnable_curvature(0.1)` per layer |
 | Loss explodes after some warmup (Hyperboloid float32) | Lorentz-constraint drift accumulated past the layer's tolerance | Periodically call `manifold.proj(x, c)` between blocks, or switch to float64 |
 | Loss is decreasing on training data but eval is wild | Float precision mismatch between train and eval | Make sure both code paths use the same dtype on inputs and manifold |
 | Using `riemannian_adam` for `HTC` / `FGG` / `PP` / `PV` layers | Wrong optimizer for Euclidean-weighted layers | Switch to `optax.adam` — see [Optimizers Guide](optimizers.md) |
