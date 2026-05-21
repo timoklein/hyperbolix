@@ -37,13 +37,15 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from .protocol import Curvature
+
 # Default numerical parameter for safe division
 MIN_DENOM = 1e-15
 
 
 def hyperboloid_to_poincare(
     x: Float[Array, "dim_plus_1"],
-    c: Float[Array, ""] | float,
+    c: Curvature,
 ) -> Float[Array, "dim"]:
     """Convert hyperboloid point to Poincaré ball via stereographic projection.
 
@@ -85,7 +87,7 @@ def hyperboloid_to_poincare(
 
 def poincare_to_hyperboloid(
     y: Float[Array, "dim"],
-    c: Float[Array, ""] | float,
+    c: Curvature,
 ) -> Float[Array, "dim_plus_1"]:
     """Convert Poincaré ball point to hyperboloid via inverse stereographic projection.
 

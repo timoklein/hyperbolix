@@ -31,9 +31,10 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ._base import ManifoldBase
+from .protocol import Curvature
 
 
-def _proj(x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _proj(x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Project point onto Euclidean space (identity operation).
 
     Args:
@@ -46,7 +47,7 @@ def _proj(x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     return x
 
 
-def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Add Euclidean points x and y.
 
     Args:
@@ -60,7 +61,7 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0) ->
     return x + y
 
 
-def _scalar_mul(r: float, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _scalar_mul(r: float, x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Multiply Euclidean point x with scalar r.
 
     Args:
@@ -77,7 +78,7 @@ def _scalar_mul(r: float, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array
 def _dist(
     x: Float[Array, "dim"],
     y: Float[Array, "dim"],
-    c: float = 0.0,
+    c: Curvature = 0.0,
 ) -> Float[Array, ""]:
     """Compute geodesic distance between Euclidean points x and y.
 
@@ -92,7 +93,7 @@ def _dist(
     return jnp.linalg.norm(x - y)
 
 
-def _dist_0(x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
+def _dist_0(x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:
     """Compute geodesic distance from Euclidean origin to x.
 
     Args:
@@ -105,7 +106,7 @@ def _dist_0(x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
     return jnp.linalg.norm(x)
 
 
-def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
     In Euclidean space, this is simply addition.
@@ -121,7 +122,7 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> F
     return x + v
 
 
-def _expmap_0(v: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _expmap_0(v: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     In Euclidean space, this is identity.
@@ -136,7 +137,7 @@ def _expmap_0(v: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
     return v
 
 
-def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Retraction: first-order approximation of exponential map.
 
     In Euclidean space, retraction equals exponential map (addition).
@@ -152,7 +153,7 @@ def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) 
     return x + v
 
 
-def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Logarithmic map: map point y to tangent space at point x.
 
     In Euclidean space, this is subtraction.
@@ -168,7 +169,7 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> F
     return y - x
 
 
-def _logmap_0(y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _logmap_0(y: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     In Euclidean space, this is identity.
@@ -187,7 +188,7 @@ def _ptransp(
     v: Float[Array, "dim"],
     x: Float[Array, "dim"],
     y: Float[Array, "dim"],
-    c: float = 0.0,
+    c: Curvature = 0.0,
 ) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from point x to point y.
 
@@ -205,7 +206,7 @@ def _ptransp(
     return v
 
 
-def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from origin to point y.
 
     In Euclidean space, tangent spaces are identical everywhere (identity).
@@ -225,7 +226,7 @@ def _tangent_inner(
     u: Float[Array, "dim"],
     v: Float[Array, "dim"],
     x: Float[Array, "dim"],
-    c: float = 0.0,
+    c: Curvature = 0.0,
 ) -> Float[Array, ""]:
     """Compute inner product of tangent vectors u and v at point x.
 
@@ -243,7 +244,7 @@ def _tangent_inner(
     return jnp.dot(u, v)
 
 
-def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
+def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:
     """Compute norm of tangent vector v at point x.
 
     In Euclidean space, this is the standard L2 norm.
@@ -259,7 +260,7 @@ def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0
     return jnp.linalg.norm(v)
 
 
-def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Convert Euclidean gradient to Riemannian gradient.
 
     In Euclidean space, these are identical.
@@ -275,7 +276,7 @@ def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0
     return grad
 
 
-def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
     """Project vector v onto tangent space at point x.
 
     In Euclidean space, tangent space is the entire space (identity).
@@ -291,7 +292,7 @@ def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0
     return v
 
 
-def _is_in_manifold(x: Float[Array, "dim"], c: float = 0.0) -> Array:
+def _is_in_manifold(x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
     """Check if point x lies in Euclidean manifold.
 
     In Euclidean space, all points are valid.
@@ -306,7 +307,7 @@ def _is_in_manifold(x: Float[Array, "dim"], c: float = 0.0) -> Array:
     return jnp.array(True, dtype=bool)
 
 
-def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Array:
+def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
     """Check if vector v lies in tangent space at point x.
 
     In Euclidean space, all vectors are valid tangent vectors.
@@ -347,82 +348,82 @@ class Euclidean(ManifoldBase):
     """
 
     def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
-        super().__init__(dtype, c=0.0, learnable=False)
+        super().__init__(dtype, c=0.0)
 
-    def proj(self, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def proj(self, x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Project point onto Euclidean space (identity)."""
         return _proj(self._cast(x), c)
 
-    def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Add Euclidean points."""
         return _addition(self._cast(x), self._cast(y), c)
 
-    def scalar_mul(self, r: float, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def scalar_mul(self, r: float, x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Scalar multiplication."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
         return _scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
 
-    def dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
+    def dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:
         """Compute distance."""
         return _dist(self._cast(x), self._cast(y), c)
 
-    def dist_0(self, x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
+    def dist_0(self, x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:
         """Distance from origin."""
         return _dist_0(self._cast(x), c)
 
-    def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Exponential map."""
         return _expmap(self._cast(v), self._cast(x), c)
 
-    def expmap_0(self, v: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def expmap_0(self, v: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Exponential map from origin."""
         return _expmap_0(self._cast(v), c)
 
-    def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Retraction."""
         return _retraction(self._cast(v), self._cast(x), c)
 
-    def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Logarithmic map."""
         return _logmap(self._cast(y), self._cast(x), c)
 
-    def logmap_0(self, y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def logmap_0(self, y: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Logarithmic map from origin."""
         return _logmap_0(self._cast(y), c)
 
     def ptransp(
-        self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0
+        self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature = 0.0
     ) -> Float[Array, "dim"]:
         """Parallel transport."""
         return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
 
-    def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Parallel transport from origin."""
         return _ptransp_0(self._cast(v), self._cast(y), c)
 
     def tangent_inner(
-        self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0
+        self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0
     ) -> Float[Array, ""]:
         """Tangent inner product."""
         return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
 
-    def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, ""]:
+    def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:
         """Tangent norm."""
         return _tangent_norm(self._cast(v), self._cast(x), c)
 
-    def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Euclidean to Riemannian gradient."""
         return _egrad2rgrad(self._cast(grad), self._cast(x), c)
 
-    def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Float[Array, "dim"]:
+    def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
         """Project onto tangent space."""
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
-    def is_in_manifold(self, x: Float[Array, "dim"], c: float = 0.0) -> Array:
+    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
         """Check if on manifold."""
         return _is_in_manifold(self._cast(x), c)
 
-    def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float = 0.0) -> Array:
+    def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
         """Check if in tangent space."""
         return _is_in_tangent_space(self._cast(v), self._cast(x), c)

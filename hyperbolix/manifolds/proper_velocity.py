@@ -53,6 +53,7 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import cosh, sinh, smooth_clamp
 from ._base import ManifoldBase
+from .protocol import Curvature
 
 # Default numerical parameters
 MIN_NORM = 1e-15
@@ -67,19 +68,19 @@ VERSION_DEFAULT = 0
 # ---------------------------------------------------------------------------
 
 
-def _create_origin(c: Float[Array, ""] | float, dim: int, dtype=jnp.float32) -> Float[Array, "dim"]:
+def _create_origin(c: Curvature, dim: int, dtype=jnp.float32) -> Float[Array, "dim"]:
     """Create PV origin: the zero vector in R^n."""
     del c  # curvature is irrelevant: the PV origin is always 0.
     return jnp.zeros(dim, dtype=dtype)
 
 
-def _beta(x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, ""]:
+def _beta(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """PV beta factor β_x = 1/√(1 + c·||x||²)."""
     x_sqnorm = jnp.dot(x, x)
     return 1.0 / jnp.sqrt(1.0 + c * x_sqnorm)
 
 
-def _beta_inv(x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, ""]:
+def _beta_inv(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Reciprocal of the PV beta factor: 1/β_x = √(1 + c·||x||²)."""
     x_sqnorm = jnp.dot(x, x)
     return jnp.sqrt(1.0 + c * x_sqnorm)
@@ -90,7 +91,7 @@ def _safe_norm(x: Float[Array, "dim"]) -> Float[Array, ""]:
     return jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
 
 
-def _dpi_x(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _dpi_x(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Differential of π: PV → Poincaré (paper Eq. 7 with K = -c).
 
     dπ_x(v) = β_x/(1+β_x)·v - c·β_x³/(1+β_x)²·⟨x, v⟩·x
@@ -107,7 +108,7 @@ def _mobius_gyration(
     a: Float[Array, "dim"],
     b: Float[Array, "dim"],
     z: Float[Array, "dim"],
-    c: Float[Array, ""] | float,
+    c: Curvature,
 ) -> Float[Array, "dim"]:
     """Möbius gyration gyr_M[a, b]z on the Poincaré ball (self-contained copy).
 
@@ -133,7 +134,7 @@ def _mobius_gyration(
 # ---------------------------------------------------------------------------
 
 
-def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """PV gyroaddition x ⊕_U y (paper Eq. 2 with K = -c).
 
     x ⊕ y = x + y + {(1 - β_y)/β_y + c·β_x/(1+β_x)·⟨x, y⟩}·x
@@ -148,7 +149,7 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Float[Array, ""
     return x + y + coef * x
 
 
-def _scalar_mul(t: Float[Array, ""] | float, x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _scalar_mul(t: Float[Array, ""] | float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """PV scalar multiplication t ⊗_U x (paper Eq. 3 with K = -c).
 
     t ⊗ x = sinh(t · asinh(√c·||x||)) · x / (√c·||x||),     t ⊗ 0 = 0
@@ -166,7 +167,7 @@ def _scalar_mul(t: Float[Array, ""] | float, x: Float[Array, "dim"], c: Float[Ar
 # ---------------------------------------------------------------------------
 
 
-def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, ""]:
+def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Geodesic distance d(x, y) on PV (paper Eq. 13, asinh form).
 
     The atanh form ``(2/√c)·atanh(√c·||π(-x⊕y)||)`` is algebraically equal to
@@ -180,7 +181,7 @@ def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Float[Array, ""] | 
     return jnp.asinh(sqrt_c * z_norm) / sqrt_c
 
 
-def _dist_0(x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, ""]:
+def _dist_0(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Geodesic distance from the PV origin (paper Thm 4.3 simplified).
 
     d(0, x) = (1/√c) · asinh(√c · ||x||)
@@ -195,7 +196,7 @@ def _dist_0(x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array,
 # ---------------------------------------------------------------------------
 
 
-def _expmap_0(v: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Exponential map from the origin (paper Thm 4.3 simplified).
 
     exp_0(v) = sinh(√c·||v||) · v / (√c·||v||)
@@ -210,7 +211,7 @@ def _expmap_0(v: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Arra
     return scale * v
 
 
-def _logmap_0(y: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _logmap_0(y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Logarithmic map to the origin (paper Thm 4.3 simplified).
 
     log_0(y) = asinh(√c·||y||) · y / (√c·||y||)
@@ -223,7 +224,7 @@ def _logmap_0(y: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Arra
     return scale * y
 
 
-def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Exponential map at x (paper Eq. 10 with K = -c).
 
     Uses the simplified form
@@ -254,7 +255,7 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Array, ""] 
     return _addition(x, coef * dpi_v, c)
 
 
-def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Logarithmic map at x (paper Eq. 11 with K = -c).
 
     Uses the simplified form
@@ -283,7 +284,7 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Array, ""] 
     return asinhc * direction
 
 
-def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Euclidean retraction x + v. PV is unconstrained, so this is exact.
 
     Kept separate from expmap to match the other manifolds' APIs; use ``expmap``
@@ -298,7 +299,7 @@ def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Array, 
 # ---------------------------------------------------------------------------
 
 
-def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Parallel transport from the origin to y (paper Thm 4.3, K = -c).
 
     PT_{0→y}(v) = v + c·β_y/(1+β_y) · ⟨y, v⟩ · y
@@ -313,7 +314,7 @@ def _ptransp(
     v: Float[Array, "dim"],
     x: Float[Array, "dim"],
     y: Float[Array, "dim"],
-    c: Float[Array, ""] | float,
+    c: Curvature,
 ) -> Float[Array, "dim"]:
     """Parallel transport from T_x PV to T_y PV (paper Eq. 12 with K = -c).
 
@@ -351,7 +352,7 @@ def _tangent_inner(
     u: Float[Array, "dim"],
     v: Float[Array, "dim"],
     x: Float[Array, "dim"],
-    c: Float[Array, ""] | float,
+    c: Curvature,
 ) -> Float[Array, ""]:
     """Riemannian inner product ⟨u, v⟩_x (paper Eq. 1 with K = -c).
 
@@ -364,19 +365,19 @@ def _tangent_inner(
     return uv - c * beta_x**2 * xu * xv
 
 
-def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, ""]:
+def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Riemannian norm ||v||_x = √g_x(v, v)."""
     inner = _tangent_inner(v, v, x, c)
     return jnp.sqrt(jnp.maximum(inner, 0.0))
 
 
-def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Tangent-space projection. T_x PV = R^n, so the projection is identity."""
     del x, c
     return v
 
 
-def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Convert Euclidean gradient to Riemannian gradient under the PV metric.
 
     From g_x(u, v) = ⟨u, A(x) v⟩ with A(x) = I - c·β_x²·x xᵀ, the Riemannian
@@ -394,13 +395,13 @@ def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Float[Arr
 # ---------------------------------------------------------------------------
 
 
-def _proj(x: Float[Array, "dim"], c: Float[Array, ""] | float) -> Float[Array, "dim"]:
+def _proj(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Projection onto PV. PV is R^n; we only replace non-finite entries."""
     del c
     return jnp.nan_to_num(x)
 
 
-def _is_in_manifold(x: Float[Array, "dim"], c: Float[Array, ""] | float, atol: float = 1e-5) -> Array:
+def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float = 1e-5) -> Array:
     """Every finite point in R^n lies on the PV manifold."""
     del c, atol
     return jnp.all(jnp.isfinite(x))
@@ -409,7 +410,7 @@ def _is_in_manifold(x: Float[Array, "dim"], c: Float[Array, ""] | float, atol: f
 def _is_in_tangent_space(
     v: Float[Array, "dim"],
     x: Float[Array, "dim"],
-    c: Float[Array, ""] | float,
+    c: Curvature,
     atol: float | None = None,
 ) -> Array:
     """Every finite vector in R^n is a tangent vector at any PV point."""
@@ -431,7 +432,7 @@ def _compute_mlr(
     x: Float[Array, "batch in_dim"],
     z: Float[Array, "out_dim in_dim"],
     r: Float[Array, "out_dim 1"],
-    c: Float[Array, ""] | float,
+    c: Curvature,
     clamping_factor: float,
     smoothing_factor: float,
     min_enorm: float = 1e-15,
@@ -500,10 +501,7 @@ class ProperVelocity(ManifoldBase):
 
     Args:
         dtype: Target JAX dtype for computations (default: ``jnp.float32``).
-        c: Initial curvature value (default: 1.0). Must be positive.
-        learnable: If True, curvature becomes a trainable ``nnx.Param``
-            optimized via softplus reparameterization. Access via the
-            ``c`` property. Default: False.
+        c: Curvature value (default: 1.0). Must be positive.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -520,25 +518,25 @@ class ProperVelocity(ManifoldBase):
 
     # -- Structural helpers --------------------------------------------------
 
-    def create_origin(self, c: float, dim: int) -> Float[Array, "dim"]:
+    def create_origin(self, c: Curvature, dim: int) -> Float[Array, "dim"]:
         """Create the PV origin (zero vector in R^n)."""
         return _create_origin(c, dim, self.dtype)
 
-    def beta(self, x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
+    def beta(self, x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
         """PV beta factor β_x = 1/√(1 + c·||x||²)."""
         return _beta(self._cast(x), c)
 
     # -- Gyro-operations -----------------------------------------------------
 
-    def proj(self, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def proj(self, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Projection onto PV (replaces non-finite values; PV is unconstrained)."""
         return _proj(self._cast(x), c)
 
-    def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """PV gyroaddition x ⊕_U y."""
         return _addition(self._cast(x), self._cast(y), c)
 
-    def scalar_mul(self, r: float, x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def scalar_mul(self, r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """PV scalar multiplication r ⊗_U x."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
@@ -550,37 +548,37 @@ class ProperVelocity(ManifoldBase):
         self,
         x: Float[Array, "dim"],
         y: Float[Array, "dim"],
-        c: float,
+        c: Curvature,
         version_idx: int = VERSION_DEFAULT,
     ) -> Float[Array, ""]:
         """Geodesic distance between PV points."""
         del version_idx  # only one implementation currently
         return _dist(self._cast(x), self._cast(y), c)
 
-    def dist_0(self, x: Float[Array, "dim"], c: float, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
+    def dist_0(self, x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
         """Geodesic distance from the PV origin."""
         del version_idx
         return _dist_0(self._cast(x), c)
 
     # -- Exp / log maps ------------------------------------------------------
 
-    def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Exponential map at x."""
         return _expmap(self._cast(v), self._cast(x), c)
 
-    def expmap_0(self, v: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def expmap_0(self, v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Exponential map from the origin."""
         return _expmap_0(self._cast(v), c)
 
-    def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Logarithmic map at x."""
         return _logmap(self._cast(y), self._cast(x), c)
 
-    def logmap_0(self, y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def logmap_0(self, y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Logarithmic map to the origin."""
         return _logmap_0(self._cast(y), c)
 
-    def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Euclidean retraction (exact for PV)."""
         return _retraction(self._cast(v), self._cast(x), c)
 
@@ -591,12 +589,12 @@ class ProperVelocity(ManifoldBase):
         v: Float[Array, "dim"],
         x: Float[Array, "dim"],
         y: Float[Array, "dim"],
-        c: float,
+        c: Curvature,
     ) -> Float[Array, "dim"]:
         """Parallel transport v from T_x PV to T_y PV."""
         return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
 
-    def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Parallel transport v from T_0 PV to T_y PV."""
         return _ptransp_0(self._cast(v), self._cast(y), c)
 
@@ -607,30 +605,30 @@ class ProperVelocity(ManifoldBase):
         u: Float[Array, "dim"],
         v: Float[Array, "dim"],
         x: Float[Array, "dim"],
-        c: float,
+        c: Curvature,
     ) -> Float[Array, ""]:
         """Riemannian inner product ⟨u, v⟩_x."""
         return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
 
-    def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, ""]:
+    def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
         """Riemannian norm ||v||_x."""
         return _tangent_norm(self._cast(v), self._cast(x), c)
 
-    def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Tangent-space projection (identity for PV)."""
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
-    def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Float[Array, "dim"]:
+    def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Convert Euclidean gradient to Riemannian gradient."""
         return _egrad2rgrad(self._cast(grad), self._cast(x), c)
 
     # -- Validation ----------------------------------------------------------
 
-    def is_in_manifold(self, x: Float[Array, "dim"], c: float, atol: float = 1e-5) -> Array:
+    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature, atol: float = 1e-5) -> Array:
         """Check that all entries are finite (PV has no constraint)."""
         return _is_in_manifold(self._cast(x), c, atol)
 
-    def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: float) -> Array:
+    def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Array:
         """Check that v has finite entries (T_x PV = R^n)."""
         return _is_in_tangent_space(self._cast(v), self._cast(x), c)
 
@@ -645,7 +643,7 @@ class ProperVelocity(ManifoldBase):
         x: Float[Array, "batch in_dim"],
         z: Float[Array, "out_dim in_dim"],
         r: Float[Array, "out_dim 1"],
-        c: float,
+        c: Curvature,
         clamping_factor: float,
         smoothing_factor: float,
         min_enorm: float = 1e-15,

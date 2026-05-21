@@ -55,32 +55,53 @@ curvature $-c$ (so larger `c` → more curved). `Euclidean` ignores `c` entirely
 
 ### Static vs. learnable
 
-All three hyperbolic manifolds support both fixed and learnable curvature
-through the same API:
+Manifolds are **pure geometric utilities** (plain Python classes, not `nnx.Module`).
+They hold a fixed curvature value. For **learnable curvature**, use the
+`LearnableCurvature` module and assign one instance per distinct curvature
+in your model:
 
 ```python
-# Fixed curvature (default)
-manifold = Hyperboloid(c=1.0)               # m.c is a Python float
-manifold = Poincare(c=0.1)                  # ditto
-manifold = ProperVelocity(c=1.0)            # ditto
+from hyperbolix import LearnableCurvature
+from hyperbolix.manifolds import Hyperboloid, Poincare
 
-# Learnable curvature: stored as nnx.Param via softplus reparameterization
-manifold = Hyperboloid(c=1.0, learnable=True)
-manifold = Poincare(c=0.1, learnable=True)
-manifold = ProperVelocity(c=1.0, learnable=True)
+# Fixed curvature (default) — manifold.c is a Python float
+manifold = Hyperboloid(c=1.0)
+manifold = Poincare(c=0.1)
 
-# Either way, the current value is accessible the same way:
-c_now = manifold.c   # float if fixed; traced jax.Array if learnable
+# Learnable curvature: one LearnableCurvature per distinct c on your model
+class Model(nnx.Module):
+    def __init__(self, rngs):
+        self.manifold = Hyperboloid(c=1.0)               # static geometric utility
+        self.curvature = LearnableCurvature(init_c=1.0)  # nnx.Module on the model
+        self.fc = FGGLinear(33, 65, rngs=rngs)
+
+    def __call__(self, x):
+        c = self.curvature()                              # softplus → positive, clamped
+        return self.fc(x, c=c)
 ```
 
-Learnable curvature is broadly useful and works with any standard `nnx.Optimizer`
-(no Riemannian optimizer required for the curvature itself — it's a Euclidean
-`nnx.Param`):
+The underlying raw parameter is Euclidean and works with any standard
+`nnx.Optimizer` (no Riemannian optimizer required):
 
 ```python
 optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
-# manifold._c_raw will be optimized alongside other params automatically.
+# self.curvature.raw is optimized alongside other params automatically.
 ```
+
+### Choosing softplus vs. log
+
+| Parameterization | Formula | Gradient w.r.t. raw | When to prefer |
+|---|---|---|---|
+| `"softplus"` (default) | `c = softplus(raw)` | `sigmoid(raw) ∈ (0, 1)` — bounded | Supervised training; van Spengler 2023 convention |
+| `"log"` | `c = exp(raw)` | `c` — scale-invariant | RL/compiled loops; `c` spans orders of magnitude; MERU convention |
+
+```python
+self.curvature = LearnableCurvature(init_c=1.0, parameterization="log")
+```
+
+Both apply the default clamp `[0.1, 10.0]` to the recovered `c` (not the
+raw parameter), giving a hard stability guard. Pass `c_min=None, c_max=None`
+to disable, or set tighter bounds to fit your workload.
 
 ### When `c=1.0` works and when it doesn't
 
@@ -91,18 +112,24 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 | `Poincare` | **Often too aggressive for deep nets** | Conformal factor $\lambda = 2/(1 - c\|x\|^2)$ collapses near boundary, killing MLR signal |
 
 For Poincaré in deep networks, the **van Spengler et al. (2023)** convention
-is `init_c=0.1` with a separate `Poincare(c=...)` per layer, often with
-`learnable=True`:
+is `init_c=0.1` with learnable per-layer curvatures (one `LearnableCurvature`
+per layer — do **not** share a single instance across layers, see the
+compiled-loops note below):
 
 ```python
-# Per-layer Poincaré curvature, all learnable
+from hyperbolix import LearnableCurvature
+
 class HypResNetBlock(nnx.Module):
     def __init__(self, rngs: nnx.Rngs):
-        # Each layer carries its own (initially small) curvature
-        self.manifold_a = Poincare(c=0.1, learnable=True)
-        self.manifold_b = Poincare(c=0.1, learnable=True)
-        self.conv_a = HypConv2DPoincare(self.manifold_a, ..., rngs=rngs)
-        self.conv_b = HypConv2DPoincare(self.manifold_b, ..., rngs=rngs)
+        self.manifold = Poincare(c=0.1)
+        self.curv_a = LearnableCurvature(init_c=0.1)
+        self.curv_b = LearnableCurvature(init_c=0.1)
+        self.conv_a = HypConv2DPoincare(self.manifold, ..., rngs=rngs)
+        self.conv_b = HypConv2DPoincare(self.manifold, ..., rngs=rngs)
+
+    def __call__(self, x):
+        h = self.conv_a(x, self.curv_a())
+        return self.conv_b(h, self.curv_b())
 ```
 
 ### Curvature in `ProductManifold`
@@ -116,15 +143,85 @@ product.factors[i].c         # specific factor's curvature
 product.component_dist(x, y) # per-factor distance vector (before reduction)
 ```
 
-Per-factor learnability is controlled via the 5-tuple form of
-`from_signature`, letting you mix learnable and fixed curvatures:
+For learnable per-factor curvatures, instantiate one `LearnableCurvature`
+per factor on your model:
 
 ```python
-mixed = ProductManifold.from_signature(
-    (Hyperboloid, 5, 4, 1.0, True),   # 4 copies, curvatures learnable
-    (Poincare,    3, 2, 0.1, False),  # 2 copies, curvatures fixed
-    (Euclidean,   8, 1),              # 1 copy, c/learnable irrelevant
-)
+from hyperbolix import LearnableCurvature
+from hyperbolix.manifolds import Hyperboloid, Poincare, ProductManifold
+
+class Model(nnx.Module):
+    def __init__(self, rngs):
+        self.pm = ProductManifold(
+            (Hyperboloid(c=1.0), 3),
+            (Poincare(c=0.5), 2),
+        )
+        self.curv_h = LearnableCurvature(init_c=1.0)
+        self.curv_p = LearnableCurvature(init_c=0.5)
+
+    def __call__(self, x, y):
+        c_h = self.curv_h()
+        c_p = self.curv_p()
+        x_parts = self.pm.split(x)
+        y_parts = self.pm.split(y)
+        d_h = self.pm.factors[0].dist(x_parts[0], y_parts[0], c_h)
+        d_p = self.pm.factors[1].dist(x_parts[1], y_parts[1], c_p)
+        return d_h + d_p
+```
+
+### Learnable curvature in compiled training loops (`nnx.scan` / `nnx.fori_loop`)
+
+Long compiled training loops (RL agents, episode rollouts, multi-step
+training kernels) have two stability concerns that motivate the
+`LearnableCurvature` defaults:
+
+1. **Sharing rule**: Assigning the **same** `LearnableCurvature` instance
+   to multiple fields creates a shared reference in the NNX pytree, which
+   breaks `nnx.scan` / `nnx.fori_loop` with `ValueError: Dict key mismatch`.
+   This is the same failure mode that motivated the manifold refactor.
+   Always instantiate a fresh `LearnableCurvature` per location where you
+   want a distinct learnable `c`. (The manifold itself is a plain Python
+   class with no NNX state, so sharing the manifold across layers is
+   always safe.)
+
+2. **Clamp guard**: Over millions of gradient steps, an unclamped curvature
+   can drift to `c → 0` (effectively Euclidean) or `c → ∞` (numerical
+   blow-up). The default `[0.1, 10.0]` bounds — applied directly to `c`,
+   not to the raw parameter — cover the entire useful hyperbolic geometry
+   range without losing expressivity.
+
+The recommended pattern for a compiled RL loop:
+
+```python
+from hyperbolix import LearnableCurvature
+from hyperbolix.manifolds import Poincare
+from hyperbolix.nn_layers import HypLinearPoincarePP
+
+manifold = Poincare(c=0.1)  # shared across layers — safe (plain class)
+
+class HypPolicy(nnx.Module):
+    def __init__(self, rngs: nnx.Rngs):
+        self.manifold = manifold
+        # Log parameterization: scale-invariant gradient (dc/draw = c).
+        # Default clamp [0.1, 10.0] is the stability guard.
+        self.curvature = LearnableCurvature(
+            init_c=0.1, parameterization="log",
+        )
+        self.l1 = HypLinearPoincarePP(manifold, 4, 4, rngs=rngs)
+        self.l2 = HypLinearPoincarePP(manifold, 4, 4, rngs=rngs)
+
+    def __call__(self, x):
+        c = self.curvature()
+        h = self.l1(x, c)
+        return self.l2(h, c)
+
+# Standard Euclidean optimizer — self.curvature.raw is updated like any param.
+optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
+
+# Training loop survives nnx.fori_loop / nnx.scan because:
+# 1. The manifold is a plain class (not in the pytree).
+# 2. LearnableCurvature lives at exactly one path on the model.
+# 3. The clamp prevents pathological values from accumulating.
 ```
 
 ## Going Euclidean → Manifold

@@ -1,16 +1,15 @@
 """JAX manifold implementations - class-based approach with dtype control."""
 
-# Import manifold classes
-# Import manifold modules for backwards compatibility
 from . import isometry_mappings
 from .euclidean import Euclidean
 from .hyperboloid import Hyperboloid
 from .poincare import Poincare
 from .product import ProductManifold
 from .proper_velocity import ProperVelocity
-from .protocol import Manifold
+from .protocol import Curvature, Manifold
 
 __all__ = [
+    "Curvature",
     "Euclidean",
     "Hyperboloid",
     "Manifold",

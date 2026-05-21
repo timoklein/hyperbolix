@@ -32,22 +32,22 @@ References:
 
 import jax
 import jax.numpy as jnp
-from flax import nnx
 from jaxtyping import Array, Float
 
 from ._base import ManifoldBase
+from .protocol import Curvature
 
 
-class ProductManifold(nnx.Module):
+class ProductManifold:
     """Product manifold P = M1 x M2 x ... x Mn.
 
     Each factor is specified as ``(manifold_instance, dim)`` where ``dim`` is
     the point dimension (array slice width): ambient for Hyperboloid (d+1),
     spatial for Poincaré/Euclidean/ProperVelocity (d).
 
-    Curvature is managed per-factor via each sub-manifold's ``.c`` property
-    (optionally learnable). The ``c`` parameter on protocol methods is accepted
-    for compatibility but ignored — each factor uses its own curvature.
+    Curvature is managed per-factor via each sub-manifold's ``.c`` property.
+    The ``c`` parameter on protocol methods is accepted for compatibility but
+    ignored — each factor uses its own curvature.
 
     Args:
         *factors: Tuples of ``(manifold_instance, dim)``. At least one required.
@@ -58,14 +58,6 @@ class ProductManifold(nnx.Module):
         >>> x = product.origin()           # shape (8,)
         >>> parts = product.split(x)       # (array(5,), array(3,))
         >>> d = product.dist(x, y, c=0.0)  # c ignored, uses per-factor curvatures
-
-        With learnable curvatures:
-
-        >>> product = ProductManifold(
-        ...     (Hyperboloid(c=1.0, learnable=True), 5),
-        ...     (Poincare(c=0.1, learnable=True), 3),
-        ... )
-        >>> product.curvatures  # (softplus(raw_0), softplus(raw_1))
 
         From a signature (repeated factors):
 
@@ -99,7 +91,7 @@ class ProductManifold(nnx.Module):
             slices.append(slice(pos, pos + dim))
             pos += dim
 
-        self._factors = nnx.List(manifolds)
+        self._factors = tuple(manifolds)
         self._dims = tuple(dims)
         self._slices = tuple(slices)
         self._total_dim = pos
@@ -131,7 +123,7 @@ class ProductManifold(nnx.Module):
 
     @property
     def factors(self) -> tuple[ManifoldBase, ...]:
-        return tuple(self._factors)
+        return self._factors
 
     @property
     def curvatures(self) -> tuple[float | jax.Array, ...]:
@@ -165,7 +157,7 @@ class ProductManifold(nnx.Module):
 
     # -- Geometry (per-factor decomposable) --------------------------------
 
-    def proj(self, x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def proj(self, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
         """Project point onto product manifold (per-factor projection)."""
         del c
         x = self._cast(x)
@@ -173,7 +165,7 @@ class ProductManifold(nnx.Module):
         return jnp.concatenate([m.proj(p, m.c) for m, p in zip(self._factors, parts, strict=True)])
 
     def addition(
-        self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: float = 0.0
+        self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Manifold addition (per-factor)."""
         del c
@@ -181,7 +173,7 @@ class ProductManifold(nnx.Module):
         x_parts, y_parts = self.split(x), self.split(y)
         return jnp.concatenate([m.addition(xp, yp, m.c) for m, xp, yp in zip(self._factors, x_parts, y_parts, strict=True)])
 
-    def scalar_mul(self, r: float, x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def scalar_mul(self, r: float, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
         """Scalar multiplication (same scalar r applied to all factors)."""
         del c
         x = self._cast(x)
@@ -190,28 +182,32 @@ class ProductManifold(nnx.Module):
 
     # -- Exponential / logarithmic maps ------------------------------------
 
-    def expmap(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def expmap(
+        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
+    ) -> Float[Array, "total_dim"]:
         """Exponential map (per-factor)."""
         del c
         v, x = self._cast(v), self._cast(x)
         v_parts, x_parts = self.split(v), self.split(x)
         return jnp.concatenate([m.expmap(vp, xp, m.c) for m, vp, xp in zip(self._factors, v_parts, x_parts, strict=True)])
 
-    def expmap_0(self, v: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def expmap_0(self, v: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
         """Exponential map from origin (per-factor)."""
         del c
         v = self._cast(v)
         parts = self.split(v)
         return jnp.concatenate([m.expmap_0(p, m.c) for m, p in zip(self._factors, parts, strict=True)])
 
-    def logmap(self, y: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def logmap(
+        self, y: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
+    ) -> Float[Array, "total_dim"]:
         """Logarithmic map (per-factor)."""
         del c
         y, x = self._cast(y), self._cast(x)
         y_parts, x_parts = self.split(y), self.split(x)
         return jnp.concatenate([m.logmap(yp, xp, m.c) for m, yp, xp in zip(self._factors, y_parts, x_parts, strict=True)])
 
-    def logmap_0(self, y: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def logmap_0(self, y: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
         """Logarithmic map to origin (per-factor)."""
         del c
         y = self._cast(y)
@@ -219,7 +215,7 @@ class ProductManifold(nnx.Module):
         return jnp.concatenate([m.logmap_0(p, m.c) for m, p in zip(self._factors, parts, strict=True)])
 
     def retraction(
-        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0
+        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Retraction (per-factor)."""
         del c
@@ -234,7 +230,7 @@ class ProductManifold(nnx.Module):
         v: Float[Array, "total_dim"],
         x: Float[Array, "total_dim"],
         y: Float[Array, "total_dim"],
-        c: float = 0.0,
+        c: Curvature = 0.0,
     ) -> Float[Array, "total_dim"]:
         """Parallel transport of v from x to y (per-factor)."""
         del c
@@ -245,7 +241,7 @@ class ProductManifold(nnx.Module):
         )
 
     def ptransp_0(
-        self, v: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: float = 0.0
+        self, v: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Parallel transport from origin to y (per-factor)."""
         del c
@@ -258,7 +254,7 @@ class ProductManifold(nnx.Module):
         u: Float[Array, "total_dim"],
         v: Float[Array, "total_dim"],
         x: Float[Array, "total_dim"],
-        c: float = 0.0,
+        c: Curvature = 0.0,
     ) -> Float[Array, ""]:
         """Riemannian inner product (sum of per-factor inner products)."""
         del c
@@ -269,12 +265,12 @@ class ProductManifold(nnx.Module):
         )
         return jnp.sum(inners)
 
-    def tangent_norm(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, ""]:
+    def tangent_norm(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, ""]:
         """Riemannian norm (sqrt of tangent inner product with itself)."""
         return jnp.sqrt(jnp.maximum(self.tangent_inner(v, v, x, c), 0.0))
 
     def egrad2rgrad(
-        self, grad: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0
+        self, grad: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Convert Euclidean gradient to Riemannian gradient (per-factor)."""
         del c
@@ -283,7 +279,7 @@ class ProductManifold(nnx.Module):
         return jnp.concatenate([m.egrad2rgrad(gp, xp, m.c) for m, gp, xp in zip(self._factors, g_parts, x_parts, strict=True)])
 
     def tangent_proj(
-        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0
+        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Project vector onto tangent space (per-factor)."""
         del c
@@ -305,13 +301,13 @@ class ProductManifold(nnx.Module):
         x_parts, y_parts = self.split(x), self.split(y)
         return jnp.stack([m.dist(xp, yp, m.c) for m, xp, yp in zip(self._factors, x_parts, y_parts, strict=True)])
 
-    def dist(self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, ""]:
+    def dist(self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, ""]:
         """Product distance (L2/Riemannian): d = sqrt(sum d_i^2)."""
         del c
         d_per_factor = self.component_dist(x, y)
         return jnp.sqrt(jnp.sum(d_per_factor**2))
 
-    def dist_0(self, x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, ""]:
+    def dist_0(self, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, ""]:
         """Distance from origin (L2/Riemannian)."""
         del c
         x = self._cast(x)
@@ -337,7 +333,7 @@ class ProductManifold(nnx.Module):
 
     # -- Validation --------------------------------------------------------
 
-    def is_in_manifold(self, x: Float[Array, "total_dim"], c: float = 0.0) -> Array:
+    def is_in_manifold(self, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Array:
         """Check if point is on product manifold (all factors valid)."""
         del c
         x = self._cast(x)
@@ -345,7 +341,7 @@ class ProductManifold(nnx.Module):
         checks = [m.is_in_manifold(p, m.c) for m, p in zip(self._factors, parts, strict=True)]
         return jnp.all(jnp.stack(checks))
 
-    def is_in_tangent_space(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0) -> Array:
+    def is_in_tangent_space(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Array:
         """Check if vector is in tangent space at x (all factors valid)."""
         del c
         v, x = self._cast(v), self._cast(x)
@@ -359,48 +355,28 @@ class ProductManifold(nnx.Module):
     def from_signature(
         cls,
         *specs: tuple,
-        learnable: bool = False,
         dtype: jnp.dtype = jnp.float32,
     ) -> "ProductManifold":
         """Create product manifold from a signature specification.
 
         Each spec is one of:
-          - ``(ManifoldClass, dim, count)`` — uses ``c=1.0`` and global ``learnable``.
-          - ``(ManifoldClass, dim, count, curvature)`` — sets ``c``, uses global ``learnable``.
-          - ``(ManifoldClass, dim, count, curvature, learnable)`` — overrides
-            the global ``learnable`` flag for this spec only.
+          - ``(ManifoldClass, dim, count)`` — uses ``c=1.0``.
+          - ``(ManifoldClass, dim, count, curvature)`` — sets ``c``.
 
-        Euclidean factors silently ignore the ``curvature`` and ``learnable``
-        fields (Euclidean has fixed ``c=0`` and no learnable curvature; see
-        ``Euclidean.__init__``).
+        Euclidean factors silently ignore the ``curvature`` field
+        (Euclidean has fixed ``c=0``; see ``Euclidean.__init__``).
 
         Args:
-            *specs: Signature tuples (3-, 4-, or 5-tuple as described above).
-            learnable: Global default for whether curvatures are learnable.
-                Used when a spec does not supply an explicit override (i.e.
-                3- or 4-tuple). Default: False.
+            *specs: Signature tuples (3- or 4-tuple as described above).
             dtype: Target JAX dtype.
 
         Returns:
             ProductManifold instance.
 
         Examples:
-            Uniform learnability (current behavior preserved):
-
-            >>> # (H^3)^8 x (P^2)^4 x E^8, all hyperbolic factors learnable
             >>> pm = ProductManifold.from_signature(
             ...     (Hyperboloid, 3, 8, 1.0),
             ...     (Poincare, 2, 4, 0.1),
-            ...     (Euclidean, 8, 1),
-            ...     learnable=True,
-            ... )
-
-            Per-factor learnability via 5-tuples (mixed):
-
-            >>> # Hyperboloid factors learn curvature, Poincare factors fixed
-            >>> pm = ProductManifold.from_signature(
-            ...     (Hyperboloid, 3, 8, 1.0, True),
-            ...     (Poincare, 2, 4, 0.1, False),
             ...     (Euclidean, 8, 1),
             ... )
         """
@@ -411,26 +387,19 @@ class ProductManifold(nnx.Module):
             if len(spec) == 3:
                 manifold_cls, dim, count = spec
                 curvature = 1.0
-                learnable_override: bool | None = None
             elif len(spec) == 4:
                 manifold_cls, dim, count, curvature = spec
-                learnable_override = None
-            elif len(spec) == 5:
-                manifold_cls, dim, count, curvature, learnable_override = spec
             else:
                 raise ValueError(
-                    "Expected 3-tuple (ManifoldClass, dim, count), 4-tuple "
-                    "(ManifoldClass, dim, count, curvature), or 5-tuple "
-                    f"(ManifoldClass, dim, count, curvature, learnable); got {len(spec)}-tuple"
+                    "Expected 3-tuple (ManifoldClass, dim, count) or 4-tuple "
+                    f"(ManifoldClass, dim, count, curvature); got {len(spec)}-tuple"
                 )
-
-            factor_learnable = learnable if learnable_override is None else learnable_override
 
             for _ in range(count):
                 if issubclass(manifold_cls, Euclidean):
                     instance = manifold_cls(dtype=dtype)
                 else:
-                    instance = manifold_cls(dtype=dtype, c=curvature, learnable=factor_learnable)
+                    instance = manifold_cls(dtype=dtype, c=curvature)
                 factors.append((instance, dim))
 
         return cls(*factors, dtype=dtype)

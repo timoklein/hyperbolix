@@ -17,7 +17,7 @@ All manifolds share a common interface defined by the `Manifold` protocol and su
 - **Automatic dtype casting**: Pass `dtype=jnp.float64` for higher precision
 - **vmap-native methods**: Methods operate on single points; use `jax.vmap` for batching
 - **JIT compatibility**: All methods are JIT-compilable
-- **Optionally learnable curvature**: Pass `learnable=True` to base manifolds (Poincaré, Hyperboloid, Proper Velocity) to make $c$ a trainable `nnx.Param` via softplus reparameterization
+- **Learnable curvature**: Use the `LearnableCurvature` module to add trainable curvature to any model (softplus or log/exp reparameterization, optional clamping)
 
 ## Manifold Protocol
 
@@ -109,7 +109,7 @@ where $x_i$, $y_i$ are the per-factor slices of the flat points.
     The `c` argument on protocol methods (e.g. `product.dist(x, y, c=0.0)`) is accepted for `Manifold`-protocol compatibility but **ignored** — each factor uses its own curvature stored on the sub-manifold instance. This mirrors how `Euclidean` accepts but ignores `c`.
 
 !!! tip "Mixed learnability"
-    Use the 5-tuple form of `from_signature` to make some factors' curvatures learnable while keeping others fixed (e.g. learn hyperbolic curvatures but freeze a Poincaré factor at $c=0.1$). Euclidean factors silently ignore the curvature/learnable fields.
+    `ProductManifold` factors hold static curvatures; learnable curvature lives on your `nnx.Module` via [`LearnableCurvature`](utils.md#learnable-curvature). To make some factors learnable while keeping others fixed, instantiate a `LearnableCurvature` only for the factors you want to train, then call each factor's methods directly (e.g. `pm.factors[i].dist(...)`) with the recovered curvature. See the [Manifolds User Guide — Curvature in ProductManifold](../user-guide/manifolds.md#curvature-in-productmanifold) for the full pattern.
 
 ::: hyperbolix.manifolds.product.ProductManifold
     options:
@@ -256,13 +256,13 @@ y = product.origin()  # generated elsewhere; here we use o for illustration
 d_l2 = product.dist(x, y)               # scalar
 d_per_factor = product.component_dist(x, y)  # shape (3,) per-factor distances
 
-# Per-factor learnable curvature: Hyperboloid learns, Poincaré stays fixed
+# Repeated-factor construction via from_signature
 mixed = ProductManifold.from_signature(
-    (Hyperboloid, 5, 4, 1.0, True),   # 4 copies of H^4(c=1.0), curvatures learnable
-    (Poincare,    3, 2, 0.1, False),  # 2 copies of P^3(c=0.1), curvatures fixed
-    (Euclidean,   4, 1),              # 1 copy of E^4 — c/learnable fields ignored
+    (Hyperboloid, 5, 4, 1.0),   # 4 copies of H^4(c=1.0)
+    (Poincare,    3, 2, 0.1),   # 2 copies of P^3(c=0.1)
+    (Euclidean,   4, 1),         # 1 copy of E^4
 )
-# Each learnable factor exposes a softplus-parametrized `_c_raw` nnx.Param.
+# For learnable curvature, use LearnableCurvature on your nnx.Module.
 ```
 
 ### Isometry Mappings
