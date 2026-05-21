@@ -1191,8 +1191,7 @@ you when you're in the rare case that does.</p>
 <li>All modern NN layers — <code>HTCLinear</code>, <code>FGGLinear</code>, <code>HypConv2DHyperboloid*</code>,
   <code>HypLinearHyperboloidPP</code>, <code>HypLinearPoincarePP</code>, <code>HypLinearPV</code>, all
   attention / normalization / regression heads.</li>
-<li>Learnable curvature (<code>Hyperboloid(c=1.0, learnable=True)</code> and the same on
-  Poincaré / PV).</li>
+<li>Learnable curvature (via the <code>LearnableCurvature</code> module).</li>
 </ul>
 <p><strong>The single exception</strong>: the legacy Ganea-style Poincaré layers
 (<code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>) parameterize weights <em>directly
@@ -1242,14 +1241,19 @@ correctly.</p>
 </span></code></pre></div>
 <h2 id="learnable-curvature-is-also-euclidean">Learnable Curvature Is Also Euclidean<a class="headerlink" href="#learnable-curvature-is-also-euclidean" title="Permanent link">&para;</a></h2>
 <p>A common confusion: surely learnable curvature needs Riemannian optimization?
-No. Curvature is stored as a single Euclidean <code>nnx.Param</code> (<code>_c_raw</code>) and
-reparameterized through <code>softplus</code> to stay positive. The <code>_c_raw</code> parameter
-gets a normal Euclidean gradient and a normal Adam update — there's nothing
-to project, nothing on a manifold.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">learnable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># _c_raw is a plain nnx.Param</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># ... build model ...</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Curvature is updated by Adam alongside all other parameters.</span>
+No. The <code>LearnableCurvature</code> module stores a plain Euclidean <code>nnx.Param</code>
+that is reparameterized at call time (via <code>softplus</code> or <code>exp</code>) to stay
+positive. It gets a normal Euclidean gradient and a normal Adam update —
+there's nothing to project, nothing on a manifold.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix</span><span class="w"> </span><span class="kn">import</span> <span class="n">LearnableCurvature</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">Model</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">...</span><span class="p">):</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span> <span class="o">=</span> <span class="n">LearnableCurvature</span><span class="p">(</span><span class="n">init_c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># raw is a plain nnx.Param</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>        <span class="o">...</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="c1"># Curvature is updated by Adam alongside all other parameters.</span>
 </span></code></pre></div>
 <h2 id="the-legacy-ganea-exception">The Legacy Ganea Exception<a class="headerlink" href="#the-legacy-ganea-exception" title="Permanent link">&para;</a></h2>
 <p><code>HypLinearPoincare</code> and <code>HypRegressionPoincare</code> (Ganea et al. 2018) store

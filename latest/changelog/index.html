@@ -980,6 +980,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#added" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -991,7 +1002,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#changed" class="md-nav__link">
+  <a href="#changed_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Changed
@@ -1030,7 +1041,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#changed_1" class="md-nav__link">
+  <a href="#changed_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         Changed
@@ -1103,6 +1114,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#added" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1114,7 +1136,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#changed" class="md-nav__link">
+  <a href="#changed_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Changed
@@ -1153,7 +1175,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#changed_1" class="md-nav__link">
+  <a href="#changed_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         Changed
@@ -1202,40 +1224,48 @@
 <h1 id="changelog">Changelog<a class="headerlink" href="#changelog" title="Permanent link">&para;</a></h1>
 <p>All notable changes to Hyperbolix will be documented in this file.</p>
 <h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v0.1.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Manifolds are now plain Python classes</strong> (not <code>nnx.Module</code>). This structurally prevents shared-manifold bugs in <code>nnx.scan</code>/<code>nnx.fori_loop</code> — manifolds become static graphdef attributes with no state pytree entries</li>
+<li><strong><code>learnable=True</code> removed</strong> from manifold constructors. Use the <code>LearnableCurvature</code> module instead — assign one instance per distinct curvature on your model. See the <a href="../user-guide/manifolds/#static-vs-learnable">Manifolds User Guide</a></li>
+<li><strong><code>ProductManifold</code></strong> is now a plain class; <code>from_signature</code> accepts 3- and 4-tuple specs only (5-tuple <code>learnable</code> override removed)</li>
+<li><strong><code>learnable_curvature()</code> / <code>get_curvature()</code> functional helpers replaced</strong> by the <code>LearnableCurvature(nnx.Module)</code> class. The class bundles the raw parameter, reparameterization scheme, and clamp bounds in one object, making accidental init/recovery mismatches structurally impossible. Call sites change from <code>c = get_curvature(self.c_raw)</code> to <code>c = self.curvature()</code>. <strong>Breaking change</strong> — no deprecation shim</li>
+</ul>
 <h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>Product manifold</strong> (<code>hyperbolix.manifolds.ProductManifold</code>) — heterogeneous-curvature composition <span class="arithmatex">\(M_1 \times M_2 \times \dots \times M_n\)</span> where each factor may be any base manifold with its own curvature (Gu et al. 2019). Points are flat concatenated arrays of shape <code>(total_dim,)</code>; the protocol-required <code>c</code> argument is accepted for compatibility but ignored. Provides Pythagorean L2 geodesic distance plus auxiliary <code>dist_l1</code> / <code>dist_min</code> / <code>component_dist</code> reductions, full per-factor decomposition of <code>expmap</code>/<code>logmap</code>/<code>ptransp</code>/<code>proj</code>/<code>egrad2rgrad</code>/<code>tangent_inner</code>, an <code>origin()</code> helper, and a <code>from_signature</code> factory accepting 3-, 4-, and 5-tuple specs (the 5-tuple form <code>(cls, dim, count, c, learnable)</code> overrides the global <code>learnable</code> per spec, enabling mixed learnability)</li>
-<li><strong>Learnable curvature</strong> for <code>Poincare</code>, <code>Hyperboloid</code>, and <code>ProperVelocity</code> — pass <code>learnable=True</code> to store curvature as a trainable <code>nnx.Param</code> (<code>_c_raw</code>) reparametrized through <code>softplus</code> to stay positive. The current value is exposed via the standard <code>.c</code> property and traces through any <code>jax.grad</code>/<code>nnx.value_and_grad</code>. Works transparently with <code>nnx.Optimizer(..., wrt=nnx.Param)</code> and with <code>ProductManifold</code> (per-factor independent curvatures)</li>
-<li><strong>Proper Velocity (PV) manifold</strong> (<code>hyperbolix.manifolds.ProperVelocity</code>) — unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> model of hyperbolic geometry from Chen et al. (2026), with complete geometric operations: <code>addition</code>, <code>scalar_mul</code>, <code>dist</code>, <code>expmap</code>/<code>logmap</code> (at origin and arbitrary base points), <code>ptransp</code>/<code>ptransp_0</code>, <code>egrad2rgrad</code>, and Riemannian inner product</li>
-<li><strong>Proper Velocity neural-network layers</strong>:<ul>
-<li><code>HypLinearPV</code>: PV fully-connected layer (Thm 5.3 / Eq. 22)</li>
-<li><code>HypConv2DPV</code>: PV 2D convolution with raw Euclidean patch concatenation (Sec 5.3) — no beta-scaling, dimension-preserving</li>
-<li><code>HypRegressionPV</code>: PV multinomial-logistic-regression head (Thm 5.2 / Eq. 19)</li>
+<li>
+<p><strong><code>LearnableCurvature(nnx.Module)</code></strong> — canonical module for trainable curvature in <code>hyperbolix.utils.curvature</code>, also exported at top level (<code>from hyperbolix import LearnableCurvature</code>). Supports two reparameterizations:</p>
+<ul>
+<li><code>parameterization="softplus"</code> (default): <code>c = softplus(raw)</code>, bounded gradient via sigmoid (van Spengler 2023 convention)</li>
+<li><code>parameterization="log"</code>: <code>c = exp(raw)</code>, scale-invariant gradient <code>dc/draw = c</code> (MERU convention, preferred for compiled RL loops)</li>
 </ul>
+<p>Default clamp <code>[0.1, 10.0]</code> is applied to the recovered <code>c</code> (not the raw parameter) as a hard stability guard for long compiled training loops; pass <code>c_min=None, c_max=None</code> to disable. Updated by any standard Euclidean <code>nnx.Optimizer</code> — no Riemannian optimizer needed
+- <strong>Product manifold</strong> (<code>hyperbolix.manifolds.ProductManifold</code>) — heterogeneous-curvature composition <span class="arithmatex">\(M_1 \times M_2 \times \dots \times M_n\)</span> where each factor may be any base manifold with its own curvature (Gu et al. 2019). Points are flat concatenated arrays of shape <code>(total_dim,)</code>; the protocol-required <code>c</code> argument is accepted for compatibility but ignored. Provides Pythagorean L2 geodesic distance plus auxiliary <code>dist_l1</code> / <code>dist_min</code> / <code>component_dist</code> reductions, full per-factor decomposition of <code>expmap</code>/<code>logmap</code>/<code>ptransp</code>/<code>proj</code>/<code>egrad2rgrad</code>/<code>tangent_inner</code>, an <code>origin()</code> helper, and a <code>from_signature</code> factory accepting 3- and 4-tuple specs
+- <strong>Proper Velocity (PV) manifold</strong> (<code>hyperbolix.manifolds.ProperVelocity</code>) — unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> model of hyperbolic geometry from Chen et al. (2026), with complete geometric operations: <code>addition</code>, <code>scalar_mul</code>, <code>dist</code>, <code>expmap</code>/<code>logmap</code> (at origin and arbitrary base points), <code>ptransp</code>/<code>ptransp_0</code>, <code>egrad2rgrad</code>, and Riemannian inner product
+- <strong>Proper Velocity neural-network layers</strong>:
+- <code>HypLinearPV</code>: PV fully-connected layer (Thm 5.3 / Eq. 22)
+- <code>HypConv2DPV</code>: PV 2D convolution with raw Euclidean patch concatenation (Sec 5.3) — no beta-scaling, dimension-preserving
+- <code>HypRegressionPV</code>: PV multinomial-logistic-regression head (Thm 5.2 / Eq. 19)
+- MkDocs Material documentation system
+- Complete API reference documentation
+- Getting Started guide
+- CI/CD workflow for documentation builds
+- Positional encoding layers for hyperbolic Transformers:
+- <code>lorentz_residual</code>: Lorentzian midpoint-based residual connection
+- <code>hope</code>: Hyperbolic Rotary Positional Encoding (functional)
+- <code>HyperbolicRoPE</code>: NNX module wrapper for HOPE
+- <code>HypformerPositionalEncoding</code>: Learnable positional encoding with HTCLinear
+- Class-based manifold API with automatic dtype casting (<code>Poincare</code>, <code>Hyperboloid</code>, <code>Euclidean</code>)
+- Isometry mappings between Poincaré ball and hyperboloid models
+- <code>Manifold</code> structural protocol for type-safe manifold dispatch
+- <strong>Causal attention masking</strong> (<code>causal=True</code>) for all three hyperbolic attention variants:
+- <code>HyperbolicSoftmaxAttention</code>: lower-triangular <code>-inf</code> mask before softmax
+- <code>HyperbolicFullAttention</code>: lower-triangular <code>-inf</code> mask on Lorentzian similarity scores
+- <code>HyperbolicLinearAttention</code>: O(N) cumulative-sum recurrence via <code>jax.lax.scan</code> (Katharopoulos et al. 2020), keeping O(N) complexity in causal mode
+- Tiny Shakespeare character-level benchmark (<code>benchmarks/bench_shakespeare_attention.py</code>) comparing all four model variants (Euclidean + 3 hyperbolic) with causal attention</p>
 </li>
-<li>MkDocs Material documentation system</li>
-<li>Complete API reference documentation</li>
-<li>Getting Started guide</li>
-<li>CI/CD workflow for documentation builds</li>
-<li>Positional encoding layers for hyperbolic Transformers:<ul>
-<li><code>lorentz_residual</code>: Lorentzian midpoint-based residual connection</li>
-<li><code>hope</code>: Hyperbolic Rotary Positional Encoding (functional)</li>
-<li><code>HyperbolicRoPE</code>: NNX module wrapper for HOPE</li>
-<li><code>HypformerPositionalEncoding</code>: Learnable positional encoding with HTCLinear</li>
 </ul>
-</li>
-<li>Class-based manifold API with automatic dtype casting (<code>Poincare</code>, <code>Hyperboloid</code>, <code>Euclidean</code>)</li>
-<li>Isometry mappings between Poincaré ball and hyperboloid models</li>
-<li><code>Manifold</code> structural protocol for type-safe manifold dispatch</li>
-<li><strong>Causal attention masking</strong> (<code>causal=True</code>) for all three hyperbolic attention variants:<ul>
-<li><code>HyperbolicSoftmaxAttention</code>: lower-triangular <code>-inf</code> mask before softmax</li>
-<li><code>HyperbolicFullAttention</code>: lower-triangular <code>-inf</code> mask on Lorentzian similarity scores</li>
-<li><code>HyperbolicLinearAttention</code>: O(N) cumulative-sum recurrence via <code>jax.lax.scan</code> (Katharopoulos et al. 2020), keeping O(N) complexity in causal mode</li>
-</ul>
-</li>
-<li>Tiny Shakespeare character-level benchmark (<code>benchmarks/bench_shakespeare_attention.py</code>) comparing all four model variants (Euclidean + 3 hyperbolic) with causal attention</li>
-</ul>
-<h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
+<h3 id="changed_1">Changed<a class="headerlink" href="#changed_1" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Breaking</strong>: Manifold public functions renamed to private (<code>dist()</code> → <code>_dist()</code>); use class methods instead</li>
 <li>Replaced <code>with_precision()</code> wrapper with <code>Poincare(dtype=jnp.float64)</code> pattern</li>
@@ -1253,7 +1283,7 @@
 <li>CI/CD pipeline with benchmarking</li>
 <li>vmap-native API design</li>
 </ul>
-<h3 id="changed_1">Changed<a class="headerlink" href="#changed_1" title="Permanent link">&para;</a></h3>
+<h3 id="changed_2">Changed<a class="headerlink" href="#changed_2" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Migrated from PyTorch to pure JAX/Flax NNX</li>
 <li>Unified package structure: <code>hyperbolix_jax</code> → <code>hyperbolix</code></li>

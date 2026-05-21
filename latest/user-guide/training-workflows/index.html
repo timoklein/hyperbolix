@@ -1268,7 +1268,7 @@ per-operation performance, not training workflows.</p>
 </tr>
 <tr>
 <td><strong>Curvature init</strong></td>
-<td>Hyperboloid: <code>c=1.0</code>. PV: <code>c=1.0</code>. Poincaré (deep nets): <code>c=0.1</code> with <code>learnable=True</code> per layer</td>
+<td>Hyperboloid: <code>c=1.0</code>. PV: <code>c=1.0</code>. Poincaré (deep nets): <code>c=0.1</code> with <code>LearnableCurvature(init_c=0.1)</code> per layer</td>
 </tr>
 <tr>
 <td><strong>Float precision</strong></td>
@@ -1298,7 +1298,7 @@ per-operation performance, not training workflows.</p>
 <tr>
 <td>Stuck at random-chance accuracy (Poincaré)</td>
 <td>Curvature too high — features hit the boundary where the conformal factor collapses</td>
-<td>Set <code>Poincare(c=0.1, learnable=True)</code>, ideally per layer</td>
+<td>Use <code>Poincare(c=0.1)</code> with <code>LearnableCurvature(init_c=0.1)</code> per layer</td>
 </tr>
 <tr>
 <td>Loss explodes after some warmup (Hyperboloid float32)</td>
