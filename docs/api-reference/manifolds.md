@@ -109,7 +109,7 @@ where $x_i$, $y_i$ are the per-factor slices of the flat points.
     The `c` argument on protocol methods (e.g. `product.dist(x, y, c=0.0)`) is accepted for `Manifold`-protocol compatibility but **ignored** — each factor uses its own curvature stored on the sub-manifold instance. This mirrors how `Euclidean` accepts but ignores `c`.
 
 !!! tip "Mixed learnability"
-    Use the 5-tuple form of `from_signature` to make some factors' curvatures learnable while keeping others fixed (e.g. learn hyperbolic curvatures but freeze a Poincaré factor at $c=0.1$). Euclidean factors silently ignore the curvature/learnable fields.
+    `ProductManifold` factors hold static curvatures; learnable curvature lives on your `nnx.Module` via [`LearnableCurvature`](utils.md#learnable-curvature). To make some factors learnable while keeping others fixed, instantiate a `LearnableCurvature` only for the factors you want to train, then call each factor's methods directly (e.g. `pm.factors[i].dist(...)`) with the recovered curvature. See the [Manifolds User Guide — Curvature in ProductManifold](../user-guide/manifolds.md#curvature-in-productmanifold) for the full pattern.
 
 ::: hyperbolix.manifolds.product.ProductManifold
     options:

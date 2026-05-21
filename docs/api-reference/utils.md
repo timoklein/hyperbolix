@@ -32,6 +32,46 @@ z = jnp.array([0.99, 1.0, 1.01])
 z_clamped = smooth_clamp(z, min_val=0.0, max_val=1.0)
 ```
 
+## Learnable Curvature
+
+`LearnableCurvature` is an `nnx.Module` that bundles a Euclidean raw parameter, a positivity reparameterization (`softplus` or `log`/`exp`), and an optional `[c_min, c_max]` clamp into one object. Assign one instance per distinct curvature on your model and call it in the forward pass to obtain the positive (optionally clamped) curvature.
+
+::: hyperbolix.utils.curvature.LearnableCurvature
+    options:
+      show_source: true
+      heading_level: 3
+
+### Usage Example
+
+```python
+from flax import nnx
+import optax
+from hyperbolix import LearnableCurvature
+from hyperbolix.manifolds import Hyperboloid
+from hyperbolix.nn_layers import HypLinearHyperboloidPP
+
+
+class Model(nnx.Module):
+    def __init__(self, rngs: nnx.Rngs):
+        self.manifold = Hyperboloid(c=1.0)               # static, shared
+        self.curvature = LearnableCurvature(             # one per distinct c
+            init_c=1.0,
+            parameterization="softplus",                 # or "log" (MERU)
+            c_min=0.1, c_max=10.0,                       # default clamp
+        )
+        self.fc = HypLinearHyperboloidPP(self.manifold, 33, 65, rngs=rngs)
+
+    def __call__(self, x):
+        c = self.curvature()                              # positive, clamped
+        return self.fc(x, c=c)
+
+
+# Updated by any standard Euclidean optimizer — no Riemannian optimizer needed.
+optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
+```
+
+See the [Manifolds User Guide — Working with Curvature](../user-guide/manifolds.md#working-with-curvature) for the full discussion of parameterizations, clamping, the `nnx.scan` sharing rule, and per-factor `ProductManifold` usage.
+
 ## Helper Functions
 
 Helper utilities for distance computation and delta-hyperbolicity analysis.
