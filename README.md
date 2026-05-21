@@ -56,7 +56,8 @@ product = ProductManifold(
     (Poincare(c=0.1), 3),
     (Euclidean(), 4),
 )
-d = product.dist(x, y)  # sqrt(sum d_i^2) over factors
+cs = product.curvatures        # (1.0, 0.1, 0.0) — pass per-factor at call time
+d = product.dist(x, y, cs)     # sqrt(sum d_i^2) over factors
 ```
 
 To make any factor's curvature trainable, store one `LearnableCurvature`
