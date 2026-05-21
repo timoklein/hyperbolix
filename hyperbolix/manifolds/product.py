@@ -35,6 +35,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ._base import ManifoldBase
+from .protocol import Curvature
 
 
 class ProductManifold:
@@ -156,7 +157,7 @@ class ProductManifold:
 
     # -- Geometry (per-factor decomposable) --------------------------------
 
-    def proj(self, x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def proj(self, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
         """Project point onto product manifold (per-factor projection)."""
         del c
         x = self._cast(x)
@@ -164,7 +165,7 @@ class ProductManifold:
         return jnp.concatenate([m.proj(p, m.c) for m, p in zip(self._factors, parts, strict=True)])
 
     def addition(
-        self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: float = 0.0
+        self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Manifold addition (per-factor)."""
         del c
@@ -172,7 +173,7 @@ class ProductManifold:
         x_parts, y_parts = self.split(x), self.split(y)
         return jnp.concatenate([m.addition(xp, yp, m.c) for m, xp, yp in zip(self._factors, x_parts, y_parts, strict=True)])
 
-    def scalar_mul(self, r: float, x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def scalar_mul(self, r: float, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
         """Scalar multiplication (same scalar r applied to all factors)."""
         del c
         x = self._cast(x)
@@ -181,28 +182,32 @@ class ProductManifold:
 
     # -- Exponential / logarithmic maps ------------------------------------
 
-    def expmap(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def expmap(
+        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
+    ) -> Float[Array, "total_dim"]:
         """Exponential map (per-factor)."""
         del c
         v, x = self._cast(v), self._cast(x)
         v_parts, x_parts = self.split(v), self.split(x)
         return jnp.concatenate([m.expmap(vp, xp, m.c) for m, vp, xp in zip(self._factors, v_parts, x_parts, strict=True)])
 
-    def expmap_0(self, v: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def expmap_0(self, v: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
         """Exponential map from origin (per-factor)."""
         del c
         v = self._cast(v)
         parts = self.split(v)
         return jnp.concatenate([m.expmap_0(p, m.c) for m, p in zip(self._factors, parts, strict=True)])
 
-    def logmap(self, y: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def logmap(
+        self, y: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
+    ) -> Float[Array, "total_dim"]:
         """Logarithmic map (per-factor)."""
         del c
         y, x = self._cast(y), self._cast(x)
         y_parts, x_parts = self.split(y), self.split(x)
         return jnp.concatenate([m.logmap(yp, xp, m.c) for m, yp, xp in zip(self._factors, y_parts, x_parts, strict=True)])
 
-    def logmap_0(self, y: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, "total_dim"]:
+    def logmap_0(self, y: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
         """Logarithmic map to origin (per-factor)."""
         del c
         y = self._cast(y)
@@ -210,7 +215,7 @@ class ProductManifold:
         return jnp.concatenate([m.logmap_0(p, m.c) for m, p in zip(self._factors, parts, strict=True)])
 
     def retraction(
-        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0
+        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Retraction (per-factor)."""
         del c
@@ -225,7 +230,7 @@ class ProductManifold:
         v: Float[Array, "total_dim"],
         x: Float[Array, "total_dim"],
         y: Float[Array, "total_dim"],
-        c: float = 0.0,
+        c: Curvature = 0.0,
     ) -> Float[Array, "total_dim"]:
         """Parallel transport of v from x to y (per-factor)."""
         del c
@@ -236,7 +241,7 @@ class ProductManifold:
         )
 
     def ptransp_0(
-        self, v: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: float = 0.0
+        self, v: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Parallel transport from origin to y (per-factor)."""
         del c
@@ -249,7 +254,7 @@ class ProductManifold:
         u: Float[Array, "total_dim"],
         v: Float[Array, "total_dim"],
         x: Float[Array, "total_dim"],
-        c: float = 0.0,
+        c: Curvature = 0.0,
     ) -> Float[Array, ""]:
         """Riemannian inner product (sum of per-factor inner products)."""
         del c
@@ -260,12 +265,12 @@ class ProductManifold:
         )
         return jnp.sum(inners)
 
-    def tangent_norm(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, ""]:
+    def tangent_norm(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, ""]:
         """Riemannian norm (sqrt of tangent inner product with itself)."""
         return jnp.sqrt(jnp.maximum(self.tangent_inner(v, v, x, c), 0.0))
 
     def egrad2rgrad(
-        self, grad: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0
+        self, grad: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Convert Euclidean gradient to Riemannian gradient (per-factor)."""
         del c
@@ -274,7 +279,7 @@ class ProductManifold:
         return jnp.concatenate([m.egrad2rgrad(gp, xp, m.c) for m, gp, xp in zip(self._factors, g_parts, x_parts, strict=True)])
 
     def tangent_proj(
-        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0
+        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
     ) -> Float[Array, "total_dim"]:
         """Project vector onto tangent space (per-factor)."""
         del c
@@ -296,13 +301,13 @@ class ProductManifold:
         x_parts, y_parts = self.split(x), self.split(y)
         return jnp.stack([m.dist(xp, yp, m.c) for m, xp, yp in zip(self._factors, x_parts, y_parts, strict=True)])
 
-    def dist(self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, ""]:
+    def dist(self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, ""]:
         """Product distance (L2/Riemannian): d = sqrt(sum d_i^2)."""
         del c
         d_per_factor = self.component_dist(x, y)
         return jnp.sqrt(jnp.sum(d_per_factor**2))
 
-    def dist_0(self, x: Float[Array, "total_dim"], c: float = 0.0) -> Float[Array, ""]:
+    def dist_0(self, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, ""]:
         """Distance from origin (L2/Riemannian)."""
         del c
         x = self._cast(x)
@@ -328,7 +333,7 @@ class ProductManifold:
 
     # -- Validation --------------------------------------------------------
 
-    def is_in_manifold(self, x: Float[Array, "total_dim"], c: float = 0.0) -> Array:
+    def is_in_manifold(self, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Array:
         """Check if point is on product manifold (all factors valid)."""
         del c
         x = self._cast(x)
@@ -336,7 +341,7 @@ class ProductManifold:
         checks = [m.is_in_manifold(p, m.c) for m, p in zip(self._factors, parts, strict=True)]
         return jnp.all(jnp.stack(checks))
 
-    def is_in_tangent_space(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: float = 0.0) -> Array:
+    def is_in_tangent_space(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Array:
         """Check if vector is in tangent space at x (all factors valid)."""
         del c
         v, x = self._cast(v), self._cast(x)

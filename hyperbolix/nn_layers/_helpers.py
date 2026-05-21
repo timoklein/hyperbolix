@@ -1,4 +1,14 @@
-"""Shared helpers for hyperbolic nn layer modules."""
+"""Shared helpers for hyperbolic nn layer modules.
+
+Note on layer-side manifold storage: every layer in ``hyperbolix.nn_layers``
+stores its manifold via ``self.manifold = manifold_module``. This is safe
+even when the same manifold instance is shared across multiple layers (or
+reused inside ``nnx.scan`` / ``nnx.fori_loop``) because manifolds are plain
+Python classes — not ``nnx.Module`` — so the assignment registers as static
+graphdef metadata and contributes nothing to the NNX state pytree. Do not
+wrap the assignment in ``nnx.data(...)`` or ``object.__setattr__``; both
+would be no-ops here and only obscure intent.
+"""
 
 from hyperbolix.manifolds import Manifold
 
