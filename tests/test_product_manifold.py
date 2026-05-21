@@ -14,7 +14,7 @@ import optax
 import pytest
 from flax import nnx
 
-from hyperbolix import get_curvature, learnable_curvature
+from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import (
     Euclidean,
     Hyperboloid,
@@ -623,10 +623,10 @@ class TestGradients:
         assert jnp.all(jnp.isfinite(g))
 
     def test_learnable_curvature_gradient(self):
-        """Gradients flow to learnable curvature parameters via helpers.
+        """Gradients flow to per-factor LearnableCurvature instances.
 
-        Uses ``learnable_curvature()``/``get_curvature()`` stored on an
-        nnx.Module wrapper. Verifies:
+        Uses one ``LearnableCurvature`` per factor stored on an nnx.Module
+        wrapper. Verifies:
           1) Grad leaves are finite and non-trivial.
           2) An SGD step actually moves the curvatures.
         """
@@ -642,12 +642,12 @@ class TestGradients:
         class CurvModel(nnx.Module):
             def __init__(self):
                 self.pm = pm
-                self.c_h = learnable_curvature(init_c=1.0)
-                self.c_p = learnable_curvature(init_c=0.5)
+                self.curv_h = LearnableCurvature(init_c=1.0)
+                self.curv_p = LearnableCurvature(init_c=0.5)
 
             def __call__(self, x_, y_):
-                c_h = get_curvature(self.c_h)
-                c_p = get_curvature(self.c_p)
+                c_h = self.curv_h()
+                c_p = self.curv_p()
                 x_parts = self.pm.split(x_)
                 y_parts = self.pm.split(y_)
                 d_h = self.pm.factors[0].dist(x_parts[0], y_parts[0], c_h)
@@ -655,7 +655,7 @@ class TestGradients:
                 return d_h + d_p
 
         model = CurvModel()
-        c_before = jnp.array([float(get_curvature(model.c_h)), float(get_curvature(model.c_p))])
+        c_before = jnp.array([float(model.curv_h()), float(model.curv_p())])
 
         def loss_fn(m):
             return m(x, y)
@@ -669,7 +669,7 @@ class TestGradients:
 
         optimizer = nnx.Optimizer(model, optax.sgd(learning_rate=1.0), wrt=nnx.Param)
         optimizer.update(model, grads)
-        c_after = jnp.array([float(get_curvature(model.c_h)), float(get_curvature(model.c_p))])
+        c_after = jnp.array([float(model.curv_h()), float(model.curv_p())])
         assert jnp.all(jnp.isfinite(c_after))
         assert jnp.any(jnp.abs(c_after - c_before) > 1e-6)
 

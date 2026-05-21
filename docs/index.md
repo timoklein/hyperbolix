@@ -7,7 +7,7 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 ## Features
 
 - **5 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, and Product Manifold (mixed-curvature composition) — all with complete geometric operations
-- **Learnable Curvature**: Use `learnable_curvature()` / `get_curvature()` helpers to add trainable curvature to any model (softplus reparameterization)
+- **Learnable Curvature**: `LearnableCurvature` module bundles parameter + reparameterization (softplus or log/exp) + optional clamp; works with any `nnx.Optimizer`
 - **Neural Network Layers**: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers
 - **Activation Functions**: 4 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish)
 - **Riemannian Optimizers**: RAdam and RSGD with automatic manifold parameter detection
@@ -133,24 +133,28 @@ dist_c2 = poincare.dist(x, y, c=2.0)
 
 ### Learnable Curvature
 
-Curvature can be made trainable via the `learnable_curvature()` /
-`get_curvature()` helpers. Store the parameter on your `nnx.Module` and
-pass the recovered positive value to manifold operations:
+Curvature can be made trainable via the `LearnableCurvature` module.
+Instantiate one per distinct curvature in your model and call it at runtime:
 
 ```python
-from hyperbolix import learnable_curvature, get_curvature
+from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Hyperboloid
 
 class Model(nnx.Module):
     def __init__(self, rngs):
         self.manifold = Hyperboloid(c=1.0)
-        self.c_raw = learnable_curvature(init_c=1.0)   # nnx.Param on the model
+        self.curvature = LearnableCurvature(init_c=1.0)  # nnx.Module on the model
         self.fc = FGGLinear(33, 65, rngs=rngs)
 
     def __call__(self, x):
-        c = get_curvature(self.c_raw)                   # softplus → positive
+        c = self.curvature()                             # positive, clamped to [0.1, 10.0]
         return self.fc(x, c=c)
 ```
+
+Pick `parameterization="log"` for compiled RL loops or when `c` spans
+orders of magnitude; the default `"softplus"` is best for supervised
+training. See the [Manifolds guide](user-guide/manifolds.md#choosing-softplus-vs-log)
+for details.
 
 ### Mixed-Curvature Product Spaces
 

@@ -15,8 +15,8 @@ from typing import Any, Protocol, runtime_checkable
 from jaxtyping import Array, Float
 
 # Curvature parameter passed at call time. Accepts a Python float (static, fixed
-# curvature) or a scalar jax.Array (traced, e.g. softplus(c_raw) from
-# `learnable_curvature`). All manifold methods accept both.
+# curvature) or a scalar jax.Array (traced, e.g. the value returned by calling a
+# `LearnableCurvature` module). All manifold methods accept both.
 Curvature = float | Float[Array, ""]
 
 

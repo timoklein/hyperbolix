@@ -201,21 +201,21 @@ class HTCClassifier(nnx.Module):
 ### Pattern 2: Hybrid CNN backbone + Poincaré head
 
 ```python
-from hyperbolix import learnable_curvature, get_curvature
+from hyperbolix import LearnableCurvature
 
 class HybridCNN(nnx.Module):
     def __init__(self, num_classes: int, *, rngs: nnx.Rngs):
         self.stem = nnx.Conv(3, 64, kernel_size=(3, 3), rngs=rngs)  # Euclidean
         self.pool = lambda x: jnp.mean(x, axis=(1, 2))               # GAP
         self.poincare = Poincare(c=0.1)
-        self.c_raw = learnable_curvature(init_c=0.1)                  # per van Spengler
+        self.curvature = LearnableCurvature(init_c=0.1)              # per van Spengler
         self.head = HypRegressionPoincarePP(
             manifold_module=self.poincare,
             in_dim=64, out_dim=num_classes, rngs=rngs,
         )
 
     def __call__(self, images: jax.Array) -> jax.Array:
-        c = get_curvature(self.c_raw)
+        c = self.curvature()
         features = self.pool(jax.nn.relu(self.stem(images)))  # (B, 64) Euclidean
         x_poincare = jax.vmap(self.poincare.expmap_0, in_axes=(0, None))(
             features, c,
@@ -252,13 +252,13 @@ When stacking many Poincaré layers, give each block its own learnable curvature
 to avoid the conformal-factor collapse near the boundary:
 
 ```python
-from hyperbolix import learnable_curvature, get_curvature
+from hyperbolix import LearnableCurvature
 
 class HypResBlock(nnx.Module):
     def __init__(self, channels: int, *, rngs: nnx.Rngs):
         self.manifold = Poincare(c=0.1)
-        self.c1 = learnable_curvature(init_c=0.1)
-        self.c2 = learnable_curvature(init_c=0.1)
+        self.curv1 = LearnableCurvature(init_c=0.1)
+        self.curv2 = LearnableCurvature(init_c=0.1)
         self.conv1 = HypConv2DPoincare(self.manifold, channels, channels,
                                        kernel_size=(3, 3), rngs=rngs)
         self.bn1 = PoincareBatchNorm2D(self.manifold, channels, rngs=rngs)

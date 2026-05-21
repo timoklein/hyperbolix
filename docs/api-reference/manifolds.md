@@ -17,7 +17,7 @@ All manifolds share a common interface defined by the `Manifold` protocol and su
 - **Automatic dtype casting**: Pass `dtype=jnp.float64` for higher precision
 - **vmap-native methods**: Methods operate on single points; use `jax.vmap` for batching
 - **JIT compatibility**: All methods are JIT-compilable
-- **Learnable curvature**: Use `learnable_curvature()` / `get_curvature()` helpers to add trainable curvature to any model (softplus reparameterization)
+- **Learnable curvature**: Use the `LearnableCurvature` module to add trainable curvature to any model (softplus or log/exp reparameterization, optional clamping)
 
 ## Manifold Protocol
 
@@ -262,7 +262,7 @@ mixed = ProductManifold.from_signature(
     (Poincare,    3, 2, 0.1),   # 2 copies of P^3(c=0.1)
     (Euclidean,   4, 1),         # 1 copy of E^4
 )
-# For learnable curvature, use learnable_curvature() on your nnx.Module.
+# For learnable curvature, use LearnableCurvature on your nnx.Module.
 ```
 
 ### Isometry Mappings

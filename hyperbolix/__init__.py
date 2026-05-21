@@ -1,11 +1,10 @@
 """Hyperbolix JAX backend - pure functional implementation."""
 
 from . import manifolds, utils
-from .utils.curvature import get_curvature, learnable_curvature
+from .utils.curvature import LearnableCurvature
 
 __all__ = [
-    "get_curvature",
-    "learnable_curvature",
+    "LearnableCurvature",
     "manifolds",
     "utils",
 ]

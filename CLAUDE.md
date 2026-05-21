@@ -64,11 +64,11 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
   - `hyperboloid_core.py` has foundational ops: `hrc()`, `htc()`, `build_spacelike_V()`, `lorentz_midpoint()`
 - **`optim/`** — Riemannian optimizers (`riemannian_sgd`, `riemannian_adam`). Uses `ManifoldParam` (subclass of `nnx.Param`) to tag hyperbolic parameters. `_riemannian_base.py` has shared `make_riemannian_optimizer()`.
 - **`distributions/`** — Wrapped normal (Poincare/Hyperboloid) and uniform Poincare sampling.
-- **`utils/`** — Numerically stable math (`atanh`, `acosh`, `smooth_clamp`), curvature helpers (`learnable_curvature`, `get_curvature`), and other utilities.
+- **`utils/`** — Numerically stable math (`atanh`, `acosh`, `smooth_clamp`), the `LearnableCurvature` module for trainable curvature, and other utilities.
 
 ### Key patterns
 
-- **Curvature `c`** is passed dynamically at call time (not stored on layers), enabling learnable curvature via `learnable_curvature()`/`get_curvature()` helpers from `hyperbolix.utils.curvature`. Manifolds are plain Python classes with static `c`; learnable curvature params live on the user's `nnx.Module`.
+- **Curvature `c`** is passed dynamically at call time (not stored on layers), enabling learnable curvature via the `LearnableCurvature` module from `hyperbolix.utils.curvature`. Manifolds are plain Python classes with static `c`; `LearnableCurvature` lives on the user's `nnx.Module` and is called at runtime to produce the (optionally clamped) curvature value.
 - **`version_idx`** selects distance/operation variants and must be **static** for JIT (use `functools.partial` or `static_argnums`).
 - **`ManifoldParam`** tags params for Riemannian optimization. The optimizer auto-detects these and applies Riemannian gradients + projection; all other `nnx.Param`s get standard Euclidean updates.
 - **Layers accept `manifold_module`** (a manifold class instance) — never raw functions.

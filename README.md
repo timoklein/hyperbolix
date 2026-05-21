@@ -12,7 +12,7 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 ## Features
 
 - 🌐 **5 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, and Product Manifold (mixed-curvature composition)
-- 🎛️ **Learnable Curvature**: `learnable_curvature()` / `get_curvature()` helpers add a softplus-reparametrized `nnx.Param` on your model — works with any `nnx.Optimizer` (no Riemannian optimizer needed)
+- 🎛️ **Learnable Curvature**: `LearnableCurvature` module bundles parameter + reparameterization (softplus or log/exp) + optional clamp. Works with any `nnx.Optimizer` — no Riemannian optimizer needed
 - 🧠 **20+ Neural Network Layers**: Linear, convolutional, regression, attention, positional encoding, PV
 - ⚡ **5 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish, GELU
 - 📈 **Riemannian Optimizers**: RAdam and RSGD with automatic manifold detection
@@ -59,9 +59,9 @@ product = ProductManifold(
 d = product.dist(x, y)  # sqrt(sum d_i^2) over factors
 ```
 
-To make any factor's curvature trainable, store a `learnable_curvature()`
-parameter on your model and pass `get_curvature(...)` to per-factor calls
-(see "Learnable curvature" below).
+To make any factor's curvature trainable, store one `LearnableCurvature`
+instance per factor on your model and call it to obtain `c` for per-factor
+operations (see "Learnable curvature" below).
 
 ## Installation
 
@@ -102,20 +102,20 @@ distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(
 )
 ```
 
-**Learnable curvature:** Use the `learnable_curvature()` / `get_curvature()` helpers — store the (Euclidean) `nnx.Param` on your model and pass `get_curvature(self.c_raw)` to each manifold/layer call. The manifold itself stays a fixed plain Python class, which keeps it out of the NNX state pytree (safe to share the same instance across layers and inside `nnx.scan` / `nnx.fori_loop`). For per-factor learnable curvatures inside a `ProductManifold`, allocate one `c_raw` per factor on your model and pass them when you access `pm.factors[i].dist(...)` etc.
+**Learnable curvature:** Use the `LearnableCurvature` module — assign one instance per distinct curvature in your model and call it to obtain a positive (optionally clamped) value. The manifold itself stays a fixed plain Python class, which keeps it out of the NNX state pytree (safe to share the same instance across layers and inside `nnx.scan` / `nnx.fori_loop`). The default clamp `[0.1, 10.0]` matches published reference ranges; pass `c_min=None, c_max=None` to disable. Use `parameterization="log"` (MERU-style) when `c` may span orders of magnitude or for long compiled training loops; the default `"softplus"` matches van Spengler 2023.
 
 ```python
-from hyperbolix import learnable_curvature, get_curvature
+from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Hyperboloid
 
 class Model(nnx.Module):
     def __init__(self, rngs):
-        self.manifold = Hyperboloid(c=1.0)        # static, shared
-        self.c_raw = learnable_curvature(1.0)      # nnx.Param on the model
+        self.manifold = Hyperboloid(c=1.0)               # static, shared
+        self.curvature = LearnableCurvature(init_c=1.0)  # one per distinct c
         self.fc = HypLinearHyperboloidPP(self.manifold, 33, 65, rngs=rngs)
 
     def __call__(self, x):
-        c = get_curvature(self.c_raw)              # softplus → positive
+        c = self.curvature()                              # positive, clamped
         return self.fc(x, c=c)
 
 # Updated by any standard Euclidean optimizer — no Riemannian optimizer needed.

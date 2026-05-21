@@ -6,7 +6,7 @@ import optax
 import pytest
 from flax import nnx
 
-from hyperbolix import get_curvature, learnable_curvature
+from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Euclidean, Hyperboloid, Poincare, ProperVelocity
 
 jax.config.update("jax_enable_x64", True)
@@ -72,60 +72,124 @@ class TestEuclidean:
 
 
 # ===========================================================================
-# 3. Curvature helpers
+# 3. LearnableCurvature module
 # ===========================================================================
 
 
-class TestCurvatureHelpers:
-    @pytest.mark.parametrize("init_c", [0.01, 0.1, 1.0, 5.0, 20.0])
-    def test_init_recovery(self, init_c):
-        c_raw = learnable_curvature(init_c)
-        recovered = get_curvature(c_raw)
-        assert jnp.allclose(recovered, init_c, atol=1e-5)
+class TestLearnableCurvatureInit:
+    @pytest.mark.parametrize("init_c", [0.1, 0.5, 1.0, 5.0, 10.0])
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_init_recovery_within_default_bounds(self, init_c, parameterization):
+        c = LearnableCurvature(init_c, parameterization=parameterization)
+        assert jnp.allclose(c(), init_c, atol=1e-5)
 
-    def test_positivity_zeroed_raw(self):
-        c_raw = learnable_curvature(1.0)
-        c_raw[...] = jnp.array(0.0, dtype=jnp.float32)
-        assert float(get_curvature(c_raw)) > 0
+    @pytest.mark.parametrize("init_c", [0.01, 50.0, 100.0])
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_init_recovery_with_disabled_clamp(self, init_c, parameterization):
+        c = LearnableCurvature(init_c, parameterization=parameterization, c_min=None, c_max=None)
+        assert jnp.allclose(c(), init_c, atol=1e-4)
 
-    def test_positivity_negative_raw(self):
-        c_raw = learnable_curvature(1.0)
-        c_raw[...] = jnp.array(-10.0, dtype=jnp.float32)
-        assert float(get_curvature(c_raw)) >= 0
+    def test_raw_is_nnx_param(self):
+        c = LearnableCurvature(0.1)
+        assert isinstance(c.raw, nnx.Param)
 
-    def test_is_nnx_param(self):
-        c_raw = learnable_curvature(0.1)
-        assert isinstance(c_raw, nnx.Param)
+    def test_is_nnx_module(self):
+        c = LearnableCurvature(1.0)
+        assert isinstance(c, nnx.Module)
 
-    def test_negative_init_raises(self):
+    @pytest.mark.parametrize("bad_c", [-1.0, 0.0])
+    def test_nonpositive_init_raises(self, bad_c):
         with pytest.raises(ValueError, match="init_c > 0"):
-            learnable_curvature(-1.0)
+            LearnableCurvature(bad_c)
 
-    def test_zero_init_raises(self):
-        with pytest.raises(ValueError, match="init_c > 0"):
-            learnable_curvature(0.0)
+    def test_init_below_c_min_raises(self):
+        with pytest.raises(ValueError, match=r"init_c.*c_min"):
+            LearnableCurvature(0.05, c_min=0.1, c_max=10.0)
 
-    def test_gradient_flow(self):
-        c_raw = learnable_curvature(0.5)
+    def test_init_above_c_max_raises(self):
+        with pytest.raises(ValueError, match=r"init_c.*c_max"):
+            LearnableCurvature(20.0, c_min=0.1, c_max=10.0)
 
+    def test_c_min_greater_than_c_max_raises(self):
+        with pytest.raises(ValueError, match=r"c_min.*c_max"):
+            LearnableCurvature(1.0, c_min=10.0, c_max=1.0)
+
+    def test_unknown_parameterization_raises(self):
+        with pytest.raises(ValueError, match="parameterization"):
+            LearnableCurvature(1.0, parameterization="quadratic")  # type: ignore[arg-type]
+
+
+class TestLearnableCurvatureClamping:
+    """Clamping applies to the recovered c, not the raw param."""
+
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_default_clamp_upper_bound(self, parameterization):
+        c = LearnableCurvature(1.0, parameterization=parameterization)
+        # Push raw to a huge value; default c_max=10.0 must hold.
+        c.raw[...] = jnp.array(100.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(10.0)
+
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_default_clamp_lower_bound(self, parameterization):
+        c = LearnableCurvature(1.0, parameterization=parameterization)
+        # Push raw to a very negative value; default c_min=0.1 must hold.
+        c.raw[...] = jnp.array(-100.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(0.1)
+
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_disabled_clamp_allows_extremes(self, parameterization):
+        c = LearnableCurvature(1.0, parameterization=parameterization, c_min=None, c_max=None)
+        c.raw[...] = jnp.array(20.0, dtype=jnp.float32)
+        # No clamp: softplus(20) ≈ 20, exp(20) ≈ 4.85e8 — both well above 10.
+        assert float(c()) > 10.0
+
+    def test_custom_clamp_bounds(self):
+        c = LearnableCurvature(0.5, parameterization="log", c_min=0.2, c_max=2.0)
+        c.raw[...] = jnp.array(10.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(2.0)
+        c.raw[...] = jnp.array(-10.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(0.2)
+
+
+class TestLearnableCurvatureGradients:
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_gradient_flow(self, parameterization):
         class Holder(nnx.Module):
-            def __init__(self, c):
-                self.c_raw = c
+            def __init__(self):
+                self.curvature = LearnableCurvature(0.5, parameterization=parameterization)
 
-        holder = Holder(c_raw)
+        holder = Holder()
 
         def loss_fn(h):
-            return get_curvature(h.c_raw) ** 2
+            return h.curvature() ** 2
 
         _loss, grads = nnx.value_and_grad(loss_fn)(holder)
-        grad_val = grads.c_raw[...]
+        grad_val = grads.curvature.raw[...]
         assert jnp.isfinite(grad_val)
         assert float(grad_val) != 0.0
 
-    def test_roundtrip_with_bare_array(self):
-        c_raw = learnable_curvature(1.5)
-        val = get_curvature(c_raw[...])
-        assert jnp.allclose(val, 1.5, atol=1e-5)
+    def test_log_parameterization_scale_invariance(self):
+        """For c = exp(raw), dc/draw = c — scale-invariant gradient."""
+        c = LearnableCurvature(2.0, parameterization="log", c_min=None, c_max=None)
+
+        def fn(m):
+            return m()
+
+        _val, grads = nnx.value_and_grad(fn)(c)
+        # d(exp(raw))/draw = exp(raw) = c
+        assert jnp.allclose(grads.raw[...], 2.0, atol=1e-5)
+
+    def test_softplus_parameterization_sigmoid_gradient(self):
+        """For c = softplus(raw), dc/draw = sigmoid(raw) ∈ (0, 1)."""
+        c = LearnableCurvature(1.0, parameterization="softplus", c_min=None, c_max=None)
+        raw_val = float(c.raw[...])
+
+        def fn(m):
+            return m()
+
+        _val, grads = nnx.value_and_grad(fn)(c)
+        expected = float(jax.nn.sigmoid(jnp.array(raw_val)))
+        assert jnp.allclose(grads.raw[...], expected, atol=1e-5)
 
 
 # ===========================================================================
@@ -161,12 +225,16 @@ class TestVmapCompatibility:
 
 
 # ===========================================================================
-# 5. Training integration with learnable_curvature helpers
+# 5. Training integration with LearnableCurvature
 # ===========================================================================
 
 
+PARAMETERIZATIONS = ["softplus", "log"]
+
+
 class TestTrainingIntegration:
-    def test_poincare_curvature_trains(self):
+    @pytest.mark.parametrize("parameterization", PARAMETERIZATIONS)
+    def test_poincare_curvature_trains(self, parameterization):
         from hyperbolix.nn_layers import HypLinearPoincarePP, HypRegressionPoincarePP
 
         manifold = Poincare(c=1.0)
@@ -174,12 +242,12 @@ class TestTrainingIntegration:
         class Model(nnx.Module):
             def __init__(self, m, rngs: nnx.Rngs):
                 self.manifold = m
-                self.c_raw = learnable_curvature(init_c=1.0)
+                self.curvature = LearnableCurvature(init_c=1.0, parameterization=parameterization)
                 self.fc = HypLinearPoincarePP(m, 4, 3, rngs=rngs)
                 self.head = HypRegressionPoincarePP(m, 3, 2, rngs=rngs)
 
             def __call__(self, x):
-                c = get_curvature(self.c_raw)
+                c = self.curvature()
                 h = self.fc(x, c)
                 return self.head(h, c)
 
@@ -194,17 +262,18 @@ class TestTrainingIntegration:
             logits = m(x)
             return jnp.mean((logits - target) ** 2)
 
-        c_before = float(get_curvature(model.c_raw))
+        c_before = float(model.curvature())
         for _ in range(20):
             _, grads = nnx.value_and_grad(loss_fn)(model)
             optimizer.update(model, grads)
 
-        c_after = float(get_curvature(model.c_raw))
+        c_after = float(model.curvature())
         assert c_before != c_after, f"Curvature did not change: {c_before}"
         assert jnp.isfinite(jnp.array(c_after))
         assert c_after > 0
 
-    def test_hyperboloid_curvature_trains(self):
+    @pytest.mark.parametrize("parameterization", PARAMETERIZATIONS)
+    def test_hyperboloid_curvature_trains(self, parameterization):
         from hyperbolix.nn_layers import FGGLinear, FGGLorentzMLR
 
         manifold = Hyperboloid(c=1.0)
@@ -212,12 +281,12 @@ class TestTrainingIntegration:
         class Model(nnx.Module):
             def __init__(self, m, rngs: nnx.Rngs):
                 self.manifold = m
-                self.c_raw = learnable_curvature(init_c=1.0)
+                self.curvature = LearnableCurvature(init_c=1.0, parameterization=parameterization)
                 self.fc = FGGLinear(5, 4, rngs=rngs, activation=jax.nn.relu)
                 self.head = FGGLorentzMLR(4, 3, rngs=rngs)
 
             def __call__(self, x):
-                c = get_curvature(self.c_raw)
+                c = self.curvature()
                 h = self.fc(x, c)
                 return self.head(h, c)
 
@@ -236,17 +305,18 @@ class TestTrainingIntegration:
             logits = m(x)
             return optax.softmax_cross_entropy_with_integer_labels(logits, target).mean()
 
-        c_before = float(get_curvature(model.c_raw))
+        c_before = float(model.curvature())
         for _ in range(20):
             _, grads = nnx.value_and_grad(loss_fn)(model)
             optimizer.update(model, grads)
 
-        c_after = float(get_curvature(model.c_raw))
+        c_after = float(model.curvature())
         assert c_before != c_after, f"Curvature did not change: {c_before}"
         assert jnp.isfinite(jnp.array(c_after))
         assert c_after > 0
 
-    def test_pv_curvature_trains(self):
+    @pytest.mark.parametrize("parameterization", PARAMETERIZATIONS)
+    def test_pv_curvature_trains(self, parameterization):
         from hyperbolix.nn_layers import HypLinearPV, HypRegressionPV
 
         manifold = ProperVelocity(c=1.0)
@@ -254,12 +324,12 @@ class TestTrainingIntegration:
         class Model(nnx.Module):
             def __init__(self, m, rngs: nnx.Rngs):
                 self.manifold = m
-                self.c_raw = learnable_curvature(init_c=1.0)
+                self.curvature = LearnableCurvature(init_c=1.0, parameterization=parameterization)
                 self.fc = HypLinearPV(m, 4, 3, rngs=rngs)
                 self.head = HypRegressionPV(m, 3, 2, rngs=rngs)
 
             def __call__(self, x):
-                c = get_curvature(self.c_raw)
+                c = self.curvature()
                 h = self.fc(x, c=c)
                 return self.head(h, c=c)
 
@@ -274,12 +344,12 @@ class TestTrainingIntegration:
             y = m(x)
             return jnp.mean((y - target) ** 2)
 
-        c_before = float(get_curvature(model.c_raw))
+        c_before = float(model.curvature())
         for _ in range(20):
             _, grads = nnx.value_and_grad(loss_fn)(model)
             optimizer.update(model, grads)
 
-        c_after = float(get_curvature(model.c_raw))
+        c_after = float(model.curvature())
         assert c_before != c_after, f"Curvature did not change: {c_before}"
         assert jnp.isfinite(jnp.array(c_after))
         assert c_after > 0
@@ -291,14 +361,17 @@ class TestTrainingIntegration:
 
 
 class TestScanCompatibility:
-    def test_fori_loop_with_shared_manifold_and_learnable_c(self):
-        """Regression test: shared manifold + learnable curvature param in nnx.fori_loop.
+    @pytest.mark.parametrize("parameterization", PARAMETERIZATIONS)
+    def test_fori_loop_with_shared_manifold_and_learnable_c(self, parameterization):
+        """Regression test: shared manifold + LearnableCurvature in nnx.fori_loop.
 
         This was the original bug: when ManifoldBase was an nnx.Module with a
         learnable _c_raw param, sharing the manifold across layers caused
         NNX graph deduplication to fail inside fori_loop with
         'ValueError: Dict key mismatch'. Now that manifolds are plain classes,
-        they're static graphdef attributes — no deduplication issues.
+        they're static graphdef attributes — no deduplication issues. The
+        LearnableCurvature instance lives once on the model so there is no
+        shared-reference aliasing.
         """
         from hyperbolix.nn_layers import HypLinearPoincarePP
 
@@ -307,12 +380,12 @@ class TestScanCompatibility:
         class Model(nnx.Module):
             def __init__(self, rngs: nnx.Rngs):
                 self.manifold = manifold
-                self.c_raw = learnable_curvature(init_c=0.1)
+                self.curvature = LearnableCurvature(init_c=0.1, parameterization=parameterization)
                 self.l1 = HypLinearPoincarePP(manifold, 4, 4, rngs=nnx.Rngs(0))
                 self.l2 = HypLinearPoincarePP(manifold, 4, 4, rngs=nnx.Rngs(1))
 
             def __call__(self, x):
-                c = get_curvature(self.c_raw)
+                c = self.curvature()
                 h = self.l1(x, c)
                 return jnp.sum(self.l2(h, c))
 
@@ -330,4 +403,4 @@ class TestScanCompatibility:
         model, optimizer = nnx.fori_loop(0, 3, train_step, (model, optimizer))
         loss = model(x)
         assert jnp.isfinite(loss)
-        assert float(get_curvature(model.c_raw)) > 0
+        assert float(model.curvature()) > 0
