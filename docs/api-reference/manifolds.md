@@ -94,7 +94,7 @@ The Proper Velocity (PV) model — an **unconstrained** $\mathbb{R}^n$ represent
 
 ## Product Manifold
 
-Heterogeneous-curvature product space $P = M_1 \times M_2 \times \dots \times M_n$ where each factor $M_i$ can be any base manifold (Poincaré, Hyperboloid, Euclidean, Proper Velocity) with its own curvature $c_i$. Points are represented as flat concatenated arrays of shape `(total_dim,)`; factor curvatures are managed independently via each sub-manifold's `c` property and may be made individually learnable.
+Heterogeneous-curvature product space $P = M_1 \times M_2 \times \dots \times M_n$ where each factor $M_i$ can be any base manifold (Poincaré, Hyperboloid, Euclidean, Proper Velocity) with its own curvature $c_i$. Points are represented as flat concatenated arrays of shape `(total_dim,)`.
 
 The geodesic distance on a product Riemannian manifold is Pythagorean over component distances:
 
@@ -102,14 +102,11 @@ $$d_P(x, y) \;=\; \sqrt{\sum_{i=1}^{n} d_{M_i}(x_i, y_i)^2}$$
 
 where $x_i$, $y_i$ are the per-factor slices of the flat points.
 
-!!! note "Per-factor curvatures"
-    `ProductManifold` does *not* expose a single `c` attribute (accessing `.c` raises `TypeError`). Use `product.curvatures` to get all factor curvatures, `product.factors[i].c` to access a specific one, or `product.component_dist(x, y)` to get the per-factor distance vector before reducing.
+!!! note "Per-factor `c` argument"
+    Every geometry method (`dist`, `expmap`, `logmap`, `proj`, `origin`, …) takes a positional `c` argument that must be a sequence of length `n_factors` — one curvature per factor. There is no scalar fallback and no broadcast: pass `product.curvatures` for static curvatures, or a tuple built from `LearnableCurvature` calls for trainable ones. `ProductManifold` satisfies the `Manifold` protocol — the protocol-level `Curvature` type unions scalar and sequence-of-scalars, so `isinstance(product, Manifold)` is `True` and generic code typed against `Manifold` accepts product instances. The product itself has **no `c` attribute** — read factor-stored values via `product.curvatures`.
 
-!!! info "Convention"
-    The `c` argument on protocol methods (e.g. `product.dist(x, y, c=0.0)`) is accepted for `Manifold`-protocol compatibility but **ignored** — each factor uses its own curvature stored on the sub-manifold instance. This mirrors how `Euclidean` accepts but ignores `c`.
-
-!!! tip "Mixed learnability"
-    `ProductManifold` factors hold static curvatures; learnable curvature lives on your `nnx.Module` via [`LearnableCurvature`](utils.md#learnable-curvature). To make some factors learnable while keeping others fixed, instantiate a `LearnableCurvature` only for the factors you want to train, then call each factor's methods directly (e.g. `pm.factors[i].dist(...)`) with the recovered curvature. See the [Manifolds User Guide — Curvature in ProductManifold](../user-guide/manifolds.md#curvature-in-productmanifold) for the full pattern.
+!!! tip "Static vs learnable curvature"
+    Factor instances may carry an initial `c` (`Hyperboloid(c=1.0)`), but `ProductManifold` never reads it in its geometry methods — it is exposed via `product.curvatures` as a convenience default. For learnable curvature, instantiate one `LearnableCurvature` per factor on your `nnx.Module` and pass `c=(self.curv_a(), self.curv_b(), ...)` to the product. See the [Manifolds User Guide — Curvature in ProductManifold](../user-guide/manifolds.md#curvature-in-productmanifold) for the full pattern.
 
 ::: hyperbolix.manifolds.product.ProductManifold
     options:
@@ -246,15 +243,19 @@ product = ProductManifold(
     (Euclidean(), 4),         # 4 = standard euclidean dim
 )
 
-# A point on the product is a flat (total_dim,) array
-o = product.origin()           # shape (12,)
-print(product.curvatures)      # (1.0, 0.1, 0.0)
+# Per-factor curvatures must be passed at call time as a sequence.
+c = product.curvatures             # (1.0, 0.1, 0.0) — static default
+o = product.origin(c)              # shape (12,)
 
 # Pythagorean product distance: d_P = sqrt(sum d_i^2)
-x = product.origin()
-y = product.origin()  # generated elsewhere; here we use o for illustration
-d_l2 = product.dist(x, y)               # scalar
-d_per_factor = product.component_dist(x, y)  # shape (3,) per-factor distances
+x = product.origin(c)
+y = product.origin(c)  # generated elsewhere; here we use o for illustration
+d_l2 = product.dist(x, y, c)               # scalar
+d_per_factor = product.component_dist(x, y, c)  # shape (3,) per-factor distances
+
+# Batch with vmap: broadcast c with None across the batch.
+dist_batch = jax.vmap(product.dist, in_axes=(0, 0, None))
+# distances = dist_batch(xs, ys, c)
 
 # Repeated-factor construction via from_signature
 mixed = ProductManifold.from_signature(
@@ -262,7 +263,10 @@ mixed = ProductManifold.from_signature(
     (Poincare,    3, 2, 0.1),   # 2 copies of P^3(c=0.1)
     (Euclidean,   4, 1),         # 1 copy of E^4
 )
-# For learnable curvature, use LearnableCurvature on your nnx.Module.
+# For learnable curvature, build the sequence from LearnableCurvature calls on
+# your nnx.Module:
+#   c = (self.curv_h(), self.curv_p(), 0.0)
+#   d = product.dist(x, y, c)
 ```
 
 ### Isometry Mappings

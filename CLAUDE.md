@@ -56,7 +56,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 
 ### Module layout
 
-- **`manifolds/`** — Plain Python classes (not `nnx.Module`): `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `ProductManifold`. Each is instantiated with a dtype (`Poincare(dtype=jnp.float64)`). Conforms to `Manifold` protocol in `protocol.py`. `_base.py` has shared `ManifoldBase`.
+- **`manifolds/`** — Plain Python classes (not `nnx.Module`): `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `ProductManifold`. Each is instantiated with a dtype (`Poincare(dtype=jnp.float64)`). `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity` conform to the scalar-`c` `Manifold` protocol in `protocol.py`; `ProductManifold` intentionally does **not** (it takes a per-factor `cs: Sequence[Curvature]` sequence instead of a scalar `c`, and has no `c` attribute). `_base.py` has shared `ManifoldBase`.
 - **`nn_layers/`** — Flax NNX layers (`nnx.Module`). Two families:
   - *Poincare*: `HypLinearPoincare`, `HypLinearPoincarePP`, `HypConv2DPoincare`, `PoincareBatchNorm2D`, `HypRegressionPoincare` (Ganea et al. 2018, Shimizu et al. 2020, van Spengler et al. 2023)
   - *Hyperboloid*: `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `HTCLinear`, `HypLinearHyperboloidPP`, `LorentzConv2D` (Klis et al. 2026, Shimizu et al. 2020), attention layers, positional encodings, normalization

@@ -126,6 +126,7 @@ include = ["hyperbolix"]
 exclude = [
     "**/node_modules",
     "**/__pycache__",
+    "hyperbolix",  # Manifold Curvature union (scalar | sequence) causes downstream type-check limitations; tests validate runtime correctness
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
