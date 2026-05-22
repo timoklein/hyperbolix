@@ -1,8 +1,9 @@
 """Manifold Protocol for structural typing.
 
-Defines the common interface shared by Poincare, Hyperboloid, and Euclidean
-manifold classes. Use ``Manifold`` as a type hint for any parameter that
-accepts an arbitrary manifold instance.
+Defines the common interface shared by all concrete manifold classes
+(``Poincare``, ``Hyperboloid``, ``ProperVelocity``, ``Euclidean``, and
+``ProductManifold``). Use ``Manifold`` as a type hint for any parameter
+that accepts an arbitrary manifold instance.
 
 This is a ``typing.Protocol`` -- no classes need to explicitly inherit from it.
 Structural subtyping ensures that any object with the right methods is accepted.
@@ -10,22 +11,33 @@ Structural subtyping ensures that any object with the right methods is accepted.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from jaxtyping import Array, Float
 
-# Curvature parameter passed at call time. Accepts a Python float (static, fixed
-# curvature) or a scalar jax.Array (traced, e.g. the value returned by calling a
-# `LearnableCurvature` module). All manifold methods accept both.
-Curvature = float | Float[Array, ""]
+# A single curvature value: a Python float (static, fixed curvature) or a scalar
+# jax.Array (traced, e.g. the value returned by calling a `LearnableCurvature`
+# module). This is what `Poincare`, `Hyperboloid`, `ProperVelocity`, and
+# `Euclidean` accept directly.
+ScalarCurvature = float | Float[Array, ""]
+
+# Curvature accepted by manifold methods. Single manifolds take a scalar;
+# `ProductManifold` takes a per-factor sequence of length ``n_factors``. The
+# union lets a single ``Manifold`` protocol cover both shapes — each
+# implementation validates the shape it expects at runtime.
+Curvature = ScalarCurvature | Sequence[ScalarCurvature]
 
 
 @runtime_checkable
 class Manifold(Protocol):
     """Structural protocol for manifold classes.
 
-    All three concrete manifold classes (``Poincare``, ``Hyperboloid``,
-    ``Euclidean``) satisfy this protocol without modification.
+    All concrete manifold classes (``Poincare``, ``Hyperboloid``,
+    ``ProperVelocity``, ``Euclidean``, ``ProductManifold``) satisfy this
+    protocol without modification. For single manifolds, ``c`` is a scalar
+    (``ScalarCurvature``); for ``ProductManifold``, ``c`` is a sequence of
+    length ``n_factors`` (one curvature per factor).
 
     The method signatures use the *minimal common interface* so that
     manifold-specific optional parameters (e.g. ``version_idx``, ``atol``)
@@ -33,9 +45,6 @@ class Manifold(Protocol):
     """
 
     dtype: Any
-
-    @property
-    def c(self) -> Any: ...
 
     def _cast(self, x: Array) -> Array: ...
 

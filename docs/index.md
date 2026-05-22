@@ -159,17 +159,20 @@ for details.
 ### Mixed-Curvature Product Spaces
 
 Compose heterogeneous factors (each with its own curvature) into a single
-product manifold (Gu et al. 2019):
+product manifold (Gu et al. 2019). Curvature is supplied at call time as a
+per-factor sequence — pass `product.curvatures` for static factors, or
+build the sequence from `LearnableCurvature` calls for trainable factors:
 
 ```python
 from hyperbolix.manifolds import ProductManifold, Hyperboloid, Poincare, Euclidean
 
 product = ProductManifold(
     (Hyperboloid(c=1.0), 5),   # hyperbolic factor
-    (Poincare(c=0.1), 3),     # Poincaré factor
+    (Poincare(c=0.1), 3),      # Poincaré factor
     (Euclidean(), 4),          # flat factor
 )
-d = product.dist(x, y)  # sqrt(sum d_i^2) over factors
+c = product.curvatures               # (1.0, 0.1, 0.0)
+d = product.dist(x, y, c)            # sqrt(sum d_i^2) over factors
 ```
 
 ### Manifold Operations

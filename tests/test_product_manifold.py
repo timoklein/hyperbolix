@@ -1,8 +1,14 @@
 """Tests for ProductManifold.
 
-Covers construction, protocol compliance, decomposition correctness,
-distance properties, exp/log round-trips, origin, JIT/vmap, gradient flow,
-and edge cases (single-factor, all-Euclidean).
+Covers construction, decomposition correctness, distance properties,
+exp/log round-trips, origin, JIT/vmap, gradient flow, and edge cases
+(single-factor, all-Euclidean).
+
+API note: ProductManifold methods take a positional ``c`` argument that
+must be a sequence of per-factor curvatures (length ``n_factors``). Tests
+pass ``product.curvatures`` (factor-stored values) for static cases and
+an explicit ``(c_h, c_p)`` tuple for the learnable-curvature test. The
+fixture is named ``cs`` locally to reflect the sequence shape.
 """
 
 from __future__ import annotations
@@ -53,10 +59,16 @@ def _make_product_point(product: ProductManifold, rng: np.random.Generator) -> j
     return jnp.concatenate(parts)
 
 
-def _make_small_tangent(product: ProductManifold, x: jnp.ndarray, rng: np.random.Generator, scale: float = 0.1) -> jnp.ndarray:
+def _make_small_tangent(
+    product: ProductManifold,
+    x: jnp.ndarray,
+    rng: np.random.Generator,
+    cs,
+    scale: float = 0.1,
+) -> jnp.ndarray:
     """Generate a small tangent vector at x on the product manifold."""
     raw = jnp.asarray(rng.normal(0, scale, size=(product.total_dim,)), dtype=product.dtype)
-    return product.tangent_proj(raw, x, 0.0)
+    return product.tangent_proj(raw, x, cs)
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +126,12 @@ def product(request, dtype):
 
 
 @pytest.fixture
+def cs(product):
+    """Per-factor curvatures for ``product`` — used as the static ``cs`` arg."""
+    return product.curvatures
+
+
+@pytest.fixture
 def rng():
     return np.random.default_rng(42)
 
@@ -127,10 +145,10 @@ def two_points(product, rng):
 
 
 @pytest.fixture
-def point_and_tangent(product, rng):
+def point_and_tangent(product, rng, cs):
     """A valid point and a small tangent vector at that point."""
     x = _make_product_point(product, rng)
-    v = _make_small_tangent(product, x, rng)
+    v = _make_small_tangent(product, x, rng, cs)
     return x, v
 
 
@@ -181,10 +199,10 @@ class TestConstruction:
         assert curvs[1] == 0.5
         assert curvs[2] == 0.0
 
-    def test_c_property_raises(self):
+    def test_no_c_attribute(self):
+        """ProductManifold deliberately has no scalar ``c``."""
         p = ProductManifold((Poincare(), 3), (Hyperboloid(), 5))
-        with pytest.raises(TypeError, match="per-factor curvatures"):
-            _ = p.c
+        assert not hasattr(p, "c")
 
     def test_factors_property(self):
         h = Hyperboloid(c=1.0)
@@ -222,37 +240,35 @@ class TestConstruction:
 
 
 # ===========================================================================
-# 2. Protocol compliance
+# 2. cs validation
 # ===========================================================================
 
 
-class TestProtocol:
-    def test_isinstance_manifold(self, product):
-        assert isinstance(product, Manifold)
+class TestCurvatureSequenceValidation:
+    """ProductManifold methods require an explicit per-factor curvature sequence."""
 
-    def test_has_all_protocol_methods(self, product):
-        required = [
-            "proj",
-            "dist",
-            "dist_0",
-            "addition",
-            "scalar_mul",
-            "expmap",
-            "expmap_0",
-            "logmap",
-            "logmap_0",
-            "retraction",
-            "ptransp",
-            "ptransp_0",
-            "tangent_inner",
-            "tangent_norm",
-            "egrad2rgrad",
-            "tangent_proj",
-            "is_in_manifold",
-            "is_in_tangent_space",
-        ]
-        for name in required:
-            assert hasattr(product, name), f"Missing protocol method: {name}"
+    def test_scalar_c_raises(self, product, rng):
+        x = _make_product_point(product, rng)
+        y = _make_product_point(product, rng)
+        with pytest.raises(TypeError, match="sequence"):
+            product.dist(x, y, 0.0)  # type: ignore[arg-type]
+
+    def test_wrong_length_raises(self, product, rng):
+        x = _make_product_point(product, rng)
+        y = _make_product_point(product, rng)
+        too_short = (1.0,) * (product.n_factors + 1)
+        with pytest.raises(ValueError, match="curvatures"):
+            product.dist(x, y, too_short)
+
+    def test_satisfies_manifold_protocol(self, product):
+        """ProductManifold satisfies the structural ``Manifold`` protocol.
+
+        The protocol-level ``Curvature`` type was widened to include
+        sequences, so the product's per-factor sequence shape unifies with
+        the scalar shape used by ``Poincare``/``Hyperboloid``/etc. under a
+        single protocol.
+        """
+        assert isinstance(product, Manifold)
 
 
 # ===========================================================================
@@ -289,104 +305,105 @@ class TestSplitCombine:
 class TestDecomposition:
     """Verify that product ops equal per-factor ops concatenated."""
 
-    def test_proj_decomposes(self, product, rng, tolerance):
+    def test_proj_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        result = product.proj(x, 0.0)
+        result = product.proj(x, cs)
 
         parts = product.split(x)
-        expected = jnp.concatenate([m.proj(p, m.c) for m, p in zip(product.factors, parts, strict=True)])
+        expected = jnp.concatenate([m.proj(p, c) for m, p, c in zip(product.factors, parts, cs, strict=True)])
         assert jnp.allclose(result, expected, atol=atol)
 
-    def test_expmap_0_decomposes(self, product, rng, tolerance):
+    def test_expmap_0_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         v = jnp.asarray(rng.normal(0, 0.1, (product.total_dim,)), dtype=product.dtype)
-        result = product.expmap_0(v, 0.0)
+        result = product.expmap_0(v, cs)
 
         parts = product.split(v)
-        expected = jnp.concatenate([m.expmap_0(p, m.c) for m, p in zip(product.factors, parts, strict=True)])
+        expected = jnp.concatenate([m.expmap_0(p, c) for m, p, c in zip(product.factors, parts, cs, strict=True)])
         assert jnp.allclose(result, expected, atol=atol)
 
-    def test_logmap_0_decomposes(self, product, rng, tolerance):
+    def test_logmap_0_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        result = product.logmap_0(x, 0.0)
+        result = product.logmap_0(x, cs)
 
         parts = product.split(x)
-        expected = jnp.concatenate([m.logmap_0(p, m.c) for m, p in zip(product.factors, parts, strict=True)])
+        expected = jnp.concatenate([m.logmap_0(p, c) for m, p, c in zip(product.factors, parts, cs, strict=True)])
         assert jnp.allclose(result, expected, atol=atol)
 
-    def test_expmap_decomposes(self, product, rng, tolerance):
+    def test_expmap_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        v = _make_small_tangent(product, x, rng, scale=0.05)
-        result = product.expmap(v, x, 0.0)
+        v = _make_small_tangent(product, x, rng, cs, scale=0.05)
+        result = product.expmap(v, x, cs)
 
         v_parts, x_parts = product.split(v), product.split(x)
         expected = jnp.concatenate(
-            [m.expmap(vp, xp, m.c) for m, vp, xp in zip(product.factors, v_parts, x_parts, strict=True)]
+            [m.expmap(vp, xp, c) for m, vp, xp, c in zip(product.factors, v_parts, x_parts, cs, strict=True)]
         )
         assert jnp.allclose(result, expected, atol=atol)
 
-    def test_logmap_decomposes(self, product, rng, tolerance):
+    def test_logmap_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        result = product.logmap(y, x, 0.0)
+        result = product.logmap(y, x, cs)
 
         x_parts, y_parts = product.split(x), product.split(y)
         expected = jnp.concatenate(
-            [m.logmap(yp, xp, m.c) for m, yp, xp in zip(product.factors, y_parts, x_parts, strict=True)]
+            [m.logmap(yp, xp, c) for m, yp, xp, c in zip(product.factors, y_parts, x_parts, cs, strict=True)]
         )
         assert jnp.allclose(result, expected, atol=atol)
 
-    def test_ptransp_decomposes(self, product, rng, tolerance):
+    def test_ptransp_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        v = _make_small_tangent(product, x, rng)
-        result = product.ptransp(v, x, y, 0.0)
+        v = _make_small_tangent(product, x, rng, cs)
+        result = product.ptransp(v, x, y, cs)
 
         v_parts, x_parts, y_parts = product.split(v), product.split(x), product.split(y)
         expected = jnp.concatenate(
-            [m.ptransp(vp, xp, yp, m.c) for m, vp, xp, yp in zip(product.factors, v_parts, x_parts, y_parts, strict=True)]
+            [m.ptransp(vp, xp, yp, c) for m, vp, xp, yp, c in zip(product.factors, v_parts, x_parts, y_parts, cs, strict=True)]
         )
         assert jnp.allclose(result, expected, atol=atol)
 
-    def test_egrad2rgrad_decomposes(self, product, rng, tolerance):
+    def test_egrad2rgrad_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         grad = jnp.asarray(rng.normal(0, 0.1, (product.total_dim,)), dtype=product.dtype)
-        result = product.egrad2rgrad(grad, x, 0.0)
+        result = product.egrad2rgrad(grad, x, cs)
 
         g_parts, x_parts = product.split(grad), product.split(x)
         expected = jnp.concatenate(
-            [m.egrad2rgrad(gp, xp, m.c) for m, gp, xp in zip(product.factors, g_parts, x_parts, strict=True)]
+            [m.egrad2rgrad(gp, xp, c) for m, gp, xp, c in zip(product.factors, g_parts, x_parts, cs, strict=True)]
         )
         assert jnp.allclose(result, expected, atol=atol)
 
-    def test_addition_decomposes(self, product, rng, tolerance):
+    def test_addition_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        result = product.addition(x, y, 0.0)
+        result = product.addition(x, y, cs)
 
         x_parts, y_parts = product.split(x), product.split(y)
         expected = jnp.concatenate(
-            [m.addition(xp, yp, m.c) for m, xp, yp in zip(product.factors, x_parts, y_parts, strict=True)]
+            [m.addition(xp, yp, c) for m, xp, yp, c in zip(product.factors, x_parts, y_parts, cs, strict=True)]
         )
         assert jnp.allclose(result, expected, atol=atol)
 
-    def test_tangent_inner_decomposes(self, product, rng, tolerance):
+    def test_tangent_inner_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        u = _make_small_tangent(product, x, rng)
-        v = _make_small_tangent(product, x, rng)
-        result = product.tangent_inner(u, v, x, 0.0)
+        u = _make_small_tangent(product, x, rng, cs)
+        v = _make_small_tangent(product, x, rng, cs)
+        result = product.tangent_inner(u, v, x, cs)
 
         u_parts, v_parts, x_parts = product.split(u), product.split(v), product.split(x)
         expected = sum(
-            m.tangent_inner(up, vp, xp, m.c) for m, up, vp, xp in zip(product.factors, u_parts, v_parts, x_parts, strict=True)
+            m.tangent_inner(up, vp, xp, c)
+            for m, up, vp, xp, c in zip(product.factors, u_parts, v_parts, x_parts, cs, strict=True)
         )
         assert jnp.allclose(result, expected, atol=atol)
 
@@ -397,72 +414,72 @@ class TestDecomposition:
 
 
 class TestDistance:
-    def test_self_distance_zero(self, product, rng, tolerance):
+    def test_self_distance_zero(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        assert jnp.allclose(product.dist(x, x, 0.0), 0.0, atol=atol)
+        assert jnp.allclose(product.dist(x, x, cs), 0.0, atol=atol)
 
-    def test_positive_definite(self, product, rng):
+    def test_positive_definite(self, product, rng, cs):
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        d = product.dist(x, y, 0.0)
+        d = product.dist(x, y, cs)
         assert d > 0 or jnp.allclose(x, y)
 
-    def test_symmetric(self, product, rng, tolerance):
+    def test_symmetric(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        assert jnp.allclose(product.dist(x, y, 0.0), product.dist(y, x, 0.0), atol=atol)
+        assert jnp.allclose(product.dist(x, y, cs), product.dist(y, x, cs), atol=atol)
 
-    def test_triangle_inequality(self, product, rng):
+    def test_triangle_inequality(self, product, rng, cs):
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
         z = _make_product_point(product, rng)
-        dxy = product.dist(x, y, 0.0)
-        dyz = product.dist(y, z, 0.0)
-        dxz = product.dist(x, z, 0.0)
+        dxy = product.dist(x, y, cs)
+        dyz = product.dist(y, z, cs)
+        dxz = product.dist(x, z, cs)
         assert dxz <= dxy + dyz + 1e-5
 
-    def test_pythagorean_decomposition(self, product, rng, tolerance):
+    def test_pythagorean_decomposition(self, product, rng, cs, tolerance):
         """d_P^2 == sum(d_i^2)"""
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        d_product = product.dist(x, y, 0.0)
-        d_components = product.component_dist(x, y)
+        d_product = product.dist(x, y, cs)
+        d_components = product.component_dist(x, y, cs)
         expected = jnp.sqrt(jnp.sum(d_components**2))
         assert jnp.allclose(d_product, expected, atol=atol)
 
-    def test_dist_0(self, product, rng, tolerance):
+    def test_dist_0(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        o = product.origin()
-        d_from_origin = product.dist_0(x, 0.0)
-        d_to_origin = product.dist(x, o, 0.0)
+        o = product.origin(cs)
+        d_from_origin = product.dist_0(x, cs)
+        d_to_origin = product.dist(x, o, cs)
         assert jnp.allclose(d_from_origin, d_to_origin, atol=atol)
 
-    def test_dist_l1(self, product, rng, tolerance):
+    def test_dist_l1(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        d_l1 = product.dist_l1(x, y)
-        d_components = product.component_dist(x, y)
+        d_l1 = product.dist_l1(x, y, cs)
+        d_components = product.component_dist(x, y, cs)
         assert jnp.allclose(d_l1, jnp.sum(d_components), atol=atol)
 
-    def test_dist_min(self, product, rng, tolerance):
+    def test_dist_min(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        d_min = product.dist_min(x, y)
-        d_components = product.component_dist(x, y)
+        d_min = product.dist_min(x, y, cs)
+        d_components = product.component_dist(x, y, cs)
         assert jnp.allclose(d_min, jnp.min(d_components), atol=atol)
 
-    def test_l2_geq_component_dists(self, product, rng):
+    def test_l2_geq_component_dists(self, product, rng, cs):
         """L2 product distance >= every component distance."""
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        d_l2 = product.dist(x, y, 0.0)
-        d_components = product.component_dist(x, y)
+        d_l2 = product.dist(x, y, cs)
+        d_components = product.component_dist(x, y, cs)
         assert jnp.all(d_l2 >= d_components - 1e-6)
 
 
@@ -472,31 +489,31 @@ class TestDistance:
 
 
 class TestRoundTrips:
-    def test_expmap0_logmap0_roundtrip(self, product, rng, tolerance):
+    def test_expmap0_logmap0_roundtrip(self, product, rng, cs, tolerance):
         """logmap_0(expmap_0(v)) ≈ v for small v in tangent space at origin."""
         atol, _ = tolerance
         raw = jnp.asarray(rng.normal(0, 0.05, (product.total_dim,)), dtype=product.dtype)
-        o = product.origin()
-        v = product.tangent_proj(raw, o, 0.0)
-        x = product.expmap_0(v, 0.0)
-        v_recovered = product.logmap_0(x, 0.0)
+        o = product.origin(cs)
+        v = product.tangent_proj(raw, o, cs)
+        x = product.expmap_0(v, cs)
+        v_recovered = product.logmap_0(x, cs)
         assert jnp.allclose(v, v_recovered, atol=atol)
 
-    def test_logmap0_expmap0_roundtrip(self, product, rng, tolerance):
+    def test_logmap0_expmap0_roundtrip(self, product, rng, cs, tolerance):
         """expmap_0(logmap_0(x)) ≈ x."""
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        v = product.logmap_0(x, 0.0)
-        x_recovered = product.expmap_0(v, 0.0)
+        v = product.logmap_0(x, cs)
+        x_recovered = product.expmap_0(v, cs)
         assert jnp.allclose(x, x_recovered, atol=atol)
 
-    def test_expmap_logmap_roundtrip(self, product, rng, tolerance):
+    def test_expmap_logmap_roundtrip(self, product, rng, cs, tolerance):
         """logmap(expmap(v, x), x) ≈ v for small v."""
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        v = _make_small_tangent(product, x, rng, scale=0.05)
-        y = product.expmap(v, x, 0.0)
-        v_recovered = product.logmap(y, x, 0.0)
+        v = _make_small_tangent(product, x, rng, cs, scale=0.05)
+        y = product.expmap(v, x, cs)
+        v_recovered = product.logmap(y, x, cs)
         assert jnp.allclose(v, v_recovered, atol=atol)
 
 
@@ -506,21 +523,21 @@ class TestRoundTrips:
 
 
 class TestOrigin:
-    def test_origin_on_manifold(self, product):
-        o = product.origin()
+    def test_origin_on_manifold(self, product, cs):
+        o = product.origin(cs)
         assert o.shape == (product.total_dim,)
-        assert bool(product.is_in_manifold(o, 0.0))
+        assert bool(product.is_in_manifold(o, cs))
 
-    def test_origin_dist_0_is_zero(self, product, tolerance):
+    def test_origin_dist_0_is_zero(self, product, cs, tolerance):
         atol, _ = tolerance
-        o = product.origin()
-        assert jnp.allclose(product.dist_0(o, 0.0), 0.0, atol=atol)
+        o = product.origin(cs)
+        assert jnp.allclose(product.dist_0(o, cs), 0.0, atol=atol)
 
-    def test_origin_matches_expmap0_zeros(self, product, tolerance):
+    def test_origin_matches_expmap0_zeros(self, product, cs, tolerance):
         atol, _ = tolerance
-        o = product.origin()
+        o = product.origin(cs)
         z = jnp.zeros(product.total_dim, dtype=product.dtype)
-        o2 = product.expmap_0(z, 0.0)
+        o2 = product.expmap_0(z, cs)
         assert jnp.allclose(o, o2, atol=atol)
 
 
@@ -530,26 +547,26 @@ class TestOrigin:
 
 
 class TestTangentSpace:
-    def test_tangent_norm_consistent_with_inner(self, product, rng, tolerance):
+    def test_tangent_norm_consistent_with_inner(self, product, rng, cs, tolerance):
         """tangent_norm(v, x) == sqrt(tangent_inner(v, v, x))"""
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        v = _make_small_tangent(product, x, rng)
-        norm = product.tangent_norm(v, x, 0.0)
-        inner = product.tangent_inner(v, v, x, 0.0)
+        v = _make_small_tangent(product, x, rng, cs)
+        norm = product.tangent_norm(v, x, cs)
+        inner = product.tangent_inner(v, v, x, cs)
         assert jnp.allclose(norm, jnp.sqrt(jnp.maximum(inner, 0.0)), atol=atol)
 
-    def test_projection_idempotent(self, product, rng, tolerance):
+    def test_projection_idempotent(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
-        x_proj = product.proj(x, 0.0)
-        x_proj2 = product.proj(x_proj, 0.0)
+        x_proj = product.proj(x, cs)
+        x_proj2 = product.proj(x_proj, cs)
         assert jnp.allclose(x_proj, x_proj2, atol=atol)
 
-    def test_is_in_manifold(self, product, rng):
+    def test_is_in_manifold(self, product, rng, cs):
         x = _make_product_point(product, rng)
-        x = product.proj(x, 0.0)
-        assert bool(product.is_in_manifold(x, 0.0))
+        x = product.proj(x, cs)
+        assert bool(product.is_in_manifold(x, cs))
 
 
 # ===========================================================================
@@ -558,45 +575,45 @@ class TestTangentSpace:
 
 
 class TestJITVmap:
-    def test_dist_jit(self, product, rng):
+    def test_dist_jit(self, product, rng, cs):
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        dist_jit = jax.jit(product.dist, static_argnames=[])
-        result = dist_jit(x, y, 0.0)
-        expected = product.dist(x, y, 0.0)
+        dist_jit = jax.jit(product.dist)
+        result = dist_jit(x, y, cs)
+        expected = product.dist(x, y, cs)
         assert jnp.allclose(result, expected)
 
-    def test_expmap_0_jit(self, product, rng):
+    def test_expmap_0_jit(self, product, rng, cs):
         v = jnp.asarray(rng.normal(0, 0.1, (product.total_dim,)), dtype=product.dtype)
         expmap_jit = jax.jit(product.expmap_0)
-        result = expmap_jit(v, 0.0)
-        expected = product.expmap_0(v, 0.0)
+        result = expmap_jit(v, cs)
+        expected = product.expmap_0(v, cs)
         assert jnp.allclose(result, expected)
 
-    def test_proj_jit(self, product, rng):
+    def test_proj_jit(self, product, rng, cs):
         x = _make_product_point(product, rng)
         proj_jit = jax.jit(product.proj)
-        result = proj_jit(x, 0.0)
-        expected = product.proj(x, 0.0)
+        result = proj_jit(x, cs)
+        expected = product.proj(x, cs)
         assert jnp.allclose(result, expected)
 
-    def test_dist_vmap(self, product, rng):
-        """vmap over a batch of point pairs."""
+    def test_dist_vmap(self, product, rng, cs):
+        """vmap over a batch of point pairs; broadcast cs with None."""
         batch_size = 8
         xs = jnp.stack([_make_product_point(product, rng) for _ in range(batch_size)])
         ys = jnp.stack([_make_product_point(product, rng) for _ in range(batch_size)])
         dist_batch = jax.vmap(product.dist, in_axes=(0, 0, None))
-        results = dist_batch(xs, ys, 0.0)
+        results = dist_batch(xs, ys, cs)
         assert results.shape == (batch_size,)
         for i in range(batch_size):
-            expected = product.dist(xs[i], ys[i], 0.0)
+            expected = product.dist(xs[i], ys[i], cs)
             assert jnp.allclose(results[i], expected, atol=1e-5)
 
-    def test_expmap_0_vmap(self, product, rng):
+    def test_expmap_0_vmap(self, product, rng, cs):
         batch_size = 8
         vs = jnp.asarray(rng.normal(0, 0.1, (batch_size, product.total_dim)), dtype=product.dtype)
         expmap_batch = jax.vmap(product.expmap_0, in_axes=(0, None))
-        results = expmap_batch(vs, 0.0)
+        results = expmap_batch(vs, cs)
         assert results.shape == (batch_size, product.total_dim)
 
 
@@ -606,27 +623,27 @@ class TestJITVmap:
 
 
 class TestGradients:
-    def test_dist_grad_finite(self, product, rng):
+    def test_dist_grad_finite(self, product, rng, cs):
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        grad_fn = jax.grad(lambda x_: product.dist(x_, y, 0.0))
+        grad_fn = jax.grad(lambda x_: product.dist(x_, y, cs))
         g = grad_fn(x)
         assert jnp.all(jnp.isfinite(g))
 
-    def test_expmap_0_grad_finite(self, product, rng):
+    def test_expmap_0_grad_finite(self, product, rng, cs):
         raw = jnp.asarray(rng.normal(0, 0.1, (product.total_dim,)), dtype=product.dtype)
-        o = product.origin()
-        v = product.tangent_proj(raw, o, 0.0)
+        o = product.origin(cs)
+        v = product.tangent_proj(raw, o, cs)
         y = _make_product_point(product, rng)
-        grad_fn = jax.grad(lambda v_: product.dist(product.expmap_0(v_, 0.0), y, 0.0))
+        grad_fn = jax.grad(lambda v_: product.dist(product.expmap_0(v_, cs), y, cs))
         g = grad_fn(v)
         assert jnp.all(jnp.isfinite(g))
 
     def test_learnable_curvature_gradient(self):
-        """Gradients flow to per-factor LearnableCurvature instances.
+        """Gradients flow to per-factor LearnableCurvature instances via the
+        ProductManifold's ``cs`` argument (no factor-wise workaround).
 
-        Uses one ``LearnableCurvature`` per factor stored on an nnx.Module
-        wrapper. Verifies:
+        Verifies:
           1) Grad leaves are finite and non-trivial.
           2) An SGD step actually moves the curvatures.
         """
@@ -646,13 +663,8 @@ class TestGradients:
                 self.curv_p = LearnableCurvature(init_c=0.5)
 
             def __call__(self, x_, y_):
-                c_h = self.curv_h()
-                c_p = self.curv_p()
-                x_parts = self.pm.split(x_)
-                y_parts = self.pm.split(y_)
-                d_h = self.pm.factors[0].dist(x_parts[0], y_parts[0], c_h)
-                d_p = self.pm.factors[1].dist(x_parts[1], y_parts[1], c_p)
-                return d_h + d_p
+                cs = (self.curv_h(), self.curv_p())
+                return self.pm.dist(x_, y_, cs)
 
         model = CurvModel()
         c_before = jnp.array([float(model.curv_h()), float(model.curv_p())])
@@ -684,6 +696,7 @@ class TestEdgeCases:
         """Single-factor product should behave like the factor alone."""
         h = Hyperboloid(c=1.0, dtype=jnp.float64)
         pm = ProductManifold((h, 5), dtype=jnp.float64)
+        cs = (1.0,)
         rng = np.random.default_rng(99)
 
         spatial = rng.normal(0, 0.3, (4,)).astype(np.float64)
@@ -694,13 +707,13 @@ class TestEdgeCases:
         y = jnp.asarray(h.proj(jnp.array(ambient2), 1.0))
 
         d_base = h.dist(x, y, 1.0)
-        d_product = pm.dist(x, y, 0.0)
+        d_product = pm.dist(x, y, cs)
         assert jnp.allclose(d_base, d_product, atol=1e-7)
 
         v = jnp.asarray(rng.normal(0, 0.05, (5,)), dtype=jnp.float64)
         v = h.tangent_proj(v, x, 1.0)
         exp_base = h.expmap(v, x, 1.0)
-        exp_product = pm.expmap(v, x, 0.0)
+        exp_product = pm.expmap(v, x, cs)
         assert jnp.allclose(exp_base, exp_product, atol=1e-7)
 
     def test_all_euclidean_matches_flat(self):
@@ -708,23 +721,24 @@ class TestEdgeCases:
         e1 = Euclidean(dtype=jnp.float64)
         e2 = Euclidean(dtype=jnp.float64)
         pm = ProductManifold((e1, 3), (e2, 4), dtype=jnp.float64)
+        cs = pm.curvatures  # (0.0, 0.0)
         e_flat = Euclidean(dtype=jnp.float64)
 
         rng = np.random.default_rng(42)
         x = jnp.asarray(rng.normal(0, 1, (7,)), dtype=jnp.float64)
         y = jnp.asarray(rng.normal(0, 1, (7,)), dtype=jnp.float64)
 
-        d_product = pm.dist(x, y, 0.0)
+        d_product = pm.dist(x, y, cs)
         d_flat = e_flat.dist(x, y, 0.0)
         assert jnp.allclose(d_product, d_flat, atol=1e-10)
 
-    def test_parallel_transport_preserves_norm(self, product, rng, tolerance):
+    def test_parallel_transport_preserves_norm(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
-        v = _make_small_tangent(product, x, rng, scale=0.05)
+        v = _make_small_tangent(product, x, rng, cs, scale=0.05)
 
-        norm_before = product.tangent_norm(v, x, 0.0)
-        v_transported = product.ptransp(v, x, y, 0.0)
-        norm_after = product.tangent_norm(v_transported, y, 0.0)
+        norm_before = product.tangent_norm(v, x, cs)
+        v_transported = product.ptransp(v, x, y, cs)
+        norm_after = product.tangent_norm(v_transported, y, cs)
         assert jnp.allclose(norm_before, norm_after, atol=atol)

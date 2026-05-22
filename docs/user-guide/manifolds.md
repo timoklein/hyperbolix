@@ -134,17 +134,34 @@ class HypResNetBlock(nnx.Module):
 
 ### Curvature in `ProductManifold`
 
-A `ProductManifold` has **no single `c`** — accessing `.c` raises `TypeError`.
-Use one of:
+A `ProductManifold` has **no single `c`**: it has one curvature per factor.
+Every geometry method takes a positional `c` argument that must be a sequence
+of length `n_factors` — there is no scalar fallback, no default, and no `.c`
+attribute on the product. This is intentional: it forces the curvature choice
+to be explicit at every call site, and it makes static and learnable
+curvatures look identical to readers. The protocol-level `Curvature` type
+unions the scalar shape (used by `Poincare`/`Hyperboloid`/`ProperVelocity`/
+`Euclidean`) with the sequence shape (used by `ProductManifold`), so
+`ProductManifold` satisfies the `Manifold` protocol and generic code typed
+against `Manifold` accepts the product too.
 
 ```python
-product.curvatures           # tuple of all factor curvatures
-product.factors[i].c         # specific factor's curvature
-product.component_dist(x, y) # per-factor distance vector (before reduction)
+product.curvatures            # tuple of factor-stored curvatures — pass as c when static
+product.factors[i].c          # specific factor's stored curvature
+product.dist(x, y, c)         # c: sequence of length n_factors
+product.component_dist(x, y, c)  # per-factor distance vector before reduction
 ```
 
-For learnable per-factor curvatures, instantiate one `LearnableCurvature`
-per factor on your model:
+For **static** factor curvatures, pass `product.curvatures`:
+
+```python
+product = ProductManifold((Hyperboloid(c=1.0), 5), (Poincare(c=0.1), 3))
+c = product.curvatures                   # (1.0, 0.1)
+d = product.dist(x, y, c)
+```
+
+For **learnable** per-factor curvatures, instantiate one `LearnableCurvature`
+per factor on your model and build the sequence in `__call__`:
 
 ```python
 from hyperbolix import LearnableCurvature
@@ -159,15 +176,25 @@ class Model(nnx.Module):
         self.curv_h = LearnableCurvature(init_c=1.0)
         self.curv_p = LearnableCurvature(init_c=0.5)
 
+    @property
+    def c(self):
+        return (self.curv_h(), self.curv_p())
+
     def __call__(self, x, y):
-        c_h = self.curv_h()
-        c_p = self.curv_p()
-        x_parts = self.pm.split(x)
-        y_parts = self.pm.split(y)
-        d_h = self.pm.factors[0].dist(x_parts[0], y_parts[0], c_h)
-        d_p = self.pm.factors[1].dist(x_parts[1], y_parts[1], c_p)
-        return d_h + d_p
+        return self.pm.dist(x, y, self.c)
 ```
+
+The curvature tuple is a JAX pytree, so `jax.jit(self.pm.dist)(x, y, c)` and
+`jax.vmap(self.pm.dist, in_axes=(0, 0, None))(xs, ys, c)` work without any
+`static_argnames` — broadcast the whole tuple with `None` to vmap over batched
+points but constant curvatures.
+
+!!! note "Factor `c` is an initial value only"
+    The `c=...` you pass to a factor at construction (`Hyperboloid(c=1.0)`)
+    is stored on the factor and exposed via `product.curvatures`, but
+    `ProductManifold` never reads it in its geometry methods. Treat it as a
+    *default that you choose to thread through via `product.curvatures`* —
+    not as a value the product silently uses.
 
 ### Learnable curvature in compiled training loops (`nnx.scan` / `nnx.fori_loop`)
 

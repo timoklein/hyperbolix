@@ -1,11 +1,35 @@
 """Product manifold - combines multiple sub-manifolds into a single space.
 
 A product manifold P = M1 x M2 x ... x Mn where each Mi can be any manifold
-(Poincaré, Hyperboloid, Euclidean, ProperVelocity) with its own curvature.
+(Poincaré, Hyperboloid, Euclidean, ProperVelocity). Each factor has its own
+curvature, supplied **at call time** as a per-factor sequence ``c`` — there
+is no scalar broadcast.
 
 Points are represented as flat concatenated arrays of shape (total_dim,).
 All single-point operations follow the vmap-native pattern: use jax.vmap
 for batching.
+
+Per-factor curvature contract
+-----------------------------
+Every geometry method takes a positional ``c: Curvature`` argument that must
+be a sequence of length ``n_factors``. ``c[i]`` is routed into the i-th
+factor. There is no default and no scalar broadcast — callers must pass the
+per-factor sequence explicitly. Use ``product.curvatures`` to read the
+factor-stored values as a static default, or pass the outputs of
+``LearnableCurvature`` modules for trainable curvatures.
+
+    >>> import jax
+    >>> import jax.numpy as jnp
+    >>> from hyperbolix.manifolds import ProductManifold, Hyperboloid, Poincare
+    >>>
+    >>> product = ProductManifold((Hyperboloid(c=1.0), 5), (Poincare(c=0.1), 3))
+    >>> c = product.curvatures                   # (1.0, 0.1)
+    >>> x = product.origin(c)                    # shape (8,)
+    >>> parts = product.split(x)                 # (array(5,), array(3,))
+    >>>
+    >>> # Batch distance with vmap (broadcast c across the batch with None)
+    >>> dist_batch = jax.vmap(product.dist, in_axes=(0, 0, None))
+    >>> distances = dist_batch(x_batch, y_batch, c)
 
 JIT Compilation & Batching
 ---------------------------
@@ -13,29 +37,19 @@ Python for-loops over factors unroll at JIT trace time since the product
 structure is static. Each iteration traces a different code path (different
 manifold type), which is correct and efficient.
 
-    >>> import jax
-    >>> import jax.numpy as jnp
-    >>> from hyperbolix.manifolds import ProductManifold, Hyperboloid, Poincare
-    >>>
-    >>> product = ProductManifold((Hyperboloid(c=1.0), 5), (Poincare(c=0.1), 3))
-    >>> x = product.origin()  # shape (8,)
-    >>> parts = product.split(x)  # (array(5,), array(3,))
-    >>>
-    >>> # Batch distance with vmap
-    >>> dist_batch = jax.vmap(product.dist, in_axes=(0, 0, None))
-    >>> distances = dist_batch(x_batch, y_batch, 0.0)  # c is ignored
-
 References:
     Gu et al. "Learning Mixed-Curvature Representations in Product Spaces."
     ICLR 2019.
 """
+
+from collections.abc import Sequence
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ._base import ManifoldBase
-from .protocol import Curvature
+from .protocol import Curvature, ScalarCurvature
 
 
 class ProductManifold:
@@ -45,9 +59,19 @@ class ProductManifold:
     the point dimension (array slice width): ambient for Hyperboloid (d+1),
     spatial for Poincaré/Euclidean/ProperVelocity (d).
 
-    Curvature is managed per-factor via each sub-manifold's ``.c`` property.
-    The ``c`` parameter on protocol methods is accepted for compatibility but
-    ignored — each factor uses its own curvature.
+    Curvature is supplied at call time as a per-factor sequence:
+
+        product.dist(x, y, (c0, c1, ...))         # explicit tuple
+        product.dist(x, y, product.curvatures)    # use factor-stored values
+
+    Factor instances may carry an initial curvature value (``Hyperboloid(c=1.0)``),
+    but that value is **not** consulted by ProductManifold's methods — it is
+    only useful as a static default to read off via ``product.curvatures``.
+
+    ProductManifold satisfies the ``Manifold`` protocol with ``c`` typed as
+    ``Curvature`` (a union of scalar and sequence-of-scalars), so generic code
+    written against ``Manifold`` accepts product instances too. The product
+    itself has **no ``c`` attribute** — there is no single scalar curvature.
 
     Args:
         *factors: Tuples of ``(manifold_instance, dim)``. At least one required.
@@ -55,9 +79,10 @@ class ProductManifold:
 
     Examples:
         >>> product = ProductManifold((Hyperboloid(c=1.0), 5), (Poincare(c=0.1), 3))
-        >>> x = product.origin()           # shape (8,)
-        >>> parts = product.split(x)       # (array(5,), array(3,))
-        >>> d = product.dist(x, y, c=0.0)  # c ignored, uses per-factor curvatures
+        >>> c = product.curvatures                   # (1.0, 0.1)
+        >>> x = product.origin(c)
+        >>> parts = product.split(x)
+        >>> d = product.dist(x, y, c)
 
         From a signature (repeated factors):
 
@@ -101,13 +126,26 @@ class ProductManifold:
             return x.astype(self.dtype)
         return x
 
-    # -- Properties --------------------------------------------------------
+    def _validate_c(self, c: Curvature) -> Sequence[ScalarCurvature]:
+        """Validate a per-factor curvature sequence.
 
-    @property
-    def c(self) -> None:
-        raise TypeError(
-            "ProductManifold has per-factor curvatures. Use .curvatures to get all or .factors[i].c for a specific factor."
-        )
+        Raises ``TypeError`` if ``c`` has no length (e.g. a scalar passed by
+        mistake) and ``ValueError`` if its length does not match
+        ``n_factors``. Returns ``c`` unchanged on success so the validation
+        can be inlined at the top of each method.
+        """
+        try:
+            n = len(c)  # type: ignore[arg-type]
+        except TypeError as e:
+            raise TypeError(
+                f"ProductManifold expects a sequence of {len(self._factors)} per-factor curvatures; "
+                f"got {type(c).__name__}. Pass a tuple, e.g. product.curvatures or (c0, c1, ...)."
+            ) from e
+        if n != len(self._factors):
+            raise ValueError(f"Expected {len(self._factors)} curvatures (one per factor), got {n}.")
+        return c  # type: ignore[return-value]
+
+    # -- Properties --------------------------------------------------------
 
     @property
     def total_dim(self) -> int:
@@ -126,7 +164,13 @@ class ProductManifold:
         return self._factors
 
     @property
-    def curvatures(self) -> tuple[float | jax.Array, ...]:
+    def curvatures(self) -> tuple[ScalarCurvature, ...]:
+        """Per-factor curvatures stored on the factor instances.
+
+        Useful as the ``c`` argument when curvature is static, e.g.
+        ``product.dist(x, y, product.curvatures)``. For learnable curvature,
+        build the tuple from ``LearnableCurvature`` calls instead.
+        """
         return tuple(m.c for m in self._factors)
 
     # -- Split / Combine ---------------------------------------------------
@@ -143,85 +187,123 @@ class ProductManifold:
 
     # -- Origin ------------------------------------------------------------
 
-    def origin(self) -> Float[Array, "total_dim"]:
-        """Construct the product origin point.
+    def origin(self, c: Curvature) -> Float[Array, "total_dim"]:
+        """Construct the product origin point under per-factor curvatures.
 
-        Uses expmap_0(zeros) per factor, which returns the manifold origin
-        for all manifold types without isinstance checks.
+        Uses ``expmap_0(zeros, c[i])`` per factor, which returns the manifold
+        origin for all manifold types without isinstance checks.
         """
+        cs = self._validate_c(c)
         parts = []
-        for m, dim in zip(self._factors, self._dims, strict=True):
+        for m, dim, c_i in zip(self._factors, self._dims, cs, strict=True):
             zero_tangent = jnp.zeros(dim, dtype=self.dtype)
-            parts.append(m.expmap_0(zero_tangent, m.c))
+            parts.append(m.expmap_0(zero_tangent, c_i))
         return jnp.concatenate(parts)
 
     # -- Geometry (per-factor decomposable) --------------------------------
 
-    def proj(self, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
+    def proj(
+        self,
+        x: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Float[Array, "total_dim"]:
         """Project point onto product manifold (per-factor projection)."""
-        del c
+        cs = self._validate_c(c)
         x = self._cast(x)
         parts = self.split(x)
-        return jnp.concatenate([m.proj(p, m.c) for m, p in zip(self._factors, parts, strict=True)])
+        return jnp.concatenate([m.proj(p, c_i) for m, p, c_i in zip(self._factors, parts, cs, strict=True)])
 
     def addition(
-        self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: Curvature = 0.0
+        self,
+        x: Float[Array, "total_dim"],
+        y: Float[Array, "total_dim"],
+        c: Curvature,
     ) -> Float[Array, "total_dim"]:
         """Manifold addition (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         x, y = self._cast(x), self._cast(y)
         x_parts, y_parts = self.split(x), self.split(y)
-        return jnp.concatenate([m.addition(xp, yp, m.c) for m, xp, yp in zip(self._factors, x_parts, y_parts, strict=True)])
+        return jnp.concatenate(
+            [m.addition(xp, yp, c_i) for m, xp, yp, c_i in zip(self._factors, x_parts, y_parts, cs, strict=True)]
+        )
 
-    def scalar_mul(self, r: float, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
+    def scalar_mul(
+        self,
+        r: float,
+        x: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Float[Array, "total_dim"]:
         """Scalar multiplication (same scalar r applied to all factors)."""
-        del c
+        cs = self._validate_c(c)
         x = self._cast(x)
         parts = self.split(x)
-        return jnp.concatenate([m.scalar_mul(r, p, m.c) for m, p in zip(self._factors, parts, strict=True)])
+        return jnp.concatenate([m.scalar_mul(r, p, c_i) for m, p, c_i in zip(self._factors, parts, cs, strict=True)])
 
     # -- Exponential / logarithmic maps ------------------------------------
 
     def expmap(
-        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
+        self,
+        v: Float[Array, "total_dim"],
+        x: Float[Array, "total_dim"],
+        c: Curvature,
     ) -> Float[Array, "total_dim"]:
         """Exponential map (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         v, x = self._cast(v), self._cast(x)
         v_parts, x_parts = self.split(v), self.split(x)
-        return jnp.concatenate([m.expmap(vp, xp, m.c) for m, vp, xp in zip(self._factors, v_parts, x_parts, strict=True)])
+        return jnp.concatenate(
+            [m.expmap(vp, xp, c_i) for m, vp, xp, c_i in zip(self._factors, v_parts, x_parts, cs, strict=True)]
+        )
 
-    def expmap_0(self, v: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
+    def expmap_0(
+        self,
+        v: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Float[Array, "total_dim"]:
         """Exponential map from origin (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         v = self._cast(v)
         parts = self.split(v)
-        return jnp.concatenate([m.expmap_0(p, m.c) for m, p in zip(self._factors, parts, strict=True)])
+        return jnp.concatenate([m.expmap_0(p, c_i) for m, p, c_i in zip(self._factors, parts, cs, strict=True)])
 
     def logmap(
-        self, y: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
+        self,
+        y: Float[Array, "total_dim"],
+        x: Float[Array, "total_dim"],
+        c: Curvature,
     ) -> Float[Array, "total_dim"]:
         """Logarithmic map (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         y, x = self._cast(y), self._cast(x)
         y_parts, x_parts = self.split(y), self.split(x)
-        return jnp.concatenate([m.logmap(yp, xp, m.c) for m, yp, xp in zip(self._factors, y_parts, x_parts, strict=True)])
+        return jnp.concatenate(
+            [m.logmap(yp, xp, c_i) for m, yp, xp, c_i in zip(self._factors, y_parts, x_parts, cs, strict=True)]
+        )
 
-    def logmap_0(self, y: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, "total_dim"]:
+    def logmap_0(
+        self,
+        y: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Float[Array, "total_dim"]:
         """Logarithmic map to origin (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         y = self._cast(y)
         parts = self.split(y)
-        return jnp.concatenate([m.logmap_0(p, m.c) for m, p in zip(self._factors, parts, strict=True)])
+        return jnp.concatenate([m.logmap_0(p, c_i) for m, p, c_i in zip(self._factors, parts, cs, strict=True)])
 
     def retraction(
-        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
+        self,
+        v: Float[Array, "total_dim"],
+        x: Float[Array, "total_dim"],
+        c: Curvature,
     ) -> Float[Array, "total_dim"]:
         """Retraction (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         v, x = self._cast(v), self._cast(x)
         v_parts, x_parts = self.split(v), self.split(x)
-        return jnp.concatenate([m.retraction(vp, xp, m.c) for m, vp, xp in zip(self._factors, v_parts, x_parts, strict=True)])
+        return jnp.concatenate(
+            [m.retraction(vp, xp, c_i) for m, vp, xp, c_i in zip(self._factors, v_parts, x_parts, cs, strict=True)]
+        )
 
     # -- Transport / tangent space -----------------------------------------
 
@@ -230,63 +312,87 @@ class ProductManifold:
         v: Float[Array, "total_dim"],
         x: Float[Array, "total_dim"],
         y: Float[Array, "total_dim"],
-        c: Curvature = 0.0,
+        c: Curvature,
     ) -> Float[Array, "total_dim"]:
         """Parallel transport of v from x to y (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         v, x, y = self._cast(v), self._cast(x), self._cast(y)
         v_parts, x_parts, y_parts = self.split(v), self.split(x), self.split(y)
         return jnp.concatenate(
-            [m.ptransp(vp, xp, yp, m.c) for m, vp, xp, yp in zip(self._factors, v_parts, x_parts, y_parts, strict=True)]
+            [
+                m.ptransp(vp, xp, yp, c_i)
+                for m, vp, xp, yp, c_i in zip(self._factors, v_parts, x_parts, y_parts, cs, strict=True)
+            ]
         )
 
     def ptransp_0(
-        self, v: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: Curvature = 0.0
+        self,
+        v: Float[Array, "total_dim"],
+        y: Float[Array, "total_dim"],
+        c: Curvature,
     ) -> Float[Array, "total_dim"]:
         """Parallel transport from origin to y (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         v, y = self._cast(v), self._cast(y)
         v_parts, y_parts = self.split(v), self.split(y)
-        return jnp.concatenate([m.ptransp_0(vp, yp, m.c) for m, vp, yp in zip(self._factors, v_parts, y_parts, strict=True)])
+        return jnp.concatenate(
+            [m.ptransp_0(vp, yp, c_i) for m, vp, yp, c_i in zip(self._factors, v_parts, y_parts, cs, strict=True)]
+        )
 
     def tangent_inner(
         self,
         u: Float[Array, "total_dim"],
         v: Float[Array, "total_dim"],
         x: Float[Array, "total_dim"],
-        c: Curvature = 0.0,
+        c: Curvature,
     ) -> Float[Array, ""]:
         """Riemannian inner product (sum of per-factor inner products)."""
-        del c
+        cs = self._validate_c(c)
         u, v, x = self._cast(u), self._cast(v), self._cast(x)
         u_parts, v_parts, x_parts = self.split(u), self.split(v), self.split(x)
         inners = jnp.stack(
-            [m.tangent_inner(up, vp, xp, m.c) for m, up, vp, xp in zip(self._factors, u_parts, v_parts, x_parts, strict=True)]
+            [
+                m.tangent_inner(up, vp, xp, c_i)
+                for m, up, vp, xp, c_i in zip(self._factors, u_parts, v_parts, x_parts, cs, strict=True)
+            ]
         )
         return jnp.sum(inners)
 
-    def tangent_norm(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, ""]:
+    def tangent_norm(
+        self,
+        v: Float[Array, "total_dim"],
+        x: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Float[Array, ""]:
         """Riemannian norm (sqrt of tangent inner product with itself)."""
         return jnp.sqrt(jnp.maximum(self.tangent_inner(v, v, x, c), 0.0))
 
     def egrad2rgrad(
-        self, grad: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
+        self,
+        grad: Float[Array, "total_dim"],
+        x: Float[Array, "total_dim"],
+        c: Curvature,
     ) -> Float[Array, "total_dim"]:
         """Convert Euclidean gradient to Riemannian gradient (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         grad, x = self._cast(grad), self._cast(x)
         g_parts, x_parts = self.split(grad), self.split(x)
-        return jnp.concatenate([m.egrad2rgrad(gp, xp, m.c) for m, gp, xp in zip(self._factors, g_parts, x_parts, strict=True)])
+        return jnp.concatenate(
+            [m.egrad2rgrad(gp, xp, c_i) for m, gp, xp, c_i in zip(self._factors, g_parts, x_parts, cs, strict=True)]
+        )
 
     def tangent_proj(
-        self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0
+        self,
+        v: Float[Array, "total_dim"],
+        x: Float[Array, "total_dim"],
+        c: Curvature,
     ) -> Float[Array, "total_dim"]:
         """Project vector onto tangent space (per-factor)."""
-        del c
+        cs = self._validate_c(c)
         v, x = self._cast(v), self._cast(x)
         v_parts, x_parts = self.split(v), self.split(x)
         return jnp.concatenate(
-            [m.tangent_proj(vp, xp, m.c) for m, vp, xp in zip(self._factors, v_parts, x_parts, strict=True)]
+            [m.tangent_proj(vp, xp, c_i) for m, vp, xp, c_i in zip(self._factors, v_parts, x_parts, cs, strict=True)]
         )
 
     # -- Distance ----------------------------------------------------------
@@ -295,31 +401,51 @@ class ProductManifold:
         self,
         x: Float[Array, "total_dim"],
         y: Float[Array, "total_dim"],
+        c: Curvature,
     ) -> Float[Array, "n_factors"]:
         """Per-factor geodesic distances as a vector."""
+        cs = self._validate_c(c)
         x, y = self._cast(x), self._cast(y)
         x_parts, y_parts = self.split(x), self.split(y)
-        return jnp.stack([m.dist(xp, yp, m.c) for m, xp, yp in zip(self._factors, x_parts, y_parts, strict=True)])
+        return jnp.stack([m.dist(xp, yp, c_i) for m, xp, yp, c_i in zip(self._factors, x_parts, y_parts, cs, strict=True)])
 
-    def dist(self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, ""]:
+    def dist(
+        self,
+        x: Float[Array, "total_dim"],
+        y: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Float[Array, ""]:
         """Product distance (L2/Riemannian): d = sqrt(sum d_i^2)."""
-        del c
-        d_per_factor = self.component_dist(x, y)
+        d_per_factor = self.component_dist(x, y, c)
         return jnp.sqrt(jnp.sum(d_per_factor**2))
 
-    def dist_0(self, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Float[Array, ""]:
+    def dist_0(
+        self,
+        x: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Float[Array, ""]:
         """Distance from origin (L2/Riemannian)."""
-        del c
+        cs = self._validate_c(c)
         x = self._cast(x)
         parts = self.split(x)
-        d_sq = jnp.stack([m.dist_0(p, m.c) ** 2 for m, p in zip(self._factors, parts, strict=True)])
+        d_sq = jnp.stack([m.dist_0(p, c_i) ** 2 for m, p, c_i in zip(self._factors, parts, cs, strict=True)])
         return jnp.sqrt(jnp.sum(d_sq))
 
-    def dist_l1(self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"]) -> Float[Array, ""]:
+    def dist_l1(
+        self,
+        x: Float[Array, "total_dim"],
+        y: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Float[Array, ""]:
         """L1 product distance: d = sum d_i."""
-        return jnp.sum(self.component_dist(x, y))
+        return jnp.sum(self.component_dist(x, y, c))
 
-    def dist_min(self, x: Float[Array, "total_dim"], y: Float[Array, "total_dim"]) -> Float[Array, ""]:
+    def dist_min(
+        self,
+        x: Float[Array, "total_dim"],
+        y: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Float[Array, ""]:
         """Min product distance: d = min d_i.
 
         Warning:
@@ -329,24 +455,35 @@ class ProductManifold:
             "closest-factor" interpretation is semantically intended;
             for an actual distance use ``dist`` (L2) or ``dist_l1``.
         """
-        return jnp.min(self.component_dist(x, y))
+        return jnp.min(self.component_dist(x, y, c))
 
     # -- Validation --------------------------------------------------------
 
-    def is_in_manifold(self, x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Array:
+    def is_in_manifold(
+        self,
+        x: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Array:
         """Check if point is on product manifold (all factors valid)."""
-        del c
+        cs = self._validate_c(c)
         x = self._cast(x)
         parts = self.split(x)
-        checks = [m.is_in_manifold(p, m.c) for m, p in zip(self._factors, parts, strict=True)]
+        checks = [m.is_in_manifold(p, c_i) for m, p, c_i in zip(self._factors, parts, cs, strict=True)]
         return jnp.all(jnp.stack(checks))
 
-    def is_in_tangent_space(self, v: Float[Array, "total_dim"], x: Float[Array, "total_dim"], c: Curvature = 0.0) -> Array:
+    def is_in_tangent_space(
+        self,
+        v: Float[Array, "total_dim"],
+        x: Float[Array, "total_dim"],
+        c: Curvature,
+    ) -> Array:
         """Check if vector is in tangent space at x (all factors valid)."""
-        del c
+        cs = self._validate_c(c)
         v, x = self._cast(v), self._cast(x)
         v_parts, x_parts = self.split(v), self.split(x)
-        checks = [m.is_in_tangent_space(vp, xp, m.c) for m, vp, xp in zip(self._factors, v_parts, x_parts, strict=True)]
+        checks = [
+            m.is_in_tangent_space(vp, xp, c_i) for m, vp, xp, c_i in zip(self._factors, v_parts, x_parts, cs, strict=True)
+        ]
         return jnp.all(jnp.stack(checks))
 
     # -- Factory methods ---------------------------------------------------
@@ -360,8 +497,12 @@ class ProductManifold:
         """Create product manifold from a signature specification.
 
         Each spec is one of:
-          - ``(ManifoldClass, dim, count)`` — uses ``c=1.0``.
-          - ``(ManifoldClass, dim, count, curvature)`` — sets ``c``.
+          - ``(ManifoldClass, dim, count)`` — uses ``c=1.0`` as factor init.
+          - ``(ManifoldClass, dim, count, curvature)`` — sets factor init ``c``.
+
+        The ``curvature`` here is an **initial / default** value stored on the
+        factor; it is only consulted via ``product.curvatures``. Geometry
+        methods take ``c`` at call time.
 
         Euclidean factors silently ignore the ``curvature`` field
         (Euclidean has fixed ``c=0``; see ``Euclidean.__init__``).
@@ -410,6 +551,6 @@ class ProductManifold:
         parts = []
         for m, d in zip(self._factors, self._dims, strict=True):
             name = type(m).__name__
-            parts.append(f"{name}(dim={d}, c={m.c})")
+            parts.append(f"{name}(dim={d}, c_init={m.c})")
         signature = " x ".join(parts)
         return f"ProductManifold({signature}, total_dim={self._total_dim})"
