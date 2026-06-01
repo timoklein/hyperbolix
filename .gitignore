@@ -17,6 +17,8 @@ wheels/
 
 # Docs
 site/
+# MathJax is vendored at build time by scripts/vendor_mathjax.py (not committed)
+docs/javascripts/mathjax/
 
 # Benchmark results
 results/

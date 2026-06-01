@@ -28,8 +28,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --dev
 
+      - name: Vendor MathJax (pinned + integrity-checked, self-hosted)
+        run: uv run python scripts/vendor_mathjax.py
+
       - name: Build documentation
         run: uv run mkdocs build --strict
+
+      - name: Audit external resource hosts
+        run: uv run python scripts/check_external_hosts.py site
 
       - name: Upload documentation artifact
         uses: actions/upload-artifact@v4
