@@ -139,29 +139,32 @@ def _proj_batch(x: Float[Array, "... dim_plus_1"], c: Curvature) -> Float[Array,
 
 
 def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
-    """Einstein gyrovector addition on hyperboloid.
+    """Gyrovector addition is undefined on the Hyperboloid model — always raises.
 
-    Args:
-        x: Hyperboloid point, shape (dim+1,)
-        y: Hyperboloid point, shape (dim+1,)
-        c: Curvature (positive)
+    The hyperboloid is not modeled as a gyrovector space in hyperbolix: there is no
+    correct closed-form coordinate addition here. The previous implementation was wrong
+    at *every* curvature (e.g. ``origin ⊕ y != y``; the ``c / (1 + √c)`` term it used is
+    not even dimensionally consistent), and it only ever returned on-manifold points
+    because of a trailing ``proj`` — so it failed silently. It now fails loudly instead.
 
-    Returns:
-        Einstein sum x ⊕ y, shape (dim+1,)
+    To combine points hyperbolically, convert to the Poincaré ball, add there, and convert
+    back (both maps are exact isometries)::
 
-    References:
-        Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
+        from hyperbolix.manifolds import isometry_mappings
+        yp = isometry_mappings.hyperboloid_to_poincare(x, c)
+        # ... Möbius-add in the ball via Poincare.addition ...
+        x_new = isometry_mappings.poincare_to_hyperboloid(yp_sum, c)
+
+    or use ``expmap``/``logmap`` directly. ``scalar_mul`` (geodesic scaling) IS supported.
     """
-    sqrt_c = jnp.sqrt(c)
-    mink_inner_xy = _minkowski_inner(x, y)
-
-    # Einstein addition formula
-    denom = jnp.maximum(1.0 - c * mink_inner_xy, MIN_NORM)
-    gamma = 1.0 / denom
-
-    res = x + gamma * (y + (c / (1.0 + sqrt_c)) * mink_inner_xy * x)
-    res = _proj(res, c)
-    return res
+    del x, y, c
+    raise NotImplementedError(
+        "Hyperboloid.addition is not supported: the hyperboloid is not a gyrovector space "
+        "with a valid closed-form coordinate addition in hyperbolix. Convert to the Poincaré "
+        "ball (isometry_mappings.hyperboloid_to_poincare), use Poincare.addition, then convert "
+        "back (poincare_to_hyperboloid); or use expmap/logmap. Note scalar_mul (geodesic "
+        "scaling) is supported."
+    )
 
 
 def _scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
@@ -762,7 +765,12 @@ class Hyperboloid(ManifoldBase):
     def addition(
         self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature
     ) -> Float[Array, "dim_plus_1"]:
-        """Gyrovector addition on hyperboloid."""
+        """Gyrovector addition — unsupported on the Hyperboloid; raises ``NotImplementedError``.
+
+        The hyperboloid is not a gyrovector space here. Convert to the Poincaré ball to add
+        (``isometry_mappings.hyperboloid_to_poincare`` → ``Poincare.addition`` →
+        ``poincare_to_hyperboloid``), or use ``expmap``/``logmap``. ``scalar_mul`` is supported.
+        """
         return _addition(self._cast(x), self._cast(y), c)
 
     def scalar_mul(self, r: float, x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
