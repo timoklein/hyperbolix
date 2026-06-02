@@ -675,10 +675,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#hyperboloid-poincare-use-the-isometry" class="md-nav__link">
+  <a href="#switching-models-use-the-isometry" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Hyperboloid ↔ Poincaré: Use the Isometry
+        Switching Models: Use the Isometry
       
     </span>
   </a>
@@ -1311,10 +1311,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#hyperboloid-poincare-use-the-isometry" class="md-nav__link">
+  <a href="#switching-models-use-the-isometry" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Hyperboloid ↔ Poincaré: Use the Isometry
+        Switching Models: Use the Isometry
       
     </span>
   </a>
@@ -1801,20 +1801,38 @@ vector onto a hyperbolic manifold, and they are <strong>not interchangeable</str
 <p>Both patterns appear in the MNIST benchmark (<code>benchmarks/bench_mnist_hyperboloid.py</code>):
 <code>FHCNNHybrid</code> uses Pattern A after a small Euclidean embedding;
 <code>FullyHyperbolicCNN_*</code> uses Pattern B per-pixel from raw image values.</p>
-<h2 id="hyperboloid-poincare-use-the-isometry">Hyperboloid ↔ Poincaré: Use the Isometry<a class="headerlink" href="#hyperboloid-poincare-use-the-isometry" title="Permanent link">&para;</a></h2>
+<h2 id="switching-models-use-the-isometry">Switching Models: Use the Isometry<a class="headerlink" href="#switching-models-use-the-isometry" title="Permanent link">&para;</a></h2>
 <p>When you need to switch models (e.g., move from a Hyperboloid CNN backbone
-to a Poincaré classifier head), <strong>do not</strong> route through <code>logmap_0 → expmap_0</code>
-on the other manifold. Use the direct isometry:</p>
+to a Poincaré classifier head, or lift Euclidean features into the unconstrained
+PV space), <strong>do not</strong> route through <code>logmap_0 → expmap_0</code> on the other manifold.
+Use the direct isometries — they are exact and distance-preserving:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">isometry_mappings</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># Hyperboloid (d+1) → Poincaré (d) — distance preserving, ~10x faster than logmap/expmap</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># Hyperboloid (d+1) ↔ Poincaré (d) — ~10x faster than logmap/expmap</span>
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">x_poincare</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">hyperboloid_to_poincare</span><span class="p">(</span><span class="n">x_hyperboloid</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="c1"># Reverse direction</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="n">x_hyperboloid</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">poincare_to_hyperboloid</span><span class="p">(</span><span class="n">x_poincare</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">x_hyperboloid</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">poincare_to_hyperboloid</span><span class="p">(</span><span class="n">x_poincare</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Proper Velocity (d) ↔ Poincaré (d)   (PVNN Eq. 4)</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="n">x_pv</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">poincare_to_pv</span><span class="p">(</span><span class="n">x_poincare</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="n">x_poincare</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">pv_to_poincare</span><span class="p">(</span><span class="n">x_pv</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="c1"># Proper Velocity (d) ↔ Hyperboloid (d+1) — direct: PV coords are the</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="c1"># space-like part of the 4-velocity, so this is just a concat / slice.</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="n">x_hyperboloid</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">pv_to_hyperboloid</span><span class="p">(</span><span class="n">x_pv</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>        <span class="c1"># add time = √(1/c + ‖x‖²)</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="n">x_pv</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">hyperboloid_to_pv</span><span class="p">(</span><span class="n">x_hyperboloid</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>        <span class="c1"># drop the time component</span>
 </span></code></pre></div>
+<p>All single-point functions; batch with <code>jax.vmap(fn, in_axes=(0, None))</code>.</p>
 <p>The <code>logmap → expmap</code> route is lossy (tangent-space round-trip accumulates
-numerical error) and slower. The isometry is exact.</p>
+numerical error) and slower. The isometries are exact and mutually consistent —
+<code>pv_to_hyperboloid</code> equals <code>poincare_to_hyperboloid ∘ pv_to_poincare</code>.</p>
+<div class="admonition tip">
+<p class="admonition-title">Why PV for numerically hard regimes</p>
+<p>The Poincaré ball is bounded (<code>‖y‖² &lt; 1/c</code>) and the hyperboloid time
+component grows exponentially with distance, so both can be unstable far from
+the origin. PV space is unconstrained <code>ℝⁿ</code>, so converting <em>to</em> PV
+(<code>poincare_to_pv</code> / <code>hyperboloid_to_pv</code>) is a stable way to operate on points
+near the boundary — at the cost of an unbounded coordinate, which is expected.</p>
+</div>
 <h2 id="common-pitfalls">Common Pitfalls<a class="headerlink" href="#common-pitfalls" title="Permanent link">&para;</a></h2>
 <h3 id="1-raw-jnpacosh-jnpatanh-instead-of-the-hyperbolix-versions">1. Raw <code>jnp.acosh</code> / <code>jnp.atanh</code> instead of the hyperbolix versions<a class="headerlink" href="#1-raw-jnpacosh-jnpatanh-instead-of-the-hyperbolix-versions" title="Permanent link">&para;</a></h3>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># ❌ NaN at domain boundaries (inner_product &lt; 1 for acosh, |x| &gt;= 1 for atanh)</span>

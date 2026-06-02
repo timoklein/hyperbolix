@@ -1012,6 +1012,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1146,6 +1157,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1231,6 +1253,7 @@
 <li><strong><code>ProductManifold</code> curvature API redesigned</strong> — every geometry method (<code>dist</code>, <code>expmap</code>, <code>logmap</code>, <code>proj</code>, <code>origin</code>, <code>tangent_inner</code>, etc.) now takes a positional <code>c</code> argument that must be a sequence of length <code>n_factors</code> (one curvature per factor) instead of the silently-ignored scalar <code>c</code>. There is no default and no scalar broadcast: pass <code>product.curvatures</code> for static curvatures, or build the sequence from <code>LearnableCurvature</code> calls for trainable ones. The protocol-level <code>Curvature</code> type was widened to <code>ScalarCurvature | Sequence[ScalarCurvature]</code> so <code>ProductManifold</code> satisfies the <code>Manifold</code> protocol — <code>isinstance(product, Manifold)</code> is <code>True</code> and generic code typed against <code>Manifold</code> accepts product instances. The product still has no <code>c</code> attribute (use <code>product.curvatures</code>). <strong>Breaking change</strong> — call sites that passed <code>c=0.0</code> (or any scalar) must now pass a per-factor sequence <code>(c_0, c_1, …)</code></li>
 <li><strong><code>ProductManifold</code></strong> is now a plain class; <code>from_signature</code> accepts 3- and 4-tuple specs only (5-tuple <code>learnable</code> override removed)</li>
 <li><strong><code>learnable_curvature()</code> / <code>get_curvature()</code> functional helpers replaced</strong> by the <code>LearnableCurvature(nnx.Module)</code> class. The class bundles the raw parameter, reparameterization scheme, and clamp bounds in one object, making accidental init/recovery mismatches structurally impossible. Call sites change from <code>c = get_curvature(self.c_raw)</code> to <code>c = self.curvature()</code>. <strong>Breaking change</strong> — no deprecation shim</li>
+<li><strong><code>Hyperboloid.addition</code> now raises <code>NotImplementedError</code></strong> (and <code>ProductManifold.addition</code> for any Hyperboloid factor). The hyperboloid is not a gyrovector space with a valid closed-form coordinate addition in hyperbolix; the previous implementation was incorrect at <em>every</em> curvature (e.g. <code>origin ⊕ y ≠ y</code>) and only ever returned on-manifold points via a trailing projection, so it failed silently. To add hyperbolically, convert to the Poincaré ball (<code>isometry_mappings.hyperboloid_to_poincare</code> → <code>Poincare.addition</code> → <code>poincare_to_hyperboloid</code>) or use <code>expmap</code>/<code>logmap</code>. <code>Hyperboloid.scalar_mul</code> (geodesic scaling) is unaffected. <strong>Breaking change</strong></li>
 </ul>
 <h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
 <ul>
@@ -1257,7 +1280,7 @@
 - <code>HyperbolicRoPE</code>: NNX module wrapper for HOPE
 - <code>HypformerPositionalEncoding</code>: Learnable positional encoding with HTCLinear
 - Class-based manifold API with automatic dtype casting (<code>Poincare</code>, <code>Hyperboloid</code>, <code>Euclidean</code>)
-- Isometry mappings between Poincaré ball and hyperboloid models
+- Isometry mappings now span all three models — Poincaré ↔ Hyperboloid, Poincaré ↔ Proper Velocity, and Hyperboloid ↔ Proper Velocity. New functions: <code>pv_to_poincare</code>, <code>poincare_to_pv</code>, <code>pv_to_hyperboloid</code>, <code>hyperboloid_to_pv</code> (in <code>hyperbolix.manifolds.isometry_mappings</code>). All six maps are exact, curvature-correct Riemannian isometries (PVNN Eq. 4; Chen et al. 2026). The direct <code>pv_to_hyperboloid</code> (PV coords are the hyperboloid's spatial part; time reconstructed from <code>⟨z,z⟩_L = -1/c</code>) avoids the near-boundary blow-up of composing through the ball
 - <code>Manifold</code> structural protocol for type-safe manifold dispatch
 - <strong>Causal attention masking</strong> (<code>causal=True</code>) for all three hyperbolic attention variants:
 - <code>HyperbolicSoftmaxAttention</code>: lower-triangular <code>-inf</code> mask before softmax
@@ -1270,6 +1293,11 @@
 <ul>
 <li><strong>Breaking</strong>: Manifold public functions renamed to private (<code>dist()</code> → <code>_dist()</code>); use class methods instead</li>
 <li>Replaced <code>with_precision()</code> wrapper with <code>Poincare(dtype=jnp.float64)</code> pattern</li>
+</ul>
+<h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Poincaré ↔ Hyperboloid isometry maps were only correct at <code>c=1</code>.</strong> <code>poincare_to_hyperboloid</code> / <code>hyperboloid_to_poincare</code> used unit-ball stereographic formulas missing their <code>√c</code> factors, so round-trips and distance preservation silently failed at any other curvature (the recommended default is <code>c=0.1</code>). Both are now curvature-correct at all <code>c</code>, verified by round-trip, isometry, commutative-diagram, and extreme-curvature tests across dtypes</li>
+<li><strong>Test fixture <code>uniform_points</code> generated hyperboloid points at the wrong geodesic radius for <code>c ≠ 1</code></strong> (an extra <code>/√c</code> on the spatial coordinate, masked by a trailing projection). Corrected so generated points are the exact Poincaré images at any curvature</li>
 </ul>
 <h2 id="014-2026-02">[0.1.4] - 2026-02<a class="headerlink" href="#014-2026-02" title="Permanent link">&para;</a></h2>
 <h3 id="added_1">Added<a class="headerlink" href="#added_1" title="Permanent link">&para;</a></h3>
