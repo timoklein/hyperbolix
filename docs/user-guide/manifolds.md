@@ -278,24 +278,42 @@ Both patterns appear in the MNIST benchmark (`benchmarks/bench_mnist_hyperboloid
 `FHCNNHybrid` uses Pattern A after a small Euclidean embedding;
 `FullyHyperbolicCNN_*` uses Pattern B per-pixel from raw image values.
 
-## Hyperboloid ↔ Poincaré: Use the Isometry
+## Switching Models: Use the Isometry
 
 When you need to switch models (e.g., move from a Hyperboloid CNN backbone
-to a Poincaré classifier head), **do not** route through `logmap_0 → expmap_0`
-on the other manifold. Use the direct isometry:
+to a Poincaré classifier head, or lift Euclidean features into the unconstrained
+PV space), **do not** route through `logmap_0 → expmap_0` on the other manifold.
+Use the direct isometries — they are exact and distance-preserving:
 
 ```python
 from hyperbolix.manifolds import isometry_mappings
 
-# Hyperboloid (d+1) → Poincaré (d) — distance preserving, ~10x faster than logmap/expmap
+# Hyperboloid (d+1) ↔ Poincaré (d) — ~10x faster than logmap/expmap
 x_poincare = isometry_mappings.hyperboloid_to_poincare(x_hyperboloid, c)
-
-# Reverse direction
 x_hyperboloid = isometry_mappings.poincare_to_hyperboloid(x_poincare, c)
+
+# Proper Velocity (d) ↔ Poincaré (d)   (PVNN Eq. 4)
+x_pv = isometry_mappings.poincare_to_pv(x_poincare, c)
+x_poincare = isometry_mappings.pv_to_poincare(x_pv, c)
+
+# Proper Velocity (d) ↔ Hyperboloid (d+1) — direct: PV coords are the
+# space-like part of the 4-velocity, so this is just a concat / slice.
+x_hyperboloid = isometry_mappings.pv_to_hyperboloid(x_pv, c)        # add time = √(1/c + ‖x‖²)
+x_pv = isometry_mappings.hyperboloid_to_pv(x_hyperboloid, c)        # drop the time component
 ```
 
+All single-point functions; batch with `jax.vmap(fn, in_axes=(0, None))`.
+
 The `logmap → expmap` route is lossy (tangent-space round-trip accumulates
-numerical error) and slower. The isometry is exact.
+numerical error) and slower. The isometries are exact and mutually consistent —
+`pv_to_hyperboloid` equals `poincare_to_hyperboloid ∘ pv_to_poincare`.
+
+!!! tip "Why PV for numerically hard regimes"
+    The Poincaré ball is bounded (`‖y‖² < 1/c`) and the hyperboloid time
+    component grows exponentially with distance, so both can be unstable far from
+    the origin. PV space is unconstrained `ℝⁿ`, so converting *to* PV
+    (`poincare_to_pv` / `hyperboloid_to_pv`) is a stable way to operate on points
+    near the boundary — at the cost of an unbounded coordinate, which is expected.
 
 ## Common Pitfalls
 

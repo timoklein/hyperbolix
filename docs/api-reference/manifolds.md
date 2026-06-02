@@ -115,7 +115,10 @@ where $x_i$, $y_i$ are the per-factor slices of the flat points.
 
 ## Isometry Mappings
 
-Distance-preserving maps between Poincaré ball and hyperboloid models.
+Distance-preserving maps between the Poincaré ball, hyperboloid, and Proper
+Velocity (PV) models — all coordinate models of the same hyperbolic space.
+Provides Poincaré ↔ Hyperboloid, Poincaré ↔ PV (PVNN Eq. 4), and the direct
+Hyperboloid ↔ PV map (PV coordinates are the space-like part of the 4-velocity).
 
 ::: hyperbolix.manifolds.isometry_mappings
     options:
