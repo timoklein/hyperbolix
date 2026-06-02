@@ -109,10 +109,14 @@ def test_addition(manifold_and_c, tolerance: tuple[float, float], uniform_points
     """Test addition/Möbius addition operation."""
     manifold, c = manifold_and_c
 
-    # Note: The addition operation is not well-defined for the Hyperboloid manifold
-    # (matches PyTorch test behavior)
+    # The addition operation is not well-defined for the Hyperboloid manifold: it is not a
+    # gyrovector space with a valid closed-form coordinate addition here. Rather than return
+    # silently-wrong points, Hyperboloid.addition raises NotImplementedError — verify that.
     if _is_hyperboloid(manifold):
-        pytest.skip("Addition not well-defined for Hyperboloid manifold")
+        x_pt = uniform_points[0]
+        with pytest.raises(NotImplementedError):
+            manifold.addition(x_pt, x_pt, c)
+        return
 
     atol, rtol = tolerance
     x, y = _split(uniform_points, 2)

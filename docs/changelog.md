@@ -10,6 +10,7 @@ All notable changes to Hyperbolix will be documented in this file.
 - **`ProductManifold` curvature API redesigned** — every geometry method (`dist`, `expmap`, `logmap`, `proj`, `origin`, `tangent_inner`, etc.) now takes a positional `c` argument that must be a sequence of length `n_factors` (one curvature per factor) instead of the silently-ignored scalar `c`. There is no default and no scalar broadcast: pass `product.curvatures` for static curvatures, or build the sequence from `LearnableCurvature` calls for trainable ones. The protocol-level `Curvature` type was widened to `ScalarCurvature | Sequence[ScalarCurvature]` so `ProductManifold` satisfies the `Manifold` protocol — `isinstance(product, Manifold)` is `True` and generic code typed against `Manifold` accepts product instances. The product still has no `c` attribute (use `product.curvatures`). **Breaking change** — call sites that passed `c=0.0` (or any scalar) must now pass a per-factor sequence `(c_0, c_1, …)`
 - **`ProductManifold`** is now a plain class; `from_signature` accepts 3- and 4-tuple specs only (5-tuple `learnable` override removed)
 - **`learnable_curvature()` / `get_curvature()` functional helpers replaced** by the `LearnableCurvature(nnx.Module)` class. The class bundles the raw parameter, reparameterization scheme, and clamp bounds in one object, making accidental init/recovery mismatches structurally impossible. Call sites change from `c = get_curvature(self.c_raw)` to `c = self.curvature()`. **Breaking change** — no deprecation shim
+- **`Hyperboloid.addition` now raises `NotImplementedError`** (and `ProductManifold.addition` for any Hyperboloid factor). The hyperboloid is not a gyrovector space with a valid closed-form coordinate addition in hyperbolix; the previous implementation was incorrect at *every* curvature (e.g. `origin ⊕ y ≠ y`) and only ever returned on-manifold points via a trailing projection, so it failed silently. To add hyperbolically, convert to the Poincaré ball (`isometry_mappings.hyperboloid_to_poincare` → `Poincare.addition` → `poincare_to_hyperboloid`) or use `expmap`/`logmap`. `Hyperboloid.scalar_mul` (geodesic scaling) is unaffected. **Breaking change**
 
 ### Added
 - **`LearnableCurvature(nnx.Module)`** — canonical module for trainable curvature in `hyperbolix.utils.curvature`, also exported at top level (`from hyperbolix import LearnableCurvature`). Supports two reparameterizations:
@@ -33,7 +34,7 @@ All notable changes to Hyperbolix will be documented in this file.
     - `HyperbolicRoPE`: NNX module wrapper for HOPE
     - `HypformerPositionalEncoding`: Learnable positional encoding with HTCLinear
 - Class-based manifold API with automatic dtype casting (`Poincare`, `Hyperboloid`, `Euclidean`)
-- Isometry mappings between Poincaré ball and hyperboloid models
+- Isometry mappings now span all three models — Poincaré ↔ Hyperboloid, Poincaré ↔ Proper Velocity, and Hyperboloid ↔ Proper Velocity. New functions: `pv_to_poincare`, `poincare_to_pv`, `pv_to_hyperboloid`, `hyperboloid_to_pv` (in `hyperbolix.manifolds.isometry_mappings`). All six maps are exact, curvature-correct Riemannian isometries (PVNN Eq. 4; Chen et al. 2026). The direct `pv_to_hyperboloid` (PV coords are the hyperboloid's spatial part; time reconstructed from `⟨z,z⟩_L = -1/c`) avoids the near-boundary blow-up of composing through the ball
 - `Manifold` structural protocol for type-safe manifold dispatch
 - **Causal attention masking** (`causal=True`) for all three hyperbolic attention variants:
     - `HyperbolicSoftmaxAttention`: lower-triangular `-inf` mask before softmax
@@ -44,6 +45,10 @@ All notable changes to Hyperbolix will be documented in this file.
 ### Changed
 - **Breaking**: Manifold public functions renamed to private (`dist()` → `_dist()`); use class methods instead
 - Replaced `with_precision()` wrapper with `Poincare(dtype=jnp.float64)` pattern
+
+### Fixed
+- **Poincaré ↔ Hyperboloid isometry maps were only correct at `c=1`.** `poincare_to_hyperboloid` / `hyperboloid_to_poincare` used unit-ball stereographic formulas missing their `√c` factors, so round-trips and distance preservation silently failed at any other curvature (the recommended default is `c=0.1`). Both are now curvature-correct at all `c`, verified by round-trip, isometry, commutative-diagram, and extreme-curvature tests across dtypes
+- **Test fixture `uniform_points` generated hyperboloid points at the wrong geodesic radius for `c ≠ 1`** (an extra `/√c` on the spatial coordinate, masked by a trailing projection). Corrected so generated points are the exact Poincaré images at any curvature
 
 ## [0.1.4] - 2026-02
 

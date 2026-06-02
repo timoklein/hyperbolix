@@ -123,10 +123,15 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
         poincare_points = poincare_points * 0.5
 
         # Convert Poincaré to Hyperboloid
-        # Using the standard conversion: given Poincaré point p with ||p||² < 1/c
-        # Hyperboloid point: [x₀, x_rest] where
-        # x₀ = (1 + c||p||²) / (√c * (1 - c||p||²))
-        # x_rest = 2p / (√c * (1 - c||p||²))
+        # Curvature-correct inverse stereographic projection (radius-1/√c ball).
+        # Given a Poincaré point p with ||p||² < 1/c, its hyperboloid image is
+        # [x₀, x_rest] where
+        #   x₀     = (1 + c||p||²) / (√c · (1 - c||p||²))   (only the time part carries 1/√c)
+        #   x_rest = 2p / (1 - c||p||²)                     (NO extra /√c — matches
+        #            isometry_mappings.poincare_to_hyperboloid)
+        # The earlier code carried an extra /√c on x_rest, which was correct only at
+        # c=1 and was silently masked by the proj() below (same bug class as the
+        # historical poincare_to_hyperboloid defect).
         p = poincare_points
         p_sqnorm = np.sum(p**2, axis=-1, keepdims=True)
         denom = 1.0 - c * p_sqnorm
@@ -134,7 +139,7 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
 
         sqrt_c = np.sqrt(c)
         x0 = (1.0 + c * p_sqnorm) / (sqrt_c * denom)
-        x_rest = 2.0 * p / (sqrt_c * denom)
+        x_rest = 2.0 * p / denom
 
         points = np.concatenate([x0, x_rest], axis=-1).astype(np_dtype)
         points = jnp.asarray(points, dtype=dtype)

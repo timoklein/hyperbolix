@@ -1,367 +1,343 @@
 """Tests for isometry mappings between hyperbolic manifold models.
 
-Tests the distance-preserving transformations between the hyperboloid model
-and the Poincaré ball model. Verifies that conversions preserve geodesic
-distances and manifold constraints.
+Covers the distance-preserving transformations among the Poincaré ball,
+hyperboloid (Lorentz), and Proper Velocity (PV) models:
+
+    Poincaré ↔ Hyperboloid    (curvature-aware stereographic projection)
+    Poincaré ↔ PV             (PVNN Eq. 4 gyro-isomorphism)
+    Hyperboloid ↔ PV          (direct: PV coords = space-like 4-velocity part)
+
+Every map is verified for: target-manifold validity, round-trip identity,
+origin↦origin, geodesic-distance preservation (the defining isometry property),
+the cross-model commutative diagram, and JIT/vmap compatibility. Tests are
+parametrized over both dtypes (conftest ``dtype``/``tolerance``) and over a
+range of curvatures — the latter specifically guards against curvature-dependent
+bugs that a single ``c=1.0`` test cannot catch.
 """
 
 import jax
 import jax.numpy as jnp
 import pytest
 
-import hyperbolix as hj
-from hyperbolix.manifolds import Hyperboloid, Poincare
+from hyperbolix.manifolds import Hyperboloid, Poincare, ProperVelocity
+from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
 from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT
 
-hyperboloid = Hyperboloid(dtype=jnp.float64)
-poincare = Poincare(dtype=jnp.float64)
+DIM = 3  # spatial dimension (hyperboloid ambient dimension is DIM + 1)
+N_POINTS = 20
+
+
+def _batch(fn):
+    """vmap a single-point ``(point, c) -> point`` map over the batch axis."""
+    return jax.vmap(fn, in_axes=(0, None))
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+#
+# ``dtype`` and ``tolerance`` are provided by conftest (parametrized f32/f64).
+# ``curvature`` spans low/unit/high values, all != 1.0-only, so the maps are
+# exercised away from the special c = 1 case. Values are kept >= 0.5 to keep
+# float32 geodesic distances comfortably below the ~7 precision ceiling; an
+# additional float64-only test below stresses extreme curvatures.
+
+
+@pytest.fixture(params=[0.5, 1.0, 4.0])
+def curvature(request: pytest.FixtureRequest) -> float:
+    """Curvature values spanning low / unit / high."""
+    return request.param
 
 
 @pytest.fixture
-def curvature():
-    """Curvature parameter for tests."""
-    return 1.0
+def manifolds(dtype: jnp.dtype) -> tuple[Poincare, Hyperboloid, ProperVelocity]:
+    """Manifold instances built at the test dtype."""
+    return Poincare(dtype=dtype), Hyperboloid(dtype=dtype), ProperVelocity(dtype=dtype)
 
 
 @pytest.fixture
-def tolerance():
-    """Tolerance for float64 comparisons."""
-    return (1e-6, 1e-6)  # (atol, rtol)
-
-
-@pytest.fixture
-def hyperboloid_points(curvature: float):
-    """Generate test points on the hyperboloid manifold."""
+def pv_points(curvature: float, dtype: jnp.dtype) -> jnp.ndarray:
+    """PV points: unconstrained Gaussians scaled by 1/√c (no projection needed)."""
     c = curvature
-    dim = 3  # 3D hyperboloid (4D ambient space)
-
-    # Create random points in Poincaré ball, then convert to hyperboloid
-    # to ensure we have valid hyperboloid points
-    rng = jax.random.PRNGKey(42)
-    n_points = 20
-
-    # Sample from uniform distribution in ball
-    samples = jax.random.normal(rng, (n_points, dim))
-    # Scale to be within ball (with margin for safety)
-    norms = jnp.linalg.norm(samples, axis=1, keepdims=True)
-    max_norm = 0.95 / jnp.sqrt(c)  # Stay away from boundary
-    samples = samples * (max_norm / jnp.maximum(norms, 1.0))
-
-    # Convert to hyperboloid using the mapping we're testing
-    # (this is circular but we'll verify correctness separately)
-    to_hyperboloid_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.poincare_to_hyperboloid,
-        in_axes=(0, None),
-    )
-    hyperboloid_pts = to_hyperboloid_batch(samples, c)
-
-    # Verify points are on hyperboloid
-    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))
-    assert jnp.all(is_valid(hyperboloid_pts, c)), "Generated hyperboloid points are invalid"
-
-    return hyperboloid_pts
+    key = jax.random.PRNGKey(7)
+    return jax.random.normal(key, (N_POINTS, DIM), dtype=dtype) / jnp.sqrt(c)
 
 
 @pytest.fixture
-def poincare_points(curvature: float):
-    """Generate test points in the Poincaré ball."""
+def poincare_points(curvature: float, dtype: jnp.dtype) -> jnp.ndarray:
+    """Poincaré points sampled inside the radius-1/√c ball (away from boundary)."""
     c = curvature
-    dim = 3  # 3D Poincaré ball
-
-    rng = jax.random.PRNGKey(123)
-    n_points = 20
-
-    # Sample from uniform distribution in ball
-    samples = jax.random.normal(rng, (n_points, dim))
-    # Scale to be within ball (with margin for safety)
-    norms = jnp.linalg.norm(samples, axis=1, keepdims=True)
-    max_norm = 0.95 / jnp.sqrt(c)  # Stay away from boundary
-    poincare_pts = samples * (max_norm / jnp.maximum(norms, 1.0))
-
-    # Verify points are in Poincaré ball
-    is_valid = jax.vmap(poincare.is_in_manifold, in_axes=(0, None))
-    assert jnp.all(is_valid(poincare_pts, c)), "Generated Poincaré points are invalid"
-
-    return poincare_pts
+    key = jax.random.PRNGKey(123)
+    k_dir, k_rad = jax.random.split(key)
+    dirs = jax.random.normal(k_dir, (N_POINTS, DIM), dtype=dtype)
+    dirs = dirs / jnp.maximum(jnp.linalg.norm(dirs, axis=1, keepdims=True), 1e-12)
+    # Uniform-in-ball radius, capped at 0.7/√c to stay clear of the boundary.
+    radii = jax.random.uniform(k_rad, (N_POINTS, 1), dtype=dtype) ** (1.0 / DIM)
+    return dirs * radii * (0.7 / jnp.sqrt(c))
 
 
-def test_hyperboloid_to_poincare_manifold_validity(
-    hyperboloid_points: jnp.ndarray,
-    curvature: float,
-):
-    """Test that hyperboloid_to_poincare produces valid Poincaré ball points."""
+@pytest.fixture
+def hyperboloid_points(curvature: float, dtype: jnp.dtype) -> jnp.ndarray:
+    """Valid hyperboloid points, generated independently of the maps under test.
+
+    Random spatial parts are projected onto the manifold via ``Hyperboloid.proj``,
+    which reconstructs the time component as x₀ = √(1/c + ||x_rest||²).
+    """
     c = curvature
-
-    # Convert points
-    to_poincare_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.hyperboloid_to_poincare,
-        in_axes=(0, None),
-    )
-    poincare_pts = to_poincare_batch(hyperboloid_points, c)
-
-    # Verify all converted points are in Poincaré ball
-    is_valid = jax.vmap(poincare.is_in_manifold, in_axes=(0, None))
-    assert jnp.all(is_valid(poincare_pts, c)), "Converted points are not in Poincaré ball"
+    key = jax.random.PRNGKey(42)
+    spatial = jax.random.normal(key, (N_POINTS, DIM), dtype=dtype) / jnp.sqrt(c)
+    ambient = jnp.concatenate([jnp.zeros((N_POINTS, 1), dtype=dtype), spatial], axis=1)
+    return _batch(Hyperboloid(dtype=dtype).proj)(ambient, c)
 
 
-def test_poincare_to_hyperboloid_manifold_validity(
+# ---------------------------------------------------------------------------
+# Target-manifold validity
+# ---------------------------------------------------------------------------
+
+
+def test_target_manifold_validity(
+    manifolds: tuple[Poincare, Hyperboloid, ProperVelocity],
+    pv_points: jnp.ndarray,
     poincare_points: jnp.ndarray,
-    curvature: float,
-):
-    """Test that poincare_to_hyperboloid produces valid hyperboloid points."""
-    c = curvature
-
-    # Convert points
-    to_hyperboloid_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.poincare_to_hyperboloid,
-        in_axes=(0, None),
-    )
-    hyperboloid_pts = to_hyperboloid_batch(poincare_points, c)
-
-    # Verify all converted points are on hyperboloid
-    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))
-    assert jnp.all(is_valid(hyperboloid_pts, c)), "Converted points are not on hyperboloid"
-
-
-def test_origin_mapping(curvature: float, tolerance: tuple[float, float]):
-    """Test that origins map correctly between models."""
-    c = curvature
-    atol, rtol = tolerance
-
-    # Hyperboloid origin: [sqrt(1/c), 0, ..., 0]
-    dim = 3
-    hyperboloid_origin = jnp.zeros(dim + 1)
-    hyperboloid_origin = hyperboloid_origin.at[0].set(jnp.sqrt(1.0 / c))
-
-    # Poincaré origin: [0, ..., 0]
-    poincare_origin = jnp.zeros(dim)
-
-    # Test hyperboloid origin -> Poincaré origin
-    poincare_result = hj.manifolds.isometry_mappings.hyperboloid_to_poincare(hyperboloid_origin, c)
-    assert jnp.allclose(poincare_result, poincare_origin, atol=atol, rtol=rtol), (
-        "Hyperboloid origin does not map to Poincaré origin"
-    )
-
-    # Test Poincaré origin -> hyperboloid origin
-    hyperboloid_result = hj.manifolds.isometry_mappings.poincare_to_hyperboloid(poincare_origin, c)
-    assert jnp.allclose(hyperboloid_result, hyperboloid_origin, atol=atol, rtol=rtol), (
-        "Poincaré origin does not map to hyperboloid origin"
-    )
-
-
-def test_round_trip_hyperboloid_to_poincare_to_hyperboloid(
     hyperboloid_points: jnp.ndarray,
     curvature: float,
-    tolerance: tuple[float, float],
 ):
-    """Test that hyperboloid -> Poincaré -> hyperboloid is identity."""
+    """Each map lands on its target manifold."""
+    poincare, hyperboloid, pv = manifolds
     c = curvature
-    atol, rtol = tolerance
 
-    # Create batched conversion functions
-    to_poincare_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.hyperboloid_to_poincare,
-        in_axes=(0, None),
-    )
-    to_hyperboloid_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.poincare_to_hyperboloid,
-        in_axes=(0, None),
-    )
+    # Poincaré <-> Hyperboloid
+    assert jnp.all(_batch(poincare.is_in_manifold)(_batch(iso.hyperboloid_to_poincare)(hyperboloid_points, c), c))
+    assert jnp.all(_batch(hyperboloid.is_in_manifold)(_batch(iso.poincare_to_hyperboloid)(poincare_points, c), c))
 
-    # Round-trip conversion
-    poincare_pts = to_poincare_batch(hyperboloid_points, c)
-    reconstructed_pts = to_hyperboloid_batch(poincare_pts, c)
+    # PV <-> Poincaré
+    assert jnp.all(_batch(poincare.is_in_manifold)(_batch(iso.pv_to_poincare)(pv_points, c), c))
+    assert jnp.all(_batch(pv.is_in_manifold)(_batch(iso.poincare_to_pv)(poincare_points, c), c))
 
-    # Verify round-trip is identity
-    assert jnp.allclose(reconstructed_pts, hyperboloid_points, atol=atol, rtol=rtol), (
-        "Round-trip hyperboloid -> Poincaré -> hyperboloid failed"
-    )
+    # PV <-> Hyperboloid
+    assert jnp.all(_batch(hyperboloid.is_in_manifold)(_batch(iso.pv_to_hyperboloid)(pv_points, c), c))
+    assert jnp.all(_batch(pv.is_in_manifold)(_batch(iso.hyperboloid_to_pv)(hyperboloid_points, c), c))
 
 
-def test_round_trip_poincare_to_hyperboloid_to_poincare(
+# ---------------------------------------------------------------------------
+# Round-trip identity
+# ---------------------------------------------------------------------------
+
+
+def test_round_trip_poincare_hyperboloid(
     poincare_points: jnp.ndarray,
-    curvature: float,
-    tolerance: tuple[float, float],
-):
-    """Test that Poincaré -> hyperboloid -> Poincaré is identity."""
-    c = curvature
-    atol, rtol = tolerance
-
-    # Create batched conversion functions
-    to_hyperboloid_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.poincare_to_hyperboloid,
-        in_axes=(0, None),
-    )
-    to_poincare_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.hyperboloid_to_poincare,
-        in_axes=(0, None),
-    )
-
-    # Round-trip conversion
-    hyperboloid_pts = to_hyperboloid_batch(poincare_points, c)
-    reconstructed_pts = to_poincare_batch(hyperboloid_pts, c)
-
-    # Verify round-trip is identity
-    assert jnp.allclose(reconstructed_pts, poincare_points, atol=atol, rtol=rtol), (
-        "Round-trip Poincaré -> hyperboloid -> Poincaré failed"
-    )
-
-
-def test_isometry_preserves_distances(
     hyperboloid_points: jnp.ndarray,
     curvature: float,
     tolerance: tuple[float, float],
 ):
-    """Test that the mapping preserves geodesic distances (is an isometry).
+    """Poincaré <-> Hyperboloid round-trips to identity (both directions)."""
+    c = curvature
+    atol, rtol = tolerance
 
-    The most important property: d_hyperboloid(x, y) = d_poincare(φ(x), φ(y))
-    where φ is the hyperboloid_to_poincare mapping.
+    p_rt = _batch(iso.hyperboloid_to_poincare)(_batch(iso.poincare_to_hyperboloid)(poincare_points, c), c)
+    assert jnp.allclose(p_rt, poincare_points, atol=atol, rtol=rtol)
+
+    h_rt = _batch(iso.poincare_to_hyperboloid)(_batch(iso.hyperboloid_to_poincare)(hyperboloid_points, c), c)
+    assert jnp.allclose(h_rt, hyperboloid_points, atol=atol, rtol=rtol)
+
+
+def test_round_trip_poincare_pv(
+    poincare_points: jnp.ndarray,
+    pv_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """PV <-> Poincaré round-trips to identity (both directions)."""
+    c = curvature
+    atol, rtol = tolerance
+
+    pv_rt = _batch(iso.poincare_to_pv)(_batch(iso.pv_to_poincare)(pv_points, c), c)
+    assert jnp.allclose(pv_rt, pv_points, atol=atol, rtol=rtol)
+
+    p_rt = _batch(iso.pv_to_poincare)(_batch(iso.poincare_to_pv)(poincare_points, c), c)
+    assert jnp.allclose(p_rt, poincare_points, atol=atol, rtol=rtol)
+
+
+def test_round_trip_hyperboloid_pv(
+    hyperboloid_points: jnp.ndarray,
+    pv_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """PV <-> Hyperboloid round-trips to identity (both directions)."""
+    c = curvature
+    atol, rtol = tolerance
+
+    pv_rt = _batch(iso.hyperboloid_to_pv)(_batch(iso.pv_to_hyperboloid)(pv_points, c), c)
+    assert jnp.allclose(pv_rt, pv_points, atol=atol, rtol=rtol)
+
+    h_rt = _batch(iso.pv_to_hyperboloid)(_batch(iso.hyperboloid_to_pv)(hyperboloid_points, c), c)
+    assert jnp.allclose(h_rt, hyperboloid_points, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("c", [0.01, 0.1, 10.0, 100.0])
+def test_poincare_hyperboloid_extreme_curvatures(c: float):
+    """float64-only: P <-> H round-trips at extreme curvatures.
+
+    Directly pins the curvature-correctness fix: the previous unit-ball formulas
+    only round-tripped at c = 1.0 and drifted badly for c far from 1.
+    """
+    poincare = Poincare(dtype=jnp.float64)
+    key = jax.random.PRNGKey(2024)
+    dirs = jax.random.normal(key, (N_POINTS, DIM), dtype=jnp.float64)
+    dirs = dirs / jnp.linalg.norm(dirs, axis=1, keepdims=True)
+    radii = jax.random.uniform(jax.random.fold_in(key, 1), (N_POINTS, 1), dtype=jnp.float64)
+    pts = dirs * radii * (0.7 / jnp.sqrt(c))
+    assert jnp.all(_batch(poincare.is_in_manifold)(pts, c)), "test points not in ball"
+
+    rt = _batch(iso.hyperboloid_to_poincare)(_batch(iso.poincare_to_hyperboloid)(pts, c), c)
+    assert jnp.allclose(rt, pts, atol=1e-9, rtol=1e-9), f"P<->H round-trip failed at c={c}"
+
+
+# ---------------------------------------------------------------------------
+# Origin mapping
+# ---------------------------------------------------------------------------
+
+
+def test_origin_mapping(curvature: float, dtype: jnp.dtype, tolerance: tuple[float, float]):
+    """Every origin maps to every other model's origin."""
+    c = curvature
+    atol, rtol = tolerance
+
+    poincare_origin = jnp.zeros(DIM, dtype=dtype)
+    pv_origin = jnp.zeros(DIM, dtype=dtype)
+    hyperboloid_origin = jnp.zeros(DIM + 1, dtype=dtype).at[0].set(jnp.sqrt(1.0 / c))
+
+    def close(a, b):
+        return jnp.allclose(a, b, atol=atol, rtol=rtol)
+
+    # Poincaré <-> Hyperboloid
+    assert close(iso.hyperboloid_to_poincare(hyperboloid_origin, c), poincare_origin)
+    assert close(iso.poincare_to_hyperboloid(poincare_origin, c), hyperboloid_origin)
+    # PV <-> Poincaré
+    assert close(iso.pv_to_poincare(pv_origin, c), poincare_origin)
+    assert close(iso.poincare_to_pv(poincare_origin, c), pv_origin)
+    # PV <-> Hyperboloid
+    assert close(iso.pv_to_hyperboloid(pv_origin, c), hyperboloid_origin)
+    assert close(iso.hyperboloid_to_pv(hyperboloid_origin, c), pv_origin)
+
+
+# ---------------------------------------------------------------------------
+# Isometry: geodesic-distance preservation (the defining property)
+# ---------------------------------------------------------------------------
+
+
+def test_isometry_preserves_pairwise_distance(
+    manifolds: tuple[Poincare, Hyperboloid, ProperVelocity],
+    pv_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """d_PV(x, y) == d_Poincaré(φ(x), φ(y)) == d_Hyperboloid(ψ(x), ψ(y))."""
+    poincare, hyperboloid, pv = manifolds
+    c = curvature
+    atol, rtol = tolerance
+
+    n = N_POINTS // 2
+    xs, ys = pv_points[:n], pv_points[n : 2 * n]
+
+    d_pv = jax.vmap(lambda a, b: pv.dist(a, b, c))(xs, ys)
+
+    xp, yp = _batch(iso.pv_to_poincare)(xs, c), _batch(iso.pv_to_poincare)(ys, c)
+    d_p = jax.vmap(lambda a, b: poincare.dist(a, b, c, version_idx=VERSION_MOBIUS_DIRECT))(xp, yp)
+
+    xh, yh = _batch(iso.pv_to_hyperboloid)(xs, c), _batch(iso.pv_to_hyperboloid)(ys, c)
+    d_h = jax.vmap(lambda a, b: hyperboloid.dist(a, b, c, version_idx=VERSION_DEFAULT))(xh, yh)
+
+    assert jnp.allclose(d_pv, d_p, atol=atol, rtol=rtol), "PV -> Poincaré not an isometry"
+    assert jnp.allclose(d_pv, d_h, atol=atol, rtol=rtol), "PV -> Hyperboloid not an isometry"
+
+
+def test_isometry_preserves_distance_from_origin(
+    manifolds: tuple[Poincare, Hyperboloid, ProperVelocity],
+    pv_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """Distance-from-origin is preserved by the PV maps."""
+    poincare, hyperboloid, pv = manifolds
+    c = curvature
+    atol, rtol = tolerance
+
+    d_pv = jax.vmap(lambda a: pv.dist_0(a, c))(pv_points)
+    d_p = jax.vmap(lambda a: poincare.dist_0(a, c, version_idx=VERSION_MOBIUS_DIRECT))(
+        _batch(iso.pv_to_poincare)(pv_points, c)
+    )
+    d_h = jax.vmap(lambda a: hyperboloid.dist_0(a, c, version_idx=VERSION_DEFAULT))(
+        _batch(iso.pv_to_hyperboloid)(pv_points, c)
+    )
+
+    assert jnp.allclose(d_pv, d_p, atol=atol, rtol=rtol)
+    assert jnp.allclose(d_pv, d_h, atol=atol, rtol=rtol)
+
+
+# ---------------------------------------------------------------------------
+# Cross-model consistency (commutative diagram)
+# ---------------------------------------------------------------------------
+
+
+def test_commutative_diagram(
+    pv_points: jnp.ndarray,
+    hyperboloid_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """The direct PV<->H map agrees with the route composed through Poincaré.
+
+    pv_to_hyperboloid == poincare_to_hyperboloid ∘ pv_to_poincare, and the
+    inverse. This pins the direct maps and the P<->H fix together: if either
+    drifted in curvature, the two routes would disagree for c != 1.
     """
     c = curvature
     atol, rtol = tolerance
 
-    # Split points for pairwise distance computation
-    n_pairs = min(10, len(hyperboloid_points) // 2)
-    x_hyp = hyperboloid_points[:n_pairs]
-    y_hyp = hyperboloid_points[n_pairs : 2 * n_pairs]
+    direct_h = _batch(iso.pv_to_hyperboloid)(pv_points, c)
+    composed_h = _batch(iso.poincare_to_hyperboloid)(_batch(iso.pv_to_poincare)(pv_points, c), c)
+    assert jnp.allclose(direct_h, composed_h, atol=atol, rtol=rtol), "PV->H != PV->P->H"
 
-    # Convert to Poincaré ball
-    to_poincare_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.hyperboloid_to_poincare,
-        in_axes=(0, None),
-    )
-    x_poinc = to_poincare_batch(x_hyp, c)
-    y_poinc = to_poincare_batch(y_hyp, c)
-
-    # Compute distances in hyperboloid model
-    dist_hyp_fn = jax.vmap(lambda x, y: hyperboloid.dist(x, y, c, version_idx=VERSION_DEFAULT))
-    distances_hyperboloid = dist_hyp_fn(x_hyp, y_hyp)
-
-    # Compute distances in Poincaré model
-    dist_poinc_fn = jax.vmap(lambda x, y: poincare.dist(x, y, c, version_idx=VERSION_MOBIUS_DIRECT))
-    distances_poincare = dist_poinc_fn(x_poinc, y_poinc)
-
-    # Verify distances are preserved
-    assert jnp.allclose(distances_hyperboloid, distances_poincare, atol=atol, rtol=rtol), (
-        "Isometry does not preserve distances"
-    )
+    direct_pv = _batch(iso.hyperboloid_to_pv)(hyperboloid_points, c)
+    composed_pv = _batch(iso.poincare_to_pv)(_batch(iso.hyperboloid_to_poincare)(hyperboloid_points, c), c)
+    assert jnp.allclose(direct_pv, composed_pv, atol=atol, rtol=rtol), "H->PV != H->P->PV"
 
 
-def test_isometry_preserves_distance_from_origin(
-    hyperboloid_points: jnp.ndarray,
-    curvature: float,
-    tolerance: tuple[float, float],
-):
-    """Test that distance from origin is preserved under the mapping."""
+# ---------------------------------------------------------------------------
+# JIT / vmap / shape compatibility
+# ---------------------------------------------------------------------------
+
+
+def test_jit_and_vmap_compatibility(pv_points: jnp.ndarray, curvature: float, tolerance: tuple[float, float]):
+    """All four new PV maps are JIT- and vmap-compatible and shape-correct."""
     c = curvature
     atol, rtol = tolerance
 
-    # Convert to Poincaré ball
-    to_poincare_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.hyperboloid_to_poincare,
-        in_axes=(0, None),
-    )
-    poincare_pts = to_poincare_batch(hyperboloid_points, c)
+    to_h = jax.jit(_batch(iso.pv_to_hyperboloid))
+    from_h = jax.jit(_batch(iso.hyperboloid_to_pv))
+    to_p = jax.jit(_batch(iso.pv_to_poincare))
+    from_p = jax.jit(_batch(iso.poincare_to_pv))
 
-    # Compute distance from origin in hyperboloid model
-    dist_0_hyp = jax.vmap(lambda x: hyperboloid.dist_0(x, c, version_idx=VERSION_DEFAULT))
-    distances_hyperboloid = dist_0_hyp(hyperboloid_points)
+    z = to_h(pv_points, c)
+    assert z.shape == (N_POINTS, DIM + 1)  # gains the time component
+    assert jnp.allclose(from_h(z, c), pv_points, atol=atol, rtol=rtol)
 
-    # Compute distance from origin in Poincaré model
-    dist_0_poinc = jax.vmap(lambda x: poincare.dist_0(x, c, version_idx=VERSION_MOBIUS_DIRECT))
-    distances_poincare = dist_0_poinc(poincare_pts)
-
-    # Verify distances are preserved
-    assert jnp.allclose(distances_hyperboloid, distances_poincare, atol=atol, rtol=rtol), (
-        "Isometry does not preserve distance from origin"
-    )
+    y = to_p(pv_points, c)
+    assert y.shape == (N_POINTS, DIM)
+    assert jnp.allclose(from_p(y, c), pv_points, atol=atol, rtol=rtol)
 
 
-def test_jit_compatibility(hyperboloid_points: jnp.ndarray, curvature: float):
-    """Test that conversion functions are JIT-compatible."""
-    c = curvature
-
-    # JIT compile the conversion functions
-    to_poincare_jit = jax.jit(hj.manifolds.isometry_mappings.hyperboloid_to_poincare)
-    to_hyperboloid_jit = jax.jit(hj.manifolds.isometry_mappings.poincare_to_hyperboloid)
-
-    # Test single point
-    x_hyp = hyperboloid_points[0]
-    y_poinc = to_poincare_jit(x_hyp, c)
-    x_reconstructed = to_hyperboloid_jit(y_poinc, c)
-
-    assert jnp.allclose(x_reconstructed, x_hyp, atol=1e-6, rtol=1e-6)
-
-
-def test_vmap_compatibility(hyperboloid_points: jnp.ndarray, curvature: float):
-    """Test that conversion functions work correctly with vmap."""
-    c = curvature
-
-    # Create vmapped functions
-    to_poincare_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.hyperboloid_to_poincare,
-        in_axes=(0, None),
-    )
-    to_hyperboloid_batch = jax.vmap(
-        hj.manifolds.isometry_mappings.poincare_to_hyperboloid,
-        in_axes=(0, None),
-    )
-
-    # Apply batched conversions
-    poincare_pts = to_poincare_batch(hyperboloid_points, c)
-    reconstructed_pts = to_hyperboloid_batch(poincare_pts, c)
-
-    # Verify shapes
-    assert poincare_pts.shape == (len(hyperboloid_points), hyperboloid_points.shape[1] - 1)
-    assert reconstructed_pts.shape == hyperboloid_points.shape
-
-    # Verify round-trip
-    assert jnp.allclose(reconstructed_pts, hyperboloid_points, atol=1e-6, rtol=1e-6)
-
-
-def test_multiple_curvatures():
-    """Test that conversions work correctly for different curvature values."""
-    curvatures = [0.5, 1.0, 2.0, 5.0]
-    dim = 2
-
-    for c in curvatures:
-        # Create hyperboloid origin
-        hyperboloid_origin = jnp.zeros(dim + 1)
-        hyperboloid_origin = hyperboloid_origin.at[0].set(jnp.sqrt(1.0 / c))
-
-        # Create Poincaré origin
-        poincare_origin = jnp.zeros(dim)
-
-        # Test conversions
-        poincare_result = hj.manifolds.isometry_mappings.hyperboloid_to_poincare(hyperboloid_origin, c)
-        assert jnp.allclose(poincare_result, poincare_origin, atol=1e-6, rtol=1e-6)
-
-        hyperboloid_result = hj.manifolds.isometry_mappings.poincare_to_hyperboloid(poincare_origin, c)
-        assert jnp.allclose(hyperboloid_result, hyperboloid_origin, atol=1e-6, rtol=1e-6)
-
-
-def test_dimension_consistency():
-    """Test that conversions handle different dimensions correctly."""
+@pytest.mark.parametrize("dim", [1, 2, 5, 10])
+def test_dimension_consistency(dim: int):
+    """PV <-> Hyperboloid handles arbitrary dimensions (time component add/drop)."""
     c = 1.0
-    dimensions = [1, 2, 3, 5, 10]
+    x = jnp.linspace(-0.3, 0.3, dim, dtype=jnp.float64)
 
-    for dim in dimensions:
-        # Create hyperboloid point (dim+1 dimensional)
-        x_hyp = jnp.zeros(dim + 1)
-        x_hyp = x_hyp.at[0].set(jnp.sqrt(1.0 / c))
-        x_hyp = x_hyp.at[1].set(0.1)  # Small perturbation
-
-        # Project to hyperboloid
-        x_hyp = hyperboloid.proj(x_hyp, c)
-
-        # Convert to Poincaré (should be dim-dimensional)
-        y_poinc = hj.manifolds.isometry_mappings.hyperboloid_to_poincare(x_hyp, c)
-        assert y_poinc.shape == (dim,), f"Poincaré point has wrong dimension for dim={dim}"
-
-        # Convert back to hyperboloid (should be (dim+1)-dimensional)
-        x_reconstructed = hj.manifolds.isometry_mappings.poincare_to_hyperboloid(y_poinc, c)
-        assert x_reconstructed.shape == (dim + 1,), f"Hyperboloid point has wrong dimension for dim={dim}"
-
-        # Verify round-trip
-        assert jnp.allclose(x_reconstructed, x_hyp, atol=1e-6, rtol=1e-6)
+    z = iso.pv_to_hyperboloid(x, c)
+    assert z.shape == (dim + 1,)
+    x_rt = iso.hyperboloid_to_pv(z, c)
+    assert x_rt.shape == (dim,)
+    assert jnp.allclose(x_rt, x, atol=1e-9, rtol=1e-9)

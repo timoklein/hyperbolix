@@ -382,6 +382,10 @@ class TestDecomposition:
         assert jnp.allclose(result, expected, atol=atol)
 
     def test_addition_decomposes(self, product, rng, cs, tolerance):
+        # Hyperboloid.addition is unsupported (raises); only configs whose every factor
+        # supports addition can exercise the per-factor decomposition.
+        if any(isinstance(m, Hyperboloid) for m in product.factors):
+            pytest.skip("Hyperboloid.addition is unsupported (raises NotImplementedError)")
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
@@ -392,6 +396,16 @@ class TestDecomposition:
             [m.addition(xp, yp, c) for m, xp, yp, c in zip(product.factors, x_parts, y_parts, cs, strict=True)]
         )
         assert jnp.allclose(result, expected, atol=atol)
+
+    def test_addition_raises_with_hyperboloid_factor(self, product, rng, cs):
+        # A ProductManifold containing a Hyperboloid factor must surface the unsupported
+        # addition loudly rather than returning silently-wrong points.
+        if not any(isinstance(m, Hyperboloid) for m in product.factors):
+            pytest.skip("config has no Hyperboloid factor")
+        x = _make_product_point(product, rng)
+        y = _make_product_point(product, rng)
+        with pytest.raises(NotImplementedError):
+            product.addition(x, y, cs)
 
     def test_tangent_inner_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
