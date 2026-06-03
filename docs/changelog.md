@@ -25,6 +25,11 @@ All notable changes to Hyperbolix will be documented in this file.
     - `HypLinearPV`: PV fully-connected layer (Thm 5.3 / Eq. 22)
     - `HypConv2DPV`: PV 2D convolution with raw Euclidean patch concatenation (Sec 5.3) — no beta-scaling, dimension-preserving
     - `HypRegressionPV`: PV multinomial-logistic-regression head (Thm 5.2 / Eq. 19)
+- **Poincaré vector quantization layers** (`hyperbolix.nn_layers`):
+    - `HypVQEmbeddingPoincare`: HVQ-VAE quantizer (Chen et al. 2025) — explicit on-ball codebook held as a non-parameter `nnx.Variable` buffer, geodesic nearest-neighbour selection, copy-gradient straight-through estimator, and a hyperbolic-EMA codebook update (GGBall, Bu et al. 2026, Eqs. 41-43) with optional dead-code revival via the `ema_update` method (called after `optimizer.update`; the optimizer never touches the codebook, only the commitment loss trains the encoder)
+    - `HypVQMLRPoincare`: HyperVQ quantizer (Goswami et al. 2025) — implicit codebook = the rows of an internal `HypRegressionPoincarePP`, Gumbel-Softmax straight-through selection on the categorical weights (so plain `optax.adam` trains it), with a `deterministic` flag (toggled by `model.eval()` / `model.train()`) for a deterministic argmax MAP estimate at inference
+    - `PoincareVQOutput`: shared pytree-friendly `NamedTuple` return type `(quantized, indices, loss, perplexity, z)`; `quantized` is cast to float32 at the manifold→decoder boundary
+    - `poincare_weighted_midpoint`: reusable Poincaré weighted gyromidpoint (GGBall Eq. 41), the Poincaré analog of `lorentz_midpoint` and a weighted generalization of `poincare_midpoint`
 - MkDocs Material documentation system
 - Complete API reference documentation
 - Getting Started guide

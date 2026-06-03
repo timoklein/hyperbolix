@@ -15,6 +15,7 @@ Hyperbolix provides 20+ neural network layer classes and 5 activation functions 
 - **Attention Layers**: Three hyperbolic attention variants (linear O(N), softmax O(N²), full Lorentzian O(N²)) from the Hypformer paper
 - **Positional Encoding**: HOPE (Hyperbolic Rotary PE) and Hypformer learnable positional encodings for Transformers
 - **Regression Layers**: Single-layer classifiers with Riemannian geometry, including `FGGLorentzMLR` and `HypRegressionPV`
+- **Vector Quantization**: Poincaré VQ-VAE bottlenecks — `HypVQEmbeddingPoincare` (EMA codebook, GGBall) and `HypVQMLRPoincare` (Gumbel-Softmax over a Poincaré MLR)
 - **Activation Functions**: Hyperbolic ReLU, Leaky ReLU, Tanh, Swish, GELU
 - **Helper Functions**: Utilities for regression and conformal factor computation
 
@@ -1036,6 +1037,83 @@ print(logits.shape)  # (64, 10)
 probs = jax.nn.softmax(logits, axis=-1)
 ```
 
+## Vector Quantization
+
+Hyperbolic VQ-VAE quantizer bottlenecks for the Poincaré ball. Both take encoder features (Euclidean tangent vectors at the origin) and return a `PoincareVQOutput` with the straight-through quantized vector for the decoder, the discrete code indices, an auxiliary loss, and the codebook perplexity. The encoder/decoder stay in user code — these layers are *only* the quantization step.
+
+| Layer | Codebook | Selection | Codebook trained by | Aux loss |
+|---|---|---|---|---|
+| `HypVQEmbeddingPoincare` | Explicit on-ball table (a non-param **buffer**) | Geodesic nearest-neighbour | Hyperbolic EMA (`ema_update`) | Commitment |
+| `HypVQMLRPoincare` | Implicit (rows of a Poincaré MLR) | Gumbel-Softmax over MLR scores | `optax.adam` (Euclidean) | None (recon-only) |
+
+### Embedding VQ (HVQ-VAE, EMA codebook)
+
+::: hyperbolix.nn_layers.HypVQEmbeddingPoincare
+    options:
+      show_source: true
+      heading_level: 4
+
+The codebook is an `nnx.Variable` buffer, so `nnx.Optimizer(model, tx, wrt=nnx.Param)` ignores it — it moves only through `ema_update(z, indices, c)`, the hyperbolic moving average of GGBall (Bu et al. 2026, Eqs. 41-43). Call `ema_update` in the train step **after** `optimizer.update`. Set `dead_code_revival=True` (and pass a `reset_key`) to replace stale codes with random encoder points.
+
+### MLR VQ (HyperVQ, implicit codebook)
+
+::: hyperbolix.nn_layers.HypVQMLRPoincare
+    options:
+      show_source: true
+      heading_level: 4
+
+The codebook is the rows of an internal `HypRegressionPoincarePP` (`bias · kernel`), trained by plain `optax.adam`. Selection is a Gumbel-Softmax straight-through sample over the MLR scores; putting the STE on the categorical weights — not on `z_q` — is what lets the gradient reach the MLR parameters. The layer owns a `deterministic` flag that `model.eval()` / `model.train()` toggle, switching to a deterministic argmax MAP estimate at inference.
+
+### Output type and weighted gyromidpoint
+
+::: hyperbolix.nn_layers.PoincareVQOutput
+    options:
+      show_source: true
+      heading_level: 4
+
+The embedding layer's EMA centroid is the GGBall weighted gyromidpoint, exposed as a reusable helper (the Poincaré analog of `lorentz_midpoint`, generalizing the unweighted `poincare_midpoint`):
+
+::: hyperbolix.nn_layers.poincare_weighted_midpoint
+    options:
+      show_source: true
+      heading_level: 4
+
+### Usage Example
+
+```python
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from hyperbolix.manifolds import Poincare
+from hyperbolix.nn_layers import HypVQEmbeddingPoincare, HypVQMLRPoincare
+
+# Manifold ops run in float64; the quantized decoder input comes back float32.
+manifold = Poincare(dtype=jnp.float64)
+h = jax.random.normal(jax.random.PRNGKey(1), (256, 64)) * 0.3  # encoder tangent features
+
+# --- HVQ-VAE: EMA codebook (no Riemannian optimizer) ---
+vq = HypVQEmbeddingPoincare(
+    manifold, num_codes=128, code_dim=64, rngs=nnx.Rngs(0),
+    commitment_weight=0.5, ema_decay=0.99, dead_code_revival=True,
+)
+out = vq(h, c=1.0)
+print(out.quantized.shape, out.quantized.dtype)  # (256, 64) float32 — decoder input
+print(out.indices.shape, float(out.loss))        # (256,)  + commitment loss
+
+# In the train step, AFTER optimizer.update(model, grads):
+vq.ema_update(out.z, out.indices, c=1.0, reset_key=jax.random.key(7))
+
+# --- HyperVQ: implicit MLR codebook, Gumbel-Softmax ---
+mlr_vq = HypVQMLRPoincare(manifold, num_codes=512, code_dim=64, rngs=nnx.Rngs(0))
+out = mlr_vq(h, c=1.0, rngs=nnx.Rngs(2))          # rngs drives the Gumbel sample
+mlr_vq.eval()                                     # deterministic argmax for inference
+out_eval = mlr_vq(h, c=1.0)                        # rngs unused in eval mode
+```
+
+!!! info "Two quantizers, two gradient stories"
+    - **`HypVQEmbeddingPoincare`** keeps the codebook *on* the ball as a buffer and moves it with a geometric EMA (`ema_update`), entirely separate from the gradient path. Only the commitment loss reaches the encoder; the optimizer never touches the codebook. A copy-gradient STE bridges `logmap_0(q)` to the decoder.
+    - **`HypVQMLRPoincare`** has no explicit codebook — quantization is classification over a Poincaré MLR, the STE sits on the categorical weights, and plain `optax.adam` trains everything. Reconstruction-only loss (`output.loss == 0`).
+
 ## Activation Functions
 
 Hyperbolic activation functions that preserve manifold constraints. All activations follow the HRC pattern: apply function to space components, then reconstruct time.
@@ -1238,6 +1316,9 @@ The neural network layers implement methods from:
 - **Chen et al. (2024)**: "Hyperbolic Embeddings for Learning on Manifolds (HELM)" - HOPE positional encoding and Lorentzian residual connections
 - **Klis et al. (2026)**: "Fast and Geometrically Grounded Lorentz Neural Networks" - `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `FGGMeanOnlyBatchNorm`; sinh/arcsinh cancellation for linear hyperbolic distance growth
 - **Chen et al. (2026)**: "Proper Velocity Neural Networks" - `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV`; unconstrained $\mathbb{R}^n$ model of hyperbolic geometry with exact Euclidean retraction
+- **Chen et al. (2025)**: "Hyperbolic VQ-VAE (HVQ-VAE)" - `HypVQEmbeddingPoincare`; Poincaré-ball codebook with geodesic nearest-neighbour selection and copy-gradient STE
+- **Goswami et al. (2025)**: "HyperVQ" - `HypVQMLRPoincare`; vector quantization as Poincaré-MLR classification with Gumbel-Softmax straight-through selection
+- **Bu et al. (2026)**: "GGBall: Graph Generative Model on Poincaré Ball" - hyperbolic-EMA codebook update and weighted gyromidpoint (`ema_update`, `poincare_weighted_midpoint`)
 
 ### Key Theoretical Connections
 

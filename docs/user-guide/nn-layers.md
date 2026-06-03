@@ -45,6 +45,15 @@ tables below collapse this into per-task decisions.
 | `HypRegressionPV` | PV classification head — small `std=1e-2` init |
 | `HypRegressionPoincare` | Legacy Ganea — prefer `PP` |
 
+### Vector Quantization (Poincaré)
+
+| Layer | When to pick |
+|---|---|
+| `HypVQEmbeddingPoincare` | Explicit on-ball codebook with a geometric **EMA** update (GGBall, Bu et al. 2026). No Riemannian optimizer — the codebook is a buffer moved by `ema_update` (called after `optimizer.update`); only the commitment loss trains the encoder. Optional dead-code revival |
+| `HypVQMLRPoincare` | Codebook-free — quantization as Poincaré-MLR classification with Gumbel-Softmax. Plain `optax.adam`, reconstruction-only loss, deterministic argmax at eval (`model.eval()`) |
+
+Both are quantizer *bottlenecks*: feed them encoder tangent features, add `output.loss` to your reconstruction loss, and decode `output.quantized` (returned as float32). See the [VQ API reference](../api-reference/nn-layers.md#vector-quantization).
+
 ### Attention, Normalization, Positional Encoding
 
 | Use case | Layer |

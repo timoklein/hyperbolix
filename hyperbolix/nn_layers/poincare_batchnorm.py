@@ -70,6 +70,76 @@ def poincare_midpoint(
     return manifold.proj(midpoint_C, c)
 
 
+def poincare_weighted_midpoint(
+    points_MC: Float[Array, "M C"],
+    weights_NM: Float[Array, "N M"],
+    manifold: Poincare,
+    c: float,
+    eps: float = 1e-6,
+) -> Float[Array, "N C"]:
+    """Weighted Poincaré gyromidpoint over M points (GGBall Eq. 41).
+
+    Generalises :func:`poincare_midpoint` (the unweighted Einstein midpoint of N
+    points) to N *weighted* midpoints, mirroring the hyperboloid
+    :func:`hyperbolix.nn_layers.lorentz_midpoint`. For weight-vector ``w_n`` over
+    the M points::
+
+        mu_n = (1/2) ⊗_c [ Σ_m w_nm · λ(x_m) · x_m  /  Σ_m w_nm · (λ(x_m) - 1) ]
+
+    where ``λ(x) = 2 / (1 - c‖x‖²)`` is the conformal factor and ``⊗_c`` is
+    Möbius scalar multiplication. The ``½ ⊗_c`` half-scaling is exactly what turns
+    the conformal-weighted Euclidean average into the gyro-midpoint *on* the ball
+    (for N copies of a single point it returns that point — see the algebra in
+    the tests).
+
+    This is the codebook-centroid operator of the hyperbolic-EMA VQ update
+    (GGBall, Bu et al. 2026): pass the assigned encoder points as ``points`` and
+    the transposed one-hot assignment matrix ``(num_codes, N)`` as ``weights`` to
+    get one midpoint per code.
+
+    Parameters
+    ----------
+    points_MC : Array, shape (M, C)
+        Points on the Poincaré ball with curvature ``c``.
+    weights_NM : Array, shape (N, M)
+        Combination weights, one row per output midpoint. Typically non-negative
+        (assignment / attention weights). Because ``λ(x) ≥ 2`` the denominator
+        ``Σ_m w_nm (λ-1)`` is strictly positive whenever a row carries any mass;
+        an all-zero row maps to the origin.
+    manifold : Poincare
+        Poincaré manifold instance (supplies ``conformal_factor``, ``scalar_mul``,
+        ``proj``).
+    c : float
+        Curvature (positive).
+    eps : float
+        Denominator floor guarding the empty-row 0/0 (default: 1e-6).
+
+    Returns
+    -------
+    Array, shape (N, C)
+        Weighted gyromidpoints on the Poincaré ball.
+    """
+    # lambda per point — conformal_factor is batched and returns (M, 1).
+    lambda_M = manifold.conformal_factor(points_MC, c)[:, 0]  # (M,)
+
+    # Eq. 41 numerator / denominator, contracted over the M axis:
+    #   numerator_n = Σ_m w_nm · λ(x_m) · x_m   (N, C)
+    #   denom_n     = Σ_m w_nm · (λ(x_m) - 1)   (N,)
+    numerator_NC = jnp.einsum("nm,mc->nc", weights_NM, lambda_M[:, None] * points_MC)  # (N, C)
+    denom_N = jnp.einsum("nm,m->n", weights_NM, lambda_M - 1.0)  # (N,)
+    # Empty row (all-zero weights) -> denom 0 and numerator 0; map to origin
+    # rather than 0/0. λ ≥ 2 keeps denom > 0 for any row with mass.
+    denom_safe_N = jnp.where(jnp.abs(denom_N) < eps, 1.0, denom_N)  # (N,)
+    inner_NC = numerator_NC / denom_safe_N[:, None]  # (N, C) — argument of ½ ⊗_c
+
+    # Boundary guard before the Möbius half-scaling (keeps scalar_mul's atanh in domain).
+    inner_NC = jax.vmap(manifold.proj, in_axes=(0, None))(inner_NC, c)
+
+    # mu_n = ½ ⊗_c inner_n  (single-point scalar_mul, vmapped over N).
+    mu_NC = jax.vmap(lambda v: manifold.scalar_mul(0.5, v, c))(inner_NC)  # (N, C)
+    return jax.vmap(manifold.proj, in_axes=(0, None))(mu_NC, c)
+
+
 def frechet_variance(
     x_NC: Float[Array, "N C"],
     mean_C: Float[Array, "C"],
