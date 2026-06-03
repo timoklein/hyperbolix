@@ -13,6 +13,7 @@ import pytest
 
 import hyperbolix as hj
 import hyperbolix.manifolds.poincare as poincare_impl
+from hyperbolix.manifolds import isometry_mappings
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -109,13 +110,40 @@ def test_addition(manifold_and_c, tolerance: tuple[float, float], uniform_points
     """Test addition/Möbius addition operation."""
     manifold, c = manifold_and_c
 
-    # The addition operation is not well-defined for the Hyperboloid manifold: it is not a
-    # gyrovector space with a valid closed-form coordinate addition here. Rather than return
-    # silently-wrong points, Hyperboloid.addition raises NotImplementedError — verify that.
+    # The Hyperboloid implements the Lorentz gyrovector addition (Shi et al. 2026, Eq. 1):
+    #   x ⊕ y = Exp_x(PT_{0→x}(Log_0(y))).
+    # Its identity is the origin [√(1/c), 0…] (NOT zeros) and its inverse is
+    # ⊖x = (-1) ⊙ x = [x₀, -x_s] (NOT -x), so the generic Euclidean-style body below does
+    # not apply — verify the gyrogroup axioms here with the correct identity/inverse.
     if _is_hyperboloid(manifold):
-        x_pt = uniform_points[0]
-        with pytest.raises(NotImplementedError):
-            manifold.addition(x_pt, x_pt, c)
+        atol, rtol = tolerance
+        if uniform_points.dtype == jnp.dtype("float32"):
+            # Gyroaddition is a log_0 → ptransp → exp round-trip; relax f32 like other manifolds.
+            atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+
+        addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None))
+        scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
+
+        origin = jnp.zeros_like(uniform_points)
+        origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
+
+        # Closed-form inverse: ⊖x = (-1) ⊙ x = [x₀, -x_s]
+        neg_ones = -jnp.ones(uniform_points.shape[0], dtype=uniform_points.dtype)
+        ominus = scalar_mul_batch(neg_ones, uniform_points, c)
+        ominus_expected = uniform_points.at[:, 1:].multiply(-1.0)
+        assert jnp.allclose(ominus, ominus_expected, atol=atol, rtol=rtol)
+
+        # Left/right identity: 0 ⊕ x = x and x ⊕ 0 = x
+        assert jnp.allclose(addition_batch(origin, uniform_points, c), uniform_points, atol=atol, rtol=rtol)
+        assert jnp.allclose(addition_batch(uniform_points, origin, c), uniform_points, atol=atol, rtol=rtol)
+
+        # Left/right inverse: (⊖x) ⊕ x = 0 and x ⊕ (⊖x) = 0
+        assert jnp.allclose(addition_batch(ominus, uniform_points, c), origin, atol=atol, rtol=rtol)
+        assert jnp.allclose(addition_batch(uniform_points, ominus, c), origin, atol=atol, rtol=rtol)
+
+        # Result stays on the manifold
+        x_h, y_h = _split(uniform_points, 2)
+        assert _batch_is_in_manifold(manifold, addition_batch(x_h, y_h, c), c)
         return
 
     atol, rtol = tolerance
@@ -157,6 +185,95 @@ def test_addition(manifold_and_c, tolerance: tuple[float, float], uniform_points
 
     # Results should stay on manifold
     assert _batch_is_in_manifold(manifold, result5, c)
+
+
+def test_hyperboloid_gyro_addition(
+    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
+) -> None:
+    """Deep correctness checks for the Hyperboloid Lorentz gyroaddition (Shi et al. 2026, Eq. 1).
+
+    Validated three independent ways:
+      1. Isometry cross-check against the trusted Poincaré Möbius addition (primary oracle):
+         the stereographic projection is a gyrogroup isomorphism, so hyperboloid ⊕ must agree
+         with adding in the Poincaré ball and mapping back.
+      2. n-gyroaddition: n ⊙ x = x ⊕ x ⊕ … ⊕ x links the gyroaddition (Eq. 1) to the gyro
+         scalar multiplication (Eq. 2).
+      3. Left cancellation: (⊖x) ⊕ (x ⊕ y) = y, the defining law of a (left) gyrogroup.
+    """
+    manifold, c = manifold_and_c
+    if not _is_hyperboloid(manifold):
+        pytest.skip("Lorentz gyroaddition test only applies to the Hyperboloid manifold")
+
+    atol, rtol = tolerance
+    if uniform_points.dtype == jnp.dtype("float32"):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+
+    addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None))
+    scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
+    x, y = _split(uniform_points, 2)
+
+    # (1) Isometry cross-check against Poincaré Möbius addition (single addition — robust).
+    poincare = hj.manifolds.Poincare(dtype=uniform_points.dtype)
+    h2p = jax.vmap(isometry_mappings.hyperboloid_to_poincare, in_axes=(0, None))
+    p2h = jax.vmap(isometry_mappings.poincare_to_hyperboloid, in_axes=(0, None))
+    mobius_add = jax.vmap(poincare.addition, in_axes=(0, 0, None))
+
+    got = addition_batch(x, y, c)
+    expected = p2h(mobius_add(h2p(x, c), h2p(y, c), c), c)
+    assert jnp.allclose(got, expected, atol=atol, rtol=rtol)
+    assert _batch_is_in_manifold(manifold, got, c)
+
+    # Shrink points so the multi-addition checks below keep geodesic distances in the
+    # float32-reliable range (< 7); the gyrogroup laws are scale-independent.
+    quarter = jnp.full(x.shape[0], 0.2, dtype=x.dtype)
+    xs = scalar_mul_batch(quarter, x, c)
+    ys = scalar_mul_batch(quarter, y, c)
+
+    # (2) n-gyroaddition: n ⊙ xs = xs ⊕ xs ⊕ … ⊕ xs (n times).
+    n = int(rng.integers(2, 6))
+    n_sum = xs
+    for _ in range(n - 1):
+        n_sum = addition_batch(n_sum, xs, c)
+    n_scalar = jnp.full(xs.shape[0], float(n), dtype=xs.dtype)
+    n_scaled = scalar_mul_batch(n_scalar, xs, c)
+    assert jnp.allclose(n_sum, n_scaled, atol=atol, rtol=rtol)
+
+    # (3) Left cancellation: (⊖xs) ⊕ (xs ⊕ ys) = ys.
+    neg_ones = -jnp.ones(xs.shape[0], dtype=xs.dtype)
+    ominus_xs = scalar_mul_batch(neg_ones, xs, c)
+    left_cancel = addition_batch(ominus_xs, addition_batch(xs, ys, c), c)
+    assert jnp.allclose(left_cancel, ys, atol=atol, rtol=rtol)
+
+
+def test_hyperboloid_scalar_mul_eq2(
+    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
+) -> None:
+    """Verify Hyperboloid.scalar_mul equals the paper's Eq. 2: t ⊙ x = Exp_0(t · Log_0(x)).
+
+    ``scalar_mul`` is written in the normalized form Exp_0(t · d(0,x) · Log_0(x)/‖Log_0(x)‖);
+    since ‖Log_0(x)‖_L = d(0,x) this collapses to Eq. 2. This test confirms the equality.
+    """
+    manifold, c = manifold_and_c
+    if not _is_hyperboloid(manifold):
+        pytest.skip("Eq. 2 form check only applies to the Hyperboloid manifold")
+
+    atol, rtol = tolerance
+    if uniform_points.dtype == jnp.dtype("float32"):
+        atol, rtol = max(atol, 4e-3), max(rtol, 2e-2)
+
+    scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
+    logmap_0_batch = jax.vmap(manifold.logmap_0, in_axes=(0, None))
+    expmap_0_batch = jax.vmap(manifold.expmap_0, in_axes=(0, None))
+
+    # Keep |t| · d(0,x) within the float32-reliable range.
+    t = jnp.asarray(rng.uniform(-1.5, 1.5, size=uniform_points.shape[0]), dtype=uniform_points.dtype)
+
+    got = scalar_mul_batch(t, uniform_points, c)
+    # Eq. 2 directly: scale the origin-tangent by t, then exp back.
+    v0 = logmap_0_batch(uniform_points, c)
+    expected = expmap_0_batch(t[:, None] * v0, c)
+    assert jnp.allclose(got, expected, atol=atol, rtol=rtol)
+    assert _batch_is_in_manifold(manifold, got, c)
 
 
 def test_scalar_mul(

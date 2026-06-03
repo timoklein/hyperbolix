@@ -44,6 +44,7 @@ import math
 
 import jax.lax as lax
 import jax.numpy as jnp
+from jax.scipy.special import digamma
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import acosh, cosh, sinh, smooth_clamp, smooth_clamp_min
@@ -139,32 +140,35 @@ def _proj_batch(x: Float[Array, "... dim_plus_1"], c: Curvature) -> Float[Array,
 
 
 def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
-    """Gyrovector addition is undefined on the Hyperboloid model — always raises.
+    """Lorentz gyrovector addition ``x ⊕ y`` on the Hyperboloid.
 
-    The hyperboloid is not modeled as a gyrovector space in hyperbolix: there is no
-    correct closed-form coordinate addition here. The previous implementation was wrong
-    at *every* curvature (e.g. ``origin ⊕ y != y``; the ``c / (1 + √c)`` term it used is
-    not even dimensionally consistent), and it only ever returned on-manifold points
-    because of a trailing ``proj`` — so it failed silently. It now fails loudly instead.
+    Implements the gyroaddition of Chen et al. (2025b), adopted as the intrinsic Lorentz
+    addition by Shi et al. (2026), Eq. (1)::
 
-    To combine points hyperbolically, convert to the Poincaré ball, add there, and convert
-    back (both maps are exact isometries)::
+        x ⊕ y = Exp_x( PT_{0→x}( Log_0(y) ) )
 
-        from hyperbolix.manifolds import isometry_mappings
-        yp = isometry_mappings.hyperboloid_to_poincare(x, c)
-        # ... Möbius-add in the ball via Poincare.addition ...
-        x_new = isometry_mappings.poincare_to_hyperboloid(yp_sum, c)
+    i.e. take the tangent vector at the origin that maps to ``y`` (``Log_0(y)``), parallel
+    transport it from the origin to ``x``, then follow the geodesic from ``x``. This forms a
+    gyrocommutative gyrogroup: ``0 ⊕ x = x ⊕ 0 = x`` and ``(⊖x) ⊕ x = x ⊕ (⊖x) = 0`` with
+    inverse ``⊖x = (-1) ⊙ x = [x₀, -x_s]`` (see ``_scalar_mul``). Under the stereographic
+    isometry it coincides with Möbius addition on the Poincaré ball.
 
-    or use ``expmap``/``logmap`` directly. ``scalar_mul`` (geodesic scaling) IS supported.
+    Args:
+        x: Hyperboloid point, shape (dim+1,)
+        y: Hyperboloid point, shape (dim+1,)
+        c: Curvature (positive)
+
+    Returns:
+        Gyrovector sum x ⊕ y, shape (dim+1,)
+
+    References:
+        Chen et al. "Hyperbolic neural networks: gyrovector operations on the Lorentz model." 2025b.
+        Shi et al. "Intrinsic Lorentz Neural Network." ICLR 2026, Eq. (1).
     """
-    del x, y, c
-    raise NotImplementedError(
-        "Hyperboloid.addition is not supported: the hyperboloid is not a gyrovector space "
-        "with a valid closed-form coordinate addition in hyperbolix. Convert to the Poincaré "
-        "ball (isometry_mappings.hyperboloid_to_poincare), use Poincare.addition, then convert "
-        "back (poincare_to_hyperboloid); or use expmap/logmap. Note scalar_mul (geodesic "
-        "scaling) is supported."
-    )
+    v0 = _logmap_0(y, c)  # tangent vector at the origin (first component 0)
+    vx = _ptransp_0(v0, x, c)  # parallel transport origin → x; result is tangent at x
+    res = _expmap(vx, x, c)  # geodesic step from x (already re-projected onto the manifold)
+    return res
 
 
 def _scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
@@ -666,6 +670,62 @@ def _hcat(
     return result_A
 
 
+def _log_radius_concat(
+    points: Float[Array, "N n"],
+    c: Curvature = 1.0,
+) -> Float[Array, "dN_plus_1"]:
+    """Log-radius-preserving concatenation of N Hyperboloid points.
+
+    A hyperboloid analog of the Poincaré β-concatenation (Shimizu et al. 2020), introduced by
+    Shi et al. (2026, Sec. 4.3). Naively stacking the spatial parts of N blocks (as ``_hcat``
+    does) biases the expected spatial radius upward with the post-concat dimension. To keep the
+    expected *log* spatial radius invariant, each block's spatial part is rescaled by
+
+        s = exp( ½ · ( ψ(n / 2) - ψ(nᵢ / 2) ) ),
+
+    where ψ is the digamma function, ``nᵢ = d`` is the per-block spatial dimension and
+    ``n = N · d`` is the total post-concat spatial dimension. The single time coordinate is then
+    recomputed so the scaled point stays on the hyperboloid (here ``1/c`` equals the reference
+    ``k = -1/K``):
+
+        t' = sqrt( 1/c + s² · Σᵢ (tᵢ² - 1/c) ).
+
+    When ``N = 1`` the scale is ``1`` and this reduces exactly to ``_hcat``.
+
+    Args:
+        points: N points in (d+1)-dimensional ambient space, shape (N, d+1).
+                Each point satisfies -x[0]² + ||x[1:]||² = -1/c.
+        c: Manifold curvature (positive).
+
+    Returns:
+        Single point in (dN+1)-dimensional ambient space, shape (dN+1,).
+        - Time coordinate: sqrt(1/c + s² · Σ(tᵢ² - 1/c))
+        - Space coordinates: each block's space part scaled by ``s``, then concatenated.
+
+    References:
+        Shi et al. "Intrinsic Lorentz Neural Network." ICLR 2026, Sec. 4.3.
+        Shimizu et al. "Hyperbolic Neural Networks++." ICLR 2021 (β-concatenation analog).
+    """
+    N, ambient_dim = points.shape
+    d = ambient_dim - 1  # per-block spatial dimension (nᵢ)
+    n_total = N * d  # post-concat spatial dimension (n)
+
+    # Digamma scale keeps E[log‖v_spatial‖] constant across the concat dim; s == 1 when N == 1.
+    scale = jnp.exp(0.5 * (digamma(n_total / 2.0) - digamma(d / 2.0)))
+
+    time_N = points[:, 0]  # (N,)
+    space_ND = points[:, 1:]  # (N, d)
+
+    space_scaled_flat = (scale * space_ND).reshape(-1)  # (N*d,)
+
+    # Recompute the time coordinate so the scaled point lies on the (dN)-dim hyperboloid.
+    time_sq = 1.0 / c + scale**2 * jnp.sum(time_N**2 - 1.0 / c)  # scalar
+    time_new = jnp.sqrt(jnp.maximum(time_sq, MIN_NORM))  # scalar
+
+    result_A = jnp.concatenate([time_new[None], space_scaled_flat])  # (1 + N*d,) = (dN+1,)
+    return result_A
+
+
 # ---------------------------------------------------------------------------
 # Batch-compatible helpers (used by NN layers)
 # ---------------------------------------------------------------------------
@@ -765,11 +825,12 @@ class Hyperboloid(ManifoldBase):
     def addition(
         self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature
     ) -> Float[Array, "dim_plus_1"]:
-        """Gyrovector addition — unsupported on the Hyperboloid; raises ``NotImplementedError``.
+        """Lorentz gyrovector addition ``x ⊕ y = Exp_x(PT_{0→x}(Log_0(y)))``.
 
-        The hyperboloid is not a gyrovector space here. Convert to the Poincaré ball to add
-        (``isometry_mappings.hyperboloid_to_poincare`` → ``Poincare.addition`` →
-        ``poincare_to_hyperboloid``), or use ``expmap``/``logmap``. ``scalar_mul`` is supported.
+        The intrinsic Lorentz addition of Chen et al. (2025b) / Shi et al. (2026, Eq. 1).
+        Forms a gyrocommutative gyrogroup with identity = origin and inverse
+        ``⊖x = (-1) ⊙ x = [x₀, -x_s]``; matches Poincaré Möbius addition under the
+        stereographic isometry. ``scalar_mul`` provides the companion gyro scaling (Eq. 2).
         """
         return _addition(self._cast(x), self._cast(y), c)
 
@@ -864,6 +925,19 @@ class Hyperboloid(ManifoldBase):
     ) -> Float[Array, "dN_plus_1"]:
         """Hyperbolic concatenation of N points into one point."""
         return _hcat(self._cast(points), c)
+
+    def log_radius_concat(
+        self,
+        points: Float[Array, "N n"],
+        c: Curvature = 1.0,
+    ) -> Float[Array, "dN_plus_1"]:
+        """Log-radius-preserving concatenation of N points (Shi et al. 2026, Sec. 4.3).
+
+        Like :meth:`hcat`, but rescales each block's spatial part by a digamma factor so the
+        expected log spatial radius is invariant to the number of concatenated blocks. Reduces
+        to :meth:`hcat` when ``N == 1``.
+        """
+        return _log_radius_concat(self._cast(points), c)
 
     def embed_spatial_0(self, v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plus_1"]:
         """Embed spatial vector as tangent vector at origin."""

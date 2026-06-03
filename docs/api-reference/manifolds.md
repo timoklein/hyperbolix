@@ -65,6 +65,7 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
     - `lorentz_boost`: Lorentz boost transformation
     - `distance_rescale`: Distance-based rescaling
     - `hcat`: Lorentz direct concatenation for convolutions
+    - `log_radius_concat`: log-radius–preserving concatenation (digamma-scaled `hcat`; Shi et al. 2026, Sec. 4.3)
 
 ::: hyperbolix.manifolds.hyperboloid.Hyperboloid
     options:
