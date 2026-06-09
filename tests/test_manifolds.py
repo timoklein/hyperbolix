@@ -73,6 +73,30 @@ def _is_gyrovector(manifold) -> bool:
     return _is_euclidean(manifold) or _is_poincare(manifold) or _is_pv(manifold)
 
 
+def _random_ball_point(rng: np.random.Generator, dim: int, max_radius: float) -> np.ndarray:
+    """Random point strictly inside the ball of the given radius (uniform-on-ball direction/radius)."""
+    direction = rng.normal(0.0, 1.0, size=dim)
+    direction /= np.linalg.norm(direction)
+    r = max_radius * rng.random() ** (1.0 / dim)
+    return direction * r
+
+
+def _shrink_for_float32(manifold, points: jnp.ndarray, c: float) -> jnp.ndarray:
+    """Pull points toward the origin in float32 so geodesic distances stay in the library's
+    reliable range (< 7); a no-op in float64.
+
+    The Apollonian identities tested below (symmetrization, closed-form values, δ(x,x)=0) hold
+    at every interior point, so shrinking is harmless — it just avoids the near-boundary regime
+    where float32 underflows the conformal factor. The float64 parametrization runs the same
+    tests unshrunk and so still covers the full near-boundary range.
+    """
+    if points.dtype != jnp.dtype("float32"):
+        return points
+    scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
+    factor = jnp.full(points.shape[0], 0.2, dtype=points.dtype)
+    return scalar_mul_batch(factor, points, c)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 
@@ -560,6 +584,136 @@ def test_dist_0(manifold_and_c, tolerance: tuple[float, float], uniform_points: 
     d2 = dist_batch(uniform_points, origin, c)
 
     assert jnp.allclose(d1, d2, atol=atol, rtol=rtol)
+
+
+# ---------------------------------------------------------------------------
+# Apollonian weak metric (Poincaré-only) — Papadopoulos & Troyanov, Theorem 2
+
+
+def test_apollonian_symmetrization_is_dist(
+    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray
+) -> None:
+    """Symmetrizing the Apollonian weak metric recovers the geodesic distance.
+
+    δ(x, y) + δ(y, x) = √c · dist(x, y)  (Papadopoulos & Troyanov Cor 5.1).
+    The √c factor reflects that the paper's Poincaré metric h_{D²} uses the curvature -4
+    normalization — exactly half of hyperbolix's curvature -1 ``dist`` (so the factor is 1 at c=1).
+    """
+    manifold, c = manifold_and_c
+    if not _is_poincare(manifold):
+        pytest.skip("Apollonian weak metric is Poincaré-specific.")
+    atol, rtol = tolerance
+
+    x, y = _split(uniform_points, 2)
+    x, y = _shrink_for_float32(manifold, x, c), _shrink_for_float32(manifold, y, c)
+    if uniform_points.dtype == jnp.dtype("float32"):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+
+    apoll_batch = jax.vmap(manifold.apollonian_dist, in_axes=(0, 0, None))
+    dist_batch = jax.vmap(manifold.dist, in_axes=(0, 0, None))
+
+    symmetrized = apoll_batch(x, y, c) + apoll_batch(y, x, c)
+    geodesic = jnp.sqrt(c) * dist_batch(x, y, c)
+
+    assert jnp.allclose(symmetrized, geodesic, atol=atol, rtol=rtol)
+
+
+def test_apollonian_special_values(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
+    """Closed-form values against the origin (Papadopoulos & Troyanov Cor 5.2, generalized to c):
+
+    δ(x, 0) = log(1 + √c‖x‖)   and   δ(0, x) = -log(1 - √c‖x‖).
+    """
+    manifold, c = manifold_and_c
+    if not _is_poincare(manifold):
+        pytest.skip("Apollonian weak metric is Poincaré-specific.")
+    atol, rtol = tolerance
+
+    x = _shrink_for_float32(manifold, uniform_points, c)
+    if uniform_points.dtype == jnp.dtype("float32"):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+    origin = jnp.zeros_like(x)
+    apoll_batch = jax.vmap(manifold.apollonian_dist, in_axes=(0, 0, None))
+
+    sqrt_c_norm = jnp.sqrt(c) * jnp.linalg.norm(x, axis=-1)  # √c‖x‖, shape (N,)
+
+    d_x0 = apoll_batch(x, origin, c)  # δ(x, 0)
+    d_0x = apoll_batch(origin, x, c)  # δ(0, x)
+
+    assert jnp.allclose(d_x0, jnp.log1p(sqrt_c_norm), atol=atol, rtol=rtol)
+    assert jnp.allclose(d_0x, -jnp.log1p(-sqrt_c_norm), atol=atol, rtol=rtol)
+
+
+def test_apollonian_non_symmetric(manifold_and_c, uniform_points: jnp.ndarray) -> None:
+    """δ is a *weak* metric: δ(x, y) ≠ δ(y, x) for generic distinct points (Cor 5.2)."""
+    manifold, c = manifold_and_c
+    if not _is_poincare(manifold):
+        pytest.skip("Apollonian weak metric is Poincaré-specific.")
+
+    x, y = _split(uniform_points, 2)
+    apoll_batch = jax.vmap(manifold.apollonian_dist, in_axes=(0, 0, None))
+
+    d_xy = apoll_batch(x, y, c)
+    d_yx = apoll_batch(y, x, c)
+
+    # Tight tolerance so "not close" is a meaningful assertion, not float noise.
+    assert not jnp.allclose(d_xy, d_yx, atol=1e-4, rtol=1e-4)
+
+
+def test_apollonian_basic_properties(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
+    """Weak-metric basics: δ(x, x) = 0 and δ(x, y) ≥ 0."""
+    manifold, c = manifold_and_c
+    if not _is_poincare(manifold):
+        pytest.skip("Apollonian weak metric is Poincaré-specific.")
+    atol, rtol = tolerance
+
+    x, y = _split(uniform_points, 2)
+    x, y = _shrink_for_float32(manifold, x, c), _shrink_for_float32(manifold, y, c)
+
+    apoll_batch = jax.vmap(manifold.apollonian_dist, in_axes=(0, 0, None))
+
+    d_xx = apoll_batch(x, x, c)
+    assert jnp.allclose(d_xx, 0.0, atol=atol, rtol=rtol)
+
+    d_xy = apoll_batch(x, y, c)
+    assert jnp.all(d_xy >= -atol)
+
+
+@pytest.mark.parametrize("dim", [2, 3])
+def test_apollonian_matches_boundary_supremum(dim: int, rng: np.random.Generator) -> None:
+    """Validate the closed form directly against the definition (Papadopoulos & Troyanov Eq. 6):
+
+        δ(x, y) = sup_{‖a‖=1/√c} log(‖x - a‖ / ‖y - a‖),
+
+    the supremum over the ball boundary sphere. Running dim=3 (not just the disk) confirms the
+    maximizer lies in span(x, y) — i.e. the closed form genuinely generalizes beyond n=2.
+    ``rng`` (which depends on ``seed_jax``) also ensures float64 is enabled.
+    """
+    manifold = hj.manifolds.Poincare(dtype=jnp.float64)
+    c = 1.0
+    radius = 1.0 / np.sqrt(c)
+    n_theta = 8192
+    theta = jnp.asarray(np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False), dtype=jnp.float64)
+
+    for _ in range(5):
+        # Keep points off the boundary so the finite-sample sup is clean (δ blows up at ∂ball).
+        x = jnp.asarray(_random_ball_point(rng, dim, radius * 0.85), dtype=jnp.float64)
+        y = jnp.asarray(_random_ball_point(rng, dim, radius * 0.85), dtype=jnp.float64)
+
+        # Orthonormal basis {e1, e2} of span(x, y) via Gram-Schmidt (non-collinear almost surely).
+        e1 = x / jnp.linalg.norm(x)
+        w = y - jnp.dot(y, e1) * e1
+        e2 = w / jnp.linalg.norm(w)
+
+        # Sweep the great circle a(θ) = radius·(cosθ·e1 + sinθ·e2) on the boundary sphere.
+        a_TD = radius * (jnp.outer(jnp.cos(theta), e1) + jnp.outer(jnp.sin(theta), e2))  # (n_theta, dim)
+        f_T = jnp.log(jnp.linalg.norm(x - a_TD, axis=-1) / jnp.linalg.norm(y - a_TD, axis=-1))
+        sup_numeric = jnp.max(f_T)
+
+        closed_form = manifold.apollonian_dist(x, y, c)
+
+        # Closed form is the true supremum (dominates any finite sample) and a dense sweep matches.
+        assert closed_form >= sup_numeric - 1e-9
+        assert jnp.allclose(closed_form, sup_numeric, atol=1e-4, rtol=1e-4)
 
 
 def test_expmap_logmap_basic(

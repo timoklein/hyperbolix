@@ -246,6 +246,50 @@ def _dist_lorentzian_proxy(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Cu
     return -2 / c - 2 * xy_mink
 
 
+def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+    """Apollonian weak metric δ(x, y) on the Poincaré ball.
+
+    A *weak metric*: δ(x, y) ≥ 0, δ(x, x) = 0 and the triangle inequality hold, but δ is
+    NON-SYMMETRIC (δ(x, y) ≠ δ(y, x) in general). It is defined as the boundary supremum
+    δ(x, y) = sup_{‖a‖=1/√c} log(‖x - a‖ / ‖y - a‖). Its symmetrization recovers the geodesic
+    distance: δ(x, y) + δ(y, x) = √c · dist(x, y).
+
+    Closed form (curvature-c, n-dimensional generalization of Papadopoulos & Troyanov, Thm 2):
+        δ_c(x, y) = log( (√c‖x - y‖ + G) / (1 - c‖y‖²) )
+        G = √(c²‖x‖²‖y‖² - 2c⟨x, y⟩ + 1)        (= |c·x·ȳ - 1| in the n=2 / C case)
+
+    The paper's Theorem 2 covers the unit disk (c=1, n=2, x,y ∈ C). The complex term |x·ȳ - 1|
+    expands to the real, dimension-free radical G; curvature enters via the similarity x ↦ √c·x
+    (δ is a log of a *ratio* of distances, so similarity-invariant — paper Prop 4.3).
+
+    Args:
+        x: Poincaré ball point, shape (dim,)
+        y: Poincaré ball point, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Apollonian weak metric δ(x, y), scalar
+
+    References:
+        Papadopoulos & Troyanov. "Weak metrics on Euclidean domains." (Theorem 2.)
+    """
+    sqrt_c = jnp.sqrt(c)
+    x2 = jnp.dot(x, x)
+    y2 = jnp.dot(y, y)
+    xy = jnp.dot(x, y)
+    # G = |c·x·ȳ - 1| generalized to ℝⁿ, i.e. G² = c²‖x‖²‖y‖² - 2c⟨x,y⟩ + 1. We use the
+    # Gram-determinant form (1 - c⟨x,y⟩)² + c²(‖x‖²‖y‖² - ⟨x,y⟩²): a sum of two non-negative
+    # terms (Cauchy-Schwarz ⇒ Gram det ≥ 0), so no catastrophic cancellation near the boundary.
+    # At x=y the Gram term is exactly 0, so G = 1 - c‖x‖² = denom and δ(x,x)=0 to machine precision.
+    gram = x2 * y2 - xy**2  # ‖x‖²‖y‖² - ⟨x,y⟩² ≥ 0 (squared area of the x,y parallelogram)
+    G = jnp.sqrt(jnp.maximum((1.0 - c * xy) ** 2 + c**2 * gram, MIN_NORM))
+    num = sqrt_c * jnp.linalg.norm(x - y) + G
+    # Denominator 1 - c‖y‖² = 2/λ(y); reuse the already-clamped conformal factor so the
+    # near-boundary floor matches the rest of the module (δ → ∞ as y → ∂ball is expected).
+    denom = 2.0 / _conformal_factor(y, c)
+    return jnp.log(num / denom)
+
+
 def _dist(
     x: Float[Array, "dim"],
     y: Float[Array, "dim"],
@@ -750,6 +794,10 @@ class Poincare(ManifoldBase):
     def dist_0(self, x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
         """Compute geodesic distance from Poincaré ball origin."""
         return _dist_0(self._cast(x), c, version_idx)
+
+    def apollonian_dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+        """Apollonian weak metric δ(x, y) — non-symmetric; symmetrizes to √c·dist(x, y)."""
+        return _apollonian_dist(self._cast(x), self._cast(y), c)
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Exponential map: map tangent vector v at point x to manifold."""
