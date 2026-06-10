@@ -59,6 +59,9 @@ All notable changes to Hyperbolix will be documented in this file.
 - **`squared_commitment` flag on `HypVQEmbeddingPoincare`** (default `False`). The cited references genuinely disagree on the commitment penalty: HVQ-VAE uses the plain geodesic distance `d(z, sg(q))`, GGBall's L_HVQVAE uses `d²` (the Euclidean VQ-VAE convention). The flag selects between them without touching library code
 
 ### Fixed
+- **Silent float64 promotion under x64 in hyperboloid layers.** Runtime buffers created without an explicit dtype (`FGGConv2D` SAME/origin padding buffer, causal linear-attention scan carries, full-attention uniform head-averaging weights) now derive their dtype from the input, and the scalar attention parameters (`temperature`, `scale`, `attn_bias`) are cast to the compute dtype at use. Previously, with `jax_enable_x64` active, these defaulted to float64 and promoted float32 activations through the rest of the layer
+- `FGGConv2D` docstring stated the default weight init is `"kaiming"`; the actual default is `"lorentz_kaiming"`
+- `PoincareBatchNorm2D` now documents that the learned variance is an unconstrained scalar under a sqrt (NaN if driven negative) — kept as-is to match the van Spengler reference, with a workaround noted
 - **Poincaré ↔ Hyperboloid isometry maps were only correct at `c=1`.** `poincare_to_hyperboloid` / `hyperboloid_to_poincare` used unit-ball stereographic formulas missing their `√c` factors, so round-trips and distance preservation silently failed at any other curvature (the recommended default is `c=0.1`). Both are now curvature-correct at all `c`, verified by round-trip, isometry, commutative-diagram, and extreme-curvature tests across dtypes
 - **Test fixture `uniform_points` generated hyperboloid points at the wrong geodesic radius for `c ≠ 1`** (an extra `/√c` on the spatial coordinate, masked by a trailing projection). Corrected so generated points are the exact Poincaré images at any curvature
 

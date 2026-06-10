@@ -602,7 +602,7 @@ class FGGConv2D(nnx.Module):
         Euclidean activation for the FGGLinear (default: None).
     reset_params : str, optional
         Weight init for FGGLinear: ``"eye"``, ``"xavier"``, ``"kaiming"``,
-        ``"lorentz_kaiming"``, or ``"mlr"`` (default: ``"kaiming"``).
+        ``"lorentz_kaiming"``, or ``"mlr"`` (default: ``"lorentz_kaiming"``).
     use_weight_norm : bool, optional
         Weight normalization in FGGLinear (default: False).
     init_bias : float, optional
@@ -723,7 +723,7 @@ class FGGConv2D(nnx.Module):
                 # Pad with manifold origin: (√(1/c), 0, ..., 0)
                 padded_h = height + pad_h
                 padded_w = width + pad_w
-                padded = jnp.zeros((batch, padded_h, padded_w, in_channels))
+                padded = jnp.zeros((batch, padded_h, padded_w, in_channels), dtype=x.dtype)
                 padded = padded.at[..., 0].set(jnp.sqrt(1.0 / c))
                 x = padded.at[:, pad_top : pad_top + height, pad_left : pad_left + width, :].set(x)
             else:  # edge

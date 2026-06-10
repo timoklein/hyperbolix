@@ -666,3 +666,28 @@ def test_fgg_mean_only_bn_spatial_dims():
     assert y.shape == (2, 4, 4, 9)
     y_flat = y.reshape(-1, 9)
     assert _check_on_hyperboloid(y_flat, c=1.0, atol=1e-7)
+
+
+def test_fgg_conv2d_origin_padding_preserves_float32():
+    """SAME/origin padding buffer follows the input dtype.
+
+    Regression: the padding buffer was created with jnp.zeros without dtype,
+    which under x64 is float64 and silently promoted a float32 input (and the
+    entire downstream convolution) to float64.
+    """
+    conv = FGGConv2D(
+        hyperboloid,
+        in_channels=5,
+        out_channels=9,
+        kernel_size=3,
+        rngs=nnx.Rngs(0),
+        padding="SAME",
+        pad_mode="origin",
+    )
+    key = jax.random.PRNGKey(1)
+    spatial = jax.random.normal(key, (2, 8, 8, 4), dtype=jnp.float32) * 0.3
+    time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
+    x = jnp.concatenate([time, spatial], axis=-1)  # (2, 8, 8, 5) float32
+
+    patches = conv._extract_patches(x, c=1.0)
+    assert patches.dtype == jnp.float32

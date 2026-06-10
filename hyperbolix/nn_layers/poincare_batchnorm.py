@@ -191,6 +191,17 @@ class PoincareBatchNorm2D(nnx.Module):
     eps : float
         Numerical stability floor (default: 1e-6).
 
+    Notes
+    -----
+    The learned variance ``self.var`` is an unconstrained scalar used as
+    ``sqrt(var / (batch_var + eps))`` — if gradient descent drives it
+    negative, the sqrt produces NaN. This matches the reference (van
+    Spengler's PoincareBatchNorm uses an unconstrained ``nn.Parameter``
+    under the same sqrt), so we keep the parameterization; in practice the
+    init at 1.0 and typical learning rates keep it positive. If you observe
+    NaNs originating here, reparameterize via softplus in your model or
+    clamp ``self.var`` after optimizer steps.
+
     References
     ----------
     van Spengler et al. "Poincaré ResNet." ICML 2023.
