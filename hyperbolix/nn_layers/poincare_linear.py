@@ -128,8 +128,11 @@ class HypLinearPoincare(nnx.Module):
         else:
             x_BI = x
 
-        # Matrix-vector multiplication in tangent space at origin
-        x_BO = jnp.einsum("bi,oi->bo", x_BI, self.kernel)  # (B, I) @ (I, O) -> (B, O)
+        # Matrix-vector multiplication in tangent space at origin. Cast the
+        # kernel to the input dtype so float64 weights (from global
+        # jax_enable_x64) don't promote a float32 computation to float64.
+        kernel_OI = self.kernel[...].astype(x_BI.dtype)
+        x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI)  # (B, I) @ (I, O) -> (B, O)
 
         # Map back to manifold
         x_BO = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BO, c)

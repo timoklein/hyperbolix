@@ -23,6 +23,7 @@ Salimans & Kingma "Weight Normalization" (2016).
 
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from .hyperboloid_core import hrc
@@ -381,15 +382,22 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
         *,
         momentum: float = 0.99,
         eps: float = 1e-7,
+        dtype: DTypeLike = jnp.float32,
     ):
         self.num_features = num_features
         self.momentum = momentum
         self.eps = eps
 
+        # Pin the bias/running-mean dtype (this layer has no manifold to inherit
+        # it from). NNX casts assignments back to a Variable's init dtype, so a
+        # float64 init (which a bare jnp.zeros becomes under global
+        # jax_enable_x64) would persist float64 state regardless of the working
+        # precision. Defaulting to float32 matches the library default; pass
+        # dtype=jnp.float64 for a fully float64 network.
         # Learnable bias (shift after centering)
-        self.bias = nnx.Param(jnp.zeros((num_features,)))
+        self.bias = nnx.Param(jnp.zeros((num_features,), dtype=dtype))
         # Running mean for eval mode
-        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,)))
+        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,), dtype=dtype))
 
     def __call__(
         self,
@@ -419,18 +427,27 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
         """
 
         def mean_only_bn(z):
-            # z: spatial components, shape (..., D)
+            # z: spatial components, shape (..., D). Cast state to the working
+            # dtype so float64 bias/running-mean (from global jax_enable_x64)
+            # don't promote the float32 computation or persist as float64 state.
+            bias = self.bias[...].astype(z.dtype)
             if use_running_average:
-                mean = self.running_mean[...]
+                mean = self.running_mean[...].astype(z.dtype)
             else:
                 # Compute mean over all dims except the last (feature) dim
                 # Flatten leading dims for mean computation
                 z_flat = z.reshape(-1, z.shape[-1])  # (N, D)
                 mean = jnp.mean(z_flat, axis=0)  # (D,)
 
-                # Update running mean (EMA)
-                self.running_mean[...] = self.momentum * self.running_mean[...] + (1.0 - self.momentum) * mean
+                # Update running mean (EMA). Compute in the working dtype, then
+                # cast explicitly to the stat's own dtype: NNX casts assignments
+                # back to the Variable's init dtype anyway, and doing it
+                # explicitly avoids an unsafe-scatter FutureWarning when a float64
+                # network feeds the default float32 stat.
+                rm = self.running_mean[...]
+                new_rm = self.momentum * rm.astype(z.dtype) + (1.0 - self.momentum) * mean
+                self.running_mean[...] = new_rm.astype(rm.dtype)
 
-            return z - mean + self.bias[...]
+            return z - mean + bias
 
         return hrc(x, mean_only_bn, c_in, c_out, self.eps)

@@ -226,13 +226,18 @@ class PoincareBatchNorm2D(nnx.Module):
         self.momentum = momentum
         self.eps = eps
 
-        # Learnable parameters (tangent space)
-        self.mean = nnx.Param(jnp.zeros((num_features,)))  # learned mean
-        self.var = nnx.Param(jnp.ones(()))  # learned variance (scalar)
+        # Learnable parameters and running stats (tangent space). Pin the dtype
+        # to the manifold dtype so they stay float32 even when jax_enable_x64 is
+        # enabled globally; otherwise the float64 var/stats promote the float32
+        # tangent-space scaling and persist float64 BatchStat state. These are
+        # constant (zeros/ones) inits, so pinning the dtype changes no values.
+        dtype = self.manifold.dtype
+        self.mean = nnx.Param(jnp.zeros((num_features,), dtype=dtype))  # learned mean
+        self.var = nnx.Param(jnp.ones((), dtype=dtype))  # learned variance (scalar)
 
         # Running statistics (tangent space)
-        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,)))
-        self.running_var = nnx.BatchStat(jnp.ones(()))
+        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,), dtype=dtype))
+        self.running_var = nnx.BatchStat(jnp.ones((), dtype=dtype))
 
     def __call__(
         self,

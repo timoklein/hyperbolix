@@ -56,7 +56,11 @@ def _fhcnn_forward(
     if activation is not None:
         x_BI = activation(x_BI)
 
-    # Linear transformation: (B, in_dim) -> (B, out_dim)
+    # Linear transformation: (B, in_dim) -> (B, out_dim). Cast params to the
+    # input dtype so float64 weights (created when jax_enable_x64 is enabled
+    # globally) don't silently promote a float32 manifold computation.
+    kernel_OI = kernel_OI.astype(x_BI.dtype)
+    bias_1O = bias_1O.astype(x_BI.dtype)
     x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O
 
     # Split into time and space: x0 is first coord, x_rem is spatial
@@ -121,7 +125,11 @@ def _fhnn_forward(
     if dropout_fn is not None:
         x_BI = dropout_fn(x_BI)
 
-    # Linear transformation: (B, in_dim) -> (B, out_dim)
+    # Linear transformation: (B, in_dim) -> (B, out_dim). Cast params to the
+    # input dtype so float64 weights (created when jax_enable_x64 is enabled
+    # globally) don't silently promote a float32 manifold computation.
+    kernel_OI = kernel_OI.astype(x_BI.dtype)
+    bias_1O = bias_1O.astype(x_BI.dtype)
     z_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O  # (B, O)
 
     # Split into time logit and spatial components
@@ -731,9 +739,11 @@ class HTCLinear(nnx.Module):
         """
 
         def linear_fn(z):
-            out = z @ self.kernel[...]
+            # Cast params to the working dtype so float64 weights (from global
+            # jax_enable_x64) don't promote a float32 computation to float64.
+            out = z @ self.kernel[...].astype(z.dtype)
             if self.bias is not None:
-                out = out + self.bias[...]
+                out = out + self.bias[...].astype(z.dtype)
             return out
 
         return htc(x, linear_fn, c_in, c_out, self.eps)

@@ -187,10 +187,13 @@ def hope(
     """
     spatial_SD = z[..., 1:]  # (..., S, D) where S=seq, D=spatial dim
     d = spatial_SD.shape[-1]
+    dtype = spatial_SD.dtype
 
-    # Frequency schedule: theta_i = 1 / base^(2i/d)
-    freqs_F = 1.0 / (base ** (jnp.arange(0, d, 2) / d))  # (F,) where F = d//2
-    angles_SF = positions[:, None] * freqs_F[None, :]  # (S, F)
+    # Frequency schedule: theta_i = 1 / base^(2i/d). Build the index grid in the
+    # input dtype: bare jnp.arange is int64 under global jax_enable_x64, and the
+    # subsequent division would promote the whole encoding to float64.
+    freqs_F = 1.0 / (base ** (jnp.arange(0, d, 2, dtype=dtype) / d))  # (F,) where F = d//2
+    angles_SF = positions[:, None].astype(dtype) * freqs_F[None, :]  # (S, F)
     cos_SF = jnp.cos(angles_SF)
     sin_SF = jnp.sin(angles_SF)
 
