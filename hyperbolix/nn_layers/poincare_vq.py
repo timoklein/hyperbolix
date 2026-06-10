@@ -82,27 +82,6 @@ def _codebook_perplexity(indices_N: Array, num_codes: int) -> Array:
     return jnp.exp(entropy).astype(jnp.float32)
 
 
-def _weighted_midpoint_op(x_C: Array, w: Array, manifold: Poincare, c: float) -> Array:
-    """The single-point weighted-midpoint operator ``[x, w]_c`` (GGBall Eq. 43).
-
-    Building block of the two-point EMA blend (Eq. 42): it maps a ball point ``x``
-    and a scalar weight ``w`` into the representation that Möbius addition then
-    combines into the gyromidpoint. For unit weight it is the identity
-    (``[x, 1]_c = x``)::
-
-        [x, w]_c = ( w · λ(x) · x ) / ( 1 + sqrt(1 + c · w² · λ(x)² · ‖x‖²) )
-
-    where ``λ(x) = 2 / (1 - c‖x‖²)``. Distinct from
-    :func:`poincare_weighted_midpoint` (Eq. 41, the M-point centroid) — this is
-    the *two-point* blend's per-operand term and stays private to the VQ update.
-    """
-    lam = manifold.conformal_factor(x_C[None, :], c)[0, 0]  # scalar λ(x)
-    x_sqnorm = jnp.dot(x_C, x_C)  # ‖x‖²
-    numerator_C = w * lam * x_C
-    denom = 1.0 + jnp.sqrt(1.0 + c * w**2 * lam**2 * x_sqnorm)
-    return numerator_C / denom
-
-
 class HypVQEmbeddingPoincare(nnx.Module):
     """Poincaré-ball vector quantizer with an EMA codebook (HVQ-VAE).
 
@@ -135,6 +114,14 @@ class HypVQEmbeddingPoincare(nnx.Module):
     commitment_weight : float
         Weight on the commitment loss ``E[d_D(z, sg(q))]`` returned in
         ``output.loss`` (default: 0.5, matching the reference ``ω₃``).
+    squared_commitment : bool
+        Use the SQUARED geodesic distance ``d²`` in the commitment loss
+        (default: False). The two cited references genuinely disagree here:
+        HVQ-VAE penalises the plain distance ``d_D(z, sg(q))``, while GGBall's
+        L_HVQVAE uses ``d²_c`` (matching the Euclidean VQ-VAE convention).
+        With ``d²`` the encoder gradient vanishes as ``z → q`` (settles on the
+        code); with plain ``d`` the gradient magnitude stays ~constant near
+        the code (oscillates around it but is scale-robust far away).
     ema_decay : float
         ``β`` in Eq. 42 — weight on the OLD code (slow update). Also the
         cluster-size EMA decay (default: 0.99).
@@ -156,6 +143,7 @@ class HypVQEmbeddingPoincare(nnx.Module):
         rngs: nnx.Rngs,
         init_scale: float = 1e-3,
         commitment_weight: float = 0.5,
+        squared_commitment: bool = False,
         ema_decay: float = 0.99,
         dead_code_threshold: float = 1.0,
         dead_code_revival: bool = False,
@@ -163,12 +151,13 @@ class HypVQEmbeddingPoincare(nnx.Module):
     ) -> None:
         validate_poincare_manifold(
             manifold_module,
-            required_methods=("expmap_0", "logmap_0", "dist", "proj", "addition", "scalar_mul", "conformal_factor"),
+            required_methods=("expmap_0", "logmap_0", "dist", "proj", "scalar_mul", "conformal_factor"),
         )
         self.manifold = manifold_module
         self.num_codes = num_codes
         self.code_dim = code_dim
         self.commitment_weight = commitment_weight
+        self.squared_commitment = squared_commitment
         self.ema_decay = ema_decay
         self.dead_code_threshold = dead_code_threshold
         self.dead_code_revival = dead_code_revival
@@ -214,9 +203,13 @@ class HypVQEmbeddingPoincare(nnx.Module):
         q_tangent_NC = jax.vmap(manifold.logmap_0, in_axes=(0, None))(q_NC, c)  # (N, C)
         quantized_NC = x_NC + jax.lax.stop_gradient(q_tangent_NC - x_NC)
 
-        # Commitment loss E[d_D(z, sg(q))] — pulls the encoder toward the codes.
-        # (The codebook term E[d_D(sg(z), q)] is dropped: EMA owns the codebook.)
+        # Commitment loss — pulls the encoder toward the codes. HVQ-VAE uses the
+        # plain geodesic distance E[d_D(z, sg(q))]; GGBall uses the square
+        # E[d²_c(z, sg(q))] (Euclidean VQ-VAE convention). Static bool, JIT-safe.
+        # (The codebook term E[d(sg(z), q)] is dropped: EMA owns the codebook.)
         commit_N = jax.vmap(manifold.dist, in_axes=(0, 0, None))(z_NC, jax.lax.stop_gradient(q_NC), c)
+        if self.squared_commitment:
+            commit_N = commit_N**2
         loss = self.commitment_weight * jnp.mean(commit_N)
 
         perplexity = _codebook_perplexity(indices_N, self.num_codes)
@@ -269,14 +262,17 @@ class HypVQEmbeddingPoincare(nnx.Module):
         # the N points to one midpoint per code → (K, C).
         mu_KC = poincare_weighted_midpoint(z_NC, A_NK.T, manifold, c)  # (K, C)
 
-        # Eq. 42: c_j^{t+1} = proj( [c_j^t, β]_c ⊕_c [μ_j, 1-β]_c ).
+        # Eq. 42: c_j^{t+1} = gyromidpoint of {c_j^t, μ_j} with weights (β, 1-β).
+        # The bracket sum [c^t, β]_c ⊕ [μ, 1-β]_c is defined *atomically* as the
+        # two-point case of the Eq. 41 weighted gyromidpoint — evaluating the
+        # brackets per-operand and gluing with Möbius addition breaks the fixed
+        # point blend(x, x) = x and drifts the codebook toward the boundary.
         beta = jnp.asarray(decay, dtype=dtype)
-        one_minus_beta = jnp.asarray(1.0, dtype=dtype) - beta
+        weights_12 = jnp.stack([beta, 1.0 - beta])[None, :]  # (1, 2)
 
         def blend(old_C: Array, mu_C: Array) -> Array:
-            term_old = _weighted_midpoint_op(old_C, beta, manifold, c)  # [c^t, β]_c
-            term_mu = _weighted_midpoint_op(mu_C, one_minus_beta, manifold, c)  # [μ, 1-β]_c
-            return manifold.proj(manifold.addition(term_old, term_mu, c), c)
+            pair_2C = jnp.stack([old_C, mu_C])  # (2, C)
+            return poincare_weighted_midpoint(pair_2C, weights_12, manifold, c)[0]
 
         new_KC = jax.vmap(blend)(old_KC, mu_KC)  # (K, C)
 

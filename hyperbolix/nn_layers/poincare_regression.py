@@ -7,6 +7,8 @@ Dimension key:
 """
 
 import math
+from collections.abc import Callable
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -45,6 +47,13 @@ class HypRegressionPoincare(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    curvature : float or callable
+        Curvature tag for the manifold-valued ``bias`` parameter (default: 1.0).
+        The Riemannian optimizer uses this value for the bias update
+        (egrad2rgrad, expmap, parallel transport), so it MUST match the ``c``
+        passed at ``__call__`` time — a mismatch silently applies the wrong
+        Riemannian correction. For learnable curvature, pass a callable
+        returning the current value (e.g. ``lambda: model.curvature()``).
     Notes
     -----
     JIT Compatibility:
@@ -67,6 +76,7 @@ class HypRegressionPoincare(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        curvature: float | Callable[[], Any] = 1.0,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -90,7 +100,7 @@ class HypRegressionPoincare(nnx.Module):
         self.bias = ManifoldParam(
             jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01,
             manifold=self.manifold,
-            curvature=1.0,
+            curvature=curvature,
         )
 
     def _compute_mlr(

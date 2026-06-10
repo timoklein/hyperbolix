@@ -23,7 +23,7 @@ from .hyperboloid_linear import HTCLinear
 
 
 class HypformerPositionalEncoding(nnx.Module):
-    """Learnable relative positional encoding from Hypformer.
+    """Relative positional encoding from Hypformer.
 
     Computes a position vector via HTCLinear, then combines it with the input
     using a Lorentzian residual connection:
@@ -31,7 +31,12 @@ class HypformerPositionalEncoding(nnx.Module):
         p = HTCLinear(x)
         result = lorentz_residual(x, p, w_y=epsilon, c=c)
 
-    where epsilon is a learnable scalar magnitude parameter.
+    where epsilon is a FIXED scalar weight on the position contribution. The
+    Hypformer reference keeps it a plain (non-learnable) tensor fixed at 1.0;
+    making it a trainable parameter is unsafe because gradient descent can
+    drive it below -1, where ``x + epsilon * p`` leaves the upper hyperboloid
+    sheet and the ``abs()`` in the residual normalizer silently masks the
+    violation (see :func:`~hyperbolix.nn_layers.hyperboloid_core.lorentz_residual`).
 
     Parameters
     ----------
@@ -42,6 +47,10 @@ class HypformerPositionalEncoding(nnx.Module):
         dimension d+1 (= out_features + 1), matching the input.
     rngs : nnx.Rngs
         Random number generators for parameter initialization.
+    epsilon : float, optional
+        Fixed scalar weight for the position encoding contribution
+        (default: 1.0, matching the Hypformer reference). Must be >= 0 so the
+        Lorentzian residual stays on the upper hyperboloid sheet.
     init_bound : float, optional
         Bound for HTCLinear uniform weight initialization (default: 0.02).
     eps : float, optional
@@ -51,8 +60,8 @@ class HypformerPositionalEncoding(nnx.Module):
     ----------
     htc_linear : HTCLinear
         Linear transformation producing the position encoding vector.
-    epsilon : nnx.Param
-        Learnable scalar weight for the position encoding contribution.
+    epsilon : float
+        Fixed scalar weight for the position encoding contribution.
     eps : float
         Numerical stability parameter.
 
@@ -68,11 +77,17 @@ class HypformerPositionalEncoding(nnx.Module):
         out_features: int,
         *,
         rngs: nnx.Rngs,
+        epsilon: float = 1.0,
         init_bound: float = 0.02,
         eps: float = 1e-7,
     ):
+        if epsilon < 0:
+            raise ValueError(
+                f"epsilon must be >= 0 (got {epsilon}): a negative weight can push the "
+                "Lorentzian residual off the upper hyperboloid sheet."
+            )
         self.htc_linear = HTCLinear(in_features, out_features, rngs=rngs, init_bound=init_bound)
-        self.epsilon = nnx.Param(jnp.array(1.0))
+        self.epsilon = epsilon
         self.eps = eps
 
     def __call__(
@@ -95,7 +110,7 @@ class HypformerPositionalEncoding(nnx.Module):
             Positionally-encoded points on hyperboloid with curvature c.
         """
         p = self.htc_linear(x, c_in=c, c_out=c)  # (..., d+1)
-        return lorentz_residual(x, p, w_y=self.epsilon[...], c=c, eps=self.eps)
+        return lorentz_residual(x, p, w_y=self.epsilon, c=c, eps=self.eps)
 
 
 def _apply_rotary_interleaved(

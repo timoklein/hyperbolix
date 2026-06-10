@@ -98,7 +98,7 @@ def riemannian_sgd(
     >>>
     >>> x = jax.random.normal(jax.random.key(1), (32, 10))
     >>> grads = nnx.grad(loss_fn)(layer, x)
-    >>> optimizer.update(grads)  # Automatically handles manifold parameters
+    >>> optimizer.update(layer, grads)  # Automatically handles manifold parameters
 
     Notes
     -----

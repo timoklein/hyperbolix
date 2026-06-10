@@ -111,13 +111,22 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
 def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic cosine with domain clamping. Domain=[1, inf).
 
+    Clamps to ``1 + 10*machine_eps`` — NOT exactly 1.0. ``acosh'(1) = inf``,
+    so a hard clip at 1.0 lets inputs that land exactly on 1.0 (e.g. the
+    distance argument at x == y) reach the singular derivative and produce
+    NaN gradients; post-hoc ``jnp.where`` guards cannot remove them because
+    the NaN cotangent already exists inside the VJP (0*inf = NaN). The
+    margin bounds the derivative at ~1/sqrt(2*margin) and keeps the forward
+    error sqrt(2*margin) below test tolerances (f32: ~1.5e-3, f64: ~6.6e-8).
+
     Args:
         x: Input array of any shape
 
     Returns:
-        acosh(x) with domain protection (clamps x >= 1.0)
+        acosh(x) with domain and gradient protection
     """
-    x = jnp.clip(x, 1.0, None)
+    eps = 10.0 * float(jnp.finfo(x.dtype).eps)
+    x = jnp.clip(x, 1.0 + eps, None)
     return jnp.acosh(x)
 
 
@@ -125,14 +134,17 @@ def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
 def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic tangent with domain clamping. Domain=(-1, 1).
 
-    Clamps input away from ±1 to avoid singularities.
+    Clamps input to ``±(1 - 10*machine_eps)``. The factor 10 keeps the
+    clamped value safely representable away from ±1.0 (where the float grid
+    is coarsest) and bounds ``atanh'`` at ~1/(2*margin) instead of letting
+    inputs ride the last representable value before the singularity.
 
     Args:
         x: Input array of any shape
 
     Returns:
-        atanh(x) with domain protection
+        atanh(x) with domain and gradient protection
     """
-    eps = jnp.finfo(x.dtype).eps
+    eps = 10.0 * float(jnp.finfo(x.dtype).eps)
     x = jnp.clip(x, -1.0 + eps, 1.0 - eps)
     return jnp.atanh(x)

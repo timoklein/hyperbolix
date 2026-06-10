@@ -346,18 +346,23 @@ def test_hypformer_pe_shape_preservation():
         assert out.shape == x.shape, f"Shape mismatch for d={d}"
 
 
-def test_hypformer_pe_learnable_epsilon():
-    """epsilon is an nnx.Param and changes during a gradient step."""
+def test_hypformer_pe_fixed_epsilon():
+    """epsilon is a fixed scalar (Hypformer reference), untouched by training.
+
+    The reference keeps epsilon a plain tensor fixed at 1.0; a learnable
+    epsilon could be driven below -1, where lorentz_residual's abs()
+    silently masks a spacelike / lower-sheet point.
+    """
     d = 6
     in_features = d + 1
     key = jax.random.PRNGKey(42)
     x = _make_hyperboloid_points(key, (4, d), c=1.0)
 
     pe = HypformerPositionalEncoding(in_features, d, rngs=nnx.Rngs(0))
-    assert isinstance(pe.epsilon, nnx.Param), "epsilon should be nnx.Param"
-    epsilon_before = pe.epsilon[...].copy()
+    assert not isinstance(pe.epsilon, nnx.Variable), "epsilon must not be trainable"
+    assert pe.epsilon == 1.0
 
-    # Take a gradient step
+    # A gradient step must leave epsilon untouched.
     optimizer = nnx.Optimizer(pe, optax.adam(1e-2), wrt=nnx.Param)
 
     def loss_fn(model):
@@ -366,9 +371,26 @@ def test_hypformer_pe_learnable_epsilon():
 
     _loss, grads = nnx.value_and_grad(loss_fn)(pe)
     optimizer.update(pe, grads)
+    assert pe.epsilon == 1.0
 
-    epsilon_after = pe.epsilon[...]
-    assert not jnp.allclose(epsilon_before, epsilon_after, atol=1e-8), "epsilon should change after gradient step"
+
+def test_hypformer_pe_rejects_negative_epsilon():
+    """Negative epsilon weights can leave the upper hyperboloid sheet."""
+    with pytest.raises(ValueError, match="epsilon must be >= 0"):
+        HypformerPositionalEncoding(7, 6, rngs=nnx.Rngs(0), epsilon=-0.5)
+
+
+def test_hypformer_pe_custom_epsilon_on_manifold():
+    """A custom non-negative epsilon still produces valid hyperboloid points."""
+    d = 6
+    in_features = d + 1
+    key = jax.random.PRNGKey(7)
+    x = _make_hyperboloid_points(key, (4, d), c=1.0)
+
+    pe = HypformerPositionalEncoding(in_features, d, rngs=nnx.Rngs(0), epsilon=0.3)
+    out = pe(x, c=1.0)
+    for i in range(out.shape[0]):
+        assert hyperboloid.is_in_manifold(out[i], 1.0, atol=1e-4)
 
 
 def test_hypformer_pe_has_htclinear_params():

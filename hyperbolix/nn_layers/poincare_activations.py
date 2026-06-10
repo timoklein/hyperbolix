@@ -21,15 +21,12 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
 
-# Module-level manifold instance for the activation functions.
-# Uses float64 for numerical stability (standard for hyperbolic operations).
-_poincare = Poincare(dtype=jnp.float64)
-
 
 def _apply_in_tangent_space(
     x: Float[Array, "... dim"],
     activation_fn,
     c: float,
+    manifold_module: Poincare | None = None,
 ) -> Float[Array, "... dim"]:
     """Apply an activation function in the tangent space at the origin.
 
@@ -43,25 +40,33 @@ def _apply_in_tangent_space(
         Pointwise activation function to apply in tangent space.
     c : float
         Curvature parameter (positive).
+    manifold_module : Poincare or None
+        Manifold to use. Defaults to ``Poincare(dtype=x.dtype)`` so the
+        activation preserves the input dtype — manifold methods cast inputs
+        to the *manifold's* dtype, so a fixed float64 instance here would
+        silently promote float32 activations (and everything downstream)
+        under ``JAX_ENABLE_X64=1``.
 
     Returns
     -------
     y : Array of shape (..., dim)
         Output point(s) on the Poincaré ball.
     """
+    manifold = manifold_module if manifold_module is not None else Poincare(dtype=x.dtype)
+
     # Flatten all leading dims: (..., dim) -> (N, dim)
     orig_shape = x.shape
     dim = orig_shape[-1]
     x_flat = x.reshape(-1, dim)  # (N, dim)
 
     # logmap_0: manifold -> tangent space at origin
-    t_flat = jax.vmap(_poincare.logmap_0, in_axes=(0, None))(x_flat, c)  # (N, dim)
+    t_flat = jax.vmap(manifold.logmap_0, in_axes=(0, None))(x_flat, c)  # (N, dim)
 
     # Apply activation in tangent space
     t_act = activation_fn(t_flat)  # (N, dim)
 
     # expmap_0: tangent space -> manifold
-    y_flat = jax.vmap(_poincare.expmap_0, in_axes=(0, None))(t_act, c)  # (N, dim)
+    y_flat = jax.vmap(manifold.expmap_0, in_axes=(0, None))(t_act, c)  # (N, dim)
 
     return y_flat.reshape(orig_shape)
 
@@ -69,6 +74,7 @@ def _apply_in_tangent_space(
 def poincare_relu(
     x: Float[Array, "... dim"],
     c: float,
+    manifold_module: Poincare | None = None,
 ) -> Float[Array, "... dim"]:
     """Poincaré ReLU activation: exp_0^c ∘ ReLU ∘ log_0^c.
 
@@ -83,6 +89,8 @@ def poincare_relu(
         dimensions (e.g., (batch, H, W, channels) for feature maps).
     c : float
         Curvature parameter (positive).
+    manifold_module : Poincare or None
+        Manifold to use (default: ``Poincare(dtype=x.dtype)`` — dtype-preserving).
 
     Returns
     -------
@@ -110,13 +118,14 @@ def poincare_relu(
     >>> y_batch.shape
     (4, 14, 14, 8)
     """
-    return _apply_in_tangent_space(x, jax.nn.relu, c)
+    return _apply_in_tangent_space(x, jax.nn.relu, c, manifold_module)
 
 
 def poincare_leaky_relu(
     x: Float[Array, "... dim"],
     c: float,
     negative_slope: float = 0.01,
+    manifold_module: Poincare | None = None,
 ) -> Float[Array, "... dim"]:
     """Poincaré LeakyReLU activation: exp_0^c ∘ LeakyReLU ∘ log_0^c.
 
@@ -128,6 +137,8 @@ def poincare_leaky_relu(
         Curvature parameter (positive).
     negative_slope : float, optional
         Negative slope coefficient (default: 0.01).
+    manifold_module : Poincare or None
+        Manifold to use (default: ``Poincare(dtype=x.dtype)`` — dtype-preserving).
 
     Returns
     -------
@@ -138,12 +149,13 @@ def poincare_leaky_relu(
     def f(z):
         return jax.nn.leaky_relu(z, negative_slope)
 
-    return _apply_in_tangent_space(x, f, c)
+    return _apply_in_tangent_space(x, f, c, manifold_module)
 
 
 def poincare_tanh(
     x: Float[Array, "... dim"],
     c: float,
+    manifold_module: Poincare | None = None,
 ) -> Float[Array, "... dim"]:
     """Poincaré tanh activation: exp_0^c ∘ tanh ∘ log_0^c.
 
@@ -153,10 +165,12 @@ def poincare_tanh(
         Input point(s) on the Poincaré ball.
     c : float
         Curvature parameter (positive).
+    manifold_module : Poincare or None
+        Manifold to use (default: ``Poincare(dtype=x.dtype)`` — dtype-preserving).
 
     Returns
     -------
     y : Array of shape (..., dim)
         Output point(s) on the Poincaré ball.
     """
-    return _apply_in_tangent_space(x, jnp.tanh, c)
+    return _apply_in_tangent_space(x, jnp.tanh, c, manifold_module)

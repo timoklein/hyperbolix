@@ -6,19 +6,37 @@ Provides the common init/update loop for Riemannian optimization:
 - Euclidean gradient → Riemannian gradient conversion
 - Exponential map / retraction for manifold moves
 - Parallel transport of first moments
+- vmap over leading axes so (N, dim) embedding tables work with the
+  single-point manifold API
 
 Each optimizer (SGD, Adam) supplies algorithm-specific callbacks
 for moment updates and direction computation.
+
+Manifold detection
+------------------
+``ManifoldParam`` metadata is captured by ``init_fn``, NOT detected inside
+``update_fn``. Flax's ``nnx.Optimizer`` (>= 0.12.5) strips Variables to raw
+arrays before calling the optax update, so ``isinstance(leaf, ManifoldParam)``
+inside ``update_fn`` can never fire on that path — it would silently apply
+Euclidean updates to every parameter. ``init_fn`` still receives the intact
+Variables, so the (manifold, curvature) info is recorded there, positionally
+aligned with the flattened parameter tree, and resolved at update time.
+Live Variables in ``update_fn`` (direct ``tx.update(grad, state, param)``
+usage) take precedence over the captured metadata.
 """
 
 from typing import Any, cast
 
+import jax
 import jax.numpy as jnp
 import optax
 from flax import nnx
 from jax import tree_util
 
-from .manifold_metadata import ManifoldParam, get_manifold_info
+from .manifold_metadata import ManifoldParam
+
+# Dimension key:
+#   D: manifold point dim (last axis)    N: number of points in a leaf
 
 
 def _resolve_lr(learning_rate: float | optax.Schedule, count: jnp.ndarray) -> jnp.ndarray:
@@ -28,17 +46,34 @@ def _resolve_lr(learning_rate: float | optax.Schedule, count: jnp.ndarray) -> jn
     return jnp.asarray(cast(float, learning_rate))
 
 
-def _extract_param_and_manifold(param_variable):
-    """Extract parameter value and manifold info from a pytree leaf.
+def _is_variable_leaf(x: Any) -> bool:
+    return isinstance(x, nnx.Variable)
 
-    Returns:
-        (param_value, manifold_info) where manifold_info is (manifold_module, c) or None
+
+def _unwrap(x: Any) -> Any:
+    """Unwrap an nnx.Variable to its raw array value (identity for arrays)."""
+    return x[...] if isinstance(x, nnx.Variable) else x
+
+
+def _manifold_info_spec(leaf: Any) -> tuple[Any, Any] | None:
+    """(manifold, curvature_spec) for a ManifoldParam leaf, else None.
+
+    The curvature spec is stored *unevaluated* (it may be a callable for
+    learnable curvature) and resolved at update time.
     """
-    manifold_info = None
-    if isinstance(param_variable, ManifoldParam):
-        manifold_info = get_manifold_info(param_variable)
-    param_value = param_variable[...] if isinstance(param_variable, nnx.Variable) else param_variable
-    return param_value, manifold_info
+    if isinstance(leaf, ManifoldParam):
+        return (leaf.manifold, leaf.curvature)
+    return None
+
+
+def _resolve_info(spec: tuple[Any, Any] | None) -> tuple[Any, Any] | None:
+    """Evaluate a stored (manifold, curvature_spec) into (manifold, c)."""
+    if spec is None:
+        return None
+    manifold, curvature = spec
+    if callable(curvature):
+        curvature = curvature()
+    return (manifold, curvature)
 
 
 def _apply_manifold_move(direction, param_value, manifold_module, c, use_expmap):
@@ -46,6 +81,33 @@ def _apply_manifold_move(direction, param_value, manifold_module, c, use_expmap)
     if use_expmap:
         return manifold_module.expmap(direction, param_value, c)
     return manifold_module.retraction(direction, param_value, c)
+
+
+def _resolve_leaf_infos(param_leaves: list, captured_infos: tuple | None) -> list[tuple[Any, Any] | None]:
+    """Per-leaf (manifold, c) info: live Variables first, else init-captured metadata.
+
+    Live Variables appear in direct ``tx.update(grad, state, param)`` usage; the
+    nnx.Optimizer path delivers raw arrays and relies on the metadata captured
+    by ``init_fn`` (positionally aligned with the flattened parameter tree).
+    """
+    if any(_is_variable_leaf(leaf) for leaf in param_leaves):
+        return [_resolve_info(_manifold_info_spec(leaf)) for leaf in param_leaves]
+    if captured_infos is None:
+        raise ValueError(
+            "Riemannian optimizer received raw array parameters and no Variable "
+            "metadata was captured at init. ManifoldParam detection relies on "
+            "init_fn seeing the model's nnx.Variables (Flax's nnx.Optimizer strips "
+            "them before the optax update). This usually means tx.init() was called "
+            "with raw arrays. If this model has no manifold parameters, use a "
+            "standard optax optimizer (e.g. optax.adam) instead."
+        )
+    if len(captured_infos) != len(param_leaves):
+        raise ValueError(
+            f"Parameter tree has {len(param_leaves)} leaves but manifold metadata was "
+            f"captured for {len(captured_infos)} leaves at init. Did you reuse this "
+            "optimizer instance with a different model?"
+        )
+    return [_resolve_info(spec) for spec in captured_infos]
 
 
 def make_riemannian_optimizer(
@@ -67,7 +129,9 @@ def make_riemannian_optimizer(
     manifold_leaf_fn : callable
         ``(rgrad, moments, param_value, manifold_module, c, lr, count)``
         ``-> (direction, new_moments, ptransp_indices)``
-        Returns step direction, updated moments, and indices to parallel-transport.
+        Operates on a SINGLE manifold point of shape (D,); the base vmaps it
+        over any leading axes. Returns step direction, updated moments, and
+        indices to parallel-transport.
     euclidean_leaf_fn : callable
         ``(grad, moments, lr, count) -> (param_update, new_moments)``
         Returns the parameter update and updated moments for Euclidean params.
@@ -79,12 +143,64 @@ def make_riemannian_optimizer(
     Returns
     -------
     optax.GradientTransformation
+
+    Notes
+    -----
+    Do not reuse one GradientTransformation instance across different models:
+    ``init_fn`` captures per-leaf manifold metadata for the parameter tree it
+    is initialized with, and a second ``init`` overwrites it.
     """
+    # Manifold metadata captured at init time (see module docstring). A plain
+    # closure cell: nnx.Optimizer calls tx.init eagerly at construction, while
+    # the model's Variables are still intact.
+    captured: dict[str, tuple | None] = {"infos": None}
 
     def init_fn(params: Any) -> Any:
-        moment_trees = tuple(tree_util.tree_map(lambda p: jnp.zeros_like(p), params) for _ in range(n_moments))
+        leaves = tree_util.tree_flatten(params, is_leaf=_is_variable_leaf)[0]
+        if any(_is_variable_leaf(leaf) for leaf in leaves):
+            captured["infos"] = tuple(_manifold_info_spec(leaf) for leaf in leaves)
+        else:
+            # Raw arrays at init: metadata never existed. update_fn raises if
+            # it also sees raw arrays (it cannot tell manifold from Euclidean).
+            captured["infos"] = None
+        # Moments are stored as raw arrays (not Variables) so the optimizer
+        # state stays a plain JIT-friendly pytree.
+        moment_trees = tuple(
+            tree_util.tree_map(lambda p: jnp.zeros_like(_unwrap(p)), params, is_leaf=_is_variable_leaf)
+            for _ in range(n_moments)
+        )
         count = jnp.zeros([], jnp.int32)
         return state_cls(*moment_trees, count)
+
+    def _manifold_update(grad_value, moments, param_value, manifold_module, c, lr, count_inc):
+        """Riemannian update for one leaf; vmaps single-point ops over leading axes."""
+
+        def point_update(grad_D, param_D, moments_D):
+            rgrad_D = manifold_module.egrad2rgrad(grad_D, param_D, c)
+            direction_D, new_moments_D, ptransp_indices = manifold_leaf_fn(
+                rgrad_D, moments_D, param_D, manifold_module, c, lr, count_inc
+            )
+            new_param_D = _apply_manifold_move(direction_D, param_D, manifold_module, c, use_expmap)
+            final_moments_D = list(new_moments_D)
+            for idx in ptransp_indices:
+                final_moments_D[idx] = manifold_module.ptransp(new_moments_D[idx], param_D, new_param_D, c)
+            return new_param_D - param_D, tuple(final_moments_D)
+
+        if param_value.ndim == 0:
+            raise ValueError("Manifold parameters must have at least one dimension (a point), got a scalar.")
+        if param_value.ndim == 1:
+            return point_update(grad_value, param_value, moments)
+
+        # (..., D) tables: flatten leading axes to N points and vmap.
+        dim = param_value.shape[-1]
+        grad_ND = grad_value.reshape(-1, dim)
+        param_ND = param_value.reshape(-1, dim)
+        moments_ND = tuple(m.reshape(-1, dim) for m in moments)
+        update_ND, new_moments_ND = jax.vmap(point_update)(grad_ND, param_ND, moments_ND)
+        return (
+            update_ND.reshape(param_value.shape),
+            tuple(m.reshape(param_value.shape) for m in new_moments_ND),
+        )
 
     def update_fn(
         updates: Any,
@@ -101,53 +217,34 @@ def make_riemannian_optimizer(
         lr = _resolve_lr(learning_rate, count_inc)
 
         # Flatten all pytrees in lock-step
-        def is_variable_leaf(x):
-            return isinstance(x, nnx.Variable)
+        grad_leaves, treedef = tree_util.tree_flatten(updates, is_leaf=_is_variable_leaf)
+        moment_leaves_list = [tree_util.tree_flatten(m, is_leaf=_is_variable_leaf)[0] for m in moment_states]
+        param_leaves = tree_util.tree_flatten(params, is_leaf=_is_variable_leaf)[0]
 
-        grad_leaves, treedef = tree_util.tree_flatten(updates, is_leaf=is_variable_leaf)
-        moment_leaves_list = [tree_util.tree_flatten(m, is_leaf=is_variable_leaf)[0] for m in moment_states]
-        param_leaves = tree_util.tree_flatten(params, is_leaf=is_variable_leaf)[0]
+        infos = _resolve_leaf_infos(param_leaves, captured["infos"])
 
         n_leaves = len(grad_leaves)
         param_update_leaves = []
         new_moment_leaves_list = [[] for _ in range(n_moments)]
 
         for i in range(n_leaves):
-            grad_value = grad_leaves[i]
-            moments = tuple(moment_leaves_list[k][i] for k in range(n_moments))
-            param_variable = param_leaves[i]
-
-            param_value, manifold_info = _extract_param_and_manifold(param_variable)
+            grad_value = _unwrap(grad_leaves[i])
+            moments = tuple(_unwrap(moment_leaves_list[k][i]) for k in range(n_moments))
+            param_value = _unwrap(param_leaves[i])
+            manifold_info = infos[i]
 
             if manifold_info is not None:
                 manifold_module, c = manifold_info
-
-                # Convert Euclidean gradient to Riemannian gradient
-                rgrad = manifold_module.egrad2rgrad(grad_value, param_value, c)
-
-                # Algorithm-specific moment update and direction computation
-                direction, new_moments, ptransp_indices = manifold_leaf_fn(
-                    rgrad, moments, param_value, manifold_module, c, lr, count_inc
+                param_update, new_moments = _manifold_update(
+                    grad_value, moments, param_value, manifold_module, c, lr, count_inc
                 )
-
-                # Move on manifold
-                new_param_value = _apply_manifold_move(direction, param_value, manifold_module, c, use_expmap)
-
-                # Parallel transport specified moments
-                final_moments = list(new_moments)
-                for idx in ptransp_indices:
-                    final_moments[idx] = manifold_module.ptransp(new_moments[idx], param_value, new_param_value, c)
-
-                param_update = new_param_value - param_value
-                for k in range(n_moments):
-                    new_moment_leaves_list[k].append(final_moments[k])
             else:
                 # Euclidean parameter update
                 param_update, new_moments = euclidean_leaf_fn(grad_value, moments, lr, count_inc)
-                for k in range(n_moments):
-                    new_moment_leaves_list[k].append(new_moments[k])
 
             param_update_leaves.append(param_update)
+            for k in range(n_moments):
+                new_moment_leaves_list[k].append(new_moments[k])
 
         param_updates = tree_util.tree_unflatten(treedef, param_update_leaves)
         new_moment_trees = tuple(tree_util.tree_unflatten(treedef, new_moment_leaves_list[k]) for k in range(n_moments))

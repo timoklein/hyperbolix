@@ -71,6 +71,30 @@ def test_poincare_midpoint_identical_points(dtype):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_poincare_midpoint_equidistant_two_points(dtype):
+    """Midpoint of two points is geodesically equidistant from both.
+
+    Regression guard: the old ``Σλ²x/Σλ²`` formula gave (0.8686, 0) for this
+    pair — geodesic distances 0.289 / 2.655 — because the λ² weighting drags
+    the mean toward boundary points. The gyromidpoint has the closed form
+    ``tanh(atanh(0.9)/2)·e₁`` here.
+    """
+    c = 1.0
+    manifold = Poincare(dtype=dtype)
+    x_NC = jnp.array([[0.9, 0.0], [0.0, 0.0]], dtype=dtype)
+
+    mid_C = poincare_midpoint(x_NC, manifold, c)
+
+    atol = 4e-3 if dtype == jnp.float32 else 1e-7
+    expected_x = jnp.tanh(jnp.arctanh(jnp.asarray(0.9, dtype=dtype)) / 2.0)
+    assert jnp.allclose(mid_C, jnp.array([expected_x, 0.0], dtype=dtype), atol=atol)
+
+    d0 = manifold.dist(mid_C, x_NC[0], c)
+    d1 = manifold.dist(mid_C, x_NC[1], c)
+    assert jnp.allclose(d0, d1, atol=atol)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_poincare_midpoint_gradients(dtype):
     """Gradients through midpoint are finite."""
     key = jax.random.PRNGKey(1)

@@ -37,10 +37,16 @@ def poincare_midpoint(
     c: float,
     eps: float = 1e-6,
 ) -> Float[Array, "C"]:
-    """Compute Einstein midpoint of Poincaré ball points.
+    """Compute the (Einstein) gyromidpoint of Poincaré ball points.
 
-    Uses conformal factor weighting: midpoint = Σ(λ²·x) / Σ(λ²),
-    then projects onto the ball.
+    Delegates to :func:`poincare_weighted_midpoint` (GGBall Eq. 41) with uniform
+    weights::
+
+        mu = (1/2) ⊗_c [ Σ λ(x_n)·x_n / Σ (λ(x_n) - 1) ]
+
+    NOTE: an earlier version computed ``Σ(λ²·x) / Σ(λ²)``, which is *not* a
+    midpoint (it is not equidistant for two points and is biased toward points
+    near the ball boundary, where λ explodes).
 
     Parameters
     ----------
@@ -56,18 +62,10 @@ def poincare_midpoint(
     Returns
     -------
     Array, shape (C,)
-        Einstein midpoint on the Poincaré ball.
+        Gyromidpoint on the Poincaré ball.
     """
-    # lambda_N1: (N, 1) — conformal factor for each point
-    lambda_N1 = manifold.conformal_factor(x_NC, c)  # (N, 1)
-    lambda_sq_N1 = lambda_N1**2  # (N, 1)
-
-    # Weighted sum: Σ(λ²·x) / Σ(λ²)
-    numerator_C = jnp.sum(lambda_sq_N1 * x_NC, axis=0)  # (C,)
-    denominator = jnp.sum(lambda_sq_N1, axis=0) + eps  # (1,)
-
-    midpoint_C = numerator_C / denominator  # (C,)
-    return manifold.proj(midpoint_C, c)
+    weights_1N = jnp.ones((1, x_NC.shape[0]), dtype=x_NC.dtype)  # (1, N) uniform
+    return poincare_weighted_midpoint(x_NC, weights_1N, manifold, c, eps)[0]
 
 
 def poincare_weighted_midpoint(

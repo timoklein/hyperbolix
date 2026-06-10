@@ -35,7 +35,6 @@ Version Constants:
     VERSION_MOBIUS_DIRECT (0): Direct Möbius distance formula (fastest)
     VERSION_MOBIUS (1): Möbius distance via addition
     VERSION_METRIC_TENSOR (2): Metric tensor induced distance
-    VERSION_LORENTZIAN_PROXY (3): Lorentzian proxy distance
 
 Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
@@ -80,7 +79,6 @@ MIN_NORM = 1e-15
 VERSION_MOBIUS_DIRECT = 0
 VERSION_MOBIUS = 1
 VERSION_METRIC_TENSOR = 2
-VERSION_LORENTZIAN_PROXY = 3
 
 
 def _get_max_norm_eps(x: Float[Array, "dim"]) -> float:
@@ -199,7 +197,10 @@ def _scalar_mul(r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, 
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    x_norm = jnp.maximum(jnp.linalg.norm(x), MIN_NORM)
+    # Safe norm: sqrt(||x||² + eps²) has finite gradients at x=0. The previous
+    # maximum(norm, MIN_NORM) only guarded the forward — linalg.norm's VJP at 0
+    # is 0/0 = NaN, and 0-cotangent · NaN is still NaN.
+    x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
     c_norm_prod = jnp.sqrt(c) * x_norm
     res = jnp.tanh(r * atanh(c_norm_prod)) / c_norm_prod * x
     res = _proj(res, c)
@@ -212,7 +213,8 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curva
     sqrt_c = jnp.sqrt(c)
     x2y2 = jnp.dot(x, x) * jnp.dot(y, y)
     xy = jnp.dot(x, y)
-    num = jnp.linalg.norm(y - x)
+    # Safe norm: finite gradient at x == y (norm's VJP at 0 is 0/0 = NaN)
+    num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
     denom = jnp.sqrt(jnp.maximum(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
     xysum_norm = num / denom
     dist_c = atanh(sqrt_c * xysum_norm)
@@ -223,7 +225,9 @@ def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -
     """Möbius distance via addition."""
     sqrt_c = jnp.sqrt(c)
     diff = _addition(-x, y, c)
-    dist_c = atanh(sqrt_c * jnp.linalg.norm(diff))
+    # Safe norm: finite gradient at x == y (diff = 0)
+    diff_norm = jnp.sqrt(jnp.sum(diff**2) + MIN_NORM**2)
+    dist_c = atanh(sqrt_c * diff_norm)
     return 2 * dist_c / sqrt_c
 
 
@@ -235,15 +239,6 @@ def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curva
     arg = 1 + 2 * c * xy_diff_sqnorm / ((1 - c * x_sqnorm) * (1 - c * y_sqnorm))
     condition = arg < 1 + MIN_NORM
     return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
-
-
-def _dist_lorentzian_proxy(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Lorentzian proxy distance."""
-    xy_prod = x * y
-    xy0 = xy_prod[0]
-    xy_rem = jnp.sum(xy_prod[1:])
-    xy_mink = xy_rem - xy0
-    return -2 / c - 2 * xy_mink
 
 
 def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
@@ -309,16 +304,17 @@ def _dist(
 
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
-        Law et al. "Lorentzian distance learning." ICML 2019.
     """
-    return lax.switch(version_idx, [_dist_mobius_direct, _dist_mobius, _dist_metric_tensor, _dist_lorentzian_proxy], x, y, c)
+    return lax.switch(version_idx, [_dist_mobius_direct, _dist_mobius, _dist_metric_tensor], x, y, c)
 
 
 # Distance from origin implementations for lax.switch
 def _dist_0_mobius(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Möbius distance from origin (mobius_direct and mobius use same formula)."""
     sqrt_c = jnp.sqrt(c)
-    dist_c = atanh(sqrt_c * jnp.linalg.norm(x))
+    # Safe norm: finite gradient at the origin
+    x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    dist_c = atanh(sqrt_c * x_norm)
     return 2 * dist_c / sqrt_c
 
 
@@ -328,12 +324,6 @@ def _dist_0_metric_tensor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, 
     arg = 1 + 2 * c * x_sqnorm / (1 - c * x_sqnorm)
     condition = arg < 1 + MIN_NORM
     return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
-
-
-def _dist_0_lorentzian_proxy(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Lorentzian proxy distance from origin."""
-    x0 = x[0]
-    return -2 / c + 2 * x0 / jnp.sqrt(c)
 
 
 def _dist_0(x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
@@ -352,7 +342,7 @@ def _dist_0(x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_MOB
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     # mobius_direct and mobius use same implementation for dist_0
-    return lax.switch(version_idx, [_dist_0_mobius, _dist_0_mobius, _dist_0_metric_tensor, _dist_0_lorentzian_proxy], x, c)
+    return lax.switch(version_idx, [_dist_0_mobius, _dist_0_mobius, _dist_0_metric_tensor], x, c)
 
 
 def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
@@ -369,8 +359,11 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    v_norm = jnp.linalg.norm(v)
-    c_norm_prod = jnp.maximum(jnp.sqrt(c) * v_norm, MIN_NORM)
+    # Safe norm: sqrt(||v||² + eps²) has well-defined gradients at v=0,
+    # matching _expmap_0. The previous maximum(·, MIN_NORM) only guarded the
+    # forward — linalg.norm's VJP at 0 is 0/0 = NaN, and 0·NaN is still NaN.
+    v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    c_norm_prod = jnp.sqrt(c) * v_norm
     lambda_x = _conformal_factor(x, c)
     second_term = jnp.tanh(c_norm_prod * lambda_x / 2) / c_norm_prod * v
     second_term = _proj(second_term, c)
@@ -673,9 +666,10 @@ def _compute_mlr_pp(
     # Safe norm: sqrt(sum(z²) + eps²) avoids NaN gradients at z=0
     z_norm_P1 = jnp.sqrt(jnp.sum(z**2, axis=-1, keepdims=True) + min_enorm**2)  # (P, 1)
 
-    # Metric scaling factor: lam = 2(1 - c||x||²) (NOT the conformal factor)
-    x_sqnorm_B1 = jnp.sum(x**2, axis=-1, keepdims=True)  # (B, 1)
-    lam_B1 = 2.0 * (1.0 - c * x_sqnorm_B1)  # (B, 1)
+    # Conformal factor lam(x) = 2 / (1 - c||x||²) per HNN++ Eq. 26 (boundary-clamped).
+    # NOTE: van Spengler's poincare-resnet repo has 2*(1 - c||x||²) here — a
+    # transcription bug the same author fixed in hypll. Do not "restore" it.
+    lam_B1 = _conformal_factor_batch(x, c)  # (B, 1)
 
     z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1)  # (B, P)
     asinh_arg_BP = sqrt_c * lam_B1 * z_unitx_BP * cosh(sqrt_c2r_1P) - (lam_B1 - 1) * sinh(sqrt_c2r_1P)  # (B, P)
@@ -759,7 +753,6 @@ class Poincare(ManifoldBase):
     VERSION_MOBIUS_DIRECT = VERSION_MOBIUS_DIRECT
     VERSION_MOBIUS = VERSION_MOBIUS
     VERSION_METRIC_TENSOR = VERSION_METRIC_TENSOR
-    VERSION_LORENTZIAN_PROXY = VERSION_LORENTZIAN_PROXY
 
     def proj(self, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
         """Project point onto Poincaré ball by clipping norm."""

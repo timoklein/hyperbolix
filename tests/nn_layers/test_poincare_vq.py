@@ -139,6 +139,34 @@ def test_embedding_forward_contract(dtype, dim, c):
 @pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
 @pytest.mark.parametrize("dim", [2, 8], ids=["dim2", "dim8"])
 @pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
+def test_embedding_squared_commitment(dtype, dim, c):
+    """squared_commitment=True penalises d² instead of d (HVQ-VAE vs GGBall).
+
+    The two layers share rngs=0, so codes and assignments are identical and
+    loss_sq must equal w·mean(d²) where loss = w·mean(d) over the same dists.
+    """
+    manifold, layer = _embedding(dtype, dim)
+    _, layer_sq = _embedding(dtype, dim, squared_commitment=True)
+    x = _inputs(3, 32, dim, dtype)
+    atol, rtol = _tol(dtype)
+
+    out = layer(x, c)
+    out_sq = layer_sq(x, c)
+
+    # Recompute the per-point geodesic distances to the (identical) chosen codes.
+    q_NC = layer.codebook[...][out.indices]
+    d_N = jax.vmap(manifold.dist, in_axes=(0, 0, None))(out.z, q_NC, c)
+    w = layer.commitment_weight
+    assert jnp.allclose(out.loss, w * jnp.mean(d_N), atol=atol, rtol=rtol)
+    assert jnp.allclose(out_sq.loss, w * jnp.mean(d_N**2), atol=atol, rtol=rtol)
+    # Everything except the loss is unaffected by the flag.
+    assert jnp.array_equal(out.indices, out_sq.indices)
+    assert jnp.allclose(out.quantized, out_sq.quantized, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
+@pytest.mark.parametrize("dim", [2, 8], ids=["dim2", "dim8"])
+@pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
 def test_embedding_batch_independence(dtype, dim, c):
     """quantizing x[:1] equals the first row of quantizing x (catches un-vmapped ops)."""
     _manifold, layer = _embedding(dtype, dim)
@@ -217,6 +245,41 @@ def test_embedding_ema_empty_codes_unchanged(dtype, dim, c):
     moved = jnp.linalg.norm(layer.codebook[...] - before, axis=-1)
     assert moved[0] > 0  # code 0 moved
     assert jnp.all(moved[1:] == 0)  # codes 1..K-1 untouched
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
+@pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
+def test_embedding_ema_fixed_point(dtype, c):
+    """blend(x, x) = x: encoder points sitting exactly on the codes leave the
+    codebook unmoved.
+
+    Regression guard: the old per-operand-bracket blend
+    ``[c,β]_c ⊕ [μ,1-β]_c`` violated this fixed point (drift ~8.5e-2/step at
+    r=0.9), iterating codes into the ball boundary. Eq. 42 is the *atomic*
+    two-point weighted gyromidpoint.
+    """
+    _manifold, layer = _embedding(dtype, 2, num_codes=4)
+    atol, rtol = _tol(dtype)
+    codes_KC = jnp.array([[0.9, 0.0], [0.0, 0.85], [-0.7, 0.3], [0.2, -0.6]], dtype=dtype)
+    layer.codebook[...] = codes_KC
+    layer.ema_update(codes_KC, jnp.arange(4, dtype=jnp.int32), c)
+    assert jnp.allclose(layer.codebook[...], codes_KC, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
+def test_embedding_ema_converges_to_cluster_mean(dtype):
+    """Iterated EMA with a fixed cluster mean converges to that mean.
+
+    Regression guard: the old blend converged to ‖code‖ → 0.99997 (the
+    boundary, geodesic offset ~10) with the mean held at 0.5.
+    """
+    c = 1.0
+    _manifold, layer = _embedding(dtype, 2, num_codes=1, ema_decay=0.9)
+    layer.codebook[...] = jnp.array([[0.1, 0.0]], dtype=dtype)
+    target_NC = jnp.array([[0.5, 0.0]], dtype=dtype)
+    for _ in range(150):
+        layer.ema_update(target_NC, jnp.zeros((1,), dtype=jnp.int32), c)
+    assert jnp.allclose(layer.codebook[...][0], target_NC[0], atol=5e-3)
 
 
 @pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])

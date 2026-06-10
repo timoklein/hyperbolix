@@ -302,13 +302,9 @@ d1 = poincare.dist(x, y, c, version_idx=poincare.VERSION_MOBIUS)
 # Version 2: Metric tensor induced
 d2 = poincare.dist(x, y, c, version_idx=poincare.VERSION_METRIC_TENSOR)
 
-# Version 3: Lorentzian proxy (best near boundary)
-d3 = poincare.dist(x, y, c, version_idx=poincare.VERSION_LORENTZIAN_PROXY)
-
 print(f"Version 0: {d0:.6f}")
 print(f"Version 1: {d1:.6f}")
 print(f"Version 2: {d2:.6f}")
-print(f"Version 3: {d3:.6f}")
 # All should be approximately equal
 ```
 
@@ -320,7 +316,9 @@ print(f"Version 3: {d3:.6f}")
 - Best for most applications
 
 **Special cases**:
-- **Near-boundary points** (||x|| > 0.9): Try `VERSION_LORENTZIAN_PROXY` (version 3) for better stability
+- **Near-boundary points** (||x|| > 0.9): Use `Poincare(dtype=jnp.float64)`, or convert to the
+  hyperboloid via `isometry_mappings.poincare_to_hyperboloid` and use `Hyperboloid.dist`
+  (the hyperboloid is unbounded, so there is no boundary to saturate)
 - **Very high dimensions** (> 1000): `VERSION_METRIC_TENSOR` (version 2) may be more stable
 - **Debugging**: Compare all versions — significant differences indicate numerical issues
 
@@ -573,10 +571,10 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
 
 5. **Try different version**:
    ```python
-   # Try VERSION_LORENTZIAN_PROXY if VERSION_MOBIUS_DIRECT fails
+   # Try VERSION_METRIC_TENSOR if VERSION_MOBIUS_DIRECT fails
    from hyperbolix.manifolds import Poincare
    poincare = Poincare()
-   dist = poincare.dist(x, y, c, version_idx=poincare.VERSION_LORENTZIAN_PROXY)
+   dist = poincare.dist(x, y, c, version_idx=poincare.VERSION_METRIC_TENSOR)
    ```
 
 6. **Use float64 manifold**:

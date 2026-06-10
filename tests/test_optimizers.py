@@ -470,3 +470,91 @@ def test_zero_gradient():
     # Parameter should not change
     new_value = param[...] + updates  # type: ignore[operator]
     assert jnp.allclose(new_value, param[...])
+
+
+# ---------------------------------------------------------------------------
+# Regression guards: manifold dispatch through nnx.Optimizer
+#
+# Flax's nnx.Optimizer (>= 0.12.5) strips Variables to raw arrays before the
+# optax update, so isinstance(leaf, ManifoldParam) inside update_fn can never
+# fire on that path. The metadata is now captured by init_fn instead. These
+# tests pin the behaviors that the old in-update dispatch silently broke.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("make_tx", [lambda: riemannian_adam(0.1), lambda: riemannian_sgd(0.1, momentum=0.9)])
+def test_nnx_optimizer_boundary_point_stays_on_manifold(make_tx):
+    """A near-boundary point must take a Riemannian step through nnx.Optimizer.
+
+    Regression guard: the old in-update isinstance dispatch never fired through
+    nnx.Optimizer, so EVERY parameter silently took a Euclidean step — this
+    exact setup sent ||x|| = 0.9 to ||x|| = 1.4, off the manifold, with no error.
+    """
+    c = 1.0
+
+    class BoundaryModel(nnx.Module):
+        def __init__(self):
+            self.x = mark_manifold_param(
+                nnx.Param(jnp.array([0.9, 0.0])),
+                manifold=poincare,
+                curvature=c,
+            )
+
+    model = BoundaryModel()
+    optimizer = nnx.Optimizer(model, make_tx(), wrt=nnx.Param)
+    target = jnp.array([0.0, 0.5])
+
+    def loss_fn(m):
+        return poincare.dist(m.x[...], target, c) ** 2
+
+    grads = nnx.grad(loss_fn)(model)
+    optimizer.update(model, grads)
+
+    assert jnp.linalg.norm(model.x[...]) < 1.0, f"Point left the ball: {model.x[...]}"
+    assert poincare.is_in_manifold(model.x[...], c)
+
+
+def test_nnx_optimizer_embedding_table():
+    """(N, dim) manifold leaves work through nnx.Optimizer and stay on the ball.
+
+    Regression guard: the manifold branch was single-point only — multi-point
+    embedding tables crashed in egrad2rgrad with a matmul shape error.
+    """
+    c = 1.0
+
+    class EmbModel(nnx.Module):
+        def __init__(self):
+            init = jax.random.normal(jax.random.key(0), (8, 4)) * 0.2
+            init = jax.vmap(poincare.proj, in_axes=(0, None))(init, c)
+            self.emb = mark_manifold_param(nnx.Param(init), manifold=poincare, curvature=c)
+            self.head = nnx.Param(jnp.ones((4,)))  # mixed Euclidean param
+
+    model = EmbModel()
+    optimizer = nnx.Optimizer(model, riemannian_adam(learning_rate=0.05), wrt=nnx.Param)
+    target = jnp.zeros(4).at[0].set(0.6)
+
+    def loss_fn(m):
+        dists = jax.vmap(poincare.dist, in_axes=(0, None, None))(m.emb[...], target, c)
+        return jnp.sum(dists**2) + jnp.sum((m.head[...] - 2.0) ** 2)
+
+    initial_loss = loss_fn(model)
+    initial_head = model.head[...].copy()
+    for _ in range(30):
+        grads = nnx.grad(loss_fn)(model)
+        optimizer.update(model, grads)
+
+    assert loss_fn(model) < 0.2 * initial_loss
+    assert not jnp.allclose(model.head[...], initial_head)  # Euclidean branch also updates
+    on_ball = jax.vmap(lambda row: poincare.is_in_manifold(row, c))(model.emb[...])
+    assert jnp.all(on_ball)
+
+
+def test_raw_array_init_raises_instead_of_silent_euclidean():
+    """Initializing with raw arrays (no Variable metadata) must fail loudly at
+    update time rather than silently applying Euclidean updates to everything."""
+    tx = riemannian_adam(learning_rate=0.1)
+    raw = jnp.array([0.1, 0.2])
+    opt_state = tx.init(raw)
+
+    with pytest.raises(ValueError, match="no Variable metadata"):
+        tx.update(raw * 0.1, opt_state, raw)

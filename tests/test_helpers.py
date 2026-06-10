@@ -131,13 +131,9 @@ def test_hyperboloid_versions(hyperboloid, version_idx: int):
     assert jnp.all(distmat >= 0.0)
 
 
-@pytest.mark.parametrize("version_idx", [0, 1, 2, 3])
+@pytest.mark.parametrize("version_idx", [0, 1, 2])
 def test_poincare_versions(poincare, version_idx: int):
-    """Test that different Poincaré distance versions work.
-
-    Note: VERSION_LORENTZIAN_PROXY (3) is a pseudo-distance that can be
-    negative, so we don't check non-negativity for it.
-    """
+    """Test that different Poincaré distance versions work."""
     key = jax.random.PRNGKey(42)
     n_points, dim = 5, 5
     points = jax.random.normal(key, (n_points, dim)) * 0.3
@@ -146,8 +142,7 @@ def test_poincare_versions(poincare, version_idx: int):
     distmat = compute_pairwise_distances(points, poincare, c=1.0, version_idx=version_idx)
 
     assert distmat.shape == (n_points, n_points)
-    if version_idx != poincare.VERSION_LORENTZIAN_PROXY:
-        assert jnp.all(distmat >= 0.0)
+    assert jnp.all(distmat >= 0.0)
 
 
 def test_output_shape():

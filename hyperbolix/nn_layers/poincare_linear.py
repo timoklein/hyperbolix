@@ -5,6 +5,9 @@ Dimension key:
   O: output dimension
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -41,6 +44,13 @@ class HypLinearPoincare(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
+    curvature : float or callable
+        Curvature tag for the manifold-valued ``bias`` parameter (default: 1.0).
+        The Riemannian optimizer uses this value for the bias update
+        (egrad2rgrad, expmap, parallel transport), so it MUST match the ``c``
+        passed at ``__call__`` time — a mismatch silently applies the wrong
+        Riemannian correction. For learnable curvature, pass a callable
+        returning the current value (e.g. ``lambda: model.curvature()``).
     Notes
     -----
     JIT Compatibility:
@@ -62,6 +72,7 @@ class HypLinearPoincare(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
+        curvature: float | Callable[[], Any] = 1.0,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -85,7 +96,7 @@ class HypLinearPoincare(nnx.Module):
         self.bias = ManifoldParam(
             jax.random.normal(rngs.params(), (out_dim,)) * 0.01,
             manifold=self.manifold,
-            curvature=1.0,
+            curvature=curvature,
         )
 
     def __call__(

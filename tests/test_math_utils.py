@@ -1,5 +1,6 @@
 """Tests for JAX math utilities."""
 
+import jax
 import jax.numpy as jnp
 
 from hyperbolix.utils.math_utils import (
@@ -103,8 +104,8 @@ def test_sinh():
 
 def test_acosh():
     """Test numerically stable acosh."""
-    # Test valid domain values
-    x_valid = jnp.array([1.0, 1.5, 2.0, 5.0, 10.0])
+    # Values away from the domain boundary are exact
+    x_valid = jnp.array([1.5, 2.0, 5.0, 10.0])
     result_valid = acosh(x_valid)
     expected_valid = jnp.acosh(x_valid)
     assert jnp.allclose(result_valid, expected_valid)
@@ -116,10 +117,24 @@ def test_acosh():
     # Should not contain nan
     assert jnp.all(jnp.isfinite(result_invalid))
 
-    # Values < 1 should be clamped to acosh(1) = 0
-    assert result_invalid[0] == 0.0  # acosh(1) = 0
-    assert result_invalid[1] == 0.0  # clamped
-    assert result_invalid[2] == 0.0  # acosh(1) = 0
+    # Values <= 1 are clamped to 1 + 10*machine_eps, giving a forward value of
+    # sqrt(2 * 10 * eps) instead of exactly 0 — the deliberate margin that
+    # bounds acosh' (acosh'(1) = inf would otherwise NaN every gradient that
+    # lands exactly on the boundary, e.g. dist(x, x)).
+    for dtype in [jnp.float32, jnp.float64]:
+        margin = 10.0 * float(jnp.finfo(dtype).eps)
+        forward_error = float(jnp.sqrt(2.0 * margin))
+        res = acosh(jnp.array([0.5, 1.0], dtype=dtype))
+        assert jnp.allclose(res, 0.0, atol=1.01 * forward_error)
+
+
+def test_acosh_gradient_at_boundary():
+    """Gradient at and below the domain boundary is finite (regression: a hard
+    clip at exactly 1.0 let x = 1.0 reach acosh'(1) = inf)."""
+    for dtype in [jnp.float32, jnp.float64]:
+        for x in [0.5, 1.0, 1.0 + 1e-9]:
+            g = jax.grad(lambda a: acosh(a))(jnp.asarray(x, dtype=dtype))
+            assert jnp.isfinite(g)
 
 
 def test_atanh():
@@ -140,6 +155,14 @@ def test_atanh():
     # Should be antisymmetric
     assert jnp.allclose(result_boundary[0], -result_boundary[-1], rtol=1e-5)
     assert jnp.abs(result_boundary[2]) < 1e10  # Should be finite but large
+
+
+def test_atanh_gradient_at_boundary():
+    """Gradient at and beyond ±1 is finite (the 10*eps margin bounds atanh')."""
+    for dtype in [jnp.float32, jnp.float64]:
+        for x in [-1.1, -1.0, 1.0, 1.1]:
+            g = jax.grad(lambda a: atanh(a))(jnp.asarray(x, dtype=dtype))
+            assert jnp.isfinite(g)
 
 
 def test_dtype_consistency():

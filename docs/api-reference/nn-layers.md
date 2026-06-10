@@ -709,7 +709,7 @@ spatial = jax.random.normal(key, (batch_size, d)) * 0.1
 time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
 x = jnp.concatenate([time, spatial], axis=-1)  # (32, 9)
 
-# Apply learnable positional encoding
+# Apply positional encoding
 x_encoded = pe(x, c=1.0)
 print(x_encoded.shape)  # (32, 9) - shape preserved
 
@@ -717,22 +717,17 @@ print(x_encoded.shape)  # (32, 9) - shape preserved
 is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(x_encoded, 1.0)
 print(is_valid.all())  # True
 
-# The epsilon parameter is learnable
-print(f"Epsilon: {pe.epsilon.value}")  # Initially 1.0
-
-# Use in training loop with gradient updates
-import optax
-optimizer = nnx.Optimizer(pe, optax.adam(1e-3), wrt=nnx.Param)
-
-def loss_fn(model):
-    out = model(x, c=1.0)
-    return jnp.sum(out**2)  # Dummy loss
-
-loss, grads = nnx.value_and_grad(loss_fn)(pe)
-optimizer.update(pe, grads)
-
-print(f"Epsilon after update: {pe.epsilon.value}")  # Changed
+# epsilon is a FIXED scalar (default 1.0, matching the Hypformer reference);
+# only the HTCLinear weights train. A custom non-negative value can be set:
+pe_weak = HypformerPositionalEncoding(in_features=d + 1, out_features=d, rngs=nnx.Rngs(0), epsilon=0.3)
 ```
+
+!!! warning "Why `epsilon` is not learnable"
+    The Hypformer reference keeps `epsilon` a plain (non-trainable) tensor fixed at 1.0.
+    Making it a parameter is unsafe: gradient descent can drive it below -1, where
+    `x + epsilon * p` leaves the upper hyperboloid sheet and the `abs()` in the
+    Lorentzian residual normalizer silently masks the violation instead of raising.
+    For the same reason, `lorentz_residual`'s `w_y` must always be non-negative.
 
 ### Lorentzian Residual Example
 
@@ -788,9 +783,9 @@ print(result_batch.shape)  # (8, 7)
 
     **HypformerPositionalEncoding**:
 
-    - Learnable, adapts to task
+    - Learnable (HTCLinear weights), adapts to task
     - Uses HTCLinear + Lorentzian residual
-    - `epsilon` parameter controls position encoding magnitude
+    - `epsilon` (fixed, non-negative) controls position encoding magnitude
     - More flexible but requires training
     - Suitable when position patterns are task-specific
 
@@ -1095,6 +1090,7 @@ h = jax.random.normal(jax.random.PRNGKey(1), (256, 64)) * 0.3  # encoder tangent
 vq = HypVQEmbeddingPoincare(
     manifold, num_codes=128, code_dim=64, rngs=nnx.Rngs(0),
     commitment_weight=0.5, ema_decay=0.99, dead_code_revival=True,
+    squared_commitment=False,  # False: HVQ-VAE plain d; True: GGBall d² (VQ-VAE convention)
 )
 out = vq(h, c=1.0)
 print(out.quantized.shape, out.quantized.dtype)  # (256, 64) float32 — decoder input

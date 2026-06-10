@@ -26,6 +26,11 @@ from hyperbolix.utils.math_utils import sinh
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc
 
+# Gradient-safety floor for norms (matches hyperbolix.manifolds MIN_NORM):
+# sqrt(sum + MIN_NORM²) has a finite VJP at zero input, unlike linalg.norm,
+# whose 0/0 NaN survives any post-hoc jnp.where masking.
+MIN_NORM = 1e-15
+
 
 def _fhcnn_forward(
     x_BI: Float[Array, "batch in_dim"],
@@ -60,7 +65,9 @@ def _fhcnn_forward(
 
     # Static branch - JIT friendly
     if normalize:
-        x_rem_norm_B1 = jnp.linalg.norm(x_rem_BD, ord=2, axis=-1, keepdims=True)  # (B, 1)
+        # Safe norm: finite gradient at zero spatial input; the origin mask
+        # below still fires (safe norm of a zero vector is MIN_NORM <= 1e-5).
+        x_rem_norm_B1 = jnp.sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (B, 1)
 
         # Learnable sigmoid scaling
         scale_B1 = jnp.exp(scale_val) * jax.nn.sigmoid(x0_B1)  # (B, 1)
@@ -129,8 +136,10 @@ def _fhnn_forward(
     # Always real since y0 > 1/sqrt(c) + eps => y0^2 > 1/c
     target_norm_B1 = jnp.sqrt(y0_B1**2 - 1.0 / c)  # (B, 1)
 
-    # Rescale spatial to satisfy hyperboloid constraint
-    z_rem_norm_B1 = jnp.linalg.norm(z_rem_BD, ord=2, axis=-1, keepdims=True)  # (B, 1)
+    # Rescale spatial to satisfy hyperboloid constraint.
+    # Safe norm: finite gradient at zero spatial input (linalg.norm's VJP at 0
+    # is NaN and survives both the maximum() and the jnp.where below).
+    z_rem_norm_B1 = jnp.sqrt(jnp.sum(z_rem_BD**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (B, 1)
     z_rem_norm_safe_B1 = jnp.maximum(z_rem_norm_B1, eps)  # avoid division by zero
     y_rem_BD = target_norm_B1 / z_rem_norm_safe_B1 * z_rem_BD  # (B, D)
 

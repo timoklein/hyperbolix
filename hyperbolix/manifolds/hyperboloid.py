@@ -300,7 +300,9 @@ def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Cur
     """
     sqrt_c = jnp.sqrt(c)
     v_sqnorm = jnp.clip(_minkowski_inner(v, v), min=0.0)
-    v_norm = jnp.sqrt(v_sqnorm)
+    # Safe norm: +MIN_NORM² keeps sqrt's gradient finite at v=0
+    # (sqrt'(0) = inf; the forward-only maximum below can't undo that NaN).
+    v_norm = jnp.sqrt(v_sqnorm + MIN_NORM**2)
     c_norm_prod = sqrt_c * v_norm
 
     denom = jnp.maximum(c_norm_prod, MIN_NORM)
@@ -328,7 +330,8 @@ def _expmap_0(v: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_
     """
     sqrt_c = jnp.sqrt(c)
     v_sqnorm = jnp.clip(_minkowski_inner(v, v), min=0.0)
-    v_norm = jnp.sqrt(v_sqnorm)
+    # Safe norm: +MIN_NORM² keeps sqrt's gradient finite at v=0 (see _expmap)
+    v_norm = jnp.sqrt(v_sqnorm + MIN_NORM**2)
     c_norm_prod = sqrt_c * v_norm
 
     denom = jnp.maximum(c_norm_prod, MIN_NORM)

@@ -40,12 +40,11 @@ Flat Euclidean space (identity operations).
 The Poincaré ball model with Möbius operations.
 
 !!! note "Distance Versions"
-    The Poincaré `dist` method has a `version_idx` parameter selecting between 4 formulations:
+    The Poincaré `dist` method has a `version_idx` parameter selecting between 3 formulations:
 
     - `VERSION_MOBIUS_DIRECT` (0): Möbius addition formula (default, fastest)
     - `VERSION_MOBIUS` (1): Möbius via addition
     - `VERSION_METRIC_TENSOR` (2): Direct metric tensor integration
-    - `VERSION_LORENTZIAN_PROXY` (3): Lorentzian model proxy (best near boundary)
 
     Constants are available as `poincare.VERSION_MOBIUS_DIRECT` etc., or from
     `hyperbolix.manifolds.poincare`.
