@@ -114,7 +114,10 @@ def test_weighted_midpoint_jit(dtype, c):
 # --------------------------------------------------------------------------- #
 def _embedding(dtype, dim, num_codes=16, **kw):
     manifold = Poincare(dtype=dtype)
-    layer = HypVQEmbeddingPoincare(manifold, num_codes=num_codes, code_dim=dim, rngs=nnx.Rngs(0), **kw)
+    # param_dtype=dtype keeps codebook storage at the test's precision so the
+    # f64-parametrized math tests (e.g. the 1e-7-tolerance EMA fixed point)
+    # are not limited by the float32 storage default.
+    layer = HypVQEmbeddingPoincare(manifold, num_codes=num_codes, code_dim=dim, rngs=nnx.Rngs(0), param_dtype=dtype, **kw)
     return manifold, layer
 
 
@@ -323,7 +326,7 @@ def test_embedding_jit(dtype, c):
 # --------------------------------------------------------------------------- #
 def _mlr(dtype, dim, num_codes=16):
     manifold = Poincare(dtype=dtype)
-    layer = HypVQMLRPoincare(manifold, num_codes=num_codes, code_dim=dim, rngs=nnx.Rngs(0))
+    layer = HypVQMLRPoincare(manifold, num_codes=num_codes, code_dim=dim, rngs=nnx.Rngs(0), param_dtype=dtype)
     return manifold, layer
 
 

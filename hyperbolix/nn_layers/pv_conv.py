@@ -20,7 +20,9 @@ Dimension key:
 from collections.abc import Callable
 
 import jax
+import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
@@ -78,6 +80,9 @@ class HypConv2DPV(nnx.Module):
         stacked conv blocks preserve variance under ReLU (for small MLR
         arguments the PV output reduces to an Euclidean linear map per patch,
         so standard He analysis applies).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
@@ -115,6 +120,7 @@ class HypConv2DPV(nnx.Module):
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
         kernel_init_std: float | None = None,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
             raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
@@ -145,8 +151,10 @@ class HypConv2DPV(nnx.Module):
         # variance under ReLU. Bias init is uniform U(-1e-3, 1e-3), matching
         # the paper reference.
         std = (2.0 / concat_dim) ** 0.5 if kernel_init_std is None else kernel_init_std
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_channels, concat_dim)) * std)
-        self.bias = nnx.Param(jax.random.uniform(rngs.params(), (out_channels, 1), minval=-1e-3, maxval=1e-3))
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_channels, concat_dim), dtype=param_dtype) * std)
+        self.bias = nnx.Param(
+            jax.random.uniform(rngs.params(), (out_channels, 1), dtype=param_dtype, minval=-1e-3, maxval=1e-3)
+        )
 
     def __call__(
         self,

@@ -24,6 +24,7 @@ Hyperbolic Space", 2025.
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from .hyperboloid_core import lorentz_midpoint, spatial_to_hyperboloid
@@ -97,6 +98,9 @@ class _HyperbolicAttentionBase(nnx.Module):
         Uniform init bound for HTCLinear weights (default: 0.02).
     eps : float
         Numerical stability floor (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by the manifold's ``dtype``.
     rngs : nnx.Rngs
         Random number generators.
     """
@@ -109,6 +113,7 @@ class _HyperbolicAttentionBase(nnx.Module):
         num_heads: int = 1,
         init_bound: float = 0.02,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
         rngs: nnx.Rngs,
     ):
         self.num_heads = num_heads
@@ -116,13 +121,22 @@ class _HyperbolicAttentionBase(nnx.Module):
         self.eps = eps
 
         self.query_projections = nnx.List(
-            [HTCLinear(in_features, out_features, rngs=rngs, init_bound=init_bound, eps=eps) for _ in range(num_heads)]
+            [
+                HTCLinear(in_features, out_features, rngs=rngs, init_bound=init_bound, eps=eps, param_dtype=param_dtype)
+                for _ in range(num_heads)
+            ]
         )
         self.key_projections = nnx.List(
-            [HTCLinear(in_features, out_features, rngs=rngs, init_bound=init_bound, eps=eps) for _ in range(num_heads)]
+            [
+                HTCLinear(in_features, out_features, rngs=rngs, init_bound=init_bound, eps=eps, param_dtype=param_dtype)
+                for _ in range(num_heads)
+            ]
         )
         self.value_projections = nnx.List(
-            [HTCLinear(in_features, out_features, rngs=rngs, init_bound=init_bound, eps=eps) for _ in range(num_heads)]
+            [
+                HTCLinear(in_features, out_features, rngs=rngs, init_bound=init_bound, eps=eps, param_dtype=param_dtype)
+                for _ in range(num_heads)
+            ]
         )
 
     def _project_qkv(
@@ -210,6 +224,9 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         Uniform init bound for weights (default: 0.02).
     eps : float
         Numerical stability floor (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by the manifold's ``dtype``.
     rngs : nnx.Rngs
         Random number generators.
     """
@@ -223,6 +240,7 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         power: float = 2.0,
         init_bound: float = 0.02,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
         rngs: nnx.Rngs,
     ):
         super().__init__(
@@ -231,12 +249,13 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
             num_heads=num_heads,
             init_bound=init_bound,
             eps=eps,
+            param_dtype=param_dtype,
             rngs=rngs,
         )
         self.power = power
-        self.temperature = nnx.Param(jnp.array(1.0))
+        self.temperature = nnx.Param(jnp.array(1.0, dtype=param_dtype))
         # Spatial residual projection ψ: D → D (shared across heads)
-        self.residual_proj = nnx.Linear(out_features, out_features, rngs=rngs)
+        self.residual_proj = nnx.Linear(out_features, out_features, param_dtype=param_dtype, rngs=rngs)
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
@@ -246,8 +265,9 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         key_spatial_BNHD = key_BNHA[..., 1:]
         value_spatial_BNHD = value_BNHA[..., 1:]
 
-        # Cast scalar param to compute dtype: param creation follows JAX default
-        # dtype, which is float64 under x64 and would silently promote f32 inputs.
+        # Cast scalar param to compute dtype: storage (param_dtype) and compute
+        # (input/manifold dtype) are decoupled, so the param must not drag the
+        # computation to its storage dtype.
         temperature = self.temperature[...].astype(query_spatial_BNHD.dtype)
         focused_query_BNHD = focus_transform(query_spatial_BNHD, temperature, self.power, eps)
         focused_key_BNHD = focus_transform(key_spatial_BNHD, temperature, self.power, eps)
@@ -323,6 +343,9 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         Uniform init bound for weights (default: 0.02).
     eps : float
         Numerical stability floor (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by the manifold's ``dtype``.
     rngs : nnx.Rngs
         Random number generators.
     """
@@ -335,6 +358,7 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         num_heads: int = 1,
         init_bound: float = 0.02,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
         rngs: nnx.Rngs,
     ):
         super().__init__(
@@ -343,10 +367,11 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
             num_heads=num_heads,
             init_bound=init_bound,
             eps=eps,
+            param_dtype=param_dtype,
             rngs=rngs,
         )
         # Spatial residual projection ψ: D → D (shared across heads)
-        self.residual_proj = nnx.Linear(out_features, out_features, rngs=rngs)
+        self.residual_proj = nnx.Linear(out_features, out_features, param_dtype=param_dtype, rngs=rngs)
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
@@ -398,6 +423,9 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         Uniform init bound for weights (default: 0.02).
     eps : float
         Numerical stability floor (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by the manifold's ``dtype``.
     rngs : nnx.Rngs
         Random number generators.
     """
@@ -410,6 +438,7 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         num_heads: int = 1,
         init_bound: float = 0.02,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
         rngs: nnx.Rngs,
     ):
         super().__init__(
@@ -418,10 +447,11 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
             num_heads=num_heads,
             init_bound=init_bound,
             eps=eps,
+            param_dtype=param_dtype,
             rngs=rngs,
         )
-        self.scale = nnx.Param(jnp.array(1.0))
-        self.attn_bias = nnx.Param(jnp.array(0.0))
+        self.scale = nnx.Param(jnp.array(1.0, dtype=param_dtype))
+        self.attn_bias = nnx.Param(jnp.array(0.0, dtype=param_dtype))
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
@@ -431,8 +461,9 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         lorentz_inner_BNHM = -jnp.einsum("bnha,bmha->bnhm", query_BNHA[..., 0:1], key_BNHA[..., 0:1]) + jnp.einsum(
             "bnhd,bmhd->bnhm", query_BNHA[..., 1:], key_BNHA[..., 1:]
         )  # (B, N, H, M)
-        # Cast scalar params to compute dtype (param creation follows JAX default
-        # dtype, which is float64 under x64 and would silently promote f32 scores).
+        # Cast scalar params to compute dtype: storage (param_dtype) and compute
+        # (input/manifold dtype) are decoupled, so the params must not drag the
+        # scores to their storage dtype.
         scale = self.scale[...].astype(lorentz_inner_BNHM.dtype)
         attn_bias = self.attn_bias[...].astype(lorentz_inner_BNHM.dtype)
         scores_BNHM = (2.0 + 2.0 * lorentz_inner_BNHM) / (scale + eps) + attn_bias

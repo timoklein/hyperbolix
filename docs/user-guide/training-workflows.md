@@ -109,7 +109,7 @@ Most defaults from Euclidean training transfer. The exceptions:
 | **Learning rate** | Adam `1e-3` works as a starting point for HTC / HCat / PP / PV. For deep Poincaré nets at `c=0.1`, try `5e-4`–`1e-3` |
 | **Gradient clipping** | Norm-clip at `1.0` is a safe default; not strictly required for most setups |
 | **Curvature init** | Hyperboloid: `c=1.0`. PV: `c=1.0`. Poincaré (deep nets): `c=0.1` with `LearnableCurvature(init_c=0.1)` per layer |
-| **Float precision** | `float32` is fine for Hyperboloid and PV at modest depths. Use `Poincare(dtype=jnp.float64)` for high curvature, deep nets, or boundary-near training. See [Numerical Stability](numerical-stability.md) |
+| **Float precision** | `float32` is fine for Hyperboloid and PV at modest depths. Use `Poincare(dtype=jnp.float64)` for high curvature, deep nets, or boundary-near training. Parameters stay float32 regardless (`param_dtype` default) — float64 affects manifold compute only. See [Numerical Stability](numerical-stability.md#storage-vs-compute-dtype) |
 | **Layer init** | Keep each family's default (HTC uses small uniform, PP uses scaled normal, etc.). Standard He/Xavier is too large for hyperbolic layers — see the [NN Layers guide](nn-layers.md#initialization-scales) |
 
 ## Common Training Failures
@@ -119,7 +119,7 @@ Most defaults from Euclidean training transfer. The exceptions:
 | NaN loss in the first step | Init too large, or `version_idx` left dynamic under JIT | Verify per-family init defaults; bind `version_idx` with `functools.partial` before JIT |
 | Stuck at random-chance accuracy (Poincaré) | Curvature too high — features hit the boundary where the conformal factor collapses | Use `Poincare(c=0.1)` with `LearnableCurvature(init_c=0.1)` per layer |
 | Loss explodes after some warmup (Hyperboloid float32) | Lorentz-constraint drift accumulated past the layer's tolerance | Periodically call `manifold.proj(x, c)` between blocks, or switch to float64 |
-| Loss is decreasing on training data but eval is wild | Float precision mismatch between train and eval | Make sure both code paths use the same dtype on inputs and manifold |
+| Loss is decreasing on training data but eval is wild | Float precision mismatch between train and eval | Make sure both code paths use the same dtype on inputs and manifold (`param_dtype` storage is shared, so the mismatch is almost always inputs or manifold dtype) |
 | Using `riemannian_adam` for `HTC` / `FGG` / `PP` / `PV` layers | Wrong optimizer for Euclidean-weighted layers | Switch to `optax.adam` — see [Optimizers Guide](optimizers.md) |
 
 ## See Also

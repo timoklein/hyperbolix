@@ -9,6 +9,7 @@ Dimension key:
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
@@ -42,6 +43,9 @@ class HypRegressionHyperboloid(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
     Notes
     -----
     JIT Compatibility:
@@ -64,6 +68,7 @@ class HypRegressionHyperboloid(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -79,9 +84,9 @@ class HypRegressionHyperboloid(nnx.Module):
 
         # Trainable parameters
         # kernel lies in the tangent space of the Hyperboloid origin, so the time coordinate along axis is zero
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim - 1)))
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim - 1), dtype=param_dtype))
         # Scalar bias (initialized to small random values)
-        self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1)) * 0.01)
+        self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1), dtype=param_dtype) * 0.01)
 
     def __call__(
         self,
@@ -148,6 +153,9 @@ class FGGLorentzMLR(nnx.Module):
         Initial value for bias entries (default: 0.5).
     eps : float, optional
         Numerical stability floor (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by the manifold's ``dtype``.
 
     References
     ----------
@@ -163,6 +171,7 @@ class FGGLorentzMLR(nnx.Module):
         reset_params: str = "mlr",
         init_bias: float = 0.5,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if reset_params not in ("default", "mlr"):
             raise ValueError(f"reset_params must be 'default' or 'mlr', got '{reset_params}'")
@@ -177,11 +186,13 @@ class FGGLorentzMLR(nnx.Module):
         key = rngs.params()
         if reset_params == "mlr":
             std = jnp.sqrt(5.0 / in_features)
-            self.kernel = nnx.Param(jax.random.normal(key, (in_spatial, num_classes)) * std)
+            self.kernel = nnx.Param(jax.random.normal(key, (in_spatial, num_classes), dtype=param_dtype) * std)
         else:  # default
             stdv = 1.0 / jnp.sqrt(jnp.array(in_features, dtype=jnp.float32))
-            self.kernel = nnx.Param(jax.random.uniform(key, (in_spatial, num_classes), minval=-stdv, maxval=stdv))
-        self.bias = nnx.Param(jnp.full((num_classes,), init_bias))
+            self.kernel = nnx.Param(
+                jax.random.uniform(key, (in_spatial, num_classes), dtype=param_dtype, minval=-stdv, maxval=stdv)
+            )
+        self.bias = nnx.Param(jnp.full((num_classes,), init_bias, dtype=param_dtype))
 
     def __call__(
         self,

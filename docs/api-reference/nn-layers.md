@@ -984,8 +984,8 @@ logits_B10 = mlr(y_BHWC.reshape(-1, 65), c=1.0)
 print(logits_B10.shape)  # (784, 10)
 
 # --- FGGMeanOnlyBatchNorm: pairs with FGGLinear(use_weight_norm=True) ---
-# num_features is the SPATIAL (out) dimension
-bn = FGGMeanOnlyBatchNorm(num_features=64, rngs=rngs)
+# num_features is the SPATIAL (out) dimension (no rngs: zero-initialized state)
+bn = FGGMeanOnlyBatchNorm(num_features=64)
 y_normed = bn(y_B65, c_in=1.0, c_out=1.0, use_running_average=False)
 print(y_normed.shape)  # (8, 65)
 ```
@@ -1082,7 +1082,8 @@ from flax import nnx
 from hyperbolix.manifolds import Poincare
 from hyperbolix.nn_layers import HypVQEmbeddingPoincare, HypVQMLRPoincare
 
-# Manifold ops run in float64; the quantized decoder input comes back float32.
+# Manifold ops run in float64; the quantized decoder input comes back float32,
+# and the codebook/cluster-size buffers are stored float32 (param_dtype default).
 manifold = Poincare(dtype=jnp.float64)
 h = jax.random.normal(jax.random.PRNGKey(1), (256, 64)) * 0.3  # encoder tangent features
 

@@ -17,6 +17,7 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
@@ -58,9 +59,13 @@ def _fhcnn_forward(
 
     # Linear transformation: (B, in_dim) -> (B, out_dim). Cast params to the
     # input dtype so float64 weights (created when jax_enable_x64 is enabled
-    # globally) don't silently promote a float32 manifold computation.
+    # globally) don't silently promote a float32 manifold computation. The
+    # scale needs the same guard: a learnable scale param is weak-typed at
+    # init (adopts float32) but becomes strong float64 after the first
+    # optimizer step. asarray also covers the static Python-float scale.
     kernel_OI = kernel_OI.astype(x_BI.dtype)
     bias_1O = bias_1O.astype(x_BI.dtype)
+    scale_val = jnp.asarray(scale_val, dtype=x_BI.dtype)
     x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O
 
     # Split into time and space: x0 is first coord, x_rem is spatial
@@ -127,9 +132,12 @@ def _fhnn_forward(
 
     # Linear transformation: (B, in_dim) -> (B, out_dim). Cast params to the
     # input dtype so float64 weights (created when jax_enable_x64 is enabled
-    # globally) don't silently promote a float32 manifold computation.
+    # globally) don't silently promote a float32 manifold computation. The
+    # scale param needs the same guard: it is weak-typed at init (adopts
+    # float32) but becomes strong float64 after the first optimizer step.
     kernel_OI = kernel_OI.astype(x_BI.dtype)
     bias_1O = bias_1O.astype(x_BI.dtype)
+    scale_val = jnp.asarray(scale_val, dtype=x_BI.dtype)
     z_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O  # (B, O)
 
     # Split into time logit and spatial components
@@ -276,6 +284,9 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
     normalize : bool
         Whether to normalize the space coordinates before rescaling (default: False).
         Note: This is a static configuration - changing it after initialization requires recompilation.
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
     Notes
     -----
     JIT Compatibility:
@@ -314,6 +325,7 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
         eps: float = 1e-5,
         activation: Callable[[Array], Array] | None = None,
         normalize: bool = False,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -330,13 +342,13 @@ class HypLinearHyperboloidFHCNN(nnx.Module):
 
         # Trainable parameters
         bound = 0.02
-        weight_init = jax.random.uniform(rngs.params(), (out_dim, in_dim), minval=-bound, maxval=bound)
+        weight_init = jax.random.uniform(rngs.params(), (out_dim, in_dim), dtype=param_dtype, minval=-bound, maxval=bound)
         self.kernel = nnx.Param(weight_init)
-        self.bias = nnx.Param(jnp.zeros((1, out_dim)))
+        self.bias = nnx.Param(jnp.zeros((1, out_dim), dtype=param_dtype))
 
         # Scale parameter for sigmoid
         if learnable_scale:
-            self.scale = nnx.Param(jnp.array(init_scale))
+            self.scale = nnx.Param(jnp.array(init_scale, dtype=param_dtype))
         else:
             # For non-learnable scale, store as regular Python float (static)
             self.scale = init_scale
@@ -414,6 +426,9 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         Note: This is a static configuration - changing it after initialization requires recompilation.
     dropout_rate : float or None
         Dropout rate applied before the linear transformation (default: None).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
@@ -454,6 +469,7 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         eps: float = 1e-5,
         activation: Callable[[Array], Array] | None = None,
         dropout_rate: float | None = None,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -469,13 +485,13 @@ class HypLinearHyperboloidFHNN(nnx.Module):
 
         # FHNN weight init: U(-0.02, 0.02) with time column zeroed (tangent vectors at origin)
         bound = 0.02
-        weight_init = jax.random.uniform(rngs.params(), (out_dim, in_dim), minval=-bound, maxval=bound)
+        weight_init = jax.random.uniform(rngs.params(), (out_dim, in_dim), dtype=param_dtype, minval=-bound, maxval=bound)
         weight_init = weight_init.at[:, 0].set(0.0)
         self.kernel = nnx.Param(weight_init)
-        self.bias = nnx.Param(jnp.zeros((1, out_dim)))
+        self.bias = nnx.Param(jnp.zeros((1, out_dim), dtype=param_dtype))
 
         # Learnable scale for the sigmoid (always learnable in FHNN)
-        self.scale = nnx.Param(jnp.array(init_scale))
+        self.scale = nnx.Param(jnp.array(init_scale, dtype=param_dtype))
 
         # Optional dropout
         if dropout_rate is not None and dropout_rate > 0:
@@ -553,6 +569,9 @@ class HypLinearHyperboloidPP(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
@@ -576,6 +595,7 @@ class HypLinearHyperboloidPP(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -592,8 +612,8 @@ class HypLinearHyperboloidPP(nnx.Module):
         # Trainable parameters — standard normal init (Shimizu et al. 2020)
         in_spatial = in_dim - 1
         out_spatial = out_dim - 1
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_spatial, in_spatial)))
-        self.bias = nnx.Param(jnp.zeros((out_spatial, 1)))
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_spatial, in_spatial), dtype=param_dtype))
+        self.bias = nnx.Param(jnp.zeros((out_spatial, 1), dtype=param_dtype))
 
     def __call__(
         self,
@@ -649,6 +669,9 @@ class HTCLinear(nnx.Module):
         close to the hyperboloid origin for stable training (default: 0.02).
     eps : float, optional
         Small value for numerical stability (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by the manifold's ``dtype``.
 
     Attributes
     ----------
@@ -703,14 +726,17 @@ class HTCLinear(nnx.Module):
         use_bias: bool = True,
         init_bound: float = 0.02,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         # Small uniform initialization for hyperbolic stability
         # Standard initializations (Lecun, Xavier) are too large and cause gradient explosion
         self.kernel = nnx.Param(
-            jax.random.uniform(rngs.params(), (in_features, out_features), minval=-init_bound, maxval=init_bound)
+            jax.random.uniform(
+                rngs.params(), (in_features, out_features), dtype=param_dtype, minval=-init_bound, maxval=init_bound
+            )
         )
         if use_bias:
-            self.bias = nnx.Param(jnp.zeros((out_features,)))
+            self.bias = nnx.Param(jnp.zeros((out_features,), dtype=param_dtype))
         else:
             self.bias = None
         self.eps = eps
@@ -785,6 +811,9 @@ class FGGLinear(nnx.Module):
         Initial value for bias entries (default: 0.5).
     eps : float, optional
         Numerical stability floor (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by the manifold's ``dtype``.
 
     References
     ----------
@@ -816,6 +845,7 @@ class FGGLinear(nnx.Module):
         use_weight_norm: bool = False,
         init_bias: float = 0.5,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if reset_params not in ("eye", "xavier", "kaiming", "lorentz_kaiming", "mlr"):
             raise ValueError(
@@ -849,17 +879,21 @@ class FGGLinear(nnx.Module):
             std = jnp.sqrt(5.0 / in_features)
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
 
+        # Pin storage dtype once after the init branches (under global x64 the
+        # bare jnp.eye / jax.random.normal above would be float64).
+        U_init = U_init.astype(param_dtype)
+
         # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
         if use_weight_norm:
             # Reference: kernel_dir from reset_params (normalized in forward), kernel_scale fixed magnitude
             self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
             g_init_val = jnp.sqrt(1.0 / (in_features + out_features))
-            self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val))  # (O,)
+            self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val, dtype=param_dtype))  # (O,)
         else:
             self.kernel = nnx.Param(U_init)  # (I, O)
 
         # Bias: init to init_bias
-        self.bias = nnx.Param(jnp.full((out_spatial,), init_bias))  # (O,)
+        self.bias = nnx.Param(jnp.full((out_spatial,), init_bias, dtype=param_dtype))  # (O,)
 
     def _get_kernel(self) -> jax.Array:
         """Return the effective weight matrix, handling weight normalization."""

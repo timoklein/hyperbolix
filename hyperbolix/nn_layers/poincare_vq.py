@@ -31,6 +31,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
@@ -132,6 +133,10 @@ class HypVQEmbeddingPoincare(nnx.Module):
     out_dtype : jnp.dtype
         Dtype of ``output.quantized`` (default: float32) — the manifold→decoder
         boundary cast that prevents silent float64 promotion of the decoder.
+    param_dtype : DTypeLike
+        Storage dtype of the codebook and cluster-size buffers (default:
+        jnp.float32). Compute precision of manifold operations (forward and
+        EMA update) is set by ``manifold.dtype``.
     """
 
     def __init__(
@@ -148,6 +153,7 @@ class HypVQEmbeddingPoincare(nnx.Module):
         dead_code_threshold: float = 1.0,
         dead_code_revival: bool = False,
         out_dtype: jnp.dtype = jnp.float32,  # type: ignore[assignment]
+        param_dtype: DTypeLike = jnp.float32,
     ) -> None:
         validate_poincare_manifold(
             manifold_module,
@@ -166,14 +172,15 @@ class HypVQEmbeddingPoincare(nnx.Module):
         # Codebook BUFFER (nnx.Variable, not nnx.Param): a small zero-centred
         # Gaussian projected onto the ball. The init is tiny so the proj is a
         # no-op for any reasonable curvature (c=1.0 nominal here; every forward /
-        # ema_update applies the true call-time c). Float dtype from the manifold.
-        init_KC = jax.random.normal(rngs.params(), (num_codes, code_dim), dtype=manifold_module.dtype) * init_scale
+        # ema_update applies the true call-time c). Stored in param_dtype; the
+        # proj runs in manifold.dtype, so cast back at the storage boundary.
+        init_KC = jax.random.normal(rngs.params(), (num_codes, code_dim), dtype=param_dtype) * init_scale
         init_KC = jax.vmap(manifold_module.proj, in_axes=(0, None))(init_KC, 1.0)
-        self.codebook = nnx.Variable(init_KC)
+        self.codebook = nnx.Variable(init_KC.astype(param_dtype))
 
         # Per-code EMA usage count for dead-code revival. Init to 2·threshold so a
         # never-used code survives a grace window before its first revival.
-        self.cluster_size = nnx.Variable(jnp.full((num_codes,), 2.0 * dead_code_threshold, dtype=manifold_module.dtype))
+        self.cluster_size = nnx.Variable(jnp.full((num_codes,), 2.0 * dead_code_threshold, dtype=param_dtype))
 
     def __call__(self, x_NC: Float[Array, "N C"], c: float = 1.0) -> PoincareVQOutput:
         """Quantize encoder tangent vectors ``x_NC`` at curvature ``c``.
@@ -296,8 +303,10 @@ class HypVQEmbeddingPoincare(nnx.Module):
             new_cluster_size_K = jnp.where(dead_K, revived_credit, new_cluster_size_K)
             n_dead = jnp.sum(dead_K).astype(jnp.int32)
 
-        self.codebook[...] = updated_KC
-        self.cluster_size[...] = new_cluster_size_K
+        # Storage boundary: all EMA math above ran in manifold.dtype; cast back
+        # to the buffers' storage dtype (param_dtype) at store time.
+        self.codebook[...] = updated_KC.astype(self.codebook[...].dtype)
+        self.cluster_size[...] = new_cluster_size_K.astype(self.cluster_size[...].dtype)
         return n_dead
 
 
@@ -335,6 +344,9 @@ class HypVQMLRPoincare(nnx.Module):
     out_dtype : jnp.dtype
         Dtype of ``output.quantized`` (default: float32) — the manifold→decoder
         boundary cast.
+    param_dtype : DTypeLike
+        Storage dtype of the MLR parameters (default: jnp.float32). Compute
+        precision of manifold operations is set by ``manifold.dtype``.
     """
 
     def __init__(
@@ -347,6 +359,7 @@ class HypVQMLRPoincare(nnx.Module):
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
         out_dtype: jnp.dtype = jnp.float32,  # type: ignore[assignment]
+        param_dtype: DTypeLike = jnp.float32,
     ) -> None:
         validate_poincare_manifold(manifold_module, required_methods=("expmap_0",))
         self.manifold = manifold_module
@@ -365,6 +378,7 @@ class HypVQMLRPoincare(nnx.Module):
             rngs=rngs,
             clamping_factor=clamping_factor,
             smoothing_factor=smoothing_factor,
+            param_dtype=param_dtype,
         )
 
     def __call__(

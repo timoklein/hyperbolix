@@ -11,6 +11,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
@@ -51,6 +52,9 @@ class HypLinearPoincare(nnx.Module):
         passed at ``__call__`` time — a mismatch silently applies the wrong
         Riemannian correction. For learnable curvature, pass a callable
         returning the current value (e.g. ``lambda: model.curvature()``).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
     Notes
     -----
     JIT Compatibility:
@@ -73,6 +77,7 @@ class HypLinearPoincare(nnx.Module):
         rngs: nnx.Rngs,
         input_space: str = "manifold",
         curvature: float | Callable[[], Any] = 1.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -91,10 +96,10 @@ class HypLinearPoincare(nnx.Module):
         # Tangent space weight (Euclidean) - initialized with std = 1/sqrt(fan_in)
         # to prevent outputs from saturating at the Poincaré ball boundary
         std = 1.0 / jnp.sqrt(in_dim)
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * std)
         # Manifold bias (initialized to small random values to avoid gradient issues at origin)
         self.bias = ManifoldParam(
-            jax.random.normal(rngs.params(), (out_dim,)) * 0.01,
+            jax.random.normal(rngs.params(), (out_dim,), dtype=param_dtype) * 0.01,
             manifold=self.manifold,
             curvature=curvature,
         )
@@ -202,6 +207,9 @@ class HypLinearPoincarePP(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
     Notes
     -----
     JIT Compatibility:
@@ -224,6 +232,7 @@ class HypLinearPoincarePP(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -244,9 +253,9 @@ class HypLinearPoincarePP(nnx.Module):
         # Tangent space weight - initialized with std = 1/sqrt(fan_in)
         # to prevent outputs from saturating at the Poincaré ball boundary
         std = 1.0 / jnp.sqrt(in_dim)
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * std)
         # Scalar bias
-        self.bias = nnx.Param(jnp.zeros((out_dim, 1)))
+        self.bias = nnx.Param(jnp.zeros((out_dim, 1), dtype=param_dtype))
 
     def __call__(
         self,

@@ -24,6 +24,7 @@ Dimension key:
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
@@ -190,6 +191,10 @@ class PoincareBatchNorm2D(nnx.Module):
         EMA momentum for running statistics (default: 0.9).
     eps : float
         Numerical stability floor (default: 1e-6).
+    param_dtype : DTypeLike
+        Storage dtype of the learnable parameters and running statistics
+        (default: jnp.float32). Compute precision of manifold operations is
+        set by ``manifold.dtype``.
 
     Notes
     -----
@@ -215,6 +220,7 @@ class PoincareBatchNorm2D(nnx.Module):
         use_running_average: bool = False,
         momentum: float = 0.9,
         eps: float = 1e-6,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         validate_poincare_manifold(
             manifold_module,
@@ -226,18 +232,16 @@ class PoincareBatchNorm2D(nnx.Module):
         self.momentum = momentum
         self.eps = eps
 
-        # Learnable parameters and running stats (tangent space). Pin the dtype
-        # to the manifold dtype so they stay float32 even when jax_enable_x64 is
-        # enabled globally; otherwise the float64 var/stats promote the float32
-        # tangent-space scaling and persist float64 BatchStat state. These are
-        # constant (zeros/ones) inits, so pinning the dtype changes no values.
-        dtype = self.manifold.dtype
-        self.mean = nnx.Param(jnp.zeros((num_features,), dtype=dtype))  # learned mean
-        self.var = nnx.Param(jnp.ones((), dtype=dtype))  # learned variance (scalar)
+        # Learnable parameters and running stats (tangent space). Storage is
+        # pinned to param_dtype; manifold operations re-promote to the
+        # manifold's compute dtype at their boundaries, and the EMA updates in
+        # __call__ cast back to the stat dtype at store time.
+        self.mean = nnx.Param(jnp.zeros((num_features,), dtype=param_dtype))  # learned mean
+        self.var = nnx.Param(jnp.ones((), dtype=param_dtype))  # learned variance (scalar)
 
         # Running statistics (tangent space)
-        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,), dtype=dtype))
-        self.running_var = nnx.BatchStat(jnp.ones((), dtype=dtype))
+        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,), dtype=param_dtype))
+        self.running_var = nnx.BatchStat(jnp.ones((), dtype=param_dtype))
 
     def __call__(
         self,
@@ -286,13 +290,13 @@ class PoincareBatchNorm2D(nnx.Module):
             # Map midpoint back to tangent space for running stat storage
             batch_mean_tangent_C = self.manifold.logmap_0(batch_midpoint_C, c)  # (C,)
 
-            # Update running statistics (EMA, no gradient flow)
-            self.running_mean[...] = jax.lax.stop_gradient(
-                self.momentum * self.running_mean[...] + (1.0 - self.momentum) * batch_mean_tangent_C
-            )
-            self.running_var[...] = jax.lax.stop_gradient(
-                self.momentum * self.running_var[...] + (1.0 - self.momentum) * batch_var
-            )
+            # Update running statistics (EMA, no gradient flow). The batch
+            # stats come from manifold ops (manifold.dtype), so cast back to
+            # the stat storage dtype at store time.
+            new_running_mean_C = self.momentum * self.running_mean[...] + (1.0 - self.momentum) * batch_mean_tangent_C
+            self.running_mean[...] = jax.lax.stop_gradient(new_running_mean_C).astype(self.running_mean[...].dtype)
+            new_running_var = self.momentum * self.running_var[...] + (1.0 - self.momentum) * batch_var
+            self.running_var[...] = jax.lax.stop_gradient(new_running_var).astype(self.running_var[...].dtype)
 
         # Get the manifold-space mean to use for geometric operations
         # (either from batch or from running stats)

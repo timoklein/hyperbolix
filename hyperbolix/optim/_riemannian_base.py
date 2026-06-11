@@ -184,7 +184,15 @@ def make_riemannian_optimizer(
             final_moments_D = list(new_moments_D)
             for idx in ptransp_indices:
                 final_moments_D[idx] = manifold_module.ptransp(new_moments_D[idx], param_D, new_param_D, c)
-            return new_param_D - param_D, tuple(final_moments_D)
+            # Storage-dtype contract: manifold methods compute in manifold.dtype
+            # (egrad2rgrad/expmap/ptransp _cast their inputs), but the returned
+            # update must match the param dtype (optax convention; a float32
+            # param next to a float64 manifold must not promote) and moment
+            # buffers must keep their init dtype (zeros_like(param)) — without
+            # the casts, optimizer state silently turns float64 after one step.
+            update_D = (new_param_D - param_D).astype(param_D.dtype)
+            final_moments_out_D = tuple(m.astype(m_in.dtype) for m, m_in in zip(final_moments_D, moments_D, strict=True))
+            return update_D, final_moments_out_D
 
         if param_value.ndim == 0:
             raise ValueError("Manifold parameters must have at least one dimension (a point), got a scalar.")

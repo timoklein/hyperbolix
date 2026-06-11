@@ -12,6 +12,7 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
@@ -56,6 +57,9 @@ class LorentzConv2D(nnx.Module):
         Stride of the convolution (default: 1)
     padding : str or int or tuple
         Padding mode: 'SAME', 'VALID', or explicit padding (default: 'SAME')
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by the manifold's ``dtype``.
 
     Notes
     -----
@@ -87,6 +91,7 @@ class LorentzConv2D(nnx.Module):
         rngs: nnx.Rngs,
         stride: int | tuple[int, int] = 1,
         padding: str = "SAME",
+        param_dtype: DTypeLike = jnp.float32,
     ):
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -100,6 +105,7 @@ class LorentzConv2D(nnx.Module):
             kernel_size=kernel_size,
             strides=stride,
             padding=padding,
+            param_dtype=param_dtype,
             rngs=rngs,
         )
 
@@ -176,6 +182,9 @@ class HypConv2DHyperboloid(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
@@ -200,6 +209,7 @@ class HypConv2DHyperboloid(nnx.Module):
         stride: int | tuple[int, int] = 1,
         padding: str = "SAME",
         input_space: str = "manifold",
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
             raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
@@ -239,9 +249,11 @@ class HypConv2DHyperboloid(nnx.Module):
         # Trainable parameters — owned directly for flat parameter paths
         bound = 0.02
         self.kernel = nnx.Param(
-            jax.random.uniform(rngs.params(), (out_channels, hcat_out_ambient_dim), minval=-bound, maxval=bound)
+            jax.random.uniform(
+                rngs.params(), (out_channels, hcat_out_ambient_dim), dtype=param_dtype, minval=-bound, maxval=bound
+            )
         )
-        self.bias = nnx.Param(jnp.zeros((1, out_channels)))
+        self.bias = nnx.Param(jnp.zeros((1, out_channels), dtype=param_dtype))
         self.scale = 2.3  # not learnable (matches FHCNN default)
 
     def _extract_patches(
@@ -383,6 +395,9 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
         Activation function to apply before the linear transformation (default: None).
     dropout_rate : float or None
         Dropout rate applied before the linear transformation (default: None).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
@@ -416,6 +431,7 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
         eps: float = 1e-5,
         activation: Callable[[Array], Array] | None = None,
         dropout_rate: float | None = None,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
             raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
@@ -450,13 +466,15 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
 
         # FHNN weight init: U(-0.02, 0.02) with time column zeroed (tangent vectors at origin)
         bound = 0.02
-        weight_init = jax.random.uniform(rngs.params(), (out_channels, hcat_out_ambient_dim), minval=-bound, maxval=bound)
+        weight_init = jax.random.uniform(
+            rngs.params(), (out_channels, hcat_out_ambient_dim), dtype=param_dtype, minval=-bound, maxval=bound
+        )
         weight_init = weight_init.at[:, 0].set(0.0)
         self.kernel = nnx.Param(weight_init)
-        self.bias = nnx.Param(jnp.zeros((1, out_channels)))
+        self.bias = nnx.Param(jnp.zeros((1, out_channels), dtype=param_dtype))
 
         # Learnable scale for the sigmoid (always learnable in FHNN)
-        self.scale = nnx.Param(jnp.array(init_scale))
+        self.scale = nnx.Param(jnp.array(init_scale, dtype=param_dtype))
 
         # Optional dropout
         if dropout_rate is not None and dropout_rate > 0:
@@ -609,6 +627,9 @@ class FGGConv2D(nnx.Module):
         Initial bias for FGGLinear (default: 0.5).
     eps : float, optional
         Numerical stability floor (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     References
     ----------
@@ -631,6 +652,7 @@ class FGGConv2D(nnx.Module):
         use_weight_norm: bool = False,
         init_bias: float = 0.5,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ("SAME", "VALID"):
             raise ValueError(f"padding must be 'SAME' or 'VALID', got '{padding}'")
@@ -689,15 +711,19 @@ class FGGConv2D(nnx.Module):
             std = jnp.sqrt(5.0 / hcat_out_ambient)
             U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
 
+        # Pin storage dtype once after the init branches (under global x64 the
+        # bare jnp.eye / jax.random.normal above would be float64).
+        U_init = U_init.astype(param_dtype)
+
         # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
         if use_weight_norm:
             self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
             g_init_val = jnp.sqrt(1.0 / (hcat_out_ambient + out_channels))
-            self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val))  # (O,)
+            self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val, dtype=param_dtype))  # (O,)
         else:
             self.kernel = nnx.Param(U_init)  # (I, O)
 
-        self.bias = nnx.Param(jnp.full((out_spatial,), init_bias))  # (O,)
+        self.bias = nnx.Param(jnp.full((out_spatial,), init_bias, dtype=param_dtype))  # (O,)
 
     def _extract_patches(
         self,
@@ -827,6 +853,9 @@ class HypConv2DHyperboloidPP(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
@@ -853,6 +882,7 @@ class HypConv2DHyperboloidPP(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
             raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
@@ -888,8 +918,8 @@ class HypConv2DHyperboloidPP(nnx.Module):
         # Trainable parameters — standard normal init (Shimizu et al. 2020)
         out_spatial = out_channels - 1
         hcat_spatial = hcat_out_ambient_dim - 1
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_spatial, hcat_spatial)))
-        self.bias = nnx.Param(jnp.zeros((out_spatial, 1)))
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_spatial, hcat_spatial), dtype=param_dtype))
+        self.bias = nnx.Param(jnp.zeros((out_spatial, 1), dtype=param_dtype))
 
     def _extract_patches(
         self,

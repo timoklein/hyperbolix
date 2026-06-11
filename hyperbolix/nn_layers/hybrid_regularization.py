@@ -25,6 +25,7 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 """
@@ -46,6 +47,8 @@ class HyperPPFeatureScaling(nnx.Module):
         and the layer is entirely parameter-free. Default: None.
     activation : Callable or None, optional
         Lipschitz activation function. Default: jax.nn.tanh. None to skip.
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
     rngs : nnx.Rngs
         Random number generators for sub-layers.
 
@@ -69,6 +72,7 @@ class HyperPPFeatureScaling(nnx.Module):
         *,
         alpha: float | None = None,
         activation: Callable | None = jax.nn.tanh,
+        param_dtype: DTypeLike = jnp.float32,
         rngs: nnx.Rngs,
     ):
         if alpha is not None:
@@ -76,12 +80,12 @@ class HyperPPFeatureScaling(nnx.Module):
                 msg = f"alpha must be in (0, 1), got {alpha}"
                 raise ValueError(msg)
             self._atanh_alpha = math.atanh(alpha)
-            self.xi_theta = nnx.Linear(dim, 1, rngs=rngs)
+            self.xi_theta = nnx.Linear(dim, 1, param_dtype=param_dtype, rngs=rngs)
         else:
             self._atanh_alpha = None
             self.xi_theta = None
 
-        self.rms_norm = nnx.RMSNorm(dim, use_scale=False, rngs=rngs)
+        self.rms_norm = nnx.RMSNorm(dim, use_scale=False, param_dtype=param_dtype, rngs=rngs)
         self._inv_sqrt_dim = 1.0 / math.sqrt(dim)
         self.activation = activation
 

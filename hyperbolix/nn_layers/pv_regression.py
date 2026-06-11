@@ -9,7 +9,9 @@ Dimension key:
 """
 
 import jax
+import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
@@ -48,6 +50,9 @@ class HypRegressionPV(nnx.Module):
         Clamping factor for the MLR output (default: 1.0).
     smoothing_factor : float
         Smoothing factor for the MLR output (default: 50.0).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
@@ -70,6 +75,7 @@ class HypRegressionPV(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -87,9 +93,9 @@ class HypRegressionPV(nnx.Module):
 
         # Kernel init: small normal with std = 1e-2 (matches paper reference
         # PVManifoldMLR.reset_parameters in the Chen et al. repo).
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * 1e-2)
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * 1e-2)
         # Bias init: uniform U(-1e-3, 1e-3) (matches paper reference).
-        self.bias = nnx.Param(jax.random.uniform(rngs.params(), (out_dim, 1), minval=-1e-3, maxval=1e-3))
+        self.bias = nnx.Param(jax.random.uniform(rngs.params(), (out_dim, 1), dtype=param_dtype, minval=-1e-3, maxval=1e-3))
 
     def __call__(
         self,

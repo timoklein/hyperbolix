@@ -18,6 +18,7 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
@@ -102,6 +103,9 @@ class HypLinearPV(nnx.Module):
         classification/regression layer directly before a softmax/MSE loss —
         that matches the paper's ``PVManifoldMLR.reset_parameters`` recipe,
         which is tuned for receiving ``O(1)``-variance features.
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
@@ -126,6 +130,7 @@ class HypLinearPV(nnx.Module):
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
         kernel_init_std: float | None = None,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -147,8 +152,8 @@ class HypLinearPV(nnx.Module):
         # classification layer — see the ``kernel_init_std`` docstring above.
         # Bias init is uniform U(-1e-3, 1e-3), matching the paper reference.
         std = (2.0 / in_dim) ** 0.5 if kernel_init_std is None else kernel_init_std
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
-        self.bias = nnx.Param(jax.random.uniform(rngs.params(), (out_dim, 1), minval=-1e-3, maxval=1e-3))
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * std)
+        self.bias = nnx.Param(jax.random.uniform(rngs.params(), (out_dim, 1), dtype=param_dtype, minval=-1e-3, maxval=1e-3))
 
     def __call__(
         self,

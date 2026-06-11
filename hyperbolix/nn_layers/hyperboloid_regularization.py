@@ -114,6 +114,8 @@ class HRCLayerNorm(nnx.Module):
         Small value for numerical stability in layer norm (default: 1e-5).
     eps : float, optional
         Small value for numerical stability in HRC (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
 
     Attributes
     ----------
@@ -138,8 +140,9 @@ class HRCLayerNorm(nnx.Module):
         rngs: nnx.Rngs,
         epsilon: float = 1e-5,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
     ):
-        self.ln = nnx.LayerNorm(num_features, epsilon=epsilon, rngs=rngs)
+        self.ln = nnx.LayerNorm(num_features, epsilon=epsilon, param_dtype=param_dtype, rngs=rngs)
         self.eps = eps
 
     def __call__(
@@ -185,6 +188,8 @@ class HRCRMSNorm(nnx.Module):
         Small value for numerical stability in RMS norm (default: 1e-6).
     eps : float, optional
         Small value for numerical stability in HRC (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
 
     Attributes
     ----------
@@ -217,8 +222,9 @@ class HRCRMSNorm(nnx.Module):
         rngs: nnx.Rngs,
         epsilon: float = 1e-6,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
     ):
-        self.rms = nnx.RMSNorm(num_features, epsilon=epsilon, rngs=rngs)
+        self.rms = nnx.RMSNorm(num_features, epsilon=epsilon, param_dtype=param_dtype, rngs=rngs)
         self.eps = eps
 
     def __call__(
@@ -264,6 +270,8 @@ class HRCBatchNorm(nnx.Module):
         Small value for numerical stability in batch norm (default: 1e-5).
     eps : float, optional
         Small value for numerical stability in HRC (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
 
     Attributes
     ----------
@@ -302,11 +310,13 @@ class HRCBatchNorm(nnx.Module):
         momentum: float = 0.99,
         epsilon: float = 1e-5,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         self.bn = nnx.BatchNorm(
             num_features,
             momentum=momentum,
             epsilon=epsilon,
+            param_dtype=param_dtype,
             rngs=rngs,
         )
         self.eps = eps
@@ -369,6 +379,9 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
         Update: ``running_mean = momentum * running_mean + (1 - momentum) * batch_mean``.
     eps : float, optional
         Numerical stability floor for HRC time reconstruction (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the learnable bias and running mean (default:
+        jnp.float32).
 
     References
     ----------
@@ -382,22 +395,22 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
         *,
         momentum: float = 0.99,
         eps: float = 1e-7,
-        dtype: DTypeLike = jnp.float32,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         self.num_features = num_features
         self.momentum = momentum
         self.eps = eps
 
-        # Pin the bias/running-mean dtype (this layer has no manifold to inherit
-        # it from). NNX casts assignments back to a Variable's init dtype, so a
-        # float64 init (which a bare jnp.zeros becomes under global
-        # jax_enable_x64) would persist float64 state regardless of the working
-        # precision. Defaulting to float32 matches the library default; pass
-        # dtype=jnp.float64 for a fully float64 network.
+        # Pin the bias/running-mean storage dtype. NNX casts assignments back
+        # to a Variable's init dtype, so a float64 init (which a bare
+        # jnp.zeros becomes under global jax_enable_x64) would persist float64
+        # state regardless of the working precision. Defaulting to float32
+        # matches the library-wide param_dtype convention; pass
+        # param_dtype=jnp.float64 for a fully float64 network.
         # Learnable bias (shift after centering)
-        self.bias = nnx.Param(jnp.zeros((num_features,), dtype=dtype))
+        self.bias = nnx.Param(jnp.zeros((num_features,), dtype=param_dtype))
         # Running mean for eval mode
-        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,), dtype=dtype))
+        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,), dtype=param_dtype))
 
     def __call__(
         self,

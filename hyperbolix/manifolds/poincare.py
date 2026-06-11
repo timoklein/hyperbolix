@@ -707,10 +707,13 @@ def _beta_concat(points: Float[Array, "M n_i"], c: Curvature) -> Float[Array, "n
     M, n_i = points.shape
     n = M * n_i  # concatenated dimension
 
-    # Euler beta function ratio: B(n/2, 1/2) / B(n_i/2, 1/2)
+    # Euler beta function ratio: B(n/2, 1/2) / B(n_i/2, 1/2).
+    # jax.scipy.special.beta returns a strongly-typed float64 scalar under
+    # global jax_enable_x64 (unlike most scalar math, which stays weak-typed),
+    # so without the cast the ratio would promote the computation to float64.
     beta_n = jax.scipy.special.beta(n / 2.0, 0.5)
     beta_ni = jax.scipy.special.beta(n_i / 2.0, 0.5)
-    scale = beta_n / beta_ni
+    scale = jnp.asarray(beta_n / beta_ni, dtype=points.dtype)
 
     # Map all points to tangent space at origin
     tangent_MD = jax.vmap(_logmap_0, in_axes=(0, None))(points, c)  # (M, n_i)
