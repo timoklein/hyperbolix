@@ -1693,7 +1693,7 @@ optimizer = nnx.Optimizer(layer, tx, wrt=nnx.Param)</p>
 ...     return jnp.sum(y ** 2)</p>
 <p>x = jax.random.normal(jax.random.key(1), (32, 10))
 grads = nnx.grad(loss_fn)(layer, x)
-optimizer.update(grads)  # Automatically handles manifold parameters</p>
+optimizer.update(layer, grads)  # Automatically handles manifold parameters</p>
 </blockquote>
 </blockquote>
 </blockquote>
@@ -1840,7 +1840,7 @@ optimizer.update(grads)  # Automatically handles manifold parameters</p>
 </span><span id="__span-0-98"><a id="__codelineno-0-98" name="__codelineno-0-98"></a><span class="sd">    &gt;&gt;&gt;</span>
 </span><span id="__span-0-99"><a id="__codelineno-0-99" name="__codelineno-0-99"></a><span class="sd">    &gt;&gt;&gt; x = jax.random.normal(jax.random.key(1), (32, 10))</span>
 </span><span id="__span-0-100"><a id="__codelineno-0-100" name="__codelineno-0-100"></a><span class="sd">    &gt;&gt;&gt; grads = nnx.grad(loss_fn)(layer, x)</span>
-</span><span id="__span-0-101"><a id="__codelineno-0-101" name="__codelineno-0-101"></a><span class="sd">    &gt;&gt;&gt; optimizer.update(grads)  # Automatically handles manifold parameters</span>
+</span><span id="__span-0-101"><a id="__codelineno-0-101" name="__codelineno-0-101"></a><span class="sd">    &gt;&gt;&gt; optimizer.update(layer, grads)  # Automatically handles manifold parameters</span>
 </span><span id="__span-0-102"><a id="__codelineno-0-102" name="__codelineno-0-102"></a>
 </span><span id="__span-0-103"><a id="__codelineno-0-103" name="__codelineno-0-103"></a><span class="sd">    Notes</span>
 </span><span id="__span-0-104"><a id="__codelineno-0-104" name="__codelineno-0-104"></a><span class="sd">    -----</span>
@@ -2247,7 +2247,7 @@ optimizer = nnx.Optimizer(layer, tx, wrt=nnx.Param)</p>
 ...     return jnp.sum(y ** 2)</p>
 <p>x = jax.random.normal(jax.random.key(1), (32, 10))
 grads = nnx.grad(loss_fn)(layer, x)
-optimizer.update(grads)  # Automatically handles manifold parameters</p>
+optimizer.update(layer, grads)  # Automatically handles manifold parameters</p>
 </blockquote>
 </blockquote>
 </blockquote>
@@ -2433,7 +2433,7 @@ optimizer.update(grads)  # Automatically handles manifold parameters</p>
 </span><span id="__span-0-114"><a id="__codelineno-0-114" name="__codelineno-0-114"></a><span class="sd">    &gt;&gt;&gt;</span>
 </span><span id="__span-0-115"><a id="__codelineno-0-115" name="__codelineno-0-115"></a><span class="sd">    &gt;&gt;&gt; x = jax.random.normal(jax.random.key(1), (32, 10))</span>
 </span><span id="__span-0-116"><a id="__codelineno-0-116" name="__codelineno-0-116"></a><span class="sd">    &gt;&gt;&gt; grads = nnx.grad(loss_fn)(layer, x)</span>
-</span><span id="__span-0-117"><a id="__codelineno-0-117" name="__codelineno-0-117"></a><span class="sd">    &gt;&gt;&gt; optimizer.update(grads)  # Automatically handles manifold parameters</span>
+</span><span id="__span-0-117"><a id="__codelineno-0-117" name="__codelineno-0-117"></a><span class="sd">    &gt;&gt;&gt; optimizer.update(layer, grads)  # Automatically handles manifold parameters</span>
 </span><span id="__span-0-118"><a id="__codelineno-0-118" name="__codelineno-0-118"></a>
 </span><span id="__span-0-119"><a id="__codelineno-0-119" name="__codelineno-0-119"></a><span class="sd">    Notes</span>
 </span><span id="__span-0-120"><a id="__codelineno-0-120" name="__codelineno-0-120"></a><span class="sd">    -----</span>
@@ -2551,6 +2551,12 @@ optimizer.update(grads)  # Automatically handles manifold parameters</p>
 <li>Performs parallel transport for momentum/adaptive moments</li>
 <li>Falls back to Euclidean updates for plain <code>nnx.Param</code> parameters</li>
 </ol>
+<p><strong>Dtype contract:</strong> the Riemannian math (steps 2-3) runs in the manifold's
+<code>dtype</code>, but the returned updates and the moment buffers are cast back to each
+parameter's storage dtype before they leave the transformation. A float32
+parameter tagged with a float64 manifold keeps float32 weights and float32
+optimizer state across steps, while the geometry itself is computed in
+float64.</p>
 <h3 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h3>
 
 

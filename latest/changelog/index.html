@@ -1013,6 +1013,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#added-vq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added (VQ)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#fixed" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1158,6 +1169,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#added-vq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added (VQ)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#fixed" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1248,6 +1270,12 @@
 <h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v0.1.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
 <h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
 <ul>
+<li><strong>All NN layers now take a <code>param_dtype</code> constructor argument (default <code>jnp.float32</code>)</strong> controlling the <em>storage</em> dtype of every trainable parameter and persistent state (batch-norm statistics, VQ codebooks, scalar scales/temperatures). The manifold's <code>dtype</code> controls <em>compute</em> precision only. Under global <code>jax_enable_x64</code>, parameters previously materialized as float64 (2× parameter/optimizer memory, float64 checkpoints); they now stay float32 unless <code>param_dtype=jnp.float64</code> is passed explicitly. The Riemannian optimizers complete the contract: <code>egrad2rgrad</code>/<code>expmap</code>/<code>ptransp</code> run in the manifold dtype, but returned updates and momentum buffers are cast back to the parameter's storage dtype (previously a float32 <code>ManifoldParam</code> next to a float64 manifold silently promoted its optimizer state to float64 after one step). See <a href="../user-guide/numerical-stability/#storage-vs-compute-dtype">Numerical Stability — Storage vs. Compute Dtype</a>. <strong>Breaking changes:</strong><ul>
+<li><code>FGGMeanOnlyBatchNorm(dtype=...)</code> renamed to <code>param_dtype=...</code></li>
+<li><code>PoincareBatchNorm2D</code> and <code>HypVQEmbeddingPoincare</code> state is no longer pinned to <code>manifold.dtype</code> — it defaults to float32; pass <code>param_dtype=manifold.dtype</code> to restore the old behavior</li>
+<li>Checkpoints saved under global x64 before this change carry float64 leaves and will dtype-mismatch on restore into float32-storage modules — re-initialize or cast the state tree on load</li>
+</ul>
+</li>
 <li><strong>Manifolds are now plain Python classes</strong> (not <code>nnx.Module</code>). This structurally prevents shared-manifold bugs in <code>nnx.scan</code>/<code>nnx.fori_loop</code> — manifolds become static graphdef attributes with no state pytree entries</li>
 <li><strong><code>learnable=True</code> removed</strong> from manifold constructors. Use the <code>LearnableCurvature</code> module instead — assign one instance per distinct curvature on your model. See the <a href="../user-guide/manifolds/#static-vs-learnable">Manifolds User Guide</a></li>
 <li><strong><code>ProductManifold</code> curvature API redesigned</strong> — every geometry method (<code>dist</code>, <code>expmap</code>, <code>logmap</code>, <code>proj</code>, <code>origin</code>, <code>tangent_inner</code>, etc.) now takes a positional <code>c</code> argument that must be a sequence of length <code>n_factors</code> (one curvature per factor) instead of the silently-ignored scalar <code>c</code>. There is no default and no scalar broadcast: pass <code>product.curvatures</code> for static curvatures, or build the sequence from <code>LearnableCurvature</code> calls for trainable ones. The protocol-level <code>Curvature</code> type was widened to <code>ScalarCurvature | Sequence[ScalarCurvature]</code> so <code>ProductManifold</code> satisfies the <code>Manifold</code> protocol — <code>isinstance(product, Manifold)</code> is <code>True</code> and generic code typed against <code>Manifold</code> accepts product instances. The product still has no <code>c</code> attribute (use <code>product.curvatures</code>). <strong>Breaking change</strong> — call sites that passed <code>c=0.0</code> (or any scalar) must now pass a per-factor sequence <code>(c_0, c_1, …)</code></li>
@@ -1271,6 +1299,11 @@
 - <code>HypLinearPV</code>: PV fully-connected layer (Thm 5.3 / Eq. 22)
 - <code>HypConv2DPV</code>: PV 2D convolution with raw Euclidean patch concatenation (Sec 5.3) — no beta-scaling, dimension-preserving
 - <code>HypRegressionPV</code>: PV multinomial-logistic-regression head (Thm 5.2 / Eq. 19)
+- <strong>Poincaré vector quantization layers</strong> (<code>hyperbolix.nn_layers</code>):
+- <code>HypVQEmbeddingPoincare</code>: HVQ-VAE quantizer (Chen et al. 2025) — explicit on-ball codebook held as a non-parameter <code>nnx.Variable</code> buffer, geodesic nearest-neighbour selection, copy-gradient straight-through estimator, and a hyperbolic-EMA codebook update (GGBall, Bu et al. 2026, Eqs. 41-43) with optional dead-code revival via the <code>ema_update</code> method (called after <code>optimizer.update</code>; the optimizer never touches the codebook, only the commitment loss trains the encoder)
+- <code>HypVQMLRPoincare</code>: HyperVQ quantizer (Goswami et al. 2025) — implicit codebook = the rows of an internal <code>HypRegressionPoincarePP</code>, Gumbel-Softmax straight-through selection on the categorical weights (so plain <code>optax.adam</code> trains it), with a <code>deterministic</code> flag (toggled by <code>model.eval()</code> / <code>model.train()</code>) for a deterministic argmax MAP estimate at inference
+- <code>PoincareVQOutput</code>: shared pytree-friendly <code>NamedTuple</code> return type <code>(quantized, indices, loss, perplexity, z)</code>; <code>quantized</code> is cast to float32 at the manifold→decoder boundary
+- <code>poincare_weighted_midpoint</code>: reusable Poincaré weighted gyromidpoint (GGBall Eq. 41), the Poincaré analog of <code>lorentz_midpoint</code> and a weighted generalization of <code>poincare_midpoint</code>
 - MkDocs Material documentation system
 - Complete API reference documentation
 - Getting Started guide
@@ -1294,9 +1327,19 @@
 <ul>
 <li><strong>Breaking</strong>: Manifold public functions renamed to private (<code>dist()</code> → <code>_dist()</code>); use class methods instead</li>
 <li>Replaced <code>with_precision()</code> wrapper with <code>Poincare(dtype=jnp.float64)</code> pattern</li>
+<li><strong>Breaking: <code>VERSION_LORENTZIAN_PROXY</code> removed from the Poincaré manifold.</strong> The formula treated Poincaré ball coordinate 0 as a Lorentz time component, so it was only meaningful for hyperboloid inputs and returned <code>dist(x, x) = -2/c ≠ 0</code> for ball points; the docs additionally mis-advertised it as "best near boundary". The reference implementation never had it. <code>dist</code>/<code>dist_0</code> now select between 3 versions (<code>VERSION_MOBIUS_DIRECT</code>, <code>VERSION_MOBIUS</code>, <code>VERSION_METRIC_TENSOR</code>). For a true Lorentzian (squared Minkowski) proxy, convert to the hyperboloid via <code>isometry_mappings.poincare_to_hyperboloid</code> first</li>
+<li><strong>Breaking: <code>HypformerPositionalEncoding.epsilon</code> is no longer a learnable <code>nnx.Param</code></strong> — it is a fixed, non-negative constructor float (default 1.0), matching the Hypformer reference (which keeps it a plain non-trainable tensor). A learnable epsilon could be driven below -1 by gradient descent, where <code>x + epsilon * p</code> leaves the upper hyperboloid sheet and the <code>abs()</code> in the <code>lorentz_residual</code> normalizer silently masks the violation. <code>lorentz_residual</code> now documents the <code>w_y &gt;= 0</code> requirement</li>
+<li><strong>Legacy Ganea layers (<code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>) accept a <code>curvature</code> constructor argument</strong> (float or callable, default 1.0) for their manifold-valued <code>bias</code> tag instead of hardcoding 1.0. The Riemannian optimizer uses this tag for the bias update, so it must match the <code>c</code> passed at call time — previously any <code>c ≠ 1.0</code> silently applied the wrong Riemannian correction to the bias</li>
+</ul>
+<h3 id="added-vq">Added (VQ)<a class="headerlink" href="#added-vq" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>squared_commitment</code> flag on <code>HypVQEmbeddingPoincare</code></strong> (default <code>False</code>). The cited references genuinely disagree on the commitment penalty: HVQ-VAE uses the plain geodesic distance <code>d(z, sg(q))</code>, GGBall's L_HVQVAE uses <code>d²</code> (the Euclidean VQ-VAE convention). The flag selects between them without touching library code</li>
 </ul>
 <h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
 <ul>
+<li><strong>Silent float64 promotion under x64 in hyperboloid layers.</strong> Runtime buffers created without an explicit dtype (<code>FGGConv2D</code> SAME/origin padding buffer, causal linear-attention scan carries, full-attention uniform head-averaging weights) now derive their dtype from the input, and the scalar attention parameters (<code>temperature</code>, <code>scale</code>, <code>attn_bias</code>) are cast to the compute dtype at use. Previously, with <code>jax_enable_x64</code> active, these defaulted to float64 and promoted float32 activations through the rest of the layer</li>
+<li><code>FGGConv2D</code> docstring stated the default weight init is <code>"kaiming"</code>; the actual default is <code>"lorentz_kaiming"</code></li>
+<li><code>PoincareBatchNorm2D</code> now documents that the learned variance is an unconstrained scalar under a sqrt (NaN if driven negative) — kept as-is to match the van Spengler reference, with a workaround noted</li>
 <li><strong>Poincaré ↔ Hyperboloid isometry maps were only correct at <code>c=1</code>.</strong> <code>poincare_to_hyperboloid</code> / <code>hyperboloid_to_poincare</code> used unit-ball stereographic formulas missing their <code>√c</code> factors, so round-trips and distance preservation silently failed at any other curvature (the recommended default is <code>c=0.1</code>). Both are now curvature-correct at all <code>c</code>, verified by round-trip, isometry, commutative-diagram, and extreme-curvature tests across dtypes</li>
 <li><strong>Test fixture <code>uniform_points</code> generated hyperboloid points at the wrong geodesic radius for <code>c ≠ 1</code></strong> (an extra <code>/√c</code> on the spatial coordinate, masked by a trailing projection). Corrected so generated points are the exact Poincaré images at any curvature</li>
 </ul>

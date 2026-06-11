@@ -643,6 +643,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#vector-quantization-poincare" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Vector Quantization (Poincaré)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#attention-normalization-positional-encoding" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1329,6 +1340,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#vector-quantization-poincare" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Vector Quantization (Poincaré)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#attention-normalization-positional-encoding" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1705,6 +1727,26 @@ tables below collapse this into per-task decisions.</p>
 </tr>
 </tbody>
 </table>
+<h3 id="vector-quantization-poincare">Vector Quantization (Poincaré)<a class="headerlink" href="#vector-quantization-poincare" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>When to pick</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HypVQEmbeddingPoincare</code></td>
+<td>Explicit on-ball codebook with a geometric <strong>EMA</strong> update (GGBall, Bu et al. 2026). No Riemannian optimizer — the codebook is a buffer moved by <code>ema_update</code> (called after <code>optimizer.update</code>); only the commitment loss trains the encoder. Optional dead-code revival</td>
+</tr>
+<tr>
+<td><code>HypVQMLRPoincare</code></td>
+<td>Codebook-free — quantization as Poincaré-MLR classification with Gumbel-Softmax. Plain <code>optax.adam</code>, reconstruction-only loss, deterministic argmax at eval (<code>model.eval()</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Both are quantizer <em>bottlenecks</em>: feed them encoder tangent features, add <code>output.loss</code> to your reconstruction loss, and decode <code>output.quantized</code> (returned as float32). See the <a href="../../api-reference/nn-layers/#vector-quantization">VQ API reference</a>.</p>
 <h3 id="attention-normalization-positional-encoding">Attention, Normalization, Positional Encoding<a class="headerlink" href="#attention-normalization-positional-encoding" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

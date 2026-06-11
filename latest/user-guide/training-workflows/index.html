@@ -1272,7 +1272,7 @@ per-operation performance, not training workflows.</p>
 </tr>
 <tr>
 <td><strong>Float precision</strong></td>
-<td><code>float32</code> is fine for Hyperboloid and PV at modest depths. Use <code>Poincare(dtype=jnp.float64)</code> for high curvature, deep nets, or boundary-near training. See <a href="../numerical-stability/">Numerical Stability</a></td>
+<td><code>float32</code> is fine for Hyperboloid and PV at modest depths. Use <code>Poincare(dtype=jnp.float64)</code> for high curvature, deep nets, or boundary-near training. Parameters stay float32 regardless (<code>param_dtype</code> default) — float64 affects manifold compute only. See <a href="../numerical-stability/#storage-vs-compute-dtype">Numerical Stability</a></td>
 </tr>
 <tr>
 <td><strong>Layer init</strong></td>
@@ -1308,7 +1308,7 @@ per-operation performance, not training workflows.</p>
 <tr>
 <td>Loss is decreasing on training data but eval is wild</td>
 <td>Float precision mismatch between train and eval</td>
-<td>Make sure both code paths use the same dtype on inputs and manifold</td>
+<td>Make sure both code paths use the same dtype on inputs and manifold (<code>param_dtype</code> storage is shared, so the mismatch is almost always inputs or manifold dtype)</td>
 </tr>
 <tr>
 <td>Using <code>riemannian_adam</code> for <code>HTC</code> / <code>FGG</code> / <code>PP</code> / <code>PV</code> layers</td>
