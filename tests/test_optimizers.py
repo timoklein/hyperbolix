@@ -321,8 +321,11 @@ def test_hyplinear_poincare_with_rsgd():
     tx = riemannian_sgd(learning_rate=0.001, momentum=0.9)
     optimizer = nnx.Optimizer(layer, tx, wrt=nnx.Param)
 
-    # Dummy input and loss
-    x = jax.random.normal(jax.random.key(1), (8, 5))
+    # Dummy input and loss. Scale down so features stay well inside the
+    # Poincaré ball: an unscaled normal pushes the layer output onto the
+    # boundary (‖y‖→1/√c), where ``proj`` clamps and the gradient vanishes,
+    # leaving the loss frozen and the test passing or failing on init luck.
+    x = jax.random.normal(jax.random.key(1), (8, 5)) * 0.1
 
     def loss_fn(model):
         y = model(x, c=1.0)
