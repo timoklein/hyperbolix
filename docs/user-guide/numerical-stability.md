@@ -65,6 +65,51 @@ dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
     # If > 7, create Poincare(dtype=jnp.float64) instead
     ```
 
+## Storage vs. Compute Dtype
+
+Hyperbolix separates two dtype concerns that are easy to conflate:
+
+- **Compute precision** — the dtype in which manifold operations (`dist`,
+  `expmap`, `logmap`, …) run. Controlled by the manifold's `dtype` attribute
+  (e.g. `Poincare(dtype=jnp.float64)`). Manifold methods cast their array
+  arguments to this dtype on entry.
+- **Storage dtype** — the dtype in which a layer's trainable parameters and
+  persistent state (batch-norm statistics, VQ codebooks) are kept. Controlled
+  by the `param_dtype` constructor argument on every NN layer
+  (default: `jnp.float32`, following the Flax convention).
+
+The two are decoupled: a float32-stored parameter that enters a float64
+manifold operation is promoted to float64 *for that computation only*; the
+parameter itself stays float32. The Riemannian optimizers follow the same
+contract — `egrad2rgrad`/`expmap`/`ptransp` run in the manifold dtype, but the
+returned updates and the momentum buffers are cast back to the parameter's
+storage dtype.
+
+**The recommended high-precision recipe** is therefore float64 *compute* with
+float32 *storage* — full precision where the geometry needs it, at half the
+parameter/optimizer-state memory and with float32 checkpoints:
+
+```python
+import jax.numpy as jnp
+from flax import nnx
+from hyperbolix.manifolds import Poincare
+from hyperbolix.nn_layers import HypLinearPoincarePP
+
+# Requires global x64 (JAX_ENABLE_X64=1) for the float64 compute path.
+manifold = Poincare(dtype=jnp.float64)            # compute: float64
+layer = HypLinearPoincarePP(manifold, 64, 32, rngs=nnx.Rngs(0))  # storage: float32 (default)
+
+# Fully-float64 networks are an explicit opt-in:
+layer_f64 = HypLinearPoincarePP(manifold, 64, 32, rngs=nnx.Rngs(0), param_dtype=jnp.float64)
+```
+
+!!! note "Parameter dtype rarely matters"
+    Float32 parameter storage costs essentially nothing in accuracy: precision
+    in hyperbolic networks is consumed by the manifold operations (conformal
+    factors, `atanh`/`acosh` near their singularities), not by where the
+    weights are stored. Reach for `param_dtype=jnp.float64` only for
+    reproducibility studies or numerical debugging.
+
 ## The Conformal Factor Problem
 
 ### Understanding λ(x)
@@ -302,13 +347,9 @@ d1 = poincare.dist(x, y, c, version_idx=poincare.VERSION_MOBIUS)
 # Version 2: Metric tensor induced
 d2 = poincare.dist(x, y, c, version_idx=poincare.VERSION_METRIC_TENSOR)
 
-# Version 3: Lorentzian proxy (best near boundary)
-d3 = poincare.dist(x, y, c, version_idx=poincare.VERSION_LORENTZIAN_PROXY)
-
 print(f"Version 0: {d0:.6f}")
 print(f"Version 1: {d1:.6f}")
 print(f"Version 2: {d2:.6f}")
-print(f"Version 3: {d3:.6f}")
 # All should be approximately equal
 ```
 
@@ -320,7 +361,9 @@ print(f"Version 3: {d3:.6f}")
 - Best for most applications
 
 **Special cases**:
-- **Near-boundary points** (||x|| > 0.9): Try `VERSION_LORENTZIAN_PROXY` (version 3) for better stability
+- **Near-boundary points** (||x|| > 0.9): Use `Poincare(dtype=jnp.float64)`, or convert to the
+  hyperboloid via `isometry_mappings.poincare_to_hyperboloid` and use `Hyperboloid.dist`
+  (the hyperboloid is unbounded, so there is no boundary to saturate)
 - **Very high dimensions** (> 1000): `VERSION_METRIC_TENSOR` (version 2) may be more stable
 - **Debugging**: Compare all versions — significant differences indicate numerical issues
 
@@ -573,10 +616,10 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
 
 5. **Try different version**:
    ```python
-   # Try VERSION_LORENTZIAN_PROXY if VERSION_MOBIUS_DIRECT fails
+   # Try VERSION_METRIC_TENSOR if VERSION_MOBIUS_DIRECT fails
    from hyperbolix.manifolds import Poincare
    poincare = Poincare()
-   dist = poincare.dist(x, y, c, version_idx=poincare.VERSION_LORENTZIAN_PROXY)
+   dist = poincare.dist(x, y, c, version_idx=poincare.VERSION_METRIC_TENSOR)
    ```
 
 6. **Use float64 manifold**:

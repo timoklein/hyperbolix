@@ -250,3 +250,30 @@ def test_world_model_gradients_finite():
 
     for path, value in jax.tree_util.tree_flatten_with_path(grad_state)[0]:
         assert jnp.all(jnp.isfinite(value)), f"{path}: Gradients contain NaN or Inf"
+
+
+def test_ganea_layers_curvature_tag_matches_call_time_c():
+    """Legacy Ganea layers tag their manifold bias with the constructor curvature.
+
+    Regression: the tag was hardcoded to 1.0 while __call__ accepted dynamic c,
+    so Riemannian bias updates used the wrong curvature whenever c != 1.0.
+    """
+    from hyperbolix.nn_layers import HypRegressionPoincare
+    from hyperbolix.optim import get_manifold_info
+
+    manifold = Poincare()
+    c = 0.1
+
+    linear = HypLinearPoincare(manifold, 4, 3, rngs=nnx.Rngs(0), curvature=c)
+    _, tag_c = get_manifold_info(linear.bias)
+    assert tag_c == c
+
+    regression = HypRegressionPoincare(manifold, 4, 3, rngs=nnx.Rngs(0), curvature=c)
+    _, tag_c = get_manifold_info(regression.bias)
+    assert tag_c == c
+
+    # Callable curvature (learnable-c pattern) is resolved at read time.
+    curv = nnx.Param(jnp.array(0.5))
+    linear_learnable = HypLinearPoincare(manifold, 4, 3, rngs=nnx.Rngs(0), curvature=lambda: curv[...])
+    _, tag_c = get_manifold_info(linear_learnable.bias)
+    assert jnp.allclose(tag_c, 0.5)

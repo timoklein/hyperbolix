@@ -493,3 +493,46 @@ def test_causal_jit_compatible(cls):
     y = forward(model, x)
     assert y.shape == (B, N, D_out + 1)
     assert jnp.all(jnp.isfinite(y))
+
+
+@pytest.mark.parametrize("causal", [False, True])
+def test_full_attention_attend_preserves_float32(causal):
+    """HyperbolicFullAttention._attend keeps float32 inputs in float32.
+
+    Regression: the scalar scale/attn_bias params (JAX default dtype — float64
+    under x64) and the uniform head-averaging weights (jnp.ones without dtype)
+    silently promoted float32 activations to float64. The params are now cast
+    to the compute dtype at use; the buffer derives its dtype from the input.
+    """
+    layer = HyperbolicFullAttention(in_features=7, out_features=6, num_heads=2, rngs=nnx.Rngs(0))
+    pts_BNA = _make_hyp_points(jax.random.PRNGKey(1), 2, 5, 7, c=1.0)
+    qkv_BNHA = jnp.stack([pts_BNA, pts_BNA], axis=2).astype(jnp.float32)  # (B, N, H, A)
+
+    out_BNA = layer._attend(qkv_BNHA, qkv_BNHA, qkv_BNHA, c_attn=1.0, c_out=1.0, causal=causal)
+    assert out_BNA.dtype == jnp.float32
+    assert jnp.all(jnp.isfinite(out_BNA))
+
+
+@pytest.mark.parametrize("causal", [False, True])
+def test_linear_attention_attend_preserves_float32(causal):
+    """HyperbolicLinearAttention._attend keeps float32 inputs in float32.
+
+    Regression: the temperature param (JAX default dtype — float64 under x64)
+    and the causal scan carries (jnp.zeros without dtype) silently promoted
+    float32 activations to float64. The temperature is now cast to the compute
+    dtype at use; the carries derive their dtype from the focused keys.
+
+    The residual projection is an nnx.Linear whose params follow the
+    codebase-wide default-dtype convention (float64 under x64), so its params
+    are cast to float32 here to isolate the layer-internal buffers under test.
+    """
+    layer = HyperbolicLinearAttention(in_features=7, out_features=6, num_heads=2, rngs=nnx.Rngs(0))
+    layer.residual_proj.kernel[...] = layer.residual_proj.kernel[...].astype(jnp.float32)
+    layer.residual_proj.bias[...] = layer.residual_proj.bias[...].astype(jnp.float32)
+
+    pts_BNA = _make_hyp_points(jax.random.PRNGKey(2), 2, 5, 7, c=1.0)
+    qkv_BNHA = jnp.stack([pts_BNA, pts_BNA], axis=2).astype(jnp.float32)  # (B, N, H, A)
+
+    out_BNA = layer._attend(qkv_BNHA, qkv_BNHA, qkv_BNHA, c_attn=1.0, c_out=1.0, causal=causal)
+    assert out_BNA.dtype == jnp.float32
+    assert jnp.all(jnp.isfinite(out_BNA))

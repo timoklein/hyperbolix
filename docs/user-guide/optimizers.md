@@ -93,6 +93,15 @@ The optimizer walks the model state, applies Riemannian updates wherever it
 finds a `ManifoldParam` tag, and falls back to standard Adam everywhere else.
 You don't need separate optimizers for the Euclidean and manifold parts.
 
+!!! note "Storage vs. compute dtype"
+    The Riemannian update math (`egrad2rgrad`, `expmap`, `ptransp`) runs in
+    the **manifold's dtype**, but the returned parameter updates and the
+    momentum buffers are cast back to the **parameter's storage dtype**. A
+    float32 `ManifoldParam` paired with a `Poincare(dtype=jnp.float64)`
+    manifold therefore gets float64-precision geometry while its weights and
+    optimizer state stay float32. See
+    [Numerical Stability](numerical-stability.md#storage-vs-compute-dtype).
+
 !!! tip "Prefer the `PP` migration"
     If you're picking the legacy Ganea layer for new work, almost always swap
     it for `HypLinearPoincarePP` / `HypRegressionPoincarePP` instead. The

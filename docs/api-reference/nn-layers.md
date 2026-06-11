@@ -15,6 +15,7 @@ Hyperbolix provides 20+ neural network layer classes and 5 activation functions 
 - **Attention Layers**: Three hyperbolic attention variants (linear O(N), softmax O(N²), full Lorentzian O(N²)) from the Hypformer paper
 - **Positional Encoding**: HOPE (Hyperbolic Rotary PE) and Hypformer learnable positional encodings for Transformers
 - **Regression Layers**: Single-layer classifiers with Riemannian geometry, including `FGGLorentzMLR` and `HypRegressionPV`
+- **Vector Quantization**: Poincaré VQ-VAE bottlenecks — `HypVQEmbeddingPoincare` (EMA codebook, GGBall) and `HypVQMLRPoincare` (Gumbel-Softmax over a Poincaré MLR)
 - **Activation Functions**: Hyperbolic ReLU, Leaky ReLU, Tanh, Swish, GELU
 - **Helper Functions**: Utilities for regression and conformal factor computation
 
@@ -708,7 +709,7 @@ spatial = jax.random.normal(key, (batch_size, d)) * 0.1
 time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
 x = jnp.concatenate([time, spatial], axis=-1)  # (32, 9)
 
-# Apply learnable positional encoding
+# Apply positional encoding
 x_encoded = pe(x, c=1.0)
 print(x_encoded.shape)  # (32, 9) - shape preserved
 
@@ -716,22 +717,17 @@ print(x_encoded.shape)  # (32, 9) - shape preserved
 is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(x_encoded, 1.0)
 print(is_valid.all())  # True
 
-# The epsilon parameter is learnable
-print(f"Epsilon: {pe.epsilon.value}")  # Initially 1.0
-
-# Use in training loop with gradient updates
-import optax
-optimizer = nnx.Optimizer(pe, optax.adam(1e-3), wrt=nnx.Param)
-
-def loss_fn(model):
-    out = model(x, c=1.0)
-    return jnp.sum(out**2)  # Dummy loss
-
-loss, grads = nnx.value_and_grad(loss_fn)(pe)
-optimizer.update(pe, grads)
-
-print(f"Epsilon after update: {pe.epsilon.value}")  # Changed
+# epsilon is a FIXED scalar (default 1.0, matching the Hypformer reference);
+# only the HTCLinear weights train. A custom non-negative value can be set:
+pe_weak = HypformerPositionalEncoding(in_features=d + 1, out_features=d, rngs=nnx.Rngs(0), epsilon=0.3)
 ```
+
+!!! warning "Why `epsilon` is not learnable"
+    The Hypformer reference keeps `epsilon` a plain (non-trainable) tensor fixed at 1.0.
+    Making it a parameter is unsafe: gradient descent can drive it below -1, where
+    `x + epsilon * p` leaves the upper hyperboloid sheet and the `abs()` in the
+    Lorentzian residual normalizer silently masks the violation instead of raising.
+    For the same reason, `lorentz_residual`'s `w_y` must always be non-negative.
 
 ### Lorentzian Residual Example
 
@@ -787,9 +783,9 @@ print(result_batch.shape)  # (8, 7)
 
     **HypformerPositionalEncoding**:
 
-    - Learnable, adapts to task
+    - Learnable (HTCLinear weights), adapts to task
     - Uses HTCLinear + Lorentzian residual
-    - `epsilon` parameter controls position encoding magnitude
+    - `epsilon` (fixed, non-negative) controls position encoding magnitude
     - More flexible but requires training
     - Suitable when position patterns are task-specific
 
@@ -988,8 +984,8 @@ logits_B10 = mlr(y_BHWC.reshape(-1, 65), c=1.0)
 print(logits_B10.shape)  # (784, 10)
 
 # --- FGGMeanOnlyBatchNorm: pairs with FGGLinear(use_weight_norm=True) ---
-# num_features is the SPATIAL (out) dimension
-bn = FGGMeanOnlyBatchNorm(num_features=64, rngs=rngs)
+# num_features is the SPATIAL (out) dimension (no rngs: zero-initialized state)
+bn = FGGMeanOnlyBatchNorm(num_features=64)
 y_normed = bn(y_B65, c_in=1.0, c_out=1.0, use_running_average=False)
 print(y_normed.shape)  # (8, 65)
 ```
@@ -1035,6 +1031,85 @@ print(logits.shape)  # (64, 10)
 # Use with softmax for classification
 probs = jax.nn.softmax(logits, axis=-1)
 ```
+
+## Vector Quantization
+
+Hyperbolic VQ-VAE quantizer bottlenecks for the Poincaré ball. Both take encoder features (Euclidean tangent vectors at the origin) and return a `PoincareVQOutput` with the straight-through quantized vector for the decoder, the discrete code indices, an auxiliary loss, and the codebook perplexity. The encoder/decoder stay in user code — these layers are *only* the quantization step.
+
+| Layer | Codebook | Selection | Codebook trained by | Aux loss |
+|---|---|---|---|---|
+| `HypVQEmbeddingPoincare` | Explicit on-ball table (a non-param **buffer**) | Geodesic nearest-neighbour | Hyperbolic EMA (`ema_update`) | Commitment |
+| `HypVQMLRPoincare` | Implicit (rows of a Poincaré MLR) | Gumbel-Softmax over MLR scores | `optax.adam` (Euclidean) | None (recon-only) |
+
+### Embedding VQ (HVQ-VAE, EMA codebook)
+
+::: hyperbolix.nn_layers.HypVQEmbeddingPoincare
+    options:
+      show_source: true
+      heading_level: 4
+
+The codebook is an `nnx.Variable` buffer, so `nnx.Optimizer(model, tx, wrt=nnx.Param)` ignores it — it moves only through `ema_update(z, indices, c)`, the hyperbolic moving average of GGBall (Bu et al. 2026, Eqs. 41-43). Call `ema_update` in the train step **after** `optimizer.update`. Set `dead_code_revival=True` (and pass a `reset_key`) to replace stale codes with random encoder points.
+
+### MLR VQ (HyperVQ, implicit codebook)
+
+::: hyperbolix.nn_layers.HypVQMLRPoincare
+    options:
+      show_source: true
+      heading_level: 4
+
+The codebook is the rows of an internal `HypRegressionPoincarePP` (`bias · kernel`), trained by plain `optax.adam`. Selection is a Gumbel-Softmax straight-through sample over the MLR scores; putting the STE on the categorical weights — not on `z_q` — is what lets the gradient reach the MLR parameters. The layer owns a `deterministic` flag that `model.eval()` / `model.train()` toggle, switching to a deterministic argmax MAP estimate at inference.
+
+### Output type and weighted gyromidpoint
+
+::: hyperbolix.nn_layers.PoincareVQOutput
+    options:
+      show_source: true
+      heading_level: 4
+
+The embedding layer's EMA centroid is the GGBall weighted gyromidpoint, exposed as a reusable helper (the Poincaré analog of `lorentz_midpoint`, generalizing the unweighted `poincare_midpoint`):
+
+::: hyperbolix.nn_layers.poincare_weighted_midpoint
+    options:
+      show_source: true
+      heading_level: 4
+
+### Usage Example
+
+```python
+import jax
+import jax.numpy as jnp
+from flax import nnx
+from hyperbolix.manifolds import Poincare
+from hyperbolix.nn_layers import HypVQEmbeddingPoincare, HypVQMLRPoincare
+
+# Manifold ops run in float64; the quantized decoder input comes back float32,
+# and the codebook/cluster-size buffers are stored float32 (param_dtype default).
+manifold = Poincare(dtype=jnp.float64)
+h = jax.random.normal(jax.random.PRNGKey(1), (256, 64)) * 0.3  # encoder tangent features
+
+# --- HVQ-VAE: EMA codebook (no Riemannian optimizer) ---
+vq = HypVQEmbeddingPoincare(
+    manifold, num_codes=128, code_dim=64, rngs=nnx.Rngs(0),
+    commitment_weight=0.5, ema_decay=0.99, dead_code_revival=True,
+    squared_commitment=False,  # False: HVQ-VAE plain d; True: GGBall d² (VQ-VAE convention)
+)
+out = vq(h, c=1.0)
+print(out.quantized.shape, out.quantized.dtype)  # (256, 64) float32 — decoder input
+print(out.indices.shape, float(out.loss))        # (256,)  + commitment loss
+
+# In the train step, AFTER optimizer.update(model, grads):
+vq.ema_update(out.z, out.indices, c=1.0, reset_key=jax.random.key(7))
+
+# --- HyperVQ: implicit MLR codebook, Gumbel-Softmax ---
+mlr_vq = HypVQMLRPoincare(manifold, num_codes=512, code_dim=64, rngs=nnx.Rngs(0))
+out = mlr_vq(h, c=1.0, rngs=nnx.Rngs(2))          # rngs drives the Gumbel sample
+mlr_vq.eval()                                     # deterministic argmax for inference
+out_eval = mlr_vq(h, c=1.0)                        # rngs unused in eval mode
+```
+
+!!! info "Two quantizers, two gradient stories"
+    - **`HypVQEmbeddingPoincare`** keeps the codebook *on* the ball as a buffer and moves it with a geometric EMA (`ema_update`), entirely separate from the gradient path. Only the commitment loss reaches the encoder; the optimizer never touches the codebook. A copy-gradient STE bridges `logmap_0(q)` to the decoder.
+    - **`HypVQMLRPoincare`** has no explicit codebook — quantization is classification over a Poincaré MLR, the STE sits on the categorical weights, and plain `optax.adam` trains everything. Reconstruction-only loss (`output.loss == 0`).
 
 ## Activation Functions
 
@@ -1238,6 +1313,9 @@ The neural network layers implement methods from:
 - **Chen et al. (2024)**: "Hyperbolic Embeddings for Learning on Manifolds (HELM)" - HOPE positional encoding and Lorentzian residual connections
 - **Klis et al. (2026)**: "Fast and Geometrically Grounded Lorentz Neural Networks" - `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `FGGMeanOnlyBatchNorm`; sinh/arcsinh cancellation for linear hyperbolic distance growth
 - **Chen et al. (2026)**: "Proper Velocity Neural Networks" - `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV`; unconstrained $\mathbb{R}^n$ model of hyperbolic geometry with exact Euclidean retraction
+- **Chen et al. (2025)**: "Hyperbolic VQ-VAE (HVQ-VAE)" - `HypVQEmbeddingPoincare`; Poincaré-ball codebook with geodesic nearest-neighbour selection and copy-gradient STE
+- **Goswami et al. (2025)**: "HyperVQ" - `HypVQMLRPoincare`; vector quantization as Poincaré-MLR classification with Gumbel-Softmax straight-through selection
+- **Bu et al. (2026)**: "GGBall: Graph Generative Model on Poincaré Ball" - hyperbolic-EMA codebook update and weighted gyromidpoint (`ema_update`, `poincare_weighted_midpoint`)
 
 ### Key Theoretical Connections
 

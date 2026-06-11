@@ -105,15 +105,14 @@ dist_c2 = poincare.dist(x, y, c=2.0)
 The Poincaré `dist` method accepts a `version_idx` parameter for numerical stability:
 
 ```python
-from hyperbolix.manifolds.poincare import Poincare, VERSION_MOBIUS_DIRECT, VERSION_LORENTZIAN_PROXY
+from hyperbolix.manifolds.poincare import Poincare, VERSION_MOBIUS_DIRECT
 
 poincare = Poincare()
 
-# Poincaré distance has 4 versions
+# Poincaré distance has 3 versions
 dist_v0 = poincare.dist(x, y, c, version_idx=VERSION_MOBIUS_DIRECT)   # Fastest (default)
 dist_v1 = poincare.dist(x, y, c, version_idx=1)                       # Möbius via addition
 dist_v2 = poincare.dist(x, y, c, version_idx=2)                       # Metric tensor
-dist_v3 = poincare.dist(x, y, c, version_idx=VERSION_LORENTZIAN_PROXY) # Near-boundary
 ```
 
 ## Building a Neural Network

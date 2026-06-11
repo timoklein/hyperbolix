@@ -118,15 +118,14 @@ def test_poincare_logmap_with_jit(benchmark, benchmark_points, curvature):
     benchmark(run)
 
 
-@pytest.mark.parametrize("version_idx", [0, 1, 2, 3])
+@pytest.mark.parametrize("version_idx", [0, 1, 2])
 def test_poincare_dist_versions(benchmark, benchmark_points, curvature, version_idx):
     """Compare performance of different Poincaré distance implementations.
 
-    Tests all 4 versions:
+    Tests all 3 versions:
     - 0: VERSION_MOBIUS_DIRECT (fastest)
     - 1: VERSION_MOBIUS
     - 2: VERSION_METRIC_TENSOR
-    - 3: VERSION_LORENTZIAN_PROXY
     """
     points_a, points_b = jnp.array_split(benchmark_points, 2)
 

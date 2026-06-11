@@ -24,6 +24,7 @@ Dimension key:
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
@@ -37,10 +38,16 @@ def poincare_midpoint(
     c: float,
     eps: float = 1e-6,
 ) -> Float[Array, "C"]:
-    """Compute Einstein midpoint of Poincaré ball points.
+    """Compute the (Einstein) gyromidpoint of Poincaré ball points.
 
-    Uses conformal factor weighting: midpoint = Σ(λ²·x) / Σ(λ²),
-    then projects onto the ball.
+    Delegates to :func:`poincare_weighted_midpoint` (GGBall Eq. 41) with uniform
+    weights::
+
+        mu = (1/2) ⊗_c [ Σ λ(x_n)·x_n / Σ (λ(x_n) - 1) ]
+
+    NOTE: an earlier version computed ``Σ(λ²·x) / Σ(λ²)``, which is *not* a
+    midpoint (it is not equidistant for two points and is biased toward points
+    near the ball boundary, where λ explodes).
 
     Parameters
     ----------
@@ -56,18 +63,80 @@ def poincare_midpoint(
     Returns
     -------
     Array, shape (C,)
-        Einstein midpoint on the Poincaré ball.
+        Gyromidpoint on the Poincaré ball.
     """
-    # lambda_N1: (N, 1) — conformal factor for each point
-    lambda_N1 = manifold.conformal_factor(x_NC, c)  # (N, 1)
-    lambda_sq_N1 = lambda_N1**2  # (N, 1)
+    weights_1N = jnp.ones((1, x_NC.shape[0]), dtype=x_NC.dtype)  # (1, N) uniform
+    return poincare_weighted_midpoint(x_NC, weights_1N, manifold, c, eps)[0]
 
-    # Weighted sum: Σ(λ²·x) / Σ(λ²)
-    numerator_C = jnp.sum(lambda_sq_N1 * x_NC, axis=0)  # (C,)
-    denominator = jnp.sum(lambda_sq_N1, axis=0) + eps  # (1,)
 
-    midpoint_C = numerator_C / denominator  # (C,)
-    return manifold.proj(midpoint_C, c)
+def poincare_weighted_midpoint(
+    points_MC: Float[Array, "M C"],
+    weights_NM: Float[Array, "N M"],
+    manifold: Poincare,
+    c: float,
+    eps: float = 1e-6,
+) -> Float[Array, "N C"]:
+    """Weighted Poincaré gyromidpoint over M points (GGBall Eq. 41).
+
+    Generalises :func:`poincare_midpoint` (the unweighted Einstein midpoint of N
+    points) to N *weighted* midpoints, mirroring the hyperboloid
+    :func:`hyperbolix.nn_layers.lorentz_midpoint`. For weight-vector ``w_n`` over
+    the M points::
+
+        mu_n = (1/2) ⊗_c [ Σ_m w_nm · λ(x_m) · x_m  /  Σ_m w_nm · (λ(x_m) - 1) ]
+
+    where ``λ(x) = 2 / (1 - c‖x‖²)`` is the conformal factor and ``⊗_c`` is
+    Möbius scalar multiplication. The ``½ ⊗_c`` half-scaling is exactly what turns
+    the conformal-weighted Euclidean average into the gyro-midpoint *on* the ball
+    (for N copies of a single point it returns that point — see the algebra in
+    the tests).
+
+    This is the codebook-centroid operator of the hyperbolic-EMA VQ update
+    (GGBall, Bu et al. 2026): pass the assigned encoder points as ``points`` and
+    the transposed one-hot assignment matrix ``(num_codes, N)`` as ``weights`` to
+    get one midpoint per code.
+
+    Parameters
+    ----------
+    points_MC : Array, shape (M, C)
+        Points on the Poincaré ball with curvature ``c``.
+    weights_NM : Array, shape (N, M)
+        Combination weights, one row per output midpoint. Typically non-negative
+        (assignment / attention weights). Because ``λ(x) ≥ 2`` the denominator
+        ``Σ_m w_nm (λ-1)`` is strictly positive whenever a row carries any mass;
+        an all-zero row maps to the origin.
+    manifold : Poincare
+        Poincaré manifold instance (supplies ``conformal_factor``, ``scalar_mul``,
+        ``proj``).
+    c : float
+        Curvature (positive).
+    eps : float
+        Denominator floor guarding the empty-row 0/0 (default: 1e-6).
+
+    Returns
+    -------
+    Array, shape (N, C)
+        Weighted gyromidpoints on the Poincaré ball.
+    """
+    # lambda per point — conformal_factor is batched and returns (M, 1).
+    lambda_M = manifold.conformal_factor(points_MC, c)[:, 0]  # (M,)
+
+    # Eq. 41 numerator / denominator, contracted over the M axis:
+    #   numerator_n = Σ_m w_nm · λ(x_m) · x_m   (N, C)
+    #   denom_n     = Σ_m w_nm · (λ(x_m) - 1)   (N,)
+    numerator_NC = jnp.einsum("nm,mc->nc", weights_NM, lambda_M[:, None] * points_MC)  # (N, C)
+    denom_N = jnp.einsum("nm,m->n", weights_NM, lambda_M - 1.0)  # (N,)
+    # Empty row (all-zero weights) -> denom 0 and numerator 0; map to origin
+    # rather than 0/0. λ ≥ 2 keeps denom > 0 for any row with mass.
+    denom_safe_N = jnp.where(jnp.abs(denom_N) < eps, 1.0, denom_N)  # (N,)
+    inner_NC = numerator_NC / denom_safe_N[:, None]  # (N, C) — argument of ½ ⊗_c
+
+    # Boundary guard before the Möbius half-scaling (keeps scalar_mul's atanh in domain).
+    inner_NC = jax.vmap(manifold.proj, in_axes=(0, None))(inner_NC, c)
+
+    # mu_n = ½ ⊗_c inner_n  (single-point scalar_mul, vmapped over N).
+    mu_NC = jax.vmap(lambda v: manifold.scalar_mul(0.5, v, c))(inner_NC)  # (N, C)
+    return jax.vmap(manifold.proj, in_axes=(0, None))(mu_NC, c)
 
 
 def frechet_variance(
@@ -122,6 +191,21 @@ class PoincareBatchNorm2D(nnx.Module):
         EMA momentum for running statistics (default: 0.9).
     eps : float
         Numerical stability floor (default: 1e-6).
+    param_dtype : DTypeLike
+        Storage dtype of the learnable parameters and running statistics
+        (default: jnp.float32). Compute precision of manifold operations is
+        set by ``manifold.dtype``.
+
+    Notes
+    -----
+    The learned variance ``self.var`` is an unconstrained scalar used as
+    ``sqrt(var / (batch_var + eps))`` — if gradient descent drives it
+    negative, the sqrt produces NaN. This matches the reference (van
+    Spengler's PoincareBatchNorm uses an unconstrained ``nn.Parameter``
+    under the same sqrt), so we keep the parameterization; in practice the
+    init at 1.0 and typical learning rates keep it positive. If you observe
+    NaNs originating here, reparameterize via softplus in your model or
+    clamp ``self.var`` after optimizer steps.
 
     References
     ----------
@@ -136,6 +220,7 @@ class PoincareBatchNorm2D(nnx.Module):
         use_running_average: bool = False,
         momentum: float = 0.9,
         eps: float = 1e-6,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         validate_poincare_manifold(
             manifold_module,
@@ -147,13 +232,16 @@ class PoincareBatchNorm2D(nnx.Module):
         self.momentum = momentum
         self.eps = eps
 
-        # Learnable parameters (tangent space)
-        self.mean = nnx.Param(jnp.zeros((num_features,)))  # learned mean
-        self.var = nnx.Param(jnp.ones(()))  # learned variance (scalar)
+        # Learnable parameters and running stats (tangent space). Storage is
+        # pinned to param_dtype; manifold operations re-promote to the
+        # manifold's compute dtype at their boundaries, and the EMA updates in
+        # __call__ cast back to the stat dtype at store time.
+        self.mean = nnx.Param(jnp.zeros((num_features,), dtype=param_dtype))  # learned mean
+        self.var = nnx.Param(jnp.ones((), dtype=param_dtype))  # learned variance (scalar)
 
         # Running statistics (tangent space)
-        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,)))
-        self.running_var = nnx.BatchStat(jnp.ones(()))
+        self.running_mean = nnx.BatchStat(jnp.zeros((num_features,), dtype=param_dtype))
+        self.running_var = nnx.BatchStat(jnp.ones((), dtype=param_dtype))
 
     def __call__(
         self,
@@ -202,13 +290,13 @@ class PoincareBatchNorm2D(nnx.Module):
             # Map midpoint back to tangent space for running stat storage
             batch_mean_tangent_C = self.manifold.logmap_0(batch_midpoint_C, c)  # (C,)
 
-            # Update running statistics (EMA, no gradient flow)
-            self.running_mean[...] = jax.lax.stop_gradient(
-                self.momentum * self.running_mean[...] + (1.0 - self.momentum) * batch_mean_tangent_C
-            )
-            self.running_var[...] = jax.lax.stop_gradient(
-                self.momentum * self.running_var[...] + (1.0 - self.momentum) * batch_var
-            )
+            # Update running statistics (EMA, no gradient flow). The batch
+            # stats come from manifold ops (manifold.dtype), so cast back to
+            # the stat storage dtype at store time.
+            new_running_mean_C = self.momentum * self.running_mean[...] + (1.0 - self.momentum) * batch_mean_tangent_C
+            self.running_mean[...] = jax.lax.stop_gradient(new_running_mean_C).astype(self.running_mean[...].dtype)
+            new_running_var = self.momentum * self.running_var[...] + (1.0 - self.momentum) * batch_var
+            self.running_var[...] = jax.lax.stop_gradient(new_running_var).astype(self.running_var[...].dtype)
 
         # Get the manifold-space mean to use for geometric operations
         # (either from batch or from running stats)

@@ -201,3 +201,38 @@ def test_init_time_column_zeroed():
     layer = HypLinearHyperboloidFHNN(get_hyperboloid(jnp.float32), 6, 10, rngs=rngs)
 
     assert jnp.allclose(layer.kernel[...][:, 0], 0.0)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_fhnn_fhcnn_gradients_at_zero_spatial_norm(dtype):
+    """Gradients are finite when the linear output's spatial part is exactly 0.
+
+    Regression guard: both forwards divided by an unguarded ``linalg.norm`` of
+    the spatial part and masked the result *afterwards* with ``jnp.where`` —
+    the norm's NaN VJP at zero survives that masking. A zero kernel + zero
+    bias forces every row through the singular point.
+    """
+    from hyperbolix.nn_layers.hyperboloid_linear import _fhcnn_forward, _fhnn_forward
+
+    manifold = get_hyperboloid(dtype)
+    batch_size, in_dim, out_dim = 2, 4, 4
+    kernel_OI = jnp.zeros((out_dim, in_dim), dtype=dtype)
+    bias_1O = jnp.zeros((1, out_dim), dtype=dtype)
+    x_BI = jnp.ones((batch_size, in_dim), dtype=dtype) * 0.3
+    scale = jnp.asarray(1.0, dtype=dtype)
+
+    def loss_fhcnn(kernel):
+        out = _fhcnn_forward(x_BI, kernel, bias_1O, manifold, 1.0, "tangent", None, True, scale, 1e-5)
+        return jnp.sum(out)
+
+    def loss_fhnn(kernel):
+        out = _fhnn_forward(x_BI, kernel, bias_1O, manifold, 1.0, "tangent", None, None, scale, 1e-5)
+        return jnp.sum(out)
+
+    assert jnp.all(jnp.isfinite(jax.grad(loss_fhcnn)(kernel_OI)))
+    assert jnp.all(jnp.isfinite(jax.grad(loss_fhnn)(kernel_OI)))
+
+    # Forward: zero spatial rows still map to the hyperboloid origin
+    out = _fhcnn_forward(x_BI, kernel_OI, bias_1O, manifold, 1.0, "tangent", None, True, scale, 1e-5)
+    origin = jnp.concatenate([jnp.ones((1,), dtype=dtype), jnp.zeros((out_dim - 1,), dtype=dtype)])
+    assert jnp.allclose(out, origin, atol=1e-6)

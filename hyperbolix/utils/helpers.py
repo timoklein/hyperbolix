@@ -42,7 +42,6 @@ def compute_pairwise_distances(
                 0 = VERSION_MOBIUS_DIRECT (direct Möbius formula)
                 1 = VERSION_MOBIUS (via addition)
                 2 = VERSION_METRIC_TENSOR (metric tensor induced)
-                3 = VERSION_LORENTZIAN_PROXY (Lorentzian proxy)
 
     Returns:
         Symmetric distance matrix of shape (n_points, n_points)

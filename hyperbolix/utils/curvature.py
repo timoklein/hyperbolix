@@ -28,6 +28,7 @@ from typing import Literal
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 
 Parameterization = Literal["softplus", "log"]
 
@@ -73,6 +74,9 @@ class LearnableCurvature(nnx.Module):
             Pass ``None`` to disable.
         c_max: Upper clamp applied to the recovered ``c``. Default ``10.0``.
             Pass ``None`` to disable.
+        param_dtype: Storage dtype of the raw parameter (default:
+            ``jnp.float32``), pinned so it does not become float64 under
+            global ``jax_enable_x64``.
 
     Sharing note: Do **not** assign the same ``LearnableCurvature`` instance
     to multiple fields if you want independent learnable curvatures —
@@ -88,6 +92,7 @@ class LearnableCurvature(nnx.Module):
         parameterization: Parameterization = "softplus",
         c_min: float | None = 0.1,
         c_max: float | None = 10.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if init_c <= 0:
             raise ValueError(f"LearnableCurvature requires init_c > 0, got {init_c}")
@@ -109,7 +114,7 @@ class LearnableCurvature(nnx.Module):
         else:  # "log"
             raw_init = math.log(init_c)
 
-        self.raw = nnx.Param(jnp.array(raw_init, dtype=jnp.float32))
+        self.raw = nnx.Param(jnp.array(raw_init, dtype=param_dtype))
 
     def __call__(self) -> jax.Array:
         if self._parameterization == "softplus":

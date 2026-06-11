@@ -122,6 +122,13 @@ The optimizer automatically:
 3. Performs parallel transport for momentum/adaptive moments
 4. Falls back to Euclidean updates for plain `nnx.Param` parameters
 
+**Dtype contract:** the Riemannian math (steps 2-3) runs in the manifold's
+`dtype`, but the returned updates and the moment buffers are cast back to each
+parameter's storage dtype before they leave the transformation. A float32
+parameter tagged with a float64 manifold keeps float32 weights and float32
+optimizer state across steps, while the geometry itself is computed in
+float64.
+
 ### API Reference
 
 ::: hyperbolix.optim.manifold_metadata

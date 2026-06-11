@@ -246,6 +246,59 @@ class TestVmapJitCompat:
         assert d.dtype == jnp.float64
 
 
+class TestSingularPointGradients:
+    """Gradients at geometric singular points must be finite.
+
+    Regression guards for the NaN-gradient family: acosh'(1) = inf reached
+    through hard clips at exactly 1.0, and linalg.norm / sqrt VJPs at zero
+    vectors (0/0 = NaN) that post-hoc ``jnp.where`` masking cannot remove.
+    """
+
+    def test_poincare_dist_grad_at_coincident_points(self):
+        for dtype in [jnp.float32, jnp.float64]:
+            manifold = Poincare(dtype=dtype)
+            x = jnp.array([0.3, -0.4], dtype=dtype)
+            for version_idx in (0, 1, 2):
+                g = jax.grad(lambda a, m=manifold, y=x, v=version_idx: m.dist(a, y, 1.0, version_idx=v))(x)
+                assert jnp.all(jnp.isfinite(g)), f"NaN grad: dist v{version_idx} {dtype}"
+            g0 = jax.grad(lambda a, m=manifold: m.dist_0(a, 1.0))(jnp.zeros(2, dtype=dtype))
+            assert jnp.all(jnp.isfinite(g0))
+
+    def test_poincare_expmap_grad_at_zero_tangent(self):
+        for dtype in [jnp.float32, jnp.float64]:
+            manifold = Poincare(dtype=dtype)
+            x = jnp.array([0.3, -0.4], dtype=dtype)
+            g = jax.grad(lambda v, m=manifold, p=x: jnp.sum(m.expmap(v, p, 1.0)))(jnp.zeros(2, dtype=dtype))
+            assert jnp.all(jnp.isfinite(g))
+
+    def test_poincare_scalar_mul_grad_at_origin(self):
+        for dtype in [jnp.float32, jnp.float64]:
+            manifold = Poincare(dtype=dtype)
+            g = jax.grad(lambda a, m=manifold: jnp.sum(m.scalar_mul(0.7, a, 1.0)))(jnp.zeros(2, dtype=dtype))
+            assert jnp.all(jnp.isfinite(g))
+
+    def test_hyperboloid_dist_grad_at_coincident_points(self):
+        for dtype in [jnp.float32, jnp.float64]:
+            manifold = Hyperboloid(dtype=dtype)
+            x = manifold.proj(jnp.array([1.5, 0.3, -0.4], dtype=dtype), 1.0)
+            origin = jnp.array([1.0, 0.0, 0.0], dtype=dtype)
+            for version_idx in (0, 1):
+                g = jax.grad(lambda a, m=manifold, y=x, v=version_idx: m.dist(a, y, 1.0, version_idx=v))(x)
+                assert jnp.all(jnp.isfinite(g)), f"NaN grad: dist v{version_idx} {dtype}"
+            g0 = jax.grad(lambda a, m=manifold: m.dist_0(a, 1.0))(origin)
+            assert jnp.all(jnp.isfinite(g0))
+
+    def test_hyperboloid_expmap_grad_at_zero_tangent(self):
+        for dtype in [jnp.float32, jnp.float64]:
+            manifold = Hyperboloid(dtype=dtype)
+            x = manifold.proj(jnp.array([1.5, 0.3, -0.4], dtype=dtype), 1.0)
+            v0 = jnp.zeros(3, dtype=dtype)
+            g = jax.grad(lambda v, m=manifold, p=x: jnp.sum(m.expmap(v, p, 1.0)))(v0)
+            assert jnp.all(jnp.isfinite(g))
+            g0 = jax.grad(lambda v, m=manifold: jnp.sum(m.expmap_0(v, 1.0)))(v0)
+            assert jnp.all(jnp.isfinite(g0))
+
+
 class TestMLRFunctions:
     """Test that MLR functions work correctly via class methods."""
 
@@ -270,6 +323,38 @@ class TestMLRFunctions:
         assert result.shape == (4, 5)
         assert jnp.all(jnp.isfinite(result))
         assert result.dtype == jnp.float64
+
+    def test_poincare_compute_mlr_pp_matches_geodesic_distance(self):
+        """|logit| / (2‖z‖) equals the geodesic distance to the HNN++ hyperplane.
+
+        Ground truth 0.915745 was obtained by brute-force minimisation of
+        d(x, exp_q(s·w)) over the hyperplane through q = exp_0(r·ẑ) with normal
+        a = PT_{0→q}(z), w ⊥ a (matches hypll / official HNN++; van Spengler's
+        poincare-resnet has a λ-transcription bug giving 0.064 here).
+        """
+        manifold = Poincare(dtype=jnp.float64)
+        x = jnp.array([[0.35, 0.42]])
+        z = jnp.array([[0.7, -0.3]])
+        r = jnp.array([[0.4]])
+
+        logits = manifold.compute_mlr_pp(x, z, r, c=1.0, clamping_factor=10.0, smoothing_factor=50.0)
+        dist = jnp.abs(logits[0, 0]) / (2.0 * jnp.linalg.norm(z))
+        assert jnp.allclose(dist, 0.915745, atol=1e-4)
+
+    def test_poincare_compute_mlr_pp_zero_on_hyperplane(self):
+        """The hyperplane base point q = exp_0(r·ẑ) lies on the decision
+        boundary, so its logit must vanish. This discriminates the conformal
+        factor from the buggy 2(1 - c‖x‖²) form at any curvature — the two only
+        agree at the origin."""
+        for c in (0.5, 1.0):
+            manifold = Poincare(dtype=jnp.float64)
+            z = jnp.array([[0.7, -0.3]])
+            r = jnp.array([[0.4]])
+            z_hat = z[0] / jnp.linalg.norm(z[0])
+            q = manifold.expmap_0(r[0, 0] * z_hat, c)
+
+            logit = manifold.compute_mlr_pp(q[None], z, r, c=c, clamping_factor=10.0, smoothing_factor=50.0)
+            assert jnp.allclose(logit[0, 0], 0.0, atol=1e-10)
 
     def test_hyperboloid_compute_mlr(self):
         manifold = Hyperboloid(dtype=jnp.float64)

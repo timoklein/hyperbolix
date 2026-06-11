@@ -20,6 +20,7 @@ Dimension key:
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
@@ -77,6 +78,9 @@ class HypConv2DPoincare(nnx.Module):
         Clamping factor for the HNN++ linear layer output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the HNN++ linear layer output (default: 50.0)
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
@@ -114,6 +118,7 @@ class HypConv2DPoincare(nnx.Module):
         id_init: bool = True,
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
             raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
@@ -161,12 +166,12 @@ class HypConv2DPoincare(nnx.Module):
         if id_init:
             # W = 1/2 * I(C_out, K^2*C_in)
             # The 1/2 factor compensates for the factor of 2 in the HNN++ distance formula.
-            kernel_init = 0.5 * jnp.eye(out_channels, concat_dim)
+            kernel_init = 0.5 * jnp.eye(out_channels, concat_dim, dtype=param_dtype)
         else:
             std = 1.0 / jnp.sqrt(concat_dim)
-            kernel_init = jax.random.normal(rngs.params(), (out_channels, concat_dim)) * std
+            kernel_init = jax.random.normal(rngs.params(), (out_channels, concat_dim), dtype=param_dtype) * std
         self.kernel = nnx.Param(kernel_init)
-        self.bias = nnx.Param(jnp.zeros((out_channels, 1)))
+        self.bias = nnx.Param(jnp.zeros((out_channels, 1), dtype=param_dtype))
 
     def __call__(
         self,

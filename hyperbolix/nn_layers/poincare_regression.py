@@ -7,10 +7,13 @@ Dimension key:
 """
 
 import math
+from collections.abc import Callable
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
@@ -45,6 +48,16 @@ class HypRegressionPoincare(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    curvature : float or callable
+        Curvature tag for the manifold-valued ``bias`` parameter (default: 1.0).
+        The Riemannian optimizer uses this value for the bias update
+        (egrad2rgrad, expmap, parallel transport), so it MUST match the ``c``
+        passed at ``__call__`` time — a mismatch silently applies the wrong
+        Riemannian correction. For learnable curvature, pass a callable
+        returning the current value (e.g. ``lambda: model.curvature()``).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
     Notes
     -----
     JIT Compatibility:
@@ -67,6 +80,8 @@ class HypRegressionPoincare(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        curvature: float | Callable[[], Any] = 1.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -85,12 +100,12 @@ class HypRegressionPoincare(nnx.Module):
 
         # Trainable parameters
         # Tangent space weight (Euclidean)
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)))
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype))
         # Manifold bias (initialized to small random values)
         self.bias = ManifoldParam(
-            jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01,
+            jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * 0.01,
             manifold=self.manifold,
-            curvature=1.0,
+            curvature=curvature,
         )
 
     def _compute_mlr(
@@ -228,6 +243,9 @@ class HypRegressionPoincarePP(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters (default: jnp.float32).
+        Compute precision of manifold operations is set by ``manifold.dtype``.
     Notes
     -----
     JIT Compatibility:
@@ -250,6 +268,7 @@ class HypRegressionPoincarePP(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
@@ -271,9 +290,9 @@ class HypRegressionPoincarePP(nnx.Module):
         # Reference uses std = (2 * in_dim * out_dim)^{-0.5}; unscaled normal(0,1) gives
         # row norms ≈ sqrt(in_dim) which overwhelms the MLR output scaling.
         std = 1.0 / jnp.sqrt(2.0 * in_dim * out_dim)
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim)) * std)
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * std)
         # Scalar bias (initialized to small random values)
-        self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1)) * 0.01)
+        self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1), dtype=param_dtype) * 0.01)
 
     def __call__(
         self,

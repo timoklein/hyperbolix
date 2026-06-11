@@ -187,6 +187,17 @@ def lorentz_residual(
 
     where <a, a>_L = -a_0^2 + ||a_s||^2 is the Minkowski inner product.
 
+    .. warning::
+        ``w_y`` must be **non-negative**. For x, y on the upper sheet, any conic
+        combination ``x + w_y * y`` with ``w_y >= 0`` stays future-directed
+        timelike, so the normalization returns a valid hyperboloid point. For
+        ``w_y < 0`` the combination can turn spacelike (``<ave, ave>_L > 0``,
+        roughly ``w_y < -1`` for nearby points) or land on the lower sheet
+        (``ave_0 < 0``) — the ``abs()`` in the normalizer then converts the
+        geometry violation into a "valid-looking" but wrong output instead of
+        raising. This is why callers must not expose ``w_y`` as an
+        unconstrained learnable parameter.
+
     Parameters
     ----------
     x : Array, shape (..., d+1)
@@ -194,7 +205,7 @@ def lorentz_residual(
     y : Array, shape (..., d+1)
         Points on hyperboloid with curvature c (to be added with weight w_y).
     w_y : float or scalar Array
-        Weight for the y contribution.
+        Weight for the y contribution. Must be >= 0 (see warning above).
     c : float
         Curvature parameter (positive, c > 0).
     eps : float, optional
