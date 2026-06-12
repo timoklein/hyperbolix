@@ -1633,9 +1633,9 @@ tables below collapse this into per-task decisions.</p>
 <td>Advanced — ~3× faster but trickier (init-sensitive, requires the <code>0.5·eye</code> default and <code>lorentz_kaiming</code> to converge). Use once you have a working HTC baseline</td>
 </tr>
 <tr>
-<td><code>HypLinearHyperboloidPP</code></td>
+<td><code>HypLinearHyperboloidPLFC</code></td>
 <td>Hyperboloid</td>
-<td>Deep hyperboloid networks following the HNN++ formulation</td>
+<td>Deep hyperboloid networks — point-to-hyperplane Lorentz FC (PLFC, Shi et al. 2026), the Lorentz analog of the HNN++ formulation. Optional intrinsic gyro-bias via <code>use_gyro_bias=True</code></td>
 </tr>
 <tr>
 <td><code>HypLinearPoincarePP</code></td>
