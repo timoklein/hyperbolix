@@ -78,7 +78,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 
 - FGG layers: default `lorentz_kaiming` init with `std = sqrt(1/in_features)` using **ambient** dimensions (not spatial). FGGLinear default `0.5*eye` with bias `0.5`
 - FHCNN/HTC layers: small uniform `U(-0.02, 0.02)`
-- HypLinearHyperboloidPLFC: small normal `std = 0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init); `kernel_init_std=1.0` recovers the old HNN++-style init. HypConv2DHyperboloidPP keeps standard normal `std = 1.0` (Shimizu et al. 2020)
+- HypLinearHyperboloidPLFC and HypConv2DHyperboloidILNN: small normal `std = 0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init); `kernel_init_std=1.0` recovers the old HNN++-style init (Shimizu et al. 2020). The ILNN conv (formerly HypConv2DHyperboloidPP) is the Shi et al. 2026 Lorentz convolution: LogCat (`log_radius_concat`) + PLFC, with origin padding (`pad_mode="origin"`)
 - Poincare layers: scaled normal `std = (2 * in_dim * out_dim)^{-0.5}` (van Spengler et al. 2023)
 - Standard inits (He, Xavier) are too large for hyperbolic layers
 

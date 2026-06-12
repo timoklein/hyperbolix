@@ -817,18 +817,25 @@ class FGGConv2D(nnx.Module):
         return linear_out_NC.reshape(batch, out_h, out_w, self.out_channels)
 
 
-class HypConv2DHyperboloidPP(nnx.Module):
+class HypConv2DHyperboloidILNN(nnx.Module):
     """
-    Hyperbolic Neural Networks ++ 2D convolutional layer (Hyperboloid model).
+    Intrinsic Lorentz Neural Network (ILNN) 2D convolutional layer (Hyperboloid model).
 
-    Uses HCat (Lorentz direct concatenation) to combine receptive field points,
-    then applies the HNN++ linear transform (MLR + sinh diffeomorphism) for
-    channel mixing.
+    Implements the Lorentz convolution of Shi et al. 2026, Eq. (11):
+    ``y = PLFC(LogCat({x_patch}))``. Receptive-field points are combined with the
+    log-radius-preserving concatenation (LogCat) and mixed across channels by the
+    PLFC linear transform (MLR scores -> sinh diffeomorphism -> time
+    reconstruction). This extends the HNN++ linearized-kernel convolution
+    (Shimizu et al. 2020) by replacing the Euclidean FC and naive concatenation
+    with their intrinsic Lorentz counterparts. Formerly named
+    ``HypConv2DHyperboloidPP``.
 
     Computation steps:
-        1) Extract receptive field (kernel_size x kernel_size) of hyperbolic points
-        2) Apply HCat (Lorentz direct concatenation) to combine receptive field points
-        3) Pass through HNN++ linear (MLR scores -> sinh -> time reconstruction)
+        1) Extract receptive field (kernel_size x kernel_size) of hyperbolic points,
+           padding with the manifold origin if needed
+        2) Apply LogCat (log-radius-preserving concatenation) to combine receptive field points
+        3) Pass through PLFC linear (MLR scores -> guard -> sinh -> time reconstruction)
+        4) Optionally add an intrinsic gyro-bias ``y <- y (+) exp_0([0, b])``
 
     Parameters
     ----------
@@ -846,6 +853,11 @@ class HypConv2DHyperboloidPP(nnx.Module):
         Stride of the convolution (default: 1)
     padding : str
         Padding mode, either 'SAME' or 'VALID' (default: 'SAME')
+    pad_mode : str
+        How to fill padding pixels for 'SAME' padding: ``"origin"`` fills with the
+        manifold origin ``(sqrt(1/c), 0, ..., 0)`` (matching the Shi et al. 2026
+        reference, which clamps zero-padded times up to ``sqrt(1/c)``), ``"edge"``
+        replicates border values (default: ``"origin"``).
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
@@ -857,6 +869,16 @@ class HypConv2DHyperboloidPP(nnx.Module):
         Output-side guard: the sinh argument ``sqrt(c)*v`` is smooth-clamped to
         ``±v_max``, bounding the output spatial norm by ``sinh(v_max)/sqrt(c)``
         (default: 10.0, matching the Shi et al. 2026 reference implementation).
+    use_gyro_bias : bool
+        If True, add a learnable intrinsic bias via Lorentz gyroaddition,
+        ``y <- y (+) exp_0([0, b])`` with ``b`` initialized to zero — the gyrogroup
+        identity, so the bias is a no-op at initialization (default: False).
+    kernel_init_std : float
+        Standard deviation of the normal kernel init (default: 0.02, the Shi et al.
+        2026 PLFC reference value; the reference conv defers to the PLFC init).
+        Use 1.0 to recover the previous HNN++-style init (Shimizu et al. 2020);
+        note that large kernels push the pre-guard scores into the ``v_max``
+        saturation regime.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
@@ -864,15 +886,21 @@ class HypConv2DHyperboloidPP(nnx.Module):
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (padding, input_space,
-        clamping_factor, smoothing_factor, v_max) are treated as static and baked into the compiled function.
+        This layer is designed to work with nnx.jit. Configuration parameters (padding, pad_mode,
+        input_space, clamping_factor, smoothing_factor, v_max) are treated as static and baked
+        into the compiled function.
+
+    See Also
+    --------
+    HypLinearHyperboloidPLFC : The underlying PLFC linear layer.
+    hyperbolix.manifolds.hyperboloid.Hyperboloid.log_radius_concat : The LogCat operation.
 
     References
     ----------
+    Xianglong Shi, Ziheng Chen, Yunhan Jiang, and Nicu Sebe. "Intrinsic Lorentz Neural Network."
+        ICLR 2026, arXiv:2602.23981 (Sec. 4.3: Lorentz convolution, log-radius concatenation).
     Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++."
         arXiv preprint arXiv:2006.08210 (2020).
-    Xianglong Shi, Ziheng Chen, Yunhan Jiang, and Nicu Sebe. "Intrinsic Lorentz Neural Network."
-        ICLR 2026 (output-side score guard).
     """
 
     def __init__(
@@ -885,24 +913,33 @@ class HypConv2DHyperboloidPP(nnx.Module):
         rngs: nnx.Rngs,
         stride: int | tuple[int, int] = 1,
         padding: str = "SAME",
+        pad_mode: str = "origin",
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
         v_max: float = 10.0,
+        use_gyro_bias: bool = False,
+        kernel_init_std: float = 0.02,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
             raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
+        if pad_mode not in ("origin", "edge"):
+            raise ValueError(f"pad_mode must be 'origin' or 'edge', got '{pad_mode}'")
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration
-        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "compute_mlr", "hcat"))
+        required_methods = ("expmap_0", "compute_mlr", "log_radius_concat")
+        if use_gyro_bias:
+            required_methods = ("expmap_0", "compute_mlr", "log_radius_concat", "embed_spatial_0", "addition")
+        validate_hyperboloid_manifold(manifold_module, required_methods=required_methods)
         self.manifold = manifold_module
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.input_space = input_space
         self.padding = padding
+        self.pad_mode = pad_mode
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
         self.v_max = v_max
@@ -917,23 +954,32 @@ class HypConv2DHyperboloidPP(nnx.Module):
         else:
             self.stride = stride
 
-        # HCat output ambient dim: (in_channels - 1) * kh * kw + 1
+        # LogCat output ambient dim: (in_channels - 1) * kh * kw + 1 (same as HCat)
         kernel_h, kernel_w = self.kernel_size
         N = kernel_h * kernel_w
         d = in_channels - 1
-        hcat_out_ambient_dim = d * N + 1
+        logcat_out_ambient_dim = d * N + 1
 
-        # Trainable parameters — standard normal init (Shimizu et al. 2020)
+        # Trainable parameters — small normal init (Shi et al. 2026 PLFC reference;
+        # the reference conv defers to the PLFC reset_parameters)
         out_spatial = out_channels - 1
-        hcat_spatial = hcat_out_ambient_dim - 1
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_spatial, hcat_spatial), dtype=param_dtype))
+        logcat_spatial = logcat_out_ambient_dim - 1
+        kernel_init = kernel_init_std * jax.random.normal(rngs.params(), (out_spatial, logcat_spatial), dtype=param_dtype)
+        self.kernel = nnx.Param(kernel_init)
         self.bias = nnx.Param(jnp.zeros((out_spatial, 1), dtype=param_dtype))
+
+        # Gyro-bias: spatial tangent vector at the origin, zero-initialized
+        if use_gyro_bias:
+            self.gyro_bias = nnx.Param(jnp.zeros((out_spatial,), dtype=param_dtype))
+        else:
+            self.gyro_bias = None
 
     def _extract_patches(
         self,
         x: Float[Array, "batch height width in_channels"],
+        c: float,
     ) -> Float[Array, "batch out_height out_width kernel_h kernel_w in_channels"]:
-        """Extract patches (receptive fields) from the input."""
+        """Extract patches, padding with manifold origin or edge replication for SAME mode."""
         batch, height, width, in_channels = x.shape
         kernel_h, kernel_w = self.kernel_size
         stride_h, stride_w = self.stride
@@ -948,11 +994,19 @@ class HypConv2DHyperboloidPP(nnx.Module):
             pad_left = pad_w // 2
             pad_right = pad_w - pad_left
 
-            x = jnp.pad(
-                x,
-                ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                mode="edge",
-            )
+            if self.pad_mode == "origin":
+                # Pad with manifold origin: (√(1/c), 0, ..., 0)
+                padded_h = height + pad_h
+                padded_w = width + pad_w
+                padded = jnp.zeros((batch, padded_h, padded_w, in_channels), dtype=x.dtype)
+                padded = padded.at[..., 0].set(jnp.sqrt(1.0 / c))
+                x = padded.at[:, pad_top : pad_top + height, pad_left : pad_left + width, :].set(x)
+            else:  # edge
+                x = jnp.pad(
+                    x,
+                    ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                    mode="edge",
+                )
 
         patches_flat_BHW_CKhKw = jax.lax.conv_general_dilated_patches(
             lhs=x,
@@ -995,24 +1049,24 @@ class HypConv2DHyperboloidPP(nnx.Module):
             x = x_mapped_NC.reshape(x.shape)  # (B, H, W, C)
 
         # Extract patches: (B, H', W', kh, kw, C)
-        patches_BHWkhkwC = self._extract_patches(x)
+        patches_BHWkhkwC = self._extract_patches(x, c)
         batch, out_h, out_w, kh, kw, in_c = patches_BHWkhkwC.shape
 
         # Flatten batch+spatial for parallel processing: (B*H'*W', K, C)
         patches_flat_NKC = patches_BHWkhkwC.reshape(-1, kh * kw, in_c)
 
-        # HCat: (K, C) -> (hcat_dim,) per patch
-        hcat_out_NA = jax.vmap(self.manifold.hcat, in_axes=(0, None))(patches_flat_NKC, c)  # (B*H'*W', hcat_dim)
+        # LogCat: (K, C) -> (logcat_dim,) per patch — log-radius-preserving concatenation (Shi et al. 2026, Eq. 11)
+        logcat_out_NA = jax.vmap(self.manifold.log_radius_concat, in_axes=(0, None))(patches_flat_NKC, c)
 
-        # PLFC linear: (hcat_dim,) -> (out_channels,)
+        # PLFC linear: (logcat_dim,) -> (out_channels,)
         linear_out_NC = _hyperboloid_plfc_forward(
-            hcat_out_NA,
+            logcat_out_NA,
             self.kernel[...],
             self.bias[...],
-            None,  # no gyro-bias in the conv layer
+            self.gyro_bias[...] if self.gyro_bias is not None else None,
             self.manifold,
             c,
-            "manifold",  # HCat output is already on manifold
+            "manifold",  # LogCat output is already on manifold
             self.clamping_factor,
             self.smoothing_factor,
             self.v_max,
