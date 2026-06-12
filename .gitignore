@@ -22,3 +22,6 @@ docs/javascripts/mathjax/
 
 # Benchmark results
 results/
+
+# PDF files
+.pdf
