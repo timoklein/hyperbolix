@@ -1670,9 +1670,14 @@ tables below collapse this into per-task decisions.</p>
 <td><strong>Default</strong> for hyperboloid conv — well-established HCat formulation, robust across configurations</td>
 </tr>
 <tr>
-<td><code>HypConv2DHyperboloidPP</code> / <code>HypConv2DHyperboloidFHNN</code></td>
+<td><code>HypConv2DHyperboloidILNN</code></td>
 <td>Hyperboloid</td>
-<td>Variants of the HCat conv following specific paper formulations (HNN++, FHNN); reach for these when reproducing those papers</td>
+<td>Intrinsic Lorentz conv (Shi et al. 2026) — log-radius-preserving concatenation (LogCat) + PLFC channel mixing, origin padding, optional gyro-bias</td>
+</tr>
+<tr>
+<td><code>HypConv2DHyperboloidFHNN</code></td>
+<td>Hyperboloid</td>
+<td>HCat conv following the FHNN paper formulation; reach for it when reproducing that paper</td>
 </tr>
 <tr>
 <td><code>FGGConv2D</code></td>
