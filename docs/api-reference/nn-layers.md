@@ -108,7 +108,7 @@ print(output.shape)  # (10, 16)
       show_source: true
       heading_level: 4
 
-::: hyperbolix.nn_layers.HypConv2DHyperboloidPP
+::: hyperbolix.nn_layers.HypConv2DHyperboloidILNN
     options:
       show_source: true
       heading_level: 4
@@ -263,11 +263,12 @@ h_eval = jax.nn.relu(h_eval)
 
 `FGGConv2D` combines HCat patch extraction with `FGGLinear` for channel mixing. Unlike `HypConv2DHyperboloid`, it uses the FGG spacelike-V construction, achieving linear growth of hyperbolic distance rather than logarithmic. Supports manifold-origin padding (`pad_mode="origin"`) matching the reference implementation.
 
-| Feature | FGGConv2D | HypConv2DHyperboloid | HypConv2DHyperboloidPP |
+| Feature | FGGConv2D | HypConv2DHyperboloid | HypConv2DHyperboloidILNN |
 |---------|-----------|----------------------|------------------------|
 | **Linear layer** | FGGLinear (V-matrix) | HypLinearHyperboloidFHCNN | HypLinearHyperboloidPLFC (MLR) |
+| **Patch concatenation** | HCat | HCat | LogCat (log-radius-preserving) |
 | **Distance growth** | Linear | Logarithmic | Logarithmic |
-| **Default padding** | Manifold origin | Edge replication | Edge replication |
+| **Default padding** | Manifold origin | Edge replication | Manifold origin |
 | **Weight norm** | Optional (`use_weight_norm`) | No | No |
 
 ### Proper Velocity Convolution (Chen et al. 2026)
@@ -298,13 +299,13 @@ LorentzConv2D provides a simpler, more efficient alternative to HCat-based convo
 
 **Key Differences from HypConv2DHyperboloid:**
 
-| Feature | HypConv2DHyperboloid (HCat+FHCNN) | HypConv2DHyperboloidPP (HCat+HNN++) | LorentzConv2D (HRC) |
+| Feature | HypConv2DHyperboloid (HCat+FHCNN) | HypConv2DHyperboloidILNN (LogCat+PLFC) | LorentzConv2D (HRC) |
 |---------|-----------------------------------|--------------------------------------|-------------------|
-| **Method** | HCat + FHCNN linear | HCat + MLR + sinh diffeomorphism | Euclidean conv on space components |
+| **Method** | HCat + FHCNN linear | LogCat + PLFC (MLR + sinh diffeomorphism) | Euclidean conv on space components |
 | **Dimension** | Grows: `(d-1)×N+1` | Grows: `(d-1)×N+1` | Preserved |
 | **Speed** | Slower (~80s/epoch) | Similar to FHCNN | **2.5x faster** (~32s/epoch) |
-| **Accuracy** | Higher (~71% on MNIST) | Better gradient flow (HNN++) | Lower (~46% on MNIST) |
-| **Use Case** | HCat accuracy | Deep HCat networks | Speed/memory efficiency |
+| **Accuracy** | Higher (~71% on MNIST) | Intrinsic Lorentz conv (Shi et al. 2026) | Lower (~46% on MNIST) |
+| **Use Case** | HCat accuracy | Deep intrinsic Lorentz networks | Speed/memory efficiency |
 
 **Theoretical Connection:**
 
@@ -352,11 +353,11 @@ print(output.shape)  # (8, 14, 14, 65) - dimensions preserved!
     - Working with resource-constrained environments
     - Acceptable accuracy trade-off for 2.5x speedup
 
-    Choose HypConv2DHyperboloid or HypConv2DHyperboloidPP when:
+    Choose HypConv2DHyperboloid or HypConv2DHyperboloidILNN when:
 
     - Maximum accuracy is required
     - Willing to accept slower training and dimensional growth
-    - Use HypConv2DHyperboloidPP for deeper networks (better gradient flow via HNN++)
+    - Use HypConv2DHyperboloidILNN for deeper networks (intrinsic Lorentz conv: LogCat + PLFC, Shi et al. 2026)
 
 ## Hypformer Components
 
@@ -1305,7 +1306,7 @@ print(output.shape)  # (32, 10)
 The neural network layers implement methods from:
 
 - **Ganea et al. (2018)**: "Hyperbolic Neural Networks" - Poincaré linear layers and activations
-- **Shimizu et al. (2020)**: "Hyperbolic Neural Networks++" - Enhanced Poincaré and Hyperboloid operations (`HypLinearPoincarePP`, `HypLinearHyperboloidPLFC`, `HypConv2DHyperboloidPP`)
+- **Shimizu et al. (2020)**: "Hyperbolic Neural Networks++" - Enhanced Poincaré operations and the linearized-kernel conv formulation (`HypLinearPoincarePP`; basis of `HypLinearHyperboloidPLFC` and `HypConv2DHyperboloidILNN`)
 - **Bdeir et al. (2023)**: "Fully Hyperbolic Convolutional Neural Networks for Computer Vision" - HCat-based convolutions (`HypConv2DHyperboloid`)
 - **Chen et al. (2022)**: "Fully Hyperbolic Neural Networks" - FHCNN linear layers
 - **LResNet (2023)**: "Lorentzian ResNet" - HRC-based convolutions (`LorentzConv2D`)
@@ -1316,7 +1317,7 @@ The neural network layers implement methods from:
 - **Chen et al. (2025)**: "Hyperbolic VQ-VAE (HVQ-VAE)" - `HypVQEmbeddingPoincare`; Poincaré-ball codebook with geodesic nearest-neighbour selection and copy-gradient STE
 - **Goswami et al. (2025)**: "HyperVQ" - `HypVQMLRPoincare`; vector quantization as Poincaré-MLR classification with Gumbel-Softmax straight-through selection
 - **Bu et al. (2026)**: "GGBall: Graph Generative Model on Poincaré Ball" - hyperbolic-EMA codebook update and weighted gyromidpoint (`ema_update`, `poincare_weighted_midpoint`)
-- **Shi et al. (2026)**: "Intrinsic Lorentz Neural Network" (ICLR 2026) - point-to-hyperplane Lorentz FC layer with output-side score guard and intrinsic gyro-bias (`HypLinearHyperboloidPLFC`), log-radius concatenation (`Hyperboloid.log_radius_concat`), Lorentz gyroaddition (`Hyperboloid.addition`)
+- **Shi et al. (2026)**: "Intrinsic Lorentz Neural Network" (ICLR 2026, arXiv:2602.23981) - point-to-hyperplane Lorentz FC layer with output-side score guard and intrinsic gyro-bias (`HypLinearHyperboloidPLFC`), log-radius concatenation (`Hyperboloid.log_radius_concat`), Lorentz convolution via LogCat + PLFC with origin padding (`HypConv2DHyperboloidILNN`), Lorentz gyroaddition (`Hyperboloid.addition`)
 
 ### Key Theoretical Connections
 

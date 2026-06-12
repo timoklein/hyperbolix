@@ -29,7 +29,8 @@ tables below collapse this into per-task decisions.
 | Layer | Manifold | When to pick |
 |---|---|---|
 | `HypConv2DHyperboloid` | Hyperboloid | **Default** for hyperboloid conv — well-established HCat formulation, robust across configurations |
-| `HypConv2DHyperboloidPP` / `HypConv2DHyperboloidFHNN` | Hyperboloid | Variants of the HCat conv following specific paper formulations (HNN++, FHNN); reach for these when reproducing those papers |
+| `HypConv2DHyperboloidILNN` | Hyperboloid | Intrinsic Lorentz conv (Shi et al. 2026) — log-radius-preserving concatenation (LogCat) + PLFC channel mixing, origin padding, optional gyro-bias |
+| `HypConv2DHyperboloidFHNN` | Hyperboloid | HCat conv following the FHNN paper formulation; reach for it when reproducing that paper |
 | `FGGConv2D` | Hyperboloid | Advanced — HCat expressiveness with FGG's speed, but inherits FGG's init sensitivity |
 | `HypConv2DPoincare` | Poincaré | Standard for Poincaré CNNs (no faster variant exists) |
 | `HypConv2DPV` | Proper Velocity | PV CNNs — raw Euclidean patch concatenation, no β-scaling |

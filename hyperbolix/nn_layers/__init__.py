@@ -19,7 +19,13 @@ from .hyperboloid_attention import (
     HyperbolicSoftmaxAttention,
     focus_transform,
 )
-from .hyperboloid_conv import FGGConv2D, HypConv2DHyperboloid, HypConv2DHyperboloidFHNN, HypConv2DHyperboloidPP, LorentzConv2D
+from .hyperboloid_conv import (
+    FGGConv2D,
+    HypConv2DHyperboloid,
+    HypConv2DHyperboloidFHNN,
+    HypConv2DHyperboloidILNN,
+    LorentzConv2D,
+)
 from .hyperboloid_core import (
     build_spacelike_V,
     hrc,
@@ -61,7 +67,7 @@ __all__ = [
     "HTCLinear",
     "HypConv2DHyperboloid",
     "HypConv2DHyperboloidFHNN",
-    "HypConv2DHyperboloidPP",
+    "HypConv2DHyperboloidILNN",
     "HypConv2DPV",
     "HypConv2DPoincare",
     "HypLinearHyperboloidFHCNN",

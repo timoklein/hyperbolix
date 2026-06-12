@@ -185,7 +185,7 @@ def _hyperboloid_plfc_forward(
 ) -> Float[Array, "batch out_dim"]:
     """Pure-function PLFC forward pass for the hyperboloid model.
 
-    Used by HypLinearHyperboloidPLFC and HypConv2DHyperboloidPP. Computes MLR
+    Used by HypLinearHyperboloidPLFC and HypConv2DHyperboloidILNN. Computes MLR
     scores, guards them, maps back to the hyperboloid via element-wise sinh
     diffeomorphism, and optionally applies an intrinsic gyro-bias.
     """
