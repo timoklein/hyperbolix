@@ -48,7 +48,7 @@ from flax import nnx
 import optax
 from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Hyperboloid
-from hyperbolix.nn_layers import HypLinearHyperboloidPP
+from hyperbolix.nn_layers import HypLinearHyperboloidPLFC
 
 
 class Model(nnx.Module):
@@ -59,7 +59,7 @@ class Model(nnx.Module):
             parameterization="softplus",                 # or "log" (MERU)
             c_min=0.1, c_max=10.0,                       # default clamp
         )
-        self.fc = HypLinearHyperboloidPP(self.manifold, 33, 65, rngs=rngs)
+        self.fc = HypLinearHyperboloidPLFC(self.manifold, 33, 65, rngs=rngs)
 
     def __call__(self, x):
         c = self.curvature()                              # positive, clamped

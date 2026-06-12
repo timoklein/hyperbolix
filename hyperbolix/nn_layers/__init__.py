@@ -34,7 +34,7 @@ from .hyperboloid_linear import (
     HTCLinear,
     HypLinearHyperboloidFHCNN,
     HypLinearHyperboloidFHNN,
-    HypLinearHyperboloidPP,
+    HypLinearHyperboloidPLFC,
 )
 from .hyperboloid_positional import HyperbolicRoPE, HypformerPositionalEncoding, hope
 from .hyperboloid_regression import FGGLorentzMLR, HypRegressionHyperboloid
@@ -66,7 +66,7 @@ __all__ = [
     "HypConv2DPoincare",
     "HypLinearHyperboloidFHCNN",
     "HypLinearHyperboloidFHNN",
-    "HypLinearHyperboloidPP",
+    "HypLinearHyperboloidPLFC",
     "HypLinearPV",
     "HypLinearPoincare",
     "HypLinearPoincarePP",

@@ -19,7 +19,7 @@ tables below collapse this into per-task decisions.
 |---|---|---|
 | `HTCLinear` | Hyperboloid | **Default** for hyperboloid FC — simple, robust, just works. Also supports cross-curvature (`c_in != c_out`) for Hypformer blocks |
 | `FGGLinear` | Hyperboloid | Advanced — ~3× faster but trickier (init-sensitive, requires the `0.5·eye` default and `lorentz_kaiming` to converge). Use once you have a working HTC baseline |
-| `HypLinearHyperboloidPP` | Hyperboloid | Deep hyperboloid networks following the HNN++ formulation |
+| `HypLinearHyperboloidPLFC` | Hyperboloid | Deep hyperboloid networks — point-to-hyperplane Lorentz FC (PLFC, Shi et al. 2026), the Lorentz analog of the HNN++ formulation. Optional intrinsic gyro-bias via `use_gyro_bias=True` |
 | `HypLinearPoincarePP` | Poincaré | **Default** for Poincaré FC — Euclidean-parameterized weights, works with `optax.adam` |
 | `HypLinearPoincare` | Poincaré | Legacy Ganea 2018 — manifold-valued weights, requires `riemannian_adam`. Prefer `PP` |
 | `HypLinearPV` | Proper Velocity | PV networks — Euclidean weights, He init |

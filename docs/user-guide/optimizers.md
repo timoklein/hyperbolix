@@ -11,7 +11,7 @@ For per-optimizer signatures, see the
 **Use `optax.adam` (or any Euclidean Optax optimizer).** That includes:
 
 - All modern NN layers — `HTCLinear`, `FGGLinear`, `HypConv2DHyperboloid*`,
-  `HypLinearHyperboloidPP`, `HypLinearPoincarePP`, `HypLinearPV`, all
+  `HypLinearHyperboloidPLFC`, `HypLinearPoincarePP`, `HypLinearPV`, all
   attention / normalization / regression heads.
 - Learnable curvature (via the `LearnableCurvature` module).
 

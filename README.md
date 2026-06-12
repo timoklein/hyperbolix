@@ -113,7 +113,7 @@ class Model(nnx.Module):
     def __init__(self, rngs):
         self.manifold = Hyperboloid(c=1.0)               # static, shared
         self.curvature = LearnableCurvature(init_c=1.0)  # one per distinct c
-        self.fc = HypLinearHyperboloidPP(self.manifold, 33, 65, rngs=rngs)
+        self.fc = HypLinearHyperboloidPLFC(self.manifold, 33, 65, rngs=rngs)
 
     def __call__(self, x):
         c = self.curvature()                              # positive, clamped

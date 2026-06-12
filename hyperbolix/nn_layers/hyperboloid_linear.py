@@ -22,7 +22,7 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import sinh
+from hyperbolix.utils.math_utils import sinh, smooth_clamp
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc
@@ -171,20 +171,23 @@ def _fhnn_forward(
     return res_BA
 
 
-def _hyperboloid_pp_forward(
+def _hyperboloid_plfc_forward(
     x_BAi: Float[Array, "batch in_dim"],
     kernel_OI: Array,
     bias_O1: Array,
+    gyro_bias_O: Array | None,
     manifold: Hyperboloid,
     c: float,
     input_space: str,
     clamping_factor: float,
     smoothing_factor: float,
+    v_max: float,
 ) -> Float[Array, "batch out_dim"]:
-    """Pure-function HNN++ forward pass for the hyperboloid model.
+    """Pure-function PLFC forward pass for the hyperboloid model.
 
-    Used by HypLinearHyperboloidPP. Computes MLR scores then maps back
-    to the hyperboloid via element-wise sinh diffeomorphism.
+    Used by HypLinearHyperboloidPLFC and HypConv2DHyperboloidPP. Computes MLR
+    scores, guards them, maps back to the hyperboloid via element-wise sinh
+    diffeomorphism, and optionally applies an intrinsic gyro-bias.
     """
     # Map to manifold if needed (static branch - JIT friendly)
     if input_space == "tangent":
@@ -193,14 +196,29 @@ def _hyperboloid_pp_forward(
     # Compute multinomial logistic regression scores: (B, O) where O = out_dim-1
     v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
 
-    # Element-wise sinh diffeomorphism (NOT expmap_0 which applies sinh to norm)
+    # Output-side guard (Shi et al. 2026 reference clamps v to ±10 at c=1).
+    # compute_mlr only bounds its asinh argument, leaving v ∝ ‖kernel_row‖
+    # unbounded; sinh then exponentiates v, so without this guard the squared
+    # spatial norm in the time reconstruction overflows float32 once
+    # ‖kernel_row‖ or the input distance from the origin grows.
     sqrt_c = jnp.sqrt(c)
-    res_rem_BO = sinh(sqrt_c * v_BO) / sqrt_c  # (B, O) spatial components
+    sinh_arg_BO = smooth_clamp(sqrt_c * v_BO, -v_max, v_max, smoothing_factor)
+
+    # Element-wise sinh diffeomorphism (NOT expmap_0 which applies sinh to norm)
+    res_rem_BO = sinh(sinh_arg_BO) / sqrt_c  # (B, O) spatial components
 
     # Reconstruct time from hyperboloid constraint: -x0^2 + ||x_s||^2 = -1/c
     res0_B1 = jnp.sqrt(jnp.sum(res_rem_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
 
-    return jnp.concatenate([res0_B1, res_rem_BO], axis=-1)  # (B, Ao)
+    res_BAo = jnp.concatenate([res0_B1, res_rem_BO], axis=-1)  # (B, Ao)
+
+    # Intrinsic gyro-bias: y ← y ⊕ exp_0([0, b]) (Shi et al. 2026, Sec. 4.1)
+    if gyro_bias_O is not None:
+        bias_tangent_Ao = manifold.embed_spatial_0(gyro_bias_O)
+        bias_point_Ao = manifold.expmap_0(bias_tangent_Ao, c)
+        res_BAo = jax.vmap(manifold.addition, in_axes=(0, None, None))(res_BAo, bias_point_Ao, c)
+
+    return res_BAo
 
 
 def _get_effective_kernel(
@@ -449,7 +467,7 @@ class HypLinearHyperboloidFHNN(nnx.Module):
     See Also
     --------
     HypLinearHyperboloidFHCNN : FHCNN layer with spatial-primary parameterization.
-    HypLinearHyperboloidPP : HNN++ layer using MLR + sinh diffeomorphism.
+    HypLinearHyperboloidPLFC : PLFC layer using MLR + sinh diffeomorphism.
 
     References
     ----------
@@ -542,15 +560,25 @@ class HypLinearHyperboloidFHNN(nnx.Module):
         )
 
 
-class HypLinearHyperboloidPP(nnx.Module):
+class HypLinearHyperboloidPLFC(nnx.Module):
     """
-    Hyperbolic Neural Networks ++ fully connected layer (Hyperboloid model).
+    Point-to-hyperplane Lorentz fully connected (PLFC) layer (Hyperboloid model).
+
+    Each output coordinate is the signed Lorentz distance from the input point to a
+    learned Lorentz hyperplane (the Lorentz MLR score). The output point is recovered
+    in closed form via the element-wise sinh diffeomorphism and the hyperboloid time
+    constraint, so the signed distance from the output to the k-th coordinate
+    hyperplane equals the k-th score (margin preservation, Shi et al. 2026, Thm. 1-2).
+    This is the Lorentz analog of the HNN++ point-to-hyperplane FC formulation
+    (Shimizu et al. 2020). Formerly named ``HypLinearHyperboloidPP``.
 
     Computation steps:
         0) Project the input tensor onto the manifold (optional)
         1) Compute the multinomial linear regression score(s) via ``compute_mlr``
-        2) Apply element-wise sinh diffeomorphism to obtain spatial coordinates
-        3) Reconstruct time coordinate from the hyperboloid constraint
+        2) Smooth-clamp the scaled scores ``sqrt(c)*v`` to ``±v_max`` (output-side guard)
+        3) Apply element-wise sinh diffeomorphism to obtain spatial coordinates
+        4) Reconstruct time coordinate from the hyperboloid constraint
+        5) Optionally add an intrinsic gyro-bias ``y ← y ⊕ exp_0([0, b])``
 
     Parameters
     ----------
@@ -569,6 +597,19 @@ class HypLinearHyperboloidPP(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    v_max : float
+        Output-side guard: the sinh argument ``sqrt(c)*v`` is smooth-clamped to
+        ``±v_max``, bounding the output spatial norm by ``sinh(v_max)/sqrt(c)``
+        (default: 10.0, matching the Shi et al. 2026 reference implementation).
+    use_gyro_bias : bool
+        If True, add a learnable intrinsic bias via Lorentz gyroaddition,
+        ``y ← y ⊕ exp_0([0, b])`` with ``b`` initialized to zero — the gyrogroup
+        identity, so the bias is a no-op at initialization (default: False).
+    kernel_init_std : float
+        Standard deviation of the normal kernel init (default: 0.02, the Shi et al.
+        2026 PLFC reference value). Use 1.0 to recover the previous HNN++-style
+        init (Shimizu et al. 2020); note that large kernels push the pre-guard
+        scores toward the ``v_max`` saturation regime.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
@@ -577,10 +618,13 @@ class HypLinearHyperboloidPP(nnx.Module):
     -----
     JIT Compatibility:
         This layer is designed to work with nnx.jit. Configuration parameters (input_space,
-        clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
+        clamping_factor, smoothing_factor, v_max) are treated as static and will be baked
+        into the compiled function.
 
     References
     ----------
+    Xianglong Shi, Ziheng Chen, Yunhan Jiang, and Nicu Sebe. "Intrinsic Lorentz Neural Network."
+        ICLR 2026, Sec. 4.1 (PLFC layer, Theorem 1).
     Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++."
         arXiv preprint arXiv:2006.08210 (2020).
     """
@@ -595,25 +639,39 @@ class HypLinearHyperboloidPP(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        v_max: float = 10.0,
+        use_gyro_bias: bool = False,
+        kernel_init_std: float = 0.02,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
         # Static configuration (treated as compile-time constants for JIT)
-        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "compute_mlr"))
+        required_methods = ("expmap_0", "compute_mlr")
+        if use_gyro_bias:
+            required_methods = ("expmap_0", "compute_mlr", "embed_spatial_0", "addition")
+        validate_hyperboloid_manifold(manifold_module, required_methods=required_methods)
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
+        self.v_max = v_max
 
-        # Trainable parameters — standard normal init (Shimizu et al. 2020)
+        # Trainable parameters — small normal init (Shi et al. 2026 PLFC reference)
         in_spatial = in_dim - 1
         out_spatial = out_dim - 1
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_spatial, in_spatial), dtype=param_dtype))
+        kernel_init = kernel_init_std * jax.random.normal(rngs.params(), (out_spatial, in_spatial), dtype=param_dtype)
+        self.kernel = nnx.Param(kernel_init)
         self.bias = nnx.Param(jnp.zeros((out_spatial, 1), dtype=param_dtype))
+
+        # Gyro-bias: spatial tangent vector at the origin, zero-initialized
+        if use_gyro_bias:
+            self.gyro_bias = nnx.Param(jnp.zeros((out_spatial,), dtype=param_dtype))
+        else:
+            self.gyro_bias = None
 
     def __call__(
         self,
@@ -621,7 +679,7 @@ class HypLinearHyperboloidPP(nnx.Module):
         c: float = 1.0,
     ) -> Float[Array, "batch out_dim"]:
         """
-        Forward pass through the HNN++ hyperboloid linear layer.
+        Forward pass through the PLFC hyperboloid linear layer.
 
         Parameters
         ----------
@@ -635,15 +693,17 @@ class HypLinearHyperboloidPP(nnx.Module):
         res : Array of shape (batch, out_dim)
             Output on the Hyperboloid manifold
         """
-        return _hyperboloid_pp_forward(
+        return _hyperboloid_plfc_forward(
             x,
             self.kernel[...],
             self.bias[...],
+            self.gyro_bias[...] if self.gyro_bias is not None else None,
             self.manifold,
             c,
             self.input_space,
             self.clamping_factor,
             self.smoothing_factor,
+            self.v_max,
         )
 
 

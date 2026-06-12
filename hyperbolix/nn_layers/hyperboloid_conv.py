@@ -24,7 +24,7 @@ from .hyperboloid_linear import (
     _fhcnn_forward,
     _fhnn_forward,
     _get_effective_kernel,
-    _hyperboloid_pp_forward,
+    _hyperboloid_plfc_forward,
 )
 
 
@@ -853,6 +853,10 @@ class HypConv2DHyperboloidPP(nnx.Module):
         Clamping factor for the multinomial linear regression output (default: 1.0)
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
+    v_max : float
+        Output-side guard: the sinh argument ``sqrt(c)*v`` is smooth-clamped to
+        ``±v_max``, bounding the output spatial norm by ``sinh(v_max)/sqrt(c)``
+        (default: 10.0, matching the Shi et al. 2026 reference implementation).
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
@@ -861,12 +865,14 @@ class HypConv2DHyperboloidPP(nnx.Module):
     -----
     JIT Compatibility:
         This layer is designed to work with nnx.jit. Configuration parameters (padding, input_space,
-        clamping_factor, smoothing_factor) are treated as static and baked into the compiled function.
+        clamping_factor, smoothing_factor, v_max) are treated as static and baked into the compiled function.
 
     References
     ----------
     Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++."
         arXiv preprint arXiv:2006.08210 (2020).
+    Xianglong Shi, Ziheng Chen, Yunhan Jiang, and Nicu Sebe. "Intrinsic Lorentz Neural Network."
+        ICLR 2026 (output-side score guard).
     """
 
     def __init__(
@@ -882,6 +888,7 @@ class HypConv2DHyperboloidPP(nnx.Module):
         input_space: str = "manifold",
         clamping_factor: float = 1.0,
         smoothing_factor: float = 50.0,
+        v_max: float = 10.0,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
@@ -898,6 +905,7 @@ class HypConv2DHyperboloidPP(nnx.Module):
         self.padding = padding
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
+        self.v_max = v_max
 
         if isinstance(kernel_size, int):
             self.kernel_size = (kernel_size, kernel_size)
@@ -996,16 +1004,18 @@ class HypConv2DHyperboloidPP(nnx.Module):
         # HCat: (K, C) -> (hcat_dim,) per patch
         hcat_out_NA = jax.vmap(self.manifold.hcat, in_axes=(0, None))(patches_flat_NKC, c)  # (B*H'*W', hcat_dim)
 
-        # HNN++ linear: (hcat_dim,) -> (out_channels,)
-        linear_out_NC = _hyperboloid_pp_forward(
+        # PLFC linear: (hcat_dim,) -> (out_channels,)
+        linear_out_NC = _hyperboloid_plfc_forward(
             hcat_out_NA,
             self.kernel[...],
             self.bias[...],
+            None,  # no gyro-bias in the conv layer
             self.manifold,
             c,
             "manifold",  # HCat output is already on manifold
             self.clamping_factor,
             self.smoothing_factor,
+            self.v_max,
         )  # (B*H'*W', out_channels)
 
         # Reshape back to spatial

@@ -59,7 +59,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 - **`manifolds/`** — Plain Python classes (not `nnx.Module`): `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `ProductManifold`. Each is instantiated with a dtype (`Poincare(dtype=jnp.float64)`). `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity` conform to the scalar-`c` `Manifold` protocol in `protocol.py`; `ProductManifold` intentionally does **not** (it takes a per-factor `cs: Sequence[Curvature]` sequence instead of a scalar `c`, and has no `c` attribute). `_base.py` has shared `ManifoldBase`.
 - **`nn_layers/`** — Flax NNX layers (`nnx.Module`). Two families:
   - *Poincare*: `HypLinearPoincare`, `HypLinearPoincarePP`, `HypConv2DPoincare`, `PoincareBatchNorm2D`, `HypRegressionPoincare` (Ganea et al. 2018, Shimizu et al. 2020, van Spengler et al. 2023)
-  - *Hyperboloid*: `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `HTCLinear`, `HypLinearHyperboloidPP`, `LorentzConv2D` (Klis et al. 2026, Shimizu et al. 2020), attention layers, positional encodings, normalization
+  - *Hyperboloid*: `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `HTCLinear`, `HypLinearHyperboloidPLFC`, `LorentzConv2D` (Klis et al. 2026, Shimizu et al. 2020, Shi et al. 2026), attention layers, positional encodings, normalization
   - *Hybrid*: `HyperPPFeatureScaling` — Euclidean-space feature scaling applied before `expmap_0` in hybrid networks (RMSNorm + activation + dim scaling + optional learned rescaling)
   - `hyperboloid_core.py` has foundational ops: `hrc()`, `htc()`, `build_spacelike_V()`, `lorentz_midpoint()`
 - **`optim/`** — Riemannian optimizers (`riemannian_sgd`, `riemannian_adam`). Uses `ManifoldParam` (subclass of `nnx.Param`) to tag hyperbolic parameters. `_riemannian_base.py` has shared `make_riemannian_optimizer()`.
@@ -78,7 +78,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 
 - FGG layers: default `lorentz_kaiming` init with `std = sqrt(1/in_features)` using **ambient** dimensions (not spatial). FGGLinear default `0.5*eye` with bias `0.5`
 - FHCNN/HTC layers: small uniform `U(-0.02, 0.02)`
-- HyperboloidPP layer: standard normal `std = 1.0` (Shimizu et al. 2020 reference init)
+- HypLinearHyperboloidPLFC: small normal `std = 0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init); `kernel_init_std=1.0` recovers the old HNN++-style init. HypConv2DHyperboloidPP keeps standard normal `std = 1.0` (Shimizu et al. 2020)
 - Poincare layers: scaled normal `std = (2 * in_dim * out_dim)^{-0.5}` (van Spengler et al. 2023)
 - Standard inits (He, Xavier) are too large for hyperbolic layers
 

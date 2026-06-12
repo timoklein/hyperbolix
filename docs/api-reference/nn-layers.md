@@ -47,7 +47,7 @@ All layers follow Flax NNX conventions and store manifold module references.
       show_source: true
       heading_level: 4
 
-::: hyperbolix.nn_layers.HypLinearHyperboloidPP
+::: hyperbolix.nn_layers.HypLinearHyperboloidPLFC
     options:
       show_source: true
       heading_level: 4
@@ -265,7 +265,7 @@ h_eval = jax.nn.relu(h_eval)
 
 | Feature | FGGConv2D | HypConv2DHyperboloid | HypConv2DHyperboloidPP |
 |---------|-----------|----------------------|------------------------|
-| **Linear layer** | FGGLinear (V-matrix) | HypLinearHyperboloidFHCNN | HypLinearHyperboloidPP (MLR) |
+| **Linear layer** | FGGLinear (V-matrix) | HypLinearHyperboloidFHCNN | HypLinearHyperboloidPLFC (MLR) |
 | **Distance growth** | Linear | Logarithmic | Logarithmic |
 | **Default padding** | Manifold origin | Edge replication | Edge replication |
 | **Weight norm** | Optional (`use_weight_norm`) | No | No |
@@ -1305,7 +1305,7 @@ print(output.shape)  # (32, 10)
 The neural network layers implement methods from:
 
 - **Ganea et al. (2018)**: "Hyperbolic Neural Networks" - Poincaré linear layers and activations
-- **Shimizu et al. (2020)**: "Hyperbolic Neural Networks++" - Enhanced Poincaré and Hyperboloid operations (`HypLinearPoincarePP`, `HypLinearHyperboloidPP`, `HypConv2DHyperboloidPP`)
+- **Shimizu et al. (2020)**: "Hyperbolic Neural Networks++" - Enhanced Poincaré and Hyperboloid operations (`HypLinearPoincarePP`, `HypLinearHyperboloidPLFC`, `HypConv2DHyperboloidPP`)
 - **Bdeir et al. (2023)**: "Fully Hyperbolic Convolutional Neural Networks for Computer Vision" - HCat-based convolutions (`HypConv2DHyperboloid`)
 - **Chen et al. (2022)**: "Fully Hyperbolic Neural Networks" - FHCNN linear layers
 - **LResNet (2023)**: "Lorentzian ResNet" - HRC-based convolutions (`LorentzConv2D`)
@@ -1316,6 +1316,7 @@ The neural network layers implement methods from:
 - **Chen et al. (2025)**: "Hyperbolic VQ-VAE (HVQ-VAE)" - `HypVQEmbeddingPoincare`; Poincaré-ball codebook with geodesic nearest-neighbour selection and copy-gradient STE
 - **Goswami et al. (2025)**: "HyperVQ" - `HypVQMLRPoincare`; vector quantization as Poincaré-MLR classification with Gumbel-Softmax straight-through selection
 - **Bu et al. (2026)**: "GGBall: Graph Generative Model on Poincaré Ball" - hyperbolic-EMA codebook update and weighted gyromidpoint (`ema_update`, `poincare_weighted_midpoint`)
+- **Shi et al. (2026)**: "Intrinsic Lorentz Neural Network" (ICLR 2026) - point-to-hyperplane Lorentz FC layer with output-side score guard and intrinsic gyro-bias (`HypLinearHyperboloidPLFC`), log-radius concatenation (`Hyperboloid.log_radius_concat`), Lorentz gyroaddition (`Hyperboloid.addition`)
 
 ### Key Theoretical Connections
 
