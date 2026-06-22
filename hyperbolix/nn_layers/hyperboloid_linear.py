@@ -221,6 +221,57 @@ def _hyperboloid_plfc_forward(
     return res_BAo
 
 
+def _fgg_weight_init(
+    key: Array,
+    in_spatial: int,
+    out_spatial: int,
+    in_ambient: int,
+    out_ambient: int,
+    reset_params: str,
+    param_dtype: DTypeLike,
+) -> Float[Array, "in_spatial out_spatial"]:
+    """Euclidean weight ``U`` of shape ``(I, O)`` for FGG layers (Klis et al. 2026).
+
+    Shared by ``FGGLinear`` and ``FGGConv2D``. The std is computed from the
+    *ambient* dimensions (``in_ambient``/``out_ambient`` = spatial + 1), and the
+    result is pinned to ``param_dtype`` so a global ``jax_enable_x64`` does not
+    silently promote the bare ``jnp.eye`` / ``jax.random.normal`` to float64.
+
+    Parameters
+    ----------
+    key : Array
+        PRNG key for the random init branches.
+    in_spatial, out_spatial : int
+        Spatial weight dims ``I = in_ambient - 1``, ``O = out_ambient - 1``.
+    in_ambient, out_ambient : int
+        Ambient dims (including the time coordinate) used for the std formulas.
+    reset_params : str
+        One of ``"eye"``, ``"xavier"``, ``"kaiming"``, ``"lorentz_kaiming"``, ``"mlr"``.
+    param_dtype : DTypeLike
+        Storage dtype the returned weight is pinned to.
+
+    Returns
+    -------
+    Array, shape (I, O)
+        Euclidean weight matrix in ``param_dtype``.
+    """
+    if reset_params == "eye":
+        U_IO = 0.5 * jnp.eye(in_spatial, out_spatial)
+    elif reset_params == "xavier":
+        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(1.0 / (in_ambient + out_ambient))
+    elif reset_params == "kaiming":
+        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(2.0 / in_ambient)
+    elif reset_params == "lorentz_kaiming":
+        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(1.0 / in_ambient)
+    elif reset_params == "mlr":
+        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(5.0 / in_ambient)
+    else:
+        raise ValueError(f"reset_params must be 'eye', 'xavier', 'kaiming', 'lorentz_kaiming', or 'mlr', got '{reset_params}'")
+
+    # Pin storage dtype (under global x64 the bare jnp.eye / jax.random.normal would be float64).
+    return U_IO.astype(param_dtype)
+
+
 def _get_effective_kernel(
     kernel: Array | None,
     kernel_dir: Array | None,
@@ -907,11 +958,6 @@ class FGGLinear(nnx.Module):
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
     ):
-        if reset_params not in ("eye", "xavier", "kaiming", "lorentz_kaiming", "mlr"):
-            raise ValueError(
-                f"reset_params must be 'eye', 'xavier', 'kaiming', 'lorentz_kaiming', or 'mlr', got '{reset_params}'"
-            )
-
         in_spatial = in_features - 1  # I
         out_spatial = out_features - 1  # O
 
@@ -921,27 +967,8 @@ class FGGLinear(nnx.Module):
         self.use_weight_norm = use_weight_norm
         self.eps = eps
 
-        # Initialize Euclidean weight U: (I, O)
-        # Reference computes std from ambient dimensions (in_features, out_features)
-        key = rngs.params()
-        if reset_params == "eye":
-            U_init = 0.5 * jnp.eye(in_spatial, out_spatial)
-        elif reset_params == "xavier":
-            std = jnp.sqrt(1.0 / (in_features + out_features))
-            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
-        elif reset_params == "kaiming":
-            std = jnp.sqrt(2.0 / in_features)
-            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
-        elif reset_params == "lorentz_kaiming":
-            std = jnp.sqrt(1.0 / in_features)
-            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
-        else:  # mlr
-            std = jnp.sqrt(5.0 / in_features)
-            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
-
-        # Pin storage dtype once after the init branches (under global x64 the
-        # bare jnp.eye / jax.random.normal above would be float64).
-        U_init = U_init.astype(param_dtype)
+        # Euclidean weight U (I, O); std from ambient dims (in_features, out_features).
+        U_init = _fgg_weight_init(rngs.params(), in_spatial, out_spatial, in_features, out_features, reset_params, param_dtype)
 
         # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
         if use_weight_norm:

@@ -185,6 +185,17 @@ def extract_patches(
     return patches_BHWkhkwC
 
 
+def hcat_ambient_dim(in_channels: int, kernel_size: tuple[int, int]) -> int:
+    """Output ambient dimension of HCat/LogCat over a ``kh*kw`` receptive field.
+
+    Concatenating ``N = kh*kw`` hyperboloid points (each with ``in_channels - 1``
+    spatial dims) yields one point of spatial dim ``(in_channels - 1) * N`` plus a
+    single reconstructed time coordinate.
+    """
+    kh, kw = kernel_size
+    return (in_channels - 1) * kh * kw + 1
+
+
 def spatial_to_hyperboloid(
     spatial: Float[Array, "... D"],
     c_in: float,
@@ -485,15 +496,8 @@ def hrc(
 
     out_space_D = f_r(x_space_D)  # (..., D') — may change dim
 
-    # Scale for curvature transformation: sqrt(c_in / c_out)
-    scale = jnp.sqrt(c_in / c_out)
-    scaled_D = scale * out_space_D  # (..., D')
-
-    # Reconstruct time via hyperboloid constraint: x₀ = sqrt(||x_rest||² + 1/c_out)
-    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
-    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
-
-    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D'+1)
+    # Curvature scaling sqrt(c_in/c_out) + time reconstruction (shared hrc/htc tail).
+    return spatial_to_hyperboloid(out_space_D, c_in, c_out, eps)  # (..., D'+1)
 
 
 def htc(
@@ -579,12 +583,5 @@ def htc(
     # f_t: (..., A_in) → (..., D_out) where A_in = in_dim+1
     out_D = f_t(x)
 
-    # Scale for curvature transformation
-    scale = jnp.sqrt(c_in / c_out)
-    scaled_D = scale * out_D  # (..., D_out)
-
-    # Reconstruct time via hyperboloid constraint: x₀ = sqrt(||space||² + 1/c_out)
-    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
-    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
-
-    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D_out+1)
+    # Curvature scaling sqrt(c_in/c_out) + time reconstruction (shared hrc/htc tail).
+    return spatial_to_hyperboloid(out_D, c_in, c_out, eps)  # (..., D_out+1)

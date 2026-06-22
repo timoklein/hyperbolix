@@ -17,15 +17,34 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 
-from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import extract_patches, hrc
+from ._helpers import as_pair, validate_hyperboloid_manifold
+from .hyperboloid_core import extract_patches, hcat_ambient_dim, hrc
 from .hyperboloid_linear import (
     _fgg_linear_forward,
+    _fgg_weight_init,
     _fhcnn_forward,
     _fhnn_forward,
     _get_effective_kernel,
     _hyperboloid_plfc_forward,
 )
+
+
+def _map_input_to_manifold(
+    x: Float[Array, "batch height width in_channels"],
+    manifold: Hyperboloid,
+    input_space: str,
+    c: float,
+) -> Float[Array, "batch height width in_channels"]:
+    """expmap_0 a (B, H, W, C) feature map onto the manifold if ``input_space == 'tangent'``.
+
+    Shared by the conv ``__call__``s; ``input_space`` is a static Python attribute so
+    the branch stays JIT-friendly (baked in at trace time).
+    """
+    if input_space == "tangent":
+        x_flat_NC = x.reshape(-1, x.shape[-1])  # (B*H*W, C)
+        x_flat_NC = jax.vmap(manifold.expmap_0, in_axes=(0, None))(x_flat_NC, c)
+        x = x_flat_NC.reshape(x.shape)  # (B, H, W, C)
+    return x
 
 
 class LorentzConv2D(nnx.Module):
@@ -224,27 +243,11 @@ class HypConv2DHyperboloid(nnx.Module):
         self.input_space = input_space
         self.padding = padding
 
-        # Handle kernel_size as int or tuple
-        if isinstance(kernel_size, int):
-            self.kernel_size = (kernel_size, kernel_size)
-        else:
-            self.kernel_size = kernel_size
+        self.kernel_size = as_pair(kernel_size)
+        self.stride = as_pair(stride)
 
-        # Handle stride as int or tuple
-        if isinstance(stride, int):
-            self.stride = (stride, stride)
-        else:
-            self.stride = stride
-
-        # Compute dimensions for the linear layer
-        # Receptive field: kernel_h x kernel_w pixels, each is a point in in_channels-dim ambient space
-        # HCat input: N = kernel_h x kernel_w points, each in in_channels ambient dimensions
-        # HCat output: ambient dim = (in_channels - 1) x N + 1
-        #            = (in_channels - 1) x (kernel_h x kernel_w) + 1
-        kernel_h, kernel_w = self.kernel_size
-        N = kernel_h * kernel_w  # Number of points in receptive field
-        d = in_channels - 1  # Input manifold dimension
-        hcat_out_ambient_dim = d * N + 1  # HCat output ambient dimension
+        # HCat output ambient dim for the linear layer
+        hcat_out_ambient_dim = hcat_ambient_dim(in_channels, self.kernel_size)
 
         # Trainable parameters — owned directly for flat parameter paths
         bound = 0.02
@@ -277,10 +280,7 @@ class HypConv2DHyperboloid(nnx.Module):
             Output feature map on the Hyperboloid manifold
         """
         # Map to manifold if needed (static branch - JIT friendly)
-        if self.input_space == "tangent":
-            x_flat_NC = x.reshape(-1, x.shape[-1])  # (B*H*W, C)
-            x_mapped_NC = jax.vmap(self.manifold.expmap_0, in_axes=(0, None))(x_flat_NC, c)
-            x = x_mapped_NC.reshape(x.shape)  # (B, H, W, C)
+        x = _map_input_to_manifold(x, self.manifold, self.input_space, c)
 
         # Extract patches: (B, H, W, kh, kw, C)
         patches_BHWkhkwC = extract_patches(x, self.kernel_size, self.stride, self.padding, pad_mode="edge")
@@ -405,21 +405,11 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
         self.eps = eps
         self.activation = activation
 
-        if isinstance(kernel_size, int):
-            self.kernel_size = (kernel_size, kernel_size)
-        else:
-            self.kernel_size = kernel_size
+        self.kernel_size = as_pair(kernel_size)
+        self.stride = as_pair(stride)
 
-        if isinstance(stride, int):
-            self.stride = (stride, stride)
-        else:
-            self.stride = stride
-
-        # HCat output ambient dim: (in_channels - 1) * kh * kw + 1
-        kernel_h, kernel_w = self.kernel_size
-        N = kernel_h * kernel_w
-        d = in_channels - 1
-        hcat_out_ambient_dim = d * N + 1
+        # HCat output ambient dim
+        hcat_out_ambient_dim = hcat_ambient_dim(in_channels, self.kernel_size)
 
         # FHNN weight init: U(-0.02, 0.02) with time column zeroed (tangent vectors at origin)
         bound = 0.02
@@ -462,10 +452,7 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
             Output feature map on the Hyperboloid manifold
         """
         # Map to manifold if needed (static branch - JIT friendly)
-        if self.input_space == "tangent":
-            x_flat_NC = x.reshape(-1, x.shape[-1])  # (B*H*W, C)
-            x_mapped_NC = jax.vmap(self.manifold.expmap_0, in_axes=(0, None))(x_flat_NC, c)
-            x = x_mapped_NC.reshape(x.shape)  # (B, H, W, C)
+        x = _map_input_to_manifold(x, self.manifold, self.input_space, c)
 
         # Extract patches: (B, H, W, kh, kw, C)
         patches_BHWkhkwC = extract_patches(x, self.kernel_size, self.stride, self.padding, pad_mode="edge")
@@ -573,7 +560,7 @@ class FGGConv2D(nnx.Module):
         param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ("SAME", "VALID"):
-            raise ValueError(f"padding must be 'SAME' or 'VALID', got '{padding}'")
+            raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
         if pad_mode not in ("origin", "edge"):
             raise ValueError(f"pad_mode must be 'origin' or 'edge', got '{pad_mode}'")
 
@@ -585,53 +572,23 @@ class FGGConv2D(nnx.Module):
         self.pad_mode = pad_mode
         self.eps = eps
 
-        if isinstance(kernel_size, int):
-            self.kernel_size = (kernel_size, kernel_size)
-        else:
-            self.kernel_size = kernel_size
+        self.kernel_size = as_pair(kernel_size)
+        self.stride = as_pair(stride)
 
-        if isinstance(stride, int):
-            self.stride = (stride, stride)
-        else:
-            self.stride = stride
-
-        # HCat output ambient dim: (in_channels - 1) * kh * kw + 1
-        kh, kw = self.kernel_size
-        hcat_out_ambient = (in_channels - 1) * kh * kw + 1
+        # HCat output ambient dim
+        hcat_out_ambient = hcat_ambient_dim(in_channels, self.kernel_size)
 
         # Trainable parameters — owned directly for flat parameter paths
-        if reset_params not in ("eye", "xavier", "kaiming", "lorentz_kaiming", "mlr"):
-            raise ValueError(
-                f"reset_params must be 'eye', 'xavier', 'kaiming', 'lorentz_kaiming', or 'mlr', got '{reset_params}'"
-            )
-
         in_spatial = hcat_out_ambient - 1  # I
         out_spatial = out_channels - 1  # O
 
         self.activation = activation
         self.use_weight_norm = use_weight_norm
 
-        # Initialize Euclidean weight U: (I, O)
-        # Reference computes std from ambient dimensions (hcat_out_ambient, out_channels)
-        key = rngs.params()
-        if reset_params == "eye":
-            U_init = 0.5 * jnp.eye(in_spatial, out_spatial)
-        elif reset_params == "xavier":
-            std = jnp.sqrt(1.0 / (hcat_out_ambient + out_channels))
-            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
-        elif reset_params == "kaiming":
-            std = jnp.sqrt(2.0 / hcat_out_ambient)
-            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
-        elif reset_params == "lorentz_kaiming":
-            std = jnp.sqrt(1.0 / hcat_out_ambient)
-            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
-        else:  # mlr
-            std = jnp.sqrt(5.0 / hcat_out_ambient)
-            U_init = jax.random.normal(key, (in_spatial, out_spatial)) * std
-
-        # Pin storage dtype once after the init branches (under global x64 the
-        # bare jnp.eye / jax.random.normal above would be float64).
-        U_init = U_init.astype(param_dtype)
+        # Euclidean weight U (I, O); std from ambient dims (hcat_out_ambient, out_channels).
+        U_init = _fgg_weight_init(
+            rngs.params(), in_spatial, out_spatial, hcat_out_ambient, out_channels, reset_params, param_dtype
+        )
 
         # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
         if use_weight_norm:
@@ -813,21 +770,11 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         self.smoothing_factor = smoothing_factor
         self.v_max = v_max
 
-        if isinstance(kernel_size, int):
-            self.kernel_size = (kernel_size, kernel_size)
-        else:
-            self.kernel_size = kernel_size
+        self.kernel_size = as_pair(kernel_size)
+        self.stride = as_pair(stride)
 
-        if isinstance(stride, int):
-            self.stride = (stride, stride)
-        else:
-            self.stride = stride
-
-        # LogCat output ambient dim: (in_channels - 1) * kh * kw + 1 (same as HCat)
-        kernel_h, kernel_w = self.kernel_size
-        N = kernel_h * kernel_w
-        d = in_channels - 1
-        logcat_out_ambient_dim = d * N + 1
+        # LogCat output ambient dim (same as HCat)
+        logcat_out_ambient_dim = hcat_ambient_dim(in_channels, self.kernel_size)
 
         # Trainable parameters — small normal init (Shi et al. 2026 PLFC reference;
         # the reference conv defers to the PLFC reset_parameters)
@@ -864,10 +811,7 @@ class HypConv2DHyperboloidILNN(nnx.Module):
             Output feature map on the Hyperboloid manifold
         """
         # Map to manifold if needed (static branch - JIT friendly)
-        if self.input_space == "tangent":
-            x_flat_NC = x.reshape(-1, x.shape[-1])  # (B*H*W, C)
-            x_mapped_NC = jax.vmap(self.manifold.expmap_0, in_axes=(0, None))(x_flat_NC, c)
-            x = x_mapped_NC.reshape(x.shape)  # (B, H, W, C)
+        x = _map_input_to_manifold(x, self.manifold, self.input_space, c)
 
         # Extract patches: (B, H', W', kh, kw, C)
         patches_BHWkhkwC = extract_patches(x, self.kernel_size, self.stride, self.padding, self.pad_mode, c)
