@@ -16,7 +16,14 @@ import pytest
 from flax import nnx
 
 from hyperbolix.manifolds import Hyperboloid
-from hyperbolix.nn_layers import FGGConv2D, FGGLinear, FGGLorentzMLR, FGGMeanOnlyBatchNorm, build_spacelike_V
+from hyperbolix.nn_layers import (
+    FGGConv2D,
+    FGGLinear,
+    FGGLorentzMLR,
+    FGGMeanOnlyBatchNorm,
+    build_spacelike_V,
+    extract_patches,
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -689,5 +696,5 @@ def test_fgg_conv2d_origin_padding_preserves_float32():
     time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
     x = jnp.concatenate([time, spatial], axis=-1)  # (2, 8, 8, 5) float32
 
-    patches = conv._extract_patches(x, c=1.0)
+    patches = extract_patches(x, conv.kernel_size, conv.stride, conv.padding, conv.pad_mode, c=1.0)
     assert patches.dtype == jnp.float32

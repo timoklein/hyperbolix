@@ -18,7 +18,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 
 from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import hrc
+from .hyperboloid_core import extract_patches, hrc
 from .hyperboloid_linear import (
     _fgg_linear_forward,
     _fhcnn_forward,
@@ -256,49 +256,6 @@ class HypConv2DHyperboloid(nnx.Module):
         self.bias = nnx.Param(jnp.zeros((1, out_channels), dtype=param_dtype))
         self.scale = 2.3  # not learnable (matches FHCNN default)
 
-    def _extract_patches(
-        self,
-        x: Float[Array, "batch height width in_channels"],
-    ) -> Float[Array, "batch out_height out_width kernel_h kernel_w in_channels"]:
-        """Extract patches (receptive fields) from the input using optimized JAX primitives."""
-        batch, height, width, in_channels = x.shape
-        kernel_h, kernel_w = self.kernel_size
-        stride_h, stride_w = self.stride
-
-        # 1. Handle Padding (Manually, to ensure manifold validity)
-        if self.padding == "SAME":
-            out_height = (height + stride_h - 1) // stride_h
-            out_width = (width + stride_w - 1) // stride_w
-            pad_h = max((out_height - 1) * stride_h + kernel_h - height, 0)
-            pad_w = max((out_width - 1) * stride_w + kernel_w - width, 0)
-            pad_top = pad_h // 2
-            pad_bottom = pad_h - pad_top
-            pad_left = pad_w // 2
-            pad_right = pad_w - pad_left
-
-            x = jnp.pad(
-                x,
-                ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                mode="edge",
-            )
-
-        # 2. Extract Patches — output: (B, H, W, C*kh*kw)
-        patches_flat_BHW_CKhKw = jax.lax.conv_general_dilated_patches(
-            lhs=x,
-            filter_shape=(kernel_h, kernel_w),
-            window_strides=(stride_h, stride_w),
-            padding="VALID",
-            dimension_numbers=("NHWC", "OIHW", "NHWC"),
-        )
-
-        # 3. Reshape to separate kernel dims and channels, then transpose
-        out_h, out_w = patches_flat_BHW_CKhKw.shape[1], patches_flat_BHW_CKhKw.shape[2]
-        # Flattened dim order from rhs_spec="OIHW": (C, kh, kw)
-        patches_BHWCkhkw = patches_flat_BHW_CKhKw.reshape(batch, out_h, out_w, in_channels, kernel_h, kernel_w)
-        patches_BHWkhkwC = patches_BHWCkhkw.transpose(0, 1, 2, 4, 5, 3)  # move C last
-
-        return patches_BHWkhkwC
-
     def __call__(
         self,
         x: Float[Array, "batch height width in_channels"],
@@ -326,7 +283,7 @@ class HypConv2DHyperboloid(nnx.Module):
             x = x_mapped_NC.reshape(x.shape)  # (B, H, W, C)
 
         # Extract patches: (B, H, W, kh, kw, C)
-        patches_BHWkhkwC = self._extract_patches(x)
+        patches_BHWkhkwC = extract_patches(x, self.kernel_size, self.stride, self.padding, pad_mode="edge")
         batch, out_h, out_w, kh, kw, in_c = patches_BHWkhkwC.shape
 
         # Flatten batch+spatial for parallel processing: (B*H*W, K, C)
@@ -482,45 +439,6 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
         else:
             self.dropout = None
 
-    def _extract_patches(
-        self,
-        x: Float[Array, "batch height width in_channels"],
-    ) -> Float[Array, "batch out_height out_width kernel_h kernel_w in_channels"]:
-        """Extract patches (receptive fields) from the input using optimized JAX primitives."""
-        batch, height, width, in_channels = x.shape
-        kernel_h, kernel_w = self.kernel_size
-        stride_h, stride_w = self.stride
-
-        if self.padding == "SAME":
-            out_height = (height + stride_h - 1) // stride_h
-            out_width = (width + stride_w - 1) // stride_w
-            pad_h = max((out_height - 1) * stride_h + kernel_h - height, 0)
-            pad_w = max((out_width - 1) * stride_w + kernel_w - width, 0)
-            pad_top = pad_h // 2
-            pad_bottom = pad_h - pad_top
-            pad_left = pad_w // 2
-            pad_right = pad_w - pad_left
-
-            x = jnp.pad(
-                x,
-                ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                mode="edge",
-            )
-
-        patches_flat_BHW_CKhKw = jax.lax.conv_general_dilated_patches(
-            lhs=x,
-            filter_shape=(kernel_h, kernel_w),
-            window_strides=(stride_h, stride_w),
-            padding="VALID",
-            dimension_numbers=("NHWC", "OIHW", "NHWC"),
-        )
-
-        out_h, out_w = patches_flat_BHW_CKhKw.shape[1], patches_flat_BHW_CKhKw.shape[2]
-        patches_BHWCkhkw = patches_flat_BHW_CKhKw.reshape(batch, out_h, out_w, in_channels, kernel_h, kernel_w)
-        patches_BHWkhkwC = patches_BHWCkhkw.transpose(0, 1, 2, 4, 5, 3)
-
-        return patches_BHWkhkwC
-
     def __call__(
         self,
         x: Float[Array, "batch height width in_channels"],
@@ -550,7 +468,7 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
             x = x_mapped_NC.reshape(x.shape)  # (B, H, W, C)
 
         # Extract patches: (B, H, W, kh, kw, C)
-        patches_BHWkhkwC = self._extract_patches(x)
+        patches_BHWkhkwC = extract_patches(x, self.kernel_size, self.stride, self.padding, pad_mode="edge")
         batch, out_h, out_w, kh, kw, in_c = patches_BHWkhkwC.shape
 
         # Flatten batch+spatial for parallel processing: (B*H*W, K, C)
@@ -725,55 +643,6 @@ class FGGConv2D(nnx.Module):
 
         self.bias = nnx.Param(jnp.full((out_spatial,), init_bias, dtype=param_dtype))  # (O,)
 
-    def _extract_patches(
-        self,
-        x: Float[Array, "batch height width in_channels"],
-        c: float,
-    ) -> Float[Array, "batch out_height out_width kernel_h kernel_w in_channels"]:
-        """Extract patches, padding with manifold origin or edge replication for SAME mode."""
-        batch, height, width, in_channels = x.shape
-        kh, kw = self.kernel_size
-        stride_h, stride_w = self.stride
-
-        if self.padding == "SAME":
-            out_height = (height + stride_h - 1) // stride_h
-            out_width = (width + stride_w - 1) // stride_w
-            pad_h = max((out_height - 1) * stride_h + kh - height, 0)
-            pad_w = max((out_width - 1) * stride_w + kw - width, 0)
-            pad_top = pad_h // 2
-            pad_bottom = pad_h - pad_top
-            pad_left = pad_w // 2
-            pad_right = pad_w - pad_left
-
-            if self.pad_mode == "origin":
-                # Pad with manifold origin: (√(1/c), 0, ..., 0)
-                padded_h = height + pad_h
-                padded_w = width + pad_w
-                padded = jnp.zeros((batch, padded_h, padded_w, in_channels), dtype=x.dtype)
-                padded = padded.at[..., 0].set(jnp.sqrt(1.0 / c))
-                x = padded.at[:, pad_top : pad_top + height, pad_left : pad_left + width, :].set(x)
-            else:  # edge
-                x = jnp.pad(
-                    x,
-                    ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                    mode="edge",
-                )
-
-        # Extract patches: (B, H, W, C*kh*kw)
-        patches_flat = jax.lax.conv_general_dilated_patches(
-            lhs=x,
-            filter_shape=(kh, kw),
-            window_strides=(stride_h, stride_w),
-            padding="VALID",
-            dimension_numbers=("NHWC", "OIHW", "NHWC"),
-        )
-
-        out_h, out_w = patches_flat.shape[1], patches_flat.shape[2]
-        patches_BHWCkhkw = patches_flat.reshape(batch, out_h, out_w, in_channels, kh, kw)
-        patches_BHWkhkwC = patches_BHWCkhkw.transpose(0, 1, 2, 4, 5, 3)
-
-        return patches_BHWkhkwC
-
     def __call__(
         self,
         x: Float[Array, "batch height width in_channels"],
@@ -794,7 +663,7 @@ class FGGConv2D(nnx.Module):
             Output feature map on the hyperboloid.
         """
         # Extract patches: (B, H', W', kh, kw, C)
-        patches = self._extract_patches(x, c)
+        patches = extract_patches(x, self.kernel_size, self.stride, self.padding, self.pad_mode, c)
         batch, out_h, out_w, kh, kw, in_c = patches.shape
 
         # Flatten batch+spatial: (B*H'*W', K, C) where K = kh*kw
@@ -974,54 +843,6 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         else:
             self.gyro_bias = None
 
-    def _extract_patches(
-        self,
-        x: Float[Array, "batch height width in_channels"],
-        c: float,
-    ) -> Float[Array, "batch out_height out_width kernel_h kernel_w in_channels"]:
-        """Extract patches, padding with manifold origin or edge replication for SAME mode."""
-        batch, height, width, in_channels = x.shape
-        kernel_h, kernel_w = self.kernel_size
-        stride_h, stride_w = self.stride
-
-        if self.padding == "SAME":
-            out_height = (height + stride_h - 1) // stride_h
-            out_width = (width + stride_w - 1) // stride_w
-            pad_h = max((out_height - 1) * stride_h + kernel_h - height, 0)
-            pad_w = max((out_width - 1) * stride_w + kernel_w - width, 0)
-            pad_top = pad_h // 2
-            pad_bottom = pad_h - pad_top
-            pad_left = pad_w // 2
-            pad_right = pad_w - pad_left
-
-            if self.pad_mode == "origin":
-                # Pad with manifold origin: (√(1/c), 0, ..., 0)
-                padded_h = height + pad_h
-                padded_w = width + pad_w
-                padded = jnp.zeros((batch, padded_h, padded_w, in_channels), dtype=x.dtype)
-                padded = padded.at[..., 0].set(jnp.sqrt(1.0 / c))
-                x = padded.at[:, pad_top : pad_top + height, pad_left : pad_left + width, :].set(x)
-            else:  # edge
-                x = jnp.pad(
-                    x,
-                    ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
-                    mode="edge",
-                )
-
-        patches_flat_BHW_CKhKw = jax.lax.conv_general_dilated_patches(
-            lhs=x,
-            filter_shape=(kernel_h, kernel_w),
-            window_strides=(stride_h, stride_w),
-            padding="VALID",
-            dimension_numbers=("NHWC", "OIHW", "NHWC"),
-        )
-
-        out_h, out_w = patches_flat_BHW_CKhKw.shape[1], patches_flat_BHW_CKhKw.shape[2]
-        patches_BHWCkhkw = patches_flat_BHW_CKhKw.reshape(batch, out_h, out_w, in_channels, kernel_h, kernel_w)
-        patches_BHWkhkwC = patches_BHWCkhkw.transpose(0, 1, 2, 4, 5, 3)
-
-        return patches_BHWkhkwC
-
     def __call__(
         self,
         x: Float[Array, "batch height width in_channels"],
@@ -1049,7 +870,7 @@ class HypConv2DHyperboloidILNN(nnx.Module):
             x = x_mapped_NC.reshape(x.shape)  # (B, H, W, C)
 
         # Extract patches: (B, H', W', kh, kw, C)
-        patches_BHWkhkwC = self._extract_patches(x, c)
+        patches_BHWkhkwC = extract_patches(x, self.kernel_size, self.stride, self.padding, self.pad_mode, c)
         batch, out_h, out_w, kh, kw, in_c = patches_BHWkhkwC.shape
 
         # Flatten batch+spatial for parallel processing: (B*H'*W', K, C)

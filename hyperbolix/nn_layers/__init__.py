@@ -28,6 +28,7 @@ from .hyperboloid_conv import (
 )
 from .hyperboloid_core import (
     build_spacelike_V,
+    extract_patches,
     hrc,
     htc,
     hyp_avg_pool2d,
@@ -92,6 +93,7 @@ __all__ = [
     "PoincareBatchNorm2D",
     "PoincareVQOutput",
     "build_spacelike_V",
+    "extract_patches",
     "focus_transform",
     "frechet_variance",
     "hope",
