@@ -27,7 +27,7 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
 
-from ._helpers import validate_pv_manifold
+from ._helpers import as_pair, validate_pv_manifold
 from .pv_linear import _pv_fc_forward
 
 
@@ -140,9 +140,8 @@ class HypConv2DPV(nnx.Module):
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
 
-        # Handle kernel_size / stride as int or tuple.
-        self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
-        self.stride = (stride, stride) if isinstance(stride, int) else stride
+        self.kernel_size = as_pair(kernel_size)
+        self.stride = as_pair(stride)
 
         kernel_h, kernel_w = self.kernel_size
         concat_dim = kernel_h * kernel_w * in_channels

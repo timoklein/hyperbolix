@@ -23,6 +23,7 @@ Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026)
 
 from collections.abc import Callable
 
+import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
@@ -88,6 +89,111 @@ def build_spacelike_V(
     V_AiO = jnp.concatenate([v_time_mink_O[None, :], v_space_IO], axis=0)  # (Ai, O)
 
     return V_AiO
+
+
+def extract_patches(
+    x: Float[Array, "batch height width in_channels"],
+    kernel_size: tuple[int, int],
+    stride: tuple[int, int],
+    padding: str,
+    pad_mode: str = "edge",
+    c: float | None = None,
+) -> Float[Array, "batch out_height out_width kernel_h kernel_w in_channels"]:
+    """Extract receptive-field patches for hyperboloid convolutions.
+
+    Shared by all hyperboloid conv layers (``HypConv2DHyperboloid``,
+    ``HypConv2DHyperboloidFHNN``, ``FGGConv2D``, ``HypConv2DHyperboloidILNN``). The
+    patches are returned in **point-major** ``(kh, kw, C)`` order so that the
+    downstream per-point ops (``hcat`` / ``log_radius_concat``) can consume them as
+    ``(K, C)`` after flattening; this is why the channel-major output of
+    ``jax.lax.conv_general_dilated_patches`` is transposed.
+
+    Padding is applied **manually** because the conv primitive zero-pads, and zero is
+    not a point on the hyperboloid:
+
+    - ``pad_mode="edge"``   — replicate the border (default).
+    - ``pad_mode="origin"`` — fill with the manifold origin ``(sqrt(1/c), 0, ..., 0)``;
+      ``c`` is required in this mode (matching the Shi et al. 2026 / Klis et al. 2026
+      reference padding).
+
+    Parameters
+    ----------
+    x : Array, shape (B, H, W, in_channels)
+        Input feature map of hyperboloid points (ambient channels, time first).
+    kernel_size : tuple[int, int]
+        ``(kernel_h, kernel_w)``.
+    stride : tuple[int, int]
+        ``(stride_h, stride_w)``.
+    padding : str
+        ``"SAME"`` or ``"VALID"``. Only ``"SAME"`` triggers manual padding.
+    pad_mode : str, optional
+        ``"edge"`` or ``"origin"`` (default: ``"edge"``).
+    c : float or None, optional
+        Curvature, required only for ``pad_mode="origin"`` (default: None).
+
+    Returns
+    -------
+    Array, shape (B, out_height, out_width, kernel_h, kernel_w, in_channels)
+        Receptive-field patches in point-major order.
+    """
+    batch, height, width, in_channels = x.shape
+    kernel_h, kernel_w = kernel_size
+    stride_h, stride_w = stride
+
+    # 1. Manual padding (the conv primitive's zero-pad is off-manifold)
+    if padding == "SAME":
+        out_height = (height + stride_h - 1) // stride_h
+        out_width = (width + stride_w - 1) // stride_w
+        pad_h = max((out_height - 1) * stride_h + kernel_h - height, 0)
+        pad_w = max((out_width - 1) * stride_w + kernel_w - width, 0)
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+
+        if pad_mode == "origin":
+            # Pad with manifold origin: (√(1/c), 0, ..., 0).
+            # Buffer dtype follows x to avoid silent float64 promotion under x64.
+            padded_h = height + pad_h
+            padded_w = width + pad_w
+            padded = jnp.zeros((batch, padded_h, padded_w, in_channels), dtype=x.dtype)
+            padded = padded.at[..., 0].set(jnp.sqrt(1.0 / c))
+            x = padded.at[:, pad_top : pad_top + height, pad_left : pad_left + width, :].set(x)
+        else:  # edge
+            x = jnp.pad(
+                x,
+                ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                mode="edge",
+            )
+
+    # 2. Extract patches — output: (B, H, W, C*kh*kw), channel-major (C, kh, kw)
+    patches_flat_BHW_CKhKw = jax.lax.conv_general_dilated_patches(
+        lhs=x,
+        filter_shape=(kernel_h, kernel_w),
+        window_strides=(stride_h, stride_w),
+        padding="VALID",
+        dimension_numbers=("NHWC", "OIHW", "NHWC"),
+    )
+
+    # 3. Reshape to separate channels and kernel dims, then transpose to point-major.
+    # conv_general_dilated_patches always emits channel-major (C, kh, kw) regardless of
+    # the rhs spec letters, so the transpose to (kh, kw, C) is required (and is cheap).
+    out_h, out_w = patches_flat_BHW_CKhKw.shape[1], patches_flat_BHW_CKhKw.shape[2]
+    patches_BHWCkhkw = patches_flat_BHW_CKhKw.reshape(batch, out_h, out_w, in_channels, kernel_h, kernel_w)
+    patches_BHWkhkwC = patches_BHWCkhkw.transpose(0, 1, 2, 4, 5, 3)  # move C last
+
+    return patches_BHWkhkwC
+
+
+def hcat_ambient_dim(in_channels: int, kernel_size: tuple[int, int]) -> int:
+    """Output ambient dimension of HCat/LogCat over a ``kh*kw`` receptive field.
+
+    Concatenating ``N = kh*kw`` hyperboloid points (each with ``in_channels - 1``
+    spatial dims) yields one point of spatial dim ``(in_channels - 1) * N`` plus a
+    single reconstructed time coordinate.
+    """
+    kh, kw = kernel_size
+    return (in_channels - 1) * kh * kw + 1
 
 
 def spatial_to_hyperboloid(
@@ -390,15 +496,8 @@ def hrc(
 
     out_space_D = f_r(x_space_D)  # (..., D') — may change dim
 
-    # Scale for curvature transformation: sqrt(c_in / c_out)
-    scale = jnp.sqrt(c_in / c_out)
-    scaled_D = scale * out_space_D  # (..., D')
-
-    # Reconstruct time via hyperboloid constraint: x₀ = sqrt(||x_rest||² + 1/c_out)
-    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
-    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
-
-    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D'+1)
+    # Curvature scaling sqrt(c_in/c_out) + time reconstruction (shared hrc/htc tail).
+    return spatial_to_hyperboloid(out_space_D, c_in, c_out, eps)  # (..., D'+1)
 
 
 def htc(
@@ -484,12 +583,5 @@ def htc(
     # f_t: (..., A_in) → (..., D_out) where A_in = in_dim+1
     out_D = f_t(x)
 
-    # Scale for curvature transformation
-    scale = jnp.sqrt(c_in / c_out)
-    scaled_D = scale * out_D  # (..., D_out)
-
-    # Reconstruct time via hyperboloid constraint: x₀ = sqrt(||space||² + 1/c_out)
-    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
-    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
-
-    return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D_out+1)
+    # Curvature scaling sqrt(c_in/c_out) + time reconstruction (shared hrc/htc tail).
+    return spatial_to_hyperboloid(out_D, c_in, c_out, eps)  # (..., D_out+1)

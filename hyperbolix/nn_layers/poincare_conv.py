@@ -25,7 +25,7 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
 
-from ._helpers import validate_poincare_manifold
+from ._helpers import as_pair, validate_poincare_manifold
 from .poincare_linear import _poincare_pp_forward
 
 
@@ -136,17 +136,8 @@ class HypConv2DPoincare(nnx.Module):
         self.input_space = input_space
         self.padding = padding
 
-        # Handle kernel_size as int or tuple
-        if isinstance(kernel_size, int):
-            self.kernel_size = (kernel_size, kernel_size)
-        else:
-            self.kernel_size = kernel_size
-
-        # Handle stride as int or tuple
-        if isinstance(stride, int):
-            self.stride = (stride, stride)
-        else:
-            self.stride = stride
+        self.kernel_size = as_pair(kernel_size)
+        self.stride = as_pair(stride)
 
         # Precompute beta function ratio for tangent-space scaling
         # B(n/2, 1/2) / B(n_i/2, 1/2) where n = K^2 * C_in, n_i = C_in

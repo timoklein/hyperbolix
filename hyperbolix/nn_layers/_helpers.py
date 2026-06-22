@@ -13,6 +13,11 @@ would be no-ops here and only obscure intent.
 from hyperbolix.manifolds import Manifold
 
 
+def as_pair(x: int | tuple[int, int]) -> tuple[int, int]:
+    """Normalize an int-or-pair (e.g. kernel_size, stride) to a ``(h, w)`` tuple."""
+    return (x, x) if isinstance(x, int) else x
+
+
 def _validate_manifold_methods(
     manifold_module: Manifold,
     required_methods: tuple[str, ...],
