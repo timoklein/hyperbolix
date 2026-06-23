@@ -645,6 +645,48 @@ def test_hyperboloid_tangent_norm_zero_vector_finite_grad(manifold_and_c, unifor
     assert jnp.all(jnp.isfinite(grad))
 
 
+def test_poincare_tangent_norm_zero_vector_finite_grad(manifold_and_c, uniform_points: jnp.ndarray) -> None:
+    """``tangent_norm`` must have a finite gradient at the zero tangent vector (Poincaré).
+
+    ``λ(x)·||v||`` with a bare ``jnp.linalg.norm`` has VJP 0/0 = NaN at v = 0; the safe norm
+    ``sqrt(||v||² + MIN_NORM²)`` (matching ``_expmap``/``_proj``) keeps it finite.
+    """
+    manifold, c = manifold_and_c
+    if not _is_poincare(manifold):
+        pytest.skip("Tangent-norm zero-vector gradient guard is checked here on the Poincaré ball.")
+
+    x0 = uniform_points[0]
+    v0 = jnp.zeros_like(x0)  # zero tangent vector at x0
+
+    n = manifold.tangent_norm(v0, x0, c)
+    assert jnp.isfinite(n)
+
+    grad = jax.grad(lambda v: manifold.tangent_norm(v, x0, c))(v0)
+    assert jnp.all(jnp.isfinite(grad))
+
+
+def test_poincare_logmap_coincident_finite_grad(manifold_and_c, uniform_points: jnp.ndarray) -> None:
+    """``logmap`` must have a finite gradient when y coincides with x (Poincaré).
+
+    ``num = ||y - x||`` via a bare ``jnp.linalg.norm`` has VJP 0/0 = NaN at y = x; the safe norm
+    keeps the gradient finite w.r.t. both arguments. The forward value is 0 either way.
+    """
+    manifold, c = manifold_and_c
+    if not _is_poincare(manifold):
+        pytest.skip("logmap coincident-point gradient guard is checked here on the Poincaré ball.")
+
+    x0 = _shrink_for_float32(manifold, uniform_points[0], c)
+    y0 = x0  # coincident target
+
+    v = manifold.logmap(y0, x0, c)
+    assert jnp.all(jnp.isfinite(v))
+
+    grad_y = jax.grad(lambda y: jnp.sum(manifold.logmap(y, x0, c)))(y0)
+    grad_x = jax.grad(lambda x: jnp.sum(manifold.logmap(y0, x, c)))(x0)
+    assert jnp.all(jnp.isfinite(grad_y))
+    assert jnp.all(jnp.isfinite(grad_x))
+
+
 # ---------------------------------------------------------------------------
 # Apollonian weak metric (Poincaré-only) — Papadopoulos & Troyanov, Theorem 2
 
