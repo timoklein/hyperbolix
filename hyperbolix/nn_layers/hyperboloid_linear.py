@@ -22,7 +22,6 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import sinh, smooth_clamp
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc
@@ -196,16 +195,23 @@ def _hyperboloid_plfc_forward(
     # Compute multinomial logistic regression scores: (B, O) where O = out_dim-1
     v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
 
-    # Output-side guard (Shi et al. 2026 reference clamps v to ±10 at c=1).
-    # compute_mlr only bounds its asinh argument, leaving v ∝ ‖kernel_row‖
-    # unbounded; sinh then exponentiates v, so without this guard the squared
-    # spatial norm in the time reconstruction overflows float32 once
-    # ‖kernel_row‖ or the input distance from the origin grows.
+    # Output-side guard. compute_mlr only bounds its asinh argument, leaving v ∝
+    # ‖kernel_row‖ unbounded; the sinh below exponentiates it, so without this clip the
+    # squared spatial norm in the time reconstruction overflows float32 as ‖kernel_row‖
+    # or the input distance from the origin grows. We hard-clip the sinh argument
+    # sqrt(c)*v to ±v_max directly — the reference (Shi et al. 2026) hard-clips v to ±10
+    # at c=1; clipping sqrt(c)*v is the c≠1 generalization that makes _assert_v_max_safe a
+    # clean bound. A hard jnp.clip (not smooth_clamp) matches the reference and is
+    # value-identical for |sqrt(c)*v| ≤ v_max — it only zeroes the gradient in the
+    # already-saturated tail (≈ sinh(v_max) distance), at no per-element exp cost.
     sqrt_c = jnp.sqrt(c)
-    sinh_arg_BO = smooth_clamp(sqrt_c * v_BO, -v_max, v_max, smoothing_factor)
+    sinh_arg_BO = jnp.clip(sqrt_c * v_BO, -v_max, v_max)
 
-    # Element-wise sinh diffeomorphism (NOT expmap_0 which applies sinh to norm)
-    res_rem_BO = sinh(sinh_arg_BO) / sqrt_c  # (B, O) spatial components
+    # Element-wise sinh diffeomorphism (NOT expmap_0 which applies sinh to norm). The argument is
+    # already bounded to ±v_max ≪ the sinh overflow clamp by the line above, so the wrapped
+    # math_utils.sinh would only re-clamp redundantly — use bare jnp.sinh. The constructor asserts
+    # sinh(v_max) cannot overflow float32, keeping this safe if a user raises v_max.
+    res_rem_BO = jnp.sinh(sinh_arg_BO) / sqrt_c  # (B, O) spatial components
 
     # Reconstruct time from hyperboloid constraint: -x0^2 + ||x_s||^2 = -1/c
     res0_B1 = jnp.sqrt(jnp.sum(res_rem_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
@@ -219,6 +225,25 @@ def _hyperboloid_plfc_forward(
         res_BAo = jax.vmap(manifold.addition, in_axes=(0, None, None))(res_BAo, bias_point_Ao, c)
 
     return res_BAo
+
+
+def _assert_v_max_safe(v_max: float) -> None:
+    """Guard the bare-``jnp.sinh`` PLFC output path against ``v_max``-driven float32 overflow.
+
+    The output spatial coordinate is ``sinh(v_max)/sqrt(c)`` and the time component reconstructs from
+    ``sum(.**2)``; float32 is the binding case because layer inputs may be float32 regardless of
+    ``param_dtype``. Require ``sinh(v_max) < sqrt(finfo(float32).max)`` (≈1.84e19, i.e. ``v_max`` ≲ 45)
+    so the squared spatial norm cannot overflow. The Shi et al. 2026 default ``v_max=10`` is far
+    inside this bound; a user who needs a larger ``v_max`` should restore the wrapped/smooth sinh
+    guard instead.
+    """
+    f32_safe_sinh = float(jnp.finfo(jnp.float32).max) ** 0.5  # ~1.84e19
+    if float(jnp.sinh(v_max)) >= f32_safe_sinh:
+        raise ValueError(
+            f"v_max={v_max} is too large for the PLFC sinh diffeomorphism: sinh(v_max) would overflow "
+            f"the float32 squared spatial norm in the time reconstruction. Use v_max < ~45 "
+            f"(default 10), or restore the smooth/wrapped sinh guard for larger values."
+        )
 
 
 def _fgg_weight_init(
@@ -626,7 +651,7 @@ class HypLinearHyperboloidPLFC(nnx.Module):
     Computation steps:
         0) Project the input tensor onto the manifold (optional)
         1) Compute the multinomial linear regression score(s) via ``compute_mlr``
-        2) Smooth-clamp the scaled scores ``sqrt(c)*v`` to ``±v_max`` (output-side guard)
+        2) Hard-clamp the scaled scores ``sqrt(c)*v`` to ``±v_max`` (output-side guard)
         3) Apply element-wise sinh diffeomorphism to obtain spatial coordinates
         4) Reconstruct time coordinate from the hyperboloid constraint
         5) Optionally add an intrinsic gyro-bias ``y ← y ⊕ exp_0([0, b])``
@@ -649,7 +674,7 @@ class HypLinearHyperboloidPLFC(nnx.Module):
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
     v_max : float
-        Output-side guard: the sinh argument ``sqrt(c)*v`` is smooth-clamped to
+        Output-side guard: the sinh argument ``sqrt(c)*v`` is hard-clipped to
         ``±v_max``, bounding the output spatial norm by ``sinh(v_max)/sqrt(c)``
         (default: 10.0, matching the Shi et al. 2026 reference implementation).
     use_gyro_bias : bool
@@ -709,6 +734,7 @@ class HypLinearHyperboloidPLFC(nnx.Module):
         self.input_space = input_space
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
+        _assert_v_max_safe(v_max)
         self.v_max = v_max
 
         # Trainable parameters — small normal init (Shi et al. 2026 PLFC reference)

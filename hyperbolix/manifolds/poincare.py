@@ -233,10 +233,12 @@ def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -
 
 def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Metric tensor induced distance."""
-    x_sqnorm = jnp.dot(x, x)
-    y_sqnorm = jnp.dot(y, y)
     xy_diff_sqnorm = jnp.dot(x - y, x - y)
-    arg = 1 + 2 * c * xy_diff_sqnorm / ((1 - c * x_sqnorm) * (1 - c * y_sqnorm))
+    # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)). A bare 1 - c||x||² hits 0
+    # for an unprojected near-boundary point and blows up the divide; reuse the module-wide floor.
+    one_minus_cx = 2.0 / _conformal_factor(x, c)
+    one_minus_cy = 2.0 / _conformal_factor(y, c)
+    arg = 1 + 2 * c * xy_diff_sqnorm / (one_minus_cx * one_minus_cy)
     condition = arg < 1 + MIN_NORM
     return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
 
@@ -321,7 +323,10 @@ def _dist_0_mobius(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
 def _dist_0_metric_tensor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Metric tensor distance from origin."""
     x_sqnorm = jnp.dot(x, x)
-    arg = 1 + 2 * c * x_sqnorm / (1 - c * x_sqnorm)
+    # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)) so a near-boundary point
+    # cannot drive the denominator to 0; consistent with _dist_metric_tensor and _apollonian_dist.
+    one_minus_cx = 2.0 / _conformal_factor(x, c)
+    arg = 1 + 2 * c * x_sqnorm / one_minus_cx
     condition = arg < 1 + MIN_NORM
     return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
 
@@ -365,8 +370,9 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
     c_norm_prod = jnp.sqrt(c) * v_norm
     lambda_x = _conformal_factor(x, c)
+    # ||second_term|| = |tanh(·)|/√c < 1/√c, i.e. strictly inside the ball, so an explicit _proj
+    # here is a no-op in the valid regime; _addition re-projects its output regardless. Skip it.
     second_term = jnp.tanh(c_norm_prod * lambda_x / 2) / c_norm_prod * v
-    second_term = _proj(second_term, c)
     res = _addition(x, second_term, c)
     return res
 
@@ -430,7 +436,9 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     sub = _addition(-x, y, c)
     x2y2 = jnp.dot(x, x) * jnp.dot(y, y)
     xy = jnp.dot(x, y)
-    num = jnp.linalg.norm(y - x)
+    # Safe norm: finite gradient at x == y (raw norm's VJP at 0 is 0/0 = NaN). Identical quantity
+    # and form to _dist_mobius_direct's num — keep the two consistent.
+    num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
     denom = jnp.sqrt(jnp.maximum(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
     sub_norm = num / denom
     c_norm_prod = jnp.maximum(jnp.sqrt(c) * sub_norm, MIN_NORM)
@@ -532,7 +540,9 @@ def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) 
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_x = _conformal_factor(x, c)
-    return lambda_x * jnp.linalg.norm(v)
+    # Safe norm: sqrt(||v||² + eps²) keeps the gradient finite at v=0. A bare jnp.linalg.norm
+    # has VJP 0/0 = NaN there (and 0-cotangent · NaN stays NaN), matching the _expmap/_proj idiom.
+    return lambda_x * jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
 
 
 def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:

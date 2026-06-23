@@ -586,6 +586,107 @@ def test_dist_0(manifold_and_c, tolerance: tuple[float, float], uniform_points: 
     assert jnp.allclose(d1, d2, atol=atol, rtol=rtol)
 
 
+def test_hyperboloid_sqdist(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
+    """Squared Lorentzian distance (Law et al. 2019), the acosh-free distance proxy.
+
+    Checks it is zero at coincidence, non-negative, symmetric, and monotonically tied to the
+    geodesic distance via the closed form d_L²(x, y) = (2/c)(cosh(√c · d(x, y)) - 1) — verified
+    against an independent acosh-based ``dist``.
+    """
+    manifold, c = manifold_and_c
+    if not _is_hyperboloid(manifold):
+        pytest.skip("Squared Lorentzian distance is Hyperboloid-specific.")
+    atol, rtol = tolerance
+
+    x, y = _split(uniform_points, 2)
+    # Keep geodesic distances in the float32-reliable range so cosh(√c·d) does not overflow the
+    # closed-form check; a no-op in float64.
+    x, y = _shrink_for_float32(manifold, x, c), _shrink_for_float32(manifold, y, c)
+
+    sqdist_batch = jax.vmap(manifold.sqdist, in_axes=(0, 0, None))
+    dist_batch = jax.vmap(manifold.dist, in_axes=(0, 0, None))
+
+    # Non-negativity: d_L²(x, y) ≥ 0
+    d2_xy = sqdist_batch(x, y, c)
+    assert jnp.all(d2_xy >= -atol)
+
+    # Identity: d_L²(x, x) = 0
+    d2_xx = sqdist_batch(x, x, c)
+    assert jnp.allclose(d2_xx, 0.0, atol=atol, rtol=rtol)
+
+    # Symmetry: d_L²(x, y) = d_L²(y, x)
+    d2_yx = sqdist_batch(y, x, c)
+    assert jnp.allclose(d2_xy, d2_yx, atol=atol, rtol=rtol)
+
+    # Closed-form tie to the (independent) geodesic distance: d_L² = (2/c)(cosh(√c·d) - 1).
+    d_xy = dist_batch(x, y, c)
+    expected = (2.0 / c) * (jnp.cosh(jnp.sqrt(c) * d_xy) - 1.0)
+    is_f32 = uniform_points.dtype == jnp.dtype("float32")
+    assert jnp.allclose(d2_xy, expected, atol=max(atol, 1e-3), rtol=max(rtol, 1e-2 if is_f32 else 1e-6))
+
+
+def test_hyperboloid_tangent_norm_zero_vector_finite_grad(manifold_and_c, uniform_points: jnp.ndarray) -> None:
+    """``tangent_norm`` must have a finite gradient at the zero tangent vector.
+
+    sqrt'(0) = inf, so a bare ``sqrt(clip(⟨v,v⟩_L, 0))`` yields a 0·inf = NaN gradient at v = 0;
+    the ``+ MIN_NORM²`` floor (matching ``_expmap``) keeps it finite.
+    """
+    manifold, c = manifold_and_c
+    if not _is_hyperboloid(manifold):
+        pytest.skip("Tangent-norm zero-vector gradient guard is checked on the Hyperboloid.")
+
+    x0 = uniform_points[0]
+    v0 = jnp.zeros_like(x0)  # zero tangent vector at x0
+
+    n = manifold.tangent_norm(v0, x0, c)
+    assert jnp.isfinite(n)
+
+    grad = jax.grad(lambda v: manifold.tangent_norm(v, x0, c))(v0)
+    assert jnp.all(jnp.isfinite(grad))
+
+
+def test_poincare_tangent_norm_zero_vector_finite_grad(manifold_and_c, uniform_points: jnp.ndarray) -> None:
+    """``tangent_norm`` must have a finite gradient at the zero tangent vector (Poincaré).
+
+    ``λ(x)·||v||`` with a bare ``jnp.linalg.norm`` has VJP 0/0 = NaN at v = 0; the safe norm
+    ``sqrt(||v||² + MIN_NORM²)`` (matching ``_expmap``/``_proj``) keeps it finite.
+    """
+    manifold, c = manifold_and_c
+    if not _is_poincare(manifold):
+        pytest.skip("Tangent-norm zero-vector gradient guard is checked here on the Poincaré ball.")
+
+    x0 = uniform_points[0]
+    v0 = jnp.zeros_like(x0)  # zero tangent vector at x0
+
+    n = manifold.tangent_norm(v0, x0, c)
+    assert jnp.isfinite(n)
+
+    grad = jax.grad(lambda v: manifold.tangent_norm(v, x0, c))(v0)
+    assert jnp.all(jnp.isfinite(grad))
+
+
+def test_poincare_logmap_coincident_finite_grad(manifold_and_c, uniform_points: jnp.ndarray) -> None:
+    """``logmap`` must have a finite gradient when y coincides with x (Poincaré).
+
+    ``num = ||y - x||`` via a bare ``jnp.linalg.norm`` has VJP 0/0 = NaN at y = x; the safe norm
+    keeps the gradient finite w.r.t. both arguments. The forward value is 0 either way.
+    """
+    manifold, c = manifold_and_c
+    if not _is_poincare(manifold):
+        pytest.skip("logmap coincident-point gradient guard is checked here on the Poincaré ball.")
+
+    x0 = _shrink_for_float32(manifold, uniform_points[0], c)
+    y0 = x0  # coincident target
+
+    v = manifold.logmap(y0, x0, c)
+    assert jnp.all(jnp.isfinite(v))
+
+    grad_y = jax.grad(lambda y: jnp.sum(manifold.logmap(y, x0, c)))(y0)
+    grad_x = jax.grad(lambda x: jnp.sum(manifold.logmap(y0, x, c)))(x0)
+    assert jnp.all(jnp.isfinite(grad_y))
+    assert jnp.all(jnp.isfinite(grad_x))
+
+
 # ---------------------------------------------------------------------------
 # Apollonian weak metric (Poincaré-only) — Papadopoulos & Troyanov, Theorem 2
 

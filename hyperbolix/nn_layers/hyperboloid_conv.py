@@ -20,6 +20,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from ._helpers import as_pair, validate_hyperboloid_manifold
 from .hyperboloid_core import extract_patches, hcat_ambient_dim, hrc
 from .hyperboloid_linear import (
+    _assert_v_max_safe,
     _fgg_linear_forward,
     _fgg_weight_init,
     _fhcnn_forward,
@@ -768,6 +769,7 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         self.pad_mode = pad_mode
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
+        _assert_v_max_safe(v_max)
         self.v_max = v_max
 
         self.kernel_size = as_pair(kernel_size)
