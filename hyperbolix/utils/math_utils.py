@@ -73,8 +73,17 @@ def smooth_clamp(
 def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic cosine with overflow protection. Domain=(-inf, inf).
 
-    Clamps input to safe ranges to prevent overflow based on dtype.
-    Uses log(max) * 0.99 as safety margin.
+    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±709 for f64) before
+    ``jnp.cosh`` so the result cannot overflow the dtype. This is a *pure overflow guard*: for any
+    input that is not about to overflow the clip is a value- and gradient-identity, so the forward
+    pass and the VJP match an unguarded ``jnp.cosh`` throughout the entire valid regime.
+
+    A hard ``jnp.clip`` is used deliberately rather than a softplus ``smooth_clamp``: it matches the
+    domain guards in ``acosh``/``atanh`` below, is free on accelerators, and avoids the ~2 extra
+    ``exp`` per call that the smooth clamp evaluated on every element with no benefit. The only
+    difference is in the saturated tail (|x| ≥ clamp), where the clip's gradient is 0 instead of a
+    tiny nonzero value — acceptable, because that regime is already degenerate (the output is ~1e37)
+    and you never want gradients pushing further into overflow.
 
     Args:
         x: Input array of any shape
@@ -82,9 +91,9 @@ def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     Returns:
         cosh(x) with overflow protection
     """
-    # Safe limit based on dtype: cosh(x) ≈ exp(x)/2 for large x, so x < log(max)
+    # cosh(x) ≈ exp(x)/2 for large x, so the overflow boundary is x = log(max).
     clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
-    x = smooth_clamp(x, -clamp, clamp)
+    x = jnp.clip(x, -clamp, clamp)
     return jnp.cosh(x)
 
 
@@ -92,8 +101,17 @@ def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
 def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic sine with overflow protection. Domain=(-inf, inf).
 
-    Clamps input to safe ranges to prevent overflow based on dtype.
-    Uses log(max) * 0.99 as safety margin.
+    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±709 for f64) before
+    ``jnp.sinh`` so the result cannot overflow the dtype. This is a *pure overflow guard*: for any
+    input that is not about to overflow the clip is a value- and gradient-identity, so the forward
+    pass and the VJP match an unguarded ``jnp.sinh`` throughout the entire valid regime.
+
+    A hard ``jnp.clip`` is used deliberately rather than a softplus ``smooth_clamp``: it matches the
+    domain guards in ``acosh``/``atanh`` below, is free on accelerators, and avoids the ~2 extra
+    ``exp`` per call that the smooth clamp evaluated on every element with no benefit. The only
+    difference is in the saturated tail (|x| ≥ clamp), where the clip's gradient is 0 instead of a
+    tiny nonzero value — acceptable, because that regime is already degenerate (the output is ~1e37)
+    and you never want gradients pushing further into overflow.
 
     Args:
         x: Input array of any shape
@@ -101,9 +119,9 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     Returns:
         sinh(x) with overflow protection
     """
-    # Safe limit based on dtype: sinh(x) ≈ exp(x)/2 for large x, so x < log(max)
+    # sinh(x) ≈ exp(x)/2 for large x, so the overflow boundary is x = log(max).
     clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
-    x = smooth_clamp(x, -clamp, clamp)
+    x = jnp.clip(x, -clamp, clamp)
     return jnp.sinh(x)
 
 

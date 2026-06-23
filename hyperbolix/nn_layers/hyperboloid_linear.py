@@ -22,7 +22,7 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import sinh, smooth_clamp
+from hyperbolix.utils.math_utils import smooth_clamp
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc
@@ -204,8 +204,11 @@ def _hyperboloid_plfc_forward(
     sqrt_c = jnp.sqrt(c)
     sinh_arg_BO = smooth_clamp(sqrt_c * v_BO, -v_max, v_max, smoothing_factor)
 
-    # Element-wise sinh diffeomorphism (NOT expmap_0 which applies sinh to norm)
-    res_rem_BO = sinh(sinh_arg_BO) / sqrt_c  # (B, O) spatial components
+    # Element-wise sinh diffeomorphism (NOT expmap_0 which applies sinh to norm). The argument is
+    # already bounded to ±v_max ≪ the sinh overflow clamp by the line above, so the wrapped
+    # math_utils.sinh would only re-clamp redundantly — use bare jnp.sinh. The constructor asserts
+    # sinh(v_max) cannot overflow float32, keeping this safe if a user raises v_max.
+    res_rem_BO = jnp.sinh(sinh_arg_BO) / sqrt_c  # (B, O) spatial components
 
     # Reconstruct time from hyperboloid constraint: -x0^2 + ||x_s||^2 = -1/c
     res0_B1 = jnp.sqrt(jnp.sum(res_rem_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
@@ -219,6 +222,25 @@ def _hyperboloid_plfc_forward(
         res_BAo = jax.vmap(manifold.addition, in_axes=(0, None, None))(res_BAo, bias_point_Ao, c)
 
     return res_BAo
+
+
+def _assert_v_max_safe(v_max: float) -> None:
+    """Guard the bare-``jnp.sinh`` PLFC output path against ``v_max``-driven float32 overflow.
+
+    The output spatial coordinate is ``sinh(v_max)/sqrt(c)`` and the time component reconstructs from
+    ``sum(.**2)``; float32 is the binding case because layer inputs may be float32 regardless of
+    ``param_dtype``. Require ``sinh(v_max) < sqrt(finfo(float32).max)`` (≈1.84e19, i.e. ``v_max`` ≲ 45)
+    so the squared spatial norm cannot overflow. The Shi et al. 2026 default ``v_max=10`` is far
+    inside this bound; a user who needs a larger ``v_max`` should restore the wrapped/smooth sinh
+    guard instead.
+    """
+    f32_safe_sinh = float(jnp.finfo(jnp.float32).max) ** 0.5  # ~1.84e19
+    if float(jnp.sinh(v_max)) >= f32_safe_sinh:
+        raise ValueError(
+            f"v_max={v_max} is too large for the PLFC sinh diffeomorphism: sinh(v_max) would overflow "
+            f"the float32 squared spatial norm in the time reconstruction. Use v_max < ~45 "
+            f"(default 10), or restore the smooth/wrapped sinh guard for larger values."
+        )
 
 
 def _fgg_weight_init(
@@ -709,6 +731,7 @@ class HypLinearHyperboloidPLFC(nnx.Module):
         self.input_space = input_space
         self.clamping_factor = clamping_factor
         self.smoothing_factor = smoothing_factor
+        _assert_v_max_safe(v_max)
         self.v_max = v_max
 
         # Trainable parameters — small normal init (Shi et al. 2026 PLFC reference)
