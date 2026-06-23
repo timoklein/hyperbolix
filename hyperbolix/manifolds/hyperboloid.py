@@ -242,6 +242,44 @@ def _dist(
     return lax.switch(version_idx, [_dist_default, _dist_smoothened], x, y, c)
 
 
+def _sqdist(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    """Squared Lorentzian distance between hyperboloid points.
+
+    Computes the squared Lorentzian distance of Law et al. (2019):
+
+        d_L²(x, y) = -2/c - 2 * ⟨x, y⟩_L
+
+    This is **not** the square of the geodesic distance :func:`_dist`. Since ⟨x,x⟩_L = ⟨y,y⟩_L =
+    -1/c on the manifold, the two are related by a monotone closed form:
+
+        d_L²(x, y) = (2/c) * (cosh(√c * d(x, y)) - 1) = (4/c) * sinh²(√c * d(x, y) / 2)
+
+    so it is zero iff x == y, non-negative, symmetric, and strictly increasing in the geodesic
+    distance d(x, y). That makes it a drop-in dissimilarity wherever a *monotone* distance proxy
+    suffices (contrastive / commitment / k-NN / attention scores).
+
+    Unlike :func:`_dist` it needs no ``acosh`` (no domain clamp, no infinite-gradient knee at
+    x == y) and no coincidence reduction -- it is a single Minkowski inner product, which is both
+    faster and numerically cleaner. The trade-off: it is not a true metric (no triangle
+    inequality); use :func:`_dist` when the geodesic length itself is required.
+
+    Args:
+        x: Hyperboloid point, shape (dim+1,)
+        y: Hyperboloid point, shape (dim+1,)
+        c: Curvature (positive)
+
+    Returns:
+        Squared Lorentzian distance d_L²(x, y), scalar
+
+    References:
+        Law et al. "Lorentzian Distance Learning for Hyperbolic Representations." ICML 2019.
+    """
+    # d_L² = ||x - y||²_L = -2/c - 2⟨x,y⟩_L >= 0. Clip the float-rounding sliver below 0 at
+    # coincidence (the true minimum is 0, where the gradient is 0 anyway).
+    sqdist = -2.0 / c - 2.0 * _minkowski_inner(x, y)
+    return jnp.clip(sqdist, min=0.0)
+
+
 # Distance from origin implementations for lax.switch
 def _dist_0_default(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
     """Standard acosh distance from origin with hard clipping."""
@@ -526,8 +564,10 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     Returns:
         Riemannian norm ||v||_x, scalar
     """
-    inner = _tangent_inner(v, v, x, c)
-    return jnp.sqrt(jnp.clip(inner, min=0.0))
+    inner = jnp.clip(_tangent_inner(v, v, x, c), min=0.0)
+    # +MIN_NORM² keeps sqrt's gradient finite at v=0 (sqrt'(0)=inf); matches the safe norm in
+    # _expmap. A bare clip(min=0.0) leaves the gradient as inf at the origin of the tangent space.
+    return jnp.sqrt(inner + MIN_NORM**2)
 
 
 def _egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
@@ -856,6 +896,16 @@ class Hyperboloid(ManifoldBase):
     def dist_0(self, x: Float[Array, "dim_plus_1"], c: Curvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
         """Compute geodesic distance from hyperboloid origin."""
         return _dist_0(self._cast(x), c, version_idx)
+
+    def sqdist(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+        """Squared Lorentzian distance ``d_L²(x, y) = -2/c - 2⟨x,y⟩_L`` (Law et al. 2019).
+
+        A fast, ``acosh``-free dissimilarity that is monotone in the geodesic :meth:`dist`
+        (``d_L² = (2/c)(cosh(√c·d) - 1)``) but is **not** the squared geodesic distance and **not**
+        a true metric. Prefer it where a smooth monotone distance proxy suffices (contrastive /
+        commitment / attention scores); use :meth:`dist` when the geodesic length is required.
+        """
+        return _sqdist(self._cast(x), self._cast(y), c)
 
     def expmap(self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
         """Exponential map: map tangent vector v at point x to manifold."""
