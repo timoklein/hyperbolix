@@ -1023,10 +1023,12 @@ print(y_normed.shape)  # (8, 65)
 
     | Layer | Role | Key params |
     |-------|------|-----------|
-    | `FGGLinear` | Fully-connected | `reset_params`, `use_weight_norm`, `activation` |
-    | `FGGConv2D` | 2D convolution | `pad_mode="origin"`, wraps `FGGLinear` |
+    | `FGGLinear` | Fully-connected | `reset_params="fan_out"`, `gain=1.0`, `init_bias=0.0`, `use_weight_norm`, `activation` |
+    | `FGGConv2D` | 2D convolution | `reset_params="fan_out"`, `gain=1.0`, `init_bias=0.0`, `pad_mode="origin"`, wraps `FGGLinear` |
     | `FGGLorentzMLR` | Classification head | `reset_params="mlr"`, `init_bias=0.5` |
     | `FGGMeanOnlyBatchNorm` | Batch normalization | pairs with `use_weight_norm=True` |
+
+    The `FGGLinear`/`FGGConv2D` defaults (`fan_out` + zero bias) are norm-preserving for *unnormalized* stacks — a deliberate deviation from the Klis et al. classification reference. Restore the reference init with `reset_params="eye"` / `"lorentz_kaiming"` + `init_bias=0.5`.
 
     **Core insight**: the sinh/arcsinh cancellation in the Lorentzian activation chain reduces the forward pass to a single matmul with a spacelike V matrix, Euclidean activation, then time reconstruction — achieving linear (not logarithmic) growth of hyperbolic distance.
 

@@ -166,7 +166,7 @@ def test_fgg_linear_weight_norm():
     assert _check_on_hyperboloid(y, c=1.0, atol=1e-8)
 
 
-@pytest.mark.parametrize("reset_params", ["eye", "xavier", "kaiming", "lorentz_kaiming", "mlr"])
+@pytest.mark.parametrize("reset_params", ["eye", "xavier", "kaiming", "lorentz_kaiming", "fan_out", "mlr"])
 def test_fgg_linear_init_schemes(reset_params):
     """All initialization schemes produce valid outputs."""
     layer = FGGLinear(17, 33, rngs=nnx.Rngs(0), reset_params=reset_params)
@@ -482,6 +482,126 @@ def test_fgg_linear_weight_norm_softplus_positive():
     U_IO = layer._get_kernel()
     col_norms = jnp.sqrt(jnp.sum(U_IO**2, axis=0))
     assert jnp.all(col_norms > 0), "All effective column magnitudes must be positive"
+
+
+# ===========================================================================
+# fan_out / norm-preserving init tests (the new FGG default)
+# ===========================================================================
+
+
+def test_fgg_linear_default_is_fan_out_zero_bias():
+    """FGGLinear now defaults to the norm-preserving fan_out init with zero bias."""
+    layer = FGGLinear(33, 257, rngs=nnx.Rngs(0))  # out_spatial = 256
+    # bias defaults to 0.0 (was 0.5 in the pre-deviation reference init)
+    assert jnp.allclose(layer.bias[...], 0.0)
+    # kernel std ~ sqrt(1/out_spatial) (gain=1.0 default)
+    expected_std = jnp.sqrt(1.0 / 256)
+    kernel_std = jnp.std(layer.kernel[...])
+    assert jnp.abs(kernel_std - expected_std) < 0.1 * expected_std, (
+        f"default kernel std={kernel_std:.5f} should be near fan_out {expected_std:.5f}"
+    )
+
+
+@pytest.mark.parametrize("gain", [1.0, 0.5])
+def test_fgg_linear_fan_out_std(gain):
+    """fan_out effective column std is gain / sqrt(out_spatial)."""
+    out_features = 257  # out_spatial = 256, large for a tight empirical std
+    layer = FGGLinear(33, out_features, rngs=nnx.Rngs(0), reset_params="fan_out", gain=gain)
+    kernel_std = jnp.std(layer.kernel[...])
+    expected_std = gain * jnp.sqrt(1.0 / (out_features - 1))
+    assert jnp.abs(kernel_std - expected_std) < 0.1 * expected_std, (
+        f"fan_out (gain={gain}) std={kernel_std:.5f} should be near {expected_std:.5f}"
+    )
+
+
+def test_fgg_fan_out_norm_preservation():
+    """A deep fan_out stack preserves the spatial norm; the old fan-in default grows it.
+
+    Regression guard for the downstream IMPALA-ResNet saturation bug: the fan-in
+    default init inflates the output spatial norm with width/depth, saturating a
+    bounded downstream projection. fan_out + bias=0 keeps ||z|| ~= ||x_spatial||.
+    """
+    width = 128  # ambient = width + 1
+    n_layers = 6
+    c = 1.0
+    x = _make_hyperboloid_points(jax.random.PRNGKey(0), batch=64, ambient_dim=width + 1, c=c)
+    n_in = jnp.mean(jnp.linalg.norm(x[:, 1:], axis=-1))
+
+    # fan_out (new default): norm-preserving, identity activation
+    h = x
+    for i in range(n_layers):
+        layer = FGGLinear(width + 1, width + 1, rngs=nnx.Rngs(i), reset_params="fan_out", gain=1.0, init_bias=0.0)
+        h = layer(h, c=c)
+        assert _check_on_hyperboloid(h, c=c, atol=1e-7)
+    n_out_fan_out = jnp.mean(jnp.linalg.norm(h[:, 1:], axis=-1))
+
+    # Old fan-in reference style: norm grows with width/depth + the 0.5 bias term
+    h = x
+    for i in range(n_layers):
+        layer = FGGLinear(width + 1, width + 1, rngs=nnx.Rngs(i), reset_params="lorentz_kaiming", init_bias=0.5)
+        h = layer(h, c=c)
+    n_out_fan_in = jnp.mean(jnp.linalg.norm(h[:, 1:], axis=-1))
+
+    # fan_out stays within a constant band of the input norm...
+    assert 0.25 * n_in < n_out_fan_out < 4.0 * n_in, f"fan_out norm {n_out_fan_out:.3f} should track input norm {n_in:.3f}"
+    # ...while the fan-in default is substantially larger (the saturation failure mode).
+    assert n_out_fan_in > 2.0 * n_out_fan_out, f"fan-in norm {n_out_fan_in:.3f} should dwarf fan_out norm {n_out_fan_out:.3f}"
+
+
+@pytest.mark.parametrize("gain", [0.25, 0.5])
+def test_fgg_fan_out_gain_scales_norm(gain):
+    """With identity activation and bias=0, output spatial norm scales linearly with gain."""
+    c = 1.0
+    x = _make_hyperboloid_points(jax.random.PRNGKey(0), batch=64, ambient_dim=65, c=c)
+
+    layer_1 = FGGLinear(65, 65, rngs=nnx.Rngs(0), reset_params="fan_out", gain=1.0, init_bias=0.0)
+    layer_g = FGGLinear(65, 65, rngs=nnx.Rngs(0), reset_params="fan_out", gain=gain, init_bias=0.0)
+
+    n_1 = jnp.mean(jnp.linalg.norm(layer_1(x, c=c)[:, 1:], axis=-1))
+    n_g = jnp.mean(jnp.linalg.norm(layer_g(x, c=c)[:, 1:], axis=-1))
+
+    # z = x_spatial @ U scales exactly with gain (same seed -> same direction).
+    assert jnp.abs(n_g - gain * n_1) < 0.2 * gain * n_1, f"gain={gain}: norm {n_g:.4f} should be ~{gain} x {n_1:.4f}"
+
+
+def test_fgg_fan_out_weight_norm_gain_noop():
+    """Under use_weight_norm, gain (and the fan_out scale) are renormalized away."""
+    layer_g1 = FGGLinear(17, 33, rngs=nnx.Rngs(0), reset_params="fan_out", gain=1.0, use_weight_norm=True)
+    layer_g8 = FGGLinear(17, 33, rngs=nnx.Rngs(0), reset_params="fan_out", gain=8.0, use_weight_norm=True)
+    # softplus(kernel_scale) * dir / ||dir|| is invariant to a global scale on dir.
+    assert jnp.allclose(layer_g1._get_kernel(), layer_g8._get_kernel(), atol=1e-10)
+
+
+def test_fgg_conv2d_default_is_fan_out():
+    """FGGConv2D defaults to fan_out + zero bias and stays on-manifold."""
+    conv = FGGConv2D(hyperboloid, in_channels=5, out_channels=65, kernel_size=3, rngs=nnx.Rngs(0))
+    assert jnp.allclose(conv.bias[...], 0.0)
+    spatial = jax.random.normal(jax.random.PRNGKey(1), (2, 6, 6, 4), dtype=jnp.float64) * 0.3
+    time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
+    x = jnp.concatenate([time, spatial], axis=-1)
+    y = conv(x, c=1.0)
+    assert y.shape == (2, 6, 6, 65)
+    assert _check_on_hyperboloid(y.reshape(-1, 65), c=1.0, atol=1e-6)
+
+    # The previous reference-style init is still reachable and valid.
+    conv_ref = FGGConv2D(
+        hyperboloid,
+        in_channels=5,
+        out_channels=9,
+        kernel_size=3,
+        rngs=nnx.Rngs(0),
+        reset_params="lorentz_kaiming",
+        init_bias=0.5,
+    )
+    assert jnp.allclose(conv_ref.bias[...], 0.5)
+    y_ref = conv_ref(x, c=1.0)
+    assert _check_on_hyperboloid(y_ref.reshape(-1, 9), c=1.0, atol=1e-6)
+
+
+def test_fgg_invalid_reset_params_errors():
+    """Unknown reset_params raises ValueError listing the valid schemes incl. fan_out."""
+    with pytest.raises(ValueError, match="fan_out"):
+        FGGLinear(17, 33, rngs=nnx.Rngs(0), reset_params="bogus")
 
 
 # ===========================================================================
