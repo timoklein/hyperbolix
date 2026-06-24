@@ -24,7 +24,7 @@ from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 
 from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import build_spacelike_V, htc
+from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid
 
 # Gradient-safety floor for norms (matches hyperbolix.manifolds MIN_NORM):
 # sqrt(sum + MIN_NORM²) has a finite VJP at zero input, unlike linalg.norm,
@@ -195,28 +195,12 @@ def _hyperboloid_plfc_forward(
     # Compute multinomial logistic regression scores: (B, O) where O = out_dim-1
     v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
 
-    # Output-side guard. compute_mlr only bounds its asinh argument, leaving v ∝
-    # ‖kernel_row‖ unbounded; the sinh below exponentiates it, so without this clip the
-    # squared spatial norm in the time reconstruction overflows float32 as ‖kernel_row‖
-    # or the input distance from the origin grows. We hard-clip the sinh argument
-    # sqrt(c)*v to ±v_max directly — the reference (Shi et al. 2026) hard-clips v to ±10
-    # at c=1; clipping sqrt(c)*v is the c≠1 generalization that makes _assert_v_max_safe a
-    # clean bound. A hard jnp.clip (not smooth_clamp) matches the reference and is
-    # value-identical for |sqrt(c)*v| ≤ v_max — it only zeroes the gradient in the
-    # already-saturated tail (≈ sinh(v_max) distance), at no per-element exp cost.
-    sqrt_c = jnp.sqrt(c)
-    sinh_arg_BO = jnp.clip(sqrt_c * v_BO, -v_max, v_max)
-
-    # Element-wise sinh diffeomorphism (NOT expmap_0 which applies sinh to norm). The argument is
-    # already bounded to ±v_max ≪ the sinh overflow clamp by the line above, so the wrapped
-    # math_utils.sinh would only re-clamp redundantly — use bare jnp.sinh. The constructor asserts
-    # sinh(v_max) cannot overflow float32, keeping this safe if a user raises v_max.
-    res_rem_BO = jnp.sinh(sinh_arg_BO) / sqrt_c  # (B, O) spatial components
-
-    # Reconstruct time from hyperboloid constraint: -x0^2 + ||x_s||^2 = -1/c
-    res0_B1 = jnp.sqrt(jnp.sum(res_rem_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
-
-    res_BAo = jnp.concatenate([res0_B1, res_rem_BO], axis=-1)  # (B, Ao)
+    # Output-side guard + sinh diffeomorphism + time reconstruction (shared with the Busemann FC
+    # layer). compute_mlr only bounds its asinh argument, leaving v ∝ ‖kernel_row‖ unbounded; the
+    # sinh exponentiates it, so sinh_lift_to_hyperboloid hard-clips sqrt(c)*v to ±v_max before the
+    # element-wise sinh (NOT expmap_0, which applies sinh to the norm). The constructor's
+    # _assert_v_max_safe keeps the bare jnp.sinh inside the helper safe from float32 overflow.
+    res_BAo = sinh_lift_to_hyperboloid(v_BO, c, v_max)  # (B, Ao)
 
     # Intrinsic gyro-bias: y ← y ⊕ exp_0([0, b]) (Shi et al. 2026, Sec. 4.1)
     if gyro_bias_O is not None:

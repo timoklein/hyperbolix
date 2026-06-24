@@ -6,7 +6,7 @@ Hyperbolic neural network layers built with Flax NNX.
 
 Hyperbolix provides 20+ neural network layer classes and 5 activation functions for building hyperbolic deep learning models:
 
-- **Linear Layers**: Poincaré, Hyperboloid, and Proper Velocity linear transformations, including FGG (Fast and Geometrically Grounded) layers
+- **Linear Layers**: Poincaré, Hyperboloid, and Proper Velocity linear transformations, including FGG (Fast and Geometrically Grounded) and Busemann FC (point-to-horosphere) layers
 - **Convolutional Layers**: HCat-based, HRC-based, FGG, and Proper Velocity hyperbolic convolutions
 - **Normalization**: Poincaré batch normalization (`PoincareBatchNorm2D`), HRC-wrapped norms, and FGG mean-only batch norm
 - **Hypformer Components**: HTC (Hyperbolic Transformation Component) and HRC (Hyperbolic Regularization Component) with curvature-change support
@@ -14,7 +14,7 @@ Hyperbolix provides 20+ neural network layer classes and 5 activation functions 
 - **Proper Velocity Components**: `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV` from Chen et al. (2026) — unconstrained $\mathbb{R}^n$ geometry with exact Euclidean retraction
 - **Attention Layers**: Three hyperbolic attention variants (linear O(N), softmax O(N²), full Lorentzian O(N²)) from the Hypformer paper
 - **Positional Encoding**: HOPE (Hyperbolic Rotary PE) and Hypformer learnable positional encodings for Transformers
-- **Regression Layers**: Single-layer classifiers with Riemannian geometry, including `FGGLorentzMLR` and `HypRegressionPV`
+- **Regression Layers**: Single-layer classifiers with Riemannian geometry, including `FGGLorentzMLR`, `HypRegressionPV`, and the Busemann MLR heads (point-to-horosphere)
 - **Vector Quantization**: Poincaré VQ-VAE bottlenecks — `HypVQEmbeddingPoincare` (EMA codebook, GGBall) and `HypVQMLRPoincare` (Gumbel-Softmax over a Poincaré MLR)
 - **Activation Functions**: Hyperbolic ReLU, Leaky ReLU, Tanh, Swish, GELU
 - **Helper Functions**: Utilities for regression and conformal factor computation
@@ -35,6 +35,11 @@ All layers follow Flax NNX conventions and store manifold module references.
       show_source: true
       heading_level: 4
 
+::: hyperbolix.nn_layers.HypLinearPoincareBusemann
+    options:
+      show_source: true
+      heading_level: 4
+
 ### Hyperboloid Linear
 
 ::: hyperbolix.nn_layers.HypLinearHyperboloidFHCNN
@@ -48,6 +53,11 @@ All layers follow Flax NNX conventions and store manifold module references.
       heading_level: 4
 
 ::: hyperbolix.nn_layers.HypLinearHyperboloidPLFC
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.HypLinearHyperboloidBusemann
     options:
       show_source: true
       heading_level: 4
@@ -857,12 +867,29 @@ Single-layer classifiers with Riemannian geometry.
       show_source: true
       heading_level: 4
 
+::: hyperbolix.nn_layers.HypRegressionPoincareBusemann
+    options:
+      show_source: true
+      heading_level: 4
+
 ### Hyperboloid Regression
 
 ::: hyperbolix.nn_layers.HypRegressionHyperboloid
     options:
       show_source: true
       heading_level: 4
+
+::: hyperbolix.nn_layers.HypRegressionHyperboloidBusemann
+    options:
+      show_source: true
+      heading_level: 4
+
+### Busemann MLR (Chen et al. 2026)
+
+The Busemann MLR heads (`HypRegressionHyperboloidBusemann`, `HypRegressionPoincareBusemann`) decide
+with point-to-*horosphere* distances (the Chen/Atigh/Fan lineage), in contrast to the point-to-*hyperplane*
+heads above (Ganea/Shimizu/Bdeir). Each logit is $u_k(x) = -\alpha_k B^{v_k}(x) + b_k$ from the closed-form
+Busemann function `Hyperboloid.busemann` / `Poincare.busemann`.
 
 ### FGG Lorentz MLR (Klis et al. 2026)
 
@@ -1314,6 +1341,7 @@ The neural network layers implement methods from:
 - **Chen et al. (2024)**: "Hyperbolic Embeddings for Learning on Manifolds (HELM)" - HOPE positional encoding and Lorentzian residual connections
 - **Klis et al. (2026)**: "Fast and Geometrically Grounded Lorentz Neural Networks" - `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `FGGMeanOnlyBatchNorm`; sinh/arcsinh cancellation for linear hyperbolic distance growth
 - **Chen et al. (2026)**: "Proper Velocity Neural Networks" - `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV`; unconstrained $\mathbb{R}^n$ model of hyperbolic geometry with exact Euclidean retraction
+- **Chen, Schölkopf & Sebe (2026)**: "Hyperbolic Busemann Neural Networks" (arXiv:2602.18858) - `HypRegressionHyperboloidBusemann`, `HypRegressionPoincareBusemann` (BMLR heads) and `HypLinearHyperboloidBusemann`, `HypLinearPoincareBusemann` (BFC layers); closed-form point-to-horosphere Busemann function (`Hyperboloid.busemann`, `Poincare.busemann`) backing all four
 - **Chen et al. (2025)**: "Hyperbolic VQ-VAE (HVQ-VAE)" - `HypVQEmbeddingPoincare`; Poincaré-ball codebook with geodesic nearest-neighbour selection and copy-gradient STE
 - **Goswami et al. (2025)**: "HyperVQ" - `HypVQMLRPoincare`; vector quantization as Poincaré-MLR classification with Gumbel-Softmax straight-through selection
 - **Bu et al. (2026)**: "GGBall: Graph Generative Model on Poincaré Ball" - hyperbolic-EMA codebook update and weighted gyromidpoint (`ema_update`, `poincare_weighted_midpoint`)

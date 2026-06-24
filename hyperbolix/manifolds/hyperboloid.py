@@ -445,7 +445,11 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     y_rest = y[1:]
-    y_rest_norm = jnp.linalg.norm(y_rest)
+    # Safe norm: +MIN_NORM² keeps the gradient finite at y = origin (y_rest = 0), where raw
+    # jnp.linalg.norm has a 0/0 derivative. The forward-only jnp.maximum below cannot undo that
+    # NaN (it gets multiplied into the VJP). This matters for the gyro-bias path of the PLFC /
+    # Busemann FC layers, whose bias point is the origin at zero init.
+    y_rest_norm = jnp.sqrt(jnp.sum(y_rest**2) + MIN_NORM**2)
 
     dist0 = _dist_0(y, c=c)
     scale = dist0 / jnp.maximum(y_rest_norm, MIN_NORM)
@@ -818,6 +822,40 @@ def _compute_mlr(
     return res_BP
 
 
+def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+    """Closed-form Lorentz Busemann function ``B^v(x)`` (point-to-horosphere coordinate).
+
+    For a unit ideal direction ``v ∈ S^{n-1}`` (a *spatial* unit vector, dim ``d``) and a
+    hyperboloid point ``x`` (ambient dim ``d+1``, time first), with curvature ``c = -K > 0``
+    (Chen et al. 2026, Eq. 4)::
+
+        B^v(x) = (1/√c) · log( √c · (x_t - ⟨x_s, v⟩) )
+
+    with ``x_t = x[0]``, ``x_s = x[1:]``. The argument ``x_t - ⟨x_s, v⟩`` equals ``-⟨x, ω⟩_L``
+    for the null lift ``ω = (1, v)`` and is strictly positive on the upper sheet
+    (Cauchy-Schwarz: ``x_t = √(1/c + ‖x_s‖²) ≥ ‖x_s‖ ≥ ⟨x_s, v⟩``); it → 0 only as ``x``
+    runs off to the ideal point ``v``, so the log argument is floored at ``MIN_NORM``.
+    ``B^v(origin) = 0`` for unit ``v``.
+
+    ``v`` is assumed unit-norm and is **not** normalized here — callers (the BMLR/BFC layers,
+    or a downstream horospherical projection) normalize their direction set to the sphere.
+
+    Args:
+        x: Hyperboloid point, shape (dim+1,)
+        v: Unit ideal direction (spatial), shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Busemann coordinate B^v(x), scalar
+
+    References:
+        Chen, Schölkopf, and Sebe. "Hyperbolic Busemann Neural Networks." 2026, Eq. 4.
+    """
+    sqrt_c = jnp.sqrt(c)
+    arg = sqrt_c * (x[0] - jnp.dot(x[1:], v))  # = -sqrt_c * minkowski_inner(x, [1, v]); > 0 on the upper sheet
+    return jnp.log(jnp.maximum(arg, MIN_NORM)) / sqrt_c
+
+
 # ---------------------------------------------------------------------------
 # Class-based manifold API
 # ---------------------------------------------------------------------------
@@ -1008,3 +1046,20 @@ class Hyperboloid(ManifoldBase):
     ) -> Float[Array, "batch out_dim"]:
         """Compute multinomial linear regression on hyperboloid."""
         return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)
+
+    def busemann(self, x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+        """Closed-form Lorentz Busemann function ``B^v(x) = (1/√c)·log(√c·(x_t - ⟨x_s, v⟩))``.
+
+        Point-to-horosphere coordinate (Chen et al. 2026, Eq. 4). ``v`` must be a *unit*
+        spatial direction (dim ``d``) — it is **not** normalized internally. Single point
+        ``(d+1,)`` → scalar; use :func:`jax.vmap` for batching and over a direction set.
+        ``B^v(origin) = 0``.
+
+        See Also
+        --------
+        For an *asymmetric* quasimetric energy, compose this Busemann coordinate with an
+        external Euclidean quasimetric (e.g. IQE/MRN). Do **not** reach for
+        :meth:`Poincare.apollonian_dist` expecting asymmetry — it is a coboundary
+        (symmetrizes to ``√c·dist``) and cannot deliver circulation.
+        """
+        return _busemann(self._cast(x), self._cast(v), c)
