@@ -1630,7 +1630,7 @@ tables below collapse this into per-task decisions.</p>
 <tr>
 <td><code>FGGLinear</code></td>
 <td>Hyperboloid</td>
-<td>Advanced — ~3× faster but trickier (init-sensitive, requires the <code>0.5·eye</code> default and <code>lorentz_kaiming</code> to converge). Use once you have a working HTC baseline</td>
+<td>Advanced — ~3× faster but init-sensitive. Defaults to the norm-preserving <code>fan_out</code> init (<code>init_bias=0.0</code>), which suits unnormalized stacks feeding a bounded projection; pass <code>reset_params="eye", init_bias=0.5</code> for the reference (BatchNorm-regime) init. Use once you have a working HTC baseline</td>
 </tr>
 <tr>
 <td><code>HypLinearHyperboloidPLFC</code></td>
@@ -1895,9 +1895,9 @@ hyperbolic-aware default — keep it unless you have a reason to change it.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>FGGLinear</code></td>
-<td><code>lorentz_kaiming</code>, <code>std=sqrt(1/in_features)</code> (ambient); default initial weight is <code>0.5·eye</code>, bias <code>0.5</code></td>
-<td>Keeps the spacelike V matrix near identity; preserves initial point magnitudes</td>
+<td><code>FGGLinear</code> / <code>FGGConv2D</code></td>
+<td><code>fan_out</code>, <code>std=sqrt(1/out_spatial)</code>, bias <code>0.0</code>, <code>gain=1.0</code></td>
+<td>Norm-preserving (<code>‖z‖ ≈ gain·‖x_spatial‖</code>) so deep <em>unnormalized</em> stacks don't saturate a bounded projection — a deliberate deviation from the Klis et al. BatchNorm-regime reference. Restore the reference with <code>reset_params="eye"</code>/<code>"lorentz_kaiming"</code> + <code>init_bias=0.5</code></td>
 </tr>
 <tr>
 <td><code>HypLinear*PP</code></td>
