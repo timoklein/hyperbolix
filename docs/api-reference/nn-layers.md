@@ -619,6 +619,16 @@ Positional encoding layers for hyperbolic Transformers and attention mechanisms.
       show_source: true
       heading_level: 4
 
+::: hyperbolix.nn_layers.lorentz_scale
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.LorentzResidual
+    options:
+      show_source: true
+      heading_level: 4
+
 ### HOPE (Hyperbolic Rotary Positional Encoding)
 
 ::: hyperbolix.nn_layers.hope
