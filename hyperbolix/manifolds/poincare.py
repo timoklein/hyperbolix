@@ -735,6 +735,39 @@ def _beta_concat(points: Float[Array, "M n_i"], c: Curvature) -> Float[Array, "n
     return _expmap_0(v_N, c)  # (M*n_i,)
 
 
+def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+    """Closed-form Poincaré Busemann function ``B^v(x)`` (point-to-horosphere coordinate).
+
+    For a unit ideal direction ``v ∈ S^{n-1}`` and a ball point ``x`` (``‖x‖ < 1/√c``), with
+    curvature ``c = -K > 0`` (Chen et al. 2026, Eq. 3)::
+
+        B^v(x) = (1/√c) · log( ‖v - √c·x‖² / (1 - c·‖x‖²) )
+
+    Numerator and denominator are both strictly positive inside the ball; the denominator is
+    floored exactly as in :func:`_conformal_factor`'s ``1 - c‖x‖²``. ``B^v(origin) = 0`` for
+    unit ``v``. Under the Poincaré↔Hyperboloid isometry this agrees with the Lorentz Busemann
+    function for the same ``v``.
+
+    ``v`` is assumed unit-norm and is **not** normalized here — callers normalize their
+    direction set to the sphere.
+
+    Args:
+        x: Poincaré ball point, shape (dim,)
+        v: Unit ideal direction, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Busemann coordinate B^v(x), scalar
+
+    References:
+        Chen, Schölkopf, and Sebe. "Hyperbolic Busemann Neural Networks." 2026, Eq. 3.
+    """
+    sqrt_c = jnp.sqrt(c)
+    num = jnp.sum((v - sqrt_c * x) ** 2)
+    denom = jnp.maximum(1.0 - c * jnp.dot(x, x), MIN_NORM)
+    return jnp.log(num / denom) / sqrt_c
+
+
 # ---------------------------------------------------------------------------
 # Class-based manifold API
 # ---------------------------------------------------------------------------
@@ -802,7 +835,15 @@ class Poincare(ManifoldBase):
         return _dist_0(self._cast(x), c, version_idx)
 
     def apollonian_dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-        """Apollonian weak metric δ(x, y) — non-symmetric; symmetrizes to √c·dist(x, y)."""
+        """Apollonian weak metric δ(x, y) — non-symmetric; symmetrizes to √c·dist(x, y).
+
+        .. warning::
+            Although ``δ`` is non-symmetric, its antisymmetric part is an exact **coboundary**
+            (``δ(x, y) - δ(y, x)`` is a difference of a per-point potential), so it carries
+            **no circulation** and is useless as a quasimetric energy. Do not reach for this
+            expecting genuine asymmetry — use a :meth:`busemann` coordinate fed to an external
+            quasimetric combinator (IQE/MRN) instead.
+        """
         return _apollonian_dist(self._cast(x), self._cast(y), c)
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
@@ -884,3 +925,20 @@ class Poincare(ManifoldBase):
     def beta_concat(self, points: Float[Array, "M n_i"], c: Curvature) -> Float[Array, "n"]:
         """Beta-concatenation of M equal-dimensional Poincaré ball points."""
         return _beta_concat(self._cast(points), c)
+
+    def busemann(self, x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+        """Closed-form Poincaré Busemann function ``B^v(x) = (1/√c)·log(‖v - √c·x‖²/(1 - c‖x‖²))``.
+
+        Point-to-horosphere coordinate (Chen et al. 2026, Eq. 3). ``v`` must be a *unit*
+        direction — it is **not** normalized internally. Single point ``(d,)`` → scalar; use
+        :func:`jax.vmap` for batching and over a direction set. ``B^v(origin) = 0``, and it
+        matches :meth:`Hyperboloid.busemann` under the Poincaré↔Hyperboloid isometry.
+
+        See Also
+        --------
+        For an *asymmetric* quasimetric energy, compose this Busemann coordinate with an
+        external Euclidean quasimetric (e.g. IQE/MRN). Do **not** reach for
+        :meth:`apollonian_dist` expecting asymmetry — it is a coboundary (symmetrizes to
+        ``√c·dist``) and cannot deliver circulation.
+        """
+        return _busemann(self._cast(x), self._cast(v), c)

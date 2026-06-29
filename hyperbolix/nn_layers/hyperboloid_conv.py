@@ -526,11 +526,22 @@ class FGGConv2D(nnx.Module):
         Euclidean activation for the FGGLinear (default: None).
     reset_params : str, optional
         Weight init for FGGLinear: ``"eye"``, ``"xavier"``, ``"kaiming"``,
-        ``"lorentz_kaiming"``, or ``"mlr"`` (default: ``"lorentz_kaiming"``).
+        ``"lorentz_kaiming"``, ``"fan_out"``, or ``"mlr"`` (default: ``"fan_out"``).
+        The ``"fan_out"`` default (std ``sqrt(1/out_spatial)``) is norm-preserving, a
+        deliberate deviation from the Klis et al. 2026 classification reference for
+        unnormalized stacks (e.g. an RL backbone feeding a bounded projection). Pass
+        ``reset_params="lorentz_kaiming", init_bias=0.5`` to recover the previous init.
     use_weight_norm : bool, optional
-        Weight normalization in FGGLinear (default: False).
+        Weight normalization in FGGLinear (default: False). Note ``gain`` and the
+        ``"fan_out"`` scale are renormalized away in this mode.
     init_bias : float, optional
-        Initial bias for FGGLinear (default: 0.5).
+        Initial bias for FGGLinear (default: 0.0). A zero bias removes the
+        ``~sqrt(out) * init_bias`` time-row term; pair with ``"fan_out"`` for norm
+        preservation.
+    gain : float, optional
+        Multiplier on the random init (default: 1.0). With ``"fan_out"`` it sets the
+        effective column std to ``gain / sqrt(out_spatial)``. No-op for ``"eye"``;
+        renormalized away under ``use_weight_norm=True``.
     eps : float, optional
         Numerical stability floor (default: 1e-7).
     param_dtype : DTypeLike
@@ -554,9 +565,10 @@ class FGGConv2D(nnx.Module):
         padding: str = "SAME",
         pad_mode: str = "origin",
         activation: Callable | None = None,
-        reset_params: str = "lorentz_kaiming",
+        reset_params: str = "fan_out",
         use_weight_norm: bool = False,
-        init_bias: float = 0.5,
+        init_bias: float = 0.0,
+        gain: float = 1.0,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
     ):
@@ -586,9 +598,10 @@ class FGGConv2D(nnx.Module):
         self.activation = activation
         self.use_weight_norm = use_weight_norm
 
-        # Euclidean weight U (I, O); std from ambient dims (hcat_out_ambient, out_channels).
+        # Euclidean weight U (I, O). Default "fan_out" std sqrt(1/out_spatial) is
+        # norm-preserving; gain scales the random init (no-op for "eye").
         U_init = _fgg_weight_init(
-            rngs.params(), in_spatial, out_spatial, hcat_out_ambient, out_channels, reset_params, param_dtype
+            rngs.params(), in_spatial, out_spatial, hcat_out_ambient, out_channels, reset_params, param_dtype, gain=gain
         )
 
         # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||

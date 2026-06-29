@@ -1,5 +1,7 @@
 """Hyperbolic neural network layers for JAX/Flax NNX."""
 
+from .busemann_linear import HypLinearHyperboloidBusemann, HypLinearPoincareBusemann
+from .busemann_regression import HypRegressionHyperboloidBusemann, HypRegressionPoincareBusemann
 from .hybrid_regularization import HyperPPFeatureScaling
 from .hyperboloid_activations import (
     hrc_gelu,
@@ -35,6 +37,7 @@ from .hyperboloid_core import (
     lorentz_midpoint,
     lorentz_residual,
     lorentz_scale,
+    sinh_lift_to_hyperboloid,
     spatial_to_hyperboloid,
 )
 from .hyperboloid_linear import (
@@ -73,15 +76,19 @@ __all__ = [
     "HypConv2DHyperboloidILNN",
     "HypConv2DPV",
     "HypConv2DPoincare",
+    "HypLinearHyperboloidBusemann",
     "HypLinearHyperboloidFHCNN",
     "HypLinearHyperboloidFHNN",
     "HypLinearHyperboloidPLFC",
     "HypLinearPV",
     "HypLinearPoincare",
+    "HypLinearPoincareBusemann",
     "HypLinearPoincarePP",
     "HypRegressionHyperboloid",
+    "HypRegressionHyperboloidBusemann",
     "HypRegressionPV",
     "HypRegressionPoincare",
+    "HypRegressionPoincareBusemann",
     "HypRegressionPoincarePP",
     "HypVQEmbeddingPoincare",
     "HypVQMLRPoincare",
@@ -121,5 +128,6 @@ __all__ = [
     "poincare_relu",
     "poincare_tanh",
     "poincare_weighted_midpoint",
+    "sinh_lift_to_hyperboloid",
     "spatial_to_hyperboloid",
 ]

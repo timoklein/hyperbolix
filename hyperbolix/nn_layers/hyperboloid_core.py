@@ -232,6 +232,53 @@ def spatial_to_hyperboloid(
     return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D+1)
 
 
+def sinh_lift_to_hyperboloid(
+    spatial_BO: Float[Array, "... O"],
+    c: float,
+    v_max: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... O_plus_1"]:
+    """Lift spatial pre-activations to the hyperboloid via the element-wise sinh diffeomorphism.
+
+    Shared output map of ``HypLinearHyperboloidPLFC`` (Shi et al. 2026, point-to-hyperplane)
+    and ``HypLinearHyperboloidBusemann`` (Chen et al. 2026, Thm. 4.2, point-to-horosphere):
+    both compute a per-output score, then recover a hyperboloid point by ::
+
+        y_s = sinh(clip(√c · score, ±v_max)) / √c
+        y_t = √(‖y_s‖² + 1/c)
+
+    The ``clip`` is an output-side overflow guard: ``compute_mlr`` / the Busemann logit only
+    bound an ``asinh``/``log`` argument, leaving the score ∝ ``‖kernel_row‖`` unbounded, and
+    the ``sinh`` exponentiates it. Hard ``jnp.clip`` (not ``smooth_clamp``) matches the Shi
+    et al. 2026 reference and is value-identical for ``|√c·score| ≤ v_max`` — it only zeroes
+    the gradient in the already-saturated tail. Callers must ``_assert_v_max_safe(v_max)`` so
+    the bare ``jnp.sinh`` below cannot overflow float32.
+
+    Parameters
+    ----------
+    spatial_BO : Array, shape (..., O)
+        Per-output scores (the sinh argument, pre-scaling). ``O = out_dim - 1``.
+    c : float
+        Curvature parameter (positive).
+    v_max : float
+        Hard clip bound on ``√c · spatial`` (output-side overflow guard).
+    eps : float, optional
+        Numerical stability floor passed to :func:`spatial_to_hyperboloid` (default: 1e-7).
+
+    Returns
+    -------
+    Array, shape (..., O+1)
+        Points on the hyperboloid with curvature ``c`` (time coordinate first).
+    """
+    sqrt_c = jnp.sqrt(c)
+    sinh_arg_BO = jnp.clip(sqrt_c * spatial_BO, -v_max, v_max)
+    # Bare jnp.sinh: the argument is already bounded to ±v_max ≪ the math_utils.sinh overflow
+    # clamp, so the safe variant would only re-clamp redundantly (callers assert v_max safety).
+    res_rem_BO = jnp.sinh(sinh_arg_BO) / sqrt_c
+    # Time reconstruction via the hyperboloid constraint (scale = 1 since c_in == c_out).
+    return spatial_to_hyperboloid(res_rem_BO, c_in=c, c_out=c, eps=eps)
+
+
 def lorentz_midpoint(
     points: Float[Array, "... M A"],
     weights: Float[Array, "... N M"],
