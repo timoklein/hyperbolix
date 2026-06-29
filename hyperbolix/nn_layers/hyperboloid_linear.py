@@ -24,7 +24,7 @@ from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 
 from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import build_spacelike_V, htc
+from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid
 
 # Gradient-safety floor for norms (matches hyperbolix.manifolds MIN_NORM):
 # sqrt(sum + MIN_NORM²) has a finite VJP at zero input, unlike linalg.norm,
@@ -195,28 +195,12 @@ def _hyperboloid_plfc_forward(
     # Compute multinomial logistic regression scores: (B, O) where O = out_dim-1
     v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
 
-    # Output-side guard. compute_mlr only bounds its asinh argument, leaving v ∝
-    # ‖kernel_row‖ unbounded; the sinh below exponentiates it, so without this clip the
-    # squared spatial norm in the time reconstruction overflows float32 as ‖kernel_row‖
-    # or the input distance from the origin grows. We hard-clip the sinh argument
-    # sqrt(c)*v to ±v_max directly — the reference (Shi et al. 2026) hard-clips v to ±10
-    # at c=1; clipping sqrt(c)*v is the c≠1 generalization that makes _assert_v_max_safe a
-    # clean bound. A hard jnp.clip (not smooth_clamp) matches the reference and is
-    # value-identical for |sqrt(c)*v| ≤ v_max — it only zeroes the gradient in the
-    # already-saturated tail (≈ sinh(v_max) distance), at no per-element exp cost.
-    sqrt_c = jnp.sqrt(c)
-    sinh_arg_BO = jnp.clip(sqrt_c * v_BO, -v_max, v_max)
-
-    # Element-wise sinh diffeomorphism (NOT expmap_0 which applies sinh to norm). The argument is
-    # already bounded to ±v_max ≪ the sinh overflow clamp by the line above, so the wrapped
-    # math_utils.sinh would only re-clamp redundantly — use bare jnp.sinh. The constructor asserts
-    # sinh(v_max) cannot overflow float32, keeping this safe if a user raises v_max.
-    res_rem_BO = jnp.sinh(sinh_arg_BO) / sqrt_c  # (B, O) spatial components
-
-    # Reconstruct time from hyperboloid constraint: -x0^2 + ||x_s||^2 = -1/c
-    res0_B1 = jnp.sqrt(jnp.sum(res_rem_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
-
-    res_BAo = jnp.concatenate([res0_B1, res_rem_BO], axis=-1)  # (B, Ao)
+    # Output-side guard + sinh diffeomorphism + time reconstruction (shared with the Busemann FC
+    # layer). compute_mlr only bounds its asinh argument, leaving v ∝ ‖kernel_row‖ unbounded; the
+    # sinh exponentiates it, so sinh_lift_to_hyperboloid hard-clips sqrt(c)*v to ±v_max before the
+    # element-wise sinh (NOT expmap_0, which applies sinh to the norm). The constructor's
+    # _assert_v_max_safe keeps the bare jnp.sinh inside the helper safe from float32 overflow.
+    res_BAo = sinh_lift_to_hyperboloid(v_BO, c, v_max)  # (B, Ao)
 
     # Intrinsic gyro-bias: y ← y ⊕ exp_0([0, b]) (Shi et al. 2026, Sec. 4.1)
     if gyro_bias_O is not None:
@@ -254,13 +238,15 @@ def _fgg_weight_init(
     out_ambient: int,
     reset_params: str,
     param_dtype: DTypeLike,
+    gain: float = 1.0,
 ) -> Float[Array, "in_spatial out_spatial"]:
     """Euclidean weight ``U`` of shape ``(I, O)`` for FGG layers (Klis et al. 2026).
 
-    Shared by ``FGGLinear`` and ``FGGConv2D``. The std is computed from the
-    *ambient* dimensions (``in_ambient``/``out_ambient`` = spatial + 1), and the
-    result is pinned to ``param_dtype`` so a global ``jax_enable_x64`` does not
-    silently promote the bare ``jnp.eye`` / ``jax.random.normal`` to float64.
+    Shared by ``FGGLinear`` and ``FGGConv2D``. The fan-in std variants compute their
+    std from the *ambient* dimensions (``in_ambient``/``out_ambient`` = spatial + 1);
+    ``"fan_out"`` uses the *output spatial* dim. The result is pinned to ``param_dtype``
+    so a global ``jax_enable_x64`` does not silently promote the bare ``jnp.eye`` /
+    ``jax.random.normal`` to float64.
 
     Parameters
     ----------
@@ -269,11 +255,19 @@ def _fgg_weight_init(
     in_spatial, out_spatial : int
         Spatial weight dims ``I = in_ambient - 1``, ``O = out_ambient - 1``.
     in_ambient, out_ambient : int
-        Ambient dims (including the time coordinate) used for the std formulas.
+        Ambient dims (including the time coordinate) used for the fan-in std formulas.
     reset_params : str
-        One of ``"eye"``, ``"xavier"``, ``"kaiming"``, ``"lorentz_kaiming"``, ``"mlr"``.
+        One of ``"eye"``, ``"xavier"``, ``"kaiming"``, ``"lorentz_kaiming"``,
+        ``"fan_out"``, ``"mlr"``. ``"fan_out"`` draws a Gaussian with
+        std ``sqrt(1 / out_spatial)`` (fan-out), which combined with ``gain`` gives an
+        effective column std of ``gain / sqrt(out_spatial)`` — norm-preserving output
+        (``||z|| ~= gain * ||x_spatial||``) suitable for unnormalized FGG stacks.
     param_dtype : DTypeLike
         Storage dtype the returned weight is pinned to.
+    gain : float, optional
+        Multiplier applied to the random (non-``"eye"``) branches (default: 1.0). For
+        ``"fan_out"`` this scales the norm-preservation factor. No-op for ``"eye"``
+        (its ``0.5 * eye`` identity scale must not be rescaled).
 
     Returns
     -------
@@ -288,10 +282,21 @@ def _fgg_weight_init(
         U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(2.0 / in_ambient)
     elif reset_params == "lorentz_kaiming":
         U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(1.0 / in_ambient)
+    elif reset_params == "fan_out":
+        # Fan-out std sqrt(1/out_spatial): output spatial norm tracks the input
+        # (norm-preserving) instead of growing as sqrt(out_channels) like fan-in.
+        # max(.,1) guards the degenerate out_spatial == 0 case (out_features == 1).
+        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(1.0 / max(out_spatial, 1))
     elif reset_params == "mlr":
         U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(5.0 / in_ambient)
     else:
-        raise ValueError(f"reset_params must be 'eye', 'xavier', 'kaiming', 'lorentz_kaiming', or 'mlr', got '{reset_params}'")
+        raise ValueError(
+            f"reset_params must be 'eye', 'xavier', 'kaiming', 'lorentz_kaiming', 'fan_out', or 'mlr', got '{reset_params}'"
+        )
+
+    # Apply gain to the random branches only -- the 0.5*eye identity init is not rescaled.
+    if reset_params != "eye":
+        U_IO = U_IO * gain
 
     # Pin storage dtype (under global x64 the bare jnp.eye / jax.random.normal would be float64).
     return U_IO.astype(param_dtype)
@@ -940,12 +945,26 @@ class FGGLinear(nnx.Module):
         Euclidean activation function applied after matmul (default: None).
     reset_params : str, optional
         Weight initialization scheme: ``"eye"``, ``"xavier"``, ``"kaiming"``,
-        ``"lorentz_kaiming"``, or ``"mlr"`` (default: ``"eye"``).
+        ``"lorentz_kaiming"``, ``"fan_out"``, or ``"mlr"`` (default: ``"fan_out"``).
+        The ``"fan_out"`` default (std ``sqrt(1/out_spatial)``) is norm-preserving
+        (``||z|| ~= gain * ||x_spatial||``), a deliberate deviation from the Klis et al.
+        2026 classification reference: it suits unnormalized stacks (e.g. an RL backbone
+        feeding a bounded Poincare-ball projection), where the reference's BatchNorm
+        regime does not apply. Pass ``reset_params="eye", init_bias=0.5`` to recover the
+        previous reference-style init.
     use_weight_norm : bool, optional
         If True, reparameterize U as ``g * v / ||v||`` for weight normalization
-        (default: False).
+        (default: False). Note that ``gain`` and the ``"fan_out"`` scale are
+        renormalized away in this mode (the magnitude is set by ``kernel_scale``).
     init_bias : float, optional
-        Initial value for bias entries (default: 0.5).
+        Initial value for bias entries (default: 0.0). A zero bias removes the
+        ``~sqrt(out) * init_bias`` quadrature term that ``build_spacelike_V`` injects
+        into the time row (``-||w|| * sinh(-sqrt(c) * b / ||w||)``); pair with
+        ``"fan_out"`` for norm preservation.
+    gain : float, optional
+        Multiplier on the random init (default: 1.0). With ``reset_params="fan_out"``
+        it sets the effective column std to ``gain / sqrt(out_spatial)``. No-op for
+        ``"eye"``; renormalized away under ``use_weight_norm=True``.
     eps : float, optional
         Numerical stability floor (default: 1e-7).
     param_dtype : DTypeLike
@@ -978,9 +997,10 @@ class FGGLinear(nnx.Module):
         *,
         rngs: nnx.Rngs,
         activation: Callable[[jax.Array], jax.Array] | None = None,
-        reset_params: str = "eye",
+        reset_params: str = "fan_out",
         use_weight_norm: bool = False,
-        init_bias: float = 0.5,
+        init_bias: float = 0.0,
+        gain: float = 1.0,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
     ):
@@ -993,8 +1013,11 @@ class FGGLinear(nnx.Module):
         self.use_weight_norm = use_weight_norm
         self.eps = eps
 
-        # Euclidean weight U (I, O); std from ambient dims (in_features, out_features).
-        U_init = _fgg_weight_init(rngs.params(), in_spatial, out_spatial, in_features, out_features, reset_params, param_dtype)
+        # Euclidean weight U (I, O). Default "fan_out" std sqrt(1/out_spatial) is
+        # norm-preserving; gain scales the random init (no-op for "eye").
+        U_init = _fgg_weight_init(
+            rngs.params(), in_spatial, out_spatial, in_features, out_features, reset_params, param_dtype, gain=gain
+        )
 
         # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
         if use_weight_norm:

@@ -18,7 +18,7 @@ tables below collapse this into per-task decisions.
 | Layer | Manifold | When to pick |
 |---|---|---|
 | `HTCLinear` | Hyperboloid | **Default** for hyperboloid FC — simple, robust, just works. Also supports cross-curvature (`c_in != c_out`) for Hypformer blocks |
-| `FGGLinear` | Hyperboloid | Advanced — ~3× faster but trickier (init-sensitive, requires the `0.5·eye` default and `lorentz_kaiming` to converge). Use once you have a working HTC baseline |
+| `FGGLinear` | Hyperboloid | Advanced — ~3× faster but init-sensitive. Defaults to the norm-preserving `fan_out` init (`init_bias=0.0`), which suits unnormalized stacks feeding a bounded projection; pass `reset_params="eye", init_bias=0.5` for the reference (BatchNorm-regime) init. Use once you have a working HTC baseline |
 | `HypLinearHyperboloidPLFC` | Hyperboloid | Deep hyperboloid networks — point-to-hyperplane Lorentz FC (PLFC, Shi et al. 2026), the Lorentz analog of the HNN++ formulation. Optional intrinsic gyro-bias via `use_gyro_bias=True` |
 | `HypLinearPoincarePP` | Poincaré | **Default** for Poincaré FC — Euclidean-parameterized weights, works with `optax.adam` |
 | `HypLinearPoincare` | Poincaré | Legacy Ganea 2018 — manifold-valued weights, requires `riemannian_adam`. Prefer `PP` |
@@ -122,7 +122,7 @@ hyperbolic-aware default — keep it unless you have a reason to change it.
 
 | Family | Default init | Rationale |
 |---|---|---|
-| `FGGLinear` | `lorentz_kaiming`, `std=sqrt(1/in_features)` (ambient); default initial weight is `0.5·eye`, bias `0.5` | Keeps the spacelike V matrix near identity; preserves initial point magnitudes |
+| `FGGLinear` / `FGGConv2D` | `fan_out`, `std=sqrt(1/out_spatial)`, bias `0.0`, `gain=1.0` | Norm-preserving (`‖z‖ ≈ gain·‖x_spatial‖`) so deep *unnormalized* stacks don't saturate a bounded projection — a deliberate deviation from the Klis et al. BatchNorm-regime reference. Restore the reference with `reset_params="eye"`/`"lorentz_kaiming"` + `init_bias=0.5` |
 | `HypLinear*PP` | Standard normal `std=1.0` (Shimizu 2020 reference) | Tuned empirically for HNN++ formulation |
 | `HypLinearPoincare*` | Scaled normal `std=(2·in·out)^{-0.5}` (van Spengler 2023) | Keeps row norms small so outputs stay away from the boundary |
 | `HypLinearHyperboloidFHCNN`, `HTCLinear` | Small uniform `U(-0.02, 0.02)` | Keeps points near the apex `[1/sqrt(c), 0, …]` initially |

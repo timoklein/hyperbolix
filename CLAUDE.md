@@ -76,7 +76,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 
 ### Weight initialization
 
-- FGG layers: default `lorentz_kaiming` init with `std = sqrt(1/in_features)` using **ambient** dimensions (not spatial). FGGLinear default `0.5*eye` with bias `0.5`
+- FGG layers (`FGGLinear`, `FGGConv2D`): default `reset_params="fan_out"` (Gaussian `std = sqrt(1/out_spatial)`) + `init_bias=0.0` + `gain=1.0` — **norm-preserving** (`‖z‖ ≈ gain·‖x_spatial‖`), a deliberate deviation from the Klis et al. 2026 BatchNorm-regime reference to keep unnormalized stacks off a bounded projection's ceiling. `gain` is a no-op for `"eye"` and renormalized away under `use_weight_norm=True`. Restore the reference init via `reset_params="eye"` (linear) / `"lorentz_kaiming"` (conv) + `init_bias=0.5`. The other `reset_params` schemes (`xavier`, `kaiming`, `lorentz_kaiming`, `mlr`) use fan-in `std` from **ambient** dims. `FGGLorentzMLR` is unchanged (`reset_params="mlr"`, bias `0.5`)
 - FHCNN/HTC layers: small uniform `U(-0.02, 0.02)`
 - HypLinearHyperboloidPLFC and HypConv2DHyperboloidILNN: small normal `std = 0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init); `kernel_init_std=1.0` recovers the old HNN++-style init (Shimizu et al. 2020). The ILNN conv (formerly HypConv2DHyperboloidPP) is the Shi et al. 2026 Lorentz convolution: LogCat (`log_radius_concat`) + PLFC, with origin padding (`pad_mode="origin"`)
 - Poincare layers: scaled normal `std = (2 * in_dim * out_dim)^{-0.5}` (van Spengler et al. 2023)

@@ -60,6 +60,21 @@ The Poincaré ball model with Möbius operations.
     $\delta(x,y) \neq \delta(y,x)$ in general. Its symmetrization recovers the geodesic distance:
     $\delta(x,y) + \delta(y,x) = \sqrt{c}\cdot$ `dist(x, y, c)`.
 
+    !!! warning
+        The antisymmetric part of $\delta$ is an exact **coboundary** (a difference of a per-point
+        potential), so it carries no circulation and is useless as an asymmetric quasimetric energy.
+        For that, use the `busemann` coordinate below with an external quasimetric combinator.
+
+!!! note "Busemann function (Chen et al. 2026)"
+    `busemann(x, v, c)` is the closed-form **point-to-horosphere** coordinate $B^v(x)$ for a unit
+    ideal direction $v\in\mathbb{S}^{n-1}$ — the horospherical analog of the point-to-hyperplane
+    `compute_mlr`/`compute_mlr_pp`. `v` must be unit-norm (not normalized internally). It is an
+    intrinsic quantity, so `Poincare.busemann` and `Hyperboloid.busemann` agree under
+    `poincare_to_hyperboloid`, and $B^v(\text{origin})=0$. Backs the `*Busemann` MLR/FC layers.
+
+    $$\mathbb{P}^n:\ B^v(x) = \tfrac{1}{\sqrt c}\log\!\frac{\lVert v-\sqrt c\,x\rVert^2}{1-c\lVert x\rVert^2}
+    \qquad\quad \mathbb{L}^n:\ B^v(x) = \tfrac{1}{\sqrt c}\log\!\big(\sqrt c\,(x_t-\langle x_s,v\rangle)\big)$$
+
 ::: hyperbolix.manifolds.poincare.Poincare
     options:
       show_source: true
