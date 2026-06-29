@@ -283,7 +283,7 @@ def lorentz_residual(
     c: float,
     eps: float = 1e-7,
 ) -> Float[Array, "... dim_plus_1"]:
-    """Lorentzian midpoint-based residual connection (LResNet from HELM).
+    """Lorentzian residual connection (LResNet, He et al. 2025).
 
     Computes the weighted Lorentzian midpoint of x and y, projecting back
     to the hyperboloid:
@@ -324,13 +324,72 @@ def lorentz_residual(
 
     References
     ----------
-    Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+    He, Neil, Menglin Yang, and Rex Ying. "Lorentzian residual neural networks."
+    Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 1. 2025.
+    (Also adopted as the residual connection in HELM, Chen et al. 2024, Eq. 2.)
     """
     ave_A = x + w_y * y  # (..., A) where A = d+1
     # Minkowski inner: -ave_0^2 + ||ave_s||^2
     mink_1 = -(ave_A[..., 0:1] ** 2) + jnp.sum(ave_A[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., 1)
     denom_1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_1), eps))  # (..., 1)
     return ave_A / denom_1  # (..., A)
+
+
+def lorentz_scale(
+    m: Float[Array, "... dim_plus_1"],
+    gamma: float | Float[Array, ""],
+    c: float,
+    eps: float = 1e-7,
+) -> Float[Array, "... dim_plus_1"]:
+    """Klein-geodesic output rescaling of a hyperboloid point (LResNet, Eq. 10).
+
+    Scales the spatial part by ``gamma`` and recomputes the time component so the
+    result stays on the hyperboloid::
+
+        m_s' = gamma * m_s
+        m_t' = sqrt(||m_s'||^2 + 1/c)
+
+    The isometry to the Klein model is ``phi_K(x) = x_s / x_t`` and Klein geodesics
+    are Euclidean lines through the origin, so this simply slides ``m`` along the
+    geodesic ray from the origin -- changing the Euclidean / geodesic norm of the
+    output while keeping it on the manifold. It restores expressiveness the bare
+    Lorentzian residual lacks: :func:`lorentz_residual`'s output is bounded by the
+    larger of its two inputs, whereas ``gamma > 1`` can push the norm beyond both.
+
+    Unlike ``lorentz_residual``'s ``w_y``, *any* real ``gamma`` yields a valid
+    hyperboloid point (``m_t' > 0`` always), so a learnable ``gamma`` is safe.
+    ``gamma = 1`` is the identity (for an on-manifold ``m``, recomputing the time
+    coordinate returns it unchanged); the LResNet reference uses a fixed
+    ``gamma = 2`` for its CIFAR configurations.
+
+    Parameters
+    ----------
+    m : Array, shape (..., d+1)
+        Points on the hyperboloid with curvature ``c``.
+    gamma : float or scalar Array
+        Scaling constant. Positive values slide toward (``< 1``) or away from
+        (``> 1``) the origin along the geodesic ray.
+    c : float
+        Curvature parameter (positive, c > 0).
+    eps : float, optional
+        Numerical stability floor (default: 1e-7).
+
+    Returns
+    -------
+    Array, shape (..., d+1)
+        Rescaled points on the hyperboloid with curvature ``c``.
+
+    References
+    ----------
+    He, Neil, Menglin Yang, and Rex Ying. "Lorentzian residual neural networks."
+    Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 1. 2025.
+    Eq. (10) (optional output scaling). See :func:`lorentz_residual` for the residual
+    this complements.
+    """
+    spatial = m[..., 1:]  # (..., d)
+    # Reuse the scale + time-reconstruction tail; c_in == c_out makes the curvature
+    # factor sqrt(c/c) = 1, leaving a pure spatial gamma-scale.
+    return spatial_to_hyperboloid(gamma * spatial, c_in=c, c_out=c, eps=eps)
 
 
 def hyp_avg_pool2d(
