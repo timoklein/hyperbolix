@@ -21,11 +21,13 @@ variance helpers it builds on live in [Primitives](primitives.md).
     options:
       heading_level: 3
 
-## Gyro Normalization (Hyperboloid & Proper Velocity)
+## Gyro Normalization (Hyperboloid, Proper Velocity & Poincaré)
 
-Intrinsic normalization for the Lorentz/Hyperboloid and Proper Velocity models that
-operates **directly on manifold points via gyrovector operations** (`addition`,
-`scalar_mul`) — no tangent-space round trip for the affine part.
+Intrinsic normalization that operates **directly on manifold points via gyrovector
+operations** (`addition`, `scalar_mul`) — no tangent-space round trip for the affine
+part. Batch normalization is provided for the Lorentz/Hyperboloid and Proper Velocity
+models (the Poincaré ball's batch normalizer is the tangent-space `PoincareBatchNorm2D`
+above); the per-sample radial RMSNorm covers all three.
 
 - **Gyrogroup Batch Normalization** (`HyperboloidGyroBatchNorm`,
   `ProperVelocityGyroBatchNorm`) — a port of GyroBN (Chen et al., ICLR 2024 / 2025).
@@ -34,12 +36,14 @@ operates **directly on manifold points via gyrovector operations** (`addition`,
   running statistics for evaluation (`use_running_average`). The Hyperboloid batch
   mean is the closed-form Lorentz centroid; the PV mean is the closed-form
   log-Euclidean mean. Use for faithful hyperbolic ResNets.
-- **Gyro radial RMSNorm** (`HyperboloidGyroRMSNorm`, `ProperVelocityGyroRMSNorm`) — a
-  *per-sample*, batch-independent normalizer (no running statistics, identical in
-  train and eval, valid at batch size 1 — the properties RL workloads want). Each
-  point's geodesic radius is rescaled to a learned target `gamma` via a single gyro
-  scalar-multiplication, with optional gyro-bias (`use_bias`). The manifold analog of
-  RMSNorm: normalizes magnitude (hierarchy *depth*) while preserving direction.
+- **Gyro radial RMSNorm** (`HyperboloidGyroRMSNorm`, `ProperVelocityGyroRMSNorm`,
+  `PoincareGyroRMSNorm`) — a *per-sample*, batch-independent normalizer (no running
+  statistics, identical in train and eval, valid at batch size 1 — the properties RL
+  workloads want). Each point's geodesic radius is rescaled to a learned target `gamma`
+  via a single gyro scalar-multiplication, with optional gyro-bias (`use_bias`). The
+  manifold analog of RMSNorm: normalizes magnitude (hierarchy *depth*) while preserving
+  direction. Möbius `scalar_mul` (Poincaré) and Lorentz/PV `scalar_mul` scale geodesic
+  radius identically, so the same layer body serves all three models.
 
 ::: hyperbolix.nn_layers.HyperboloidGyroBatchNorm
     options:
@@ -54,6 +58,10 @@ operates **directly on manifold points via gyrovector operations** (`addition`,
       heading_level: 3
 
 ::: hyperbolix.nn_layers.ProperVelocityGyroRMSNorm
+    options:
+      heading_level: 3
+
+::: hyperbolix.nn_layers.PoincareGyroRMSNorm
     options:
       heading_level: 3
 
