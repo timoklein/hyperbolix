@@ -996,15 +996,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#gyro-normalization-hyperboloid-proper-velocity" class="md-nav__link">
+  <a href="#gyro-normalization-hyperboloid-proper-velocity-poincare" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Gyro Normalization (Hyperboloid &amp; Proper Velocity)
+        Gyro Normalization (Hyperboloid, Proper Velocity &amp; Poincaré)
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Gyro Normalization (Hyperboloid &amp; Proper Velocity)">
+    <nav class="md-nav" aria-label="Gyro Normalization (Hyperboloid, Proper Velocity &amp; Poincaré)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1045,6 +1045,17 @@
     <span class="md-ellipsis">
       
         ProperVelocityGyroRMSNorm
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyperbolix.nn_layers.PoincareGyroRMSNorm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PoincareGyroRMSNorm
       
     </span>
   </a>
@@ -1552,15 +1563,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#gyro-normalization-hyperboloid-proper-velocity" class="md-nav__link">
+  <a href="#gyro-normalization-hyperboloid-proper-velocity-poincare" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Gyro Normalization (Hyperboloid &amp; Proper Velocity)
+        Gyro Normalization (Hyperboloid, Proper Velocity &amp; Poincaré)
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Gyro Normalization (Hyperboloid &amp; Proper Velocity)">
+    <nav class="md-nav" aria-label="Gyro Normalization (Hyperboloid, Proper Velocity &amp; Poincaré)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1601,6 +1612,17 @@
     <span class="md-ellipsis">
       
         ProperVelocityGyroRMSNorm
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyperbolix.nn_layers.PoincareGyroRMSNorm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PoincareGyroRMSNorm
       
     </span>
   </a>
@@ -2298,10 +2320,12 @@ clamp <code>self.var</code> after optimizer steps.</p>
 
     </div>
 
-</div><h2 id="gyro-normalization-hyperboloid-proper-velocity">Gyro Normalization (Hyperboloid &amp; Proper Velocity)<a class="headerlink" href="#gyro-normalization-hyperboloid-proper-velocity" title="Permanent link">&para;</a></h2>
-<p>Intrinsic normalization for the Lorentz/Hyperboloid and Proper Velocity models that
-operates <strong>directly on manifold points via gyrovector operations</strong> (<code>addition</code>,
-<code>scalar_mul</code>) — no tangent-space round trip for the affine part.</p>
+</div><h2 id="gyro-normalization-hyperboloid-proper-velocity-poincare">Gyro Normalization (Hyperboloid, Proper Velocity &amp; Poincaré)<a class="headerlink" href="#gyro-normalization-hyperboloid-proper-velocity-poincare" title="Permanent link">&para;</a></h2>
+<p>Intrinsic normalization that operates <strong>directly on manifold points via gyrovector
+operations</strong> (<code>addition</code>, <code>scalar_mul</code>) — no tangent-space round trip for the affine
+part. Batch normalization is provided for the Lorentz/Hyperboloid and Proper Velocity
+models (the Poincaré ball's batch normalizer is the tangent-space <code>PoincareBatchNorm2D</code>
+above); the per-sample radial RMSNorm covers all three.</p>
 <ul>
 <li><strong>Gyrogroup Batch Normalization</strong> (<code>HyperboloidGyroBatchNorm</code>,
   <code>ProperVelocityGyroBatchNorm</code>) — a port of GyroBN (Chen et al., ICLR 2024 / 2025).
@@ -2310,12 +2334,14 @@ operates <strong>directly on manifold points via gyrovector operations</strong> 
   running statistics for evaluation (<code>use_running_average</code>). The Hyperboloid batch
   mean is the closed-form Lorentz centroid; the PV mean is the closed-form
   log-Euclidean mean. Use for faithful hyperbolic ResNets.</li>
-<li><strong>Gyro radial RMSNorm</strong> (<code>HyperboloidGyroRMSNorm</code>, <code>ProperVelocityGyroRMSNorm</code>) — a
-  <em>per-sample</em>, batch-independent normalizer (no running statistics, identical in
-  train and eval, valid at batch size 1 — the properties RL workloads want). Each
-  point's geodesic radius is rescaled to a learned target <code>gamma</code> via a single gyro
-  scalar-multiplication, with optional gyro-bias (<code>use_bias</code>). The manifold analog of
-  RMSNorm: normalizes magnitude (hierarchy <em>depth</em>) while preserving direction.</li>
+<li><strong>Gyro radial RMSNorm</strong> (<code>HyperboloidGyroRMSNorm</code>, <code>ProperVelocityGyroRMSNorm</code>,
+  <code>PoincareGyroRMSNorm</code>) — a <em>per-sample</em>, batch-independent normalizer (no running
+  statistics, identical in train and eval, valid at batch size 1 — the properties RL
+  workloads want). Each point's geodesic radius is rescaled to a learned target <code>gamma</code>
+  via a single gyro scalar-multiplication, with optional gyro-bias (<code>use_bias</code>). The
+  manifold analog of RMSNorm: normalizes magnitude (hierarchy <em>depth</em>) while preserving
+  direction. Möbius <code>scalar_mul</code> (Poincaré) and Lorentz/PV <code>scalar_mul</code> scale geodesic
+  radius identically, so the same layer body serves all three models.</li>
 </ul>
 
 
@@ -2553,6 +2579,75 @@ mode): no iteration, fully vmap/JIT-clean.</p>
 <span class="normal"><a href="#__codelineno-0-349">349</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-347"><a id="__codelineno-0-347" name="__codelineno-0-347"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">ProperVelocity</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
 </span><span id="__span-0-348"><a id="__codelineno-0-348" name="__codelineno-0-348"></a>    <span class="n">validate_pv_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_RMS_METHODS</span><span class="p">)</span>
 </span><span id="__span-0-349"><a id="__codelineno-0-349" name="__codelineno-0-349"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+                  </details>
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="hyperbolix.nn_layers.PoincareGyroRMSNorm" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">hyperbolix.nn_layers.PoincareGyroRMSNorm</span>
+
+
+<a href="#hyperbolix.nn_layers.PoincareGyroRMSNorm" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">PoincareGyroRMSNorm</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Poincare</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="hyperbolix.nn_layers.gyro_normalization.GyroRMSNormBase">GyroRMSNormBase</span></code></p>
+
+
+
+        <p>Gyro radial RMSNorm for the Poincaré ball model.</p>
+<p>Inputs are on-ball points <code>(..., D)</code> (no time coordinate); <code>num_features = D</code>.
+The Poincaré ball has no time dimension, so <code>embed_spatial_0</code> is the identity and
+the ambient/spatial distinction collapses. The radial rescale uses Möbius
+<code>scalar_mul</code> exactly as the Hyperboloid/PV variants use Lorentz/PV <code>scalar_mul</code>;
+all three scale the geodesic radius <code>dist_0(x) -&gt; |r|·dist_0(x)</code> linearly, so a
+single <code>r = gamma / (dist_0(x) + eps)</code> sends every sample to radius ≈ <code>gamma</code>.</p>
+<p>This is the per-sample, batch-independent counterpart to the (tangent-space,
+batch-statistics) :class:<code>PoincareBatchNorm2D</code> — valid at batch size 1 and identical
+in train and eval.</p>
+
+
+
+
+
+
+
+
+                  <details class="mkdocstrings-source">
+                    <summary>Source code in <code>hyperbolix/nn_layers/gyro_normalization.py</code></summary>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-367">367</a></span>
+<span class="normal"><a href="#__codelineno-0-368">368</a></span>
+<span class="normal"><a href="#__codelineno-0-369">369</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-367"><a id="__codelineno-0-367" name="__codelineno-0-367"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Poincare</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="__span-0-368"><a id="__codelineno-0-368" name="__codelineno-0-368"></a>    <span class="n">validate_poincare_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_RMS_METHODS</span><span class="p">)</span>
+</span><span id="__span-0-369"><a id="__codelineno-0-369" name="__codelineno-0-369"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
