@@ -1,16 +1,19 @@
 """Tests for gyrogroup normalization layers (GyroBatchNorm + radial GyroRMSNorm).
 
-Covers both manifolds (Hyperboloid, Proper Velocity) and both families:
+Covers both families across their manifolds:
 
-- GyroBatchNorm: shape/flex-shape, on-manifold output, running-stat updates,
-  train-vs-eval, finite gradients, jit, and the degenerate identical-batch case.
-- Gyro radial RMSNorm: shape, on-manifold output, the radius-normalization
-  property (the core correctness check), per-sample batch independence, absence of
-  batch state, gradients, jit, and the origin-input edge case.
+- GyroBatchNorm (Hyperboloid, Proper Velocity): shape/flex-shape, on-manifold
+  output, running-stat updates, train-vs-eval, finite gradients, jit, and the
+  degenerate identical-batch case. (Poincaré BatchNorm is the separate tangent-space
+  ``PoincareBatchNorm2D``, tested in ``test_poincare_batchnorm.py``.)
+- Gyro radial RMSNorm (Hyperboloid, Proper Velocity, Poincaré): shape, on-manifold
+  output, the radius-normalization property (the core correctness check), per-sample
+  batch independence, absence of batch state, gradients, jit, and the origin-input
+  edge case.
 
 Dimension key:
   B: batch size     N: flattened batch     D: spatial feature dim
-  F: input feature dim (ambient: D+1 Hyperboloid, D PV)
+  F: input feature dim (ambient: D+1 Hyperboloid, D PV/Poincaré)
 """
 
 import jax
@@ -18,10 +21,11 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from hyperbolix.manifolds import Hyperboloid, ProperVelocity
+from hyperbolix.manifolds import Hyperboloid, Poincare, ProperVelocity
 from hyperbolix.nn_layers import (
     HyperboloidGyroBatchNorm,
     HyperboloidGyroRMSNorm,
+    PoincareGyroRMSNorm,
     ProperVelocityGyroBatchNorm,
     ProperVelocityGyroRMSNorm,
 )
@@ -49,12 +53,25 @@ def _pv_points(key, shape, c, dtype):
     return jax.random.normal(key, shape, dtype=dtype) * 0.2
 
 
+def _poincare_points(key, shape, c, dtype):
+    """Random Poincaré-ball points: expmap_0 of small spatial tangent vectors.
+
+    The ball has no time coordinate, so ``shape`` is already the ambient shape ``(..., D)``.
+    """
+    m = Poincare(dtype=dtype)
+    v_D = jax.random.normal(key, shape, dtype=dtype) * 0.2
+    flat = v_D.reshape(-1, v_D.shape[-1])
+    pts = jax.vmap(m.expmap_0, in_axes=(0, None))(flat, c)
+    return pts.reshape(shape)
+
+
 CONFIGS = {
     "hyperboloid": dict(
         make=lambda dt: Hyperboloid(dtype=dt),
         bn=HyperboloidGyroBatchNorm,
         rms=HyperboloidGyroRMSNorm,
         points=_hyp_points,
+        origin=lambda m, dim, dt: m.create_origin(1.0, dim),
         time=1,  # ambient = D + time
     ),
     "pv": dict(
@@ -62,6 +79,15 @@ CONFIGS = {
         bn=ProperVelocityGyroBatchNorm,
         rms=ProperVelocityGyroRMSNorm,
         points=_pv_points,
+        origin=lambda m, dim, dt: m.create_origin(1.0, dim),
+        time=0,
+    ),
+    "poincare": dict(
+        make=lambda dt: Poincare(dtype=dt),
+        bn=None,  # Poincaré BatchNorm is the tangent-space PoincareBatchNorm2D (tested elsewhere)
+        rms=PoincareGyroRMSNorm,
+        points=_poincare_points,
+        origin=lambda m, dim, dt: jnp.zeros((dim,), dtype=dt),  # ball origin is the zero vector
         time=0,
     ),
 }
@@ -69,6 +95,13 @@ CONFIGS = {
 
 @pytest.fixture(params=["hyperboloid", "pv"])
 def cfg(request):
+    """BatchNorm-family manifolds (Hyperboloid, PV)."""
+    return CONFIGS[request.param]
+
+
+@pytest.fixture(params=["hyperboloid", "pv", "poincare"])
+def cfg_rms(request):
+    """RMSNorm-family manifolds (Hyperboloid, PV, Poincaré)."""
     return CONFIGS[request.param]
 
 
@@ -215,11 +248,11 @@ def test_bn_degenerate_identical_batch(cfg, dtype):
 
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("dim", DIMS, ids=DIM_IDS)
-def test_rms_shape_and_on_manifold(cfg, dim, dtype):
+def test_rms_shape_and_on_manifold(cfg_rms, dim, dtype):
     """Output preserves shape and stays on the manifold."""
-    manifold = cfg["make"](dtype)
-    rms = cfg["rms"](manifold, num_features=dim)
-    x = cfg["points"](jax.random.PRNGKey(0), (16, dim), 1.0, dtype)
+    manifold = cfg_rms["make"](dtype)
+    rms = cfg_rms["rms"](manifold, num_features=dim)
+    x = cfg_rms["points"](jax.random.PRNGKey(0), (16, dim), 1.0, dtype)
 
     out = rms(x, c=1.0)
     assert out.shape == x.shape
@@ -229,17 +262,19 @@ def test_rms_shape_and_on_manifold(cfg, dim, dtype):
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("dim", DIMS, ids=DIM_IDS)
 @pytest.mark.parametrize("gamma", [0.5, 1.0, 2.0])
-def test_rms_radius_normalization(cfg, dim, gamma, dtype):
+def test_rms_radius_normalization(cfg_rms, dim, gamma, dtype):
     """Core property: ``scalar_mul`` sends each radius to ``gamma * r / (r + eps)``.
 
     The eps regularizer makes the target ``gamma * r / (r + eps)`` rather than exactly
     ``gamma`` (a ~gamma*eps/r shortfall, negligible for r >> eps). Asserting against
-    the exact target validates the radial-scaling math to full f64 precision.
+    the exact target validates the radial-scaling math to full f64 precision. This is
+    the test that proves Möbius (Poincaré) and Lorentz/PV ``scalar_mul`` scale geodesic
+    radius identically.
     """
-    manifold = cfg["make"](dtype)
-    rms = cfg["rms"](manifold, num_features=dim)
+    manifold = cfg_rms["make"](dtype)
+    rms = cfg_rms["rms"](manifold, num_features=dim)
     rms.gamma[...] = jnp.asarray(gamma, dtype=rms.gamma[...].dtype)
-    x = cfg["points"](jax.random.PRNGKey(7), (16, dim), 1.0, dtype)
+    x = cfg_rms["points"](jax.random.PRNGKey(7), (16, dim), 1.0, dtype)
 
     out = rms(x, c=1.0)
     r_in = jax.vmap(manifold.dist_0, in_axes=(0, None))(x, 1.0)
@@ -250,11 +285,11 @@ def test_rms_radius_normalization(cfg, dim, gamma, dtype):
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_rms_batch_independence(cfg, dtype):
+def test_rms_batch_independence(cfg_rms, dtype):
     """A point's output is identical whether normalized alone or inside a batch."""
-    manifold = cfg["make"](dtype)
-    rms = cfg["rms"](manifold, num_features=6)
-    batch = cfg["points"](jax.random.PRNGKey(8), (10, 6), 1.0, dtype)
+    manifold = cfg_rms["make"](dtype)
+    rms = cfg_rms["rms"](manifold, num_features=6)
+    batch = cfg_rms["points"](jax.random.PRNGKey(8), (10, 6), 1.0, dtype)
 
     out_batch = rms(batch, c=1.0)
     out_single = rms(batch[3:4], c=1.0)
@@ -263,23 +298,23 @@ def test_rms_batch_independence(cfg, dtype):
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_rms_no_batch_state(cfg, dtype):
+def test_rms_no_batch_state(cfg_rms, dtype):
     """RMSNorm holds no running statistics (no nnx.BatchStat leaves)."""
-    manifold = cfg["make"](dtype)
-    rms = cfg["rms"](manifold, num_features=6)
+    manifold = cfg_rms["make"](dtype)
+    rms = cfg_rms["rms"](manifold, num_features=6)
     batch_stats = nnx.state(rms, nnx.BatchStat)
     assert len(jax.tree.leaves(batch_stats)) == 0
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_rms_use_bias(cfg, dtype):
+def test_rms_use_bias(cfg_rms, dtype):
     """use_bias=True applies a learned gyro-bias and keeps gradients finite."""
-    manifold = cfg["make"](dtype)
-    rms = cfg["rms"](manifold, num_features=6, use_bias=True)
+    manifold = cfg_rms["make"](dtype)
+    rms = cfg_rms["rms"](manifold, num_features=6, use_bias=True)
     rms.bias[...] = jnp.full((6,), 0.1, dtype=rms.bias[...].dtype)
-    x = cfg["points"](jax.random.PRNGKey(9), (8, 6), 1.0, dtype)
+    x = cfg_rms["points"](jax.random.PRNGKey(9), (8, 6), 1.0, dtype)
 
-    rms_nobias = cfg["rms"](manifold, num_features=6, use_bias=False)
+    rms_nobias = cfg_rms["rms"](manifold, num_features=6, use_bias=False)
     out_bias = rms(x, c=1.0)
     out_nobias = rms_nobias(x, c=1.0)
     assert out_bias.shape == x.shape
@@ -294,11 +329,11 @@ def test_rms_use_bias(cfg, dtype):
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_rms_gradients_and_jit(cfg, dtype):
+def test_rms_gradients_and_jit(cfg_rms, dtype):
     """Finite gradient for gamma and a clean jitted forward."""
-    manifold = cfg["make"](dtype)
-    rms = cfg["rms"](manifold, num_features=6)
-    x = cfg["points"](jax.random.PRNGKey(11), (8, 6), 1.0, dtype)
+    manifold = cfg_rms["make"](dtype)
+    rms = cfg_rms["rms"](manifold, num_features=6)
+    x = cfg_rms["points"](jax.random.PRNGKey(11), (8, 6), 1.0, dtype)
 
     def loss_fn(rms):
         return jnp.sum(rms(x, c=1.0) ** 2)
@@ -316,11 +351,11 @@ def test_rms_gradients_and_jit(cfg, dtype):
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_rms_origin_input_stays_finite(cfg, dtype):
+def test_rms_origin_input_stays_finite(cfg_rms, dtype):
     """A point at the origin (radius 0) stays at the origin — no gamma/eps blow-up."""
-    manifold = cfg["make"](dtype)
-    rms = cfg["rms"](manifold, num_features=6)
-    origin = manifold.create_origin(1.0, 6)
+    manifold = cfg_rms["make"](dtype)
+    rms = cfg_rms["rms"](manifold, num_features=6)
+    origin = cfg_rms["origin"](manifold, 6, dtype)
     x = jnp.broadcast_to(origin, (4, origin.shape[-1]))
 
     out = rms(x, c=1.0)
@@ -358,6 +393,31 @@ def test_end_to_end_hyperboloid(dtype):
     assert jnp.isfinite(loss)
     assert jnp.all(jnp.isfinite(grads[1].gamma[...]))
     assert jnp.all(jnp.isfinite(grads[2].gamma[...]))
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_end_to_end_poincare(dtype):
+    """GyroRMSNorm -> HypRegressionPoincarePP: finite loss/grads on on-ball inputs.
+
+    Poincaré has no gyro BatchNorm (that role is the tangent-space PoincareBatchNorm2D),
+    so the radial RMSNorm feeds the on-ball regression head directly.
+    """
+    from hyperbolix.nn_layers import HypRegressionPoincarePP
+
+    manifold = Poincare(dtype=dtype)
+    c = 1.0
+    rngs = nnx.Rngs(0)
+    rms = PoincareGyroRMSNorm(manifold, num_features=6)
+    head = HypRegressionPoincarePP(manifold, 6, 3, rngs=rngs)  # input_space="manifold" by default
+    x = _poincare_points(jax.random.PRNGKey(1), (8, 6), c, dtype)  # on-ball (8, 6)
+
+    def loss_fn(rms, head):
+        h = rms(x, c=c)
+        return jnp.sum(head(h, c) ** 2)
+
+    loss, grads = nnx.value_and_grad(loss_fn, argnums=(0, 1))(rms, head)
+    assert jnp.isfinite(loss)
+    assert jnp.all(jnp.isfinite(grads[0].gamma[...]))
 
 
 @pytest.mark.parametrize("dtype", DTYPES)

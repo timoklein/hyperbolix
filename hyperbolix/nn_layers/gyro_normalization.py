@@ -1,9 +1,12 @@
-"""Gyrogroup normalization layers for the Hyperboloid and Proper Velocity manifolds.
+"""Gyrogroup normalization layers for the Hyperboloid, Proper Velocity, and Poincaré manifolds.
 
 This module implements two *intrinsic* normalization families that operate directly
 on manifold points via gyrovector operations (``addition``, ``scalar_mul``) — no
-tangent-space round trips for the affine part — for both the Lorentz/Hyperboloid and
-the Proper Velocity (PV) models.
+tangent-space round trips for the affine part. The Batch-Norm family covers the
+Lorentz/Hyperboloid and Proper Velocity (PV) models (the Poincaré ball already has the
+tangent-space :class:`PoincareBatchNorm2D`); the per-sample radial RMSNorm family covers
+all three, since it relies only on gyro ``scalar_mul`` (which scales geodesic radius
+``dist_0(x) -> |r|·dist_0(x)`` identically on every gyrovector space).
 
 1. **Gyrogroup Batch Normalization** (``HyperboloidGyroBatchNorm``,
    ``ProperVelocityGyroBatchNorm``). Port of GyroBN (Chen et al., "Gyrogroup Batch
@@ -68,9 +71,10 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
 
-from ._helpers import validate_hyperboloid_manifold, validate_pv_manifold
+from ._helpers import validate_hyperboloid_manifold, validate_poincare_manifold, validate_pv_manifold
 from .hyperboloid_core import lorentz_midpoint
 from .poincare_batchnorm import frechet_variance
 
@@ -342,4 +346,24 @@ class ProperVelocityGyroRMSNorm(GyroRMSNormBase):
 
     def __init__(self, manifold_module: ProperVelocity, num_features: int, **kwargs):
         validate_pv_manifold(manifold_module, required_methods=_GYRO_RMS_METHODS)
+        super().__init__(manifold_module, num_features, **kwargs)
+
+
+class PoincareGyroRMSNorm(GyroRMSNormBase):
+    """Gyro radial RMSNorm for the Poincaré ball model.
+
+    Inputs are on-ball points ``(..., D)`` (no time coordinate); ``num_features = D``.
+    The Poincaré ball has no time dimension, so ``embed_spatial_0`` is the identity and
+    the ambient/spatial distinction collapses. The radial rescale uses Möbius
+    ``scalar_mul`` exactly as the Hyperboloid/PV variants use Lorentz/PV ``scalar_mul``;
+    all three scale the geodesic radius ``dist_0(x) -> |r|·dist_0(x)`` linearly, so a
+    single ``r = gamma / (dist_0(x) + eps)`` sends every sample to radius ≈ ``gamma``.
+
+    This is the per-sample, batch-independent counterpart to the (tangent-space,
+    batch-statistics) :class:`PoincareBatchNorm2D` — valid at batch size 1 and identical
+    in train and eval.
+    """
+
+    def __init__(self, manifold_module: Poincare, num_features: int, **kwargs):
+        validate_poincare_manifold(manifold_module, required_methods=_GYRO_RMS_METHODS)
         super().__init__(manifold_module, num_features, **kwargs)

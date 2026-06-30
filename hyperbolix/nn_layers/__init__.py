@@ -5,6 +5,7 @@ from .busemann_regression import HypRegressionHyperboloidBusemann, HypRegression
 from .gyro_normalization import (
     HyperboloidGyroBatchNorm,
     HyperboloidGyroRMSNorm,
+    PoincareGyroRMSNorm,
     ProperVelocityGyroBatchNorm,
     ProperVelocityGyroRMSNorm,
 )
@@ -109,6 +110,7 @@ __all__ = [
     "LorentzConv2D",
     "LorentzResidual",
     "PoincareBatchNorm2D",
+    "PoincareGyroRMSNorm",
     "PoincareVQOutput",
     "ProperVelocityGyroBatchNorm",
     "ProperVelocityGyroRMSNorm",
