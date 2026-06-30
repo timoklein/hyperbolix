@@ -162,7 +162,7 @@ print(output.shape)  # (10, 8)
 ## Next Steps
 
 - **[Batching & JIT Guide](user-guide/batching-jit.md)**: Learn efficient JAX patterns
-- **[Tutorials](tutorials/basic-manifold-ops.ipynb)**: Hands-on Jupyter notebooks
+- **[NN Layers Guide](user-guide/nn-layers.md)**: Choosing and composing hyperbolic layers
 - **[API Reference](api-reference/manifolds.md)**: Complete function documentation
 - **[Training Workflows](user-guide/training-workflows.md)**: Full training examples
 

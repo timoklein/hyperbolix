@@ -189,7 +189,7 @@ Each manifold provides:
 
 - [Getting Started](getting-started.md): Installation and first examples
 - [User Guide](user-guide/manifolds.md): Core concepts and patterns
-- [Tutorials](tutorials/basic-manifold-ops.ipynb): Hands-on learning
+- [Training Workflows](user-guide/training-workflows.md): Hands-on training examples
 - [API Reference](api-reference/manifolds.md): Complete API documentation
 
 ## Citation

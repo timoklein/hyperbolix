@@ -21,6 +21,15 @@ All manifolds share a common interface defined by the `Manifold` protocol and su
 
 ## Manifold Protocol
 
+!!! note "The `Curvature` type"
+    Manifold methods take the curvature as a positional `c: Curvature` argument
+    (`hyperbolix.manifolds.Curvature`). It is the union
+    `ScalarCurvature | Sequence[ScalarCurvature]`, where `ScalarCurvature = float |
+    jax.Array`: single manifolds (`Poincare`, `Hyperboloid`, `ProperVelocity`,
+    `Euclidean`) take a **scalar** `c`, while `ProductManifold` takes a **sequence**
+    of per-factor scalars. Passing a traced `jax.Array` (e.g. the value returned by a
+    `LearnableCurvature` call) makes the curvature differentiable.
+
 ::: hyperbolix.manifolds.protocol.Manifold
     options:
       show_source: true

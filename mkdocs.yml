@@ -119,7 +119,17 @@ nav:
   #     - Riemannian Optimization: tutorials/riemannian-optimization.ipynb
   - API Reference:
       - Manifolds: api-reference/manifolds.md
-      - Neural Network Layers: api-reference/nn-layers.md
+      - Neural Network Layers:
+          - Overview: api-reference/nn-layers/index.md
+          - Linear: api-reference/nn-layers/linear.md
+          - Convolutional: api-reference/nn-layers/convolutional.md
+          - Normalization: api-reference/nn-layers/normalization.md
+          - Attention & Transformer: api-reference/nn-layers/attention.md
+          - Regression & MLR: api-reference/nn-layers/regression.md
+          - Activations: api-reference/nn-layers/activations.md
+          - Positional Encoding: api-reference/nn-layers/positional-encoding.md
+          - Vector Quantization: api-reference/nn-layers/vector-quantization.md
+          - Primitives & Helpers: api-reference/nn-layers/primitives.md
       - Optimizers: api-reference/optimizers.md
       - Distributions: api-reference/distributions.md
       - Utilities: api-reference/utils.md

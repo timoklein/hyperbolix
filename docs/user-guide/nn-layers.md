@@ -5,7 +5,7 @@ layers, the boundary between Euclidean and hyperbolic computation, and the
 composition patterns that aren't obvious from any single layer's docstring.
 
 For per-layer signatures, init defaults, and call semantics, see the
-[NN Layers API reference](../api-reference/nn-layers.md).
+[NN Layers API reference](../api-reference/nn-layers/index.md).
 
 ## Choosing a Layer
 
@@ -53,7 +53,7 @@ tables below collapse this into per-task decisions.
 | `HypVQEmbeddingPoincare` | Explicit on-ball codebook with a geometric **EMA** update (GGBall, Bu et al. 2026). No Riemannian optimizer — the codebook is a buffer moved by `ema_update` (called after `optimizer.update`); only the commitment loss trains the encoder. Optional dead-code revival |
 | `HypVQMLRPoincare` | Codebook-free — quantization as Poincaré-MLR classification with Gumbel-Softmax. Plain `optax.adam`, reconstruction-only loss, deterministic argmax at eval (`model.eval()`) |
 
-Both are quantizer *bottlenecks*: feed them encoder tangent features, add `output.loss` to your reconstruction loss, and decode `output.quantized` (returned as float32). See the [VQ API reference](../api-reference/nn-layers.md#vector-quantization).
+Both are quantizer *bottlenecks*: feed them encoder tangent features, add `output.loss` to your reconstruction loss, and decode `output.quantized` (returned as float32). See the [VQ API reference](../api-reference/nn-layers/vector-quantization.md).
 
 ### Attention, Normalization, Positional Encoding
 
@@ -340,7 +340,7 @@ x_BAi = jax.vmap(self.manifold.proj, in_axes=(0, None))(x_BAi, c)
 
 ## See Also
 
-- **[API Reference: NN Layers](../api-reference/nn-layers.md)** — full constructor and call signatures
+- **[API Reference: NN Layers](../api-reference/nn-layers/index.md)** — full constructor and call signatures
 - **[Manifolds Guide](manifolds.md)** — convention cheat-sheet, Euclidean→manifold lifts, isometry mappings
 - **[Numerical Stability Guide](numerical-stability.md)** — when to use float64, clamping, safe norms
 - **[Riemannian Optimizers Guide](optimizers.md)** *(WIP)* — when (rarely) you need Riemannian optimization
