@@ -8,7 +8,7 @@ Hyperbolix provides 20+ neural network layer classes and 5 activation functions 
 
 - **Linear Layers**: Poincaré, Hyperboloid, and Proper Velocity linear transformations, including FGG (Fast and Geometrically Grounded) and Busemann FC (point-to-horosphere) layers
 - **Convolutional Layers**: HCat-based, HRC-based, FGG, and Proper Velocity hyperbolic convolutions
-- **Normalization**: Poincaré batch normalization (`PoincareBatchNorm2D`), HRC-wrapped norms, and FGG mean-only batch norm
+- **Normalization**: Poincaré batch normalization (`PoincareBatchNorm2D`), HRC-wrapped norms, FGG mean-only batch norm, and gyro batch/RMS normalization for the Hyperboloid and Proper Velocity models
 - **Hypformer Components**: HTC (Hyperbolic Transformation Component) and HRC (Hyperbolic Regularization Component) with curvature-change support
 - **FGG Components**: `FGGLinear`, `FGGConv2D`, `FGGMeanOnlyBatchNorm` from Klis et al. (2026) — linear-distance growth, ~3× faster than prior work
 - **Proper Velocity Components**: `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV` from Chen et al. (2026) — unconstrained $\mathbb{R}^n$ geometry with exact Euclidean retraction
@@ -262,6 +262,67 @@ h = jax.nn.relu(h)
 h_eval = conv(x, c=0.1)
 h_eval = bn(h_eval, c=0.1, use_running_average=True)
 h_eval = jax.nn.relu(h_eval)
+```
+
+### Gyro Normalization (Hyperboloid & Proper Velocity)
+
+Intrinsic normalization for the Lorentz/Hyperboloid and Proper Velocity (PV) models that operates **directly on manifold points via gyrovector operations** (`addition`, `scalar_mul`) — no tangent-space round trip for the affine part. Two families are provided:
+
+- **Gyrogroup Batch Normalization** (`HyperboloidGyroBatchNorm`, `ProperVelocityGyroBatchNorm`) — a port of GyroBN (Chen et al., "Gyrogroup Batch Normalization", ICLR 2024 / "Riemannian Batch Normalization: A Gyro Approach", 2025). It *centers* by gyro-translating with the inverse batch mean, *scales* by the inverse Fréchet standard deviation, and *biases* with a learned manifold point, keeping running statistics for evaluation (`use_running_average`). The Hyperboloid batch mean is the closed-form Lorentz centroid; the PV batch mean is the closed-form log-Euclidean mean. Use for faithful hyperbolic ResNets.
+- **Gyro radial RMSNorm** (`HyperboloidGyroRMSNorm`, `ProperVelocityGyroRMSNorm`) — a *per-sample*, batch-independent normalizer (no running statistics, identical in train and eval, valid at batch size 1 — the properties RL workloads want). Each point's geodesic radius is rescaled to a learned target `gamma` via a single gyro scalar-multiplication, with an optional gyro-bias (`use_bias`). This is the manifold analog of RMSNorm: it normalizes magnitude (hierarchy *depth*) while preserving direction.
+
+`num_features` is the **spatial** dimension `D` (matching `FGGMeanOnlyBatchNorm` and the HRC norms). Inputs are on-manifold points whose last axis is ambient `D+1` (Hyperboloid) or `D` (PV).
+
+::: hyperbolix.nn_layers.HyperboloidGyroBatchNorm
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.ProperVelocityGyroBatchNorm
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.HyperboloidGyroRMSNorm
+    options:
+      show_source: true
+      heading_level: 4
+
+::: hyperbolix.nn_layers.ProperVelocityGyroRMSNorm
+    options:
+      show_source: true
+      heading_level: 4
+
+#### Gyro Normalization Example
+
+```python
+from hyperbolix.manifolds import Hyperboloid, ProperVelocity
+from hyperbolix.nn_layers import (
+    HyperboloidGyroBatchNorm,
+    HyperboloidGyroRMSNorm,
+    ProperVelocityGyroBatchNorm,
+    ProperVelocityGyroRMSNorm,
+)
+import jax
+
+c = 1.0
+
+# --- Hyperboloid: input is an ambient (B, D+1) point; num_features = D ---
+hyp = Hyperboloid()
+bn = HyperboloidGyroBatchNorm(hyp, num_features=16)
+rms = HyperboloidGyroRMSNorm(hyp, num_features=16)
+spatial = jax.random.normal(jax.random.PRNGKey(0), (8, 16)) * 0.2
+x_amb = jax.vmap(hyp.expmap_0, in_axes=(0, None))(jax.vmap(hyp.embed_spatial_0)(spatial), c)  # (8, 17)
+h = bn(x_amb, c=c)                              # training (running stats updated)
+h = bn(x_amb, c=c, use_running_average=True)    # evaluation (frozen stats)
+h = rms(x_amb, c=c)                             # per-sample, batch-free
+
+# --- Proper Velocity: input is a (B, D) point; num_features = D ---
+pv = ProperVelocity()
+pv_bn = ProperVelocityGyroBatchNorm(pv, num_features=16)
+pv_rms = ProperVelocityGyroRMSNorm(pv, num_features=16, use_bias=True)
+x_pv = jax.random.normal(jax.random.PRNGKey(1), (8, 16)) * 0.2   # (8, 16)
+h = pv_rms(pv_bn(x_pv, c=c), c=c)
 ```
 
 ### FGGConv2D (Klis et al. 2026)
