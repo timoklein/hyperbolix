@@ -2,6 +2,13 @@
 
 from .busemann_linear import HypLinearHyperboloidBusemann, HypLinearPoincareBusemann
 from .busemann_regression import HypRegressionHyperboloidBusemann, HypRegressionPoincareBusemann
+from .gyro_normalization import (
+    HyperboloidGyroBatchNorm,
+    HyperboloidGyroRMSNorm,
+    PoincareGyroRMSNorm,
+    ProperVelocityGyroBatchNorm,
+    ProperVelocityGyroRMSNorm,
+)
 from .hybrid_regularization import HyperPPFeatureScaling
 from .hyperboloid_activations import (
     hrc_gelu,
@@ -97,11 +104,16 @@ __all__ = [
     "HyperbolicLinearAttention",
     "HyperbolicRoPE",
     "HyperbolicSoftmaxAttention",
+    "HyperboloidGyroBatchNorm",
+    "HyperboloidGyroRMSNorm",
     "HypformerPositionalEncoding",
     "LorentzConv2D",
     "LorentzResidual",
     "PoincareBatchNorm2D",
+    "PoincareGyroRMSNorm",
     "PoincareVQOutput",
+    "ProperVelocityGyroBatchNorm",
+    "ProperVelocityGyroRMSNorm",
     "build_spacelike_V",
     "extract_patches",
     "focus_transform",

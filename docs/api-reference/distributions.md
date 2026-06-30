@@ -300,4 +300,4 @@ Wrapped distributions on manifolds are discussed in:
 See also:
 
 - [Manifolds API](manifolds.md): Exponential and logarithmic maps
-- [NN Layers API](nn-layers.md): Building VAEs with hyperbolic layers
+- [NN Layers API](nn-layers/vector-quantization.md): Building VAEs with hyperbolic VQ layers

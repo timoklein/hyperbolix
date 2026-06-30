@@ -452,6 +452,6 @@ uv run pytest benchmarks/ --benchmark-only -v
 ## See Also
 
 - [Manifolds API](../api-reference/manifolds.md): Manifold function signatures
-- [NN Layers API](../api-reference/nn-layers.md): Layer implementations
+- [NN Layers API](../api-reference/nn-layers/index.md): Layer implementations
 - [Training Workflows](training-workflows.md): Complete training examples
 - [Numerical Stability](numerical-stability.md): Float precision considerations

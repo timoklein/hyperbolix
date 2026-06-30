@@ -207,6 +207,16 @@ def _scalar_mul(r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, 
     return res
 
 
+def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
+    """Identity embedding for the Poincaré ball: no time coord to prepend.
+
+    Kept for API parity with Hyperboloid/ProperVelocity so the gyro-normalization
+    layers can treat every manifold uniformly (the bias-lift step). On the ball a
+    tangent-at-origin vector *is* the spatial vector, so this is the identity.
+    """
+    return v_spatial
+
+
 # Distance implementations for lax.switch
 def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Direct Möbius distance formula (fastest)."""
@@ -908,6 +918,10 @@ class Poincare(ManifoldBase):
         Batch-compatible version that handles arbitrary leading dimensions.
         """
         return _conformal_factor_batch(self._cast(x), c)
+
+    def embed_spatial_0(self, v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
+        """Identity embedding (the ball has no time coordinate). Kept for API parity."""
+        return _embed_spatial_0(self._cast(v_spatial))
 
     def compute_mlr_pp(
         self,

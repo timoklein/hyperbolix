@@ -374,7 +374,7 @@ x = manifold.proj(x, c)  # cheap; idempotent on already-valid points
 ### 5. Picking a slow layer when a fast equivalent exists
 
 Within each layer family, prefer the variant with the highest reported speed
-in the [API reference](../api-reference/nn-layers.md):
+in the [API reference](../api-reference/nn-layers/index.md):
 
 | Family | Slow | Fast |
 |---|---|---|
