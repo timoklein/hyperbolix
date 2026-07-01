@@ -58,6 +58,11 @@ class HypLinearHyperboloidBusemann(nnx.Module):
         ``"manifold"`` (default) or ``"tangent"`` (lift via ``expmap_0`` first). Static for JIT.
     activation : Callable or None
         Optional Euclidean activation ``φ`` applied to the Busemann logits (default: identity).
+        Avoid ``relu`` when stacking several of these layers on high-dimensional input: at a
+        random weight-normalized direction init, the Busemann score is positive for all but a
+        narrow cone of directions, so ``relu`` can zero every output unit at once and collapse the
+        whole layer to the manifold origin — a fixed point that self-reinforces through later
+        layers. ``tanh`` avoids this by never fully zeroing the logit.
     v_max : float
         Output-side guard: ``√c·φ(u)`` is hard-clipped to ``±v_max`` before the sinh
         diffeomorphism (default: 10.0, the Shi et al. 2026 reference value).
@@ -155,6 +160,9 @@ class HypLinearPoincareBusemann(nnx.Module):
         ``"manifold"`` (default) or ``"tangent"`` (lift via ``expmap_0`` first). Static for JIT.
     activation : Callable or None
         Optional Euclidean activation ``φ`` applied to the Busemann logits (default: identity).
+        Avoid ``relu`` when stacking several of these layers on high-dimensional input — same
+        origin-collapse risk as :class:`HypLinearHyperboloidBusemann` (see its ``activation`` doc);
+        ``tanh`` avoids it.
     v_max : float
         Output-side guard: ``√c·φ(u)`` is hard-clipped to ``±v_max`` before the sinh map
         (default: 10.0).
