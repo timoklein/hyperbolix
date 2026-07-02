@@ -106,8 +106,22 @@ class GyroBatchNormBase(nnx.Module):
     momentum : float
         EMA retention factor for running statistics (``new = momentum * old +
         (1 - momentum) * batch``; default: 0.9, matching :class:`PoincareBatchNorm2D`).
+        Note this differs from ``HRCBatchNorm`` and ``FGGMeanOnlyBatchNorm`` (both in
+        ``hyperboloid_regularization.py``), which default to ``momentum=0.99`` — GyroBN
+        intentionally matches ``PoincareBatchNorm2D``'s faster-adapting 0.9, not the
+        HRC/FGG family's 0.99.
     eps : float
         Numerical stability floor on the variance denominator (default: 1e-6).
+    min_var : float
+        Hard floor on the Fréchet variance itself (default: 1e-2) — distinct from
+        ``eps``. A batch of (near-)identical points drives the raw Fréchet variance
+        to 0, which (a) saturates the scale factor at ``gamma / sqrt(eps)``
+        (unboundedly large as ``eps`` shrinks) and (b) feeds that collapsed value
+        into the running-variance EMA, poisoning eval-mode normalization for every
+        future call. ``min_var`` bounds the scale factor by ``gamma / sqrt(min_var)``
+        and keeps a collapsed batch from ever polluting ``running_var``. This is a
+        floor, not a smoothing epsilon: it clips the statistic, not the arithmetic
+        near it.
     param_dtype : DTypeLike
         Storage dtype of learnable parameters and running statistics (default:
         ``jnp.float32``). Compute precision is set by ``manifold.dtype``.
@@ -124,6 +138,7 @@ class GyroBatchNormBase(nnx.Module):
         use_running_average: bool = False,
         momentum: float = 0.9,
         eps: float = 1e-6,
+        min_var: float = 1e-2,
         param_dtype: DTypeLike = jnp.float32,
     ):
         self.manifold = manifold_module
@@ -131,6 +146,7 @@ class GyroBatchNormBase(nnx.Module):
         self.use_running_average = use_running_average
         self.momentum = momentum
         self.eps = eps
+        self.min_var = min_var
 
         # Learnable affine parameters (spatial tangent / scalar). The bias is a
         # spatial tangent-at-origin vector; lifting it keeps its time coordinate
@@ -183,10 +199,10 @@ class GyroBatchNormBase(nnx.Module):
 
         if use_running_average:
             mu_F = self.manifold.expmap_0(self._lift(self.running_mean[...]), c)
-            var = self.running_var[...]
+            var = jnp.maximum(self.running_var[...], self.min_var)
         else:
             mu_F = self._batch_mean(x_NF, c)
-            var = frechet_variance(x_NF, mu_F, self.manifold, c)
+            var = jnp.maximum(frechet_variance(x_NF, mu_F, self.manifold, c), self.min_var)
 
             # EMA update (no gradient flow; cast back to the stat storage dtype).
             rm_D = self._lower(self.manifold.logmap_0(mu_F, c))

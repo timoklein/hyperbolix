@@ -74,6 +74,12 @@ class LearnableCurvature(nnx.Module):
             Pass ``None`` to disable.
         c_max: Upper clamp applied to the recovered ``c``. Default ``10.0``.
             Pass ``None`` to disable.
+        straight_through_clamp: If ``True``, the clamp is gradient-transparent:
+            the forward value is still clamped to ``[c_min, c_max]``, but the
+            backward gradient is identity rather than zero, so ``raw`` can keep
+            moving and ``c`` can re-enter the interval once the loss pulls the
+            other way (default: ``False`` — plain ``jnp.clip``, see the
+            gradient-dead note below).
         param_dtype: Storage dtype of the raw parameter (default:
             ``jnp.float32``), pinned so it does not become float64 under
             global ``jax_enable_x64``.
@@ -83,6 +89,16 @@ class LearnableCurvature(nnx.Module):
     instantiate one per location. Sharing creates a shared-reference
     pattern in the NNX pytree that breaks ``nnx.scan`` / ``nnx.fori_loop``
     (same root cause as the pre-refactor manifold bug).
+
+    Gradient-dead clamp (default behavior): plain ``jnp.clip`` has zero
+    gradient outside ``[c_min, c_max]``. If ``raw`` drifts far enough that the
+    recovered ``c`` exits the clamp interval, the gradient to ``raw`` becomes
+    permanently zero — ``c`` is pinned at the boundary and cannot re-enter the
+    interval even if the loss would eventually pull it back. Monitor
+    ``curvature.raw`` (or ``curvature()`` against the clamp bounds) in
+    training logs: a curvature sitting exactly at ``c_min``/``c_max`` for many
+    steps is "pinned", not "chosen". Pass ``straight_through_clamp=True`` to
+    keep the forward safety guarantee while eliminating the ratchet.
     """
 
     def __init__(
@@ -92,6 +108,7 @@ class LearnableCurvature(nnx.Module):
         parameterization: Parameterization = "softplus",
         c_min: float | None = 0.1,
         c_max: float | None = 10.0,
+        straight_through_clamp: bool = False,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if init_c <= 0:
@@ -108,6 +125,7 @@ class LearnableCurvature(nnx.Module):
         self._parameterization = parameterization
         self._c_min = c_min
         self._c_max = c_max
+        self._straight_through_clamp = straight_through_clamp
 
         if parameterization == "softplus":
             raw_init = _inv_softplus(init_c)
@@ -123,6 +141,13 @@ class LearnableCurvature(nnx.Module):
             c = jnp.exp(self.raw[...])
 
         if self._c_min is not None or self._c_max is not None:
-            c = jnp.clip(c, self._c_min, self._c_max)
+            c_clipped = jnp.clip(c, self._c_min, self._c_max)
+            if self._straight_through_clamp:
+                # Forward value stays clamped; backward gradient becomes identity
+                # instead of zero, so `raw` can keep moving and `c` can re-enter
+                # the interval once the loss pulls the other way.
+                c = c + jax.lax.stop_gradient(c_clipped - c)
+            else:
+                c = c_clipped
 
         return c

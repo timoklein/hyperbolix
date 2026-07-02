@@ -10,6 +10,7 @@ from jax.scipy.special import digamma
 
 from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers.hyperboloid_conv import HypConv2DHyperboloid
+from hyperbolix.nn_layers.hyperboloid_core import hcat_ambient_dim
 
 # ============================================================================
 # HCat Operation Tests
@@ -256,6 +257,49 @@ def test_log_radius_concat_time_formula(N, n, c, dtype):
 # ============================================================================
 # HypConv2DHyperboloid Layer Tests
 # ============================================================================
+
+
+def test_hypconv_hyperboloid_kernel_init_reset_params():
+    """Default kernel init is U(-0.02, 0.02); reset_params='fan_in' gives
+    std=sqrt(1/hcat_out_ambient_dim)."""
+    manifold = Hyperboloid(dtype=jnp.float32)
+    in_channels, out_channels, kernel_size = 9, 17, 3
+
+    layer_default = HypConv2DHyperboloid(
+        manifold_module=manifold,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        rngs=nnx.Rngs(42),
+    )
+    layer_fan_in = HypConv2DHyperboloid(
+        manifold_module=manifold,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        rngs=nnx.Rngs(42),
+        reset_params="fan_in",
+    )
+
+    bound = 0.02
+    expected_default_std = bound / jnp.sqrt(3.0)  # std of U(-bound, bound)
+    assert abs(float(jnp.std(layer_default.kernel[...])) - float(expected_default_std)) < 0.2 * float(expected_default_std)
+
+    hcat_out_ambient_dim = hcat_ambient_dim(in_channels, (kernel_size, kernel_size))
+    expected_fan_in_std = float(jnp.sqrt(1.0 / hcat_out_ambient_dim))
+    assert abs(float(jnp.std(layer_fan_in.kernel[...])) - expected_fan_in_std) < 0.2 * expected_fan_in_std
+
+
+def test_hypconv_hyperboloid_invalid_reset_params_errors():
+    with pytest.raises(ValueError, match="reset_params"):
+        HypConv2DHyperboloid(
+            manifold_module=Hyperboloid(dtype=jnp.float32),
+            in_channels=9,
+            out_channels=17,
+            kernel_size=3,
+            rngs=nnx.Rngs(0),
+            reset_params="bogus",
+        )
 
 
 @pytest.mark.parametrize("kernel_size", [1, 2, 3])

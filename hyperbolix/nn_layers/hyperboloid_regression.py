@@ -84,7 +84,12 @@ class HypRegressionHyperboloid(nnx.Module):
 
         # Trainable parameters
         # kernel lies in the tangent space of the Hyperboloid origin, so the time coordinate along axis is zero
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim - 1), dtype=param_dtype))
+        # and the true fan-in is the spatial dimension (in_dim - 1), not in_dim. Scaled to match reference
+        # (van Spengler et al. 2023): std = (2 * in_spatial * out_dim)^{-0.5}; unscaled normal(0,1) gives row
+        # norms ≈ sqrt(in_dim - 1) which overwhelms the MLR output scaling.
+        in_spatial = in_dim - 1
+        std = 1.0 / jnp.sqrt(2.0 * in_spatial * out_dim)
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_spatial), dtype=param_dtype) * std)
         # Scalar bias (initialized to small random values)
         self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1), dtype=param_dtype) * 0.01)
 
