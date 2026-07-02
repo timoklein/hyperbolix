@@ -243,6 +243,19 @@ def test_hyp_regression_hyperboloid_forward(dtype):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_regression_hyperboloid_kernel_init_std(dtype):
+    """Kernel init is fan-scaled by the spatial fan-in (in_dim - 1); an unscaled N(0,1)
+    would give row norms ~= sqrt(in_dim - 1), overwhelming the MLR output scaling."""
+    in_dim, out_dim = 65, 10
+    rngs = nnx.Rngs(42)
+    layer = HypRegressionHyperboloid(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
+
+    kernel_std = jnp.std(layer.kernel[...])
+    expected_std = 1.0 / jnp.sqrt(2.0 * (in_dim - 1) * out_dim)
+    assert jnp.abs(kernel_std - expected_std) < 0.2 * expected_std
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_regression_hyperboloid_jitted_forward(dtype):
     """Test HypRegressionHyperboloid forward pass under nnx.jit."""
     key = jax.random.PRNGKey(42)

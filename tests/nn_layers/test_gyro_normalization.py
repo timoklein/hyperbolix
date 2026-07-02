@@ -221,8 +221,9 @@ def test_bn_jitted(cfg, dtype):
 def test_bn_degenerate_identical_batch(cfg, dtype):
     """Identical points (var == 0) must not produce NaN and must stay on-manifold.
 
-    Stresses the var->0 path: the scale factor ``gamma / sqrt(var + eps)`` saturates
-    at ``1 / sqrt(eps)``, but the origin is a fixed point of ``scalar_mul`` and the
+    Stresses the var->0 path: the scale factor ``gamma / sqrt(var + eps)`` is now
+    floored at ``gamma / sqrt(min_var)`` (see ``test_bn_degenerate_batch_variance_floor``
+    for the bound itself), but the origin is a fixed point of ``scalar_mul`` and the
     output is re-projected, so the result is a finite, valid manifold point (no NaN /
     no escape off the manifold). Note: unlike Euclidean BN, the gyro centering does
     not cancel to the origin in exact float, so the output is not literally the bias
@@ -239,6 +240,31 @@ def test_bn_degenerate_identical_batch(cfg, dtype):
 
     assert jnp.all(jnp.isfinite(out))
     assert jnp.all(jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(out, 1.0))
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_bn_degenerate_batch_variance_floor(cfg, dtype):
+    """A collapsed (identical-point) batch floors Fréchet variance at min_var, bounding
+    the scale factor (and gamma's gradient) by 1/sqrt(min_var) instead of saturating
+    near 1/sqrt(eps) (eps=1e-6 -> ~1000x; min_var=1e-2 -> ~10x), and never lets a
+    collapsed batch write a sub-floor value into running_var.
+    """
+    manifold = cfg["make"](dtype)
+    D = 5
+    min_var = 1e-2
+    bn = cfg["bn"](manifold, num_features=D, min_var=min_var)
+
+    single = cfg["points"](jax.random.PRNGKey(5), (D,), 1.0, dtype)
+    x = jnp.broadcast_to(single, (12, single.shape[-1]))
+
+    def loss_fn(bn):
+        return jnp.sum(bn(x, c=1.0) ** 2)
+
+    _, grads = nnx.value_and_grad(loss_fn)(bn)
+
+    bound = float(jnp.abs(bn.gamma[...])) / jnp.sqrt(min_var) * 20  # generous margin
+    assert jnp.abs(grads.gamma[...]) < bound
+    assert bn.running_var[...] >= min_var
 
 
 # ============================================================================

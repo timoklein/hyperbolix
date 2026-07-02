@@ -202,6 +202,12 @@ class HypConv2DHyperboloid(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
+    reset_params : str
+        Kernel initialization scheme (default: ``"default"``). ``"default"``:
+        uniform ``U(-0.02, 0.02)`` (unchanged FHCNN-style init). ``"fan_in"``:
+        normal, ``std = sqrt(1 / hcat_out_ambient_dim)`` — a norm-preserving
+        fan-in init (analogous to ``_fgg_weight_init``'s ``"lorentz_kaiming"``
+        branch) validated for BN-free encoders.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
@@ -229,12 +235,15 @@ class HypConv2DHyperboloid(nnx.Module):
         stride: int | tuple[int, int] = 1,
         padding: str = "SAME",
         input_space: str = "manifold",
+        reset_params: str = "default",
         param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
             raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
+        if reset_params not in ("default", "fan_in"):
+            raise ValueError(f"reset_params must be 'default' or 'fan_in', got '{reset_params}'")
 
         # Static configuration
         validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "hcat"))
@@ -251,12 +260,15 @@ class HypConv2DHyperboloid(nnx.Module):
         hcat_out_ambient_dim = hcat_ambient_dim(in_channels, self.kernel_size)
 
         # Trainable parameters — owned directly for flat parameter paths
-        bound = 0.02
-        self.kernel = nnx.Param(
-            jax.random.uniform(
+        if reset_params == "default":
+            bound = 0.02
+            kernel_init = jax.random.uniform(
                 rngs.params(), (out_channels, hcat_out_ambient_dim), dtype=param_dtype, minval=-bound, maxval=bound
             )
-        )
+        else:  # "fan_in"
+            std = jnp.sqrt(1.0 / hcat_out_ambient_dim)
+            kernel_init = jax.random.normal(rngs.params(), (out_channels, hcat_out_ambient_dim), dtype=param_dtype) * std
+        self.kernel = nnx.Param(kernel_init)
         self.bias = nnx.Param(jnp.zeros((1, out_channels), dtype=param_dtype))
         self.scale = 2.3  # not learnable (matches FHCNN default)
 
@@ -719,6 +731,13 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         Use 1.0 to recover the previous HNN++-style init (Shimizu et al. 2020);
         note that large kernels push the pre-guard scores into the ``v_max``
         saturation regime.
+
+        Low end: in BN-free residual stacks (no GyroBN between blocks), every
+        block becomes a strict contraction below ``std`` ~= 0.05 (probe-measured);
+        ``std=0.1`` is healthy. The ``0.02`` default is tuned for the GyroBN'd PLFC
+        recipe (this reference pairs the conv with a following BatchNorm) and
+        should NOT be treated as a safe default for unnormalized residual stacks —
+        raise ``kernel_init_std`` (e.g. to ``0.1``) when omitting normalization.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.

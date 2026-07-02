@@ -191,6 +191,40 @@ class TestLearnableCurvatureGradients:
         expected = float(jax.nn.sigmoid(jnp.array(raw_val)))
         assert jnp.allclose(grads.raw[...], expected, atol=1e-5)
 
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_default_clamp_is_gradient_dead_past_boundary(self, parameterization):
+        """Documents current default behavior: plain jnp.clip zeroes the gradient
+        once c exits [c_min, c_max] -- c is pinned, not chosen."""
+        c = LearnableCurvature(1.0, parameterization=parameterization)
+        # raw=15.0 pushes c well past c_max=10.0 for both parameterizations (softplus(15)~=15,
+        # exp(15)~=3.3e6) without overflowing exp() in float32 (raw=100 would: exp(100) overflows
+        # to inf, and 0 (clip's out-of-range cotangent) * inf produces a spurious NaN gradient).
+        c.raw[...] = jnp.array(15.0, dtype=jnp.float32)
+
+        def fn(m):
+            return m()
+
+        _val, grads = nnx.value_and_grad(fn)(c)
+        assert float(grads.raw[...]) == 0.0
+
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_straight_through_clamp_keeps_gradient_nonzero_past_boundary(self, parameterization):
+        """straight_through_clamp=True fixes the gradient-dead ratchet: the forward
+        value stays clamped, but the gradient keeps flowing past the boundary."""
+        c = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=True)
+        # raw=15.0 pushes c well past c_max=10.0 for both parameterizations (softplus(15)~=15,
+        # exp(15)~=3.3e6) without overflowing exp() in float32 (raw=100 would: exp(100) overflows
+        # to inf, and 0 (clip's out-of-range cotangent) * inf produces a spurious NaN gradient).
+        c.raw[...] = jnp.array(15.0, dtype=jnp.float32)
+
+        def fn(m):
+            return m()
+
+        val, grads = nnx.value_and_grad(fn)(c)
+        assert float(val) == pytest.approx(10.0)  # forward value still clamped
+        assert jnp.isfinite(grads.raw[...])
+        assert float(grads.raw[...]) != 0.0
+
 
 # ===========================================================================
 # 4. Vmap compatibility (manifolds as plain classes)
