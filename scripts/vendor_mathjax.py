@@ -35,6 +35,26 @@ EXPECTED_SHA512_B64 = "Bt+SSVU8eBG27zChVewOicYs7Xsdt40qm4+UpHyX7k0/O9NliPc+x77k1
 DEST = Path("docs/javascripts/mathjax")
 PREFIX = "package/es5/"  # the self-contained engine + fonts live under es5/ in the npm tarball
 
+# The docs load exactly one combined MathJax component — see mkdocs.yml
+# `extra_javascript: javascripts/mathjax/tex-mml-chtml.js`. That component is
+# self-contained JS (bundles loader + TeX/MathML input + CHTML output) and only
+# lazy-loads CHTML web fonts from output/chtml/fonts/woff-v2/ at runtime.
+#
+# Vendoring the whole es5/ tree (~24 MB: SVG output, the speech-rule engine,
+# every other component) ships ~22 MB per version that the page never requests.
+# Because `mike` stores each docs version as a full independent copy on the
+# gh-pages branch, that waste is multiplied by every release and pushed the
+# published site (13 versions, 219 MB) past GitHub Pages' deploy limit, timing
+# out `actions/deploy-pages` at its 10-minute ceiling. Vendor only what the page
+# actually references (~1.5 MB/version).
+KEEP_FILE = "tex-mml-chtml.js"  # the single component mkdocs loads
+KEEP_DIR = "output/chtml/fonts/woff-v2/"  # CHTML web fonts it fetches on demand
+
+
+def _wanted(name: str) -> bool:
+    """True for the one component bundle and its CHTML web fonts (paths are es5-relative)."""
+    return name == KEEP_FILE or name.startswith(KEEP_DIR)
+
 
 def main() -> int:
     url = f"https://registry.npmjs.org/mathjax/-/mathjax-{MATHJAX_VERSION}.tgz"
@@ -59,8 +79,11 @@ def main() -> int:
             if not member.name.startswith(PREFIX):
                 continue
             member.name = member.name[len(PREFIX) :]  # strip "package/es5/"
-            if member.name:
+            if member.name and _wanted(member.name):
                 members.append(member)
+        if not any(m.name == KEEP_FILE for m in members):
+            print(f"EXPECTED FILE MISSING — {KEEP_FILE!r} not found in tarball es5/", file=sys.stderr)
+            return 1
         # filter="data" (Python 3.12+) rejects path traversal / unsafe members.
         tar.extractall(DEST, members=members, filter="data")
 
