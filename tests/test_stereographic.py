@@ -435,6 +435,25 @@ def test_ktrig_inverse_relations():
         assert jnp.allclose(stereo_impl._arsin_k(stereo_impl._sin_k(xs, k), k), xs, atol=1e-9)
 
 
+def test_ktrig_taylor_coeffs_match_closed_form():
+    # The κ→0 Taylor series only execute at |k| < K_ZERO_EPS (1e-9), where every term past the leading
+    # `x` is ~1e-9 and vanishes under the other κ-trig tests' tolerances — so a mis-transcribed
+    # higher-order coefficient would pass every test above. Pin the coefficients directly: evaluate each
+    # `*_zero_taylor` at a MODERATE k (where the higher orders actually contribute above the truncation
+    # error) against the independent jnp closed form. A wrong coefficient yields error ≥ 1e-3 ≫ atol.
+    xs = jnp.linspace(-0.6, 0.6, 25, dtype=jnp.float64)
+    for k in (0.3, -0.3, 0.15, -0.15):
+        sqrt_abs_k = abs(k) ** 0.5
+        tan_cf = (jnp.tan(sqrt_abs_k * xs) if k > 0 else jnp.tanh(sqrt_abs_k * xs)) / sqrt_abs_k
+        artan_cf = (jnp.arctan(sqrt_abs_k * xs) if k > 0 else jnp.arctanh(sqrt_abs_k * xs)) / sqrt_abs_k
+        sin_cf = (jnp.sin(sqrt_abs_k * xs) if k > 0 else jnp.sinh(sqrt_abs_k * xs)) / sqrt_abs_k
+        arsin_cf = (jnp.arcsin(sqrt_abs_k * xs) if k > 0 else jnp.arcsinh(sqrt_abs_k * xs)) / sqrt_abs_k
+        assert jnp.allclose(stereo_impl._tan_k_zero_taylor(xs, k), tan_cf, atol=1e-6)
+        assert jnp.allclose(stereo_impl._artan_k_zero_taylor(xs, k), artan_cf, atol=1e-6)
+        assert jnp.allclose(stereo_impl._sin_k_zero_taylor(xs, k), sin_cf, atol=1e-6)
+        assert jnp.allclose(stereo_impl._arsin_k_zero_taylor(xs, k), arsin_cf, atol=1e-6)
+
+
 def test_ktrig_zero_curvature_limit():
     xs = jnp.linspace(-1.0, 1.0, 41, dtype=jnp.float64)
     # At k = 0 every κ-trig reduces to the identity, continuously.
