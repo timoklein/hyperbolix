@@ -563,3 +563,38 @@ def test_stereographic_as_product_factor(dtype):
     assert jnp.allclose(comp, expected, atol=1e-5, rtol=1e-5)
     # L2 product distance is Pythagorean over the per-factor distances.
     assert jnp.allclose(product.dist(x, y, cs), jnp.sqrt(jnp.sum(comp**2)), atol=1e-5, rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Shared gyrovector-core dedup guard (Part B): Poincaré and Stereographic must
+# import the c>0-bit-identical algebra from one module, not re-fork it.
+# ---------------------------------------------------------------------------
+
+
+def test_shared_gyrovector_core_is_single_source():
+    """The core algebra is one function object across all three modules.
+
+    If a future edit re-adds a local ``_addition`` / ``_gyration`` / ``_conformal_factor`` / ``_proj``
+    to either manifold (silently re-forking the shared math), these ``is`` checks fail loudly.
+    """
+    import hyperbolix.manifolds._gyrovector_core as gc
+    import hyperbolix.manifolds.poincare as poincare_impl
+
+    for name in ("_addition", "_gyration", "_conformal_factor", "_conformal_factor_batch", "_proj"):
+        shared = getattr(gc, name)
+        assert getattr(poincare_impl, name) is shared, f"poincare.{name} diverged from the shared core"
+        assert getattr(stereo_impl, name) is shared, f"stereographic.{name} diverged from the shared core"
+
+
+@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
+def test_shared_core_bit_identical_to_poincare(dtype, c):
+    """For ``c > 0`` the shared core is EXACTLY (not merely ``allclose``) Poincaré's result — they call
+    the same underlying function object, so equality must be bit-for-bit."""
+    x = jnp.array([0.12, -0.2, 0.05], dtype=dtype)
+    y = jnp.array([-0.15, 0.1, 0.2], dtype=dtype)
+    pm = Poincare(dtype=dtype)
+    sm = Stereographic(dtype=dtype)
+    assert bool(jnp.all(pm.addition(x, y, c) == sm.addition(x, y, c)))
+    assert bool(jnp.all(pm.gyration(x, y, x, c) == sm.gyration(x, y, x, c)))
+    assert bool(jnp.all(pm.proj(x * 6.0, c) == sm.proj(x * 6.0, c)))  # x*6 exits the c=3 ball → projects
+    assert bool(jnp.all(pm.conformal_factor(x, c) == sm.conformal_factor(x, c)))

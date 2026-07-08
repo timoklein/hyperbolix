@@ -55,8 +55,10 @@ JIT / batching example::
     >>> dist_batched = jax.vmap(m.dist, in_axes=(0, 0, None))   # batch over points
 
 Note: ``c`` is kept dynamic (a traced value works) so learnable curvature via
-:class:`~hyperbolix.utils.LearnableCurvature` and ``jax.grad`` w.r.t. ``c`` are supported. A signed-κ
-learnable parameterization is future work (``LearnableCurvature`` is currently positive-only).
+:class:`~hyperbolix.utils.LearnableCurvature` and ``jax.grad`` w.r.t. ``c`` are supported. For a *signed*
+learnable curvature that spans all three regimes, use ``LearnableCurvature(parameterization="identity")``
+(``c = raw``, with a symmetric default clamp); the ``softplus``/``log`` parameterizations stay positive
+(hyperbolic-only).
 
 References:
     Bachmann, Bécigneul & Ganea. "Constant Curvature Graph Convolutional Networks." ICML 2020.
@@ -69,10 +71,15 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import asinh, atanh, sinh, tanh
 from ._base import ManifoldBase
+from ._gyrovector_core import (
+    MIN_NORM,
+    _addition,
+    _conformal_factor,
+    _conformal_factor_batch,
+    _gyration,
+    _proj,
+)
 from .protocol import Curvature
-
-# Default numerical parameters
-MIN_NORM = 1e-15
 
 # Switch the κ-trig functions to their (analytic, signed-κ) Taylor series when |κ| falls below this.
 # For |κ| above it the closed forms use the true √|κ| (never the floor), so value AND gradient w.r.t.
@@ -85,11 +92,6 @@ K_ZERO_EPS = 1e-9
 # (which would NaN the *unselected* branch's gradient), while still letting `tan` wrap through its poles
 # as spherical geometry requires. Mirrors geoopt's `scaled_x.clamp_max(1e38)`.
 _TAN_ARG_CLAMP = 1e30
-
-
-def _get_max_norm_eps(x: Float[Array, "dim"]) -> float:
-    """Maximum-norm epsilon for the array's dtype (``eps**0.75``); matches ``poincare._get_max_norm_eps``."""
-    return float(jnp.finfo(x.dtype).eps ** 0.75)
 
 
 # ---------------------------------------------------------------------------
@@ -205,48 +207,6 @@ def _arsin_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
 # ---------------------------------------------------------------------------
 
 
-def _conformal_factor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Conformal factor ``λ^κ_x = 2 / (1 + κ‖x‖²) = 2 / (1 - c‖x‖²)``.
-
-    For ``c > 0`` the denominator → 0 at the ball boundary and is floored with the same dtype-eps margin
-    as ``poincare._conformal_factor`` (so this matches Poincaré exactly). For ``c ≤ 0`` the denominator
-    is ``≥ 1`` and the floor never bites.
-    """
-    x2 = jnp.dot(x, x)
-    max_norm_eps = _get_max_norm_eps(x)
-    abs_c = jnp.abs(jnp.asarray(c))
-    sqrt_abs_c = jnp.sqrt(jnp.maximum(abs_c, MIN_NORM))
-    boundary_floor = 2.0 * sqrt_abs_c * max_norm_eps - abs_c * max_norm_eps**2
-    denom = jnp.maximum(1.0 - c * x2, jnp.where(jnp.asarray(c) > 0, boundary_floor, MIN_NORM))
-    return 2.0 / denom
-
-
-def _proj(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
-    """Project onto the manifold. A boundary exists only for ``c > 0`` (``‖x‖ < 1/√c``); for ``c ≤ 0``
-    (Euclidean / spherical) the space is all of R^d and this is the identity."""
-    max_norm_eps = _get_max_norm_eps(x)
-    # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
-    norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
-    sqrt_abs_c = jnp.sqrt(jnp.maximum(jnp.abs(jnp.asarray(c)), MIN_NORM))
-    max_norm = jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
-    cond = norm > max_norm
-    return jnp.where(cond, x * (max_norm / norm), x)
-
-
-def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
-    """κ-Möbius gyrovector addition ``x ⊕_κ y`` (paper Eq. 2, with ``κ = -c``).
-
-    Non-commutative, non-associative. Algebraically identical to ``poincare._addition`` for all ``c``.
-    Result is projected back onto the manifold (a no-op for ``c ≤ 0``).
-    """
-    x2 = jnp.dot(x, x)
-    y2 = jnp.dot(y, y)
-    xy = jnp.dot(x, y)
-    num = (1 + 2 * c * xy + c * y2) * x + (1 - c * x2) * y
-    denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, MIN_NORM)
-    return _proj(num / denom, c)
-
-
 def _scalar_mul(r: Float[Array, ""], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """κ-scalar multiplication ``r ⊗_κ x = tan_κ(r·tan_κ⁻¹(‖x‖))·x/‖x‖`` (paper Eq. 3, ``κ = -c``)."""
     k = -c
@@ -312,24 +272,6 @@ def _logmap_0(y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     k = -c
     y_norm = jnp.sqrt(jnp.sum(y**2) + MIN_NORM**2)
     return _artan_k(y_norm, k) * (y / y_norm)
-
-
-def _gyration(u: Float[Array, "dim"], v: Float[Array, "dim"], w: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
-    """Gyration ``gyr[u, v]w`` (Ungar; simplified closed form with ``κ = -c``).
-
-    Restores the (broken) associativity/commutativity of κ-addition. Identical to ``poincare._gyration``
-    for all ``c``; underlies parallel transport.
-    """
-    u2 = jnp.dot(u, u)
-    v2 = jnp.dot(v, v)
-    uv = jnp.dot(u, v)
-    uw = jnp.dot(u, w)
-    vw = jnp.dot(v, w)
-    c2 = c**2
-    coeff_u = -c2 * uw * v2 + c * vw + 2 * c2 * uv * vw
-    coeff_v = -c2 * vw * u2 - c * uw
-    denom = jnp.maximum(1 + 2 * c * uv + c2 * u2 * v2, MIN_NORM)
-    return w + 2 * (coeff_u * u + coeff_v * v) / denom
 
 
 def _ptransp(v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
@@ -408,25 +350,6 @@ def _antipode(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     pi = jnp.asarray(jnp.pi, dtype=x.dtype)
     spherical = _geodesic_unit(pi * radius, x, direction, c)
     return jnp.where(jnp.asarray(c) < 0, spherical, -x)
-
-
-# ---------------------------------------------------------------------------
-# Batch-compatible conformal factor (used by NN layers / normalization)
-# ---------------------------------------------------------------------------
-
-
-def _conformal_factor_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... 1"]:
-    """Conformal factor ``λ^κ_x = 2/(1 - c‖x‖²)`` over arbitrary leading dims (mirrors the Poincaré batch
-    helper; matches it exactly for ``c > 0``)."""
-    dtype = x.dtype
-    c_arr = jnp.asarray(c, dtype=dtype)
-    max_norm_eps = jnp.asarray(float(jnp.finfo(dtype).eps ** 0.75), dtype=dtype)
-    x2 = jnp.sum(x**2, axis=-1, keepdims=True)
-    abs_c = jnp.abs(c_arr)
-    sqrt_abs_c = jnp.sqrt(jnp.maximum(abs_c, MIN_NORM))
-    boundary_floor = 2.0 * sqrt_abs_c * max_norm_eps - abs_c * max_norm_eps**2
-    denom = jnp.maximum(jnp.asarray(1.0, dtype=dtype) - c_arr * x2, jnp.where(c_arr > 0, boundary_floor, MIN_NORM))
-    return 2.0 / denom
 
 
 # ---------------------------------------------------------------------------

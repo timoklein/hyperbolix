@@ -70,117 +70,20 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import acosh, atanh, cosh, sinh, smooth_clamp
 from ._base import ManifoldBase
+from ._gyrovector_core import (
+    MIN_NORM,
+    _addition,
+    _conformal_factor,
+    _conformal_factor_batch,
+    _gyration,
+    _proj,
+)
 from .protocol import Curvature
-
-# Default numerical parameters
-MIN_NORM = 1e-15
 
 # Version selection constants for dist() and dist_0()
 VERSION_MOBIUS_DIRECT = 0
 VERSION_MOBIUS = 1
 VERSION_METRIC_TENSOR = 2
-
-
-def _get_max_norm_eps(x: Float[Array, "dim"]) -> float:
-    """Get maximum norm epsilon for array's dtype.
-
-    Uses eps^0.75 as empirically stable value that scales with precision.
-    """
-    return float(jnp.finfo(x.dtype).eps ** 0.75)
-
-
-def _conformal_factor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Compute conformal factor λ(x) = 2 / (1 - c||x||²).
-
-    Args:
-        x: Poincaré ball point, shape (dim,)
-        c: Curvature (positive)
-
-    Returns:
-        Conformal factor λ(x), scalar
-
-    References:
-        Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
-    """
-    x2 = jnp.dot(x, x)
-    max_norm_eps = _get_max_norm_eps(x)
-    denom = jnp.maximum(1.0 - c * x2, 2 * jnp.sqrt(c) * max_norm_eps - c * max_norm_eps**2)
-    return 2.0 / denom
-
-
-def _gyration(x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
-    """Compute gyration gyr[x,y]z to restore commutativity.
-
-    Args:
-        x: Poincaré ball point, shape (dim,)
-        y: Poincaré ball point, shape (dim,)
-        z: Poincaré ball point, shape (dim,)
-        c: Curvature (positive)
-
-    Returns:
-        Gyration gyr[x,y]z, shape (dim,)
-
-    References:
-        Ungar. "A gyrovector space approach to hyperbolic geometry." 2022.
-    """
-    c2 = c**2
-    x_sqnorm = jnp.dot(x, x)  # scalar
-    y_sqnorm = jnp.dot(y, y)  # scalar
-    xy = jnp.dot(x, y)  # scalar
-    xz = jnp.dot(x, z)  # scalar
-    yz = jnp.dot(y, z)  # scalar
-
-    coeff_x = -c2 * xz * y_sqnorm + c * yz + 2 * c2 * xy * yz  # scalar
-    coeff_y = -c2 * yz * x_sqnorm - c * xz  # scalar
-    num_D = 2 * (coeff_x * x + coeff_y * y)  # (D,)
-    denom = jnp.maximum(1 + 2 * c * xy + c2 * x_sqnorm * y_sqnorm, MIN_NORM)  # scalar
-
-    return z + num_D / denom
-
-
-def _proj(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
-    """Project point onto Poincaré ball by clipping norm.
-
-    Args:
-        x: Point to project, shape (dim,)
-        c: Curvature (positive)
-
-    Returns:
-        Projected point with ||x|| < 1/√c, shape (dim,)
-    """
-    max_norm_eps = _get_max_norm_eps(x)
-    # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
-    norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
-    max_norm = (1.0 / jnp.sqrt(c)) - max_norm_eps
-    cond = norm > max_norm
-    return jnp.where(cond, x * (max_norm / norm), x)
-
-
-def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
-    """Möbius gyrovector addition x ⊕ y.
-
-    Non-commutative and non-associative!
-
-    Args:
-        x: Poincaré ball point, shape (dim,)
-        y: Poincaré ball point, shape (dim,)
-        c: Curvature (positive)
-
-    Returns:
-        Möbius sum x ⊕ y, shape (dim,)
-
-    References:
-        Ungar. "A gyrovector space approach to hyperbolic geometry." 2022.
-    """
-    x2 = jnp.dot(x, x)
-    y2 = jnp.dot(y, y)
-    xy = jnp.dot(x, y)
-
-    num = (1 + 2 * c * xy + c * y2) * x + (1 - c * x2) * y
-    denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, MIN_NORM)
-    res = num / denom
-    res = _proj(res, c)
-    return res
 
 
 def _scalar_mul(r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
@@ -627,31 +530,6 @@ def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curv
 # ---------------------------------------------------------------------------
 # Batch-compatible helpers (used by NN layers)
 # ---------------------------------------------------------------------------
-
-
-def _conformal_factor_batch(
-    x: Float[Array, "... dim"],
-    c: Curvature,
-) -> Float[Array, "... 1"]:
-    """Numerically stable conformal factor lambda(x) = 2 / (1 - c||x||^2).
-
-    Batch-compatible version that handles arbitrary leading dimensions.
-
-    Args:
-        x: Poincare ball point(s), shape (..., dim)
-        c: Manifold curvature (positive)
-
-    Returns:
-        Conformal factor, shape (..., 1)
-    """
-    dtype = x.dtype
-    c_arr = jnp.asarray(c, dtype=dtype)
-    sqrt_c = jnp.sqrt(c_arr)
-    max_norm_eps = jnp.asarray(_get_max_norm_eps(x.reshape(-1)[:1].squeeze()), dtype=dtype)
-    x_norm_sq_1 = jnp.sum(x**2, axis=-1, keepdims=True)  # (..., 1)
-    denom_min = 2 * sqrt_c * max_norm_eps - c_arr * max_norm_eps**2
-    denom_1 = jnp.maximum(jnp.asarray(1.0, dtype=dtype) - c_arr * x_norm_sq_1, denom_min)  # (..., 1)
-    return 2.0 / denom_1
 
 
 def _compute_mlr_pp(

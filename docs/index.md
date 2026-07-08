@@ -153,7 +153,8 @@ class Model(nnx.Module):
 
 Pick `parameterization="log"` for compiled RL loops or when `c` spans
 orders of magnitude; the default `"softplus"` is best for supervised
-training. See the [Manifolds guide](user-guide/manifolds.md#choosing-softplus-vs-log)
+training, and `"identity"` gives a signed curvature for the `Stereographic`
+manifold. See the [Manifolds guide](user-guide/manifolds.md#choosing-a-parameterization)
 for details.
 
 ### Mixed-Curvature Product Spaces
