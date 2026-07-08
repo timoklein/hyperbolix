@@ -166,3 +166,45 @@ def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     eps = 10.0 * float(jnp.finfo(x.dtype).eps)
     x = jnp.clip(x, -1.0 + eps, 1.0 - eps)
     return jnp.atanh(x)
+
+
+@jax.jit
+def tanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
+    """Hyperbolic tangent clamped so the output stays strictly inside (-1, 1). Domain=(-inf, inf).
+
+    Clips the input to ``±0.5*log(2/machine_eps)`` (≈±8.3 for f32, ≈±18.4 for f64) so ``|tanh(x)|``
+    never rounds up to exactly 1.0 — which would make a downstream ``atanh`` singular. Within the
+    un-clipped regime this is a value- and gradient-identity to ``jnp.tanh``: ``tanh`` saturates well
+    before the clip bites, so the forward pass and the VJP match unguarded ``jnp.tanh`` throughout the
+    entire non-saturated range. Mirrors the domain-guard philosophy of ``acosh``/``atanh`` above and
+    the ``tanh(clamp)`` guard in the geoopt κ-stereographic reference.
+
+    Args:
+        x: Input array of any shape
+
+    Returns:
+        tanh(x) clamped strictly inside (-1, 1)
+    """
+    # 1 - tanh(x) ≈ 2*exp(-2x); require it ≥ eps ⇒ x ≤ 0.5*log(2/eps) keeps the output < 1 exactly.
+    clamp = 0.5 * jnp.log(2.0 / jnp.finfo(x.dtype).eps)
+    x = jnp.clip(x, -clamp, clamp)
+    return jnp.tanh(x)
+
+
+@jax.jit
+def asinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
+    """Inverse hyperbolic sine. Domain=(-inf, inf).
+
+    ``asinh(x) = log(x + sqrt(1 + x^2))`` is already numerically stable over all reals — its derivative
+    ``1/sqrt(1 + x^2) in (0, 1]`` has no singularity and the forward pass cannot overflow before its
+    argument does — so no clamping is required. Provided as a thin wrapper for API symmetry with
+    ``acosh``/``atanh`` and to give the κ-stereographic trig helpers a single stable-math source for the
+    ``κ<0`` (hyperbolic) branch of ``arsin_κ``.
+
+    Args:
+        x: Input array of any shape
+
+    Returns:
+        asinh(x)
+    """
+    return jnp.asinh(x)

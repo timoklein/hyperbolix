@@ -4,12 +4,13 @@ This page documents the core manifold operations in Hyperbolix. Each manifold is
 
 ## Overview
 
-Hyperbolix provides four base manifold classes plus a composition class:
+Hyperbolix provides five base manifold classes plus a composition class:
 
 - **Euclidean**: Flat Euclidean space (baseline)
 - **Poincaré Ball**: Conformal model of hyperbolic space
 - **Hyperboloid**: Lorentz/Minkowski model of hyperbolic space
 - **Proper Velocity**: Unconstrained $\mathbb{R}^n$ model from special relativity (Chen et al. 2026)
+- **κ-Stereographic**: Signed-curvature model unifying hyperbolic, Euclidean, and spherical geometry in one manifold (Bachmann et al. 2020)
 - **Product Manifold**: Heterogeneous-curvature product spaces $M_1 \times M_2 \times \dots \times M_n$ (Gu et al. 2019)
 
 All manifolds share a common interface defined by the `Manifold` protocol and support:
@@ -85,6 +86,32 @@ The Poincaré ball model with Möbius operations.
     \qquad\quad \mathbb{L}^n:\ B^v(x) = \tfrac{1}{\sqrt c}\log\!\big(\sqrt c\,(x_t-\langle x_s,v\rangle)\big)$$
 
 ::: hyperbolix.manifolds.poincare.Poincare
+    options:
+      show_source: true
+      heading_level: 3
+
+## κ-Stereographic
+
+A single constant-curvature manifold spanning **hyperbolic, Euclidean, and spherical** geometry via a **signed** curvature `c` (Bachmann et al. 2020). It generalizes the Poincaré ball across zero curvature using curvature-generalized ("$\kappa$-") trigonometric functions ($\tan_\kappa$, $\tan_\kappa^{-1}$), enabling a network to learn the *sign* of curvature from data.
+
+!!! info "Signed-curvature convention (sectional curvature $= -c$)"
+    Unlike the other manifolds (which require $c > 0$), `Stereographic` takes a **signed** $c$:
+
+    | `c` | sectional curvature | geometry |
+    |---|---|---|
+    | $> 0$ | $< 0$ | hyperbolic — **identical to `Poincare(c)`** |
+    | $= 0$ | $0$ | Euclidean (factor-2 limit; see below) |
+    | $< 0$ | $> 0$ | spherical (stereographic projection of the sphere) |
+
+    Internally the paper's $\kappa = -c$. This is **sign-flipped from the paper/geoopt $\kappa$** (their $\kappa > 0$ = spherical), chosen so `c` matches every other hyperbolix manifold and so `Stereographic(c)` reproduces `Poincare(c)` exactly for $c > 0$.
+
+!!! warning "The Euclidean limit carries a factor of 2"
+    The conformal factor is $\lambda^\kappa_x = 2/(1 - c\lVert x\rVert^2)$, so $\lambda^\kappa_0 = 2$ and the metric at $c = 0$ is $4\cdot I$, **not** $I$. As $c \to 0$: `addition`/`expmap`/`logmap` reduce to the *bare* Euclidean $x{+}y$ / $x{+}v$ / $y{-}x$, but `dist` $\to 2\lVert x-y\rVert$ and `tangent_norm` $\to 2\lVert v\rVert$ (paper Thm. 3). This matches Poincaré's own `dist_0` $\to 2\lVert x\rVert$, and therefore does **not** equal the separate `Euclidean` manifold's `dist` (bare metric $I$). Use `Euclidean` for un-scaled flat geometry; use `Stereographic` at $c=0$ only as the *continuous limit* of the curved family.
+
+!!! note "Scope of this release"
+    Provides the complete core Riemannian manifold — the `Manifold` protocol plus `conformal_factor`, `gyration`, `geodesic`, `geodesic_unit`, and `antipode`. The $\kappa$-GCN neural-network layers and building blocks (`mobius_matvec`, weighted gyromidpoint, `dist2plane`, `sproj`/`inv_sproj`) are not yet included. Learnable curvature is currently positive-only (`LearnableCurvature`); a signed-$\kappa$ parameterization is future work. Double precision (`dtype=jnp.float64`) is strongly recommended, per Bachmann et al.
+
+::: hyperbolix.manifolds.stereographic.Stereographic
     options:
       show_source: true
       heading_level: 3

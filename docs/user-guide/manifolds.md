@@ -16,6 +16,7 @@ For per-method signatures and full API surface, see the
 | Heterogeneous structure (mixed tree + cycles + flat) | `ProductManifold` | Mixed curvatures fit mixed-structure data (Gu et al. 2019) |
 | Cross-curvature transformations (`c_in != c_out`) | `Hyperboloid` + `HTCLinear` | Native cross-curvature support in HTC layers |
 | Drop-in numerical stability | `ProperVelocity` | Unconstrained $\mathbb{R}^n$; no projection or constraint drift |
+| Spherical / cyclic data, or learning the *sign* of curvature | `Stereographic` | One signed-`c` manifold spans hyperbolic (`c>0`), Euclidean (`c=0`), and spherical (`c<0`), differentiable across zero (Bachmann et al. 2020) |
 | You don't know which to pick | `Hyperboloid` (or `ProperVelocity`) | Robust at `c=1.0`; PV adds no-projection convenience |
 
 !!! tip "Single best default"
@@ -50,6 +51,11 @@ different conventions:
 
 Curvature convention is uniform across all manifolds: `c > 0` means sectional
 curvature $-c$ (so larger `c` → more curved). `Euclidean` ignores `c` entirely.
+The one exception is `Stereographic`, which takes a **signed** `c` that *extends*
+this same convention across zero: `c > 0` hyperbolic (identical to `Poincare(c)`),
+`c = 0` Euclidean, `c < 0` spherical. See the
+[κ-Stereographic API reference](../api-reference/manifolds.md) for the factor-2
+Euclidean-limit caveat and the sign-flip relative to the paper's $\kappa$.
 
 ## Working with Curvature
 
