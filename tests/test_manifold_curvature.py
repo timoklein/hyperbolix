@@ -125,6 +125,17 @@ class TestLearnableCurvatureInit:
         with pytest.raises(ValueError, match="finite"):
             LearnableCurvature(float("nan"), parameterization=parameterization)
 
+    @pytest.mark.parametrize("parameterization", ["softplus", "log", "identity"])
+    def test_raw_param_dtype_pinned_to_float32_under_x64(self, parameterization):
+        # This module enables jax_enable_x64 globally. The raw param must still default to float32 (its
+        # param_dtype default) so a learnable curvature cannot silently promote the whole manifold graph
+        # to float64 — the dtype-leak class the hyperbolic-dl guidance warns about. Opt-in float64 storage
+        # via param_dtype is still honored.
+        assert LearnableCurvature(1.0, parameterization=parameterization).raw[...].dtype == jnp.float32
+        assert (
+            LearnableCurvature(1.0, parameterization=parameterization, param_dtype=jnp.float64).raw[...].dtype == jnp.float64
+        )
+
 
 class TestLearnableCurvatureClamping:
     """Clamping applies to the recovered c, not the raw param."""

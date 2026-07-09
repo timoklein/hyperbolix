@@ -274,6 +274,25 @@ def test_expmap_logmap_inverse(manifold, points, c, tolerance):
     assert _batch_in_manifold(manifold, reconstructed, c)
 
 
+def test_logmap_expmap_roundtrip(manifold, points, c, rng, dtype, tolerance):
+    """``log_x(exp_x(v)) = v`` — the reverse composition to ``test_expmap_logmap_inverse`` (which tests
+    ``exp∘log``). Testing only one order can hide a shared systematic error; this pins the other.
+
+    A *small* random tangent vector keeps ``exp_x(v)`` inside the injectivity radius in every regime
+    (off the ball boundary for ``c > 0``, below ``π/√|c|`` for ``c < 0``), so the round-trip is exact
+    up to floating point.
+    """
+    atol, rtol = tolerance
+    if np.dtype(points.dtype) == np.dtype(np.float32):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+    x, _, _ = _split3(points)
+    v = jnp.asarray((rng.normal(size=x.shape) * 0.1).astype(np.dtype(jnp.dtype(dtype).name)))
+    z = jax.vmap(manifold.expmap, in_axes=(0, 0, None))(v, x, c)
+    v_rec = jax.vmap(manifold.logmap, in_axes=(0, 0, None))(z, x, c)
+    assert jnp.allclose(v_rec, v, atol=atol, rtol=rtol)
+    assert _batch_in_manifold(manifold, z, c)
+
+
 def test_expmap_euclidean_limit(manifold, dtype):
     x = jnp.array([0.1, 0.2, -0.05], dtype=dtype)
     v = jnp.array([0.3, -0.1, 0.2], dtype=dtype)
@@ -315,6 +334,29 @@ def test_ptransp_preserves_riemannian_norm(manifold, points, c, tolerance):
     # ptransp from the origin matches the general ptransp with x = 0.
     v_y0 = jax.vmap(manifold.ptransp_0, in_axes=(0, 0, None))(v0, y, c)
     assert jnp.allclose(v_y, v_y0, atol=atol, rtol=rtol)
+
+
+def test_ptransp_isometry_general(manifold, points, c, rng, dtype, tolerance):
+    """Parallel transport ``x → y`` is a linear ISOMETRY of tangent spaces: ``⟨Pu, Pw⟩_y = ⟨u, w⟩_x``
+    for ARBITRARY vectors ``u, w`` and interior ``x ≠ 0``, ``y ≠ 0``.
+
+    ``test_ptransp_preserves_riemannian_norm`` only checks single-vector norm preservation FROM THE
+    ORIGIN; this covers the general two-point, two-vector bilinear form — so it also catches a transport
+    that preserves individual norms but wrongly rotates *within* the tangent plane (which would leave the
+    cross term ``⟨Pu, Pw⟩`` off).
+    """
+    atol, rtol = tolerance
+    if np.dtype(points.dtype) == np.dtype(np.float32):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+    x, y, _ = _split3(points)
+    np_dtype = np.dtype(jnp.dtype(dtype).name)
+    u = jnp.asarray(rng.normal(size=x.shape).astype(np_dtype))
+    w = jnp.asarray(rng.normal(size=x.shape).astype(np_dtype))
+    transport = jax.vmap(manifold.ptransp, in_axes=(0, 0, 0, None))
+    inner = jax.vmap(manifold.tangent_inner, in_axes=(0, 0, 0, None))
+    src = inner(u, w, x, c)
+    dst = inner(transport(u, x, y, c), transport(w, x, y, c), y, c)
+    assert jnp.allclose(src, dst, atol=atol, rtol=rtol)
 
 
 def test_tangent_inner_positive_definite_and_symmetric(manifold, points, c, dim, rng, dtype):
@@ -374,6 +416,77 @@ def test_hyperbolic_ops_match_poincare(manifold, points, c, dtype, tolerance):
     assert jnp.allclose(cf_s, cf_p, atol=atol, rtol=rtol)
 
 
+def test_hyperbolic_maps_match_poincare(manifold, points, c, dtype, tolerance, rng):
+    """Cross-validate the *curvature-dependent* κ-trig ops against the independent Poincaré
+    implementation for ``c > 0``.
+
+    ``test_hyperbolic_ops_match_poincare`` pins the shared-core algebra (addition/gyration/…); this
+    pins everything built on the κ-trig branch — ``expmap``, ``logmap``, ``scalar_mul``, ``dist_0``,
+    the general two-point ``ptransp`` and the metric ops — so the ENTIRE hyperbolic half is anchored
+    to a second implementation, not merely self-consistent with its own inverses.
+    """
+    if c <= 0:
+        pytest.skip("Cross-validation against Poincaré only applies for c > 0.")
+    atol, rtol = tolerance
+    if np.dtype(points.dtype) == np.dtype(np.float32):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+    poincare = Poincare(dtype=dtype)
+    x, y, _ = _split3(points)
+    # Genuine tangent vectors of moderate norm (log maps), plus a raw Euclidean gradient.
+    v = jax.vmap(manifold.logmap, in_axes=(0, 0, None))(y, x, c)
+    u = jax.vmap(manifold.logmap_0, in_axes=(0, None))(x, c)
+    grad = jnp.asarray(rng.normal(size=x.shape).astype(np.dtype(jnp.dtype(dtype).name)))
+
+    def close(got, ref, name):
+        assert jnp.allclose(got, ref, atol=atol, rtol=rtol), f"stereographic.{name} != poincare.{name}"
+
+    close(
+        jax.vmap(manifold.expmap, in_axes=(0, 0, None))(v, x, c),
+        jax.vmap(poincare.expmap, in_axes=(0, 0, None))(v, x, c),
+        "expmap",
+    )
+    close(
+        jax.vmap(manifold.logmap, in_axes=(0, 0, None))(y, x, c),
+        jax.vmap(poincare.logmap, in_axes=(0, 0, None))(y, x, c),
+        "logmap",
+    )
+    close(
+        jax.vmap(manifold.scalar_mul, in_axes=(None, 0, None))(1.7, x, c),
+        jax.vmap(poincare.scalar_mul, in_axes=(None, 0, None))(1.7, x, c),
+        "scalar_mul",
+    )
+    close(
+        jax.vmap(manifold.dist_0, in_axes=(0, None))(x, c),
+        jax.vmap(poincare.dist_0, in_axes=(0, None))(x, c),
+        "dist_0",
+    )
+    close(
+        jax.vmap(manifold.ptransp, in_axes=(0, 0, 0, None))(v, x, y, c),
+        jax.vmap(poincare.ptransp, in_axes=(0, 0, 0, None))(v, x, y, c),
+        "ptransp",
+    )
+    close(
+        jax.vmap(manifold.tangent_inner, in_axes=(0, 0, 0, None))(u, v, x, c),
+        jax.vmap(poincare.tangent_inner, in_axes=(0, 0, 0, None))(u, v, x, c),
+        "tangent_inner",
+    )
+    close(
+        jax.vmap(manifold.tangent_norm, in_axes=(0, 0, None))(v, x, c),
+        jax.vmap(poincare.tangent_norm, in_axes=(0, 0, None))(v, x, c),
+        "tangent_norm",
+    )
+    close(
+        jax.vmap(manifold.egrad2rgrad, in_axes=(0, 0, None))(grad, x, c),
+        jax.vmap(poincare.egrad2rgrad, in_axes=(0, 0, None))(grad, x, c),
+        "egrad2rgrad",
+    )
+    close(
+        jax.vmap(manifold.retraction, in_axes=(0, 0, None))(v, x, c),
+        jax.vmap(poincare.retraction, in_axes=(0, 0, None))(v, x, c),
+        "retraction",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Geodesics & spherical antipode
 # ---------------------------------------------------------------------------
@@ -392,6 +505,60 @@ def test_geodesic_endpoints_and_speed(manifold, points, c, tolerance):
     total = dist(x, y, c)
     half = dist(x, geo(0.5, x, y, c), c)
     assert jnp.allclose(half, 0.5 * total, atol=atol, rtol=rtol)
+
+
+def test_geodesic_unit_contract(manifold, points, c, rng, dtype, tolerance):
+    """``geodesic_unit(t, x, u)`` contract — this public method has no Poincaré counterpart, so it is
+    validated against its own definition:
+
+    - ``gamma(0) = x``;
+    - it is UNIT SPEED: ``d(x, gamma(t)) = t`` (from ``2·tan_κ⁻¹(tan_κ(t/2)) = t``, holding for every
+      curvature — the whole point of the κ-generalized construction);
+    - its initial direction is ∝ ``u`` (``log_x(gamma(t))`` is a positive multiple of ``u``).
+
+    ``t`` stays below the spherical injectivity radius ``π/√|c|`` so ``tan_κ⁻¹∘tan_κ`` stays principal.
+    """
+    atol, rtol = tolerance
+    if np.dtype(points.dtype) == np.dtype(np.float32):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+    x, _, _ = _split3(points)
+    u = jnp.asarray(rng.normal(size=x.shape).astype(np.dtype(jnp.dtype(dtype).name)))
+
+    def gu(t: float) -> jnp.ndarray:
+        return jax.vmap(manifold.geodesic_unit, in_axes=(None, 0, 0, None))(t, x, u, c)
+
+    # gamma(0) = x.
+    assert jnp.allclose(gu(0.0), x, atol=atol, rtol=rtol)
+    # Unit speed: d(x, gamma(t)) = t for t inside the injectivity radius.
+    dist = jax.vmap(manifold.dist, in_axes=(0, 0, None))
+    for t in (0.3, 0.7, 1.2):
+        assert jnp.allclose(dist(x, gu(float(t)), c), t, atol=atol, rtol=rtol), f"not unit speed at t={t}"
+    # Initial direction ∝ u: log_x(gamma(t)) is a positive multiple of u (cosine similarity 1).
+    v = jax.vmap(manifold.logmap, in_axes=(0, 0, None))(gu(0.3), x, c)
+    cos = jnp.sum(v * u, axis=-1) / (jnp.linalg.norm(v, axis=-1) * jnp.linalg.norm(u, axis=-1))
+    assert jnp.allclose(cos, 1.0, atol=atol, rtol=rtol)
+
+
+def test_geodesic_midpoint_matches_sphere_midpoint(manifold, points, c):
+    """Independent spherical oracle for the geodesic: the sphere lift of the constant-speed midpoint
+    ``gamma(0.5, x, y)`` is the great-circle midpoint ``R·(X+Y)/‖X+Y‖`` of the endpoint lifts ``X, Y``
+    (valid since all lifts have norm exactly ``R = 1/√|κ|``).
+
+    This anchors ``geodesic`` — hence the ``scalar_mul`` / ``addition`` it is built from — in the
+    spherical regime to something OTHER than its own inverse maps: the ``expmap∘logmap`` round-trips
+    could in principle mask a shared error, an external oracle cannot.
+    """
+    if c >= 0:
+        pytest.skip("Sphere-midpoint oracle only applies to the spherical regime (c < 0).")
+    x, y, _ = _split3(points)
+    mid = jax.vmap(manifold.geodesic, in_axes=(None, 0, 0, None))(0.5, x, y, c)
+    x_np, y_np, mid_np = (np.asarray(a, dtype=np.float64) for a in (x, y, mid))
+    radius = 1.0 / abs(-c) ** 0.5
+    tol = 2e-3 if np.dtype(x.dtype) == np.dtype(np.float32) else 1e-8
+    for i in range(x_np.shape[0]):
+        bisector = _sphere_embed(x_np[i], c) + _sphere_embed(y_np[i], c)
+        expected = radius * bisector / np.linalg.norm(bisector)
+        assert np.max(np.abs(_sphere_embed(mid_np[i], c) - expected)) < tol
 
 
 def test_antipode_is_sphere_antipode(manifold, points, c):
@@ -577,6 +744,15 @@ def test_trivial_tangent_ops(manifold, points, c, dtype, rng):
     assert jnp.array_equal(jax.vmap(manifold.tangent_proj, in_axes=(0, 0, None))(v, x, c), v)
     in_tangent = jax.vmap(lambda vv, xx: manifold.is_in_tangent_space(vv, xx, c))(v, x)
     assert bool(jnp.all(in_tangent))
+
+
+def test_stereographic_satisfies_manifold_protocol(dtype):
+    # Structural conformance: Stereographic must expose the full runtime-checkable Manifold interface,
+    # so it drops into any Manifold-typed API (and ProductManifold) unchanged. Guards against a public
+    # method being renamed/dropped without a corresponding failure.
+    from hyperbolix.manifolds.protocol import Manifold
+
+    assert isinstance(Stereographic(dtype=dtype), Manifold)
 
 
 def test_ktrig_seam_continuity():
