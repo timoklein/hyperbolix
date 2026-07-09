@@ -69,7 +69,7 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import asinh, atanh, sinh, tanh
+from ..utils.math_utils import atanh, tanh
 from ._base import ManifoldBase
 from ._gyrovector_core import (
     MIN_NORM,
@@ -151,30 +151,6 @@ def _artan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "
     )
 
 
-def _sin_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
-    """Order-5 Maclaurin series (in signed ``k``) of ``sin_k``; equals both branches as ``k → 0``."""
-    return (
-        x
-        - (1.0 / 6.0) * k * x**3
-        + (1.0 / 120.0) * k**2 * x**5
-        - (1.0 / 5040.0) * k**3 * x**7
-        + (1.0 / 362880.0) * k**4 * x**9
-        - (1.0 / 39916800.0) * k**5 * x**11
-    )
-
-
-def _arsin_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
-    """Order-5 Maclaurin series (in signed ``k``) of ``arsin_k``; equals both branches as ``k → 0``."""
-    return (
-        x
-        + (1.0 / 6.0) * k * x**3
-        + (3.0 / 40.0) * k**2 * x**5
-        + (5.0 / 112.0) * k**3 * x**7
-        + (35.0 / 1152.0) * k**4 * x**9
-        + (63.0 / 2816.0) * k**5 * x**11
-    )
-
-
 def _tan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     """κ-tangent: ``tanh(√|k|·x)/√|k|`` (k<0), ``tan(√k·x)/√k`` (k>0), Taylor (k→0). Paper ``tan_κ``."""
     sqrt_abs_k = _sqrt_abs_k(k)
@@ -193,28 +169,6 @@ def _artan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     pos = jnp.arctan(scaled) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
     return jnp.where(jnp.abs(jnp.asarray(k)) < _k_zero_eps(jnp.asarray(x).dtype), _artan_k_zero_taylor(x, k), nonzero)
-
-
-def _sin_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
-    """κ-sine: ``sinh(√|k|·x)/√|k|`` (k<0), ``sin(√k·x)/√k`` (k>0), Taylor (k→0). Paper ``sin_κ``."""
-    sqrt_abs_k = _sqrt_abs_k(k)
-    scaled = sqrt_abs_k * x
-    neg = sinh(scaled) / sqrt_abs_k
-    pos = jnp.sin(scaled) / sqrt_abs_k
-    nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
-    return jnp.where(jnp.abs(jnp.asarray(k)) < _k_zero_eps(jnp.asarray(x).dtype), _sin_k_zero_taylor(x, k), nonzero)
-
-
-def _arsin_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
-    """κ-arcsine: ``asinh(√|k|·x)/√|k|`` (k<0), ``arcsin(√k·x)/√k`` (k>0), Taylor (k→0). Paper ``sin_κ⁻¹``."""
-    sqrt_abs_k = _sqrt_abs_k(k)
-    scaled = sqrt_abs_k * x
-    neg = asinh(scaled) / sqrt_abs_k
-    # arcsin domain is [-1, 1]; clamp (the spherical branch is only valid there anyway).
-    eps = 10.0 * float(jnp.finfo(jnp.asarray(x).dtype).eps)
-    pos = jnp.arcsin(jnp.clip(scaled, -1.0 + eps, 1.0 - eps)) / sqrt_abs_k
-    nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
-    return jnp.where(jnp.abs(jnp.asarray(k)) < _k_zero_eps(jnp.asarray(x).dtype), _arsin_k_zero_taylor(x, k), nonzero)
 
 
 # ---------------------------------------------------------------------------

@@ -413,26 +413,21 @@ def test_antipode_is_sphere_antipode(manifold, points, c):
 
 @pytest.mark.parametrize("k", [2.0, 1.0, 0.5, -0.5, -1.0, -2.0])
 def test_ktrig_closed_forms(k):
-    # Domain-safe range: √|k|·|x| ≤ ~0.8 keeps every branch (atanh, arcsin, tan) well inside its domain.
+    # Domain-safe range: √|k|·|x| ≤ ~0.8 keeps every branch (atanh, tan) well inside its domain.
     xs = jnp.linspace(-0.5, 0.5, 41, dtype=jnp.float64)
     sqrt_abs_k = abs(k) ** 0.5
     if k < 0:  # hyperbolic branch
         assert jnp.allclose(stereo_impl._tan_k(xs, k), jnp.tanh(sqrt_abs_k * xs) / sqrt_abs_k, atol=1e-10)
         assert jnp.allclose(stereo_impl._artan_k(xs, k), jnp.arctanh(sqrt_abs_k * xs) / sqrt_abs_k, atol=1e-10)
-        assert jnp.allclose(stereo_impl._sin_k(xs, k), jnp.sinh(sqrt_abs_k * xs) / sqrt_abs_k, atol=1e-10)
-        assert jnp.allclose(stereo_impl._arsin_k(xs, k), jnp.arcsinh(sqrt_abs_k * xs) / sqrt_abs_k, atol=1e-10)
     else:  # spherical branch
         assert jnp.allclose(stereo_impl._tan_k(xs, k), jnp.tan(sqrt_abs_k * xs) / sqrt_abs_k, atol=1e-10)
         assert jnp.allclose(stereo_impl._artan_k(xs, k), jnp.arctan(sqrt_abs_k * xs) / sqrt_abs_k, atol=1e-10)
-        assert jnp.allclose(stereo_impl._sin_k(xs, k), jnp.sin(sqrt_abs_k * xs) / sqrt_abs_k, atol=1e-10)
-        assert jnp.allclose(stereo_impl._arsin_k(xs, k), jnp.arcsin(sqrt_abs_k * xs) / sqrt_abs_k, atol=1e-10)
 
 
 def test_ktrig_inverse_relations():
     xs = jnp.linspace(-0.4, 0.4, 41, dtype=jnp.float64)
     for k in (2.0, 0.5, -0.5, -2.0):
         assert jnp.allclose(stereo_impl._artan_k(stereo_impl._tan_k(xs, k), k), xs, atol=1e-9)
-        assert jnp.allclose(stereo_impl._arsin_k(stereo_impl._sin_k(xs, k), k), xs, atol=1e-9)
 
 
 def test_ktrig_taylor_coeffs_match_closed_form():
@@ -446,18 +441,14 @@ def test_ktrig_taylor_coeffs_match_closed_form():
         sqrt_abs_k = abs(k) ** 0.5
         tan_cf = (jnp.tan(sqrt_abs_k * xs) if k > 0 else jnp.tanh(sqrt_abs_k * xs)) / sqrt_abs_k
         artan_cf = (jnp.arctan(sqrt_abs_k * xs) if k > 0 else jnp.arctanh(sqrt_abs_k * xs)) / sqrt_abs_k
-        sin_cf = (jnp.sin(sqrt_abs_k * xs) if k > 0 else jnp.sinh(sqrt_abs_k * xs)) / sqrt_abs_k
-        arsin_cf = (jnp.arcsin(sqrt_abs_k * xs) if k > 0 else jnp.arcsinh(sqrt_abs_k * xs)) / sqrt_abs_k
         assert jnp.allclose(stereo_impl._tan_k_zero_taylor(xs, k), tan_cf, atol=1e-6)
         assert jnp.allclose(stereo_impl._artan_k_zero_taylor(xs, k), artan_cf, atol=1e-6)
-        assert jnp.allclose(stereo_impl._sin_k_zero_taylor(xs, k), sin_cf, atol=1e-6)
-        assert jnp.allclose(stereo_impl._arsin_k_zero_taylor(xs, k), arsin_cf, atol=1e-6)
 
 
 def test_ktrig_zero_curvature_limit():
     xs = jnp.linspace(-1.0, 1.0, 41, dtype=jnp.float64)
     # At k = 0 every κ-trig reduces to the identity, continuously.
-    for fn in (stereo_impl._tan_k, stereo_impl._artan_k, stereo_impl._sin_k, stereo_impl._arsin_k):
+    for fn in (stereo_impl._tan_k, stereo_impl._artan_k):
         assert jnp.allclose(fn(xs, 0.0), xs, atol=1e-12)
         assert jnp.allclose(fn(xs, 1e-12), xs, atol=1e-9)  # continuity across the Taylor seam
         assert jnp.allclose(fn(xs, -1e-12), xs, atol=1e-9)
@@ -593,7 +584,7 @@ def test_ktrig_seam_continuity():
     # so any residual is a true discontinuity, not the function's slope).
     xs = jnp.linspace(-1.0, 1.0, 41, dtype=jnp.float64)
     eps = stereo_impl.K_ZERO_EPS
-    for fn in (stereo_impl._tan_k, stereo_impl._artan_k, stereo_impl._sin_k, stereo_impl._arsin_k):
+    for fn in (stereo_impl._tan_k, stereo_impl._artan_k):
         for k in (eps, -eps):
             below = fn(xs, k * 0.999999)  # Taylor branch
             above = fn(xs, k * 1.000001)  # closed-form branch
