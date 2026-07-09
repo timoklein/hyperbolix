@@ -520,6 +520,51 @@ def test_jit_vmap_grad_smoke(c_val):
 
 
 # ---------------------------------------------------------------------------
+# float32 gradient safety near c = 0 (the library default dtype). These pin the two float32-only
+# hazards that the float64-only seam/grad tests above cannot see: a signed LearnableCurvature crossing
+# zero lives here, in the default dtype.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("c_val", [1e-9, 5e-9, 1e-7, 1e-6, -1e-9, -1e-7, -1e-6])
+def test_curvature_gradient_correct_near_zero_float32(c_val):
+    # Regression (float32): the closed-form κ-trig κ-gradient dies to catastrophic cancellation for
+    # |c| ≲ 1e-5 in float32 — even wrong-SIGNED below ~1e-8 — so a signed ``LearnableCurvature`` crossing
+    # zero received garbage curvature gradients in the DEFAULT dtype. The dtype-aware Taylor cutover
+    # (``_k_zero_eps``: 1e-5 for float32 vs 1e-9 for float64) must keep grad_c correct. Ground truth is
+    # the float64 autodiff value (float64 has no cancellation here); note k = -c.
+    g32 = float(jax.grad(lambda c: stereo_impl._artan_k(jnp.float32(0.5), -c))(jnp.float32(c_val)))
+    g64 = float(jax.grad(lambda c: stereo_impl._artan_k(jnp.float64(0.5), -c))(jnp.float64(c_val)))
+    assert math.copysign(1.0, g32) == math.copysign(1.0, g64), f"grad_c wrong sign at c={c_val}: f32={g32} f64={g64}"
+    assert abs(g32 - g64) < 1e-2, f"grad_c inaccurate at c={c_val}: f32={g32} f64={g64}"
+
+    # Same corruption surfaces through the public ``dist`` — the path ``LearnableCurvature`` differentiates.
+    x = jnp.array([0.1, 0.2, -0.05])
+    y = jnp.array([0.15, -0.1, 0.2])
+    d32 = float(
+        jax.grad(lambda c: Stereographic(dtype=jnp.float32).dist(x.astype(jnp.float32), y.astype(jnp.float32), c))(
+            jnp.float32(c_val)
+        )
+    )
+    d64 = float(jax.grad(lambda c: Stereographic(dtype=jnp.float64).dist(x, y, c))(jnp.float64(c_val)))
+    assert abs(d32 - d64) < 1e-2, f"dist grad_c inaccurate at c={c_val}: f32={d32} f64={d64}"
+
+
+@pytest.mark.parametrize("c_val", [0.0, 1e-9, 0.5, 2.0, -0.5, -2.0])
+def test_antipode_gradient_finite_float32(c_val):
+    # Regression (float32): the antipode builds a radius 1/√|c| that → ∞ as c → 0; the DISCARDED spherical
+    # branch (c ≥ 0 returns -x) then fed ~1e8 into the κ-trig Taylor x**11 term, overflowing float32 to inf
+    # whose 0·inf gradient leaked through jnp.where into the SELECTED -x branch → NaN grad. The radius
+    # guard must keep both grad_x and grad_c finite across all regimes.
+    m = Stereographic(dtype=jnp.float32)
+    x = jnp.array([0.3, -0.5, 0.2], dtype=jnp.float32)
+    gx = jax.grad(lambda xx: jnp.sum(m.antipode(xx, jnp.float32(c_val))))(x)
+    assert jnp.all(jnp.isfinite(gx)), f"antipode grad_x not finite at c={c_val}: {gx}"
+    gc = jax.grad(lambda cc: jnp.sum(m.antipode(x, cc)))(jnp.float32(c_val))
+    assert jnp.isfinite(gc), f"antipode grad_c not finite at c={c_val}: {gc}"
+
+
+# ---------------------------------------------------------------------------
 # Remaining protocol methods & continuity coverage
 # ---------------------------------------------------------------------------
 

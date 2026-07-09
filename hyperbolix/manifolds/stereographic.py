@@ -83,10 +83,26 @@ from .protocol import Curvature
 
 # Switch the κ-trig functions to their (analytic, signed-κ) Taylor series when |κ| falls below this.
 # For |κ| above it the closed forms use the true √|κ| (never the floor), so value AND gradient w.r.t.
-# both the argument and κ are correct; the Taylor branch only carries the tiny neighborhood of κ = 0
-# where the floored √|κ| would otherwise zero out the κ-gradient. Kept well above MIN_NORM (the √|κ|
-# floor) and well below any realistic curvature so the series never diverges (needs |κ|·x² ≳ 1).
-K_ZERO_EPS = 1e-9
+# both the argument and κ are correct; the Taylor branch only carries the neighborhood of κ = 0 where
+# the floored √|κ| would otherwise zero out the κ-gradient. Kept well above MIN_NORM (the √|κ| floor)
+# and well below any realistic curvature so the series never diverges (needs |κ|·x² ≳ 1).
+#
+# The cutover is DTYPE-DEPENDENT. In float64 the closed forms stay accurate down to |κ| ~ 1e-9, but in
+# float32 the closed-form κ-gradient `d/dκ [atanh(√|κ|·x)/√|κ|]` loses all significant digits to
+# catastrophic cancellation for |κ| up to ~1e-5 (and is even wrong-SIGNED below ~1e-8). So float32 must
+# hand over to the (cancellation-free polynomial) Taylor branch ~4 decades earlier — otherwise a signed
+# `LearnableCurvature` crossing zero receives a corrupted curvature gradient in the library's DEFAULT
+# dtype. Both thresholds sit far below any realistic curvature, so |κ|·x² ≪ 1 and the order-5 series
+# never diverges. `K_ZERO_EPS` is retained as the float64 value (and public/back-compat name).
+K_ZERO_EPS = 1e-9  # float64
+_K_ZERO_EPS_F32 = 1e-5  # float32 (and any dtype with ≤ 32 significand+exponent bits)
+
+
+def _k_zero_eps(dtype: jnp.dtype) -> float:
+    """Dtype-aware Taylor-cutover magnitude for the κ-trig functions (float32 hands over ~4 decades
+    earlier than float64 to dodge catastrophic cancellation in the closed-form κ-gradient)."""
+    return _K_ZERO_EPS_F32 if jnp.finfo(dtype).bits <= 32 else K_ZERO_EPS
+
 
 # Clamp the argument of the spherical `tan` branch to a large finite value: prevents ±inf feeding `tan`
 # (which would NaN the *unselected* branch's gradient), while still letting `tan` wrap through its poles
@@ -166,7 +182,7 @@ def _tan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     neg = tanh(scaled) / sqrt_abs_k
     pos = jnp.tan(jnp.clip(scaled, -_TAN_ARG_CLAMP, _TAN_ARG_CLAMP)) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
-    return jnp.where(jnp.abs(jnp.asarray(k)) < K_ZERO_EPS, _tan_k_zero_taylor(x, k), nonzero)
+    return jnp.where(jnp.abs(jnp.asarray(k)) < _k_zero_eps(jnp.asarray(x).dtype), _tan_k_zero_taylor(x, k), nonzero)
 
 
 def _artan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
@@ -176,7 +192,7 @@ def _artan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     neg = atanh(scaled) / sqrt_abs_k
     pos = jnp.arctan(scaled) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
-    return jnp.where(jnp.abs(jnp.asarray(k)) < K_ZERO_EPS, _artan_k_zero_taylor(x, k), nonzero)
+    return jnp.where(jnp.abs(jnp.asarray(k)) < _k_zero_eps(jnp.asarray(x).dtype), _artan_k_zero_taylor(x, k), nonzero)
 
 
 def _sin_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
@@ -186,7 +202,7 @@ def _sin_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     neg = sinh(scaled) / sqrt_abs_k
     pos = jnp.sin(scaled) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
-    return jnp.where(jnp.abs(jnp.asarray(k)) < K_ZERO_EPS, _sin_k_zero_taylor(x, k), nonzero)
+    return jnp.where(jnp.abs(jnp.asarray(k)) < _k_zero_eps(jnp.asarray(x).dtype), _sin_k_zero_taylor(x, k), nonzero)
 
 
 def _arsin_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
@@ -198,7 +214,7 @@ def _arsin_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     eps = 10.0 * float(jnp.finfo(jnp.asarray(x).dtype).eps)
     pos = jnp.arcsin(jnp.clip(scaled, -1.0 + eps, 1.0 - eps)) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
-    return jnp.where(jnp.abs(jnp.asarray(k)) < K_ZERO_EPS, _arsin_k_zero_taylor(x, k), nonzero)
+    return jnp.where(jnp.abs(jnp.asarray(k)) < _k_zero_eps(jnp.asarray(x).dtype), _arsin_k_zero_taylor(x, k), nonzero)
 
 
 # ---------------------------------------------------------------------------
@@ -343,13 +359,25 @@ def _geodesic_unit(t: Float[Array, ""], x: Float[Array, "dim"], u: Float[Array, 
 
 def _antipode(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Antipode. Spherical (``c < 0``): the point diametrically opposite ``x`` (distance ``π/√|κ|`` away),
-    computed as ``geodesic_unit(π·R, x, x/‖x‖)`` with ``R = 1/√|c|``. Non-spherical (``c ≥ 0``): ``-x``."""
+    computed as ``geodesic_unit(π·R, x, x/‖x‖)`` with ``R = 1/√|c|``. Non-spherical (``c ≥ 0``): ``-x``.
+
+    Note: ``dist(x, antipode(x))`` is numerically unreliable — antipodal points are the coordinate
+    singularity of the stereographic chart where the geodesic-distance formula is an unavoidable ``0/0``
+    (shared with the geoopt reference). The antipode *point* itself is correct (an exact involution)."""
+    c_arr = jnp.asarray(c)
+    is_spherical = c_arr < 0
     x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
     direction = x / x_norm
-    radius = 1.0 / jnp.sqrt(jnp.maximum(jnp.abs(jnp.asarray(c)), MIN_NORM))  # R = 1/√|κ|
+    # Only the spherical (``c < 0``) branch is used below; ``c ≥ 0`` returns ``-x``. Guard the radius so
+    # the DISCARDED spherical computation cannot overflow: at ``c → 0`` the true radius ``1/√|c| → ∞`` and
+    # feeding ~1e8 into the κ-trig Taylor ``x**11`` term overflows float32 to inf, whose ``0·inf`` gradient
+    # would leak through the ``jnp.where`` into the *selected* ``-x`` branch (NaN grad at ``c ≈ 0``).
+    # Substituting a benign radius for ``c ≥ 0`` keeps that branch finite without changing the ``c < 0`` result.
+    safe_abs_c = jnp.where(is_spherical, jnp.maximum(jnp.abs(c_arr), MIN_NORM), jnp.ones_like(c_arr))
+    radius = 1.0 / jnp.sqrt(safe_abs_c)  # R = 1/√|κ| for c < 0; 1 for the discarded c ≥ 0 branch
     pi = jnp.asarray(jnp.pi, dtype=x.dtype)
     spherical = _geodesic_unit(pi * radius, x, direction, c)
-    return jnp.where(jnp.asarray(c) < 0, spherical, -x)
+    return jnp.where(is_spherical, spherical, -x)
 
 
 # ---------------------------------------------------------------------------
