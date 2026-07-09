@@ -63,8 +63,9 @@ class LearnableCurvature(nnx.Module):
     Stores a single Euclidean ``nnx.Param`` whose value is mapped to a
     curvature on every forward call — positive for ``softplus``/``log``, signed
     for ``identity``. Three parameterizations are supported, with optional
-    clamping applied to the recovered curvature (not the raw parameter) for hard
-    stability guarantees in compiled training loops.
+    clamping of the recovered curvature to ``[c_min, c_max]`` for hard stability
+    guarantees in compiled training loops; the ``log`` parameterization additionally
+    caps its exponent so a large ``raw`` cannot overflow ``exp`` to a NaN gradient.
 
     Usage::
 
@@ -144,6 +145,10 @@ class LearnableCurvature(nnx.Module):
         if isinstance(c_max, _Auto):
             c_max = _C_ABS_MAX
 
+        # NaN slips through every range check below (all comparisons with NaN are False), silently storing
+        # a NaN raw param that poisons the whole model — reject it up front.
+        if not math.isfinite(init_c):
+            raise ValueError(f"init_c must be finite, got {init_c}")
         # softplus/exp map onto (0, inf) and cannot represent c <= 0, so a non-positive init is a usage error
         # there. identity is signed and accepts any init_c (including 0.0 and negatives).
         if not signed and init_c <= 0:
@@ -173,17 +178,26 @@ class LearnableCurvature(nnx.Module):
         if self._parameterization == "softplus":
             c = jax.nn.softplus(self.raw[...])
         elif self._parameterization == "log":
-            c = jnp.exp(self.raw[...])
+            # Cap the exponent so exp() cannot overflow to +inf: an inf here makes the downstream clip's
+            # out-of-range cotangent 0*inf = NaN (and, under straight_through_clamp, NaNs the forward value
+            # via inf + (-inf)). Below the cap this is a value/grad identity; above it c is already pinned at
+            # c_max by the clamp anyway, so nothing meaningful is lost.
+            raw = self.raw[...]
+            max_exp = 0.99 * math.log(float(jnp.finfo(raw.dtype).max))
+            c = jnp.exp(jnp.minimum(raw, max_exp))
         else:  # "identity"
             c = self.raw[...]
 
         if self._c_min is not None or self._c_max is not None:
             c_clipped = jnp.clip(c, self._c_min, self._c_max)
             if self._straight_through_clamp:
-                # Forward value stays clamped; backward gradient becomes identity
-                # instead of zero, so `raw` can keep moving and `c` can re-enter
-                # the interval once the loss pulls the other way.
-                c = c + jax.lax.stop_gradient(c_clipped - c)
+                # Forward value stays clamped; backward gradient becomes identity instead of zero, so
+                # `raw` can keep moving and `c` can re-enter the interval once the loss pulls the other way.
+                # Numerically stable form: `c - stop_gradient(c)` is exactly 0, so the forward equals
+                # c_clipped to full precision. The algebraically-equivalent `c + stop_gradient(c_clipped - c)`
+                # cancels catastrophically when c ≫ c_clipped (e.g. log-param with a large raw → c ~ 1e38,
+                # c_clipped = c_max: `c_max - c` loses c_max, and the sum collapses to 0).
+                c = jax.lax.stop_gradient(c_clipped) + (c - jax.lax.stop_gradient(c))
             else:
                 c = c_clipped
 

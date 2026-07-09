@@ -172,12 +172,15 @@ def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
 def tanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic tangent clamped so the output stays strictly inside (-1, 1). Domain=(-inf, inf).
 
-    Clips the input to ``±0.5*log(2/machine_eps)`` (≈±8.3 for f32, ≈±18.4 for f64) so ``|tanh(x)|``
-    never rounds up to exactly 1.0 — which would make a downstream ``atanh`` singular. Within the
-    un-clipped regime this is a value- and gradient-identity to ``jnp.tanh``: ``tanh`` saturates well
-    before the clip bites, so the forward pass and the VJP match unguarded ``jnp.tanh`` throughout the
-    entire non-saturated range. Mirrors the domain-guard philosophy of ``acosh``/``atanh`` above and
-    the ``tanh(clamp)`` guard in the geoopt κ-stereographic reference.
+    Clips the input to ``±0.5*log(2/machine_eps)`` (≈±8.3 for f32, ≈±18.4 for f64) AND clips the output to
+    ``±(1 - 10*machine_eps)``. The input clip is the analytic point where ``1 - tanh`` reaches ``eps``; the
+    output clip is required *in addition* because XLA's float32 ``tanh`` saturates to **exactly** ``1.0``
+    slightly earlier (≈ x = 8), which the input clip alone does not prevent — and an exact ``1.0`` would make
+    a downstream ``atanh`` singular. The output bound matches ``atanh``'s own ``±(1 - 10*eps)`` domain guard,
+    so ``atanh(tanh(x))`` can never reach the pole. Within the non-saturated range this is a value- and
+    gradient-identity to ``jnp.tanh``; only the saturated tail is affected (gradient 0 there, as for
+    ``cosh``/``sinh``). Mirrors the domain-guard philosophy of ``acosh``/``atanh`` above and the
+    ``tanh(clamp)`` guard in the geoopt κ-stereographic reference.
 
     Args:
         x: Input array of any shape
@@ -185,10 +188,12 @@ def tanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     Returns:
         tanh(x) clamped strictly inside (-1, 1)
     """
-    # 1 - tanh(x) ≈ 2*exp(-2x); require it ≥ eps ⇒ x ≤ 0.5*log(2/eps) keeps the output < 1 exactly.
+    # 1 - tanh(x) ≈ 2*exp(-2x); require it ≥ eps ⇒ x ≤ 0.5*log(2/eps) is the analytic bound.
     clamp = 0.5 * jnp.log(2.0 / jnp.finfo(x.dtype).eps)
-    x = jnp.clip(x, -clamp, clamp)
-    return jnp.tanh(x)
+    out = jnp.tanh(jnp.clip(x, -clamp, clamp))
+    # Also clamp the output: XLA's float32 tanh reaches exactly 1.0 before the input bound bites.
+    max_out = 1.0 - 10.0 * float(jnp.finfo(x.dtype).eps)
+    return jnp.clip(out, -max_out, max_out)
 
 
 @jax.jit

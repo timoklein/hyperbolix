@@ -118,6 +118,13 @@ class TestLearnableCurvatureInit:
         with pytest.raises(ValueError, match="parameterization"):
             LearnableCurvature(1.0, parameterization="quadratic")  # type: ignore[arg-type]
 
+    @pytest.mark.parametrize("parameterization", ["softplus", "log", "identity"])
+    def test_nan_init_c_raises(self, parameterization):
+        # NaN slips through every range check (all NaN comparisons are False); reject it up front rather
+        # than silently store a NaN raw param. `identity` accepts negatives/zero, so it needs this too.
+        with pytest.raises(ValueError, match="finite"):
+            LearnableCurvature(float("nan"), parameterization=parameterization)
+
 
 class TestLearnableCurvatureClamping:
     """Clamping applies to the recovered c, not the raw param."""
@@ -197,8 +204,8 @@ class TestLearnableCurvatureGradients:
         once c exits [c_min, c_max] -- c is pinned, not chosen."""
         c = LearnableCurvature(1.0, parameterization=parameterization)
         # raw=15.0 pushes c well past c_max=10.0 for both parameterizations (softplus(15)~=15,
-        # exp(15)~=3.3e6) without overflowing exp() in float32 (raw=100 would: exp(100) overflows
-        # to inf, and 0 (clip's out-of-range cotangent) * inf produces a spurious NaN gradient).
+        # exp(15)~=3.3e6). (The former exp() overflow at large raw is now guarded — see
+        # test_log_parameterization_no_nan_gradient_on_exp_overflow.)
         c.raw[...] = jnp.array(15.0, dtype=jnp.float32)
 
         def fn(m):
@@ -213,8 +220,8 @@ class TestLearnableCurvatureGradients:
         value stays clamped, but the gradient keeps flowing past the boundary."""
         c = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=True)
         # raw=15.0 pushes c well past c_max=10.0 for both parameterizations (softplus(15)~=15,
-        # exp(15)~=3.3e6) without overflowing exp() in float32 (raw=100 would: exp(100) overflows
-        # to inf, and 0 (clip's out-of-range cotangent) * inf produces a spurious NaN gradient).
+        # exp(15)~=3.3e6). (The former exp() overflow at large raw is now guarded — see
+        # test_log_parameterization_no_nan_gradient_on_exp_overflow.)
         c.raw[...] = jnp.array(15.0, dtype=jnp.float32)
 
         def fn(m):
@@ -224,6 +231,22 @@ class TestLearnableCurvatureGradients:
         assert float(val) == pytest.approx(10.0)  # forward value still clamped
         assert jnp.isfinite(grads.raw[...])
         assert float(grads.raw[...]) != 0.0
+
+    @pytest.mark.parametrize("straight_through", [False, True])
+    def test_log_parameterization_no_nan_gradient_on_exp_overflow(self, straight_through):
+        # Regression: exp(raw) overflowed float32 to +inf for large raw, making the clip's out-of-range
+        # cotangent 0*inf = NaN (and, under straight_through, NaN-ing the forward via inf + (-inf)). The
+        # exponent cap + numerically-stable straight-through must keep the forward pinned at c_max and the
+        # gradient finite even where exp() would have overflowed.
+        c = LearnableCurvature(1.0, parameterization="log", straight_through_clamp=straight_through)
+        c.raw[...] = jnp.array(100.0, dtype=jnp.float32)  # exp(100) overflows float32
+
+        def fn(m):
+            return m()
+
+        val, grads = nnx.value_and_grad(fn)(c)
+        assert jnp.isfinite(val) and float(val) == pytest.approx(10.0)  # forward pinned at c_max, not NaN/0
+        assert jnp.isfinite(grads.raw[...])
 
 
 # ===========================================================================
