@@ -615,10 +615,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#choosing-softplus-vs-log" class="md-nav__link">
+  <a href="#choosing-a-parameterization" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Choosing softplus vs. log
+        Choosing a parameterization
       
     </span>
   </a>
@@ -1565,10 +1565,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#choosing-softplus-vs-log" class="md-nav__link">
+  <a href="#choosing-a-parameterization" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Choosing softplus vs. log
+        Choosing a parameterization
       
     </span>
   </a>
@@ -1780,6 +1780,11 @@ patterns that aren't obvious from any single docstring.</p>
 <td>Unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span>; no projection or constraint drift</td>
 </tr>
 <tr>
+<td>Spherical / cyclic data, or learning the <em>sign</em> of curvature</td>
+<td><code>Stereographic</code></td>
+<td>One signed-<code>c</code> manifold spans hyperbolic (<code>c&gt;0</code>), Euclidean (<code>c=0</code>), and spherical (<code>c&lt;0</code>), differentiable across zero (Bachmann et al. 2020)</td>
+</tr>
+<tr>
 <td>You don't know which to pick</td>
 <td><code>Hyperboloid</code> (or <code>ProperVelocity</code>)</td>
 <td>Robust at <code>c=1.0</code>; PV adds no-projection convenience</td>
@@ -1856,7 +1861,12 @@ take <strong>different conventions</strong>:</p>
 you only have to get the channel argument right at construction.</p>
 </div>
 <p>Curvature convention is uniform across all manifolds: <code>c &gt; 0</code> means sectional
-curvature <span class="arithmatex">\(-c\)</span> (so larger <code>c</code> → more curved). <code>Euclidean</code> ignores <code>c</code> entirely.</p>
+curvature <span class="arithmatex">\(-c\)</span> (so larger <code>c</code> → more curved). <code>Euclidean</code> ignores <code>c</code> entirely.
+The one exception is <code>Stereographic</code>, which takes a <strong>signed</strong> <code>c</code> that <em>extends</em>
+this same convention across zero: <code>c &gt; 0</code> hyperbolic (identical to <code>Poincare(c)</code>),
+<code>c = 0</code> Euclidean, <code>c &lt; 0</code> spherical. See the
+<a href="../../api-reference/manifolds/">κ-Stereographic API reference</a> for the factor-2
+Euclidean-limit caveat and the sign-flip relative to the paper's <span class="arithmatex">\(\kappa\)</span>.</p>
 <h2 id="working-with-curvature">Working with Curvature<a class="headerlink" href="#working-with-curvature" title="Permanent link">&para;</a></h2>
 <h3 id="static-vs-learnable">Static vs. learnable<a class="headerlink" href="#static-vs-learnable" title="Permanent link">&para;</a></h3>
 <p>Manifolds are <strong>pure geometric utilities</strong> (plain Python classes, not <code>nnx.Module</code>).
@@ -1886,12 +1896,13 @@ in your model:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># self.curvature.raw is optimized alongside other params automatically.</span>
 </span></code></pre></div>
-<h3 id="choosing-softplus-vs-log">Choosing softplus vs. log<a class="headerlink" href="#choosing-softplus-vs-log" title="Permanent link">&para;</a></h3>
+<h3 id="choosing-a-parameterization">Choosing a parameterization<a class="headerlink" href="#choosing-a-parameterization" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
 <th>Parameterization</th>
 <th>Formula</th>
+<th>Range</th>
 <th>Gradient w.r.t. raw</th>
 <th>When to prefer</th>
 </tr>
@@ -1900,22 +1911,35 @@ in your model:</p>
 <tr>
 <td><code>"softplus"</code> (default)</td>
 <td><code>c = softplus(raw)</code></td>
+<td><code>c &gt; 0</code></td>
 <td><code>sigmoid(raw) ∈ (0, 1)</code> — bounded</td>
 <td>Supervised training; van Spengler 2023 convention</td>
 </tr>
 <tr>
 <td><code>"log"</code></td>
 <td><code>c = exp(raw)</code></td>
+<td><code>c &gt; 0</code></td>
 <td><code>c</code> — scale-invariant</td>
 <td>RL/compiled loops; <code>c</code> spans orders of magnitude; MERU convention</td>
+</tr>
+<tr>
+<td><code>"identity"</code></td>
+<td><code>c = raw</code></td>
+<td><strong>signed</strong> (<code>c ⋛ 0</code>)</td>
+<td><code>1</code> — crosses zero</td>
+<td><code>Stereographic</code> manifold: learn hyperbolic/Euclidean/spherical from data</td>
 </tr>
 </tbody>
 </table>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="bp">self</span><span class="o">.</span><span class="n">curvature</span> <span class="o">=</span> <span class="n">LearnableCurvature</span><span class="p">(</span><span class="n">init_c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">parameterization</span><span class="o">=</span><span class="s2">&quot;log&quot;</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># Signed curvature for the Stereographic manifold (c&lt;0 spherical, 0 Euclidean, c&gt;0 hyperbolic):</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="bp">self</span><span class="o">.</span><span class="n">kappa</span> <span class="o">=</span> <span class="n">LearnableCurvature</span><span class="p">(</span><span class="n">init_c</span><span class="o">=-</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">parameterization</span><span class="o">=</span><span class="s2">&quot;identity&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-<p>Both apply the default clamp <code>[0.1, 10.0]</code> to the recovered <code>c</code> (not the
-raw parameter), giving a hard stability guard. Pass <code>c_min=None, c_max=None</code>
-to disable, or set tighter bounds to fit your workload.</p>
+<p>The positive parameterizations apply the default clamp <code>[0.1, 10.0]</code> to the
+recovered <code>c</code> (not the raw parameter), giving a hard stability guard.
+<code>"identity"</code> instead uses a symmetric magnitude cap <code>[-10.0, 10.0]</code> that
+<em>includes</em> <code>0</code>, so it never forbids the Euclidean/spherical half. Pass
+<code>c_min=None, c_max=None</code> to disable, or set tighter bounds to fit your workload.</p>
 <h3 id="when-c10-works-and-when-it-doesnt">When <code>c=1.0</code> works and when it doesn't<a class="headerlink" href="#when-c10-works-and-when-it-doesnt" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

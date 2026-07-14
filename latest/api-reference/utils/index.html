@@ -2071,7 +2071,7 @@ inputs ride the last representable value before the singularity.</p>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">z_clamped</span> <span class="o">=</span> <span class="n">smooth_clamp</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">min_val</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">max_val</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="learnable-curvature">Learnable Curvature<a class="headerlink" href="#learnable-curvature" title="Permanent link">&para;</a></h2>
-<p><code>LearnableCurvature</code> is an <code>nnx.Module</code> that bundles a Euclidean raw parameter, a positivity reparameterization (<code>softplus</code> or <code>log</code>/<code>exp</code>), and an optional <code>[c_min, c_max]</code> clamp into one object. Assign one instance per distinct curvature on your model and call it in the forward pass to obtain the positive (optionally clamped) curvature.</p>
+<p><code>LearnableCurvature</code> is an <code>nnx.Module</code> that bundles a Euclidean raw parameter, a curvature reparameterization (positive <code>softplus</code>/<code>log</code>, or the <strong>signed</strong> <code>identity</code> — <code>c = raw</code> — for the <code>Stereographic</code> manifold), and an optional <code>[c_min, c_max]</code> clamp into one object. Assign one instance per distinct curvature on your model and call it in the forward pass to obtain the (optionally clamped) curvature.</p>
 
 
 <div class="doc doc-object doc-class">
@@ -2087,8 +2087,8 @@ inputs ride the last representable value before the singularity.</p>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">init_c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="o">*</span><span class="p">,</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">parameterization</span><span class="p">:</span> <span class="n">Parameterization</span> <span class="o">=</span> <span class="s2">&quot;softplus&quot;</span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">c_min</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">0.1</span><span class="p">,</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">c_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">10.0</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">c_min</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">_Auto</span> <span class="o">=</span> <span class="n">_AUTO</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">c_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">_Auto</span> <span class="o">=</span> <span class="n">_AUTO</span><span class="p">,</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">straight_through_clamp</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="p">)</span>
@@ -2102,31 +2102,38 @@ inputs ride the last representable value before the singularity.</p>
 
         <p>Reparameterized learnable curvature parameter.</p>
 <p>Stores a single Euclidean <code>nnx.Param</code> whose value is mapped to a
-positive curvature on every forward call. Two parameterizations are
-supported, with optional clamping applied to the recovered curvature
-(not the raw parameter) for hard stability guarantees in compiled
-training loops.</p>
+curvature on every forward call — positive for <code>softplus</code>/<code>log</code>, signed
+for <code>identity</code>. Three parameterizations are supported, with optional
+clamping of the recovered curvature to <code>[c_min, c_max]</code> for hard stability
+guarantees in compiled training loops; the <code>log</code> parameterization additionally
+caps its exponent so a large <code>raw</code> cannot overflow <code>exp</code> to a NaN gradient.</p>
 <p>Usage::</p>
 <div class="language-text highlight"><pre><span></span><code>self.curvature = LearnableCurvature(init_c=0.1)
 ...
 c = self.curvature()  # positive jax.Array
 </code></pre></div>
 <p>Args:
-    init_c: Initial curvature value. Must be positive. If clamp bounds
-        are set, must also satisfy <code>c_min &lt;= init_c &lt;= c_max</code>.
+    init_c: Initial curvature value. Must be positive for <code>softplus</code>/<code>log</code>;
+        any sign (including <code>0.0</code>) for <code>identity</code>. If clamp bounds are set,
+        must also satisfy <code>c_min &lt;= init_c &lt;= c_max</code>.
     parameterization: Reparameterization scheme.</p>
-<div class="language-text highlight"><pre><span></span><code>    - ``&quot;softplus&quot;`` (default): ``c = softplus(raw)``. Gradient is
-      bounded by ``sigmoid(raw) in (0, 1)``; smooth near zero;
+<div class="language-text highlight"><pre><span></span><code>    - ``&quot;softplus&quot;`` (default): ``c = softplus(raw)`` — strictly positive.
+      Gradient bounded by ``sigmoid(raw) in (0, 1)``; smooth near zero;
       matches the van Spengler et al. 2023 Poincare ResNet convention.
-    - ``&quot;log&quot;``: ``c = exp(raw)``. Scale-invariant gradient
-      (``dc/draw = c``); preferred when ``c`` may span orders of
+    - ``&quot;log&quot;``: ``c = exp(raw)`` — strictly positive. Scale-invariant
+      gradient (``dc/draw = c``); preferred when ``c`` may span orders of
       magnitude or for long compiled RL training loops. Matches the
       MERU convention.
+    - ``&quot;identity&quot;``: ``c = raw`` — **signed**. Spans hyperbolic (``c&gt;0``),
+      Euclidean (``c=0``), and spherical (``c&lt;0``) curvature for the
+      :class:`~hyperbolix.manifolds.Stereographic` manifold; ``dc/draw = 1``,
+      so it can cross zero. The only parameterization that reaches ``c&lt;=0``.
 
-c_min: Lower clamp applied to the recovered ``c``. Default ``0.1``.
-    Pass ``None`` to disable.
-c_max: Upper clamp applied to the recovered ``c``. Default ``10.0``.
-    Pass ``None`` to disable.
+c_min: Lower clamp applied to the recovered ``c``. Default resolves per
+    parameterization: ``0.1`` for ``softplus``/``log``, ``-10.0`` for the
+    signed ``identity``. Pass ``None`` to disable, or a float to override.
+c_max: Upper clamp applied to the recovered ``c``. Default resolves to
+    ``10.0``. Pass ``None`` to disable, or a float to override.
 straight_through_clamp: If ``True``, the clamp is gradient-transparent:
     the forward value is still clamped to ``[c_min, c_max]``, but the
     backward gradient is identity rather than zero, so ``raw`` can keep
@@ -2161,29 +2168,7 @@ keep the forward safety guarantee while eliminating the ratchet.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/utils/curvature.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-104">104</a></span>
-<span class="normal"><a href="#__codelineno-0-105">105</a></span>
-<span class="normal"><a href="#__codelineno-0-106">106</a></span>
-<span class="normal"><a href="#__codelineno-0-107">107</a></span>
-<span class="normal"><a href="#__codelineno-0-108">108</a></span>
-<span class="normal"><a href="#__codelineno-0-109">109</a></span>
-<span class="normal"><a href="#__codelineno-0-110">110</a></span>
-<span class="normal"><a href="#__codelineno-0-111">111</a></span>
-<span class="normal"><a href="#__codelineno-0-112">112</a></span>
-<span class="normal"><a href="#__codelineno-0-113">113</a></span>
-<span class="normal"><a href="#__codelineno-0-114">114</a></span>
-<span class="normal"><a href="#__codelineno-0-115">115</a></span>
-<span class="normal"><a href="#__codelineno-0-116">116</a></span>
-<span class="normal"><a href="#__codelineno-0-117">117</a></span>
-<span class="normal"><a href="#__codelineno-0-118">118</a></span>
-<span class="normal"><a href="#__codelineno-0-119">119</a></span>
-<span class="normal"><a href="#__codelineno-0-120">120</a></span>
-<span class="normal"><a href="#__codelineno-0-121">121</a></span>
-<span class="normal"><a href="#__codelineno-0-122">122</a></span>
-<span class="normal"><a href="#__codelineno-0-123">123</a></span>
-<span class="normal"><a href="#__codelineno-0-124">124</a></span>
-<span class="normal"><a href="#__codelineno-0-125">125</a></span>
-<span class="normal"><a href="#__codelineno-0-126">126</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-126">126</a></span>
 <span class="normal"><a href="#__codelineno-0-127">127</a></span>
 <span class="normal"><a href="#__codelineno-0-128">128</a></span>
 <span class="normal"><a href="#__codelineno-0-129">129</a></span>
@@ -2192,38 +2177,96 @@ keep the forward safety guarantee while eliminating the ratchet.</p>
 <span class="normal"><a href="#__codelineno-0-132">132</a></span>
 <span class="normal"><a href="#__codelineno-0-133">133</a></span>
 <span class="normal"><a href="#__codelineno-0-134">134</a></span>
-<span class="normal"><a href="#__codelineno-0-135">135</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-104"><a id="__codelineno-0-104" name="__codelineno-0-104"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-105"><a id="__codelineno-0-105" name="__codelineno-0-105"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-106"><a id="__codelineno-0-106" name="__codelineno-0-106"></a>    <span class="n">init_c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-107"><a id="__codelineno-0-107" name="__codelineno-0-107"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-108"><a id="__codelineno-0-108" name="__codelineno-0-108"></a>    <span class="n">parameterization</span><span class="p">:</span> <span class="n">Parameterization</span> <span class="o">=</span> <span class="s2">&quot;softplus&quot;</span><span class="p">,</span>
-</span><span id="__span-0-109"><a id="__codelineno-0-109" name="__codelineno-0-109"></a>    <span class="n">c_min</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">0.1</span><span class="p">,</span>
-</span><span id="__span-0-110"><a id="__codelineno-0-110" name="__codelineno-0-110"></a>    <span class="n">c_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="mf">10.0</span><span class="p">,</span>
-</span><span id="__span-0-111"><a id="__codelineno-0-111" name="__codelineno-0-111"></a>    <span class="n">straight_through_clamp</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-0-112"><a id="__codelineno-0-112" name="__codelineno-0-112"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-113"><a id="__codelineno-0-113" name="__codelineno-0-113"></a><span class="p">):</span>
-</span><span id="__span-0-114"><a id="__codelineno-0-114" name="__codelineno-0-114"></a>    <span class="k">if</span> <span class="n">init_c</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="__span-0-115"><a id="__codelineno-0-115" name="__codelineno-0-115"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;LearnableCurvature requires init_c &gt; 0, got </span><span class="si">{</span><span class="n">init_c</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-116"><a id="__codelineno-0-116" name="__codelineno-0-116"></a>    <span class="k">if</span> <span class="n">parameterization</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;softplus&quot;</span><span class="p">,</span> <span class="s2">&quot;log&quot;</span><span class="p">):</span>
-</span><span id="__span-0-117"><a id="__codelineno-0-117" name="__codelineno-0-117"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;parameterization must be &#39;softplus&#39; or &#39;log&#39;, got </span><span class="si">{</span><span class="n">parameterization</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-118"><a id="__codelineno-0-118" name="__codelineno-0-118"></a>    <span class="k">if</span> <span class="n">c_min</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">c_max</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">c_min</span> <span class="o">&gt;</span> <span class="n">c_max</span><span class="p">:</span>
-</span><span id="__span-0-119"><a id="__codelineno-0-119" name="__codelineno-0-119"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;c_min (</span><span class="si">{</span><span class="n">c_min</span><span class="si">}</span><span class="s2">) must be &lt;= c_max (</span><span class="si">{</span><span class="n">c_max</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
-</span><span id="__span-0-120"><a id="__codelineno-0-120" name="__codelineno-0-120"></a>    <span class="k">if</span> <span class="n">c_min</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">init_c</span> <span class="o">&lt;</span> <span class="n">c_min</span><span class="p">:</span>
-</span><span id="__span-0-121"><a id="__codelineno-0-121" name="__codelineno-0-121"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;init_c (</span><span class="si">{</span><span class="n">init_c</span><span class="si">}</span><span class="s2">) must be &gt;= c_min (</span><span class="si">{</span><span class="n">c_min</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
-</span><span id="__span-0-122"><a id="__codelineno-0-122" name="__codelineno-0-122"></a>    <span class="k">if</span> <span class="n">c_max</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">init_c</span> <span class="o">&gt;</span> <span class="n">c_max</span><span class="p">:</span>
-</span><span id="__span-0-123"><a id="__codelineno-0-123" name="__codelineno-0-123"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;init_c (</span><span class="si">{</span><span class="n">init_c</span><span class="si">}</span><span class="s2">) must be &lt;= c_max (</span><span class="si">{</span><span class="n">c_max</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
-</span><span id="__span-0-124"><a id="__codelineno-0-124" name="__codelineno-0-124"></a>
-</span><span id="__span-0-125"><a id="__codelineno-0-125" name="__codelineno-0-125"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_parameterization</span> <span class="o">=</span> <span class="n">parameterization</span>
-</span><span id="__span-0-126"><a id="__codelineno-0-126" name="__codelineno-0-126"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_c_min</span> <span class="o">=</span> <span class="n">c_min</span>
-</span><span id="__span-0-127"><a id="__codelineno-0-127" name="__codelineno-0-127"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_c_max</span> <span class="o">=</span> <span class="n">c_max</span>
-</span><span id="__span-0-128"><a id="__codelineno-0-128" name="__codelineno-0-128"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_straight_through_clamp</span> <span class="o">=</span> <span class="n">straight_through_clamp</span>
-</span><span id="__span-0-129"><a id="__codelineno-0-129" name="__codelineno-0-129"></a>
-</span><span id="__span-0-130"><a id="__codelineno-0-130" name="__codelineno-0-130"></a>    <span class="k">if</span> <span class="n">parameterization</span> <span class="o">==</span> <span class="s2">&quot;softplus&quot;</span><span class="p">:</span>
-</span><span id="__span-0-131"><a id="__codelineno-0-131" name="__codelineno-0-131"></a>        <span class="n">raw_init</span> <span class="o">=</span> <span class="n">_inv_softplus</span><span class="p">(</span><span class="n">init_c</span><span class="p">)</span>
-</span><span id="__span-0-132"><a id="__codelineno-0-132" name="__codelineno-0-132"></a>    <span class="k">else</span><span class="p">:</span>  <span class="c1"># &quot;log&quot;</span>
-</span><span id="__span-0-133"><a id="__codelineno-0-133" name="__codelineno-0-133"></a>        <span class="n">raw_init</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">init_c</span><span class="p">)</span>
-</span><span id="__span-0-134"><a id="__codelineno-0-134" name="__codelineno-0-134"></a>
-</span><span id="__span-0-135"><a id="__codelineno-0-135" name="__codelineno-0-135"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">raw</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">raw_init</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
+<span class="normal"><a href="#__codelineno-0-135">135</a></span>
+<span class="normal"><a href="#__codelineno-0-136">136</a></span>
+<span class="normal"><a href="#__codelineno-0-137">137</a></span>
+<span class="normal"><a href="#__codelineno-0-138">138</a></span>
+<span class="normal"><a href="#__codelineno-0-139">139</a></span>
+<span class="normal"><a href="#__codelineno-0-140">140</a></span>
+<span class="normal"><a href="#__codelineno-0-141">141</a></span>
+<span class="normal"><a href="#__codelineno-0-142">142</a></span>
+<span class="normal"><a href="#__codelineno-0-143">143</a></span>
+<span class="normal"><a href="#__codelineno-0-144">144</a></span>
+<span class="normal"><a href="#__codelineno-0-145">145</a></span>
+<span class="normal"><a href="#__codelineno-0-146">146</a></span>
+<span class="normal"><a href="#__codelineno-0-147">147</a></span>
+<span class="normal"><a href="#__codelineno-0-148">148</a></span>
+<span class="normal"><a href="#__codelineno-0-149">149</a></span>
+<span class="normal"><a href="#__codelineno-0-150">150</a></span>
+<span class="normal"><a href="#__codelineno-0-151">151</a></span>
+<span class="normal"><a href="#__codelineno-0-152">152</a></span>
+<span class="normal"><a href="#__codelineno-0-153">153</a></span>
+<span class="normal"><a href="#__codelineno-0-154">154</a></span>
+<span class="normal"><a href="#__codelineno-0-155">155</a></span>
+<span class="normal"><a href="#__codelineno-0-156">156</a></span>
+<span class="normal"><a href="#__codelineno-0-157">157</a></span>
+<span class="normal"><a href="#__codelineno-0-158">158</a></span>
+<span class="normal"><a href="#__codelineno-0-159">159</a></span>
+<span class="normal"><a href="#__codelineno-0-160">160</a></span>
+<span class="normal"><a href="#__codelineno-0-161">161</a></span>
+<span class="normal"><a href="#__codelineno-0-162">162</a></span>
+<span class="normal"><a href="#__codelineno-0-163">163</a></span>
+<span class="normal"><a href="#__codelineno-0-164">164</a></span>
+<span class="normal"><a href="#__codelineno-0-165">165</a></span>
+<span class="normal"><a href="#__codelineno-0-166">166</a></span>
+<span class="normal"><a href="#__codelineno-0-167">167</a></span>
+<span class="normal"><a href="#__codelineno-0-168">168</a></span>
+<span class="normal"><a href="#__codelineno-0-169">169</a></span>
+<span class="normal"><a href="#__codelineno-0-170">170</a></span>
+<span class="normal"><a href="#__codelineno-0-171">171</a></span>
+<span class="normal"><a href="#__codelineno-0-172">172</a></span>
+<span class="normal"><a href="#__codelineno-0-173">173</a></span>
+<span class="normal"><a href="#__codelineno-0-174">174</a></span>
+<span class="normal"><a href="#__codelineno-0-175">175</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-126"><a id="__codelineno-0-126" name="__codelineno-0-126"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-127"><a id="__codelineno-0-127" name="__codelineno-0-127"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-128"><a id="__codelineno-0-128" name="__codelineno-0-128"></a>    <span class="n">init_c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-129"><a id="__codelineno-0-129" name="__codelineno-0-129"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-130"><a id="__codelineno-0-130" name="__codelineno-0-130"></a>    <span class="n">parameterization</span><span class="p">:</span> <span class="n">Parameterization</span> <span class="o">=</span> <span class="s2">&quot;softplus&quot;</span><span class="p">,</span>
+</span><span id="__span-0-131"><a id="__codelineno-0-131" name="__codelineno-0-131"></a>    <span class="n">c_min</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">_Auto</span> <span class="o">=</span> <span class="n">_AUTO</span><span class="p">,</span>
+</span><span id="__span-0-132"><a id="__codelineno-0-132" name="__codelineno-0-132"></a>    <span class="n">c_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">_Auto</span> <span class="o">=</span> <span class="n">_AUTO</span><span class="p">,</span>
+</span><span id="__span-0-133"><a id="__codelineno-0-133" name="__codelineno-0-133"></a>    <span class="n">straight_through_clamp</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-134"><a id="__codelineno-0-134" name="__codelineno-0-134"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-135"><a id="__codelineno-0-135" name="__codelineno-0-135"></a><span class="p">):</span>
+</span><span id="__span-0-136"><a id="__codelineno-0-136" name="__codelineno-0-136"></a>    <span class="k">if</span> <span class="n">parameterization</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;softplus&quot;</span><span class="p">,</span> <span class="s2">&quot;log&quot;</span><span class="p">,</span> <span class="s2">&quot;identity&quot;</span><span class="p">):</span>
+</span><span id="__span-0-137"><a id="__codelineno-0-137" name="__codelineno-0-137"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;parameterization must be &#39;softplus&#39;, &#39;log&#39;, or &#39;identity&#39;, got </span><span class="si">{</span><span class="n">parameterization</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-138"><a id="__codelineno-0-138" name="__codelineno-0-138"></a>    <span class="n">signed</span> <span class="o">=</span> <span class="n">parameterization</span> <span class="o">==</span> <span class="s2">&quot;identity&quot;</span>
+</span><span id="__span-0-139"><a id="__codelineno-0-139" name="__codelineno-0-139"></a>
+</span><span id="__span-0-140"><a id="__codelineno-0-140" name="__codelineno-0-140"></a>    <span class="c1"># Resolve sentinel clamp bounds from the parameterization: softplus/log keep the historical positive</span>
+</span><span id="__span-0-141"><a id="__codelineno-0-141" name="__codelineno-0-141"></a>    <span class="c1"># window [0.1, 10]; identity uses a symmetric magnitude cap [-10, 10]. Explicit None still disables</span>
+</span><span id="__span-0-142"><a id="__codelineno-0-142" name="__codelineno-0-142"></a>    <span class="c1"># the clamp; explicit numeric bounds are honored verbatim.</span>
+</span><span id="__span-0-143"><a id="__codelineno-0-143" name="__codelineno-0-143"></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">c_min</span><span class="p">,</span> <span class="n">_Auto</span><span class="p">):</span>
+</span><span id="__span-0-144"><a id="__codelineno-0-144" name="__codelineno-0-144"></a>        <span class="n">c_min</span> <span class="o">=</span> <span class="o">-</span><span class="n">_C_ABS_MAX</span> <span class="k">if</span> <span class="n">signed</span> <span class="k">else</span> <span class="n">_C_MIN_POS</span>
+</span><span id="__span-0-145"><a id="__codelineno-0-145" name="__codelineno-0-145"></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">c_max</span><span class="p">,</span> <span class="n">_Auto</span><span class="p">):</span>
+</span><span id="__span-0-146"><a id="__codelineno-0-146" name="__codelineno-0-146"></a>        <span class="n">c_max</span> <span class="o">=</span> <span class="n">_C_ABS_MAX</span>
+</span><span id="__span-0-147"><a id="__codelineno-0-147" name="__codelineno-0-147"></a>
+</span><span id="__span-0-148"><a id="__codelineno-0-148" name="__codelineno-0-148"></a>    <span class="c1"># NaN slips through every range check below (all comparisons with NaN are False), silently storing</span>
+</span><span id="__span-0-149"><a id="__codelineno-0-149" name="__codelineno-0-149"></a>    <span class="c1"># a NaN raw param that poisons the whole model — reject it up front.</span>
+</span><span id="__span-0-150"><a id="__codelineno-0-150" name="__codelineno-0-150"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">math</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">init_c</span><span class="p">):</span>
+</span><span id="__span-0-151"><a id="__codelineno-0-151" name="__codelineno-0-151"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;init_c must be finite, got </span><span class="si">{</span><span class="n">init_c</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-152"><a id="__codelineno-0-152" name="__codelineno-0-152"></a>    <span class="c1"># softplus/exp map onto (0, inf) and cannot represent c &lt;= 0, so a non-positive init is a usage error</span>
+</span><span id="__span-0-153"><a id="__codelineno-0-153" name="__codelineno-0-153"></a>    <span class="c1"># there. identity is signed and accepts any init_c (including 0.0 and negatives).</span>
+</span><span id="__span-0-154"><a id="__codelineno-0-154" name="__codelineno-0-154"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">signed</span> <span class="ow">and</span> <span class="n">init_c</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="__span-0-155"><a id="__codelineno-0-155" name="__codelineno-0-155"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;LearnableCurvature requires init_c &gt; 0 for parameterization </span><span class="si">{</span><span class="n">parameterization</span><span class="si">!r}</span><span class="s2">, got </span><span class="si">{</span><span class="n">init_c</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-156"><a id="__codelineno-0-156" name="__codelineno-0-156"></a>    <span class="k">if</span> <span class="n">c_min</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">c_max</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">c_min</span> <span class="o">&gt;</span> <span class="n">c_max</span><span class="p">:</span>
+</span><span id="__span-0-157"><a id="__codelineno-0-157" name="__codelineno-0-157"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;c_min (</span><span class="si">{</span><span class="n">c_min</span><span class="si">}</span><span class="s2">) must be &lt;= c_max (</span><span class="si">{</span><span class="n">c_max</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</span><span id="__span-0-158"><a id="__codelineno-0-158" name="__codelineno-0-158"></a>    <span class="k">if</span> <span class="n">c_min</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">init_c</span> <span class="o">&lt;</span> <span class="n">c_min</span><span class="p">:</span>
+</span><span id="__span-0-159"><a id="__codelineno-0-159" name="__codelineno-0-159"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;init_c (</span><span class="si">{</span><span class="n">init_c</span><span class="si">}</span><span class="s2">) must be &gt;= c_min (</span><span class="si">{</span><span class="n">c_min</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</span><span id="__span-0-160"><a id="__codelineno-0-160" name="__codelineno-0-160"></a>    <span class="k">if</span> <span class="n">c_max</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">init_c</span> <span class="o">&gt;</span> <span class="n">c_max</span><span class="p">:</span>
+</span><span id="__span-0-161"><a id="__codelineno-0-161" name="__codelineno-0-161"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;init_c (</span><span class="si">{</span><span class="n">init_c</span><span class="si">}</span><span class="s2">) must be &lt;= c_max (</span><span class="si">{</span><span class="n">c_max</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</span><span id="__span-0-162"><a id="__codelineno-0-162" name="__codelineno-0-162"></a>
+</span><span id="__span-0-163"><a id="__codelineno-0-163" name="__codelineno-0-163"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_parameterization</span> <span class="o">=</span> <span class="n">parameterization</span>
+</span><span id="__span-0-164"><a id="__codelineno-0-164" name="__codelineno-0-164"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_c_min</span> <span class="o">=</span> <span class="n">c_min</span>
+</span><span id="__span-0-165"><a id="__codelineno-0-165" name="__codelineno-0-165"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_c_max</span> <span class="o">=</span> <span class="n">c_max</span>
+</span><span id="__span-0-166"><a id="__codelineno-0-166" name="__codelineno-0-166"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_straight_through_clamp</span> <span class="o">=</span> <span class="n">straight_through_clamp</span>
+</span><span id="__span-0-167"><a id="__codelineno-0-167" name="__codelineno-0-167"></a>
+</span><span id="__span-0-168"><a id="__codelineno-0-168" name="__codelineno-0-168"></a>    <span class="k">if</span> <span class="n">parameterization</span> <span class="o">==</span> <span class="s2">&quot;softplus&quot;</span><span class="p">:</span>
+</span><span id="__span-0-169"><a id="__codelineno-0-169" name="__codelineno-0-169"></a>        <span class="n">raw_init</span> <span class="o">=</span> <span class="n">_inv_softplus</span><span class="p">(</span><span class="n">init_c</span><span class="p">)</span>
+</span><span id="__span-0-170"><a id="__codelineno-0-170" name="__codelineno-0-170"></a>    <span class="k">elif</span> <span class="n">parameterization</span> <span class="o">==</span> <span class="s2">&quot;log&quot;</span><span class="p">:</span>
+</span><span id="__span-0-171"><a id="__codelineno-0-171" name="__codelineno-0-171"></a>        <span class="n">raw_init</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">init_c</span><span class="p">)</span>
+</span><span id="__span-0-172"><a id="__codelineno-0-172" name="__codelineno-0-172"></a>    <span class="k">else</span><span class="p">:</span>  <span class="c1"># &quot;identity&quot;</span>
+</span><span id="__span-0-173"><a id="__codelineno-0-173" name="__codelineno-0-173"></a>        <span class="n">raw_init</span> <span class="o">=</span> <span class="n">init_c</span>
+</span><span id="__span-0-174"><a id="__codelineno-0-174" name="__codelineno-0-174"></a>
+</span><span id="__span-0-175"><a id="__codelineno-0-175" name="__codelineno-0-175"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">raw</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">raw_init</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 

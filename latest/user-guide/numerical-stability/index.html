@@ -854,6 +854,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#stereographic-near-zero-curvature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        κ-Stereographic: Numerics Near Zero Curvature
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="κ-Stereographic: Numerics Near Zero Curvature">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-taylor-cutover-is-dtype-dependent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Taylor Cutover Is dtype-Dependent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spherical-regime-c-0-cautions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spherical Regime (\(c &lt; 0\)) Cautions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#hyperbolic-function-overflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1987,6 +2037,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#stereographic-near-zero-curvature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        κ-Stereographic: Numerics Near Zero Curvature
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="κ-Stereographic: Numerics Near Zero Curvature">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-taylor-cutover-is-dtype-dependent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Taylor Cutover Is dtype-Dependent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spherical-regime-c-0-cautions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spherical Regime (\(c &lt; 0\)) Cautions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#hyperbolic-function-overflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2587,11 +2687,50 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 <li><strong>Poincaré ball</strong>: compact, bounded — fine for small distances (<span class="arithmatex">\(&lt;5\)</span>) and visualization; clamp or use float64 past that.</li>
 <li><strong>Hyperboloid</strong>: unbounded radius, but the constraint <span class="arithmatex">\(\langle x, x\rangle_L = -1/c\)</span> must be maintained and can drift under Euclidean updates.</li>
 <li><strong>Proper Velocity</strong>: unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span>, stable at large radii, exact Euclidean retraction (plain <code>optax.adam</code> / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large.</li>
+<li><strong>κ-Stereographic</strong>: identical numerics to the Poincaré ball for <span class="arithmatex">\(c &gt; 0\)</span> (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near <span class="arithmatex">\(c = 0\)</span> — see the <a href="#stereographic-near-zero-curvature">dedicated section below</a>.</li>
 </ul>
 <div class="admonition note">
 <p class="admonition-title">Training PV layers</p>
 <p><code>HypLinearPV</code>, <code>HypConv2DPV</code>, and <code>HypRegressionPV</code> store their weights as plain <code>nnx.Param</code> (not <code>ManifoldParam</code>). Use a standard <code>nnx.Optimizer(model, optax.adam(lr), wrt=nnx.Param)</code> — no <code>riemannian_adam</code> / <code>riemannian_sgd</code> wrapper is required.</p>
 </div>
+<h2 id="stereographic-near-zero-curvature">κ-Stereographic: Numerics Near Zero Curvature<a class="headerlink" href="#stereographic-near-zero-curvature" title="Permanent link">&para;</a></h2>
+<p>The <code>Stereographic</code> manifold's signed curvature introduces one numerical regime the other manifolds don't have: the neighborhood of <span class="arithmatex">\(c = 0\)</span>, where every closed-form expression becomes <span class="arithmatex">\(0/0\)</span> and the implementation switches to Taylor series. The switching logic is internal, but its consequences matter when you train a <em>signed</em> learnable curvature that may cross zero.</p>
+<p>For <span class="arithmatex">\(c &gt; 0\)</span> nothing here is new — <code>Stereographic</code> shares its gyrovector core with <code>Poincare</code>, so every boundary/conformal-factor consideration above applies verbatim. See the <a href="../../api-reference/manifolds/">κ-Stereographic API reference</a> for the sign convention and the factor-2 flat limit.</p>
+<h3 id="the-taylor-cutover-is-dtype-dependent">The Taylor Cutover Is dtype-Dependent<a class="headerlink" href="#the-taylor-cutover-is-dtype-dependent" title="Permanent link">&para;</a></h3>
+<p>The curvature-generalized trig functions (<span class="arithmatex">\(\tan_\kappa\)</span>, <span class="arithmatex">\(\tan_\kappa^{-1}\)</span>) use their exact closed forms away from zero and a truncated Taylor series (degree 5 in <span class="arithmatex">\(\kappa\lVert x\rVert^2\)</span>) near zero. The cutover differs by precision:</p>
+<table>
+<thead>
+<tr>
+<th>dtype</th>
+<th>Taylor branch used when</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>float64</td>
+<td><span class="arithmatex">\(\lvert\kappa\rvert &lt; 10^{-9}\)</span></td>
+<td>closed forms accurate down to ~<span class="arithmatex">\(10^{-9}\)</span></td>
+</tr>
+<tr>
+<td>float32</td>
+<td><span class="arithmatex">\(\lvert\kappa\rvert &lt; 10^{-5}\)</span></td>
+<td>catastrophic cancellation in the closed-form <strong>curvature gradient</strong> below this</td>
+</tr>
+</tbody>
+</table>
+<p>In float32 the <em>values</em> stay accurate well below <span class="arithmatex">\(10^{-5}\)</span>; it is <span class="arithmatex">\(\partial(\cdot)/\partial c\)</span> computed through the closed forms that degrades. The wider float32 window trades a small seam error (worst-case measured relative error of the curvature gradient just above the cutover: ~2.4%, sign always correct) for finite, well-behaved gradients everywhere.</p>
+<p>The Taylor branch is additionally gated on its convergence region <span class="arithmatex">\(\lvert\kappa\rvert\,\lVert x\rVert^2 &lt; 0.01\)</span>: points at extreme chart radii (<span class="arithmatex">\(\lVert x\rVert \sim 1/\sqrt{\lvert\kappa\rvert}\)</span>, e.g. spherical points far from the chart origin) always keep the exact closed form, no matter how small <span class="arithmatex">\(\lvert\kappa\rvert\)</span> is.</p>
+<h3 id="spherical-regime-c-0-cautions">Spherical Regime (<span class="arithmatex">\(c &lt; 0\)</span>) Cautions<a class="headerlink" href="#spherical-regime-c-0-cautions" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>The chart has no boundary, but it has a pole.</strong> Stereographic coordinates cover the sphere minus one point; near-antipodal pairs have chart norms <span class="arithmatex">\(\sim 1/\sqrt{\lvert c\rvert}\)</span> and the metric shrinks accordingly. <code>antipode</code> itself is exact (closed form <span class="arithmatex">\(x/(c\lVert x\rVert^2)\)</span>), but <em>optimizing through</em> near-antipodal configurations concentrates precision loss the same way the Poincaré boundary does.</li>
+<li><strong>Distances saturate at <span class="arithmatex">\(\pi R = \pi/\sqrt{\lvert c\rvert}\)</span>.</strong> Gradients of <code>dist</code> vanish as a pair approaches antipodal, analogous to <code>atanh</code> saturation in the hyperbolic regime.</li>
+</ul>
+<h3 id="recommendations">Recommendations<a class="headerlink" href="#recommendations" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Use <code>Stereographic(dtype=jnp.float64)</code> when training a signed curvature that may cross zero, per Bachmann et al. (2020). Float32 is fine at fixed moderate curvature (<span class="arithmatex">\(\lvert c\rvert \gtrsim 10^{-4}\)</span>) and moderate radii.</li>
+<li>With <code>LearnableCurvature(parameterization="identity")</code>, the default clamp <span class="arithmatex">\([-10, 10]\)</span> includes 0 by design — a curvature crossing zero is a <em>feature</em> (the geometry interpolates hyperbolic → flat → spherical smoothly), not an error state.</li>
+</ul>
 <h2 id="hyperbolic-function-overflow">Hyperbolic Function Overflow<a class="headerlink" href="#hyperbolic-function-overflow" title="Permanent link">&para;</a></h2>
 <h3 id="the-problem">The Problem<a class="headerlink" href="#the-problem" title="Permanent link">&para;</a></h3>
 <p>Standard implementations of cosh, sinh can overflow:</p>

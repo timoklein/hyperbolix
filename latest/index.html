@@ -1682,8 +1682,8 @@
 <p>Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing manifold operations, neural network layers, and Riemannian optimizers for hyperbolic geometry. Built with Flax NNX and Optax for modern JAX workflows.</p>
 <h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>5 Manifolds</strong>: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, and Product Manifold (mixed-curvature composition) — all with complete geometric operations</li>
-<li><strong>Learnable Curvature</strong>: <code>LearnableCurvature</code> module bundles parameter + reparameterization (softplus or log/exp) + optional clamp; works with any <code>nnx.Optimizer</code></li>
+<li><strong>6 Manifolds</strong>: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), and Product Manifold (mixed-curvature composition) — all with complete geometric operations</li>
+<li><strong>Learnable Curvature</strong>: <code>LearnableCurvature</code> module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp; works with any <code>nnx.Optimizer</code></li>
 <li><strong>Neural Network Layers</strong>: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers</li>
 <li><strong>Activation Functions</strong>: 4 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish)</li>
 <li><strong>Riemannian Optimizers</strong>: RAdam and RSGD with automatic manifold parameter detection</li>
@@ -1809,6 +1809,11 @@
 <td>next</td>
 </tr>
 <tr>
+<td>κ-Stereographic manifold (Bachmann et al. 2020, signed learnable curvature)</td>
+<td>🚧 Unreleased</td>
+<td>next</td>
+</tr>
+<tr>
 <td>CI/CD pipeline with benchmarking</td>
 <td>✅ Stable</td>
 <td>v0.1.4</td>
@@ -1853,7 +1858,8 @@ Instantiate one per distinct curvature in your model and call it at runtime:</p>
 </span></code></pre></div>
 <p>Pick <code>parameterization="log"</code> for compiled RL loops or when <code>c</code> spans
 orders of magnitude; the default <code>"softplus"</code> is best for supervised
-training. See the <a href="user-guide/manifolds/#choosing-softplus-vs-log">Manifolds guide</a>
+training, and <code>"identity"</code> gives a signed curvature for the <code>Stereographic</code>
+manifold. See the <a href="user-guide/manifolds/#choosing-a-parameterization">Manifolds guide</a>
 for details.</p>
 <h3 id="mixed-curvature-product-spaces">Mixed-Curvature Product Spaces<a class="headerlink" href="#mixed-curvature-product-spaces" title="Permanent link">&para;</a></h3>
 <p>Compose heterogeneous factors (each with its own curvature) into a single
