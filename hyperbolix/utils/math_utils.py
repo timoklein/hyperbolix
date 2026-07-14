@@ -194,22 +194,3 @@ def tanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     # Also clamp the output: XLA's float32 tanh reaches exactly 1.0 before the input bound bites.
     max_out = 1.0 - 10.0 * float(jnp.finfo(x.dtype).eps)
     return jnp.clip(out, -max_out, max_out)
-
-
-@jax.jit
-def asinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
-    """Inverse hyperbolic sine. Domain=(-inf, inf).
-
-    ``asinh(x) = log(x + sqrt(1 + x^2))`` is already numerically stable over all reals — its derivative
-    ``1/sqrt(1 + x^2) in (0, 1]`` has no singularity and the forward pass cannot overflow before its
-    argument does — so no clamping is required. Provided as a thin wrapper for API symmetry with
-    ``acosh``/``atanh`` and to give the κ-stereographic trig helpers a single stable-math source for the
-    ``κ<0`` (hyperbolic) branch of ``arsin_κ``.
-
-    Args:
-        x: Input array of any shape
-
-    Returns:
-        asinh(x)
-    """
-    return jnp.asinh(x)

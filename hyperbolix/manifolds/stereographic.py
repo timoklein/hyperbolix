@@ -92,10 +92,25 @@ from .protocol import Curvature
 # catastrophic cancellation for |κ| up to ~1e-5 (and is even wrong-SIGNED below ~1e-8). So float32 must
 # hand over to the (cancellation-free polynomial) Taylor branch ~4 decades earlier — otherwise a signed
 # `LearnableCurvature` crossing zero receives a corrupted curvature gradient in the library's DEFAULT
-# dtype. Both thresholds sit far below any realistic curvature, so |κ|·x² ≪ 1 and the order-5 series
-# never diverges. `K_ZERO_EPS` is retained as the float64 value (and public/back-compat name).
+# dtype. `K_ZERO_EPS` is retained as the float64 value (and public/back-compat name).
 K_ZERO_EPS = 1e-9  # float64
 _K_ZERO_EPS_F32 = 1e-5  # float32 (and any dtype with ≤ 32 significand+exponent bits)
+
+# The |κ| cutover alone is NOT a sufficient gate: the series' convergence variable is u = κ·x², and some
+# callers feed x ~ 1/√|κ| (the antipode's half great-circle t = π/√|κ|; far-field spherical points, whose
+# chart norm scales exactly as 1/√|κ|), making |u| ≳ 1 for EVERY |κ| below the cutover — there the series
+# diverges (garbage values, even negative distances) and its x**-power terms overflow float32 into
+# 0·inf = NaN. The gate therefore also requires |u| < `_TAYLOR_MAX_U`, routing those arguments to the
+# closed forms — which are well-conditioned exactly there: the closed-form κ-gradient's catastrophic
+# cancellation is confined to |u| ≪ 1 (relative error ~ 3·eps/|u|, i.e. ≲ 4e-5 in float32 at this gate),
+# so the two hazard regions do not overlap. At |u| = 0.01 the order-5 truncation error (~|u|⁶/13 ≈ 8e-14
+# relative) is below float32 resolution, keeping the u-seam value-continuous.
+_TAYLOR_MAX_U = 0.01
+# Clamp on u inside the series helpers: keeps the UNSELECTED Taylor branch of the jnp.where finite for
+# any argument (u⁵ overflows float32 for |u| ≳ 5e7, and jnp.where's VJP turns a 0-cotangent times inf
+# into a NaN that leaks into the SELECTED branch's gradient). Far above the gate, so selected values are
+# never affected.
+_TAYLOR_U_CLIP = 1.0
 
 
 def _k_zero_eps(dtype: jnp.dtype) -> float:
@@ -128,27 +143,34 @@ def _sqrt_abs_k(k: Curvature) -> Float[Array, ""]:
 
 
 def _tan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
-    """Order-5 Maclaurin series (in signed ``k``) of ``tan_k``; equals both branches as ``k → 0``."""
-    return (
-        x
-        + (1.0 / 3.0) * k * x**3
-        + (2.0 / 15.0) * k**2 * x**5
-        + (17.0 / 315.0) * k**3 * x**7
-        + (62.0 / 2835.0) * k**4 * x**9
-        + (1382.0 / 155925.0) * k**5 * x**11
-    )
+    """Order-5 Maclaurin series of ``tan_k`` in the signed ``u = k·x²`` (Horner form); equals both
+    branches as ``k → 0``.
+
+    Evaluating in ``u`` rather than powers of ``x`` keeps the polynomial exact at ``k = 0`` for ANY
+    ``x`` (the x**-power form's ``x**11`` overflows float32 at ``x ≳ 3e3``, turning ``k⁵·x**11`` into
+    ``0·inf = NaN`` — a value NaN in flat space). The clamp keeps even *discarded* evaluations finite
+    under ``jnp.where``'s two-sided VJP; it sits far above the ``_TAYLOR_MAX_U`` gate, so selected
+    values are never affected."""
+    u = jnp.clip(jnp.asarray(k) * x**2, -_TAYLOR_U_CLIP, _TAYLOR_U_CLIP)
+    poly = 1.0 + u * (1.0 / 3.0 + u * (2.0 / 15.0 + u * (17.0 / 315.0 + u * (62.0 / 2835.0 + u * (1382.0 / 155925.0)))))
+    return x * poly
 
 
 def _artan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
-    """Order-5 Maclaurin series (in signed ``k``) of ``artan_k``; equals both branches as ``k → 0``."""
-    return (
-        x
-        - (1.0 / 3.0) * k * x**3
-        + (1.0 / 5.0) * k**2 * x**5
-        - (1.0 / 7.0) * k**3 * x**7
-        + (1.0 / 9.0) * k**4 * x**9
-        - (1.0 / 11.0) * k**5 * x**11
-    )
+    """Order-5 Maclaurin series of ``artan_k`` in the signed ``u = k·x²`` (Horner form); equals both
+    branches as ``k → 0``. Same u-form/clamp rationale as :func:`_tan_k_zero_taylor`."""
+    u = jnp.clip(jnp.asarray(k) * x**2, -_TAYLOR_U_CLIP, _TAYLOR_U_CLIP)
+    poly = 1.0 - u * (1.0 / 3.0 - u * (1.0 / 5.0 - u * (1.0 / 7.0 - u * (1.0 / 9.0 - u * (1.0 / 11.0)))))
+    return x * poly
+
+
+def _use_taylor(x: Float[Array, "..."], k: Curvature) -> Array:
+    """Gate for the κ→0 Taylor branch: ``|k|`` below the dtype cutover AND inside the series'
+    convergence region ``|u| = |k|·x² < _TAYLOR_MAX_U`` (see the constants above for why the |k|
+    condition alone is insufficient). Elementwise in ``x``."""
+    k_arr = jnp.asarray(k)
+    small_k = jnp.abs(k_arr) < _k_zero_eps(jnp.asarray(x).dtype)
+    return small_k & (jnp.abs(k_arr * x**2) < _TAYLOR_MAX_U)
 
 
 def _tan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
@@ -158,7 +180,7 @@ def _tan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     neg = tanh(scaled) / sqrt_abs_k
     pos = jnp.tan(jnp.clip(scaled, -_TAN_ARG_CLAMP, _TAN_ARG_CLAMP)) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
-    return jnp.where(jnp.abs(jnp.asarray(k)) < _k_zero_eps(jnp.asarray(x).dtype), _tan_k_zero_taylor(x, k), nonzero)
+    return jnp.where(_use_taylor(x, k), _tan_k_zero_taylor(x, k), nonzero)
 
 
 def _artan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
@@ -168,12 +190,15 @@ def _artan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     neg = atanh(scaled) / sqrt_abs_k
     pos = jnp.arctan(scaled) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
-    return jnp.where(jnp.abs(jnp.asarray(k)) < _k_zero_eps(jnp.asarray(x).dtype), _artan_k_zero_taylor(x, k), nonzero)
+    return jnp.where(_use_taylor(x, k), _artan_k_zero_taylor(x, k), nonzero)
 
 
 # ---------------------------------------------------------------------------
 # Manifold operations (single point, shape (dim,)). Each takes signed `c` and bridges to k = -c.
-# For c > 0 the algebra is bit-identical to `hyperbolix.manifolds.poincare`.
+# For c > 0 the shared gyrovector core (_addition/_gyration/_proj/_conformal_factor) is bit-identical to
+# `hyperbolix.manifolds.poincare` (same function objects); the κ-trig-based maps (expmap/logmap/dist/…)
+# agree with Poincaré's direct tanh forms only to float tolerance (clamped tanh, different association
+# order), not bit-for-bit.
 # ---------------------------------------------------------------------------
 
 
@@ -312,25 +337,26 @@ def _geodesic_unit(t: Float[Array, ""], x: Float[Array, "dim"], u: Float[Array, 
 
 
 def _antipode(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
-    """Antipode. Spherical (``c < 0``): the point diametrically opposite ``x`` (distance ``π/√|κ|`` away),
-    computed as ``geodesic_unit(π·R, x, x/‖x‖)`` with ``R = 1/√|c|``. Non-spherical (``c ≥ 0``): ``-x``.
+    """Antipode. Spherical (``c < 0``): the point diametrically opposite ``x`` (distance ``π/√|κ|`` away).
+    In the stereographic chart this is the closed-form inversion ``x/(c·‖x‖²) = -x/(κ‖x‖²)`` through the
+    circle of radius ``R = 1/√|κ|`` — an exact involution whose sphere lift is the negated lift of ``x``.
+    (The equivalent ``geodesic_unit(π·R, x, x/‖x‖)`` route evaluates ``tan`` at its pole and, for ``|c|``
+    below the κ-trig Taylor cutover, fed the series an argument ``∝ 1/√|c|`` outside its convergence
+    region — NaN/garbage antipodes.) Non-spherical (``c ≥ 0``): ``-x``.
 
     Note: ``dist(x, antipode(x))`` is numerically unreliable — antipodal points are the coordinate
     singularity of the stereographic chart where the geodesic-distance formula is an unavoidable ``0/0``
-    (shared with the geoopt reference). The antipode *point* itself is correct (an exact involution)."""
+    (shared with the geoopt reference). The chart antipode of the ORIGIN is the point at infinity and is
+    not representable; the safe-norm floor returns ``0`` there instead. As ``c → 0⁻`` the antipode
+    genuinely diverges (the sphere flattens), so very small ``|c|`` yields correspondingly huge outputs."""
     c_arr = jnp.asarray(c)
     is_spherical = c_arr < 0
-    x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
-    direction = x / x_norm
-    # Only the spherical (``c < 0``) branch is used below; ``c ≥ 0`` returns ``-x``. Guard the radius so
-    # the DISCARDED spherical computation cannot overflow: at ``c → 0`` the true radius ``1/√|c| → ∞`` and
-    # feeding ~1e8 into the κ-trig Taylor ``x**11`` term overflows float32 to inf, whose ``0·inf`` gradient
-    # would leak through the ``jnp.where`` into the *selected* ``-x`` branch (NaN grad at ``c ≈ 0``).
-    # Substituting a benign radius for ``c ≥ 0`` keeps that branch finite without changing the ``c < 0`` result.
-    safe_abs_c = jnp.where(is_spherical, jnp.maximum(jnp.abs(c_arr), MIN_NORM), jnp.ones_like(c_arr))
-    radius = 1.0 / jnp.sqrt(safe_abs_c)  # R = 1/√|κ| for c < 0; 1 for the discarded c ≥ 0 branch
-    pi = jnp.asarray(jnp.pi, dtype=x.dtype)
-    spherical = _geodesic_unit(pi * radius, x, direction, c)
+    # Safe squared norm: keeps the inversion (and its gradient) finite at x = 0.
+    x2 = jnp.sum(x**2) + MIN_NORM**2
+    # Substitute a benign curvature in the DISCARDED inversion for c ≥ 0 so 1/(c·x2) cannot divide by
+    # zero at c = 0 and leak a NaN gradient through the jnp.where into the selected -x branch.
+    safe_c = jnp.where(is_spherical, c_arr, -jnp.ones_like(c_arr))
+    spherical = x / (safe_c * x2)
     return jnp.where(is_spherical, spherical, -x)
 
 

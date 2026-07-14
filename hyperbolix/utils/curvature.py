@@ -184,7 +184,14 @@ class LearnableCurvature(nnx.Module):
             # c_max by the clamp anyway, so nothing meaningful is lost.
             raw = self.raw[...]
             max_exp = 0.99 * math.log(float(jnp.finfo(raw.dtype).max))
-            c = jnp.exp(jnp.minimum(raw, max_exp))
+            capped = jnp.minimum(raw, max_exp)
+            if self._straight_through_clamp:
+                # Honor the straight-through contract at the exponent cap too: forward still uses the
+                # capped exponent (exp cannot overflow), but the backward is identity through the min, so
+                # dc/draw = exp(capped) stays nonzero and a raw that drifted past the cap is not frozen
+                # there forever (a plain minimum has zero gradient above the cap — permanent freeze).
+                capped = jax.lax.stop_gradient(capped) + raw - jax.lax.stop_gradient(raw)
+            c = jnp.exp(capped)
         else:  # "identity"
             c = self.raw[...]
 
