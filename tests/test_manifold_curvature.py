@@ -118,6 +118,24 @@ class TestLearnableCurvatureInit:
         with pytest.raises(ValueError, match="parameterization"):
             LearnableCurvature(1.0, parameterization="quadratic")  # type: ignore[arg-type]
 
+    @pytest.mark.parametrize("parameterization", ["softplus", "log", "identity"])
+    def test_nan_init_c_raises(self, parameterization):
+        # NaN slips through every range check (all NaN comparisons are False); reject it up front rather
+        # than silently store a NaN raw param. `identity` accepts negatives/zero, so it needs this too.
+        with pytest.raises(ValueError, match="finite"):
+            LearnableCurvature(float("nan"), parameterization=parameterization)
+
+    @pytest.mark.parametrize("parameterization", ["softplus", "log", "identity"])
+    def test_raw_param_dtype_pinned_to_float32_under_x64(self, parameterization):
+        # This module enables jax_enable_x64 globally. The raw param must still default to float32 (its
+        # param_dtype default) so a learnable curvature cannot silently promote the whole manifold graph
+        # to float64 — the dtype-leak class the hyperbolic-dl guidance warns about. Opt-in float64 storage
+        # via param_dtype is still honored.
+        assert LearnableCurvature(1.0, parameterization=parameterization).raw[...].dtype == jnp.float32
+        assert (
+            LearnableCurvature(1.0, parameterization=parameterization, param_dtype=jnp.float64).raw[...].dtype == jnp.float64
+        )
+
 
 class TestLearnableCurvatureClamping:
     """Clamping applies to the recovered c, not the raw param."""
@@ -197,8 +215,8 @@ class TestLearnableCurvatureGradients:
         once c exits [c_min, c_max] -- c is pinned, not chosen."""
         c = LearnableCurvature(1.0, parameterization=parameterization)
         # raw=15.0 pushes c well past c_max=10.0 for both parameterizations (softplus(15)~=15,
-        # exp(15)~=3.3e6) without overflowing exp() in float32 (raw=100 would: exp(100) overflows
-        # to inf, and 0 (clip's out-of-range cotangent) * inf produces a spurious NaN gradient).
+        # exp(15)~=3.3e6). (The former exp() overflow at large raw is now guarded — see
+        # test_log_parameterization_no_nan_gradient_on_exp_overflow.)
         c.raw[...] = jnp.array(15.0, dtype=jnp.float32)
 
         def fn(m):
@@ -213,8 +231,8 @@ class TestLearnableCurvatureGradients:
         value stays clamped, but the gradient keeps flowing past the boundary."""
         c = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=True)
         # raw=15.0 pushes c well past c_max=10.0 for both parameterizations (softplus(15)~=15,
-        # exp(15)~=3.3e6) without overflowing exp() in float32 (raw=100 would: exp(100) overflows
-        # to inf, and 0 (clip's out-of-range cotangent) * inf produces a spurious NaN gradient).
+        # exp(15)~=3.3e6). (The former exp() overflow at large raw is now guarded — see
+        # test_log_parameterization_no_nan_gradient_on_exp_overflow.)
         c.raw[...] = jnp.array(15.0, dtype=jnp.float32)
 
         def fn(m):
@@ -224,6 +242,28 @@ class TestLearnableCurvatureGradients:
         assert float(val) == pytest.approx(10.0)  # forward value still clamped
         assert jnp.isfinite(grads.raw[...])
         assert float(grads.raw[...]) != 0.0
+
+    @pytest.mark.parametrize("straight_through", [False, True])
+    def test_log_parameterization_no_nan_gradient_on_exp_overflow(self, straight_through):
+        # Regression: exp(raw) overflowed float32 to +inf for large raw, making the clip's out-of-range
+        # cotangent 0*inf = NaN (and, under straight_through, NaN-ing the forward via inf + (-inf)). The
+        # exponent cap + numerically-stable straight-through must keep the forward pinned at c_max and the
+        # gradient finite even where exp() would have overflowed.
+        c = LearnableCurvature(1.0, parameterization="log", straight_through_clamp=straight_through)
+        c.raw[...] = jnp.array(100.0, dtype=jnp.float32)  # exp(100) overflows float32
+
+        def fn(m):
+            return m()
+
+        val, grads = nnx.value_and_grad(fn)(c)
+        assert jnp.isfinite(val) and float(val) == pytest.approx(10.0)  # forward pinned at c_max, not NaN/0
+        assert jnp.isfinite(grads.raw[...])
+        if straight_through:
+            # The straight-through contract must survive the exponent cap: the gradient stays nonzero
+            # (dc/draw = exp(capped exponent)) so a raw stranded past the cap can re-enter. A plain
+            # jnp.minimum satisfies the isfinite check above with gradient 0 — a permanent freeze —
+            # which is exactly the regression this pins.
+            assert float(grads.raw[...]) != 0.0
 
 
 # ===========================================================================
@@ -438,3 +478,147 @@ class TestScanCompatibility:
         loss = model(x)
         assert jnp.isfinite(loss)
         assert float(model.curvature()) > 0
+
+
+# ===========================================================================
+# 7. Signed `identity` parameterization (Stereographic manifold)
+# ===========================================================================
+
+
+class TestLearnableCurvatureIdentity:
+    """The signed ``identity`` parameterization (``c = raw``) for the Stereographic manifold.
+
+    Unlike softplus/log (strictly positive), identity spans hyperbolic (``c>0``), Euclidean
+    (``c=0``), and spherical (``c<0``); its default clamp is the symmetric magnitude cap
+    ``[-10, 10]`` (which *includes* 0), not the positive ``[0.1, 10]`` window.
+    """
+
+    @pytest.mark.parametrize("init_c", [-2.0, -0.5, 0.0, 1.5, 9.0])
+    def test_identity_recovers_signed_init(self, init_c):
+        c = LearnableCurvature(init_c, parameterization="identity")
+        assert jnp.allclose(c(), init_c, atol=1e-6)
+
+    @pytest.mark.parametrize("init_c", [-1.0, 0.0, -0.05])
+    def test_identity_accepts_nonpositive_init(self, init_c):
+        # softplus/log would raise here (they cannot represent c <= 0); identity must not.
+        c = LearnableCurvature(init_c, parameterization="identity")
+        assert jnp.isfinite(c())
+
+    def test_identity_signed_default_clamp(self):
+        c = LearnableCurvature(0.0, parameterization="identity")
+        c.raw[...] = jnp.array(-100.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(-10.0)  # symmetric lower bound, NOT the softplus +0.1
+        c.raw[...] = jnp.array(100.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(10.0)
+
+    def test_identity_default_clamp_includes_zero(self):
+        # The Euclidean point c=0 must be reachable; a naive c_min=0.1 carryover would forbid it.
+        c = LearnableCurvature(0.0, parameterization="identity")
+        c.raw[...] = jnp.array(0.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(0.0)
+
+    def test_identity_disabled_clamp(self):
+        c = LearnableCurvature(-2.0, parameterization="identity", c_min=None, c_max=None)
+        c.raw[...] = jnp.array(-100.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(-100.0)
+
+    def test_identity_custom_signed_bounds(self):
+        c = LearnableCurvature(0.0, parameterization="identity", c_min=-3.0, c_max=3.0)
+        c.raw[...] = jnp.array(-100.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(-3.0)
+        c.raw[...] = jnp.array(100.0, dtype=jnp.float32)
+        assert float(c()) == pytest.approx(3.0)
+
+    def test_identity_below_signed_c_min_raises(self):
+        # init below the symmetric default lower bound (-10) is still range-checked.
+        with pytest.raises(ValueError, match=r"init_c.*c_min"):
+            LearnableCurvature(-20.0, parameterization="identity")
+
+    def test_identity_gradient_is_one(self):
+        """For c = raw, dc/draw = 1 everywhere — no zero-crossing obstruction (the whole point)."""
+        c = LearnableCurvature(1.5, parameterization="identity", c_min=None, c_max=None)
+
+        def fn(m):
+            return m()
+
+        _val, grads = nnx.value_and_grad(fn)(c)
+        assert jnp.allclose(grads.raw[...], 1.0, atol=1e-6)
+
+    def test_identity_gradient_finite_at_zero(self):
+        """The zero-crossing point c=0 has a finite, well-defined gradient (== 1)."""
+        c = LearnableCurvature(0.0, parameterization="identity", c_min=None, c_max=None)
+
+        def fn(m):
+            return m()
+
+        val, grads = nnx.value_and_grad(fn)(c)
+        assert float(val) == pytest.approx(0.0)
+        assert jnp.isfinite(grads.raw[...])
+        assert jnp.allclose(grads.raw[...], 1.0, atol=1e-6)
+
+    def test_identity_grad_through_stereographic_at_zero(self):
+        """Grad w.r.t. curvature is finite through Stereographic.dist at c=0 — guards the
+        κ-trig Taylor seam from the learnable-curvature side."""
+        from hyperbolix.manifolds import Stereographic
+
+        manifold = Stereographic(dtype=jnp.float32)
+        x = jnp.array([0.1, 0.2, -0.05], dtype=jnp.float32)
+        y = jnp.array([-0.2, 0.15, 0.1], dtype=jnp.float32)
+        c = LearnableCurvature(0.0, parameterization="identity", c_min=None, c_max=None)
+
+        def fn(m):
+            return manifold.dist(x, y, m())
+
+        val, grads = nnx.value_and_grad(fn)(c)
+        assert jnp.isfinite(val)
+        assert jnp.isfinite(grads.raw[...])
+
+    def test_identity_straight_through_clamp_keeps_gradient(self):
+        c = LearnableCurvature(0.0, parameterization="identity", straight_through_clamp=True)
+        c.raw[...] = jnp.array(-100.0, dtype=jnp.float32)  # past the -10 lower bound
+
+        def fn(m):
+            return m()
+
+        val, grads = nnx.value_and_grad(fn)(c)
+        assert float(val) == pytest.approx(-10.0)  # forward value still clamped
+        assert jnp.isfinite(grads.raw[...])
+        assert float(grads.raw[...]) != 0.0
+
+
+class TestStereographicCurvatureTraining:
+    def test_signed_curvature_trains(self):
+        """A learnable signed curvature drives a Stereographic distance objective: the curvature
+        updates, stays finite across steps, and is free to be negative (spherical)."""
+        from hyperbolix.manifolds import Stereographic
+
+        manifold = Stereographic(dtype=jnp.float32)
+
+        class Model(nnx.Module):
+            def __init__(self):
+                self.manifold = manifold
+                self.curvature = LearnableCurvature(init_c=-1.0, parameterization="identity")
+                self.point = nnx.Param(jnp.array([0.1, 0.2, -0.05], dtype=jnp.float32))
+
+            def __call__(self, target):
+                c = self.curvature()
+                return self.manifold.dist(self.point[...], target, c) ** 2
+
+        model = Model()
+        optimizer = nnx.Optimizer(model, optax.adam(1e-2), wrt=nnx.Param)
+        target = jnp.array([-0.15, 0.1, 0.2], dtype=jnp.float32)
+
+        def loss_fn(m):
+            return m(target)
+
+        c_before = float(model.curvature())
+        losses = []
+        for _ in range(25):
+            loss, grads = nnx.value_and_grad(loss_fn)(model)
+            optimizer.update(model, grads)
+            losses.append(float(loss))
+
+        c_after = float(model.curvature())
+        assert all(jnp.isfinite(jnp.array(loss_val)) for loss_val in losses)
+        assert c_before != c_after, "signed curvature did not update"
+        assert jnp.isfinite(jnp.array(c_after))

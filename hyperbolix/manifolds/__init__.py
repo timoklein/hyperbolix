@@ -7,6 +7,7 @@ from .poincare import Poincare
 from .product import ProductManifold
 from .proper_velocity import ProperVelocity
 from .protocol import Curvature, Manifold
+from .stereographic import Stereographic
 
 __all__ = [
     "Curvature",
@@ -16,5 +17,6 @@ __all__ = [
     "Poincare",
     "ProductManifold",
     "ProperVelocity",
+    "Stereographic",
     "isometry_mappings",
 ]

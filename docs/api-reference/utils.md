@@ -34,7 +34,7 @@ z_clamped = smooth_clamp(z, min_val=0.0, max_val=1.0)
 
 ## Learnable Curvature
 
-`LearnableCurvature` is an `nnx.Module` that bundles a Euclidean raw parameter, a positivity reparameterization (`softplus` or `log`/`exp`), and an optional `[c_min, c_max]` clamp into one object. Assign one instance per distinct curvature on your model and call it in the forward pass to obtain the positive (optionally clamped) curvature.
+`LearnableCurvature` is an `nnx.Module` that bundles a Euclidean raw parameter, a curvature reparameterization (positive `softplus`/`log`, or the **signed** `identity` — `c = raw` — for the `Stereographic` manifold), and an optional `[c_min, c_max]` clamp into one object. Assign one instance per distinct curvature on your model and call it in the forward pass to obtain the (optionally clamped) curvature.
 
 ::: hyperbolix.utils.curvature.LearnableCurvature
     options:

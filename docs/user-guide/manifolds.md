@@ -16,6 +16,7 @@ For per-method signatures and full API surface, see the
 | Heterogeneous structure (mixed tree + cycles + flat) | `ProductManifold` | Mixed curvatures fit mixed-structure data (Gu et al. 2019) |
 | Cross-curvature transformations (`c_in != c_out`) | `Hyperboloid` + `HTCLinear` | Native cross-curvature support in HTC layers |
 | Drop-in numerical stability | `ProperVelocity` | Unconstrained $\mathbb{R}^n$; no projection or constraint drift |
+| Spherical / cyclic data, or learning the *sign* of curvature | `Stereographic` | One signed-`c` manifold spans hyperbolic (`c>0`), Euclidean (`c=0`), and spherical (`c<0`), differentiable across zero (Bachmann et al. 2020) |
 | You don't know which to pick | `Hyperboloid` (or `ProperVelocity`) | Robust at `c=1.0`; PV adds no-projection convenience |
 
 !!! tip "Single best default"
@@ -50,6 +51,11 @@ different conventions:
 
 Curvature convention is uniform across all manifolds: `c > 0` means sectional
 curvature $-c$ (so larger `c` → more curved). `Euclidean` ignores `c` entirely.
+The one exception is `Stereographic`, which takes a **signed** `c` that *extends*
+this same convention across zero: `c > 0` hyperbolic (identical to `Poincare(c)`),
+`c = 0` Euclidean, `c < 0` spherical. See the
+[κ-Stereographic API reference](../api-reference/manifolds.md) for the factor-2
+Euclidean-limit caveat and the sign-flip relative to the paper's $\kappa$.
 
 ## Working with Curvature
 
@@ -88,20 +94,25 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 # self.curvature.raw is optimized alongside other params automatically.
 ```
 
-### Choosing softplus vs. log
+### Choosing a parameterization
 
-| Parameterization | Formula | Gradient w.r.t. raw | When to prefer |
-|---|---|---|---|
-| `"softplus"` (default) | `c = softplus(raw)` | `sigmoid(raw) ∈ (0, 1)` — bounded | Supervised training; van Spengler 2023 convention |
-| `"log"` | `c = exp(raw)` | `c` — scale-invariant | RL/compiled loops; `c` spans orders of magnitude; MERU convention |
+| Parameterization | Formula | Range | Gradient w.r.t. raw | When to prefer |
+|---|---|---|---|---|
+| `"softplus"` (default) | `c = softplus(raw)` | `c > 0` | `sigmoid(raw) ∈ (0, 1)` — bounded | Supervised training; van Spengler 2023 convention |
+| `"log"` | `c = exp(raw)` | `c > 0` | `c` — scale-invariant | RL/compiled loops; `c` spans orders of magnitude; MERU convention |
+| `"identity"` | `c = raw` | **signed** (`c ⋛ 0`) | `1` — crosses zero | `Stereographic` manifold: learn hyperbolic/Euclidean/spherical from data |
 
 ```python
 self.curvature = LearnableCurvature(init_c=1.0, parameterization="log")
+# Signed curvature for the Stereographic manifold (c<0 spherical, 0 Euclidean, c>0 hyperbolic):
+self.kappa = LearnableCurvature(init_c=-1.0, parameterization="identity")
 ```
 
-Both apply the default clamp `[0.1, 10.0]` to the recovered `c` (not the
-raw parameter), giving a hard stability guard. Pass `c_min=None, c_max=None`
-to disable, or set tighter bounds to fit your workload.
+The positive parameterizations apply the default clamp `[0.1, 10.0]` to the
+recovered `c` (not the raw parameter), giving a hard stability guard.
+`"identity"` instead uses a symmetric magnitude cap `[-10.0, 10.0]` that
+*includes* `0`, so it never forbids the Euclidean/spherical half. Pass
+`c_min=None, c_max=None` to disable, or set tighter bounds to fit your workload.
 
 ### When `c=1.0` works and when it doesn't
 

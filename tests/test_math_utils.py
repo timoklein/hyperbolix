@@ -11,6 +11,7 @@ from hyperbolix.utils.math_utils import (
     smooth_clamp,
     smooth_clamp_max,
     smooth_clamp_min,
+    tanh,
 )
 
 
@@ -163,6 +164,19 @@ def test_atanh_gradient_at_boundary():
         for x in [-1.1, -1.0, 1.0, 1.1]:
             g = jax.grad(lambda a: atanh(a))(jnp.asarray(x, dtype=dtype))
             assert jnp.isfinite(g)
+
+
+def test_tanh():
+    """Output stays strictly inside (-1, 1) even where float32 jnp.tanh saturates to exactly 1.0."""
+    for dtype in [jnp.float32, jnp.float64]:
+        # Saturated tail: |tanh| must stay < 1 so a downstream atanh cannot reach its pole.
+        big = jnp.array([8.0, 12.0, 50.0, -8.0, -50.0], dtype=dtype)
+        out = tanh(big)
+        assert jnp.all(jnp.abs(out) < 1.0)
+        assert jnp.all(jnp.isfinite(atanh(out)))  # atanh(tanh(x)) stays finite
+        # Non-saturated regime: value-identity to jnp.tanh.
+        mid = jnp.array([-1.0, -0.5, 0.0, 0.3, 1.0], dtype=dtype)
+        assert jnp.allclose(tanh(mid), jnp.tanh(mid), atol=1e-6)
 
 
 def test_dtype_consistency():
