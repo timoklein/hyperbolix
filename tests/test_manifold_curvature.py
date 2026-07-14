@@ -258,6 +258,12 @@ class TestLearnableCurvatureGradients:
         val, grads = nnx.value_and_grad(fn)(c)
         assert jnp.isfinite(val) and float(val) == pytest.approx(10.0)  # forward pinned at c_max, not NaN/0
         assert jnp.isfinite(grads.raw[...])
+        if straight_through:
+            # The straight-through contract must survive the exponent cap: the gradient stays nonzero
+            # (dc/draw = exp(capped exponent)) so a raw stranded past the cap can re-enter. A plain
+            # jnp.minimum satisfies the isfinite check above with gradient 0 — a permanent freeze —
+            # which is exactly the regression this pins.
+            assert float(grads.raw[...]) != 0.0
 
 
 # ===========================================================================

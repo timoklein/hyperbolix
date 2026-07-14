@@ -3,7 +3,9 @@
 Unlike the shared ``manifold_and_c`` fixture in ``conftest.py`` (which only samples ``c > 0`` and has a
 hyperbolic-only point sampler), this file owns a **sign-aware** sampler and exercises all three regimes:
 
-- ``c > 0`` hyperbolic — cross-validated bit-for-bit against :class:`~hyperbolix.manifolds.Poincare`.
+- ``c > 0`` hyperbolic — the shared gyrovector core is bit-for-bit :class:`~hyperbolix.manifolds.Poincare`
+  (same function objects; guarded by the ``is``-identity test), and the κ-trig-based maps are
+  cross-validated against Poincaré's independent tanh closed forms.
 - ``c = 0`` Euclidean — with the gyrovector factor-2 metric (``dist → 2‖x-y‖``, ``expmap → x+v``).
 - ``c < 0`` spherical — cross-validated against the great-circle distance on the sphere embedding.
 
@@ -22,9 +24,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from flax import nnx
 
 import hyperbolix.manifolds.stereographic as stereo_impl
 from hyperbolix.manifolds import Euclidean, Poincare, ProductManifold, Stereographic
+from hyperbolix.optim import mark_manifold_param, riemannian_adam
 
 # ---------------------------------------------------------------------------
 # NumPy oracles for the spherical regime (independent of the manifold code).
@@ -190,6 +194,41 @@ def test_scalar_mul_axioms(manifold, points, c, tolerance):
     assert jnp.allclose(smul(2.0 * ones, points, c), add(points, points, c), atol=atol, rtol=rtol)
 
 
+def test_scalar_mul_negative_is_gyro_inverse(manifold, points, c, tolerance):
+    # (-1) ⊗ x = -x, the gyrogroup inverse — negative scalars were previously untested.
+    atol, rtol = tolerance
+    smul = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
+    ones = jnp.ones(points.shape[0], dtype=points.dtype)
+    assert jnp.allclose(smul(-ones, points, c), -points, atol=atol, rtol=rtol)
+
+
+def test_gyration_gyrocommutative_law(manifold, points, c, tolerance):
+    """``x ⊕ y = gyr[x, y](y ⊕ x)`` — the gyrocommutative law, in every curvature regime.
+
+    This ties ``gyration`` to the oracle-anchored ``addition``: the ptransp-isometry test alone cannot
+    pin gyration, because ANY tangent-space isometry preserves norms and inner products — a gyration
+    that rotated by the wrong angle would pass it. Gyrocommutativity fails for any wrong rotation."""
+    atol, rtol = tolerance
+    if np.dtype(points.dtype) == np.dtype(np.float32):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+    x, y, _ = _split3(points)
+    add = jax.vmap(manifold.addition, in_axes=(0, 0, None))
+    gyr = jax.vmap(manifold.gyration, in_axes=(0, 0, 0, None))
+    lhs = add(x, y, c)
+    rhs = gyr(x, y, add(y, x, c), c)
+    assert jnp.allclose(lhs, rhs, atol=atol, rtol=rtol)
+
+
+def test_addition_left_cancellation(manifold, points, c, tolerance):
+    """``(-x) ⊕ (x ⊕ y) = y`` — the gyrogroup left-cancellation law, in every curvature regime."""
+    atol, rtol = tolerance
+    if np.dtype(points.dtype) == np.dtype(np.float32):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+    x, y, _ = _split3(points)
+    add = jax.vmap(manifold.addition, in_axes=(0, 0, None))
+    assert jnp.allclose(add(-x, add(x, y, c), c), y, atol=atol, rtol=rtol)
+
+
 # ---------------------------------------------------------------------------
 # Distance
 # ---------------------------------------------------------------------------
@@ -247,6 +286,56 @@ def test_dist_euclidean_limit_has_factor_two(manifold, dtype):
     v = jnp.array([0.3, 0.1, -0.2, 0.05], dtype=dtype)
     assert jnp.allclose(manifold.tangent_norm(v, x, 0.0), 2.0 * jnp.linalg.norm(v), atol=1e-6)
     assert jnp.allclose(manifold.tangent_inner(v, v, x, 0.0), 4.0 * jnp.dot(v, v), atol=1e-6)
+
+
+def _chart_point(theta: float, direction: np.ndarray, c: float) -> np.ndarray:
+    """Chart coordinates of the sphere point at polar angle ``theta`` in the given direction:
+    ``tan(θ/2)·R·d̂`` with ``R = 1/√|κ|`` (κ = -c > 0). Independent of the manifold code."""
+    d = np.asarray(direction, dtype=np.float64)
+    d /= np.linalg.norm(d)
+    radius = 1.0 / abs(-c) ** 0.5
+    return math.tan(theta / 2.0) * radius * d
+
+
+@pytest.mark.parametrize(
+    ("c_val", "test_dtype", "tol"),
+    [(-5e-6, jnp.float32, 1e-4), (-1e-6, jnp.float32, 1e-4), (-1e-10, jnp.float64, 1e-9)],
+    ids=["f32_c-5e-6", "f32_c-1e-6", "f64_c-1e-10"],
+)
+def test_dist_spherical_below_taylor_cutover_matches_great_circle(c_val, test_dtype, tol):
+    """Regression: spherical ``dist`` for ``|c|`` BELOW the κ-trig Taylor cutover (1e-5 float32,
+    1e-9 float64) against the great-circle oracle, at separations spanning both sides of the
+    ``|u| = |κ|·x² < _TAYLOR_MAX_U`` gate.
+
+    Before the u-gate fix, any pair beyond a quarter great-circle fed the order-5 Taylor series a
+    divergent argument (``tan(θ/2) > 1``): at ``c = -5e-6`` a 0.75π-separated pair returned
+    **-1.09e6** for a true distance of 1053.7 — a silently wrong NEGATIVE distance, not a NaN. The
+    original suite never caught this because its sampler caps chart norms at ``0.7R`` and only uses
+    ``|c| ∈ {0.5, 2}`` (far above the cutover): an oracle only covers what its inputs reach."""
+    m = Stereographic(dtype=test_dtype)
+    direction = np.array([1.0, 0.2, -0.1])
+    theta_x = 0.05 * math.pi
+    x64 = _chart_point(theta_x, direction, c_val)
+    x = jnp.asarray(x64, dtype=test_dtype)
+    # Separations straddle the u-gate: 0.02π lands in the Taylor branch (tan²(sep/2) < 0.01), the
+    # rest exercise the closed-form branch up to nearly antipodal.
+    for theta_y in (0.07 * math.pi, 0.45 * math.pi, 0.80 * math.pi, 0.95 * math.pi):
+        y64 = _chart_point(theta_y, direction, c_val)
+        y = jnp.asarray(y64, dtype=test_dtype)
+        got = float(m.dist(x, y, test_dtype(c_val)))
+        ref = _great_circle_dist(x64, y64, c_val)
+        assert got == pytest.approx(ref, rel=tol), f"sep={(theta_y - theta_x) / math.pi:.2f}π: {got} vs {ref}"
+
+
+def test_flat_space_large_norm_no_overflow_float32():
+    """Regression: the x**-power Taylor form NaN'd ``dist_0(x, c=0)`` in float32 for ``‖x‖ ≳ 3200``
+    (``x**11 → inf`` while ``k⁵ = 0``, so the selected branch computed ``0·inf``). The Horner form in
+    ``u = k·x²`` is exact at ``c = 0`` for any norm: ``dist_0 = 2‖x‖``, ``dist = 2‖x - y‖``."""
+    m = Stereographic(dtype=jnp.float32)
+    x = jnp.full((3,), 5000.0 / math.sqrt(3.0), dtype=jnp.float32)  # ‖x‖ = 5000
+    y = -0.5 * x
+    assert float(m.dist_0(x, 0.0)) == pytest.approx(2.0 * 5000.0, rel=1e-6)
+    assert float(m.dist(x, y, 0.0)) == pytest.approx(2.0 * float(jnp.linalg.norm(x - y)), rel=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -370,61 +459,43 @@ def test_tangent_inner_positive_definite_and_symmetric(manifold, points, c, dim,
     assert jnp.all(inner(u, u, x, c) > 0.0)
 
 
-def test_egrad2rgrad_scales_by_inverse_metric(manifold, points, c, dim, rng, dtype):
-    x, _, _ = _split3(points)
-    grad = jnp.asarray(rng.normal(size=x.shape).astype(np.dtype(jnp.dtype(dtype).name)))
-    rgrad = jax.vmap(manifold.egrad2rgrad, in_axes=(0, 0, None))(grad, x, c)
-    lam = jax.vmap(lambda p: manifold.conformal_factor(p[None, :], c)[0, 0])(x)
-    assert jnp.allclose(rgrad, grad / lam[:, None] ** 2, atol=1e-5, rtol=1e-4)
-
-
-# ---------------------------------------------------------------------------
-# Poincaré cross-validation (correctness anchor for the whole hyperbolic half)
-# ---------------------------------------------------------------------------
-
-
-def test_hyperbolic_ops_match_poincare(manifold, points, c, dtype, tolerance):
-    if c <= 0:
-        pytest.skip("Cross-validation against Poincaré only applies for c > 0.")
+def test_egrad2rgrad_metric_duality(manifold, points, c, dim, rng, dtype, tolerance):
+    """``⟨egrad2rgrad(g), v⟩_x = ⟨g, v⟩`` for arbitrary ``v`` — the DEFINING property of the Riemannian
+    gradient (metric duality). This constrains ``egrad2rgrad`` through ``tangent_inner``, which is
+    itself externally anchored (factor-4 Euclidean limit, ``tangent_norm``↔``dist`` consistency, the
+    spherical oracles). A recompute-the-formula check (``rgrad == g/λ²`` using the implementation's own
+    ``conformal_factor``) could only ever catch a wrong exponent, not a wrong ``λ`` — this can."""
     atol, rtol = tolerance
-    poincare = Poincare(dtype=dtype)
-    x, y, z = _split3(points)
-    checks = {
-        "addition": (
-            jax.vmap(manifold.addition, in_axes=(0, 0, None)),
-            jax.vmap(poincare.addition, in_axes=(0, 0, None)),
-            (x, y),
-        ),
-        "gyration": (
-            jax.vmap(manifold.gyration, in_axes=(0, 0, 0, None)),
-            jax.vmap(poincare.gyration, in_axes=(0, 0, 0, None)),
-            (x, y, z),
-        ),
-        "expmap_0": (jax.vmap(manifold.expmap_0, in_axes=(0, None)), jax.vmap(poincare.expmap_0, in_axes=(0, None)), (x,)),
-        "logmap_0": (jax.vmap(manifold.logmap_0, in_axes=(0, None)), jax.vmap(poincare.logmap_0, in_axes=(0, None)), (y,)),
-        "ptransp_0": (
-            jax.vmap(manifold.ptransp_0, in_axes=(0, 0, None)),
-            jax.vmap(poincare.ptransp_0, in_axes=(0, 0, None)),
-            (x, y),
-        ),
-    }
-    for name, (fn_s, fn_p, args) in checks.items():
-        got, ref = fn_s(*args, c), fn_p(*args, c)
-        assert jnp.allclose(got, ref, atol=atol, rtol=rtol), f"stereographic.{name} != poincare.{name}"
-    # Conformal factor (batched).
-    cf_s, cf_p = manifold.conformal_factor(x, c), poincare.conformal_factor(x, c)
-    assert jnp.allclose(cf_s, cf_p, atol=atol, rtol=rtol)
+    if np.dtype(points.dtype) == np.dtype(np.float32):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+    x, _, _ = _split3(points)
+    np_dtype = np.dtype(jnp.dtype(dtype).name)
+    g = jnp.asarray(rng.normal(size=x.shape).astype(np_dtype))
+    v = jnp.asarray(rng.normal(size=x.shape).astype(np_dtype))
+    rgrad = jax.vmap(manifold.egrad2rgrad, in_axes=(0, 0, None))(g, x, c)
+    lhs = jax.vmap(manifold.tangent_inner, in_axes=(0, 0, 0, None))(rgrad, v, x, c)
+    rhs = jnp.einsum("bi,bi->b", g, v)
+    assert jnp.allclose(lhs, rhs, atol=atol, rtol=rtol)
 
 
-def test_hyperbolic_maps_match_poincare(manifold, points, c, dtype, tolerance, rng):
-    """Cross-validate the *curvature-dependent* κ-trig ops against the independent Poincaré
-    implementation for ``c > 0``.
+# ---------------------------------------------------------------------------
+# Poincaré cross-validation (correctness anchor for the κ-trig layer)
+# ---------------------------------------------------------------------------
 
-    ``test_hyperbolic_ops_match_poincare`` pins the shared-core algebra (addition/gyration/…); this
-    pins everything built on the κ-trig branch — ``expmap``, ``logmap``, ``scalar_mul``, ``dist_0``,
-    the general two-point ``ptransp`` and the metric ops — so the ENTIRE hyperbolic half is anchored
-    to a second implementation, not merely self-consistent with its own inverses.
-    """
+
+def test_hyperbolic_ktrig_ops_match_poincare(manifold, points, c, dtype, tolerance):
+    """Cross-validate the κ-trig-based ops against the independent Poincaré implementation for
+    ``c > 0``.
+
+    SCOPE (kept honest): only ops whose Stereographic implementation genuinely differs from
+    Poincaré's are compared — the κ-trig ``where``-branches + clamped ``tanh`` here vs. Poincaré's
+    direct ``tanh``/``atanh`` closed forms. NOT compared, deliberately: ``addition``/``gyration``/
+    ``proj``/``conformal_factor`` are the SAME function object on both sides (guarded by
+    ``test_shared_gyrovector_core_is_single_source``), and ``ptransp``/``ptransp_0``/
+    ``tangent_inner``/``tangent_norm``/``egrad2rgrad``/``retraction`` are textually identical bodies
+    over those shared helpers — comparing any of them would be ``f(x) == f(x)``, vacuous by
+    construction. Their correctness is carried by the pre-existing Poincaré suite (c > 0), the
+    spherical oracles (c < 0), and the property tests in this file."""
     if c <= 0:
         pytest.skip("Cross-validation against Poincaré only applies for c > 0.")
     atol, rtol = tolerance
@@ -432,59 +503,32 @@ def test_hyperbolic_maps_match_poincare(manifold, points, c, dtype, tolerance, r
         atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     poincare = Poincare(dtype=dtype)
     x, y, _ = _split3(points)
-    # Genuine tangent vectors of moderate norm (log maps), plus a raw Euclidean gradient.
+    # Genuine tangent vectors of moderate norm for the two-point maps.
     v = jax.vmap(manifold.logmap, in_axes=(0, 0, None))(y, x, c)
-    u = jax.vmap(manifold.logmap_0, in_axes=(0, None))(x, c)
-    grad = jnp.asarray(rng.normal(size=x.shape).astype(np.dtype(jnp.dtype(dtype).name)))
 
-    def close(got, ref, name):
+    checks = {
+        "expmap_0": (jax.vmap(manifold.expmap_0, in_axes=(0, None)), jax.vmap(poincare.expmap_0, in_axes=(0, None)), (x,)),
+        "logmap_0": (jax.vmap(manifold.logmap_0, in_axes=(0, None)), jax.vmap(poincare.logmap_0, in_axes=(0, None)), (y,)),
+        "dist_0": (jax.vmap(manifold.dist_0, in_axes=(0, None)), jax.vmap(poincare.dist_0, in_axes=(0, None)), (x,)),
+        "expmap": (
+            jax.vmap(manifold.expmap, in_axes=(0, 0, None)),
+            jax.vmap(poincare.expmap, in_axes=(0, 0, None)),
+            (v, x),
+        ),
+        "logmap": (
+            jax.vmap(manifold.logmap, in_axes=(0, 0, None)),
+            jax.vmap(poincare.logmap, in_axes=(0, 0, None)),
+            (y, x),
+        ),
+        "scalar_mul": (
+            jax.vmap(manifold.scalar_mul, in_axes=(None, 0, None)),
+            jax.vmap(poincare.scalar_mul, in_axes=(None, 0, None)),
+            (1.7, x),
+        ),
+    }
+    for name, (fn_s, fn_p, args) in checks.items():
+        got, ref = fn_s(*args, c), fn_p(*args, c)
         assert jnp.allclose(got, ref, atol=atol, rtol=rtol), f"stereographic.{name} != poincare.{name}"
-
-    close(
-        jax.vmap(manifold.expmap, in_axes=(0, 0, None))(v, x, c),
-        jax.vmap(poincare.expmap, in_axes=(0, 0, None))(v, x, c),
-        "expmap",
-    )
-    close(
-        jax.vmap(manifold.logmap, in_axes=(0, 0, None))(y, x, c),
-        jax.vmap(poincare.logmap, in_axes=(0, 0, None))(y, x, c),
-        "logmap",
-    )
-    close(
-        jax.vmap(manifold.scalar_mul, in_axes=(None, 0, None))(1.7, x, c),
-        jax.vmap(poincare.scalar_mul, in_axes=(None, 0, None))(1.7, x, c),
-        "scalar_mul",
-    )
-    close(
-        jax.vmap(manifold.dist_0, in_axes=(0, None))(x, c),
-        jax.vmap(poincare.dist_0, in_axes=(0, None))(x, c),
-        "dist_0",
-    )
-    close(
-        jax.vmap(manifold.ptransp, in_axes=(0, 0, 0, None))(v, x, y, c),
-        jax.vmap(poincare.ptransp, in_axes=(0, 0, 0, None))(v, x, y, c),
-        "ptransp",
-    )
-    close(
-        jax.vmap(manifold.tangent_inner, in_axes=(0, 0, 0, None))(u, v, x, c),
-        jax.vmap(poincare.tangent_inner, in_axes=(0, 0, 0, None))(u, v, x, c),
-        "tangent_inner",
-    )
-    close(
-        jax.vmap(manifold.tangent_norm, in_axes=(0, 0, None))(v, x, c),
-        jax.vmap(poincare.tangent_norm, in_axes=(0, 0, None))(v, x, c),
-        "tangent_norm",
-    )
-    close(
-        jax.vmap(manifold.egrad2rgrad, in_axes=(0, 0, None))(grad, x, c),
-        jax.vmap(poincare.egrad2rgrad, in_axes=(0, 0, None))(grad, x, c),
-        "egrad2rgrad",
-    )
-    close(
-        jax.vmap(manifold.retraction, in_axes=(0, 0, None))(v, x, c),
-        jax.vmap(poincare.retraction, in_axes=(0, 0, None))(v, x, c),
-        "retraction",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +549,26 @@ def test_geodesic_endpoints_and_speed(manifold, points, c, tolerance):
     total = dist(x, y, c)
     half = dist(x, geo(0.5, x, y, c), c)
     assert jnp.allclose(half, 0.5 * total, atol=atol, rtol=rtol)
+
+
+def test_geodesic_extrapolation_beyond_endpoint(manifold, points, c, tolerance):
+    """``d(x, gamma(2)) = 2·d(x, y)`` — the geodesic parametrization holds OUTSIDE [0, 1] too
+    (previously only interpolation was tested). On the sphere the identity only holds while the
+    doubled distance stays inside the injectivity radius ``π·R``, so those pairs are masked out."""
+    atol, rtol = tolerance
+    if np.dtype(points.dtype) == np.dtype(np.float32):
+        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
+    x, y, _ = _split3(points)
+    dist = jax.vmap(manifold.dist, in_axes=(0, 0, None))
+    geo = jax.vmap(manifold.geodesic, in_axes=(None, 0, 0, None))
+    d = dist(x, y, c)
+    doubled = dist(x, geo(2.0, x, y, c), c)
+    if c < 0:
+        mask = np.asarray(2.0 * d < 0.95 * math.pi / math.sqrt(abs(c)))
+        assert mask.any(), "no pair inside the injectivity radius — sampler drifted"
+    else:
+        mask = np.ones(d.shape[0], dtype=bool)
+    assert jnp.allclose(doubled[mask], (2.0 * d)[mask], atol=atol, rtol=rtol)
 
 
 def test_geodesic_unit_contract(manifold, points, c, rng, dtype, tolerance):
@@ -573,6 +637,38 @@ def test_antipode_is_sphere_antipode(manifold, points, c):
         assert err < 1e-6, f"antipode is not the sphere antipode (err={err:.2e})"
 
 
+@pytest.mark.parametrize("c_val", [-1e-6, -1e-7, -1e-8, -1e-10])
+def test_antipode_tiny_negative_curvature_float32(c_val):
+    """Regression: for every ``|c|`` below the float32 Taylor cutover (1e-5), the old
+    ``geodesic_unit(πR, …)`` antipode fed the κ-trig Taylor series ``t/2 = π/(2√|c|)`` —
+    ``|u| = π²/4``, outside the convergence region — returning wrong-signed garbage at ``c = -1e-6``
+    and NaN at ``c = -1e-7`` and below. The prior antipode test never saw this: its curvature fixture
+    only samples ``|c| ∈ {0.5, 2}``, far above the cutover.
+
+    Oracle: the (independent, numpy) sphere lift — the lift of the antipode must be the NEGATED lift
+    of ``x``. Compared as unit vectors, since the lifts' magnitude grows as ``R = 1/√|c|``."""
+    m = Stereographic(dtype=jnp.float32)
+    x = jnp.array([0.3, -0.5, 0.2], dtype=jnp.float32)
+    ap = m.antipode(x, jnp.float32(c_val))
+    assert bool(jnp.all(jnp.isfinite(ap))), f"antipode not finite at c={c_val}: {ap}"
+    lift_x = _sphere_embed(np.asarray(x, dtype=np.float64), c_val)
+    lift_ap = _sphere_embed(np.asarray(ap, dtype=np.float64), c_val)
+    u_x = lift_x / np.linalg.norm(lift_x)
+    u_ap = lift_ap / np.linalg.norm(lift_ap)
+    assert np.max(np.abs(u_ap + u_x)) < 1e-4, f"antipode lift not antipodal at c={c_val}"
+
+
+def test_antipode_involution(manifold, points, c):
+    """``antipode(antipode(x)) = x`` in the spherical regime — the docstring's involution claim,
+    exact for the closed-form chart inversion."""
+    if c >= 0:
+        pytest.skip("The involution is only nontrivial in the spherical regime (c < 0).")
+    x, _, _ = _split3(points)
+    ap = jax.vmap(manifold.antipode, in_axes=(0, None))(x, c)
+    ap2 = jax.vmap(manifold.antipode, in_axes=(0, None))(ap, c)
+    assert jnp.allclose(ap2, x, atol=1e-5, rtol=1e-5)
+
+
 # ---------------------------------------------------------------------------
 # κ-trig primitives: closed forms, κ→0 limit, inverse relations
 # ---------------------------------------------------------------------------
@@ -619,6 +715,34 @@ def test_ktrig_zero_curvature_limit():
         assert jnp.allclose(fn(xs, 0.0), xs, atol=1e-12)
         assert jnp.allclose(fn(xs, 1e-12), xs, atol=1e-9)  # continuity across the Taylor seam
         assert jnp.allclose(fn(xs, -1e-12), xs, atol=1e-9)
+
+
+def test_ktrig_seam_continuity_float32():
+    # f32 analogue of test_ktrig_seam_continuity: the float32 cutover (1e-5) is the |k|-seam a signed
+    # LearnableCurvature actually crosses in the library's DEFAULT dtype — the f64-only seam test
+    # (at 1e-9) never exercises it.
+    xs = jnp.linspace(-1.0, 1.0, 41, dtype=jnp.float32)
+    eps = stereo_impl._K_ZERO_EPS_F32
+    for fn in (stereo_impl._tan_k, stereo_impl._artan_k):
+        for k in (eps, -eps):
+            below = fn(xs, jnp.float32(k * 0.999))  # Taylor branch
+            above = fn(xs, jnp.float32(k * 1.001))  # closed-form branch
+            assert jnp.allclose(below, above, atol=2e-6, rtol=1e-5)
+
+
+@pytest.mark.parametrize("k_val", [9e-6, -9e-6])
+def test_ktrig_u_gate_seam_float32(k_val):
+    """Value accuracy on both sides of the ``|u| = |k|·x² < _TAYLOR_MAX_U`` gate, at fixed ``k`` just
+    below the float32 cutover. Crossing this seam changes ``x`` (unlike the |k|-seam), so each side is
+    compared against the float64 closed form as ground truth rather than against the other side. This
+    pins the u-gate handover the bug fix introduced: Taylor just below, closed form just above."""
+    x_seam = math.sqrt(stereo_impl._TAYLOR_MAX_U / abs(k_val))
+    for fn in (stereo_impl._tan_k, stereo_impl._artan_k):
+        for scale in (0.999, 1.001):  # Taylor side / closed-form side
+            xv = x_seam * scale
+            got = float(fn(jnp.float32(xv), jnp.float32(k_val)))
+            ref = float(fn(jnp.float64(xv), jnp.float64(k_val)))
+            assert got == pytest.approx(ref, rel=1e-5), f"u={k_val * xv**2:+.5f}"
 
 
 # ---------------------------------------------------------------------------
@@ -708,12 +832,13 @@ def test_curvature_gradient_correct_near_zero_float32(c_val):
     assert abs(d32 - d64) < 1e-2, f"dist grad_c inaccurate at c={c_val}: f32={d32} f64={d64}"
 
 
-@pytest.mark.parametrize("c_val", [0.0, 1e-9, 0.5, 2.0, -0.5, -2.0])
+@pytest.mark.parametrize("c_val", [0.0, 1e-9, -1e-6, -1e-7, 0.5, 2.0, -0.5, -2.0])
 def test_antipode_gradient_finite_float32(c_val):
-    # Regression (float32): the antipode builds a radius 1/√|c| that → ∞ as c → 0; the DISCARDED spherical
-    # branch (c ≥ 0 returns -x) then fed ~1e8 into the κ-trig Taylor x**11 term, overflowing float32 to inf
-    # whose 0·inf gradient leaked through jnp.where into the SELECTED -x branch → NaN grad. The radius
-    # guard must keep both grad_x and grad_c finite across all regimes.
+    # Regression (float32): the antipode is the closed-form chart inversion x/(c‖x‖²); the safe-norm
+    # floor and the benign substituted curvature in the discarded c ≥ 0 branch must keep grad_x and
+    # grad_c finite across all regimes — including tiny NEGATIVE c, where the old geodesic_unit(πR, …)
+    # route produced NaN values/gradients (this parametrization originally tested +1e-9 but no tiny
+    # negative c, which is exactly the hole the bug lived in).
     m = Stereographic(dtype=jnp.float32)
     x = jnp.array([0.3, -0.5, 0.2], dtype=jnp.float32)
     gx = jax.grad(lambda xx: jnp.sum(m.antipode(xx, jnp.float32(c_val))))(x)
@@ -819,8 +944,12 @@ def test_shared_gyrovector_core_is_single_source():
 
 @pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
 def test_shared_core_bit_identical_to_poincare(dtype, c):
-    """For ``c > 0`` the shared core is EXACTLY (not merely ``allclose``) Poincaré's result — they call
-    the same underlying function object, so equality must be bit-for-bit."""
+    """For ``c > 0`` the shared core is EXACTLY (not merely ``allclose``) Poincaré's result.
+
+    This is a CLASS-PLUMBING guard, not independent validation: both methods dispatch to the same
+    function object (see ``test_shared_gyrovector_core_is_single_source``), so a math error cannot
+    fail it. What it CAN catch — and the ``is``-check cannot — is either class's *method* growing
+    divergent pre/post-processing (extra casting, projection, reordering) around the shared call."""
     x = jnp.array([0.12, -0.2, 0.05], dtype=dtype)
     y = jnp.array([-0.15, 0.1, 0.2], dtype=dtype)
     pm = Poincare(dtype=dtype)
@@ -829,3 +958,41 @@ def test_shared_core_bit_identical_to_poincare(dtype, c):
     assert bool(jnp.all(pm.gyration(x, y, x, c) == sm.gyration(x, y, x, c)))
     assert bool(jnp.all(pm.proj(x * 6.0, c) == sm.proj(x * 6.0, c)))  # x*6 exits the c=3 ball → projects
     assert bool(jnp.all(pm.conformal_factor(x, c) == sm.conformal_factor(x, c)))
+
+
+# ---------------------------------------------------------------------------
+# Riemannian optimizer integration: egrad2rgrad/expmap/retraction/ptransp exist
+# precisely so a ManifoldParam can live on this manifold — exercise that path
+# end to end in both curved regimes (nothing else tests the dispatch).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("c_val", [1.0, -1.0], ids=["hyperbolic", "spherical"])
+def test_riemannian_adam_on_stereographic_embedding(c_val):
+    """A ManifoldParam on the Stereographic manifold trains with riemannian_adam: the loss (squared
+    geodesic distance to a target) decreases and the point stays on-manifold. This is the only test
+    of the optimizer dispatch path (egrad2rgrad → Adam moments → expmap → ptransp) for this manifold,
+    and the only one that runs it at spherical curvature at all."""
+    manifold = Stereographic(dtype=jnp.float32)
+    target = jnp.array([0.3, 0.4], dtype=jnp.float32)
+    param = mark_manifold_param(
+        nnx.Param(jnp.array([0.1, -0.1], dtype=jnp.float32)),
+        manifold=manifold,
+        curvature=c_val,
+    )
+    tx = riemannian_adam(learning_rate=0.05)
+    opt_state = tx.init(param)
+
+    def loss_fn(x):
+        return manifold.dist(x, target, c_val) ** 2
+
+    initial_loss = float(loss_fn(param[...]))
+    for _ in range(50):
+        grad = jax.grad(loss_fn)(param[...])
+        updates, opt_state = tx.update(grad, opt_state, param)
+        param[...] = param[...] + updates  # type: ignore[operator]
+
+    final_loss = float(loss_fn(param[...]))
+    assert jnp.all(jnp.isfinite(param[...]))
+    assert final_loss < 0.1 * initial_loss, f"loss did not decrease: {initial_loss} -> {final_loss}"
+    assert bool(manifold.is_in_manifold(param[...], c_val))
