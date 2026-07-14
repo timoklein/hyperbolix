@@ -1748,7 +1748,7 @@
 </span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="n">output</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">input_data</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="project-status">Project Status<a class="headerlink" href="#project-status" title="Permanent link">&para;</a></h2>
-<p><strong>Active development — current release: v0.6.0.</strong> Core functionality is complete and stable; new layers and manifolds are added incrementally. See the <a href="changelog/">Changelog</a> for the full release history.</p>
+<p><strong>Active development — current release: v0.11.0.</strong> Core functionality is complete and stable; new layers and manifolds are added incrementally. See the <a href="changelog/">Changelog</a> for the full release history.</p>
 <table>
 <thead>
 <tr>
@@ -1781,7 +1781,7 @@
 <tr>
 <td>Isometry mappings (Poincaré ↔ Hyperboloid)</td>
 <td>✅ Stable</td>
-<td>v0.2.0</td>
+<td>v0.1.4</td>
 </tr>
 <tr>
 <td>FGG-LNN layers (Klis et al. 2026)</td>
@@ -1796,22 +1796,32 @@
 <tr>
 <td>Proper Velocity manifold + PV layers (Chen et al. 2026)</td>
 <td>✅ Stable</td>
-<td>v0.5.3</td>
-</tr>
-<tr>
-<td>Learnable curvature (softplus-reparametrized <code>nnx.Param</code>)</td>
-<td>✅ Stable</td>
 <td>v0.6.0</td>
 </tr>
 <tr>
+<td>Learnable curvature (<code>LearnableCurvature</code>: softplus / log reparam)</td>
+<td>✅ Stable</td>
+<td>v0.7.0</td>
+</tr>
+<tr>
 <td>Product manifolds (Gu et al. 2019, mixed-curvature composition)</td>
-<td>🚧 Unreleased</td>
-<td>next</td>
+<td>✅ Stable</td>
+<td>v0.7.0</td>
+</tr>
+<tr>
+<td>Isometry mappings (Poincaré ↔ Proper Velocity ↔ Hyperboloid)</td>
+<td>✅ Stable</td>
+<td>v0.8.0</td>
+</tr>
+<tr>
+<td>Poincaré vector quantization (VQ-VAE / HyperVQ) layers</td>
+<td>✅ Stable</td>
+<td>v0.8.0</td>
 </tr>
 <tr>
 <td>κ-Stereographic manifold (Bachmann et al. 2020, signed learnable curvature)</td>
-<td>🚧 Unreleased</td>
-<td>next</td>
+<td>✅ Stable</td>
+<td>v0.11.0</td>
 </tr>
 <tr>
 <td>CI/CD pipeline with benchmarking</td>
