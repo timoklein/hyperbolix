@@ -18,7 +18,7 @@ All manifolds share a common interface defined by the `Manifold` protocol and su
 - **Automatic dtype casting**: Pass `dtype=jnp.float64` for higher precision
 - **vmap-native methods**: Methods operate on single points; use `jax.vmap` for batching
 - **JIT compatibility**: All methods are JIT-compilable
-- **Learnable curvature**: Use the `LearnableCurvature` module to add trainable curvature to any model (softplus or log/exp reparameterization, optional clamping)
+- **Learnable curvature**: Use the `LearnableCurvature` module to add trainable curvature to any model (positive `softplus`/`log` or signed `identity` reparameterization, optional clamping)
 
 ## Manifold Protocol
 
