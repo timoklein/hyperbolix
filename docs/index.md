@@ -85,7 +85,7 @@ output = model(input_data, c=1.0)
 
 ## Project Status
 
-**Active development — current release: v0.6.0.** Core functionality is complete and stable; new layers and manifolds are added incrementally. See the [Changelog](changelog.md) for the full release history.
+**Active development — current release: v0.11.0.** Core functionality is complete and stable; new layers and manifolds are added incrementally. See the [Changelog](changelog.md) for the full release history.
 
 | Capability | Status | Shipped in |
 |---|---|---|
@@ -93,13 +93,15 @@ output = model(input_data, c=1.0)
 | Riemannian optimizers (RSGD, RAdam) | ✅ Stable | v0.1.4 |
 | Hyperbolic linear / convolutional layers | ✅ Stable | v0.1.4 |
 | Hyperboloid attention + hyperbolic transformer blocks | ✅ Stable | v0.2.0 |
-| Isometry mappings (Poincaré ↔ Hyperboloid) | ✅ Stable | v0.2.0 |
+| Isometry mappings (Poincaré ↔ Hyperboloid) | ✅ Stable | v0.1.4 |
 | FGG-LNN layers (Klis et al. 2026) | ✅ Stable | v0.3.0 |
 | Poincaré BatchNorm2d, FHCNN layers, hyperbolic avg-pool | ✅ Stable | v0.5.x |
-| Proper Velocity manifold + PV layers (Chen et al. 2026) | ✅ Stable | v0.5.3 |
-| Learnable curvature (softplus-reparametrized `nnx.Param`) | ✅ Stable | v0.6.0 |
-| Product manifolds (Gu et al. 2019, mixed-curvature composition) | 🚧 Unreleased | next |
-| κ-Stereographic manifold (Bachmann et al. 2020, signed learnable curvature) | 🚧 Unreleased | next |
+| Proper Velocity manifold + PV layers (Chen et al. 2026) | ✅ Stable | v0.6.0 |
+| Learnable curvature (`LearnableCurvature`: softplus / log reparam) | ✅ Stable | v0.7.0 |
+| Product manifolds (Gu et al. 2019, mixed-curvature composition) | ✅ Stable | v0.7.0 |
+| Isometry mappings (Poincaré ↔ Proper Velocity ↔ Hyperboloid) | ✅ Stable | v0.8.0 |
+| Poincaré vector quantization (VQ-VAE / HyperVQ) layers | ✅ Stable | v0.8.0 |
+| κ-Stereographic manifold (Bachmann et al. 2020, signed learnable curvature) | ✅ Stable | v0.11.0 |
 | CI/CD pipeline with benchmarking | ✅ Stable | v0.1.4 |
 
 ## Key Concepts
