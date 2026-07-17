@@ -125,7 +125,8 @@ hyperbolic-aware default — keep it unless you have a reason to change it.
 | `FGGLinear` / `FGGConv2D` | `fan_out`, `std=sqrt(1/out_spatial)`, bias `0.0`, `gain=1.0` | Norm-preserving (`‖z‖ ≈ gain·‖x_spatial‖`) so deep *unnormalized* stacks don't saturate a bounded projection — a deliberate deviation from the Klis et al. BatchNorm-regime reference. Restore the reference with `reset_params="eye"`/`"lorentz_kaiming"` + `init_bias=0.5` |
 | `HypLinear*PP` | Standard normal `std=1.0` (Shimizu 2020 reference) | Tuned empirically for HNN++ formulation |
 | `HypLinearPoincare*` | Scaled normal `std=(2·in·out)^{-0.5}` (van Spengler 2023) | Keeps row norms small so outputs stay away from the boundary |
-| `HypLinearHyperboloidFHCNN`, `HTCLinear` | Small uniform `U(-0.02, 0.02)` | Keeps points near the apex `[1/sqrt(c), 0, …]` initially |
+| `HTCLinear` | Fan-in uniform `U(-√(3/in), √(3/in))` | Norm-preserving (per-layer Jacobian gain ≈ 1): `htc` applies no nonlinearity, so a fixed bound is contractive at realistic widths — the old `U(-0.02, 0.02)` froze depth-≥2 stacks. The Hypformer reference (Xavier·√2, `bound = 2√(3/(in+out))`) assumes ReLU + LayerNorm between layers; pass it explicitly to recover |
+| `HypLinearHyperboloidFHCNN` | Small uniform `U(-0.02, 0.02)` | Keeps points near the apex `[1/sqrt(c), 0, …]` initially (matches the Bdeir et al. 2023 reference) |
 | `HypLinear*PV` | He init | PV is unconstrained $\mathbb{R}^n$; standard scales work |
 | `HypRegressionPV` | `std=1e-2` | MLR head: small scores at init |
 
@@ -134,6 +135,15 @@ hyperbolic-aware default — keep it unless you have a reason to change it.
     init, you will see `NaN` losses within the first few steps. The
     constructor's `kernel_init` argument exists for tuning, not for swapping
     in a Euclidean default.
+
+!!! warning "Too small is as fatal as too large — and quieter"
+    A too-small init doesn't NaN; it *freezes*. If a layer's per-layer gain
+    `std·√fan_in` is below 1, stacking compounds the contraction as
+    `gain^depth`, and pairwise output distances fall below the float32
+    resolution of the distance computation: the stack becomes a constant map
+    with ≈0 gradients from step 0, and training silently never starts. See
+    the [numerical stability guide](numerical-stability.md#init-scale-vs-depth)
+    for the mechanism.
 
 ## The Euclidean ↔ Hyperbolic Boundary
 

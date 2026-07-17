@@ -805,10 +805,12 @@ class HTCLinear(nnx.Module):
         Random number generators for parameter initialization.
     use_bias : bool, optional
         Whether to include a bias term (default: True).
-    init_bound : float, optional
-        Bound for uniform weight initialization. Weights are initialized from
-        Uniform(-init_bound, init_bound). Small values keep initial outputs
-        close to the hyperboloid origin for stable training (default: 0.02).
+    init_bound : float or None, optional
+        Bound for uniform weight initialization: weights are drawn from
+        Uniform(-init_bound, init_bound). The default ``None`` resolves to the
+        fan-in-aware, norm-preserving bound ``sqrt(3 / in_features)`` (per-layer
+        input-Jacobian gain ~= 1; see Notes). Pass ``init_bound=0.02`` to restore
+        the previous fixed default bit-for-bit (default: None).
     eps : float, optional
         Small value for numerical stability (default: 1e-7).
     param_dtype : DTypeLike
@@ -827,10 +829,31 @@ class HTCLinear(nnx.Module):
     Notes
     -----
     Weight Initialization:
-        This layer uses small uniform initialization U(-0.02, 0.02) by default,
-        matching the initialization used by FHNN/FHCNN layers. Standard deep learning
-        initializations (Xavier, Lecun) produce weights that are too large for
-        hyperbolic operations, causing gradient explosion and training instability.
+        The default bound ``sqrt(3 / in_features)`` is norm-preserving: ``U(-a, a)``
+        has entry std ``a / sqrt(3)``, and ``htc`` applies no nonlinearity to the
+        matmul output, so the per-layer input-Jacobian RMS gain is
+        ``(a / sqrt(3)) * sqrt(in_features) ~= 1``. The previous fixed default
+        ``U(-0.02, 0.02)`` (an in-house convention inherited from the FHNN/FHCNN
+        family, not the Hypformer reference) is width-dependent *contractive*:
+        its gain ``0.02 / sqrt(3) * sqrt(in_features)`` is ~0.09 at
+        ``in_features=65``, so stacks of two or more layers collapse
+        input-dependent variation below the float32 noise floor -- the stack
+        becomes a constant map with near-zero gradients and training freezes from
+        step 0 (observed in goal-conditioned RL: depth-2 head, c=0.5, frozen
+        through 3.1M steps).
+
+        The official Hypformer reference initializes with Xavier-uniform and gain
+        ``sqrt(2)``, i.e. ``bound = 2 * sqrt(3 / (in_features + out_features))``
+        (per-layer gain ~= sqrt(2) at equal widths), intended for its
+        ReLU + LayerNorm regime where normalization absorbs the growth. Recover it
+        by passing that bound explicitly; for bare ReLU stacks without
+        normalization, the He-style ``bound = sqrt(6 / in_features)`` compensates
+        the ReLU variance halving.
+
+        Caution: the norm-preserving default is validated for shallow stacks
+        (depth <= 2) behind a Euclidean trunk at moderate curvature (c=0.5). In
+        deep fully-hyperbolic stacks or at large ``c``, any gain above 1 compounds
+        as ``gain**depth`` -- monitor output norms.
 
     See Also
     --------
@@ -866,12 +889,19 @@ class HTCLinear(nnx.Module):
         *,
         rngs: nnx.Rngs,
         use_bias: bool = True,
-        init_bound: float = 0.02,
+        init_bound: float | None = None,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
     ):
-        # Small uniform initialization for hyperbolic stability
-        # Standard initializations (Lecun, Xavier) are too large and cause gradient explosion
+        # Norm-preserving fan-in bound: U(-a, a) has entry std a/sqrt(3), and htc applies
+        # no nonlinearity to the matmul output, so the per-layer input-Jacobian RMS gain
+        # is (a/sqrt(3)) * sqrt(in_features) ~= 1 for a = sqrt(3/in_features). Any fixed
+        # width-independent bound cannot hold gain ~= 1: the old 0.02 default gave gain
+        # ~0.09 at in_features=65, so depth>=2 stacks contracted input variation below
+        # the float32 noise floor (constant map, zero gradients, frozen training).
+        # in_features counts the near-constant time column -- slightly conservative.
+        if init_bound is None:
+            init_bound = (3.0 / in_features) ** 0.5
         self.kernel = nnx.Param(
             jax.random.uniform(
                 rngs.params(), (in_features, out_features), dtype=param_dtype, minval=-init_bound, maxval=init_bound

@@ -110,7 +110,7 @@ Most defaults from Euclidean training transfer. The exceptions:
 | **Gradient clipping** | Norm-clip at `1.0` is a safe default; not strictly required for most setups |
 | **Curvature init** | Hyperboloid: `c=1.0`. PV: `c=1.0`. Poincaré (deep nets): `c=0.1` with `LearnableCurvature(init_c=0.1)` per layer |
 | **Float precision** | `float32` is fine for Hyperboloid and PV at modest depths. Use `Poincare(dtype=jnp.float64)` for high curvature, deep nets, or boundary-near training. Parameters stay float32 regardless (`param_dtype` default) — float64 affects manifold compute only. See [Numerical Stability](numerical-stability.md#storage-vs-compute-dtype) |
-| **Layer init** | Keep each family's default (HTC uses small uniform, PP uses scaled normal, etc.). Standard He/Xavier is too large for hyperbolic layers — see the [NN Layers guide](nn-layers.md#initialization-scales) |
+| **Layer init** | Keep each family's default (HTC uses a fan-in-aware uniform `U(-√(3/in), √(3/in))`, PP uses scaled normal, etc.). Standard He/Xavier is too large for most hyperbolic layers, and a fixed small bound can silently *freeze* deep stacks — see the [NN Layers guide](nn-layers.md#initialization-scales) |
 
 ## Common Training Failures
 

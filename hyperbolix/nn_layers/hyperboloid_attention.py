@@ -94,8 +94,10 @@ class _HyperbolicAttentionBase(nnx.Module):
         Spatial output dimension per head (``d_out``).
     num_heads : int
         Number of attention heads (default: 1).
-    init_bound : float
-        Uniform init bound for HTCLinear weights (default: 0.02).
+    init_bound : float or None
+        Uniform init bound forwarded to the HTCLinear projections; ``None``
+        resolves to HTCLinear's fan-in-aware default ``sqrt(3 / in_features)``
+        (default: None).
     eps : float
         Numerical stability floor (default: 1e-7).
     param_dtype : DTypeLike
@@ -111,7 +113,7 @@ class _HyperbolicAttentionBase(nnx.Module):
         out_features: int,
         *,
         num_heads: int = 1,
-        init_bound: float = 0.02,
+        init_bound: float | None = None,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
         rngs: nnx.Rngs,
@@ -220,8 +222,10 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         Number of attention heads (default: 1).
     power : float
         Focus function sharpening exponent (default: 2.0).
-    init_bound : float
-        Uniform init bound for weights (default: 0.02).
+    init_bound : float or None
+        Uniform init bound forwarded to the HTCLinear projections; ``None``
+        resolves to HTCLinear's fan-in-aware default ``sqrt(3 / in_features)``
+        (default: None).
     eps : float
         Numerical stability floor (default: 1e-7).
     param_dtype : DTypeLike
@@ -238,7 +242,7 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         *,
         num_heads: int = 1,
         power: float = 2.0,
-        init_bound: float = 0.02,
+        init_bound: float | None = None,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
         rngs: nnx.Rngs,
@@ -339,8 +343,10 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         Spatial output dimension per head.
     num_heads : int
         Number of attention heads (default: 1).
-    init_bound : float
-        Uniform init bound for weights (default: 0.02).
+    init_bound : float or None
+        Uniform init bound forwarded to the HTCLinear projections; ``None``
+        resolves to HTCLinear's fan-in-aware default ``sqrt(3 / in_features)``
+        (default: None).
     eps : float
         Numerical stability floor (default: 1e-7).
     param_dtype : DTypeLike
@@ -356,7 +362,7 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         out_features: int,
         *,
         num_heads: int = 1,
-        init_bound: float = 0.02,
+        init_bound: float | None = None,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
         rngs: nnx.Rngs,
@@ -419,8 +425,10 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         Spatial output dimension per head.
     num_heads : int
         Number of attention heads (default: 1).
-    init_bound : float
-        Uniform init bound for weights (default: 0.02).
+    init_bound : float or None
+        Uniform init bound forwarded to the HTCLinear projections; ``None``
+        resolves to HTCLinear's fan-in-aware default ``sqrt(3 / in_features)``
+        (default: None).
     eps : float
         Numerical stability floor (default: 1e-7).
     param_dtype : DTypeLike
@@ -436,7 +444,7 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         out_features: int,
         *,
         num_heads: int = 1,
-        init_bound: float = 0.02,
+        init_bound: float | None = None,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
         rngs: nnx.Rngs,

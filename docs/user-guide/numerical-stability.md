@@ -220,6 +220,39 @@ poincare_f64 = Poincare(dtype=jnp.float64)
 dist_precise = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ```
 
+## Init Scale vs. Depth
+
+Weight-init failures on hyperbolic layers come in two flavors, and only one of
+them is loud. A **too-large** init pushes first-layer outputs toward the
+Poincaré boundary or far up the hyperboloid — distances and gradients explode
+and you see `NaN` within a few steps. A **too-small** init fails *silently*:
+for a linear-in-the-matmul layer (e.g. `HTCLinear`, whose `htc` tail applies no
+nonlinearity), the per-layer input-Jacobian gain is
+
+$$
+g \approx \sigma_w \cdot \sqrt{\text{fan\_in}},
+$$
+
+and a stack compounds it as $g^{\text{depth}}$. When $g < 1$, pairwise
+distances between outputs shrink geometrically until they fall below the
+float32 resolution of the distance computation itself: near the origin the
+hyperboloid distance passes through $\mathrm{acosh}(1 + c\,d^2/2)$, and once
+$c\,d^2/2 < \varepsilon_{f32} \approx 1.19 \times 10^{-7}$ the computed
+distance quantizes to exactly zero. The stack is then a constant map —
+gradients are ≈0 from step 0 and training never starts, with no `NaN` or
+warning to point at.
+
+!!! warning "Fixed bounds cannot be width-independent"
+    A hard-coded init bound bakes in a width: `U(-0.02, 0.02)` has
+    $g \approx 0.09$ at fan-in 65 (frozen by depth 2) but $g \approx 1$ only
+    near fan-in 7,500. Hold $g \approx 1$ instead by scaling with fan-in —
+    e.g. `HTCLinear`'s default `init_bound = sqrt(3 / in_features)`. Layers
+    followed by normalization (LayerNorm/BatchNorm absorb magnitude) tolerate
+    $g > 1$; unnormalized stacks — typical in RL — do not.
+
+See the [initialization scales table](nn-layers.md#initialization-scales) for
+each layer family's default and how to recover reference inits.
+
 ## Proper Velocity: An Unconstrained Alternative
 
 The Proper Velocity (PV) model (Chen et al. 2026) sidesteps the conformal-factor and boundary problems above by representing hyperbolic geometry in **unconstrained $\mathbb{R}^n$**. Points carry no norm constraint, so there is no boundary to drift toward and no $\lambda(x) \to \infty$ singularity.
