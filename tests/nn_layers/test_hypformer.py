@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import pytest
 from flax import nnx
 
 from hyperbolix.manifolds import Hyperboloid
@@ -775,3 +776,125 @@ def test_hrc_rmsnorm_vs_layernorm():
 
     # But they should produce different outputs (RMS vs Layer normalization)
     assert not jnp.allclose(y_rms, y_ln, atol=1e-6)
+
+
+# HTCLinear weight-init regression tests (fan-in-aware default; frozen-stack guard)
+
+
+def _sample_hyperboloid_batch(key, ambient_dim, batch, c):
+    """Batch of distinct float32 hyperboloid points via random spatial tangents -> expmap_0.
+
+    Tangents are scaled to unit expected norm so pairwise geodesic distances stay
+    O(1) -- well inside the float32-reliable regime -- regardless of ambient_dim.
+    """
+    spatial_dim = ambient_dim - 1
+    scale = 1.0 / spatial_dim**0.5
+    tangent_spatial_BI = scale * jax.random.normal(key, (batch, spatial_dim), dtype=jnp.float32)
+    tangent_BA = jnp.concatenate([jnp.zeros((batch, 1), dtype=jnp.float32), tangent_spatial_BI], axis=-1)
+    return jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(tangent_BA, c)
+
+
+def _pairwise_dists(points_BA, c):
+    """Upper-triangle pairwise geodesic distances of a batch of hyperboloid points."""
+    idx_i, idx_j = jnp.triu_indices(points_BA.shape[0], k=1)
+    return jax.vmap(hyperboloid.dist, in_axes=(0, 0, None))(points_BA[idx_i], points_BA[idx_j], c)
+
+
+def _htc_stack_forward(x_BA, layers, c):
+    """Chain HTCLinear(A, A-1) layers at fixed curvature (output ambient dim stays A)."""
+    for layer in layers:
+        x_BA = layer(x_BA, c_in=c, c_out=c)
+    return x_BA
+
+
+@pytest.mark.parametrize("in_features", [17, 65, 257])
+def test_htc_default_init_fan_in_bound(in_features):
+    """Default kernel std is ~1/sqrt(in_features) (bound sqrt(3/in_features)); 0.02 override intact."""
+    layer = HTCLinear(in_features, in_features - 1, rngs=nnx.Rngs(0))
+    std = float(jnp.std(layer.kernel[...]))
+    expected = (1.0 / in_features) ** 0.5
+    assert abs(std - expected) / expected < 0.2
+
+    # Explicit init_bound restores the previous fixed default (bit-reproducibility path)
+    legacy = HTCLinear(in_features, in_features - 1, rngs=nnx.Rngs(0), init_bound=0.02)
+    legacy_std = float(jnp.std(legacy.kernel[...]))
+    legacy_expected = 0.02 / 3**0.5
+    assert abs(legacy_std - legacy_expected) / legacy_expected < 0.2
+
+
+@pytest.mark.parametrize("in_features", [17, 65, 257])
+def test_htc_default_init_jacobian_gain(in_features):
+    """Per-layer input-Jacobian RMS gain ||K||_F / sqrt(in_features) is ~1 at the default init.
+
+    htc applies no nonlinearity to the matmul output (space_out = sqrt(c_in/c_out) * (x @ K + b)),
+    so for a random unit input direction v, E||K^T v||^2 = ||K||_F^2 / in_features.
+    """
+    layer = HTCLinear(in_features, in_features - 1, rngs=nnx.Rngs(0))
+    gain = float(jnp.linalg.norm(layer.kernel[...])) / in_features**0.5
+    assert 0.3 < gain < 3.0
+
+
+@pytest.mark.parametrize("in_features", [17, 65, 257])
+@pytest.mark.parametrize("depth", [2, 4])
+def test_htc_stack_preserves_variation(in_features, depth):
+    """A default-init HTC stack at init must not collapse input variation.
+
+    Regression guard for the frozen-training failure of the old fixed U(-0.02, 0.02)
+    default: per-layer gain 0.02/sqrt(3)*sqrt(in_features) (~0.09 at 65) compounded
+    over depth >= 2 contracts pairwise distances below the float32 noise floor,
+    making the stack a constant map with ~zero gradients from step 0.
+    """
+    c = 0.5  # mirrors the GCRL setup where the freeze was observed
+    rngs = nnx.Rngs(0)
+    layers = [HTCLinear(in_features, in_features - 1, rngs=rngs) for _ in range(depth)]
+
+    x_BA = _sample_hyperboloid_batch(jax.random.PRNGKey(42), in_features, 16, c)
+    d_in = _pairwise_dists(x_BA, c)
+    y_BA = _htc_stack_forward(x_BA, layers, c)
+    d_out = _pairwise_dists(y_BA, c)
+
+    # (a) Output variation retains a nontrivial fraction of input variation
+    contraction = float(jnp.mean(d_out) / jnp.mean(d_in))
+    assert contraction > 0.1, f"stack contracted pairwise distances by {1 / contraction:.0f}x"
+
+    # (b) Output distances are spread out, not a single quantized value
+    rel_std = float(jnp.std(d_out) / (jnp.mean(d_out) + 1e-12))
+    assert rel_std > 1e-3
+
+
+def test_htc_stack_legacy_init_collapses_variation():
+    """Witness: the old U(-0.02, 0.02) default fails the variation check at depth 2, fan_in 65.
+
+    Documents the failure the new default fixes (per-layer gain ~0.09 -> ~0.008 over
+    two layers) and proves the metric in test_htc_stack_preserves_variation
+    discriminates between the two inits.
+    """
+    c = 0.5
+    in_features = 65
+    rngs = nnx.Rngs(0)
+    layers = [HTCLinear(in_features, in_features - 1, rngs=rngs, init_bound=0.02) for _ in range(2)]
+
+    x_BA = _sample_hyperboloid_batch(jax.random.PRNGKey(42), in_features, 16, c)
+    d_in = _pairwise_dists(x_BA, c)
+    y_BA = _htc_stack_forward(x_BA, layers, c)
+    d_out = _pairwise_dists(y_BA, c)
+
+    contraction = float(jnp.mean(d_out) / jnp.mean(d_in))
+    assert contraction < 0.05, f"legacy init unexpectedly preserved variation ({contraction=})"
+
+
+def test_htc_wrapper_defaults_inherit_fan_in_init():
+    """Attention and positional wrappers pick up HTCLinear's fan-in default via init_bound=None."""
+    from hyperbolix.nn_layers.hyperboloid_attention import HyperbolicLinearAttention
+    from hyperbolix.nn_layers.hyperboloid_positional import HypformerPositionalEncoding
+
+    in_features = 65
+    expected = (1.0 / in_features) ** 0.5
+
+    pe = HypformerPositionalEncoding(in_features, in_features - 1, rngs=nnx.Rngs(0))
+    pe_std = float(jnp.std(pe.htc_linear.kernel[...]))
+    assert abs(pe_std - expected) / expected < 0.2
+
+    attn = HyperbolicLinearAttention(in_features, in_features - 1, rngs=nnx.Rngs(0))
+    q_std = float(jnp.std(attn.query_projections[0].kernel[...]))
+    assert abs(q_std - expected) / expected < 0.2

@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+- **`HTCLinear` default init is now fan-in-aware and norm-preserving.** `init_bound` accepts `None` (the new default), which resolves to `sqrt(3 / in_features)` — per-layer input-Jacobian gain ≈ 1, since `htc` applies no nonlinearity to the matmul output. The previous fixed `U(-0.02, 0.02)` was width-dependent **contractive** (gain `0.02/sqrt(3)·sqrt(in_features)` ≈ 0.09 at fan-in 65): stacks of ≥ 2 layers collapsed input variation below the float32 noise floor, becoming a constant map with ≈0 gradients — training silently frozen from step 0 (observed in goal-conditioned RL: depth-2 HTC head, c=0.5, frozen through 3.1M steps; escape time monotone in the bound). The `0.02` was an in-house convention inherited from the FHNN/FHCNN family, **not** the Hypformer reference — the official Hypformer code initializes with Xavier-uniform gain `sqrt(2)` (`bound = 2·sqrt(3/(in+out))`, ~15× larger than 0.02 at fan-in 65), intended for its ReLU + LayerNorm regime; recover it by passing that bound explicitly. The attention layers (`HyperbolicLinearAttention`, `HyperbolicSoftmaxAttention`, `HyperbolicFullAttention`) and `HypformerPositionalEncoding` now default `init_bound=None` and inherit the fan-in-aware init for their HTC projections (matching the reference, whose Wq/Wk/Wv and positional encoding use the same Xavier init). FHNN/FHCNN/PLFC layers are unchanged — their `0.02` matches their references (verified against the official Chen 2021, Bdeir 2023, and Shi 2026 code). **Behavior change** — existing HTC models pick up the new init unless they pass `init_bound=0.02` explicitly (bit-for-bit reproduction of the old init)
 
 ## [0.11.0] - 2026-07-14
 

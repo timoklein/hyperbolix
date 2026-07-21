@@ -51,8 +51,9 @@ class HypformerPositionalEncoding(nnx.Module):
         Fixed scalar weight for the position encoding contribution
         (default: 1.0, matching the Hypformer reference). Must be >= 0 so the
         Lorentzian residual stays on the upper hyperboloid sheet.
-    init_bound : float, optional
-        Bound for HTCLinear uniform weight initialization (default: 0.02).
+    init_bound : float or None, optional
+        Bound for HTCLinear uniform weight initialization; ``None`` resolves to
+        HTCLinear's fan-in-aware default ``sqrt(3 / in_features)`` (default: None).
     eps : float, optional
         Numerical stability floor for lorentz_residual (default: 1e-7).
 
@@ -78,7 +79,7 @@ class HypformerPositionalEncoding(nnx.Module):
         *,
         rngs: nnx.Rngs,
         epsilon: float = 1.0,
-        init_bound: float = 0.02,
+        init_bound: float | None = None,
         eps: float = 1e-7,
     ):
         if epsilon < 0:
