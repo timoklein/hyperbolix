@@ -1282,15 +1282,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#unreleased" class="md-nav__link">
+  <a href="#0111-2026-07-21" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Unreleased
+        0.11.1 - 2026-07-21
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+    <nav class="md-nav" aria-label="0.11.1 - 2026-07-21">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2098,15 +2098,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#unreleased" class="md-nav__link">
+  <a href="#0111-2026-07-21" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Unreleased
+        0.11.1 - 2026-07-21
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+    <nav class="md-nav" aria-label="0.11.1 - 2026-07-21">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2903,7 +2903,7 @@
 <p>All notable changes to Hyperbolix will be documented in this file.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
-<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v0.11.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="0111-2026-07-21"><a href="https://github.com/timoklein/hyperbolix/compare/v0.11.0...v0.11.1">0.11.1</a> - 2026-07-21<a class="headerlink" href="#0111-2026-07-21" title="Permanent link">&para;</a></h2>
 <h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong><code>HTCLinear</code> default init is now fan-in-aware and norm-preserving.</strong> <code>init_bound</code> accepts <code>None</code> (the new default), which resolves to <code>sqrt(3 / in_features)</code> — per-layer input-Jacobian gain ≈ 1, since <code>htc</code> applies no nonlinearity to the matmul output. The previous fixed <code>U(-0.02, 0.02)</code> was width-dependent <strong>contractive</strong> (gain <code>0.02/sqrt(3)·sqrt(in_features)</code> ≈ 0.09 at fan-in 65): stacks of ≥ 2 layers collapsed input variation below the float32 noise floor, becoming a constant map with ≈0 gradients — training silently frozen from step 0 (observed in goal-conditioned RL: depth-2 HTC head, c=0.5, frozen through 3.1M steps; escape time monotone in the bound). The <code>0.02</code> was an in-house convention inherited from the FHNN/FHCNN family, <strong>not</strong> the Hypformer reference — the official Hypformer code initializes with Xavier-uniform gain <code>sqrt(2)</code> (<code>bound = 2·sqrt(3/(in+out))</code>, ~15× larger than 0.02 at fan-in 65), intended for its ReLU + LayerNorm regime; recover it by passing that bound explicitly. The attention layers (<code>HyperbolicLinearAttention</code>, <code>HyperbolicSoftmaxAttention</code>, <code>HyperbolicFullAttention</code>) and <code>HypformerPositionalEncoding</code> now default <code>init_bound=None</code> and inherit the fan-in-aware init for their HTC projections (matching the reference, whose Wq/Wk/Wv and positional encoding use the same Xavier init). FHNN/FHCNN/PLFC layers are unchanged — their <code>0.02</code> matches their references (verified against the official Chen 2021, Bdeir 2023, and Shi 2026 code). <strong>Behavior change</strong> — existing HTC models pick up the new init unless they pass <code>init_bound=0.02</code> explicitly (bit-for-bit reproduction of the old init)</li>
