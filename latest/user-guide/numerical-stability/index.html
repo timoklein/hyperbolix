@@ -804,6 +804,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#init-scale-vs-depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Init Scale vs. Depth
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#proper-velocity-an-unconstrained-alternative" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1987,6 +1998,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#init-scale-vs-depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Init Scale vs. Depth
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#proper-velocity-an-unconstrained-alternative" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2633,6 +2655,35 @@ reproducibility studies or numerical debugging.</p>
 </span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">poincare_f64</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
 </span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">dist_precise</span> <span class="o">=</span> <span class="n">poincare_f64</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># returns float64</span>
 </span></code></pre></div>
+<h2 id="init-scale-vs-depth">Init Scale vs. Depth<a class="headerlink" href="#init-scale-vs-depth" title="Permanent link">&para;</a></h2>
+<p>Weight-init failures on hyperbolic layers come in two flavors, and only one of
+them is loud. A <strong>too-large</strong> init pushes first-layer outputs toward the
+Poincaré boundary or far up the hyperboloid — distances and gradients explode
+and you see <code>NaN</code> within a few steps. A <strong>too-small</strong> init fails <em>silently</em>:
+for a linear-in-the-matmul layer (e.g. <code>HTCLinear</code>, whose <code>htc</code> tail applies no
+nonlinearity), the per-layer input-Jacobian gain is</p>
+<div class="arithmatex">\[
+g \approx \sigma_w \cdot \sqrt{\text{fan\_in}},
+\]</div>
+<p>and a stack compounds it as <span class="arithmatex">\(g^{\text{depth}}\)</span>. When <span class="arithmatex">\(g &lt; 1\)</span>, pairwise
+distances between outputs shrink geometrically until they fall below the
+float32 resolution of the distance computation itself: near the origin the
+hyperboloid distance passes through <span class="arithmatex">\(\mathrm{acosh}(1 + c\,d^2/2)\)</span>, and once
+<span class="arithmatex">\(c\,d^2/2 &lt; \varepsilon_{f32} \approx 1.19 \times 10^{-7}\)</span> the computed
+distance quantizes to exactly zero. The stack is then a constant map —
+gradients are ≈0 from step 0 and training never starts, with no <code>NaN</code> or
+warning to point at.</p>
+<div class="admonition warning">
+<p class="admonition-title">Fixed bounds cannot be width-independent</p>
+<p>A hard-coded init bound bakes in a width: <code>U(-0.02, 0.02)</code> has
+<span class="arithmatex">\(g \approx 0.09\)</span> at fan-in 65 (frozen by depth 2) but <span class="arithmatex">\(g \approx 1\)</span> only
+near fan-in 7,500. Hold <span class="arithmatex">\(g \approx 1\)</span> instead by scaling with fan-in —
+e.g. <code>HTCLinear</code>'s default <code>init_bound = sqrt(3 / in_features)</code>. Layers
+followed by normalization (LayerNorm/BatchNorm absorb magnitude) tolerate
+<span class="arithmatex">\(g &gt; 1\)</span>; unnormalized stacks — typical in RL — do not.</p>
+</div>
+<p>See the <a href="../nn-layers/#initialization-scales">initialization scales table</a> for
+each layer family's default and how to recover reference inits.</p>
 <h2 id="proper-velocity-an-unconstrained-alternative">Proper Velocity: An Unconstrained Alternative<a class="headerlink" href="#proper-velocity-an-unconstrained-alternative" title="Permanent link">&para;</a></h2>
 <p>The Proper Velocity (PV) model (Chen et al. 2026) sidesteps the conformal-factor and boundary problems above by representing hyperbolic geometry in <strong>unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span></strong>. Points carry no norm constraint, so there is no boundary to drift toward and no <span class="arithmatex">\(\lambda(x) \to \infty\)</span> singularity.</p>
 <p>Use <code>ProperVelocity</code> when your features or embeddings reach large geodesic distances from the origin and float32 precision must be preserved.</p>

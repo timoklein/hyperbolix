@@ -2224,9 +2224,14 @@ hyperbolic-aware default — keep it unless you have a reason to change it.</p>
 <td>Keeps row norms small so outputs stay away from the boundary</td>
 </tr>
 <tr>
-<td><code>HypLinearHyperboloidFHCNN</code>, <code>HTCLinear</code></td>
+<td><code>HTCLinear</code></td>
+<td>Fan-in uniform <code>U(-√(3/in), √(3/in))</code></td>
+<td>Norm-preserving (per-layer Jacobian gain ≈ 1): <code>htc</code> applies no nonlinearity, so a fixed bound is contractive at realistic widths — the old <code>U(-0.02, 0.02)</code> froze depth-≥2 stacks. The Hypformer reference (Xavier·√2, <code>bound = 2√(3/(in+out))</code>) assumes ReLU + LayerNorm between layers; pass it explicitly to recover</td>
+</tr>
+<tr>
+<td><code>HypLinearHyperboloidFHCNN</code></td>
 <td>Small uniform <code>U(-0.02, 0.02)</code></td>
-<td>Keeps points near the apex <code>[1/sqrt(c), 0, …]</code> initially</td>
+<td>Keeps points near the apex <code>[1/sqrt(c), 0, …]</code> initially (matches the Bdeir et al. 2023 reference)</td>
 </tr>
 <tr>
 <td><code>HypLinear*PV</code></td>
@@ -2246,6 +2251,16 @@ hyperbolic-aware default — keep it unless you have a reason to change it.</p>
 init, you will see <code>NaN</code> losses within the first few steps. The
 constructor's <code>kernel_init</code> argument exists for tuning, not for swapping
 in a Euclidean default.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Too small is as fatal as too large — and quieter</p>
+<p>A too-small init doesn't NaN; it <em>freezes</em>. If a layer's per-layer gain
+<code>std·√fan_in</code> is below 1, stacking compounds the contraction as
+<code>gain^depth</code>, and pairwise output distances fall below the float32
+resolution of the distance computation: the stack becomes a constant map
+with ≈0 gradients from step 0, and training silently never starts. See
+the <a href="../numerical-stability/#init-scale-vs-depth">numerical stability guide</a>
+for the mechanism.</p>
 </div>
 <h2 id="the-euclidean-hyperbolic-boundary">The Euclidean ↔ Hyperbolic Boundary<a class="headerlink" href="#the-euclidean-hyperbolic-boundary" title="Permanent link">&para;</a></h2>
 <p>Most networks aren't <em>fully</em> hyperbolic. The question is <strong>where you cross the

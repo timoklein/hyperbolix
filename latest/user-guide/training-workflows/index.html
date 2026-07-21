@@ -1590,7 +1590,7 @@ per-operation performance, not training workflows.</p>
 </tr>
 <tr>
 <td><strong>Layer init</strong></td>
-<td>Keep each family's default (HTC uses small uniform, PP uses scaled normal, etc.). Standard He/Xavier is too large for hyperbolic layers — see the <a href="../nn-layers/#initialization-scales">NN Layers guide</a></td>
+<td>Keep each family's default (HTC uses a fan-in-aware uniform <code>U(-√(3/in), √(3/in))</code>, PP uses scaled normal, etc.). Standard He/Xavier is too large for most hyperbolic layers, and a fixed small bound can silently <em>freeze</em> deep stacks — see the <a href="../nn-layers/#initialization-scales">NN Layers guide</a></td>
 </tr>
 </tbody>
 </table>
