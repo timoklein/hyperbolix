@@ -1318,7 +1318,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#100-2026-07-24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.0.0 - 2026-07-24
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.0.0 - 2026-07-24">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2145,7 +2156,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#100-2026-07-24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.0.0 - 2026-07-24
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.0.0 - 2026-07-24">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2953,7 +2975,11 @@
 <p>All notable changes to Hyperbolix will be documented in this file.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
-<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v0.11.1...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.0.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="100-2026-07-24"><a href="https://github.com/timoklein/hyperbolix/compare/v0.11.1...v1.0.0">1.0.0</a> - 2026-07-24<a class="headerlink" href="#100-2026-07-24" title="Permanent link">&para;</a></h2>
+<p>First stable release. The public API is considered complete and stable, reaching functional
+parity with the broader hyperbolic deep learning ecosystem; future changes follow semantic
+versioning.</p>
 <h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>CO-SNE</strong> (<code>hyperbolix.decomposition.CoSNE</code>) — dimensionality reduction and visualization for hyperbolic data (Guo et al. 2022), the hyperbolic analogue of t-SNE. A thin sklearn-style class (<code>fit</code> / <code>fit_transform</code>; non-parametric, so no out-of-sample <code>transform</code>, matching sklearn's <code>TSNE</code>) over a pure, JIT-friendly functional core (<code>fit_cosne</code>, <code>conditional_probabilities</code>, <code>joint_probabilities</code>, <code>low_dim_probabilities</code>, <code>kl_divergence_loss</code>, <code>magnitude_loss</code>). High-dimensional similarities are perplexity-calibrated on <strong>squared</strong> hyperbolic distances (paper Eq. 2); low-dimensional similarities use a heavy-tailed Student-t / Cauchy kernel on Poincaré-ball distances (paper Eq. 9 — both the author's-code plain-distance form, default, and the exact squared-distance form via <code>exact_cauchy=True</code>). On top of the t-SNE KL divergence it adds a <strong>magnitude loss</strong> <code>H = (1/N)·Σᵢ(‖xᵢ‖² − ‖yᵢ‖²)²</code> (paper Eq. 10) that preserves each point's distance-to-origin (the hierarchy depth). Optimization is two-stage projected gradient descent on the ball (early-exaggeration KL-only exploration, then KL + magnitude), with the KL gradient Riemannian-scaled by <code>(1 − c‖y‖²)²/4</code> and the magnitude gradient Euclidean (paper §3.7). Curvature-general (a single <code>c</code> for both spaces, passed at fit time); Poincaré input <code>(N, D)</code> → <code>(N, K)</code> ball coordinates, Hyperboloid input <code>(N, A)</code> → <code>(N, K+1)</code>. Uses <strong>exact autodiff gradients</strong> of the declared losses — a deliberate deviation from the reference's demonstrably buggy hand gradients — so the reference learning rates do not transfer; the <code>learning_rate</code> default (<code>0.5</code>) is calibrated on a synthetic-cluster recovery test and documented on the class. Double precision recommended for fitting</li>
