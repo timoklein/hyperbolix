@@ -30,6 +30,7 @@ import optax
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds import Hyperboloid, Manifold, Poincare
+from ..manifolds._gyrovector_core import _proj as _proj_ball
 from ..manifolds.hyperboloid import (
     MIN_NORM,
     VERSION_DEFAULT,
@@ -356,7 +357,11 @@ class HoroPCA:
         x_cast = self._hyperboloid._cast(x_ND)
         if self._is_hyperboloid:
             return _proj_batch(x_cast, c)  # projection hygiene
-        return jax.vmap(poincare_to_hyperboloid, in_axes=(0, None))(x_cast, c)
+        # Ball hygiene BEFORE the lift: poincare_to_hyperboloid floors 1 - c‖y‖² instead of
+        # erroring, so an on/outside-boundary point (routine under float32 saturation) would lift
+        # to a time coordinate ~1e15 and silently NaN the Fréchet mean.
+        x_ball = jax.vmap(_proj_ball, in_axes=(0, None))(x_cast, c)
+        return jax.vmap(poincare_to_hyperboloid, in_axes=(0, None))(x_ball, c)
 
     def fit(self, x_ND: Float[Array, "N R"], c: Curvature, key: PRNGKeyArray) -> "HoroPCA":
         """Fit the components on ``x_ND`` at curvature ``c``.

@@ -368,3 +368,28 @@ def test_end_to_end_recovery(dtype):
     else:
         assert float(model.explained_variance_ratio_) > 0.99
         assert float(np.median(rel)) < 1e-2
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_poincare_boundary_input_is_finite(dtype):
+    """A Poincaré input containing an exactly on-boundary point must not NaN the fit.
+
+    Regression: the Poincaré branch of ``_to_hyperboloid`` used to lift without ball hygiene;
+    ``poincare_to_hyperboloid`` floors ``1 - c‖y‖²`` instead of erroring, so an on-boundary
+    point (routine under float32 saturation) lifted to a time coordinate ~1e15 and silently
+    NaN'd the Fréchet mean — and with it every fitted attribute.
+    """
+    c = 1.0
+    P = Poincare(dtype=dtype)
+    x_hyp = _hyp_points(5, 32, 5, c, sigma=0.3, dtype=dtype)
+    x_ball = jax.vmap(iso.hyperboloid_to_poincare, in_axes=(0, None))(x_hyp, c)
+    boundary_D = jnp.zeros(5, dtype=dtype).at[0].set(1.0 / jnp.sqrt(jnp.asarray(c, dtype=dtype)))
+    x_ball = x_ball.at[0].set(boundary_D)  # exactly on the ball boundary
+
+    model = HoroPCA(P, 2, max_steps=30).fit(x_ball, c, jax.random.PRNGKey(0))
+    z = model.transform(x_ball)
+
+    assert np.isfinite(np.asarray(model.mean_)).all()
+    assert np.isfinite(np.asarray(model.components_)).all()
+    assert np.isfinite(np.asarray(model.losses_)).all()
+    assert np.isfinite(np.asarray(z)).all()
