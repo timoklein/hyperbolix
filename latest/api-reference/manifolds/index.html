@@ -1555,6 +1555,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../decomposition/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decomposition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../utils/" class="md-nav__link">
         
   
@@ -4793,11 +4821,11 @@ provides better numerical stability control.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-890">890</a></span>
-<span class="normal"><a href="#__codelineno-0-891">891</a></span>
-<span class="normal"><a href="#__codelineno-0-892">892</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-890"><a id="__codelineno-0-890" name="__codelineno-0-890"></a><span class="k">def</span><span class="w"> </span><span class="nf">create_origin</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span> <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-891"><a id="__codelineno-0-891" name="__codelineno-0-891"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Create hyperboloid origin [1/√c, 0, ..., 0].&quot;&quot;&quot;</span>
-</span><span id="__span-0-892"><a id="__codelineno-0-892" name="__codelineno-0-892"></a>    <span class="k">return</span> <span class="n">_create_origin</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">dim</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-935">935</a></span>
+<span class="normal"><a href="#__codelineno-0-936">936</a></span>
+<span class="normal"><a href="#__codelineno-0-937">937</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-935"><a id="__codelineno-0-935" name="__codelineno-0-935"></a><span class="k">def</span><span class="w"> </span><span class="nf">create_origin</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span> <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-936"><a id="__codelineno-0-936" name="__codelineno-0-936"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Create hyperboloid origin [1/√c, 0, ..., 0].&quot;&quot;&quot;</span>
+</span><span id="__span-0-937"><a id="__codelineno-0-937" name="__codelineno-0-937"></a>    <span class="k">return</span> <span class="n">_create_origin</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">dim</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -4824,11 +4852,11 @@ provides better numerical stability control.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-894">894</a></span>
-<span class="normal"><a href="#__codelineno-0-895">895</a></span>
-<span class="normal"><a href="#__codelineno-0-896">896</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-894"><a id="__codelineno-0-894" name="__codelineno-0-894"></a><span class="k">def</span><span class="w"> </span><span class="nf">minkowski_inner</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-895"><a id="__codelineno-0-895" name="__codelineno-0-895"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩.&quot;&quot;&quot;</span>
-</span><span id="__span-0-896"><a id="__codelineno-0-896" name="__codelineno-0-896"></a>    <span class="k">return</span> <span class="n">_minkowski_inner</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">))</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-939">939</a></span>
+<span class="normal"><a href="#__codelineno-0-940">940</a></span>
+<span class="normal"><a href="#__codelineno-0-941">941</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-939"><a id="__codelineno-0-939" name="__codelineno-0-939"></a><span class="k">def</span><span class="w"> </span><span class="nf">minkowski_inner</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-940"><a id="__codelineno-0-940" name="__codelineno-0-940"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩.&quot;&quot;&quot;</span>
+</span><span id="__span-0-941"><a id="__codelineno-0-941" name="__codelineno-0-941"></a>    <span class="k">return</span> <span class="n">_minkowski_inner</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -4855,11 +4883,11 @@ provides better numerical stability control.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-898">898</a></span>
-<span class="normal"><a href="#__codelineno-0-899">899</a></span>
-<span class="normal"><a href="#__codelineno-0-900">900</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-898"><a id="__codelineno-0-898" name="__codelineno-0-898"></a><span class="k">def</span><span class="w"> </span><span class="nf">proj</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-899"><a id="__codelineno-0-899" name="__codelineno-0-899"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Project point onto hyperboloid.&quot;&quot;&quot;</span>
-</span><span id="__span-0-900"><a id="__codelineno-0-900" name="__codelineno-0-900"></a>    <span class="k">return</span> <span class="n">_proj</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-943">943</a></span>
+<span class="normal"><a href="#__codelineno-0-944">944</a></span>
+<span class="normal"><a href="#__codelineno-0-945">945</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-943"><a id="__codelineno-0-943" name="__codelineno-0-943"></a><span class="k">def</span><span class="w"> </span><span class="nf">proj</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-944"><a id="__codelineno-0-944" name="__codelineno-0-944"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Project point onto hyperboloid.&quot;&quot;&quot;</span>
+</span><span id="__span-0-945"><a id="__codelineno-0-945" name="__codelineno-0-945"></a>    <span class="k">return</span> <span class="n">_proj</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -4886,11 +4914,11 @@ provides better numerical stability control.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-902">902</a></span>
-<span class="normal"><a href="#__codelineno-0-903">903</a></span>
-<span class="normal"><a href="#__codelineno-0-904">904</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-902"><a id="__codelineno-0-902" name="__codelineno-0-902"></a><span class="k">def</span><span class="w"> </span><span class="nf">proj_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-903"><a id="__codelineno-0-903" name="__codelineno-0-903"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Project batched points onto hyperboloid (handles arbitrary leading dimensions).&quot;&quot;&quot;</span>
-</span><span id="__span-0-904"><a id="__codelineno-0-904" name="__codelineno-0-904"></a>    <span class="k">return</span> <span class="n">_proj_batch</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-947">947</a></span>
+<span class="normal"><a href="#__codelineno-0-948">948</a></span>
+<span class="normal"><a href="#__codelineno-0-949">949</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-947"><a id="__codelineno-0-947" name="__codelineno-0-947"></a><span class="k">def</span><span class="w"> </span><span class="nf">proj_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-948"><a id="__codelineno-0-948" name="__codelineno-0-948"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Project batched points onto hyperboloid (handles arbitrary leading dimensions).&quot;&quot;&quot;</span>
+</span><span id="__span-0-949"><a id="__codelineno-0-949" name="__codelineno-0-949"></a>    <span class="k">return</span> <span class="n">_proj_batch</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -4923,27 +4951,27 @@ stereographic isometry. <code>scalar_mul</code> provides the companion gyro scal
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-906">906</a></span>
-<span class="normal"><a href="#__codelineno-0-907">907</a></span>
-<span class="normal"><a href="#__codelineno-0-908">908</a></span>
-<span class="normal"><a href="#__codelineno-0-909">909</a></span>
-<span class="normal"><a href="#__codelineno-0-910">910</a></span>
-<span class="normal"><a href="#__codelineno-0-911">911</a></span>
-<span class="normal"><a href="#__codelineno-0-912">912</a></span>
-<span class="normal"><a href="#__codelineno-0-913">913</a></span>
-<span class="normal"><a href="#__codelineno-0-914">914</a></span>
-<span class="normal"><a href="#__codelineno-0-915">915</a></span>
-<span class="normal"><a href="#__codelineno-0-916">916</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-906"><a id="__codelineno-0-906" name="__codelineno-0-906"></a><span class="k">def</span><span class="w"> </span><span class="nf">addition</span><span class="p">(</span>
-</span><span id="__span-0-907"><a id="__codelineno-0-907" name="__codelineno-0-907"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
-</span><span id="__span-0-908"><a id="__codelineno-0-908" name="__codelineno-0-908"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-909"><a id="__codelineno-0-909" name="__codelineno-0-909"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Lorentz gyrovector addition ``x ⊕ y = Exp_x(PT_{0→x}(Log_0(y)))``.</span>
-</span><span id="__span-0-910"><a id="__codelineno-0-910" name="__codelineno-0-910"></a>
-</span><span id="__span-0-911"><a id="__codelineno-0-911" name="__codelineno-0-911"></a><span class="sd">    The intrinsic Lorentz addition of Chen et al. (2025b) / Shi et al. (2026, Eq. 1).</span>
-</span><span id="__span-0-912"><a id="__codelineno-0-912" name="__codelineno-0-912"></a><span class="sd">    Forms a gyrocommutative gyrogroup with identity = origin and inverse</span>
-</span><span id="__span-0-913"><a id="__codelineno-0-913" name="__codelineno-0-913"></a><span class="sd">    ``⊖x = (-1) ⊙ x = [x₀, -x_s]``; matches Poincaré Möbius addition under the</span>
-</span><span id="__span-0-914"><a id="__codelineno-0-914" name="__codelineno-0-914"></a><span class="sd">    stereographic isometry. ``scalar_mul`` provides the companion gyro scaling (Eq. 2).</span>
-</span><span id="__span-0-915"><a id="__codelineno-0-915" name="__codelineno-0-915"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-916"><a id="__codelineno-0-916" name="__codelineno-0-916"></a>    <span class="k">return</span> <span class="n">_addition</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-951">951</a></span>
+<span class="normal"><a href="#__codelineno-0-952">952</a></span>
+<span class="normal"><a href="#__codelineno-0-953">953</a></span>
+<span class="normal"><a href="#__codelineno-0-954">954</a></span>
+<span class="normal"><a href="#__codelineno-0-955">955</a></span>
+<span class="normal"><a href="#__codelineno-0-956">956</a></span>
+<span class="normal"><a href="#__codelineno-0-957">957</a></span>
+<span class="normal"><a href="#__codelineno-0-958">958</a></span>
+<span class="normal"><a href="#__codelineno-0-959">959</a></span>
+<span class="normal"><a href="#__codelineno-0-960">960</a></span>
+<span class="normal"><a href="#__codelineno-0-961">961</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-951"><a id="__codelineno-0-951" name="__codelineno-0-951"></a><span class="k">def</span><span class="w"> </span><span class="nf">addition</span><span class="p">(</span>
+</span><span id="__span-0-952"><a id="__codelineno-0-952" name="__codelineno-0-952"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
+</span><span id="__span-0-953"><a id="__codelineno-0-953" name="__codelineno-0-953"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-954"><a id="__codelineno-0-954" name="__codelineno-0-954"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Lorentz gyrovector addition ``x ⊕ y = Exp_x(PT_{0→x}(Log_0(y)))``.</span>
+</span><span id="__span-0-955"><a id="__codelineno-0-955" name="__codelineno-0-955"></a>
+</span><span id="__span-0-956"><a id="__codelineno-0-956" name="__codelineno-0-956"></a><span class="sd">    The intrinsic Lorentz addition of Chen et al. (2025b) / Shi et al. (2026, Eq. 1).</span>
+</span><span id="__span-0-957"><a id="__codelineno-0-957" name="__codelineno-0-957"></a><span class="sd">    Forms a gyrocommutative gyrogroup with identity = origin and inverse</span>
+</span><span id="__span-0-958"><a id="__codelineno-0-958" name="__codelineno-0-958"></a><span class="sd">    ``⊖x = (-1) ⊙ x = [x₀, -x_s]``; matches Poincaré Möbius addition under the</span>
+</span><span id="__span-0-959"><a id="__codelineno-0-959" name="__codelineno-0-959"></a><span class="sd">    stereographic isometry. ``scalar_mul`` provides the companion gyro scaling (Eq. 2).</span>
+</span><span id="__span-0-960"><a id="__codelineno-0-960" name="__codelineno-0-960"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-961"><a id="__codelineno-0-961" name="__codelineno-0-961"></a>    <span class="k">return</span> <span class="n">_addition</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -4970,15 +4998,15 @@ stereographic isometry. <code>scalar_mul</code> provides the companion gyro scal
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-918">918</a></span>
-<span class="normal"><a href="#__codelineno-0-919">919</a></span>
-<span class="normal"><a href="#__codelineno-0-920">920</a></span>
-<span class="normal"><a href="#__codelineno-0-921">921</a></span>
-<span class="normal"><a href="#__codelineno-0-922">922</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-918"><a id="__codelineno-0-918" name="__codelineno-0-918"></a><span class="k">def</span><span class="w"> </span><span class="nf">scalar_mul</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">r</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-919"><a id="__codelineno-0-919" name="__codelineno-0-919"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Scalar multiplication on hyperboloid.&quot;&quot;&quot;</span>
-</span><span id="__span-0-920"><a id="__codelineno-0-920" name="__codelineno-0-920"></a>    <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-</span><span id="__span-0-921"><a id="__codelineno-0-921" name="__codelineno-0-921"></a>    <span class="n">r_cast</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
-</span><span id="__span-0-922"><a id="__codelineno-0-922" name="__codelineno-0-922"></a>    <span class="k">return</span> <span class="n">_scalar_mul</span><span class="p">(</span><span class="n">r_cast</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># type: ignore[arg-type]</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-963">963</a></span>
+<span class="normal"><a href="#__codelineno-0-964">964</a></span>
+<span class="normal"><a href="#__codelineno-0-965">965</a></span>
+<span class="normal"><a href="#__codelineno-0-966">966</a></span>
+<span class="normal"><a href="#__codelineno-0-967">967</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-963"><a id="__codelineno-0-963" name="__codelineno-0-963"></a><span class="k">def</span><span class="w"> </span><span class="nf">scalar_mul</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">r</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-964"><a id="__codelineno-0-964" name="__codelineno-0-964"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Scalar multiplication on hyperboloid.&quot;&quot;&quot;</span>
+</span><span id="__span-0-965"><a id="__codelineno-0-965" name="__codelineno-0-965"></a>    <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span><span id="__span-0-966"><a id="__codelineno-0-966" name="__codelineno-0-966"></a>    <span class="n">r_cast</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+</span><span id="__span-0-967"><a id="__codelineno-0-967" name="__codelineno-0-967"></a>    <span class="k">return</span> <span class="n">_scalar_mul</span><span class="p">(</span><span class="n">r_cast</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># type: ignore[arg-type]</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5008,23 +5036,23 @@ stereographic isometry. <code>scalar_mul</code> provides the companion gyro scal
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-924">924</a></span>
-<span class="normal"><a href="#__codelineno-0-925">925</a></span>
-<span class="normal"><a href="#__codelineno-0-926">926</a></span>
-<span class="normal"><a href="#__codelineno-0-927">927</a></span>
-<span class="normal"><a href="#__codelineno-0-928">928</a></span>
-<span class="normal"><a href="#__codelineno-0-929">929</a></span>
-<span class="normal"><a href="#__codelineno-0-930">930</a></span>
-<span class="normal"><a href="#__codelineno-0-931">931</a></span>
-<span class="normal"><a href="#__codelineno-0-932">932</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-924"><a id="__codelineno-0-924" name="__codelineno-0-924"></a><span class="k">def</span><span class="w"> </span><span class="nf">dist</span><span class="p">(</span>
-</span><span id="__span-0-925"><a id="__codelineno-0-925" name="__codelineno-0-925"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-926"><a id="__codelineno-0-926" name="__codelineno-0-926"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span>
-</span><span id="__span-0-927"><a id="__codelineno-0-927" name="__codelineno-0-927"></a>    <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span>
-</span><span id="__span-0-928"><a id="__codelineno-0-928" name="__codelineno-0-928"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span>
-</span><span id="__span-0-929"><a id="__codelineno-0-929" name="__codelineno-0-929"></a>    <span class="n">version_idx</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">VERSION_DEFAULT</span><span class="p">,</span>
-</span><span id="__span-0-930"><a id="__codelineno-0-930" name="__codelineno-0-930"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-931"><a id="__codelineno-0-931" name="__codelineno-0-931"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute geodesic distance between hyperboloid points.&quot;&quot;&quot;</span>
-</span><span id="__span-0-932"><a id="__codelineno-0-932" name="__codelineno-0-932"></a>    <span class="k">return</span> <span class="n">_dist</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-969">969</a></span>
+<span class="normal"><a href="#__codelineno-0-970">970</a></span>
+<span class="normal"><a href="#__codelineno-0-971">971</a></span>
+<span class="normal"><a href="#__codelineno-0-972">972</a></span>
+<span class="normal"><a href="#__codelineno-0-973">973</a></span>
+<span class="normal"><a href="#__codelineno-0-974">974</a></span>
+<span class="normal"><a href="#__codelineno-0-975">975</a></span>
+<span class="normal"><a href="#__codelineno-0-976">976</a></span>
+<span class="normal"><a href="#__codelineno-0-977">977</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-969"><a id="__codelineno-0-969" name="__codelineno-0-969"></a><span class="k">def</span><span class="w"> </span><span class="nf">dist</span><span class="p">(</span>
+</span><span id="__span-0-970"><a id="__codelineno-0-970" name="__codelineno-0-970"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-971"><a id="__codelineno-0-971" name="__codelineno-0-971"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span>
+</span><span id="__span-0-972"><a id="__codelineno-0-972" name="__codelineno-0-972"></a>    <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span>
+</span><span id="__span-0-973"><a id="__codelineno-0-973" name="__codelineno-0-973"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span>
+</span><span id="__span-0-974"><a id="__codelineno-0-974" name="__codelineno-0-974"></a>    <span class="n">version_idx</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">VERSION_DEFAULT</span><span class="p">,</span>
+</span><span id="__span-0-975"><a id="__codelineno-0-975" name="__codelineno-0-975"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-976"><a id="__codelineno-0-976" name="__codelineno-0-976"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute geodesic distance between hyperboloid points.&quot;&quot;&quot;</span>
+</span><span id="__span-0-977"><a id="__codelineno-0-977" name="__codelineno-0-977"></a>    <span class="k">return</span> <span class="n">_dist</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5053,11 +5081,11 @@ stereographic isometry. <code>scalar_mul</code> provides the companion gyro scal
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-934">934</a></span>
-<span class="normal"><a href="#__codelineno-0-935">935</a></span>
-<span class="normal"><a href="#__codelineno-0-936">936</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-934"><a id="__codelineno-0-934" name="__codelineno-0-934"></a><span class="k">def</span><span class="w"> </span><span class="nf">dist_0</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span> <span class="n">version_idx</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">VERSION_DEFAULT</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-935"><a id="__codelineno-0-935" name="__codelineno-0-935"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute geodesic distance from hyperboloid origin.&quot;&quot;&quot;</span>
-</span><span id="__span-0-936"><a id="__codelineno-0-936" name="__codelineno-0-936"></a>    <span class="k">return</span> <span class="n">_dist_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-979">979</a></span>
+<span class="normal"><a href="#__codelineno-0-980">980</a></span>
+<span class="normal"><a href="#__codelineno-0-981">981</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-979"><a id="__codelineno-0-979" name="__codelineno-0-979"></a><span class="k">def</span><span class="w"> </span><span class="nf">dist_0</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span> <span class="n">version_idx</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">VERSION_DEFAULT</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-980"><a id="__codelineno-0-980" name="__codelineno-0-980"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute geodesic distance from hyperboloid origin.&quot;&quot;&quot;</span>
+</span><span id="__span-0-981"><a id="__codelineno-0-981" name="__codelineno-0-981"></a>    <span class="k">return</span> <span class="n">_dist_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5090,23 +5118,23 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-938">938</a></span>
-<span class="normal"><a href="#__codelineno-0-939">939</a></span>
-<span class="normal"><a href="#__codelineno-0-940">940</a></span>
-<span class="normal"><a href="#__codelineno-0-941">941</a></span>
-<span class="normal"><a href="#__codelineno-0-942">942</a></span>
-<span class="normal"><a href="#__codelineno-0-943">943</a></span>
-<span class="normal"><a href="#__codelineno-0-944">944</a></span>
-<span class="normal"><a href="#__codelineno-0-945">945</a></span>
-<span class="normal"><a href="#__codelineno-0-946">946</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-938"><a id="__codelineno-0-938" name="__codelineno-0-938"></a><span class="k">def</span><span class="w"> </span><span class="nf">sqdist</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-939"><a id="__codelineno-0-939" name="__codelineno-0-939"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Squared Lorentzian distance ``d_L²(x, y) = -2/c - 2⟨x,y⟩_L`` (Law et al. 2019).</span>
-</span><span id="__span-0-940"><a id="__codelineno-0-940" name="__codelineno-0-940"></a>
-</span><span id="__span-0-941"><a id="__codelineno-0-941" name="__codelineno-0-941"></a><span class="sd">    A fast, ``acosh``-free dissimilarity that is monotone in the geodesic :meth:`dist`</span>
-</span><span id="__span-0-942"><a id="__codelineno-0-942" name="__codelineno-0-942"></a><span class="sd">    (``d_L² = (2/c)(cosh(√c·d) - 1)``) but is **not** the squared geodesic distance and **not**</span>
-</span><span id="__span-0-943"><a id="__codelineno-0-943" name="__codelineno-0-943"></a><span class="sd">    a true metric. Prefer it where a smooth monotone distance proxy suffices (contrastive /</span>
-</span><span id="__span-0-944"><a id="__codelineno-0-944" name="__codelineno-0-944"></a><span class="sd">    commitment / attention scores); use :meth:`dist` when the geodesic length is required.</span>
-</span><span id="__span-0-945"><a id="__codelineno-0-945" name="__codelineno-0-945"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-946"><a id="__codelineno-0-946" name="__codelineno-0-946"></a>    <span class="k">return</span> <span class="n">_sqdist</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-983">983</a></span>
+<span class="normal"><a href="#__codelineno-0-984">984</a></span>
+<span class="normal"><a href="#__codelineno-0-985">985</a></span>
+<span class="normal"><a href="#__codelineno-0-986">986</a></span>
+<span class="normal"><a href="#__codelineno-0-987">987</a></span>
+<span class="normal"><a href="#__codelineno-0-988">988</a></span>
+<span class="normal"><a href="#__codelineno-0-989">989</a></span>
+<span class="normal"><a href="#__codelineno-0-990">990</a></span>
+<span class="normal"><a href="#__codelineno-0-991">991</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-983"><a id="__codelineno-0-983" name="__codelineno-0-983"></a><span class="k">def</span><span class="w"> </span><span class="nf">sqdist</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-984"><a id="__codelineno-0-984" name="__codelineno-0-984"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Squared Lorentzian distance ``d_L²(x, y) = -2/c - 2⟨x,y⟩_L`` (Law et al. 2019).</span>
+</span><span id="__span-0-985"><a id="__codelineno-0-985" name="__codelineno-0-985"></a>
+</span><span id="__span-0-986"><a id="__codelineno-0-986" name="__codelineno-0-986"></a><span class="sd">    A fast, ``acosh``-free dissimilarity that is monotone in the geodesic :meth:`dist`</span>
+</span><span id="__span-0-987"><a id="__codelineno-0-987" name="__codelineno-0-987"></a><span class="sd">    (``d_L² = (2/c)(cosh(√c·d) - 1)``) but is **not** the squared geodesic distance and **not**</span>
+</span><span id="__span-0-988"><a id="__codelineno-0-988" name="__codelineno-0-988"></a><span class="sd">    a true metric. Prefer it where a smooth monotone distance proxy suffices (contrastive /</span>
+</span><span id="__span-0-989"><a id="__codelineno-0-989" name="__codelineno-0-989"></a><span class="sd">    commitment / attention scores); use :meth:`dist` when the geodesic length is required.</span>
+</span><span id="__span-0-990"><a id="__codelineno-0-990" name="__codelineno-0-990"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-991"><a id="__codelineno-0-991" name="__codelineno-0-991"></a>    <span class="k">return</span> <span class="n">_sqdist</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5135,11 +5163,11 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-948">948</a></span>
-<span class="normal"><a href="#__codelineno-0-949">949</a></span>
-<span class="normal"><a href="#__codelineno-0-950">950</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-948"><a id="__codelineno-0-948" name="__codelineno-0-948"></a><span class="k">def</span><span class="w"> </span><span class="nf">expmap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-949"><a id="__codelineno-0-949" name="__codelineno-0-949"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Exponential map: map tangent vector v at point x to manifold.&quot;&quot;&quot;</span>
-</span><span id="__span-0-950"><a id="__codelineno-0-950" name="__codelineno-0-950"></a>    <span class="k">return</span> <span class="n">_expmap</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-993">993</a></span>
+<span class="normal"><a href="#__codelineno-0-994">994</a></span>
+<span class="normal"><a href="#__codelineno-0-995">995</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-993"><a id="__codelineno-0-993" name="__codelineno-0-993"></a><span class="k">def</span><span class="w"> </span><span class="nf">expmap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-994"><a id="__codelineno-0-994" name="__codelineno-0-994"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Exponential map: map tangent vector v at point x to manifold.&quot;&quot;&quot;</span>
+</span><span id="__span-0-995"><a id="__codelineno-0-995" name="__codelineno-0-995"></a>    <span class="k">return</span> <span class="n">_expmap</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5166,11 +5194,11 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-952">952</a></span>
-<span class="normal"><a href="#__codelineno-0-953">953</a></span>
-<span class="normal"><a href="#__codelineno-0-954">954</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-952"><a id="__codelineno-0-952" name="__codelineno-0-952"></a><span class="k">def</span><span class="w"> </span><span class="nf">expmap_0</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-953"><a id="__codelineno-0-953" name="__codelineno-0-953"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Exponential map from origin.&quot;&quot;&quot;</span>
-</span><span id="__span-0-954"><a id="__codelineno-0-954" name="__codelineno-0-954"></a>    <span class="k">return</span> <span class="n">_expmap_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-997">997</a></span>
+<span class="normal"><a href="#__codelineno-0-998">998</a></span>
+<span class="normal"><a href="#__codelineno-0-999">999</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-997"><a id="__codelineno-0-997" name="__codelineno-0-997"></a><span class="k">def</span><span class="w"> </span><span class="nf">expmap_0</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-998"><a id="__codelineno-0-998" name="__codelineno-0-998"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Exponential map from origin.&quot;&quot;&quot;</span>
+</span><span id="__span-0-999"><a id="__codelineno-0-999" name="__codelineno-0-999"></a>    <span class="k">return</span> <span class="n">_expmap_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5199,15 +5227,15 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-956">956</a></span>
-<span class="normal"><a href="#__codelineno-0-957">957</a></span>
-<span class="normal"><a href="#__codelineno-0-958">958</a></span>
-<span class="normal"><a href="#__codelineno-0-959">959</a></span>
-<span class="normal"><a href="#__codelineno-0-960">960</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-956"><a id="__codelineno-0-956" name="__codelineno-0-956"></a><span class="k">def</span><span class="w"> </span><span class="nf">retraction</span><span class="p">(</span>
-</span><span id="__span-0-957"><a id="__codelineno-0-957" name="__codelineno-0-957"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
-</span><span id="__span-0-958"><a id="__codelineno-0-958" name="__codelineno-0-958"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-959"><a id="__codelineno-0-959" name="__codelineno-0-959"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Retraction: first-order approximation of exponential map.&quot;&quot;&quot;</span>
-</span><span id="__span-0-960"><a id="__codelineno-0-960" name="__codelineno-0-960"></a>    <span class="k">return</span> <span class="n">_retraction</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1001">1001</a></span>
+<span class="normal"><a href="#__codelineno-0-1002">1002</a></span>
+<span class="normal"><a href="#__codelineno-0-1003">1003</a></span>
+<span class="normal"><a href="#__codelineno-0-1004">1004</a></span>
+<span class="normal"><a href="#__codelineno-0-1005">1005</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1001"><a id="__codelineno-0-1001" name="__codelineno-0-1001"></a><span class="k">def</span><span class="w"> </span><span class="nf">retraction</span><span class="p">(</span>
+</span><span id="__span-0-1002"><a id="__codelineno-0-1002" name="__codelineno-0-1002"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
+</span><span id="__span-0-1003"><a id="__codelineno-0-1003" name="__codelineno-0-1003"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1004"><a id="__codelineno-0-1004" name="__codelineno-0-1004"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Retraction: first-order approximation of exponential map.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1005"><a id="__codelineno-0-1005" name="__codelineno-0-1005"></a>    <span class="k">return</span> <span class="n">_retraction</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5236,11 +5264,11 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-962">962</a></span>
-<span class="normal"><a href="#__codelineno-0-963">963</a></span>
-<span class="normal"><a href="#__codelineno-0-964">964</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-962"><a id="__codelineno-0-962" name="__codelineno-0-962"></a><span class="k">def</span><span class="w"> </span><span class="nf">logmap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-963"><a id="__codelineno-0-963" name="__codelineno-0-963"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Logarithmic map: map point y to tangent space at point x.&quot;&quot;&quot;</span>
-</span><span id="__span-0-964"><a id="__codelineno-0-964" name="__codelineno-0-964"></a>    <span class="k">return</span> <span class="n">_logmap</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1007">1007</a></span>
+<span class="normal"><a href="#__codelineno-0-1008">1008</a></span>
+<span class="normal"><a href="#__codelineno-0-1009">1009</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1007"><a id="__codelineno-0-1007" name="__codelineno-0-1007"></a><span class="k">def</span><span class="w"> </span><span class="nf">logmap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1008"><a id="__codelineno-0-1008" name="__codelineno-0-1008"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Logarithmic map: map point y to tangent space at point x.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1009"><a id="__codelineno-0-1009" name="__codelineno-0-1009"></a>    <span class="k">return</span> <span class="n">_logmap</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5267,11 +5295,11 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-966">966</a></span>
-<span class="normal"><a href="#__codelineno-0-967">967</a></span>
-<span class="normal"><a href="#__codelineno-0-968">968</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-966"><a id="__codelineno-0-966" name="__codelineno-0-966"></a><span class="k">def</span><span class="w"> </span><span class="nf">logmap_0</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-967"><a id="__codelineno-0-967" name="__codelineno-0-967"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Logarithmic map from origin.&quot;&quot;&quot;</span>
-</span><span id="__span-0-968"><a id="__codelineno-0-968" name="__codelineno-0-968"></a>    <span class="k">return</span> <span class="n">_logmap_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1011">1011</a></span>
+<span class="normal"><a href="#__codelineno-0-1012">1012</a></span>
+<span class="normal"><a href="#__codelineno-0-1013">1013</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1011"><a id="__codelineno-0-1011" name="__codelineno-0-1011"></a><span class="k">def</span><span class="w"> </span><span class="nf">logmap_0</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1012"><a id="__codelineno-0-1012" name="__codelineno-0-1012"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Logarithmic map from origin.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1013"><a id="__codelineno-0-1013" name="__codelineno-0-1013"></a>    <span class="k">return</span> <span class="n">_logmap_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5301,15 +5329,15 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-970">970</a></span>
-<span class="normal"><a href="#__codelineno-0-971">971</a></span>
-<span class="normal"><a href="#__codelineno-0-972">972</a></span>
-<span class="normal"><a href="#__codelineno-0-973">973</a></span>
-<span class="normal"><a href="#__codelineno-0-974">974</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-970"><a id="__codelineno-0-970" name="__codelineno-0-970"></a><span class="k">def</span><span class="w"> </span><span class="nf">ptransp</span><span class="p">(</span>
-</span><span id="__span-0-971"><a id="__codelineno-0-971" name="__codelineno-0-971"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
-</span><span id="__span-0-972"><a id="__codelineno-0-972" name="__codelineno-0-972"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-973"><a id="__codelineno-0-973" name="__codelineno-0-973"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Parallel transport tangent vector v from point x to point y.&quot;&quot;&quot;</span>
-</span><span id="__span-0-974"><a id="__codelineno-0-974" name="__codelineno-0-974"></a>    <span class="k">return</span> <span class="n">_ptransp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1015">1015</a></span>
+<span class="normal"><a href="#__codelineno-0-1016">1016</a></span>
+<span class="normal"><a href="#__codelineno-0-1017">1017</a></span>
+<span class="normal"><a href="#__codelineno-0-1018">1018</a></span>
+<span class="normal"><a href="#__codelineno-0-1019">1019</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1015"><a id="__codelineno-0-1015" name="__codelineno-0-1015"></a><span class="k">def</span><span class="w"> </span><span class="nf">ptransp</span><span class="p">(</span>
+</span><span id="__span-0-1016"><a id="__codelineno-0-1016" name="__codelineno-0-1016"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
+</span><span id="__span-0-1017"><a id="__codelineno-0-1017" name="__codelineno-0-1017"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1018"><a id="__codelineno-0-1018" name="__codelineno-0-1018"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Parallel transport tangent vector v from point x to point y.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1019"><a id="__codelineno-0-1019" name="__codelineno-0-1019"></a>    <span class="k">return</span> <span class="n">_ptransp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5338,15 +5366,15 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-976">976</a></span>
-<span class="normal"><a href="#__codelineno-0-977">977</a></span>
-<span class="normal"><a href="#__codelineno-0-978">978</a></span>
-<span class="normal"><a href="#__codelineno-0-979">979</a></span>
-<span class="normal"><a href="#__codelineno-0-980">980</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-976"><a id="__codelineno-0-976" name="__codelineno-0-976"></a><span class="k">def</span><span class="w"> </span><span class="nf">ptransp_0</span><span class="p">(</span>
-</span><span id="__span-0-977"><a id="__codelineno-0-977" name="__codelineno-0-977"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
-</span><span id="__span-0-978"><a id="__codelineno-0-978" name="__codelineno-0-978"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-979"><a id="__codelineno-0-979" name="__codelineno-0-979"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Parallel transport tangent vector v from origin to point y.&quot;&quot;&quot;</span>
-</span><span id="__span-0-980"><a id="__codelineno-0-980" name="__codelineno-0-980"></a>    <span class="k">return</span> <span class="n">_ptransp_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1021">1021</a></span>
+<span class="normal"><a href="#__codelineno-0-1022">1022</a></span>
+<span class="normal"><a href="#__codelineno-0-1023">1023</a></span>
+<span class="normal"><a href="#__codelineno-0-1024">1024</a></span>
+<span class="normal"><a href="#__codelineno-0-1025">1025</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1021"><a id="__codelineno-0-1021" name="__codelineno-0-1021"></a><span class="k">def</span><span class="w"> </span><span class="nf">ptransp_0</span><span class="p">(</span>
+</span><span id="__span-0-1022"><a id="__codelineno-0-1022" name="__codelineno-0-1022"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">y</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
+</span><span id="__span-0-1023"><a id="__codelineno-0-1023" name="__codelineno-0-1023"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1024"><a id="__codelineno-0-1024" name="__codelineno-0-1024"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Parallel transport tangent vector v from origin to point y.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1025"><a id="__codelineno-0-1025" name="__codelineno-0-1025"></a>    <span class="k">return</span> <span class="n">_ptransp_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5376,15 +5404,15 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-982">982</a></span>
-<span class="normal"><a href="#__codelineno-0-983">983</a></span>
-<span class="normal"><a href="#__codelineno-0-984">984</a></span>
-<span class="normal"><a href="#__codelineno-0-985">985</a></span>
-<span class="normal"><a href="#__codelineno-0-986">986</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-982"><a id="__codelineno-0-982" name="__codelineno-0-982"></a><span class="k">def</span><span class="w"> </span><span class="nf">tangent_inner</span><span class="p">(</span>
-</span><span id="__span-0-983"><a id="__codelineno-0-983" name="__codelineno-0-983"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">u</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
-</span><span id="__span-0-984"><a id="__codelineno-0-984" name="__codelineno-0-984"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-985"><a id="__codelineno-0-985" name="__codelineno-0-985"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute inner product of tangent vectors u and v at point x.&quot;&quot;&quot;</span>
-</span><span id="__span-0-986"><a id="__codelineno-0-986" name="__codelineno-0-986"></a>    <span class="k">return</span> <span class="n">_tangent_inner</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">u</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1027">1027</a></span>
+<span class="normal"><a href="#__codelineno-0-1028">1028</a></span>
+<span class="normal"><a href="#__codelineno-0-1029">1029</a></span>
+<span class="normal"><a href="#__codelineno-0-1030">1030</a></span>
+<span class="normal"><a href="#__codelineno-0-1031">1031</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1027"><a id="__codelineno-0-1027" name="__codelineno-0-1027"></a><span class="k">def</span><span class="w"> </span><span class="nf">tangent_inner</span><span class="p">(</span>
+</span><span id="__span-0-1028"><a id="__codelineno-0-1028" name="__codelineno-0-1028"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">u</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
+</span><span id="__span-0-1029"><a id="__codelineno-0-1029" name="__codelineno-0-1029"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1030"><a id="__codelineno-0-1030" name="__codelineno-0-1030"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute inner product of tangent vectors u and v at point x.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1031"><a id="__codelineno-0-1031" name="__codelineno-0-1031"></a>    <span class="k">return</span> <span class="n">_tangent_inner</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">u</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5413,11 +5441,11 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-988">988</a></span>
-<span class="normal"><a href="#__codelineno-0-989">989</a></span>
-<span class="normal"><a href="#__codelineno-0-990">990</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-988"><a id="__codelineno-0-988" name="__codelineno-0-988"></a><span class="k">def</span><span class="w"> </span><span class="nf">tangent_norm</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-989"><a id="__codelineno-0-989" name="__codelineno-0-989"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute norm of tangent vector v at point x.&quot;&quot;&quot;</span>
-</span><span id="__span-0-990"><a id="__codelineno-0-990" name="__codelineno-0-990"></a>    <span class="k">return</span> <span class="n">_tangent_norm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1033">1033</a></span>
+<span class="normal"><a href="#__codelineno-0-1034">1034</a></span>
+<span class="normal"><a href="#__codelineno-0-1035">1035</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1033"><a id="__codelineno-0-1033" name="__codelineno-0-1033"></a><span class="k">def</span><span class="w"> </span><span class="nf">tangent_norm</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1034"><a id="__codelineno-0-1034" name="__codelineno-0-1034"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute norm of tangent vector v at point x.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1035"><a id="__codelineno-0-1035" name="__codelineno-0-1035"></a>    <span class="k">return</span> <span class="n">_tangent_norm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5446,15 +5474,15 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-992">992</a></span>
-<span class="normal"><a href="#__codelineno-0-993">993</a></span>
-<span class="normal"><a href="#__codelineno-0-994">994</a></span>
-<span class="normal"><a href="#__codelineno-0-995">995</a></span>
-<span class="normal"><a href="#__codelineno-0-996">996</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-992"><a id="__codelineno-0-992" name="__codelineno-0-992"></a><span class="k">def</span><span class="w"> </span><span class="nf">egrad2rgrad</span><span class="p">(</span>
-</span><span id="__span-0-993"><a id="__codelineno-0-993" name="__codelineno-0-993"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">grad</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
-</span><span id="__span-0-994"><a id="__codelineno-0-994" name="__codelineno-0-994"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-995"><a id="__codelineno-0-995" name="__codelineno-0-995"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert Euclidean gradient to Riemannian gradient.&quot;&quot;&quot;</span>
-</span><span id="__span-0-996"><a id="__codelineno-0-996" name="__codelineno-0-996"></a>    <span class="k">return</span> <span class="n">_egrad2rgrad</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">grad</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1037">1037</a></span>
+<span class="normal"><a href="#__codelineno-0-1038">1038</a></span>
+<span class="normal"><a href="#__codelineno-0-1039">1039</a></span>
+<span class="normal"><a href="#__codelineno-0-1040">1040</a></span>
+<span class="normal"><a href="#__codelineno-0-1041">1041</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1037"><a id="__codelineno-0-1037" name="__codelineno-0-1037"></a><span class="k">def</span><span class="w"> </span><span class="nf">egrad2rgrad</span><span class="p">(</span>
+</span><span id="__span-0-1038"><a id="__codelineno-0-1038" name="__codelineno-0-1038"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">grad</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
+</span><span id="__span-0-1039"><a id="__codelineno-0-1039" name="__codelineno-0-1039"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1040"><a id="__codelineno-0-1040" name="__codelineno-0-1040"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert Euclidean gradient to Riemannian gradient.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1041"><a id="__codelineno-0-1041" name="__codelineno-0-1041"></a>    <span class="k">return</span> <span class="n">_egrad2rgrad</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">grad</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5483,15 +5511,15 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-998"> 998</a></span>
-<span class="normal"><a href="#__codelineno-0-999"> 999</a></span>
-<span class="normal"><a href="#__codelineno-0-1000">1000</a></span>
-<span class="normal"><a href="#__codelineno-0-1001">1001</a></span>
-<span class="normal"><a href="#__codelineno-0-1002">1002</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-998"><a id="__codelineno-0-998" name="__codelineno-0-998"></a><span class="k">def</span><span class="w"> </span><span class="nf">tangent_proj</span><span class="p">(</span>
-</span><span id="__span-0-999"><a id="__codelineno-0-999" name="__codelineno-0-999"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
-</span><span id="__span-0-1000"><a id="__codelineno-0-1000" name="__codelineno-0-1000"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-1001"><a id="__codelineno-0-1001" name="__codelineno-0-1001"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Project vector v onto tangent space at point x.&quot;&quot;&quot;</span>
-</span><span id="__span-0-1002"><a id="__codelineno-0-1002" name="__codelineno-0-1002"></a>    <span class="k">return</span> <span class="n">_tangent_proj</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1043">1043</a></span>
+<span class="normal"><a href="#__codelineno-0-1044">1044</a></span>
+<span class="normal"><a href="#__codelineno-0-1045">1045</a></span>
+<span class="normal"><a href="#__codelineno-0-1046">1046</a></span>
+<span class="normal"><a href="#__codelineno-0-1047">1047</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1043"><a id="__codelineno-0-1043" name="__codelineno-0-1043"></a><span class="k">def</span><span class="w"> </span><span class="nf">tangent_proj</span><span class="p">(</span>
+</span><span id="__span-0-1044"><a id="__codelineno-0-1044" name="__codelineno-0-1044"></a>    <span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
+</span><span id="__span-0-1045"><a id="__codelineno-0-1045" name="__codelineno-0-1045"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1046"><a id="__codelineno-0-1046" name="__codelineno-0-1046"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Project vector v onto tangent space at point x.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1047"><a id="__codelineno-0-1047" name="__codelineno-0-1047"></a>    <span class="k">return</span> <span class="n">_tangent_proj</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5520,11 +5548,11 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1004">1004</a></span>
-<span class="normal"><a href="#__codelineno-0-1005">1005</a></span>
-<span class="normal"><a href="#__codelineno-0-1006">1006</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1004"><a id="__codelineno-0-1004" name="__codelineno-0-1004"></a><span class="k">def</span><span class="w"> </span><span class="nf">is_in_manifold</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span> <span class="n">atol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-4</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
-</span><span id="__span-0-1005"><a id="__codelineno-0-1005" name="__codelineno-0-1005"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Check if point x lies on hyperboloid.&quot;&quot;&quot;</span>
-</span><span id="__span-0-1006"><a id="__codelineno-0-1006" name="__codelineno-0-1006"></a>    <span class="k">return</span> <span class="n">_is_in_manifold</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">,</span> <span class="n">atol</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1049">1049</a></span>
+<span class="normal"><a href="#__codelineno-0-1050">1050</a></span>
+<span class="normal"><a href="#__codelineno-0-1051">1051</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1049"><a id="__codelineno-0-1049" name="__codelineno-0-1049"></a><span class="k">def</span><span class="w"> </span><span class="nf">is_in_manifold</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span> <span class="n">atol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-4</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+</span><span id="__span-0-1050"><a id="__codelineno-0-1050" name="__codelineno-0-1050"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Check if point x lies on hyperboloid.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1051"><a id="__codelineno-0-1051" name="__codelineno-0-1051"></a>    <span class="k">return</span> <span class="n">_is_in_manifold</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">,</span> <span class="n">atol</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5553,11 +5581,11 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1008">1008</a></span>
-<span class="normal"><a href="#__codelineno-0-1009">1009</a></span>
-<span class="normal"><a href="#__codelineno-0-1010">1010</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1008"><a id="__codelineno-0-1008" name="__codelineno-0-1008"></a><span class="k">def</span><span class="w"> </span><span class="nf">is_in_tangent_space</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
-</span><span id="__span-0-1009"><a id="__codelineno-0-1009" name="__codelineno-0-1009"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Check if vector v lies in tangent space at point x.&quot;&quot;&quot;</span>
-</span><span id="__span-0-1010"><a id="__codelineno-0-1010" name="__codelineno-0-1010"></a>    <span class="k">return</span> <span class="n">_is_in_tangent_space</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1053">1053</a></span>
+<span class="normal"><a href="#__codelineno-0-1054">1054</a></span>
+<span class="normal"><a href="#__codelineno-0-1055">1055</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1053"><a id="__codelineno-0-1053" name="__codelineno-0-1053"></a><span class="k">def</span><span class="w"> </span><span class="nf">is_in_tangent_space</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+</span><span id="__span-0-1054"><a id="__codelineno-0-1054" name="__codelineno-0-1054"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Check if vector v lies in tangent space at point x.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1055"><a id="__codelineno-0-1055" name="__codelineno-0-1055"></a>    <span class="k">return</span> <span class="n">_is_in_tangent_space</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5584,19 +5612,19 @@ commitment / attention scores); use :meth:<code>dist</code> when the geodesic le
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1012">1012</a></span>
-<span class="normal"><a href="#__codelineno-0-1013">1013</a></span>
-<span class="normal"><a href="#__codelineno-0-1014">1014</a></span>
-<span class="normal"><a href="#__codelineno-0-1015">1015</a></span>
-<span class="normal"><a href="#__codelineno-0-1016">1016</a></span>
-<span class="normal"><a href="#__codelineno-0-1017">1017</a></span>
-<span class="normal"><a href="#__codelineno-0-1018">1018</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1012"><a id="__codelineno-0-1012" name="__codelineno-0-1012"></a><span class="k">def</span><span class="w"> </span><span class="nf">hcat</span><span class="p">(</span>
-</span><span id="__span-0-1013"><a id="__codelineno-0-1013" name="__codelineno-0-1013"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-1014"><a id="__codelineno-0-1014" name="__codelineno-0-1014"></a>    <span class="n">points</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;N n&quot;</span><span class="p">],</span>
-</span><span id="__span-0-1015"><a id="__codelineno-0-1015" name="__codelineno-0-1015"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-1016"><a id="__codelineno-0-1016" name="__codelineno-0-1016"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dN_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-1017"><a id="__codelineno-0-1017" name="__codelineno-0-1017"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Hyperbolic concatenation of N points into one point.&quot;&quot;&quot;</span>
-</span><span id="__span-0-1018"><a id="__codelineno-0-1018" name="__codelineno-0-1018"></a>    <span class="k">return</span> <span class="n">_hcat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">points</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1057">1057</a></span>
+<span class="normal"><a href="#__codelineno-0-1058">1058</a></span>
+<span class="normal"><a href="#__codelineno-0-1059">1059</a></span>
+<span class="normal"><a href="#__codelineno-0-1060">1060</a></span>
+<span class="normal"><a href="#__codelineno-0-1061">1061</a></span>
+<span class="normal"><a href="#__codelineno-0-1062">1062</a></span>
+<span class="normal"><a href="#__codelineno-0-1063">1063</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1057"><a id="__codelineno-0-1057" name="__codelineno-0-1057"></a><span class="k">def</span><span class="w"> </span><span class="nf">hcat</span><span class="p">(</span>
+</span><span id="__span-0-1058"><a id="__codelineno-0-1058" name="__codelineno-0-1058"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-1059"><a id="__codelineno-0-1059" name="__codelineno-0-1059"></a>    <span class="n">points</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;N n&quot;</span><span class="p">],</span>
+</span><span id="__span-0-1060"><a id="__codelineno-0-1060" name="__codelineno-0-1060"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-1061"><a id="__codelineno-0-1061" name="__codelineno-0-1061"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dN_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1062"><a id="__codelineno-0-1062" name="__codelineno-0-1062"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Hyperbolic concatenation of N points into one point.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1063"><a id="__codelineno-0-1063" name="__codelineno-0-1063"></a>    <span class="k">return</span> <span class="n">_hcat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">points</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5626,29 +5654,29 @@ to :meth:<code>hcat</code> when <code>N == 1</code>.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1020">1020</a></span>
-<span class="normal"><a href="#__codelineno-0-1021">1021</a></span>
-<span class="normal"><a href="#__codelineno-0-1022">1022</a></span>
-<span class="normal"><a href="#__codelineno-0-1023">1023</a></span>
-<span class="normal"><a href="#__codelineno-0-1024">1024</a></span>
-<span class="normal"><a href="#__codelineno-0-1025">1025</a></span>
-<span class="normal"><a href="#__codelineno-0-1026">1026</a></span>
-<span class="normal"><a href="#__codelineno-0-1027">1027</a></span>
-<span class="normal"><a href="#__codelineno-0-1028">1028</a></span>
-<span class="normal"><a href="#__codelineno-0-1029">1029</a></span>
-<span class="normal"><a href="#__codelineno-0-1030">1030</a></span>
-<span class="normal"><a href="#__codelineno-0-1031">1031</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1020"><a id="__codelineno-0-1020" name="__codelineno-0-1020"></a><span class="k">def</span><span class="w"> </span><span class="nf">log_radius_concat</span><span class="p">(</span>
-</span><span id="__span-0-1021"><a id="__codelineno-0-1021" name="__codelineno-0-1021"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-1022"><a id="__codelineno-0-1022" name="__codelineno-0-1022"></a>    <span class="n">points</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;N n&quot;</span><span class="p">],</span>
-</span><span id="__span-0-1023"><a id="__codelineno-0-1023" name="__codelineno-0-1023"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-1024"><a id="__codelineno-0-1024" name="__codelineno-0-1024"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dN_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-1025"><a id="__codelineno-0-1025" name="__codelineno-0-1025"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Log-radius-preserving concatenation of N points (Shi et al. 2026, Sec. 4.3).</span>
-</span><span id="__span-0-1026"><a id="__codelineno-0-1026" name="__codelineno-0-1026"></a>
-</span><span id="__span-0-1027"><a id="__codelineno-0-1027" name="__codelineno-0-1027"></a><span class="sd">    Like :meth:`hcat`, but rescales each block&#39;s spatial part by a digamma factor so the</span>
-</span><span id="__span-0-1028"><a id="__codelineno-0-1028" name="__codelineno-0-1028"></a><span class="sd">    expected log spatial radius is invariant to the number of concatenated blocks. Reduces</span>
-</span><span id="__span-0-1029"><a id="__codelineno-0-1029" name="__codelineno-0-1029"></a><span class="sd">    to :meth:`hcat` when ``N == 1``.</span>
-</span><span id="__span-0-1030"><a id="__codelineno-0-1030" name="__codelineno-0-1030"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-1031"><a id="__codelineno-0-1031" name="__codelineno-0-1031"></a>    <span class="k">return</span> <span class="n">_log_radius_concat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">points</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1065">1065</a></span>
+<span class="normal"><a href="#__codelineno-0-1066">1066</a></span>
+<span class="normal"><a href="#__codelineno-0-1067">1067</a></span>
+<span class="normal"><a href="#__codelineno-0-1068">1068</a></span>
+<span class="normal"><a href="#__codelineno-0-1069">1069</a></span>
+<span class="normal"><a href="#__codelineno-0-1070">1070</a></span>
+<span class="normal"><a href="#__codelineno-0-1071">1071</a></span>
+<span class="normal"><a href="#__codelineno-0-1072">1072</a></span>
+<span class="normal"><a href="#__codelineno-0-1073">1073</a></span>
+<span class="normal"><a href="#__codelineno-0-1074">1074</a></span>
+<span class="normal"><a href="#__codelineno-0-1075">1075</a></span>
+<span class="normal"><a href="#__codelineno-0-1076">1076</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1065"><a id="__codelineno-0-1065" name="__codelineno-0-1065"></a><span class="k">def</span><span class="w"> </span><span class="nf">log_radius_concat</span><span class="p">(</span>
+</span><span id="__span-0-1066"><a id="__codelineno-0-1066" name="__codelineno-0-1066"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-1067"><a id="__codelineno-0-1067" name="__codelineno-0-1067"></a>    <span class="n">points</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;N n&quot;</span><span class="p">],</span>
+</span><span id="__span-0-1068"><a id="__codelineno-0-1068" name="__codelineno-0-1068"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-1069"><a id="__codelineno-0-1069" name="__codelineno-0-1069"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dN_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1070"><a id="__codelineno-0-1070" name="__codelineno-0-1070"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Log-radius-preserving concatenation of N points (Shi et al. 2026, Sec. 4.3).</span>
+</span><span id="__span-0-1071"><a id="__codelineno-0-1071" name="__codelineno-0-1071"></a>
+</span><span id="__span-0-1072"><a id="__codelineno-0-1072" name="__codelineno-0-1072"></a><span class="sd">    Like :meth:`hcat`, but rescales each block&#39;s spatial part by a digamma factor so the</span>
+</span><span id="__span-0-1073"><a id="__codelineno-0-1073" name="__codelineno-0-1073"></a><span class="sd">    expected log spatial radius is invariant to the number of concatenated blocks. Reduces</span>
+</span><span id="__span-0-1074"><a id="__codelineno-0-1074" name="__codelineno-0-1074"></a><span class="sd">    to :meth:`hcat` when ``N == 1``.</span>
+</span><span id="__span-0-1075"><a id="__codelineno-0-1075" name="__codelineno-0-1075"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-1076"><a id="__codelineno-0-1076" name="__codelineno-0-1076"></a>    <span class="k">return</span> <span class="n">_log_radius_concat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">points</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5675,11 +5703,11 @@ to :meth:<code>hcat</code> when <code>N == 1</code>.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1033">1033</a></span>
-<span class="normal"><a href="#__codelineno-0-1034">1034</a></span>
-<span class="normal"><a href="#__codelineno-0-1035">1035</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1033"><a id="__codelineno-0-1033" name="__codelineno-0-1033"></a><span class="k">def</span><span class="w"> </span><span class="nf">embed_spatial_0</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v_spatial</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-1034"><a id="__codelineno-0-1034" name="__codelineno-0-1034"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Embed spatial vector as tangent vector at origin.&quot;&quot;&quot;</span>
-</span><span id="__span-0-1035"><a id="__codelineno-0-1035" name="__codelineno-0-1035"></a>    <span class="k">return</span> <span class="n">_embed_spatial_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v_spatial</span><span class="p">))</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1078">1078</a></span>
+<span class="normal"><a href="#__codelineno-0-1079">1079</a></span>
+<span class="normal"><a href="#__codelineno-0-1080">1080</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1078"><a id="__codelineno-0-1078" name="__codelineno-0-1078"></a><span class="k">def</span><span class="w"> </span><span class="nf">embed_spatial_0</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v_spatial</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1079"><a id="__codelineno-0-1079" name="__codelineno-0-1079"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Embed spatial vector as tangent vector at origin.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1080"><a id="__codelineno-0-1080" name="__codelineno-0-1080"></a>    <span class="k">return</span> <span class="n">_embed_spatial_0</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v_spatial</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5712,29 +5740,29 @@ to :meth:<code>hcat</code> when <code>N == 1</code>.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1037">1037</a></span>
-<span class="normal"><a href="#__codelineno-0-1038">1038</a></span>
-<span class="normal"><a href="#__codelineno-0-1039">1039</a></span>
-<span class="normal"><a href="#__codelineno-0-1040">1040</a></span>
-<span class="normal"><a href="#__codelineno-0-1041">1041</a></span>
-<span class="normal"><a href="#__codelineno-0-1042">1042</a></span>
-<span class="normal"><a href="#__codelineno-0-1043">1043</a></span>
-<span class="normal"><a href="#__codelineno-0-1044">1044</a></span>
-<span class="normal"><a href="#__codelineno-0-1045">1045</a></span>
-<span class="normal"><a href="#__codelineno-0-1046">1046</a></span>
-<span class="normal"><a href="#__codelineno-0-1047">1047</a></span>
-<span class="normal"><a href="#__codelineno-0-1048">1048</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1037"><a id="__codelineno-0-1037" name="__codelineno-0-1037"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_mlr</span><span class="p">(</span>
-</span><span id="__span-0-1038"><a id="__codelineno-0-1038" name="__codelineno-0-1038"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-1039"><a id="__codelineno-0-1039" name="__codelineno-0-1039"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_dim&quot;</span><span class="p">],</span>
-</span><span id="__span-0-1040"><a id="__codelineno-0-1040" name="__codelineno-0-1040"></a>    <span class="n">z</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;out_dim in_dim_minus_1&quot;</span><span class="p">],</span>
-</span><span id="__span-0-1041"><a id="__codelineno-0-1041" name="__codelineno-0-1041"></a>    <span class="n">r</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;out_dim 1&quot;</span><span class="p">],</span>
-</span><span id="__span-0-1042"><a id="__codelineno-0-1042" name="__codelineno-0-1042"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span>
-</span><span id="__span-0-1043"><a id="__codelineno-0-1043" name="__codelineno-0-1043"></a>    <span class="n">clamping_factor</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="__span-0-1044"><a id="__codelineno-0-1044" name="__codelineno-0-1044"></a>    <span class="n">smoothing_factor</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="__span-0-1045"><a id="__codelineno-0-1045" name="__codelineno-0-1045"></a>    <span class="n">min_enorm</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-15</span><span class="p">,</span>
-</span><span id="__span-0-1046"><a id="__codelineno-0-1046" name="__codelineno-0-1046"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_dim&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-1047"><a id="__codelineno-0-1047" name="__codelineno-0-1047"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute multinomial linear regression on hyperboloid.&quot;&quot;&quot;</span>
-</span><span id="__span-0-1048"><a id="__codelineno-0-1048" name="__codelineno-0-1048"></a>    <span class="k">return</span> <span class="n">_compute_mlr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">z</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">r</span><span class="p">),</span> <span class="n">c</span><span class="p">,</span> <span class="n">clamping_factor</span><span class="p">,</span> <span class="n">smoothing_factor</span><span class="p">,</span> <span class="n">min_enorm</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1082">1082</a></span>
+<span class="normal"><a href="#__codelineno-0-1083">1083</a></span>
+<span class="normal"><a href="#__codelineno-0-1084">1084</a></span>
+<span class="normal"><a href="#__codelineno-0-1085">1085</a></span>
+<span class="normal"><a href="#__codelineno-0-1086">1086</a></span>
+<span class="normal"><a href="#__codelineno-0-1087">1087</a></span>
+<span class="normal"><a href="#__codelineno-0-1088">1088</a></span>
+<span class="normal"><a href="#__codelineno-0-1089">1089</a></span>
+<span class="normal"><a href="#__codelineno-0-1090">1090</a></span>
+<span class="normal"><a href="#__codelineno-0-1091">1091</a></span>
+<span class="normal"><a href="#__codelineno-0-1092">1092</a></span>
+<span class="normal"><a href="#__codelineno-0-1093">1093</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1082"><a id="__codelineno-0-1082" name="__codelineno-0-1082"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_mlr</span><span class="p">(</span>
+</span><span id="__span-0-1083"><a id="__codelineno-0-1083" name="__codelineno-0-1083"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-1084"><a id="__codelineno-0-1084" name="__codelineno-0-1084"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_dim&quot;</span><span class="p">],</span>
+</span><span id="__span-0-1085"><a id="__codelineno-0-1085" name="__codelineno-0-1085"></a>    <span class="n">z</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;out_dim in_dim_minus_1&quot;</span><span class="p">],</span>
+</span><span id="__span-0-1086"><a id="__codelineno-0-1086" name="__codelineno-0-1086"></a>    <span class="n">r</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;out_dim 1&quot;</span><span class="p">],</span>
+</span><span id="__span-0-1087"><a id="__codelineno-0-1087" name="__codelineno-0-1087"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">,</span>
+</span><span id="__span-0-1088"><a id="__codelineno-0-1088" name="__codelineno-0-1088"></a>    <span class="n">clamping_factor</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-1089"><a id="__codelineno-0-1089" name="__codelineno-0-1089"></a>    <span class="n">smoothing_factor</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-1090"><a id="__codelineno-0-1090" name="__codelineno-0-1090"></a>    <span class="n">min_enorm</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-15</span><span class="p">,</span>
+</span><span id="__span-0-1091"><a id="__codelineno-0-1091" name="__codelineno-0-1091"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_dim&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1092"><a id="__codelineno-0-1092" name="__codelineno-0-1092"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute multinomial linear regression on hyperboloid.&quot;&quot;&quot;</span>
+</span><span id="__span-0-1093"><a id="__codelineno-0-1093" name="__codelineno-0-1093"></a>    <span class="k">return</span> <span class="n">_compute_mlr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">z</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">r</span><span class="p">),</span> <span class="n">c</span><span class="p">,</span> <span class="n">clamping_factor</span><span class="p">,</span> <span class="n">smoothing_factor</span><span class="p">,</span> <span class="n">min_enorm</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5775,37 +5803,84 @@ external Euclidean quasimetric (e.g. IQE/MRN). Do <strong>not</strong> reach for
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1050">1050</a></span>
-<span class="normal"><a href="#__codelineno-0-1051">1051</a></span>
-<span class="normal"><a href="#__codelineno-0-1052">1052</a></span>
-<span class="normal"><a href="#__codelineno-0-1053">1053</a></span>
-<span class="normal"><a href="#__codelineno-0-1054">1054</a></span>
-<span class="normal"><a href="#__codelineno-0-1055">1055</a></span>
-<span class="normal"><a href="#__codelineno-0-1056">1056</a></span>
-<span class="normal"><a href="#__codelineno-0-1057">1057</a></span>
-<span class="normal"><a href="#__codelineno-0-1058">1058</a></span>
-<span class="normal"><a href="#__codelineno-0-1059">1059</a></span>
-<span class="normal"><a href="#__codelineno-0-1060">1060</a></span>
-<span class="normal"><a href="#__codelineno-0-1061">1061</a></span>
-<span class="normal"><a href="#__codelineno-0-1062">1062</a></span>
-<span class="normal"><a href="#__codelineno-0-1063">1063</a></span>
-<span class="normal"><a href="#__codelineno-0-1064">1064</a></span>
-<span class="normal"><a href="#__codelineno-0-1065">1065</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1050"><a id="__codelineno-0-1050" name="__codelineno-0-1050"></a><span class="k">def</span><span class="w"> </span><span class="nf">busemann</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-1051"><a id="__codelineno-0-1051" name="__codelineno-0-1051"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Closed-form Lorentz Busemann function ``B^v(x) = (1/√c)·log(√c·(x_t - ⟨x_s, v⟩))``.</span>
-</span><span id="__span-0-1052"><a id="__codelineno-0-1052" name="__codelineno-0-1052"></a>
-</span><span id="__span-0-1053"><a id="__codelineno-0-1053" name="__codelineno-0-1053"></a><span class="sd">    Point-to-horosphere coordinate (Chen et al. 2026, Eq. 4). ``v`` must be a *unit*</span>
-</span><span id="__span-0-1054"><a id="__codelineno-0-1054" name="__codelineno-0-1054"></a><span class="sd">    spatial direction (dim ``d``) — it is **not** normalized internally. Single point</span>
-</span><span id="__span-0-1055"><a id="__codelineno-0-1055" name="__codelineno-0-1055"></a><span class="sd">    ``(d+1,)`` → scalar; use :func:`jax.vmap` for batching and over a direction set.</span>
-</span><span id="__span-0-1056"><a id="__codelineno-0-1056" name="__codelineno-0-1056"></a><span class="sd">    ``B^v(origin) = 0``.</span>
-</span><span id="__span-0-1057"><a id="__codelineno-0-1057" name="__codelineno-0-1057"></a>
-</span><span id="__span-0-1058"><a id="__codelineno-0-1058" name="__codelineno-0-1058"></a><span class="sd">    See Also</span>
-</span><span id="__span-0-1059"><a id="__codelineno-0-1059" name="__codelineno-0-1059"></a><span class="sd">    --------</span>
-</span><span id="__span-0-1060"><a id="__codelineno-0-1060" name="__codelineno-0-1060"></a><span class="sd">    For an *asymmetric* quasimetric energy, compose this Busemann coordinate with an</span>
-</span><span id="__span-0-1061"><a id="__codelineno-0-1061" name="__codelineno-0-1061"></a><span class="sd">    external Euclidean quasimetric (e.g. IQE/MRN). Do **not** reach for</span>
-</span><span id="__span-0-1062"><a id="__codelineno-0-1062" name="__codelineno-0-1062"></a><span class="sd">    :meth:`Poincare.apollonian_dist` expecting asymmetry — it is a coboundary</span>
-</span><span id="__span-0-1063"><a id="__codelineno-0-1063" name="__codelineno-0-1063"></a><span class="sd">    (symmetrizes to ``√c·dist``) and cannot deliver circulation.</span>
-</span><span id="__span-0-1064"><a id="__codelineno-0-1064" name="__codelineno-0-1064"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-1065"><a id="__codelineno-0-1065" name="__codelineno-0-1065"></a>    <span class="k">return</span> <span class="n">_busemann</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1095">1095</a></span>
+<span class="normal"><a href="#__codelineno-0-1096">1096</a></span>
+<span class="normal"><a href="#__codelineno-0-1097">1097</a></span>
+<span class="normal"><a href="#__codelineno-0-1098">1098</a></span>
+<span class="normal"><a href="#__codelineno-0-1099">1099</a></span>
+<span class="normal"><a href="#__codelineno-0-1100">1100</a></span>
+<span class="normal"><a href="#__codelineno-0-1101">1101</a></span>
+<span class="normal"><a href="#__codelineno-0-1102">1102</a></span>
+<span class="normal"><a href="#__codelineno-0-1103">1103</a></span>
+<span class="normal"><a href="#__codelineno-0-1104">1104</a></span>
+<span class="normal"><a href="#__codelineno-0-1105">1105</a></span>
+<span class="normal"><a href="#__codelineno-0-1106">1106</a></span>
+<span class="normal"><a href="#__codelineno-0-1107">1107</a></span>
+<span class="normal"><a href="#__codelineno-0-1108">1108</a></span>
+<span class="normal"><a href="#__codelineno-0-1109">1109</a></span>
+<span class="normal"><a href="#__codelineno-0-1110">1110</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1095"><a id="__codelineno-0-1095" name="__codelineno-0-1095"></a><span class="k">def</span><span class="w"> </span><span class="nf">busemann</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1096"><a id="__codelineno-0-1096" name="__codelineno-0-1096"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Closed-form Lorentz Busemann function ``B^v(x) = (1/√c)·log(√c·(x_t - ⟨x_s, v⟩))``.</span>
+</span><span id="__span-0-1097"><a id="__codelineno-0-1097" name="__codelineno-0-1097"></a>
+</span><span id="__span-0-1098"><a id="__codelineno-0-1098" name="__codelineno-0-1098"></a><span class="sd">    Point-to-horosphere coordinate (Chen et al. 2026, Eq. 4). ``v`` must be a *unit*</span>
+</span><span id="__span-0-1099"><a id="__codelineno-0-1099" name="__codelineno-0-1099"></a><span class="sd">    spatial direction (dim ``d``) — it is **not** normalized internally. Single point</span>
+</span><span id="__span-0-1100"><a id="__codelineno-0-1100" name="__codelineno-0-1100"></a><span class="sd">    ``(d+1,)`` → scalar; use :func:`jax.vmap` for batching and over a direction set.</span>
+</span><span id="__span-0-1101"><a id="__codelineno-0-1101" name="__codelineno-0-1101"></a><span class="sd">    ``B^v(origin) = 0``.</span>
+</span><span id="__span-0-1102"><a id="__codelineno-0-1102" name="__codelineno-0-1102"></a>
+</span><span id="__span-0-1103"><a id="__codelineno-0-1103" name="__codelineno-0-1103"></a><span class="sd">    See Also</span>
+</span><span id="__span-0-1104"><a id="__codelineno-0-1104" name="__codelineno-0-1104"></a><span class="sd">    --------</span>
+</span><span id="__span-0-1105"><a id="__codelineno-0-1105" name="__codelineno-0-1105"></a><span class="sd">    For an *asymmetric* quasimetric energy, compose this Busemann coordinate with an</span>
+</span><span id="__span-0-1106"><a id="__codelineno-0-1106" name="__codelineno-0-1106"></a><span class="sd">    external Euclidean quasimetric (e.g. IQE/MRN). Do **not** reach for</span>
+</span><span id="__span-0-1107"><a id="__codelineno-0-1107" name="__codelineno-0-1107"></a><span class="sd">    :meth:`Poincare.apollonian_dist` expecting asymmetry — it is a coboundary</span>
+</span><span id="__span-0-1108"><a id="__codelineno-0-1108" name="__codelineno-0-1108"></a><span class="sd">    (symmetrizes to ``√c·dist``) and cannot deliver circulation.</span>
+</span><span id="__span-0-1109"><a id="__codelineno-0-1109" name="__codelineno-0-1109"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-1110"><a id="__codelineno-0-1110" name="__codelineno-0-1110"></a>    <span class="k">return</span> <span class="n">_busemann</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hyperbolix.manifolds.hyperboloid.Hyperboloid.lorentz_boost" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">lorentz_boost</span>
+
+
+<a href="#hyperbolix.manifolds.hyperboloid.Hyperboloid.lorentz_boost" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">lorentz_boost</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">mu</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">dim_plus_1</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1 dim_plus_1&quot;</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Lorentz boost matrix <code>B</code> with <code>B @ mu = origin</code> (sends <code>mu</code> to the origin).</p>
+<p>Symmetric, proper, orthochronous Lorentz transformation. Boost a batch of
+row-vector points with <code>x_NA @ B.T</code> followed by :meth:<code>proj_batch</code>; the inverse
+boost is the boost of <code>[mu₀, -mu_s]</code>. Used to Fréchet-mean-center data for
+HoroPCA (Chami et al. 2021). See :func:<code>_lorentz_boost</code>.</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>hyperbolix/manifolds/hyperboloid.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1112">1112</a></span>
+<span class="normal"><a href="#__codelineno-0-1113">1113</a></span>
+<span class="normal"><a href="#__codelineno-0-1114">1114</a></span>
+<span class="normal"><a href="#__codelineno-0-1115">1115</a></span>
+<span class="normal"><a href="#__codelineno-0-1116">1116</a></span>
+<span class="normal"><a href="#__codelineno-0-1117">1117</a></span>
+<span class="normal"><a href="#__codelineno-0-1118">1118</a></span>
+<span class="normal"><a href="#__codelineno-0-1119">1119</a></span>
+<span class="normal"><a href="#__codelineno-0-1120">1120</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1112"><a id="__codelineno-0-1112" name="__codelineno-0-1112"></a><span class="k">def</span><span class="w"> </span><span class="nf">lorentz_boost</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mu</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1&quot;</span><span class="p">],</span> <span class="n">c</span><span class="p">:</span> <span class="n">Curvature</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;dim_plus_1 dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1113"><a id="__codelineno-0-1113" name="__codelineno-0-1113"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Lorentz boost matrix ``B`` with ``B @ mu = origin`` (sends ``mu`` to the origin).</span>
+</span><span id="__span-0-1114"><a id="__codelineno-0-1114" name="__codelineno-0-1114"></a>
+</span><span id="__span-0-1115"><a id="__codelineno-0-1115" name="__codelineno-0-1115"></a><span class="sd">    Symmetric, proper, orthochronous Lorentz transformation. Boost a batch of</span>
+</span><span id="__span-0-1116"><a id="__codelineno-0-1116" name="__codelineno-0-1116"></a><span class="sd">    row-vector points with ``x_NA @ B.T`` followed by :meth:`proj_batch`; the inverse</span>
+</span><span id="__span-0-1117"><a id="__codelineno-0-1117" name="__codelineno-0-1117"></a><span class="sd">    boost is the boost of ``[mu₀, -mu_s]``. Used to Fréchet-mean-center data for</span>
+</span><span id="__span-0-1118"><a id="__codelineno-0-1118" name="__codelineno-0-1118"></a><span class="sd">    HoroPCA (Chami et al. 2021). See :func:`_lorentz_boost`.</span>
+</span><span id="__span-0-1119"><a id="__codelineno-0-1119" name="__codelineno-0-1119"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-1120"><a id="__codelineno-0-1120" name="__codelineno-0-1120"></a>    <span class="k">return</span> <span class="n">_lorentz_boost</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_cast</span><span class="p">(</span><span class="n">mu</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
