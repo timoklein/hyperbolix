@@ -856,6 +856,51 @@ def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: Curvatur
     return jnp.log(jnp.maximum(arg, MIN_NORM)) / sqrt_c
 
 
+def _lorentz_boost(mu: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
+    """Lorentz boost matrix ``B`` that sends ``mu`` to the origin (``B @ mu = origin``).
+
+    Builds the pure Lorentz boost — a symmetric, proper, orthochronous Lorentz
+    transformation — carrying the hyperboloid point ``mu`` to the manifold origin
+    ``[1/√c, 0, ..., 0]``. With the Lorentz factor ``gamma = √c·mu₀`` (≥ 1) and the
+    coordinate velocity ``v = mu_s / mu₀`` (``‖v‖ < 1``)::
+
+        B = [[ gamma,       -gamma·vᵀ                    ],
+             [-gamma·v,   I_d + gamma²/(1+gamma)·(v vᵀ)      ]]
+
+    ``B`` is symmetric, so a batch of row-vector points is boosted by ``x_NA @ B.T``
+    (equivalently ``x_NA @ B``); always follow with :func:`_proj_batch` to clear the
+    float rounding off the constraint surface. The inverse boost is the boost of
+    ``[mu₀, -mu_s]`` (i.e. ``B`` with ``v → -v``). The ``gamma → 1`` limit (``mu`` at the
+    origin) is benign: ``v → 0`` and ``B → I``.
+
+    Args:
+        mu: Hyperboloid point to send to the origin, shape (dim+1,).
+        c: Curvature (positive).
+
+    Returns:
+        Boost matrix ``B``, shape (dim+1, dim+1), with ``B @ mu = origin``.
+
+    References:
+        Chami et al. "HoroPCA: Hyperbolic dimensionality reduction via horospherical
+            projections." ICML 2021 (Fréchet-mean centering).
+    """
+    sqrt_c = jnp.sqrt(c)
+    mu_t = mu[0]  # time coordinate mu₀ ≥ 1/√c > 0
+    mu_s = mu[1:]  # spatial coordinates
+    dim = mu.shape[0] - 1
+
+    gamma = sqrt_c * mu_t  # Lorentz factor gamma = √c·mu₀ ≥ 1
+    v_D = mu_s / mu_t  # coordinate velocity, ‖v‖ < 1 (division by mu₀ > 0 is safe)
+
+    top_row_A = jnp.concatenate([gamma[None], -gamma * v_D])  # (A,)
+    bottom_left_D1 = (-gamma * v_D)[:, None]  # (D, 1)
+    eye_DD = jnp.eye(dim, dtype=mu.dtype)  # (D, D)
+    bottom_right_DD = eye_DD + (gamma**2 / (1.0 + gamma)) * jnp.outer(v_D, v_D)  # (D, D)
+    bottom_DA = jnp.concatenate([bottom_left_D1, bottom_right_DD], axis=1)  # (D, A)
+    boost_AA = jnp.concatenate([top_row_A[None, :], bottom_DA], axis=0)  # (A, A)
+    return boost_AA
+
+
 # ---------------------------------------------------------------------------
 # Class-based manifold API
 # ---------------------------------------------------------------------------
@@ -1063,3 +1108,13 @@ class Hyperboloid(ManifoldBase):
         (symmetrizes to ``√c·dist``) and cannot deliver circulation.
         """
         return _busemann(self._cast(x), self._cast(v), c)
+
+    def lorentz_boost(self, mu: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
+        """Lorentz boost matrix ``B`` with ``B @ mu = origin`` (sends ``mu`` to the origin).
+
+        Symmetric, proper, orthochronous Lorentz transformation. Boost a batch of
+        row-vector points with ``x_NA @ B.T`` followed by :meth:`proj_batch`; the inverse
+        boost is the boost of ``[mu₀, -mu_s]``. Used to Fréchet-mean-center data for
+        HoroPCA (Chami et al. 2021). See :func:`_lorentz_boost`.
+        """
+        return _lorentz_boost(self._cast(mu), c)

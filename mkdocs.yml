@@ -132,6 +132,7 @@ nav:
           - Primitives & Helpers: api-reference/nn-layers/primitives.md
       - Optimizers: api-reference/optimizers.md
       - Distributions: api-reference/distributions.md
+      - Decomposition: api-reference/decomposition.md
       - Utilities: api-reference/utils.md
   - Developer Guide: developer-guide.md
   - Changelog: changelog.md
