@@ -12,6 +12,7 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 - **Activation Functions**: 4 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish)
 - **Riemannian Optimizers**: RAdam and RSGD with automatic manifold parameter detection
 - **Wrapped Normal Distributions**: For probabilistic modeling on hyperbolic manifolds
+- **Dimensionality Reduction**: HoroPCA (Chami et al. 2021), CO-SNE (Guo et al. 2022, hyperbolic t-SNE), and the Fréchet-mean centering primitive — hyperbolic analogues of PCA and t-SNE
 - **Pure JAX/Flax NNX**: No PyTorch dependency, fully compatible with JAX ecosystem
 - **vmap-native API**: Efficient batching through JAX's functional paradigm
 - **JIT-compatible**: All operations support JIT compilation for performance
@@ -85,7 +86,7 @@ output = model(input_data, c=1.0)
 
 ## Project Status
 
-**Active development — current release: v0.11.0.** Core functionality is complete and stable; new layers and manifolds are added incrementally. See the [Changelog](changelog.md) for the full release history.
+**Stable — current release: v1.0.0.** The public API is complete and stable, reaching functional parity with the broader hyperbolic deep learning ecosystem; changes follow semantic versioning and new layers and manifolds continue to be added. See the [Changelog](changelog.md) for the full release history.
 
 | Capability | Status | Shipped in |
 |---|---|---|
@@ -102,6 +103,7 @@ output = model(input_data, c=1.0)
 | Isometry mappings (Poincaré ↔ Proper Velocity ↔ Hyperboloid) | ✅ Stable | v0.8.0 |
 | Poincaré vector quantization (VQ-VAE / HyperVQ) layers | ✅ Stable | v0.8.0 |
 | κ-Stereographic manifold (Bachmann et al. 2020, signed learnable curvature) | ✅ Stable | v0.11.0 |
+| Dimensionality reduction (HoroPCA, CO-SNE, Fréchet mean) | ✅ Stable | v1.0.0 |
 | CI/CD pipeline with benchmarking | ✅ Stable | v0.1.4 |
 
 ## Key Concepts

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-24
+
+First stable release. The public API is considered complete and stable, reaching functional
+parity with the broader hyperbolic deep learning ecosystem; future changes follow semantic
+versioning.
+
 ### Added
 - **CO-SNE** (`hyperbolix.decomposition.CoSNE`) — dimensionality reduction and visualization for hyperbolic data (Guo et al. 2022), the hyperbolic analogue of t-SNE. A thin sklearn-style class (`fit` / `fit_transform`; non-parametric, so no out-of-sample `transform`, matching sklearn's `TSNE`) over a pure, JIT-friendly functional core (`fit_cosne`, `conditional_probabilities`, `joint_probabilities`, `low_dim_probabilities`, `kl_divergence_loss`, `magnitude_loss`). High-dimensional similarities are perplexity-calibrated on **squared** hyperbolic distances (paper Eq. 2); low-dimensional similarities use a heavy-tailed Student-t / Cauchy kernel on Poincaré-ball distances (paper Eq. 9 — both the author's-code plain-distance form, default, and the exact squared-distance form via `exact_cauchy=True`). On top of the t-SNE KL divergence it adds a **magnitude loss** `H = (1/N)·Σᵢ(‖xᵢ‖² − ‖yᵢ‖²)²` (paper Eq. 10) that preserves each point's distance-to-origin (the hierarchy depth). Optimization is two-stage projected gradient descent on the ball (early-exaggeration KL-only exploration, then KL + magnitude), with the KL gradient Riemannian-scaled by `(1 − c‖y‖²)²/4` and the magnitude gradient Euclidean (paper §3.7). Curvature-general (a single `c` for both spaces, passed at fit time); Poincaré input `(N, D)` → `(N, K)` ball coordinates, Hyperboloid input `(N, A)` → `(N, K+1)`. Uses **exact autodiff gradients** of the declared losses — a deliberate deviation from the reference's demonstrably buggy hand gradients — so the reference learning rates do not transfer; the `learning_rate` default (`0.5`) is calibrated on a synthetic-cluster recovery test and documented on the class. Double precision recommended for fitting
 - **HoroPCA** (`hyperbolix.decomposition.HoroPCA`) — hyperbolic dimensionality reduction via horospherical projections (Chami et al. 2021). A thin sklearn-style class (`fit` / `transform` / `fit_transform`) over a pure, independently usable and JIT-friendly functional core (`fit_horopca`, `transform_horopca`, `horo_projection`, `horopca_loss`). All computation runs on the hyperboloid (Poincaré input is mapped in via the exact isometry); K ideal points are jointly optimized with Adam + gradient clipping to maximize the pairwise-distance variance of the horospherically projected data, which preserves every Busemann coordinate. Poincaré input `(N, D)` → `(N, K)` ball coordinates; Hyperboloid input `(N, A)` → `(N, K+1)`. `K = 1` is supported via a closed form (the reference's Sherman–Morrison inverse is singular there). Exposes `components_`, `mean_`, `boost_`, `losses_`, and pairwise-variance-based `explained_variance_` / `total_variance_` / `explained_variance_ratio_`. Double precision recommended for fitting
@@ -218,7 +224,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### References
 - Based on research by Ganea et al. (2018), Bécigneul & Ganea (2019), Bdeir et al. (2023)
 
-[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/timoklein/hyperbolix/compare/v0.11.1...v1.0.0
 [0.11.1]: https://github.com/timoklein/hyperbolix/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/timoklein/hyperbolix/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/timoklein/hyperbolix/compare/v0.10.1...v0.10.2
