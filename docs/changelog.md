@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`hyperbolix.optim.has_manifold_params` always returned `False`.** `nnx.Variable` is itself a registered pytree node whose single child is the raw array, so the unguarded `jax.tree_util.tree_leaves` call unwrapped every `ManifoldParam` into an `ArrayImpl` before the `isinstance` check ran — the function reported "no manifold parameters" for a bare `ManifoldParam`, a dict of parameters, `nnx.state(model, nnx.Param)` (its own documented usage) and a model alike. The traversal now stops at `nnx.Variable` leaves. The Riemannian optimizers were **not** affected: `_riemannian_base` already flattened with that guard everywhere it inspects Variable types, so only callers using `has_manifold_params` as a guard saw the false negative
+
 ## [1.0.0] - 2026-07-24
 
 First stable release. The public API is considered complete and stable, reaching functional
