@@ -33,7 +33,7 @@ import optax
 from flax import nnx
 from jax import tree_util
 
-from .manifold_metadata import ManifoldParam
+from .manifold_metadata import ManifoldParam, _is_variable_leaf
 
 # Dimension key:
 #   D: manifold point dim (last axis)    N: number of points in a leaf
@@ -44,10 +44,6 @@ def _resolve_lr(learning_rate: float | optax.Schedule, count: jnp.ndarray) -> jn
     if callable(learning_rate):
         return jnp.asarray(learning_rate(count))
     return jnp.asarray(cast(float, learning_rate))
-
-
-def _is_variable_leaf(x: Any) -> bool:
-    return isinstance(x, nnx.Variable)
 
 
 def _unwrap(x: Any) -> Any:

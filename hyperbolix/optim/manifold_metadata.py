@@ -43,6 +43,18 @@ from flax import nnx
 from hyperbolix.manifolds import Manifold
 
 
+def _is_variable_leaf(x: Any) -> bool:
+    """Treat ``nnx.Variable`` instances as pytree leaves.
+
+    ``nnx.Variable`` is itself a registered pytree node whose single child is
+    the raw array, so an unguarded ``tree_leaves`` unwraps a ``ManifoldParam``
+    into an ``ArrayImpl`` and any ``isinstance`` check against the Variable
+    type silently fails.  Every traversal that inspects Variable *types* (as
+    opposed to values) must stop the descent here.
+    """
+    return isinstance(x, nnx.Variable)
+
+
 class ManifoldParam(nnx.Param):
     """``nnx.Param`` subclass for parameters living on a Riemannian manifold.
 
@@ -167,6 +179,7 @@ def has_manifold_params(params_pytree: Any) -> bool:
     ----------
     params_pytree : Any
         A pytree of parameters (typically from ``nnx.state(model, nnx.Param)``).
+        A bare ``ManifoldParam`` or an ``nnx.Module`` also works.
 
     Returns
     -------
@@ -185,5 +198,8 @@ def has_manifold_params(params_pytree: Any) -> bool:
     """
     from jax import tree_util
 
-    leaves = tree_util.tree_leaves(params_pytree)
+    # is_leaf is required, not an optimization: without it the traversal
+    # descends through each Variable to its raw array and the isinstance
+    # check below can never fire.  See _is_variable_leaf.
+    leaves = tree_util.tree_flatten(params_pytree, is_leaf=_is_variable_leaf)[0]
     return any(isinstance(leaf, ManifoldParam) for leaf in leaves)
