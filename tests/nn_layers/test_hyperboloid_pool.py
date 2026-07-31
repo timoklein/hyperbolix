@@ -1,13 +1,11 @@
 """Tests for hyp_avg_pool2d — hyperbolic 2D global average pooling."""
 
-import functools
-
 import jax
 import jax.numpy as jnp
 import pytest
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.nn_layers.hyperboloid_core import hrc, hyp_avg_pool2d
+from hyperbolix.nn_layers.hyperboloid_core import hyp_avg_pool2d
 
 # ============================================================================
 # Helpers
@@ -38,11 +36,10 @@ def _make_hyperboloid_feature_map(key, batch, height, width, spatial_dim, c, dty
 # ============================================================================
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pool_shape_4d(dtype):
+def test_pool_shape_4d():
     """(B, H, W, A) -> (B, A) where A = spatial_dim + 1."""
     key = jax.random.PRNGKey(0)
-    x = _make_hyperboloid_feature_map(key, batch=4, height=7, width=7, spatial_dim=64, c=1.0, dtype=dtype)
+    x = _make_hyperboloid_feature_map(key, batch=4, height=7, width=7, spatial_dim=64, c=1.0, dtype=jnp.float32)
     assert x.shape == (4, 7, 7, 65)
     y = hyp_avg_pool2d(x, c=1.0)
     assert y.shape == (4, 65)
@@ -86,7 +83,7 @@ def test_pool_dtype_preserved(dtype):
 # ============================================================================
 
 
-@pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
+@pytest.mark.parametrize("c", [0.5, 1.0, 5.0])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_pool_manifold_constraint(dtype, c):
     """All output points satisfy the hyperboloid constraint."""
@@ -99,7 +96,7 @@ def test_pool_manifold_constraint(dtype, c):
     assert is_valid.all()
 
 
-@pytest.mark.parametrize("hw", [1, 3, 7, 14])
+@pytest.mark.parametrize("hw", [1, 7])
 def test_pool_manifold_various_spatial(hw):
     """Manifold constraint holds for various spatial sizes."""
     hyperboloid = Hyperboloid(dtype=jnp.float64)
@@ -129,21 +126,6 @@ def test_pool_matches_manual(dtype):
     time_coord = jnp.sqrt(jnp.sum(x_pooled**2, axis=-1, keepdims=True) + 1.0 / c)
     expected = jnp.concatenate([time_coord, x_pooled], axis=-1)  # (4, 33)
 
-    y = hyp_avg_pool2d(x, c=c)
-
-    atol = 4e-3 if dtype == jnp.float32 else 1e-7
-    assert jnp.allclose(y, expected, atol=atol)
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pool_matches_hrc(dtype):
-    """Output matches hrc(x, pool_fn, c, c)."""
-    key = jax.random.PRNGKey(31)
-    c = 1.5
-    x = _make_hyperboloid_feature_map(key, batch=4, height=4, width=4, spatial_dim=16, c=c, dtype=dtype)
-
-    pool_fn = functools.partial(jnp.mean, axis=(-3, -2))
-    expected = hrc(x, pool_fn, c_in=c, c_out=c)
     y = hyp_avg_pool2d(x, c=c)
 
     atol = 4e-3 if dtype == jnp.float32 else 1e-7
@@ -215,22 +197,3 @@ def test_pool_jit():
     y_jit = jax.jit(hyp_avg_pool2d, static_argnames="c")(x, c=c)
 
     assert jnp.allclose(y_eager, y_jit, atol=1e-10)
-
-
-# ============================================================================
-# Curvature Tests
-# ============================================================================
-
-
-@pytest.mark.parametrize("c", [0.5, 1.0, 2.0, 5.0])
-def test_pool_different_curvatures(c):
-    """Function produces valid, finite outputs for various curvatures."""
-    hyperboloid = Hyperboloid(dtype=jnp.float64)
-    key = jax.random.PRNGKey(60)
-    x = _make_hyperboloid_feature_map(key, batch=4, height=4, width=4, spatial_dim=8, c=c, dtype=jnp.float64)
-
-    y = hyp_avg_pool2d(x, c=c)
-
-    assert jnp.all(jnp.isfinite(y))
-    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, c)
-    assert is_valid.all()

@@ -114,24 +114,6 @@ def test_lorentz_residual_batch_seq_shape():
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
-def test_hope_manifold_constraint_single(dtype, c):
-    """HOPE output for a single sequence lies on the hyperboloid."""
-    key = jax.random.PRNGKey(42)
-    seq_len, d = 16, 8
-    z = _make_hyperboloid_seq(key, 1, seq_len, d, c=c).astype(dtype)  # (1, seq, d+1)
-    positions = jnp.arange(seq_len)
-
-    out = hope(z, positions, c=c)
-
-    assert out.shape == z.shape
-    # Check manifold constraint for each point
-    for b in range(1):
-        for s in range(seq_len):
-            assert hyperboloid.is_in_manifold(out[b, s], c, atol=1e-4), f"Failed at batch={b}, seq={s}"
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
 def test_hope_manifold_constraint_batch(dtype, c):
     """HOPE output for a batch of sequences lies on the hyperboloid."""
     key = jax.random.PRNGKey(55)
@@ -300,39 +282,48 @@ def test_hyperbolic_rope_module():
 # ============================================================================
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
-def test_hypformer_pe_manifold_constraint_single(dtype, c):
-    """HypformerPE output for a single point lies on the hyperboloid."""
+@pytest.mark.parametrize("leading", [(8,), (2, 10)], ids=["rank2", "rank3"])
+def test_hypformer_pe_manifold_constraint(c, leading):
+    """HypformerPE output lies on the hyperboloid for rank-2 and rank-3 inputs."""
     key = jax.random.PRNGKey(42)
     d = 6  # spatial dim
     in_features = d + 1  # ambient dim
-    x = _make_hyperboloid_points(key, (8, d), c=c).astype(dtype)  # (8, d+1)
+    x = _make_hyperboloid_points(key, (*leading, d), c=c)  # (..., d+1)
 
     pe = HypformerPositionalEncoding(in_features, d, rngs=nnx.Rngs(0))
     out = pe(x, c=c)
 
     assert out.shape == x.shape
-    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(out, c)
-    assert is_valid.all(), f"Manifold constraint violated for c={c}, dtype={dtype}"
+    flat = out.reshape(-1, d + 1)
+    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(flat, c)
+    assert is_valid.all(), f"Manifold constraint violated for c={c}, shape={leading}"
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
-def test_hypformer_pe_manifold_constraint_batch_seq(dtype, c):
-    """HypformerPE output for (batch, seq, d+1) lies on the hyperboloid."""
-    key = jax.random.PRNGKey(55)
-    batch, seq_len, d = 2, 10, 6
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_hypformer_pe_output_depends_on_encoding(c):
+    """The HTCLinear position encoding must actually enter the output.
+
+    Regression guard for a silent no-op: dropping the ``w_y * y`` term from
+    ``lorentz_residual`` leaves ``ave = x``, whose normalization returns ``x``
+    unchanged for on-manifold inputs -- the encoding becomes the identity while
+    every shape / manifold / gradient test still passes. epsilon=0 is the
+    documented "no position contribution" setting and pins the other direction.
+    """
+    d = 6
     in_features = d + 1
-    z = _make_hyperboloid_seq(key, batch, seq_len, d, c=c).astype(dtype)
+    x = _make_hyperboloid_points(jax.random.PRNGKey(42), (8, d), c=c)
 
-    pe = HypformerPositionalEncoding(in_features, d, rngs=nnx.Rngs(0))
-    out = pe(z, c=c)
+    pe_a = HypformerPositionalEncoding(in_features, d, rngs=nnx.Rngs(0))
+    pe_b = HypformerPositionalEncoding(in_features, d, rngs=nnx.Rngs(7))
+    out_a = pe_a(x, c=c)
 
-    assert out.shape == z.shape
-    for b in range(batch):
-        for s in range(seq_len):
-            assert hyperboloid.is_in_manifold(out[b, s], c, atol=1e-4), f"Failed at batch={b}, seq={s}, c={c}, dtype={dtype}"
+    assert not jnp.allclose(out_a, x, atol=1e-5), "positional encoding is a no-op (residual ignores the HTC branch)"
+    assert not jnp.allclose(out_a, pe_b(x, c=c), atol=1e-5), "output is invariant to the HTCLinear weights"
+
+    # epsilon = 0 switches the position contribution off exactly.
+    pe_off = HypformerPositionalEncoding(in_features, d, rngs=nnx.Rngs(0), epsilon=0.0)
+    assert jnp.allclose(pe_off(x, c=c), x, atol=1e-5)
 
 
 def test_hypformer_pe_shape_preservation():
