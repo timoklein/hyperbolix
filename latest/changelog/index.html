@@ -1318,6 +1318,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Unreleased">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1411,7 +1428,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fixed" class="md-nav__link">
+  <a href="#fixed_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Fixed
@@ -1612,7 +1629,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fixed_1" class="md-nav__link">
+  <a href="#fixed_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         Fixed
@@ -1651,7 +1668,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fixed_2" class="md-nav__link">
+  <a href="#fixed_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         Fixed
@@ -2156,6 +2173,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Unreleased">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2249,7 +2283,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fixed" class="md-nav__link">
+  <a href="#fixed_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Fixed
@@ -2450,7 +2484,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fixed_1" class="md-nav__link">
+  <a href="#fixed_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         Fixed
@@ -2489,7 +2523,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fixed_2" class="md-nav__link">
+  <a href="#fixed_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         Fixed
@@ -2976,6 +3010,10 @@
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 <h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.0.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>hyperbolix.optim.has_manifold_params</code> always returned <code>False</code>.</strong> <code>nnx.Variable</code> is itself a registered pytree node whose single child is the raw array, so the unguarded <code>jax.tree_util.tree_leaves</code> call unwrapped every <code>ManifoldParam</code> into an <code>ArrayImpl</code> before the <code>isinstance</code> check ran — the function reported "no manifold parameters" for a bare <code>ManifoldParam</code>, a dict of parameters, <code>nnx.state(model, nnx.Param)</code> (its own documented usage) and a model alike. The traversal now stops at <code>nnx.Variable</code> leaves. The Riemannian optimizers were <strong>not</strong> affected: <code>_riemannian_base</code> already flattened with that guard everywhere it inspects Variable types, so only callers using <code>has_manifold_params</code> as a guard saw the false negative</li>
+</ul>
 <h2 id="100-2026-07-24"><a href="https://github.com/timoklein/hyperbolix/compare/v0.11.1...v1.0.0">1.0.0</a> - 2026-07-24<a class="headerlink" href="#100-2026-07-24" title="Permanent link">&para;</a></h2>
 <p>First stable release. The public API is considered complete and stable, reaching functional
 parity with the broader hyperbolic deep learning ecosystem; future changes follow semantic
@@ -3003,7 +3041,7 @@ versioning.</p>
 <ul>
 <li><strong>Legacy Ganea layers (<code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>) accept a <code>curvature</code> constructor argument</strong> (float or callable, default 1.0) for their manifold-valued <code>bias</code> tag instead of hardcoding 1.0. The Riemannian optimizer uses this tag for the bias update, so it must match the <code>c</code> passed at call time — previously any <code>c ≠ 1.0</code> silently applied the wrong Riemannian correction to the bias</li>
 </ul>
-<h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
+<h3 id="fixed_1">Fixed<a class="headerlink" href="#fixed_1" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Kernel-init corrections across hyperbolic layers: <code>HypRegressionHyperboloid</code> now uses the fan-scaled kernel init matching <code>HypRegressionPoincarePP</code>, and <code>HypConv2DHyperboloid</code> gains an opt-in <code>reset_params="fan_in"</code> for BatchNorm-free encoders</li>
 <li><code>GyroBatchNormBase</code> gains a <code>min_var</code> floor that prevents collapsed-variance saturation</li>
@@ -3067,7 +3105,7 @@ versioning.</p>
 <li><strong><code>Hyperboloid.addition</code> now implements the Lorentz gyrovector addition</strong> <code>x ⊕ y = Exp_x(PT_{0→x}(Log_0(y)))</code> (Chen et al. 2025b; Shi et al. 2026, Eq. 1), and <code>ProductManifold.addition</code> delegates it per factor. It forms a gyrocommutative gyrogroup (identity = origin, inverse <code>⊖x = (-1) ⊙ x = [x₀, -x_s]</code>) and coincides with Poincaré Möbius addition under the stereographic isometry. This replaces the earlier coordinate-wise formula, which was incorrect at <em>every</em> curvature (e.g. <code>origin ⊕ y ≠ y</code>) and failed silently via a trailing projection. <code>Hyperboloid.scalar_mul</code> (geodesic scaling, = Eq. 2) is unchanged. <strong>Breaking change</strong> — <code>addition</code> no longer raises <code>NotImplementedError</code></li>
 <li><strong>Breaking: <code>VERSION_LORENTZIAN_PROXY</code> removed from the Poincaré manifold.</strong> The formula treated Poincaré ball coordinate 0 as a Lorentz time component, so it was only meaningful for hyperboloid inputs and returned <code>dist(x, x) = -2/c ≠ 0</code> for ball points; the docs additionally mis-advertised it as "best near boundary". The reference implementation never had it. <code>dist</code>/<code>dist_0</code> now select between 3 versions (<code>VERSION_MOBIUS_DIRECT</code>, <code>VERSION_MOBIUS</code>, <code>VERSION_METRIC_TENSOR</code>). For a true Lorentzian (squared Minkowski) proxy, convert to the hyperboloid via <code>isometry_mappings.poincare_to_hyperboloid</code> first</li>
 </ul>
-<h3 id="fixed_1">Fixed<a class="headerlink" href="#fixed_1" title="Permanent link">&para;</a></h3>
+<h3 id="fixed_2">Fixed<a class="headerlink" href="#fixed_2" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Poincaré ↔ Hyperboloid isometry maps were only correct at <code>c=1</code>.</strong> <code>poincare_to_hyperboloid</code> / <code>hyperboloid_to_poincare</code> used unit-ball stereographic formulas missing their <code>√c</code> factors, so round-trips and distance preservation silently failed at any other curvature (the recommended default is <code>c=0.1</code>). Both are now curvature-correct at all <code>c</code>, verified by round-trip, isometry, commutative-diagram, and extreme-curvature tests across dtypes</li>
 <li><strong>Test fixture <code>uniform_points</code> generated hyperboloid points at the wrong geodesic radius for <code>c ≠ 1</code></strong> (an extra <code>/√c</code> on the spatial coordinate, masked by a trailing projection). Corrected so generated points are the exact Poincaré images at any curvature</li>
@@ -3078,7 +3116,7 @@ versioning.</p>
 <ul>
 <li><strong><code>ProductManifold</code> curvature API redesigned</strong> — every geometry method (<code>dist</code>, <code>expmap</code>, <code>logmap</code>, <code>proj</code>, <code>origin</code>, <code>tangent_inner</code>, etc.) now takes a positional <code>c</code> argument that must be a sequence of length <code>n_factors</code> (one curvature per factor) instead of the silently-ignored scalar <code>c</code>. There is no default and no scalar broadcast: pass <code>product.curvatures</code> for static curvatures, or build the sequence from <code>LearnableCurvature</code> calls for trainable ones. The protocol-level <code>Curvature</code> type was widened to <code>ScalarCurvature | Sequence[ScalarCurvature]</code> so <code>ProductManifold</code> satisfies the <code>Manifold</code> protocol — <code>isinstance(product, Manifold)</code> is <code>True</code> and generic code typed against <code>Manifold</code> accepts product instances. The product still has no <code>c</code> attribute (use <code>product.curvatures</code>). <strong>Breaking change</strong> — call sites that passed <code>c=0.0</code> (or any scalar) must now pass a per-factor sequence <code>(c_0, c_1, …)</code></li>
 </ul>
-<h3 id="fixed_2">Fixed<a class="headerlink" href="#fixed_2" title="Permanent link">&para;</a></h3>
+<h3 id="fixed_3">Fixed<a class="headerlink" href="#fixed_3" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Corrected the <code>ProductManifold</code> API examples and the protocol-conformance claim in the documentation</li>
 </ul>
