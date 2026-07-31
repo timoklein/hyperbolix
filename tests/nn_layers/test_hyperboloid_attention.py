@@ -406,6 +406,31 @@ def _ref_linear_attention(model, x_BNA, c_in, c_attn, c_out):
     return _ref_spatial_to_hyperboloid(out.mean(axis=2), c_attn, c_out, eps)
 
 
+def _ref_causal_linear_attention(model, x_BNA, c_in, c_attn, c_out):
+    """Naive O(N²) masked transcription of causal linear attention.
+
+    The layer evaluates the causal case as a prefix scan (Katharopoulos et al. 2020):
+    ``S_n = Σ_{m≤n} φ(k_m)·v_mᵀ``, ``z_n = Σ_{m≤n} φ(k_m)``, ``out_n = φ(q_n)S_n / (φ(q_n)·z_n + ε)``.
+    Undoing the associativity reordering gives the quadratic form written here,
+    ``out_n = Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩·v_m / (Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩ + ε)``, built from a
+    lower-triangular mask and two plain einsums — the scan is never called.
+    """
+    q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
+    eps = model.eps
+    temp = jnp.asarray(model.temperature[...], jnp.float64)
+    fq = np.asarray(focus_transform(jnp.asarray(q[..., 1:]), temp, model.power, eps), np.float64)
+    fk = np.asarray(focus_transform(jnp.asarray(k[..., 1:]), temp, model.power, eps), np.float64)
+    vs = v[..., 1:]
+
+    seq_len = fq.shape[1]
+    mask_NM = np.tril(np.ones((seq_len, seq_len)))
+    scores_BNHM = np.einsum("bnhd,bmhd->bnhm", fq, fk) * mask_NM[None, :, None, :]
+    num_BNHD = np.einsum("bnhm,bmhe->bnhe", scores_BNHM, vs)
+    den_BNH1 = scores_BNHM.sum(-1)[..., None]
+    out = num_BNHD / (den_BNH1 + eps) + _ref_dense(vs, model.residual_proj)
+    return _ref_spatial_to_hyperboloid(out.mean(axis=2), c_attn, c_out, eps)
+
+
 _ATTN_REFERENCES = {
     HyperbolicSoftmaxAttention: _ref_softmax_attention,
     HyperbolicFullAttention: _ref_full_attention,
@@ -575,12 +600,42 @@ def test_causal_no_future_leakage(cls):
     assert jnp.allclose(forward(model, x_orig), y_orig, atol=1e-5)
 
 
-QUADRATIC_ATTN_CLASSES = [HyperbolicSoftmaxAttention, HyperbolicFullAttention]
+@pytest.mark.parametrize("seq_len", [4, 48], ids=["short", "long"])
+def test_causal_linear_attention_matches_naive_quadratic_form(seq_len):
+    """The causal ``lax.scan`` reproduces the masked O(N²) einsum it is a reordering of.
+
+    ``test_attn_matches_naive_reference`` only exercises the bidirectional branch, so the
+    entire causal scan of ``HyperbolicLinearAttention`` had no value oracle: transposing the
+    outer product inside ``scan_step`` (a key/value role swap) changed nothing any test
+    looked at.  The ``long`` case is the drift bound — the scan accumulates 48 successive
+    rank-1 updates against the reference's single einsum, and the two must still agree to
+    float64 round-off rather than merely "closely".
+    """
+    B, A_in, D_out, H = 2, 5, 4, 2
+    c = 1.0
+    model = HyperbolicLinearAttention(A_in, D_out, num_heads=H, power=2.0, param_dtype=jnp.float64, rngs=nnx.Rngs(0))
+
+    raw = jax.random.normal(jax.random.PRNGKey(30), (B, seq_len, A_in), dtype=jnp.float64) * 0.3
+    x = jax.vmap(jax.vmap(hyperboloid_f64.proj, in_axes=(0, None)), in_axes=(0, None))(raw, c)
+
+    got = model(x, c_in=c, c_attn=c, c_out=c, causal=True)
+    expected = _ref_causal_linear_attention(model, x, c, c, c)
+
+    assert got.shape == expected.shape
+    assert jnp.allclose(got, expected, rtol=0, atol=1e-12)
+    # The causal mask is load-bearing: the bidirectional reference is a different function.
+    assert not jnp.allclose(got, _ref_linear_attention(model, x, c, c, c), atol=1e-4)
 
 
-@pytest.mark.parametrize("cls", QUADRATIC_ATTN_CLASSES, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
 def test_causal_matches_truncated(cls):
-    """Causal output at position n matches bidirectional output on tokens [0..n]."""
+    """Causal output at position n matches bidirectional output on tokens [0..n].
+
+    Previously restricted to the two quadratic variants via a ``QUADRATIC_ATTN_CLASSES``
+    list; the property is a statement about the *mechanism*, not about its complexity, and
+    the linear variant's prefix scan satisfies it exactly (verified to 1e-16 in float64).
+    Excluding it left the scan's prefix boundaries unchecked.
+    """
     B, N, A_in, D_out = 1, 5, 6, 5
     c = 1.0
     rngs = nnx.Rngs(0)
