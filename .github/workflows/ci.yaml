@@ -75,24 +75,38 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Each entry is a space-separated list of paths (relative to tests/) passed
+        # verbatim to `uv run pytest`. Small/related files are grouped into one
+        # entry to keep the matrix size manageable while still covering every
+        # test file under tests/.
         test-suite:
-          # Top-level tests
-          - "test_helpers.py"
+          # Top-level: core manifolds
           - "test_manifolds.py"
-          - "test_math_utils.py"
+          - "test_stereographic.py"
+          - "test_class_based_manifolds.py test_manifold_curvature.py"
+          - "test_product_manifold.py test_pv_manifold.py"
+          - "test_isometry_mappings.py test_docs_security.py"
+          # Top-level: optimizers, distributions, dimensionality reduction, utils
           - "test_optimizers.py"
-          - "test_wrapped_normal.py"
-          # NN layer tests (moved to subdirectory)
-          - "nn_layers/test_hyperboloid_activations.py"
-          - "nn_layers/test_hyperboloid_attention.py"
-          - "nn_layers/test_hyperboloid_conv.py"
-          - "nn_layers/test_hyperboloid_positional.py"
-          - "nn_layers/test_hypformer.py"
-          - "nn_layers/test_nn_layers.py"
-          - "nn_layers/test_poincare_conv.py"
-          - "nn_layers/test_poincare_linear_gradients.py"
+          - "test_wrapped_normal.py test_uniform_poincare.py"
+          - "test_busemann.py test_frechet_mean.py test_horopca.py test_cosne.py"
+          - "test_helpers.py test_math_utils.py test_precision.py test_smooth_clamp_vs_clip.py"
+          # NN layer tests (subdirectory): hyperboloid family
+          - "nn_layers/test_hyperboloid_conv.py nn_layers/test_hyperboloid_conv_fhnn.py nn_layers/test_hyperboloid_conv_ilnn.py"
+          - "nn_layers/test_hyperboloid_linear_fhnn.py nn_layers/test_hyperboloid_linear_plfc.py"
+          - "nn_layers/test_hyperboloid_activations.py nn_layers/test_hyperboloid_positional.py nn_layers/test_hyperboloid_pool.py"
+          - "nn_layers/test_hyperboloid_attention.py nn_layers/test_hyperboloid_residual.py"
           - "nn_layers/test_hyperboloid_fgg.py"
-          - "nn_layers/test_regression_layers.py"
+          - "nn_layers/test_hypformer.py"
+          # NN layer tests: Poincare and proper-velocity families
+          - "nn_layers/test_poincare_conv.py nn_layers/test_poincare_activations.py nn_layers/test_poincare_batchnorm.py"
+          - "nn_layers/test_poincare_linear_gradients.py nn_layers/test_poincare_vq.py"
+          - "nn_layers/test_pv_conv.py nn_layers/test_pv_linear.py nn_layers/test_pv_regression.py"
+          # NN layer tests: misc/general
+          - "nn_layers/test_regression_layers.py nn_layers/test_nn_layers.py nn_layers/test_busemann_layers.py nn_layers/test_gyro_normalization.py nn_layers/test_hybrid_regularization.py nn_layers/test_dtype_respected_x64.py"
+          # NOTE: created by a parallel fix agent as part of this test-overhaul
+          # branch; does not exist yet at the time this matrix entry was added.
+          - "nn_layers/test_layer_contract.py"
 
     steps:
       - uses: actions/checkout@v4
@@ -119,7 +133,15 @@ jobs:
         run: uv sync --locked --dev
 
       - name: Run tests
-        run: uv run pytest tests/${{ matrix.test-suite }} -v
+        # matrix.test-suite may be a space-separated list of multiple paths
+        # (relative to tests/); prefix each one individually so only the
+        # first file doesn't silently swallow "tests/".
+        run: |
+          paths=""
+          for f in ${{ matrix.test-suite }}; do
+            paths="$paths tests/$f"
+          done
+          uv run pytest $paths -v
 
   # Benchmark job - runs on main branch to track performance
   benchmark:
@@ -163,7 +185,11 @@ jobs:
       - name: Run benchmarks
         run: |
           # Run quick benchmark subset (not all parameter combinations)
+          # -o python_files="bench_*.py" is required because pyproject.toml's
+          # default python_files no longer includes bench_*.py (kept out of
+          # the default test collection to avoid zero-assertion items).
           uv run pytest benchmarks/ \
+            -o python_files="bench_*.py" \
             --benchmark-only \
             --benchmark-json=benchmark.json \
             -k "10-100" \
@@ -175,6 +201,7 @@ jobs:
           if [ -f cache/benchmark.json ]; then
             echo "Comparing against previous benchmark..."
             uv run pytest benchmarks/ \
+              -o python_files="bench_*.py" \
               --benchmark-only \
               --benchmark-compare=cache/benchmark.json \
               --benchmark-compare-fail=mean:10% \
