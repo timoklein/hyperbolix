@@ -725,25 +725,46 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         If True, add a learnable intrinsic bias via Lorentz gyroaddition,
         ``y <- y (+) exp_0([0, b])`` with ``b`` initialized to zero — the gyrogroup
         identity, so the bias is a no-op at initialization (default: False).
-    kernel_init_std : float
-        Standard deviation of the normal kernel init (default: 0.02, the Shi et al.
-        2026 PLFC reference value; the reference conv defers to the PLFC init).
-        Use 1.0 to recover the previous HNN++-style init (Shimizu et al. 2020);
-        note that large kernels push the pre-guard scores into the ``v_max``
-        saturation regime.
-
-        Low end: in BN-free residual stacks (no GyroBN between blocks), every
-        block becomes a strict contraction below ``std`` ~= 0.05 (probe-measured);
-        ``std=0.1`` is healthy. The ``0.02`` default is tuned for the GyroBN'd PLFC
-        recipe (this reference pairs the conv with a following BatchNorm) and
-        should NOT be treated as a safe default for unnormalized residual stacks —
-        raise ``kernel_init_std`` (e.g. to ``0.1``) when omitting normalization.
+    kernel_init_std : float or None
+        Standard deviation of the normal kernel init. The default ``None`` resolves
+        to the fan-out, norm-preserving value ``sqrt(1 / out_spatial)`` with
+        ``out_spatial = out_channels - 1`` (per-layer spatial-norm gain ~= 1; see
+        Notes). Pass ``kernel_init_std=0.02`` to restore the Shi et al. 2026 PLFC
+        reference value bit-for-bit, or ``1.0`` for the old HNN++-style init
+        (Shimizu et al. 2020) — note that large values push the pre-guard scores
+        into the ``v_max`` saturation regime (default: None).
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
 
     Notes
     -----
+    Weight Initialization:
+        The default ``std = sqrt(1 / out_spatial)`` is norm-preserving. Linearize the
+        layer around the manifold origin, where the PLFC chain is small-signal: with
+        the bias at its ``0`` init, ``compute_mlr`` reduces to
+        ``v = ||z||/sqrt(c) * asinh(sqrt(c) <u_s, z> / ||z||) ~= <u_s, z>`` and the
+        output map ``y_s = sinh(sqrt(c) v)/sqrt(c) ~= v``, so ``y_s ~= W u_s`` — a
+        plain matmul. For a Gaussian ``W`` of shape ``(O, I)`` with entry std
+        ``sigma`` this has RMS gain ``sigma * sqrt(O)``, and the LogCat input ``u_s``
+        carries the *per-pixel* spatial radius by construction (that is what the
+        digamma rescale buys), so ``sigma = 1/sqrt(O)`` gives an overall gain of 1.
+        Measured on a depth-3 stack (c=0.1, 3x3 kernel, 8x8 input, float64), the
+        per-layer mean spatial norm ratio is 0.82-0.95 across widths 8-64 — the
+        residual shortfall is the origin-padded border, whose interior-only ratios
+        are 0.92-0.98.
+
+        The previous fixed default ``0.02`` was tuned against the *pre-fix* LogCat,
+        which amplified the spatial radius by ~sqrt(N) per block instead of shrinking
+        it (a sign error in the digamma difference, shared with the Shi et al. 2026
+        reference; fixed 2026-07-31). The two errors cancelled at width ~64: gain
+        ``0.02 * sqrt(64) * 9 ~= 1.4`` for a 3x3 kernel. Under the corrected LogCat
+        the same ``0.02`` is strongly contractive — probe-measured per-layer ratios
+        0.05-0.15, i.e. a depth-3 stack collapses onto the manifold origin at init —
+        so ``kernel_init_std=0.02`` now restores the Shi et al. 2026 regime, which
+        implicitly assumed the pre-fix LogCat amplification, rather than a safe
+        default. Use it only to reproduce that reference.
+
     JIT Compatibility:
         This layer is designed to work with nnx.jit. Configuration parameters (padding, pad_mode,
         input_space, clamping_factor, smoothing_factor, v_max) are treated as static and baked
@@ -778,7 +799,7 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         smoothing_factor: float = 50.0,
         v_max: float = 10.0,
         use_gyro_bias: bool = False,
-        kernel_init_std: float = 0.02,
+        kernel_init_std: float | None = None,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
@@ -810,10 +831,13 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         # LogCat output ambient dim (same as HCat)
         logcat_out_ambient_dim = hcat_ambient_dim(in_channels, self.kernel_size)
 
-        # Trainable parameters — small normal init (Shi et al. 2026 PLFC reference;
-        # the reference conv defers to the PLFC reset_parameters)
+        # Trainable parameters — fan-out normal init: the PLFC chain linearizes to
+        # y_spatial ~= W @ u_spatial near the origin and the fixed LogCat hands over the
+        # per-pixel spatial radius, so std = 1/sqrt(out_spatial) makes the layer norm-preserving.
         out_spatial = out_channels - 1
         logcat_spatial = logcat_out_ambient_dim - 1
+        if kernel_init_std is None:
+            kernel_init_std = (1.0 / out_spatial) ** 0.5
         kernel_init = kernel_init_std * jax.random.normal(rngs.params(), (out_spatial, logcat_spatial), dtype=param_dtype)
         self.kernel = nnx.Param(kernel_init)
         self.bias = nnx.Param(jnp.zeros((out_spatial, 1), dtype=param_dtype))

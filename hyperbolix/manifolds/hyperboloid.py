@@ -725,10 +725,12 @@ def _log_radius_concat(
 
     A hyperboloid analog of the Poincaré β-concatenation (Shimizu et al. 2020), introduced by
     Shi et al. (2026, Sec. 4.3). Naively stacking the spatial parts of N blocks (as ``_hcat``
-    does) biases the expected spatial radius upward with the post-concat dimension. To keep the
-    expected *log* spatial radius invariant, each block's spatial part is rescaled by
+    does) biases the expected spatial radius upward with the post-concat dimension: for
+    Gaussian spatial parts ``‖v‖² ~ χ²_k``, so ``E[log‖v‖] = ½·(ψ(k/2) + log 2)`` grows with
+    the dimension ``k``. To keep the expected *log* spatial radius invariant, each block's
+    spatial part is rescaled by the ratio of the two chi radii,
 
-        s = exp( ½ · ( ψ(n / 2) - ψ(nᵢ / 2) ) ),
+        s = exp( ½ · ( ψ(nᵢ / 2) - ψ(n / 2) ) )   (≈ 1/√N, so s < 1 for N > 1),
 
     where ψ is the digamma function, ``nᵢ = d`` is the per-block spatial dimension and
     ``n = N · d`` is the total post-concat spatial dimension. The single time coordinate is then
@@ -738,6 +740,13 @@ def _log_radius_concat(
         t' = sqrt( 1/c + s² · Σᵢ (tᵢ² - 1/c) ).
 
     When ``N = 1`` the scale is ``1`` and this reduces exactly to ``_hcat``.
+
+    .. note::
+       The digamma difference is a *shrink* (``s ≤ 1``). Both the Shi et al. 2026 reference
+       implementation and hyperbolix ≤ 0.11 had the two arguments the other way round, which
+       amplifies the spatial radius by ≈ √N per concatenation — worse than plain ``_hcat``,
+       which it was meant to correct. Fixed 2026-07-31; see
+       ``HypConv2DHyperboloidILNN.kernel_init_std`` for the coupled init change.
 
     Args:
         points: N points in (d+1)-dimensional ambient space, shape (N, d+1).
@@ -758,7 +767,7 @@ def _log_radius_concat(
     n_total = N * d  # post-concat spatial dimension (n)
 
     # Digamma scale keeps E[log‖v_spatial‖] constant across the concat dim; s == 1 when N == 1.
-    scale = jnp.exp(0.5 * (digamma(n_total / 2.0) - digamma(d / 2.0)))
+    scale = jnp.exp(0.5 * (digamma(d / 2.0) - digamma(n_total / 2.0)))
 
     time_N = points[:, 0]  # (N,)
     space_ND = points[:, 1:]  # (N, d)
@@ -1069,9 +1078,10 @@ class Hyperboloid(ManifoldBase):
     ) -> Float[Array, "dN_plus_1"]:
         """Log-radius-preserving concatenation of N points (Shi et al. 2026, Sec. 4.3).
 
-        Like :meth:`hcat`, but rescales each block's spatial part by a digamma factor so the
-        expected log spatial radius is invariant to the number of concatenated blocks. Reduces
-        to :meth:`hcat` when ``N == 1``.
+        Like :meth:`hcat`, but shrinks each block's spatial part by the digamma factor
+        ``s = exp(½·(ψ(d/2) - ψ(N·d/2))) ≈ 1/√N`` so the expected log spatial radius is
+        invariant to the number of concatenated blocks. Reduces to :meth:`hcat` when
+        ``N == 1``.
         """
         return _log_radius_concat(self._cast(points), c)
 

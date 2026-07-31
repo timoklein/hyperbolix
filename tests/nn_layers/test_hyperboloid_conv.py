@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from flax import nnx
-from jax.scipy.special import digamma
+from scipy.special import digamma as scipy_digamma
 
 from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers.hyperboloid_conv import HypConv2DHyperboloid
@@ -184,11 +184,20 @@ def _random_hyperboloid_points(key, N, n, c, dtype, scale=0.1):
     return jnp.stack(points)  # (N, n)
 
 
-def _log_radius_scale(N, n, dtype):
-    """Reference digamma scale s = exp(0.5*(psi(N*d/2) - psi(d/2))) with d = n - 1."""
-    d = n - 1
-    n_total = N * d
-    return jnp.exp(0.5 * (digamma(n_total / 2.0) - digamma(d / 2.0))).astype(dtype)
+def _expected_log_radius(k):
+    """E[log ||v||] for v ~ N(0, I_k), from the chi distribution: 0.5*(psi(k/2) + log 2).
+
+    Independent oracle for the log_radius_concat contract — derived from the chi^2
+    moment-generating identity, not transcribed from the library's digamma call.
+    """
+    return 0.5 * (float(scipy_digamma(k / 2.0)) + float(np.log(2.0)))
+
+
+def _implied_scale(points_Nn, result_A):
+    """Recover the scalar block scale the library applied, from its largest spatial entry."""
+    ref_flat = np.asarray(points_Nn, dtype=np.float64)[:, 1:].reshape(-1)
+    idx = int(np.argmax(np.abs(ref_flat)))
+    return float(np.asarray(result_A, dtype=np.float64)[1:][idx] / ref_flat[idx])
 
 
 @pytest.mark.parametrize("N,n,c", [(2, 3, 1.0), (3, 4, 1.0), (4, 5, 0.5), (1, 3, 1.0)])
@@ -211,7 +220,7 @@ def test_log_radius_concat_output_on_manifold(N, n, c, dtype):
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_log_radius_concat_single_point_identity(dtype):
-    """For N=1 the digamma scale is 1, so log_radius_concat reduces to hcat (identity)."""
+    """For N=1 there is nothing to rescale, so log_radius_concat reduces to hcat (identity)."""
     manifold = Hyperboloid(dtype=dtype)
     n, c = 5, 1.0
     points = _random_hyperboloid_points(jax.random.PRNGKey(42), 1, n, c, dtype)
@@ -222,40 +231,76 @@ def test_log_radius_concat_single_point_identity(dtype):
     # Scale == 1 ⇒ returns the input point and matches the unscaled hcat exactly.
     assert jnp.allclose(result, points[0], atol=1e-6)
     assert jnp.allclose(result, manifold.hcat(points, c), atol=1e-6)
-    assert jnp.allclose(_log_radius_scale(1, n, dtype), jnp.asarray(1.0, dtype=dtype), atol=1e-6)
+    assert abs(_implied_scale(points, result) - 1.0) < 1e-6
+
+
+@pytest.mark.parametrize("N,d,c", [(9, 32, 1.0), (9, 3, 1.0), (4, 16, 0.3), (2, 8, 1.0), (3, 5, 2.0)])
+def test_log_radius_concat_preserves_expected_log_radius(N, d, c):
+    """LogCat's declared contract: E[log‖v_spatial‖] does not move with the block count N.
+
+    Independent oracle — for Gaussian spatial parts ``‖v‖² ~ χ²_k`` so
+    ``E[log‖v‖] = ½(ψ(k/2) + log 2)`` (:func:`_expected_log_radius`), computed with
+    SciPy and never read from the library. Discriminating cases, all rejected here by
+    margins ≥ 0.34 against a 0.02 tolerance: scale 1 (plain ``hcat``, off by
+    ``+½·log N``), scale 0 (collapse, ``-inf``), and the inverted digamma difference
+    that shipped through hyperbolix 1.0.0 (off by ``+log N`` — *worse* than hcat).
+    """
+    n_samples = 20_000
+    rng = np.random.default_rng(20260731)
+    space_SNd = rng.standard_normal((n_samples, N, d))
+    time_SN = np.sqrt(1.0 / c + np.sum(space_SNd**2, axis=-1))
+    points_SNn = jnp.asarray(np.concatenate([time_SN[..., None], space_SNd], axis=-1), dtype=jnp.float64)
+
+    manifold = Hyperboloid(dtype=jnp.float64)
+    out_SA = jax.vmap(manifold.log_radius_concat, in_axes=(0, None))(points_SNn, c)
+
+    measured = float(np.mean(np.log(np.linalg.norm(np.asarray(out_SA)[:, 1:], axis=-1))))
+    target = _expected_log_radius(d)  # per-block radius, the quantity that must be preserved
+    assert abs(measured - target) < 0.02, f"E[log r] moved: {measured:.4f} vs target {target:.4f}"
+
+    # Not vacuous: plain concatenation (scale 1) sits at the *widened* chi radius instead,
+    # which is outside the tolerance above — so scale=1 and scale=0 both fail this test.
+    hcat_out_SA = jax.vmap(manifold.hcat, in_axes=(0, None))(points_SNn, c)
+    hcat_measured = float(np.mean(np.log(np.linalg.norm(np.asarray(hcat_out_SA)[:, 1:], axis=-1))))
+    assert abs(hcat_measured - _expected_log_radius(N * d)) < 0.02  # sampler/oracle agree
+    assert abs(hcat_measured - target) > 0.02
 
 
 @pytest.mark.parametrize("N,n,c", [(2, 3, 1.0), (3, 4, 0.5), (4, 5, 1.0)])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_log_radius_concat_scale_and_space(N, n, c, dtype):
-    """Spatial blocks are rescaled by s = exp(0.5*(psi(N*d/2) - psi(d/2))) before stacking."""
+def test_log_radius_concat_blocks_share_one_shrinking_scale(N, n, c, dtype):
+    """Every block is scaled by the *same* scalar, blocks stay in input order, and N>1 shrinks.
+
+    Structural companion to the statistical invariant test: pins the block layout
+    (a per-block or per-coordinate scale would fail) without transcribing the digamma
+    formula. Widening the spatial dimension must shrink each block, so ``scale < 1``.
+    """
     manifold = Hyperboloid(dtype=dtype)
     points = _random_hyperboloid_points(jax.random.PRNGKey(7), N, n, c, dtype)
 
     result = manifold.log_radius_concat(points, c)
 
-    scale = _log_radius_scale(N, n, dtype)
-    expected_space = (scale * points[:, 1:]).reshape(-1)
+    scale = _implied_scale(points, result)
+    expected_space = (scale * np.asarray(points[:, 1:], dtype=np.float64)).reshape(-1)
     tolerance = 1e-5 if dtype == jnp.float32 else 1e-10
-    assert jnp.allclose(result[1:], expected_space, atol=tolerance)
-    # Concatenation widens the spatial dimension (N>1), so blocks are upscaled.
-    assert float(scale) > 1.0
+    assert np.allclose(np.asarray(result[1:], dtype=np.float64), expected_space, atol=tolerance)
+    assert scale < 1.0
 
 
 @pytest.mark.parametrize("N,n,c", [(2, 3, 1.0), (3, 4, 0.5), (4, 5, 1.0)])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_log_radius_concat_time_formula(N, n, c, dtype):
-    """Time coordinate equals sqrt(1/c + s^2 * sum(t_i^2 - 1/c))."""
+    """Time coordinate equals sqrt(1/c + s^2 * sum(t_i^2 - 1/c)) for the applied scale s."""
     manifold = Hyperboloid(dtype=dtype)
     points = _random_hyperboloid_points(jax.random.PRNGKey(11), N, n, c, dtype)
 
     result = manifold.log_radius_concat(points, c)
 
-    scale = _log_radius_scale(N, n, dtype)
-    time_coords = points[:, 0]
-    expected_time = jnp.sqrt(1.0 / c + scale**2 * jnp.sum(time_coords**2 - 1.0 / c))
+    scale = _implied_scale(points, result)
+    time_coords = np.asarray(points[:, 0], dtype=np.float64)
+    expected_time = np.sqrt(1.0 / c + scale**2 * np.sum(time_coords**2 - 1.0 / c))
     tolerance = 1e-5 if dtype == jnp.float32 else 1e-10
-    assert jnp.abs(result[0] - expected_time) < tolerance
+    assert abs(float(result[0]) - expected_time) < tolerance
 
 
 # ============================================================================

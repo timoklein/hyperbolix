@@ -5,6 +5,8 @@ every layer in the library lives in ``test_layer_contract.py``; only
 HypConv2DHyperboloidILNN-specific tests stay here.
 """
 
+import itertools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -282,25 +284,68 @@ def test_gyro_bias_on_manifold_and_trainable(dtype):
 
 
 def test_kernel_init_std():
-    """Default kernel init follows the PLFC reference (std=0.02); kernel_init_std=1.0 recovers HNN++."""
+    """Default kernel init is fan-out ``sqrt(1/out_spatial)``; explicit values are passed through.
+
+    ``kernel_init_std=0.02`` must still reproduce the Shi et al. 2026 reference draw
+    bit-for-bit (same seed), since that is the documented escape hatch.
+    """
     manifold = Hyperboloid(dtype=jnp.float32)
     in_channels, out_channels, kernel_size = 9, 17, 3  # (16, 72) kernel -> 1152 samples
+    out_spatial = out_channels - 1
 
-    layer_default = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        rngs=nnx.Rngs(42),
-    )
-    layer_hnnpp = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        rngs=nnx.Rngs(42),
-        kernel_init_std=1.0,
-    )
+    def build(**kwargs):
+        return HypConv2DHyperboloidILNN(
+            manifold_module=manifold,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            rngs=nnx.Rngs(42),
+            **kwargs,
+        )
 
-    assert abs(float(jnp.std(layer_default.kernel[...])) - 0.02) < 0.005
+    layer_default, layer_ref, layer_hnnpp = build(), build(kernel_init_std=0.02), build(kernel_init_std=1.0)
+
+    expected_std = (1.0 / out_spatial) ** 0.5  # = 0.25 at out_spatial=16
+    assert abs(float(jnp.std(layer_default.kernel[...])) - expected_std) < 0.1 * expected_std
     assert 0.8 < float(jnp.std(layer_hnnpp.kernel[...])) < 1.2
+    # Same seed ⇒ the three inits differ only by their scalar multiplier.
+    assert jnp.allclose(layer_ref.kernel[...], 0.02 * layer_hnnpp.kernel[...], atol=1e-9)
+    assert jnp.allclose(layer_default.kernel[...], expected_std * layer_hnnpp.kernel[...], atol=1e-8)
+
+
+@pytest.mark.parametrize("kernel_size", [2, 3])
+def test_depth3_stack_preserves_spatial_norm_at_init(kernel_size):
+    """A depth-3 stack at the default init neither collapses to the origin nor blows up.
+
+    The default ``kernel_init_std`` is coupled to the LogCat digamma sign fix
+    (2026-07-31): the old fixed ``0.02`` was calibrated against the pre-fix ~sqrt(N)
+    amplification, so under the corrected shrink it contracts the mean spatial norm by
+    ~15x per layer (probe-measured ratio 0.068 for this configuration) and the stack
+    is pinned at the manifold origin by layer 3. Deterministic: float64, fixed seeds.
+    """
+    dtype = jnp.float64
+    c = 0.1
+    channels = 17  # ambient; out_spatial = 16
+    manifold = Hyperboloid(dtype=dtype)
+
+    tangent_BHWC = jax.random.normal(jax.random.PRNGKey(0), (2, 8, 8, channels), dtype=dtype) * 0.3
+    tangent_BHWC = tangent_BHWC.at[..., 0].set(0.0)  # tangent at the origin
+    x_BHWC = jax.vmap(jax.vmap(jax.vmap(lambda t: manifold.expmap_0(t, c))))(tangent_BHWC)
+
+    rngs = nnx.Rngs(1234)
+    norms = [float(jnp.mean(jnp.linalg.norm(x_BHWC[..., 1:], axis=-1)))]
+    for _ in range(3):
+        layer = HypConv2DHyperboloidILNN(
+            manifold_module=manifold,
+            in_channels=channels,
+            out_channels=channels,
+            kernel_size=kernel_size,
+            rngs=rngs,
+            param_dtype=dtype,
+        )
+        x_BHWC = layer(x_BHWC, c=c)
+        norms.append(float(jnp.mean(jnp.linalg.norm(x_BHWC[..., 1:], axis=-1))))
+
+    assert norms[0] > 0.5, f"probe input is degenerate: {norms}"
+    for i, (prev, cur) in enumerate(itertools.pairwise(norms), start=1):
+        assert 0.1 * prev < cur < 10.0 * prev, f"layer {i} spatial-norm gain {cur / prev:.3g} out of band: {norms}"
