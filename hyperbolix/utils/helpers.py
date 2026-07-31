@@ -158,29 +158,27 @@ def compute_hyperbolic_delta(distmat: Float[Array, "n_points n_points"], version
     # Compute Gromov product matrix: (i|j)_0 for all pairs (i, j)
     gromov_prod_mat = (distmat_i0 + distmat_0j - distmat) / 2.0  # shape: (n, n)
 
-    # Compute the (max, min)-product of the Gromov product matrix with itself
-    # For each triple (i, j, k), we need: min((i|j)_0, (i|k)_0) over k, then max over j
-    # gromov_prod_mat[i, j] = (i|j)_0
-    # gromov_prod_mat[i, k] = (i|k)_0
-    # We want: max_j { max_k { min((i|j)_0, (i|k)_0) } }
+    # (max, min)-matrix product of the Gromov product matrix with itself:
+    #     (G ⊠ G)[i, j] = max_k min( (i|k)_0 , (k|j)_0 )
+    # The two operands must be indexed on DIFFERENT rows — the first on i, the second on the
+    # summation index k. Indexing both on row i (the historical bug) gives
+    # max_k min(G[i,k], G[i,j]) == G[i,j] whenever k = j is admissible, so `delta_matrix` was
+    # identically 0 for every input and `get_delta` always reported 0.
 
-    # Expand dimensions for broadcasting:
-    # gromov_prod_mat.shape = (n, n)
-    # Reshape to compute min over pairs:
-    # gromov_prod_mat[:, None, :] has shape (n, 1, n) - this is (i, j, k) with j=1
-    # gromov_prod_mat[:, :, None] has shape (n, n, 1) - this is (i, j, k) with k=1
-    # Broadcasting: (n, 1, n) and (n, n, 1) -> (n, n, n)
-    # Result[i, j, k] = min((i|j)_0, (i|k)_0)
+    # Computed as a scan over k with a running elementwise maximum, NOT as one broadcast
+    # jnp.minimum((n, 1, n), (1, n, n)): that materializes an (n, n, n) buffer — 27 GB in
+    # float64 at get_delta's default sample_size=1500 — while the scan needs O(n^2) memory
+    # (one (n, n) candidate per step, executed as a compiled loop even when called eagerly).
+    def _step(running_max_NN, gromov_k):
+        col_N, row_N = gromov_k  # G[:, k] = (i|k)_0 and G[k, :] = (k|j)_0
+        cand_NN = jnp.minimum(col_N[:, None], row_N[None, :])  # (i, j) -> min((i|k)_0, (k|j)_0)
+        return jnp.maximum(running_max_NN, cand_NN), None
 
-    min_products = jnp.minimum(
-        gromov_prod_mat[:, None, :],  # shape: (n, 1, n) - (i, 1, k)
-        gromov_prod_mat[:, :, None],  # shape: (n, n, 1) - (i, j, 1)
-    )  # shape: (n, n, n) - (i, j, k)
+    init_NN = jnp.full_like(gromov_prod_mat, -jnp.inf)
+    # xs leading axis is k: (gromov_prod_mat.T)[k] = G[:, k], (gromov_prod_mat)[k] = G[k, :]
+    max_min_prod, _ = jax.lax.scan(_step, init_NN, (gromov_prod_mat.T, gromov_prod_mat))
 
-    # Take maximum over the last dimension (k): max_k { min((i|j)_0, (i|k)_0) }
-    max_min_prod = jnp.max(min_products, axis=2)  # shape: (n, n) - (i, j)
-
-    # Compute delta for each pair: max_k{min((i|j)_0, (i|k)_0)} - (i|j)_0
+    # Compute delta for each pair: max_k{min((i|k)_0, (k|j)_0)} - (i|j)_0
     delta_matrix = max_min_prod - gromov_prod_mat  # shape: (n, n)
 
     # Compute the requested statistic
