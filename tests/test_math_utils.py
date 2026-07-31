@@ -64,6 +64,99 @@ def test_smooth_clamp():
     assert jnp.allclose(result[in_range_mask], x[in_range_mask], rtol=1e-5)
 
 
+# ---------------------------------------------------------------------------------------------
+# smooth_clamp gradient oracles (audit M1-07)
+#
+# The three tests above check forward VALUES only: that the output is in range, monotone, and
+# unchanged well inside the interval. The whole point of the softplus clamp over a hard `jnp.clip`
+# is the gradient in the saturated region — a hard clip passes every forward assertion in this file
+# and gives gradient 0 exactly where the smooth version is supposed to keep pushing. The closed
+# forms below come straight from the implementation:
+#
+#     smooth_clamp_min(x) = shift + softplus(beta(x - shift))/beta   for x < shift,  shift = min_value + eps
+#         d/dx = sigmoid(beta(x - shift));  = 1 for x >= shift (the `jnp.where` branch)
+#     smooth_clamp_max(x) = shift - softplus(beta(shift - x))/beta   for x > shift,  shift = max_value - eps
+#         d/dx = sigmoid(beta(shift - x));  = 1 for x <= shift
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("beta", [10.0, 50.0])
+def test_smooth_clamp_min_gradient_is_the_softplus_sigmoid(beta: float):
+    """d/dx smooth_clamp_min = sigmoid(beta·(x - shift)) below the bound, exactly 1 above it.
+
+    The ``beta`` axis is what pins the smoothing factor: dropping the multiplication (``arg = x -
+    shift``) leaves a valid, monotone, in-range clamp whose gradient no longer depends on ``beta`` at
+    all, so both parametrizations would collapse onto the same wrong curve.
+    """
+    min_val = 0.0
+    shift = min_val + float(jnp.finfo(jnp.float32).eps)
+    xs = jnp.array([-1.0, -0.2, -0.01, 0.5, 2.0], dtype=jnp.float32)
+
+    grads = jax.vmap(jax.grad(lambda v: smooth_clamp_min(v, min_val, smoothing_factor=beta)))(xs)
+
+    expected = np.where(
+        np.asarray(xs) < shift,
+        np.asarray(jax.nn.sigmoid(beta * (xs - shift))),
+        1.0,
+    )
+    assert np.allclose(np.asarray(grads), expected, rtol=1e-5, atol=1e-6)
+    # Just past the bound the gradient is attenuated but strictly positive — that is the whole
+    # difference from a hard clip, which would return exactly 0 across the entire clamped region.
+    assert 0.0 < float(grads[1]) < 1.0
+    assert float(grads[0]) < float(grads[1]), "attenuation must deepen with distance past the bound"
+
+
+@pytest.mark.parametrize("beta", [10.0, 50.0])
+def test_smooth_clamp_max_gradient_is_the_softplus_sigmoid(beta: float):
+    """d/dx smooth_clamp_max = sigmoid(beta·(shift - x)) above the bound, exactly 1 below it."""
+    max_val = 1.0
+    shift = max_val - float(jnp.finfo(jnp.float32).eps)
+    xs = jnp.array([-1.0, 0.5, 0.99, 1.2, 3.0], dtype=jnp.float32)
+
+    grads = jax.vmap(jax.grad(lambda v: smooth_clamp_max(v, max_val, smoothing_factor=beta)))(xs)
+
+    expected = np.where(
+        np.asarray(xs) > shift,
+        np.asarray(jax.nn.sigmoid(beta * (shift - xs))),
+        1.0,
+    )
+    assert np.allclose(np.asarray(grads), expected, rtol=1e-5, atol=1e-6)
+    assert 0.0 < float(grads[3]) < 1.0
+    # Deep saturation: in float32 ``sigmoid(-100)`` underflows to exactly 0, so far past the bound
+    # the smooth clamp degenerates to a hard clip. Pinned as monotone attenuation rather than
+    # strict positivity, because the latter is false at beta=50 and x=3.
+    assert 0.0 <= float(grads[-1]) <= float(grads[3])
+
+
+@pytest.mark.parametrize("beta", [10.0, 50.0])
+def test_smooth_clamp_gradient_composes_the_two_one_sided_clamps(beta: float):
+    """Two-sided ``smooth_clamp`` gradient = product of the max-side and min-side derivatives.
+
+    ``smooth_clamp`` applies ``smooth_clamp_max`` then ``smooth_clamp_min``, so by the chain rule
+    its derivative is the min-side sigmoid evaluated at the *already max-clamped* value, times the
+    max-side sigmoid. Pinning the composed value catches an ordering swap or a dropped stage, which
+    the range-only forward test cannot: both stages individually keep the output inside the range.
+    """
+    min_val, max_val = -1.5, 1.5
+    xs = jnp.array([-4.0, -1.6, 0.0, 1.6, 4.0], dtype=jnp.float32)
+
+    grads = jax.vmap(jax.grad(lambda v: smooth_clamp(v, min_val, max_val, smoothing_factor=beta)))(xs)
+
+    eps = float(jnp.finfo(jnp.float32).eps)
+    shift_max, shift_min = max_val - eps, min_val + eps
+    x_np = np.asarray(xs, dtype=np.float64)
+    outer = np.where(x_np > shift_max, np.asarray(jax.nn.sigmoid(beta * (shift_max - x_np))), 1.0)
+    x_after_max = np.asarray(smooth_clamp_max(xs, max_val, smoothing_factor=beta), dtype=np.float64)
+    inner = np.where(x_after_max < shift_min, np.asarray(jax.nn.sigmoid(beta * (x_after_max - shift_min))), 1.0)
+
+    assert np.allclose(np.asarray(grads), inner * outer, rtol=1e-4, atol=1e-6)
+    assert float(grads[2]) == pytest.approx(1.0, rel=1e-6), "no attenuation strictly inside the interval"
+    # Symmetric attenuation: just outside each bound the gradient is alive but < 1; far outside it
+    # decays further (to exactly 0 in float32 at beta=50 — see the max-side test).
+    assert 0.0 < float(grads[1]) < 1.0 and 0.0 < float(grads[3]) < 1.0
+    assert float(grads[0]) <= float(grads[1]) and float(grads[-1]) <= float(grads[3])
+
+
 def test_cosh():
     """Test numerically stable cosh."""
     # Test normal values

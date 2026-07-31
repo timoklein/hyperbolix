@@ -529,6 +529,75 @@ class TestDistance:
 
 
 # ===========================================================================
+# 5b. dist_min is deliberately NOT a metric (audit M1-05)
+#
+# ``dist_min``'s docstring warns that positive-definiteness fails. Nothing pinned that warning, so
+# the "closest-factor" semantics could have drifted to an ordinary distance (or been "fixed" into
+# one) without any test noticing — and callers who read the aggregator name as a distance would
+# have got silent nonsense. These two tests are the executable form of the warning: they must keep
+# FAILING to hold for a real metric.
+#
+# Built on a fixed two-Poincaré-factor product rather than the parametrized ``product`` fixture,
+# because the counterexamples need explicit control over which factor the two points share.
+# ===========================================================================
+
+
+class TestDistMinIsNotAMetric:
+    @pytest.fixture
+    def two_factor(self):
+        """P2 x P2 with distinct curvatures — split at index 2, both factors easy to construct on."""
+        return ProductManifold((Poincare(dtype=jnp.float64, c=1.0), 2), (Poincare(dtype=jnp.float64, c=0.5), 2))
+
+    @staticmethod
+    def _point(first, second):
+        return jnp.asarray(first + second, dtype=jnp.float64)
+
+    def test_dist_min_is_zero_for_distinct_points_sharing_one_factor(self, two_factor):
+        """Positive-definiteness fails: ``d_min(x, y) == 0`` while ``x != y``.
+
+        ``x`` and ``y`` agree on factor 1 and differ on factor 2, so the minimum over components is
+        the identically-zero first component. The L2 product distance on the same pair is strictly
+        positive, which is what makes this a statement about ``dist_min`` and not about the points.
+        """
+        cs = two_factor.curvatures
+        shared = [0.1, 0.2]
+        x = self._point(shared, [0.3, -0.1])
+        y = self._point(shared, [-0.2, 0.25])
+
+        d_min = two_factor.dist_min(x, y, cs)
+
+        assert not jnp.allclose(x, y), "the counterexample needs genuinely distinct points"
+        assert float(d_min) == pytest.approx(0.0, abs=1e-12)
+        assert float(two_factor.dist(x, y, cs)) > 0.1, "the honest L2 distance separates them"
+
+    def test_dist_min_violates_the_triangle_inequality(self, two_factor):
+        """``d_min(x, z) > d_min(x, y) + d_min(y, z)`` — a strict, reproducible violation.
+
+        Pick ``x = (p, q)``, ``y = (p, q')``, ``z = (p', q')``: consecutive pairs share one factor
+        each, so both legs collapse to 0, while ``x`` and ``z`` share neither and the minimum over
+        their two positive component distances is positive. The failure is therefore ``0 + 0 < d``,
+        as large as the smaller component distance — not a tolerance artefact.
+        """
+        cs = two_factor.curvatures
+        p, p2 = [0.1, 0.2], [-0.3, 0.05]
+        q, q2 = [0.3, -0.1], [-0.2, 0.25]
+        x = self._point(p, q)
+        y = self._point(p, q2)
+        z = self._point(p2, q2)
+
+        d_xy = float(two_factor.dist_min(x, y, cs))
+        d_yz = float(two_factor.dist_min(y, z, cs))
+        d_xz = float(two_factor.dist_min(x, z, cs))
+
+        assert d_xy == pytest.approx(0.0, abs=1e-12)
+        assert d_yz == pytest.approx(0.0, abs=1e-12)
+        assert d_xz > 0.1
+        assert d_xz > d_xy + d_yz, "dist_min unexpectedly satisfies the triangle inequality here"
+        # The L2 aggregator on the same triple does satisfy it — the defect is the aggregator's.
+        assert float(two_factor.dist(x, z, cs)) <= float(two_factor.dist(x, y, cs)) + float(two_factor.dist(y, z, cs)) + 1e-9
+
+
+# ===========================================================================
 # 6. Exp/log round-trips
 # ===========================================================================
 

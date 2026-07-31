@@ -281,6 +281,67 @@ class TestLearnableCurvatureGradients:
             expected = math.exp(0.99 * math.log(float(jnp.finfo(jnp.float32).max)))
             assert float(grads.raw[...]) == pytest.approx(expected, rel=1e-4)
 
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_straight_through_clamp_lets_curvature_re_enter_the_interval_over_many_steps(self, parameterization):
+        """The ratchet is a *multi-step* failure mode; this is the multi-step test for it.
+
+        The two single-step tests above establish the local fact (gradient 0 vs gradient nonzero
+        past the boundary). What actually bites in training is the consequence: once ``c`` leaves
+        ``[c_min, c_max]`` under a plain clip it can never come back, however hard the loss pulls,
+        because every subsequent gradient is also 0. That is invisible to a one-step check — a
+        straight-through implementation that produced a *correct but tiny* gradient would pass the
+        single-step test and still be stuck for any realistic number of steps.
+
+        Setup: start ``raw`` well past the upper clamp (c ~ c_max), then run 200 plain SGD steps on
+        a loss whose minimum sits at ``c_target = 1.0``, far inside the interval. The
+        straight-through model must come off the ``c_max`` pin; the plain-clip control must not
+        move at all. Both legs are asserted, so the test also fails if straight-through silently
+        became the default (the control would then move too).
+
+        Where the two parameterizations land differs, and the difference is worth pinning:
+
+        - ``softplus`` has a bounded ``dc/draw = sigmoid(raw) <= 1``, so the descent is well scaled
+          and ``c`` converges onto ``c_target``.
+        - ``log`` has the scale-invariant ``dc/draw = c``, which is ~3.3e6 at ``raw = 15``. The very
+          first SGD step therefore overshoots the entire interval and ``c`` ends pinned at the
+          *lower* clamp. Straight-through still did its job — the ratchet is broken and ``c`` is no
+          longer at ``c_max`` — but with a plain optimizer it trades the upper pin for a lower one
+          unless the learning rate is scaled to the curvature. Asserting the real endpoint here
+          rather than a convergence claim keeps that documented instead of hidden.
+        """
+        c_target = 1.0
+        n_steps, lr = 200, 0.05
+
+        def run(straight_through: bool) -> tuple[float, float]:
+            curvature = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=straight_through)
+            curvature.raw[...] = jnp.array(15.0, dtype=jnp.float32)  # softplus(15)~=15, exp(15)~=3.3e6
+            raw_start = float(curvature.raw[...])
+            optimizer = nnx.Optimizer(curvature, optax.sgd(lr), wrt=nnx.Param)
+
+            def loss_fn(m):
+                return (m() - c_target) ** 2
+
+            for _ in range(n_steps):
+                grads = nnx.grad(loss_fn)(curvature)
+                optimizer.update(curvature, grads)
+            return raw_start, float(curvature())
+
+        raw_start_st, c_straight_through = run(True)
+        raw_start_plain, c_plain = run(False)
+
+        assert raw_start_st == raw_start_plain == 15.0
+        # Plain clip: gradient is identically 0 past the boundary, so c is pinned at c_max forever.
+        assert c_plain == pytest.approx(10.0, rel=1e-6), f"plain clip unexpectedly moved (c={c_plain})"
+        # Straight-through: the gradient keeps flowing, so c comes off the c_max pin and lands
+        # strictly inside the clamp interval. This is the leg that fails if the straight-through
+        # branch is removed or its gradient rescaled to ~0.
+        assert 0.1 <= c_straight_through <= 10.0
+        assert c_straight_through < 9.0, (
+            f"straight_through_clamp never left the c_max pin in {n_steps} steps (c={c_straight_through})"
+        )
+        expected_endpoint = {"softplus": c_target, "log": 0.1}[parameterization]
+        assert c_straight_through == pytest.approx(expected_endpoint, abs=0.05)
+
 
 # ===========================================================================
 # 4. Vmap compatibility (manifolds as plain classes)
