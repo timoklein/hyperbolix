@@ -65,6 +65,24 @@ def _poincare_points(key, shape, c, dtype):
     return pts.reshape(shape)
 
 
+def _lorentz_centroid_ref(manifold, x_NF, c):
+    """Uniform Lorentz centroid, transcribed from the definition (HELM).
+
+    ``mu = s / (sqrt(c)·sqrt(-⟨s,s⟩_L))`` with ``s = Σ x_i`` — the ambient sum
+    renormalized back onto the ``⟨mu,mu⟩_L = -1/c`` sheet. Independent of
+    ``lorentz_midpoint``.
+    """
+    s_F = jnp.sum(x_NF, axis=0)
+    minkowski_sq = -(s_F[0] ** 2) + jnp.sum(s_F[1:] ** 2)
+    return s_F / (jnp.sqrt(c) * jnp.sqrt(-minkowski_sq))
+
+
+def _log_euclidean_mean_ref(manifold, x_NF, c):
+    """``expmap_0(mean_i logmap_0(x_i))`` — the PV batch-mean estimator."""
+    v_NF = jax.vmap(manifold.logmap_0, in_axes=(0, None))(x_NF, c)
+    return manifold.expmap_0(jnp.mean(v_NF, axis=0), c)
+
+
 CONFIGS = {
     "hyperboloid": dict(
         make=lambda dt: Hyperboloid(dtype=dt),
@@ -72,6 +90,7 @@ CONFIGS = {
         rms=HyperboloidGyroRMSNorm,
         points=_hyp_points,
         origin=lambda m, dim, dt: m.create_origin(1.0, dim),
+        batch_mean=_lorentz_centroid_ref,
         time=1,  # ambient = D + time
     ),
     "pv": dict(
@@ -80,6 +99,7 @@ CONFIGS = {
         rms=ProperVelocityGyroRMSNorm,
         points=_pv_points,
         origin=lambda m, dim, dt: m.create_origin(1.0, dim),
+        batch_mean=_log_euclidean_mean_ref,
         time=0,
     ),
     "poincare": dict(
@@ -108,6 +128,10 @@ def cfg_rms(request):
 DTYPES = [jnp.float32, jnp.float64]
 DIMS = [2, 5, 10, 15]
 DIM_IDS = [f"dim{d}" for d in DIMS]
+# RMSNorm's radial rescale is a scalar operation on the geodesic radius, so the
+# feature width only needs a narrow and a wide representative.
+RMS_DIMS = [2, 10]
+RMS_DIM_IDS = [f"dim{d}" for d in RMS_DIMS]
 
 
 def _tol(dtype):
@@ -186,8 +210,13 @@ def test_bn_train_vs_eval(cfg, dtype):
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_bn_gradients(cfg, dtype):
-    """Finite gradients for the affine parameters (bias, gamma)."""
+def test_bn_gradients_and_jit_matches_eager(cfg, dtype):
+    """Finite gradients for (bias, gamma), and ``nnx.jit`` reproduces eager values.
+
+    The jit leg is folded in here (was a separate shape-only ``jitted`` test):
+    two freshly built layers are compared so the BatchStat mutation in the first
+    call cannot make the comparison trivially unequal.
+    """
     manifold = cfg["make"](dtype)
     bn = cfg["bn"](manifold, num_features=6)
     x = cfg["points"](jax.random.PRNGKey(3), (16, 6), 1.0, dtype)
@@ -200,21 +229,71 @@ def test_bn_gradients(cfg, dtype):
     assert jnp.all(jnp.isfinite(grads.bias[...]))
     assert jnp.isfinite(grads.gamma[...])
 
-
-@pytest.mark.parametrize("dtype", DTYPES)
-def test_bn_jitted(cfg, dtype):
-    """Forward runs cleanly under nnx.jit (BatchStat mutation included)."""
-    manifold = cfg["make"](dtype)
-    bn = cfg["bn"](manifold, num_features=6)
-    x = cfg["points"](jax.random.PRNGKey(4), (16, 6), 1.0, dtype)
+    bn_eager = cfg["bn"](manifold, num_features=6)
+    bn_jit = cfg["bn"](manifold, num_features=6)
 
     @nnx.jit
     def forward(bn, x):
         return bn(x, c=1.0)
 
-    out = forward(bn, x)
-    assert out.shape == x.shape
-    assert jnp.all(jnp.isfinite(out))
+    out_eager = bn_eager(x, c=1.0)
+    out_jit = forward(bn_jit, x)
+    atol, _ = _tol(dtype)
+    assert jnp.allclose(out_jit, out_eager, atol=atol)
+    assert jnp.allclose(bn_jit.running_var[...], bn_eager.running_var[...], atol=atol)
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_bn_centers_scales_and_biases(cfg, dtype):
+    """``d(y_i, w) == (gamma/sqrt(var+eps)) · d(x_i, mu)`` — the whole GyroBN pipeline.
+
+    ``y = w ⊕ ((gamma/sqrt(var+eps)) ⊗ ((⊖mu) ⊕ x))``. Gyro-translation by ``w`` is
+    an isometry taking the origin to ``w``, and ``scalar_mul`` scales geodesic
+    radius linearly, so the geodesic radius of the output about the bias point is
+    *exactly* the scaled input radius about the batch mean. Same closed-form style
+    as the RMSNorm sibling's radius oracle, and it pins all three GyroBN steps at
+    once:
+
+    * centering — the batch is deliberately gyro-translated off the origin, so
+      dropping ``(⊖mu) ⊕ ·`` measures radii about the wrong point;
+    * scaling — the factor is checked by value, not just for finiteness;
+    * bias — the radii are measured about ``w``, not the origin.
+
+    ``mu`` and ``var`` are recomputed here (Lorentz centroid / log-Euclidean mean
+    transcribed in ``CONFIGS[...]["batch_mean"]``, variance straight from
+    ``manifold.dist``), so a ``frechet_variance ≡ 0`` mutation also fails: the
+    library would then use the ``min_var`` floor while the reference uses the
+    true variance.
+    """
+    c = 1.0
+    D = 6
+    manifold = cfg["make"](dtype)
+    bn = cfg["bn"](manifold, num_features=D, param_dtype=dtype)
+    bn.bias[...] = jnp.array([0.2, -0.1, 0.05, 0.3, -0.25, 0.15], dtype=dtype)
+    bn.gamma[...] = jnp.asarray(1.5, dtype=dtype)
+
+    # Gyro-translate a random batch away from the origin so the batch mean is a
+    # genuinely non-origin point (at the origin, centering would be a no-op).
+    pts_NF = cfg["points"](jax.random.PRNGKey(12), (16, D), c, dtype)
+    shift_F = manifold.expmap_0(manifold.embed_spatial_0(jnp.full((D,), 0.35, dtype=dtype)), c)
+    x_NF = jax.vmap(manifold.addition, in_axes=(None, 0, None))(shift_F, pts_NF, c)
+
+    out_NF = bn(x_NF, c=c, use_running_average=False)
+
+    mu_F = cfg["batch_mean"](manifold, x_NF, c)
+    assert float(manifold.dist_0(mu_F, c)) > 0.5  # centering is not a no-op here
+    d_in_N = jax.vmap(manifold.dist, in_axes=(0, None, None))(x_NF, mu_F, c)
+    var = jnp.maximum(jnp.mean(d_in_N**2), bn.min_var)
+    factor = bn.gamma[...] / jnp.sqrt(var + bn.eps)
+
+    bias_pt_F = manifold.expmap_0(manifold.embed_spatial_0(bn.bias[...]), c)
+    d_out_N = jax.vmap(manifold.dist, in_axes=(0, None, None))(out_NF, bias_pt_F, c)
+
+    atol, _ = _tol(dtype)
+    assert jnp.allclose(d_out_N, factor * d_in_N, atol=atol)
+    # Fréchet std about the bias point is gamma (up to the eps in the denominator).
+    frechet_std = jnp.sqrt(jnp.mean(d_out_N**2))
+    assert jnp.allclose(frechet_std, bn.gamma[...] * jnp.sqrt(var / (var + bn.eps)), atol=atol)
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
@@ -273,20 +352,7 @@ def test_bn_degenerate_batch_variance_floor(cfg, dtype):
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("dim", DIMS, ids=DIM_IDS)
-def test_rms_shape_and_on_manifold(cfg_rms, dim, dtype):
-    """Output preserves shape and stays on the manifold."""
-    manifold = cfg_rms["make"](dtype)
-    rms = cfg_rms["rms"](manifold, num_features=dim)
-    x = cfg_rms["points"](jax.random.PRNGKey(0), (16, dim), 1.0, dtype)
-
-    out = rms(x, c=1.0)
-    assert out.shape == x.shape
-    assert jnp.all(jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(out, 1.0))
-
-
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("dim", DIMS, ids=DIM_IDS)
+@pytest.mark.parametrize("dim", RMS_DIMS, ids=RMS_DIM_IDS)
 @pytest.mark.parametrize("gamma", [0.5, 1.0, 2.0])
 def test_rms_radius_normalization(cfg_rms, dim, gamma, dtype):
     """Core property: ``scalar_mul`` sends each radius to ``gamma * r / (r + eps)``.
@@ -296,6 +362,11 @@ def test_rms_radius_normalization(cfg_rms, dim, gamma, dtype):
     the exact target validates the radial-scaling math to full f64 precision. This is
     the test that proves Möbius (Poincaré) and Lorentz/PV ``scalar_mul`` scale geodesic
     radius identically.
+
+    The shape / on-manifold assertions of the old ``test_rms_shape_and_on_manifold``
+    are folded in: a radius oracle that also checks the output is a valid point of
+    the right shape subsumes it. The dim axis is {2, 10} — the radial rescale is a
+    scalar operation, so extra feature widths only duplicate items.
     """
     manifold = cfg_rms["make"](dtype)
     rms = cfg_rms["rms"](manifold, num_features=dim)
@@ -303,6 +374,9 @@ def test_rms_radius_normalization(cfg_rms, dim, gamma, dtype):
     x = cfg_rms["points"](jax.random.PRNGKey(7), (16, dim), 1.0, dtype)
 
     out = rms(x, c=1.0)
+    assert out.shape == x.shape
+    assert jnp.all(jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(out, 1.0))
+
     r_in = jax.vmap(manifold.dist_0, in_axes=(0, None))(x, 1.0)
     radii = jax.vmap(manifold.dist_0, in_axes=(0, None))(out, 1.0)
     expected = gamma * r_in / (r_in + rms.eps)
@@ -356,7 +430,11 @@ def test_rms_use_bias(cfg_rms, dtype):
 
 @pytest.mark.parametrize("dtype", DTYPES)
 def test_rms_gradients_and_jit(cfg_rms, dtype):
-    """Finite gradient for gamma and a clean jitted forward."""
+    """Finite gradient for gamma, and the jitted forward reproduces eager values.
+
+    RMSNorm is stateless, so the jit leg can be the strict ``jitted == eager``
+    comparison rather than the old shape-and-finiteness check.
+    """
     manifold = cfg_rms["make"](dtype)
     rms = cfg_rms["rms"](manifold, num_features=6)
     x = cfg_rms["points"](jax.random.PRNGKey(11), (8, 6), 1.0, dtype)
@@ -371,9 +449,10 @@ def test_rms_gradients_and_jit(cfg_rms, dtype):
     def forward(rms, x):
         return rms(x, c=1.0)
 
+    out_eager = rms(x, c=1.0)
     out = forward(rms, x)
     assert out.shape == x.shape
-    assert jnp.all(jnp.isfinite(out))
+    assert jnp.allclose(out, out_eager, atol=_tol(dtype)[0])
 
 
 @pytest.mark.parametrize("dtype", DTYPES)

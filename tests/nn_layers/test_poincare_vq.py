@@ -25,6 +25,7 @@ Dimension key:
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pytest
 from flax import nnx
@@ -52,6 +53,21 @@ def _inputs(seed: int, n: int, dim: int, dtype: jnp.dtype, scale: float = 0.3) -
 
 def _all_on_ball(manifold: Poincare, pts: jax.Array, c: float) -> jax.Array:
     return jax.vmap(lambda p: manifold.is_in_manifold(p, c))(pts).all()
+
+
+def _ball_dist_matrix(x_NC: np.ndarray, y_KC: np.ndarray, c: float) -> np.ndarray:
+    """Independent NumPy Poincaré geodesic distance matrix (N, K).
+
+    ``d_c(x, y) = (1/√c)·arccosh(1 + 2c‖x-y‖² / ((1-c‖x‖²)(1-c‖y‖²)))`` — the
+    arccosh form of the ball metric, transcribed from the definition rather than
+    routed through ``manifold.dist``. Agrees with ``dist_0(x) = (2/√c)·artanh(√c‖x‖)``
+    at y = 0, which is the normalization this library uses.
+    """
+    x = np.asarray(x_NC, dtype=np.float64)
+    y = np.asarray(y_KC, dtype=np.float64)
+    diff_sq_NK = np.sum((x[:, None, :] - y[None, :, :]) ** 2, axis=-1)
+    denom_NK = (1.0 - c * np.sum(x**2, axis=-1))[:, None] * (1.0 - c * np.sum(y**2, axis=-1))[None, :]
+    return np.arccosh(1.0 + 2.0 * c * diff_sq_NK / denom_NK) / np.sqrt(c)
 
 
 # --------------------------------------------------------------------------- #
@@ -88,9 +104,13 @@ def test_weighted_midpoint_on_ball(dtype, dim, c):
 
 @pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
 @pytest.mark.parametrize("dim", [2, 8], ids=["dim2", "dim8"])
-@pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
-def test_weighted_midpoint_empty_row_is_origin(dtype, dim, c):
-    """An all-zero weight row maps to the origin without 0/0 NaNs."""
+def test_weighted_midpoint_empty_row_is_origin(dtype, dim):
+    """An all-zero weight row maps to the origin without 0/0 NaNs.
+
+    Curvature is fixed: the empty-row branch short-circuits before any
+    curvature-dependent arithmetic, so a c axis only duplicates items.
+    """
+    c = 1.0
     manifold = Poincare(dtype=dtype)
     atol, _ = _tol(dtype)
     pts = jax.vmap(manifold.expmap_0, in_axes=(0, None))(_inputs(3, 6, dim, dtype), c)
@@ -180,8 +200,9 @@ def test_embedding_batch_independence(dtype, dim, c):
 
 @pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
 @pytest.mark.parametrize("dim", [2, 8], ids=["dim2", "dim8"])
-@pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
-def test_embedding_codebook_on_ball(dtype, dim, c):
+def test_embedding_codebook_on_ball(dtype, dim):
+    """The init projects at c=1.0, so only that curvature is a real check."""
+    c = 1.0
     manifold, layer = _embedding(dtype, dim)
     assert _all_on_ball(manifold, layer.codebook[...], c)
 
@@ -198,6 +219,57 @@ def test_embedding_ste_forward_identity(dtype, dim, c):
     expected = jax.vmap(manifold.logmap_0, in_axes=(0, None))(q, c).astype(jnp.float32)
     atol, rtol = _tol(dtype)
     assert jnp.allclose(out.quantized, expected, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
+@pytest.mark.parametrize("dim", [2, 8], ids=["dim2", "dim8"])
+@pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
+def test_embedding_ste_gradient_is_identity(dtype, dim, c):
+    """``d(Σ quantized)/dx == 1`` everywhere — the copy-gradient STE itself.
+
+    ``quantized = x + sg(logmap_0(q) - x)`` has Jacobian exactly ``I``: that is
+    the whole point of the estimator (the selection is non-differentiable, so
+    without the ``+ x - sg(x)`` bridge the encoder receives *zero* reconstruction
+    gradient and only the commitment term trains it).
+
+    Regression guard: deleting the STE bridge leaves the forward *value*
+    unchanged, so the forward-identity, batch-independence, shape/dtype and
+    commitment-loss tests all still pass — the gradient is the only witness.
+    """
+    _manifold, layer = _embedding(dtype, dim)
+    x = _inputs(6, 16, dim, dtype)
+
+    grad_NC = jax.grad(lambda xx: jnp.sum(layer(xx, c).quantized.astype(xx.dtype)))(x)
+
+    assert grad_NC.shape == x.shape
+    assert jnp.allclose(grad_NC, jnp.ones_like(x), atol=0.0, rtol=0.0)
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
+@pytest.mark.parametrize("dim", [2, 8], ids=["dim2", "dim8"])
+@pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
+def test_embedding_selects_geodesic_nearest_code(dtype, dim, c):
+    """``indices`` is the argmin of an independently computed distance matrix.
+
+    Regression guard: ``argmin -> argmax`` (selecting the *farthest* code) left
+    every existing test passing — indices are still valid, the STE forward value
+    still equals ``logmap_0(codebook[indices])``, perplexity is still in range.
+    The distance matrix here is the NumPy arccosh form, not ``manifold.dist``,
+    and the codebook is spread out so the argmin is unambiguous.
+    """
+    manifold, layer = _embedding(dtype, dim, num_codes=8)
+    spread = jax.random.normal(jax.random.key(21), (8, dim), dtype=dtype) * 0.6
+    layer.codebook[...] = jax.vmap(manifold.expmap_0, in_axes=(0, None))(spread, c).astype(layer.codebook[...].dtype)
+
+    out = layer(_inputs(22, 24, dim, dtype), c)
+
+    d_NK = _ball_dist_matrix(np.asarray(out.z), np.asarray(layer.codebook[...]), c)
+    sorted_NK = np.sort(d_NK, axis=-1)
+    assert np.all(sorted_NK[:, 1] - sorted_NK[:, 0] > 1e-3)  # no ties → argmin well defined
+
+    assert np.array_equal(np.asarray(out.indices), np.argmin(d_NK, axis=-1))
+    # Discriminating: nearest and farthest disagree on this data.
+    assert not np.array_equal(np.argmin(d_NK, axis=-1), np.argmax(d_NK, axis=-1))
 
 
 @pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
@@ -237,9 +309,12 @@ def test_embedding_ema_update_moves_assigned_codes(dtype, dim, c):
 
 @pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
 @pytest.mark.parametrize("dim", [2, 8], ids=["dim2", "dim8"])
-@pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
-def test_embedding_ema_empty_codes_unchanged(dtype, dim, c):
-    """Codes with no assigned points this batch are left exactly as they were."""
+def test_embedding_ema_empty_codes_unchanged(dtype, dim):
+    """Codes with no assigned points this batch are left exactly as they were.
+
+    Curvature is fixed: the ``has_pts`` mask is combinatorial, not geometric.
+    """
+    c = 1.0
     manifold, layer = _embedding(dtype, dim, num_codes=8)
     z = jax.vmap(manifold.expmap_0, in_axes=(0, None))(_inputs(9, 10, dim, dtype), c)
     indices = jnp.zeros((10,), dtype=jnp.int32)  # everything assigned to code 0

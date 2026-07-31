@@ -1,5 +1,7 @@
 """Tests for Hyperboloid activation functions."""
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -7,12 +9,45 @@ import pytest
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.nn_layers.hyperboloid_activations import (
     hrc_gelu,
+    hrc_leaky_relu,
+    hrc_relu,
+    hrc_swish,
+    hrc_tanh,
     hyp_gelu,
     hyp_leaky_relu,
     hyp_relu,
     hyp_swish,
     hyp_tanh,
 )
+
+# (id, curvature-preserving wrapper f(x, c), curvature-changing hrc f(x, c_in, c_out),
+#  the plain Euclidean function that must be applied to the SPATIAL components).
+SPATIAL_ACTIVATIONS = [
+    ("relu", hyp_relu, hrc_relu, jax.nn.relu),
+    (
+        "leaky_relu",
+        partial(hyp_leaky_relu, negative_slope=0.01),
+        partial(hrc_leaky_relu, negative_slope=0.01),
+        lambda z: jax.nn.leaky_relu(z, 0.01),
+    ),
+    ("tanh", hyp_tanh, hrc_tanh, jnp.tanh),
+    ("swish", hyp_swish, hrc_swish, jax.nn.swish),
+    ("gelu", hyp_gelu, hrc_gelu, jax.nn.gelu),
+]
+SPATIAL_ACTIVATION_IDS = [a[0] for a in SPATIAL_ACTIVATIONS]
+
+
+def _points(dtype, c, spatial):
+    """On-manifold points at curvature ``c`` from spatial tangent rows."""
+    manifold = Hyperboloid(dtype=dtype)
+    v_ND = jnp.asarray(spatial, dtype=dtype)
+    v_amb = manifold.embed_spatial_0(v_ND)
+    return manifold, jax.vmap(manifold.expmap_0, in_axes=(0, None))(v_amb, c)
+
+
+# Spatial rows with a healthy mix of signs and magnitudes — the negative entries
+# are what make an identity-substituted activation visible.
+_SPATIAL_ROWS = [[0.4, -0.6, 0.2, -1.1], [-0.3, 0.9, -0.5, 0.05]]
 
 # ============================================================================
 # Manifold Constraint Tests (Most Critical)
@@ -164,42 +199,13 @@ def test_hyp_gelu_delegates_to_hrc_gelu(dtype, c):
 # ============================================================================
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("dim", [2, 4, 10])
-def test_hyp_relu_shape_single(dtype, dim):
-    """Test that hyp_relu preserves shape for single points."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    key = jax.random.PRNGKey(42)
+def test_hyp_relu_shape_multi_dim():
+    """Test that hyp_relu preserves shape/dtype for multi-dimensional batches.
 
-    v = jax.random.normal(key, (dim,), dtype=dtype) * 0.1
-    x = hyperboloid.expmap_0(v, c=1.0)
-
-    y = hyp_relu(x, c=1.0)
-
-    assert y.shape == x.shape
-    assert y.dtype == dtype
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("batch_size", [1, 8, 16])
-@pytest.mark.parametrize("dim", [2, 4, 10])
-def test_hyp_relu_shape_batch(dtype, batch_size, dim):
-    """Test that hyp_relu preserves shape for batches."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    key = jax.random.PRNGKey(42)
-
-    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    y = hyp_relu(x, c=1.0)
-
-    assert y.shape == x.shape
-    assert y.dtype == dtype
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_relu_shape_multi_dim(dtype):
-    """Test that hyp_relu preserves shape for multi-dimensional batches."""
+    float32 because that is the dtype a stray ``Hyperboloid(dtype=float64)``
+    instance would silently promote under ``JAX_ENABLE_X64=1``.
+    """
+    dtype = jnp.float32
     hyperboloid = Hyperboloid(dtype=dtype)
     key = jax.random.PRNGKey(42)
     batch, height, width, dim = 4, 8, 8, 5
@@ -218,24 +224,53 @@ def test_hyp_relu_shape_multi_dim(dtype):
 # ============================================================================
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_relu_formula(dtype):
-    """Test that hyp_relu correctly implements the formula."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    key = jax.random.PRNGKey(42)
-    batch_size, dim = 8, 4
-    c = 1.0
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("name,hyp_fn,hrc_fn,euclidean_fn", SPATIAL_ACTIVATIONS, ids=SPATIAL_ACTIVATION_IDS)
+def test_activation_applies_euclidean_fn_to_spatial(name, hyp_fn, hrc_fn, euclidean_fn, dtype):
+    """``y = [sqrt(‖f(x_s)‖² + 1/c), f(x_s)]`` for the Euclidean function ``f``.
 
-    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, c)
+    The per-activation semantics check: an independent transcription of the HRC
+    formula against the plain ``jax.nn`` function on the spatial block. Without
+    it nothing distinguishes ``hyp_leaky_relu`` / ``hyp_swish`` from the identity
+    (the manifold-constraint and shape tests pass for a pass-through), and the
+    ``1/c`` in the time reconstruction is only pinned at a non-unit curvature.
 
-    y = hyp_relu(x, c=c)
+    The jit leg is folded in here (A8-13): a compiled call must reproduce the
+    eager values exactly, which is strictly more than the old jit-only tests
+    (shape + on-manifold) checked.
+    """
+    c = 0.7
+    _manifold, x_NF = _points(dtype, c, _SPATIAL_ROWS)
 
-    # Verify formula: y[0] = sqrt(||y[1:]||^2 + 1/c)
-    spatial = y[:, 1:]
-    expected_x0 = jnp.sqrt(jnp.sum(spatial**2, axis=-1) + 1.0 / c)
+    y_NF = hyp_fn(x_NF, c)
 
-    assert jnp.allclose(y[:, 0], expected_x0, atol=1e-5)
+    expected_space = euclidean_fn(x_NF[:, 1:])
+    expected_time = jnp.sqrt(jnp.sum(expected_space**2, axis=-1) + 1.0 / c)
+    atol = 1e-6 if dtype == jnp.float32 else 1e-12
+    assert jnp.allclose(y_NF[:, 1:], expected_space, atol=atol)
+    assert jnp.allclose(y_NF[:, 0], expected_time, atol=atol)
+    # Identity-substitution guard: f must actually move the spatial components.
+    assert not jnp.allclose(y_NF[:, 1:], x_NF[:, 1:], atol=1e-3)
+    # jit fold: compiled output equals eager output bit for bit.
+    assert jnp.array_equal(jax.jit(lambda z: hyp_fn(z, c))(x_NF), y_NF)
+
+
+@pytest.mark.parametrize("name,hyp_fn,hrc_fn,euclidean_fn", SPATIAL_ACTIVATIONS, ids=SPATIAL_ACTIVATION_IDS)
+def test_hrc_scales_spatial_by_sqrt_curvature_ratio(name, hyp_fn, hrc_fn, euclidean_fn):
+    """``hrc_*(x, c_in, c_out)`` spatial block is ``sqrt(c_in/c_out)·f(x_s)``.
+
+    Pins the curvature-change leg that the ``c_in == c_out`` wrappers can never
+    exercise: with c_in = c_out the ratio is 1 and a dropped rescale is invisible.
+    """
+    c_in, c_out = 0.5, 2.0
+    _manifold, x_NF = _points(jnp.float64, c_in, _SPATIAL_ROWS)
+
+    y_NF = hrc_fn(x_NF, c_in=c_in, c_out=c_out)
+
+    expected_space = jnp.sqrt(c_in / c_out) * euclidean_fn(x_NF[:, 1:])
+    expected_time = jnp.sqrt(jnp.sum(expected_space**2, axis=-1) + 1.0 / c_out)
+    assert jnp.allclose(y_NF[:, 1:], expected_space, atol=1e-12)
+    assert jnp.allclose(y_NF[:, 0], expected_time, atol=1e-12)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -258,21 +293,26 @@ def test_hyp_relu_negative_components_zeroed(dtype):
     assert jnp.all(y[1:] >= 0)
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("negative_slope", [0.01, 0.1, 0.2])
-def test_hyp_leaky_relu_negative_slope(dtype, negative_slope):
-    """Test that hyp_leaky_relu correctly applies negative_slope."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    key = jax.random.PRNGKey(42)
-    batch_size, dim = 8, 4
+def test_hyp_leaky_relu_negative_slope(negative_slope):
+    """``negative_slope`` actually scales the negative spatial components.
 
-    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.5
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
+    The old version only re-checked the shape, so any value of ``negative_slope``
+    (including one that never reached ``jax.nn.leaky_relu``) passed. The
+    scaled-negatives assertion plus the differs-from-ReLU leg pin the argument.
+    """
+    c = 1.0
+    _manifold, x_NF = _points(jnp.float64, c, _SPATIAL_ROWS)
+    x_space = x_NF[:, 1:]
+    assert jnp.any(x_space < 0)  # the test data must exercise the negative branch
 
-    y = hyp_leaky_relu(x, c=1.0, negative_slope=negative_slope)
+    y_NF = hyp_leaky_relu(x_NF, c=c, negative_slope=negative_slope)
 
-    # Verify manifold constraint holds (already tested above) and shape
-    assert y.shape == x.shape
+    expected_space = jnp.where(x_space > 0, x_space, negative_slope * x_space)
+    assert jnp.allclose(y_NF[:, 1:], expected_space, atol=1e-12)
+    # A slope of 0 would be plain ReLU; a slope of 1 would be the identity.
+    assert not jnp.allclose(y_NF[:, 1:], jax.nn.relu(x_space), atol=1e-6)
+    assert not jnp.allclose(y_NF[:, 1:], x_space, atol=1e-6)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -291,25 +331,6 @@ def test_hyp_tanh_bounded(dtype):
     # Spatial components should be bounded in [-1, 1]
     spatial = y[:, 1:]
     assert jnp.all(jnp.abs(spatial) <= 1.0)
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_swish_smooth_at_zero(dtype):
-    """Test that hyp_swish is smooth around zero."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    # Create points near origin
-    x1 = jnp.array([1.0, 0.01, 0.01], dtype=dtype)
-    x2 = jnp.array([1.0, -0.01, -0.01], dtype=dtype)
-
-    x1 = hyperboloid.proj(x1, c=1.0)
-    x2 = hyperboloid.proj(x2, c=1.0)
-
-    y1 = hyp_swish(x1, c=1.0)
-    y2 = hyp_swish(x2, c=1.0)
-
-    # Swish should be continuous and smooth (no abrupt changes)
-    assert jnp.isfinite(y1).all()
-    assert jnp.isfinite(y2).all()
 
 
 # ============================================================================
@@ -415,116 +436,6 @@ def test_hyp_gelu_gradients(dtype):
 
     assert jnp.isfinite(grad).all()
     assert grad.shape == x.shape
-
-
-# ============================================================================
-# JIT Compatibility Tests
-# ============================================================================
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_relu_jit(dtype):
-    """Test that hyp_relu works with JIT compilation."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    key = jax.random.PRNGKey(42)
-    batch_size, dim = 8, 4
-
-    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    @jax.jit
-    def apply_activation(x):
-        return hyp_relu(x, c=1.0)
-
-    y = apply_activation(x)
-
-    assert y.shape == x.shape
-    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0)
-    assert is_valid.all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_leaky_relu_jit(dtype):
-    """Test that hyp_leaky_relu works with JIT compilation."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    key = jax.random.PRNGKey(43)
-    batch_size, dim = 8, 4
-
-    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    @jax.jit
-    def apply_activation(x):
-        return hyp_leaky_relu(x, c=1.0, negative_slope=0.01)
-
-    y = apply_activation(x)
-
-    assert y.shape == x.shape
-    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0)
-    assert is_valid.all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_tanh_jit(dtype):
-    """Test that hyp_tanh works with JIT compilation."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    key = jax.random.PRNGKey(44)
-    batch_size, dim = 8, 4
-
-    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    @jax.jit
-    def apply_activation(x):
-        return hyp_tanh(x, c=1.0)
-
-    y = apply_activation(x)
-
-    assert y.shape == x.shape
-    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0)
-    assert is_valid.all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_swish_jit(dtype):
-    """Test that hyp_swish works with JIT compilation."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    key = jax.random.PRNGKey(45)
-    batch_size, dim = 8, 4
-
-    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    @jax.jit
-    def apply_activation(x):
-        return hyp_swish(x, c=1.0)
-
-    y = apply_activation(x)
-
-    assert y.shape == x.shape
-    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0)
-    assert is_valid.all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hyp_gelu_jit(dtype):
-    """Test that hyp_gelu works with JIT compilation."""
-    hyperboloid = Hyperboloid(dtype=dtype)
-    key = jax.random.PRNGKey(46)
-    batch_size, dim = 8, 4
-
-    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
-    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
-
-    @jax.jit
-    def apply_activation(x):
-        return hyp_gelu(x, c=1.0)
-
-    y = apply_activation(x)
-
-    assert y.shape == x.shape
-    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0)
-    assert is_valid.all()
 
 
 # ============================================================================
