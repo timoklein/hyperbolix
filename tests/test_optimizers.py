@@ -19,7 +19,9 @@ from flax import nnx
 from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import HypLinearPoincare
 from hyperbolix.optim import (
+    ManifoldParam,
     get_manifold_info,
+    has_manifold_params,
     mark_manifold_param,
     riemannian_adam,
     riemannian_sgd,
@@ -52,6 +54,47 @@ def test_unmarked_parameter():
     param = nnx.Param(jnp.array([0.1, 0.2]))
     manifold_info = get_manifold_info(param)
     assert manifold_info is None
+
+
+def test_has_manifold_params_bare_param():
+    """A bare ManifoldParam is detected.
+
+    Regression: ``nnx.Variable`` is a registered pytree node whose child is the
+    raw array, so an unguarded ``tree_leaves`` unwraps the ManifoldParam into an
+    ArrayImpl and the detection returns False for *every* input.
+    """
+    param = ManifoldParam(jnp.array([0.1, 0.2]), manifold=poincare, curvature=1.0)
+    assert has_manifold_params(param)
+
+
+def test_has_manifold_params_in_containers():
+    """Detection works through plain dict/list containers."""
+    param = ManifoldParam(jnp.array([0.1, 0.2]), manifold=poincare, curvature=1.0)
+    assert has_manifold_params({"bias": param})
+    assert has_manifold_params([nnx.Param(jnp.zeros(3)), param])
+
+
+def test_has_manifold_params_on_model_state():
+    """The documented usage — nnx.state(model, nnx.Param) — and the model itself."""
+    layer = HypLinearPoincare(
+        poincare,
+        in_dim=5,
+        out_dim=3,
+        rngs=nnx.Rngs(0),
+    )
+
+    assert has_manifold_params(nnx.state(layer, nnx.Param))
+    assert has_manifold_params(layer)
+
+
+def test_has_manifold_params_negative_cases():
+    """No false positives on Euclidean params, raw arrays, or empty pytrees."""
+    euclidean_layer = nnx.Linear(5, 3, rngs=nnx.Rngs(0))
+
+    assert not has_manifold_params(nnx.state(euclidean_layer, nnx.Param))
+    assert not has_manifold_params(nnx.Param(jnp.zeros(3)))
+    assert not has_manifold_params({"kernel": jnp.zeros((5, 3))})
+    assert not has_manifold_params({})
 
 
 def test_callable_curvature():

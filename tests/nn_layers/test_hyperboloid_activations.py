@@ -6,6 +6,8 @@ import pytest
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.nn_layers.hyperboloid_activations import (
+    hrc_gelu,
+    hyp_gelu,
     hyp_leaky_relu,
     hyp_relu,
     hyp_swish,
@@ -119,6 +121,42 @@ def test_hyp_swish_manifold_constraint(dtype):
 
     is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0)
     assert is_valid.all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_gelu_manifold_constraint(dtype):
+    """Test that hyp_gelu output lies on manifold."""
+    hyperboloid = Hyperboloid(dtype=dtype)
+    key = jax.random.PRNGKey(46)
+    batch_size, dim = 8, 4
+
+    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
+    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
+
+    y = hyp_gelu(x, c=1.0)
+
+    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0)
+    assert is_valid.all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
+def test_hyp_gelu_delegates_to_hrc_gelu(dtype, c):
+    """hyp_gelu is the curvature-preserving wrapper hrc_gelu(x, c_in=c, c_out=c).
+
+    The wrapper body is one line of argument wiring with no caller inside the
+    library, so nothing else pins the curvature reaching both c_in and c_out.
+    Parametrized over c because c_in == c_out makes any single-curvature check
+    blind to the two arguments being swapped or one being dropped.
+    """
+    hyperboloid = Hyperboloid(dtype=dtype)
+    key = jax.random.PRNGKey(46)
+    batch_size, dim = 8, 4
+
+    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
+    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, c)
+
+    assert jnp.array_equal(hyp_gelu(x, c=c), hrc_gelu(x, c_in=c, c_out=c))
 
 
 # ============================================================================
@@ -359,6 +397,26 @@ def test_hyp_swish_gradients(dtype):
     assert grad.shape == x.shape
 
 
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_gelu_gradients(dtype):
+    """Test that hyp_gelu has finite gradients."""
+    hyperboloid = Hyperboloid(dtype=dtype)
+    key = jax.random.PRNGKey(46)
+    dim = 4
+
+    v = jax.random.normal(key, (dim,), dtype=dtype) * 0.1
+    x = hyperboloid.expmap_0(v, c=1.0)
+
+    def loss_fn(x):
+        y = hyp_gelu(x, c=1.0)
+        return jnp.sum(y**2)
+
+    grad = jax.grad(loss_fn)(x)
+
+    assert jnp.isfinite(grad).all()
+    assert grad.shape == x.shape
+
+
 # ============================================================================
 # JIT Compatibility Tests
 # ============================================================================
@@ -440,6 +498,27 @@ def test_hyp_swish_jit(dtype):
     @jax.jit
     def apply_activation(x):
         return hyp_swish(x, c=1.0)
+
+    y = apply_activation(x)
+
+    assert y.shape == x.shape
+    is_valid = jax.vmap(hyperboloid.is_in_manifold, in_axes=(0, None))(y, 1.0)
+    assert is_valid.all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_gelu_jit(dtype):
+    """Test that hyp_gelu works with JIT compilation."""
+    hyperboloid = Hyperboloid(dtype=dtype)
+    key = jax.random.PRNGKey(46)
+    batch_size, dim = 8, 4
+
+    v = jax.random.normal(key, (batch_size, dim), dtype=dtype) * 0.1
+    x = jax.vmap(hyperboloid.expmap_0, in_axes=(0, None))(v, 1.0)
+
+    @jax.jit
+    def apply_activation(x):
+        return hyp_gelu(x, c=1.0)
 
     y = apply_activation(x)
 
