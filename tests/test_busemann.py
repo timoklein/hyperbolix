@@ -18,8 +18,15 @@ import pytest
 from hyperbolix.manifolds import Hyperboloid, Poincare
 from hyperbolix.manifolds import isometry_mappings as iso
 
-SEEDS = [10, 11, 12]
-DIMS = [2, 5, 10]
+# The Busemann identities below are algebraic and hold pointwise, and each item already
+# checks them on many (point, direction) pairs — so the seed axis buys nothing and is folded
+# into the bodies (extra draws) instead of parametrized. ``dim`` enters only as a summation
+# length (no dim-dependent branch); {2, 10} keeps the degenerate-ball edge and a wide case.
+# The ``c`` axis IS load-bearing: dropping the 1/√c factor from the Poincaré Busemann fails
+# the ray and cross-model tests at c ∈ {0.3, 2.5} and is a no-op at c = 1.0.
+SEED = 10
+DIMS = [2, 10]
+ALL_DIMS = [2, 5, 10]
 CURVATURES = [0.3, 1.0, 2.5]
 
 
@@ -44,32 +51,36 @@ def _ball_points(rng: np.random.Generator, n: int, dim: int, c: float, dtype) ->
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("c", CURVATURES)
-@pytest.mark.parametrize("dim", DIMS)
-def test_busemann_origin_is_zero(dtype, c, dim):
-    """B^v(origin) = 0 for unit v, both models."""
+@pytest.mark.parametrize("c", [1.0, 2.5])
+def test_busemann_origin_is_zero(dtype, c):
+    """B^v(origin) = 0 for unit v, both models.
+
+    ``log(‖v‖²/1)/√c = 0`` and ``log(√c·(1/√c))/√c = 0`` are identically zero for every ``c``
+    and every ``dim``, so the dims are looped in-body and only two curvatures are kept — this
+    anchor cannot discriminate on either axis (verified: the ``1/√c`` mutation passes it 18/18).
+    """
     atol, _ = _tol(dtype)
     H, P = Hyperboloid(dtype=dtype), Poincare(dtype=dtype)
     rng = np.random.default_rng(0)
-    v = _unit_dirs(rng, 4, dim, dtype)
 
-    oH = H.create_origin(c, dim)
-    oP = jnp.zeros(dim, dtype=dtype)
-    bH = jax.vmap(H.busemann, in_axes=(None, 0, None))(oH, v, c)
-    bP = jax.vmap(P.busemann, in_axes=(None, 0, None))(oP, v, c)
-    assert jnp.allclose(bH, 0.0, atol=atol)
-    assert jnp.allclose(bP, 0.0, atol=atol)
+    for dim in ALL_DIMS:
+        v = _unit_dirs(rng, 4, dim, dtype)
+        oH = H.create_origin(c, dim)
+        oP = jnp.zeros(dim, dtype=dtype)
+        bH = jax.vmap(H.busemann, in_axes=(None, 0, None))(oH, v, c)
+        bP = jax.vmap(P.busemann, in_axes=(None, 0, None))(oP, v, c)
+        assert jnp.allclose(bH, 0.0, atol=atol)
+        assert jnp.allclose(bP, 0.0, atol=atol)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("c", CURVATURES)
 @pytest.mark.parametrize("dim", DIMS)
-@pytest.mark.parametrize("seed", SEEDS)
-def test_busemann_cross_model_consistency(dtype, c, dim, seed):
+def test_busemann_cross_model_consistency(dtype, c, dim):
     """Poincaré and Lorentz Busemann agree under the stereographic isometry (intrinsic quantity)."""
     atol, rtol = _tol(dtype)
     H, P = Hyperboloid(dtype=dtype), Poincare(dtype=dtype)
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(SEED)
 
     xP = jax.vmap(P.proj, in_axes=(0, None))(_ball_points(rng, 16, dim, c, dtype), c)
     xL = jax.vmap(iso.poincare_to_hyperboloid, in_axes=(0, None))(xP, c)
@@ -83,31 +94,33 @@ def test_busemann_cross_model_consistency(dtype, c, dim, seed):
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("c", CURVATURES)
 @pytest.mark.parametrize("dim", DIMS)
-@pytest.mark.parametrize("seed", SEEDS)
-def test_busemann_along_ideal_ray(dtype, c, dim, seed):
+def test_busemann_along_ideal_ray(dtype, c, dim):
     """B^v(gamma) = -d_0(gamma) along the geodesic ray from the origin toward the ideal point v.
 
     This is the coordinate-free Busemann identity (the ray toward v is the steepest descent of
     B^v, and B^v(origin) = 0), so it holds without assuming either model's exp-map is unit-speed.
+
+    The old ``seed`` axis drew exactly one direction per item; the three directions are drawn
+    in-body and vmapped over instead, which keeps the same coverage in one item.
     """
     # f32 Busemann drifts at large geodesic distance; keep the ray length modest.
     atol = 5e-3 if dtype == jnp.float32 else 1e-6
     H, P = Hyperboloid(dtype=dtype), Poincare(dtype=dtype)
-    rng = np.random.default_rng(seed)
-    v = _unit_dirs(rng, 1, dim, dtype)[0]
-    ss = jnp.asarray(np.linspace(0.0, 1.5, 7), dtype=dtype)
+    rng = np.random.default_rng(SEED)
+    v_MD = _unit_dirs(rng, 3, dim, dtype)  # M ideal directions
+    ss = jnp.asarray(np.linspace(0.0, 1.5, 7), dtype=dtype)  # S ray parameters
 
     # Lorentz ray toward v: expmap_0 of the spatial tangent [0, v] scaled by s.
-    tangentL = H.embed_spatial_0(v)
-    ptsL = jax.vmap(lambda s: H.expmap_0(s * tangentL, c))(ss)
-    bL = jax.vmap(H.busemann, in_axes=(0, None, None))(ptsL, v, c)
-    dL = jax.vmap(H.dist_0, in_axes=(0, None))(ptsL, c)
+    tangentL_MA = H.embed_spatial_0(v_MD)
+    ptsL_MSA = jax.vmap(lambda t_A: jax.vmap(lambda s: H.expmap_0(s * t_A, c))(ss))(tangentL_MA)
+    bL = jax.vmap(jax.vmap(H.busemann, in_axes=(0, None, None)), in_axes=(0, 0, None))(ptsL_MSA, v_MD, c)
+    dL = jax.vmap(jax.vmap(H.dist_0, in_axes=(0, None)), in_axes=(0, None))(ptsL_MSA, c)
     assert jnp.allclose(bL, -dL, atol=atol)
 
     # Poincaré ray toward v: expmap_0 of the tangent v scaled by s.
-    ptsP = jax.vmap(lambda s: P.expmap_0(s * v, c))(ss)
-    bP = jax.vmap(P.busemann, in_axes=(0, None, None))(ptsP, v, c)
-    dP = jax.vmap(P.dist_0, in_axes=(0, None))(ptsP, c)
+    ptsP_MSD = jax.vmap(lambda v_D: jax.vmap(lambda s: P.expmap_0(s * v_D, c))(ss))(v_MD)
+    bP = jax.vmap(jax.vmap(P.busemann, in_axes=(0, None, None)), in_axes=(0, 0, None))(ptsP_MSD, v_MD, c)
+    dP = jax.vmap(jax.vmap(P.dist_0, in_axes=(0, None)), in_axes=(0, None))(ptsP_MSD, c)
     assert jnp.allclose(bP, -dP, atol=atol)
 
 
@@ -124,11 +137,18 @@ def test_busemann_jit_vmap_finite_dtype(dtype, manifold_cls, is_lorentz):
     xP = jax.vmap(Poincare(dtype=dtype).proj, in_axes=(0, None))(_ball_points(rng, 8, dim, c, dtype), c)
     x = jax.vmap(iso.poincare_to_hyperboloid, in_axes=(0, None))(xP, c) if is_lorentz else xP
 
-    busemann_fn = jax.jit(jax.vmap(jax.vmap(M.busemann, in_axes=(None, 0, None)), in_axes=(0, None, None)))
-    b = busemann_fn(x, v, c)
+    double_vmap = jax.vmap(jax.vmap(M.busemann, in_axes=(None, 0, None)), in_axes=(0, None, None))
+    b = jax.jit(double_vmap)(x, v, c)
     assert b.shape == (x.shape[0], v.shape[0])
     assert jnp.isfinite(b).all()
     assert b.dtype == dtype
+
+    # jit must reproduce eager to machine precision — without this the assertions above are
+    # the eager sibling's assertions re-run, and a jit-only divergence would be invisible.
+    # (Not bit-exact: XLA fuses the log/dot chain differently from the eager path, which
+    # moves the Poincaré result by a few ULP.)
+    ulps = 10.0 * float(jnp.finfo(dtype).eps)
+    assert jnp.allclose(b, double_vmap(x, v, c), atol=ulps, rtol=ulps)
 
     # Gradient w.r.t. the input point is finite.
     g = jax.grad(lambda xi: M.busemann(xi, v[0], c))(x[0])

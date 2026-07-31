@@ -10,29 +10,38 @@ from hyperbolix.manifolds.poincare import Poincare
 
 # ---------------------------------------------------------------------------
 # Volume tests
+#
+# No dtype axis here: ``volume`` casts ``c`` to float64 internally and takes no array
+# input, so the float32 and float64 parametrizations ran byte-identical code.
 # ---------------------------------------------------------------------------
-def test_volume_n2_c1_exact(dtype, tolerance):
+def test_volume_n2_c1_exact():
     """n=2, c=1: exact formula Vol = 2π(cosh(R) - 1)."""
-    atol, _ = tolerance
     R = 2.0
     vol = uniform_poincare.volume(c=1.0, n=2, R=R)
     expected = 2.0 * jnp.pi * (jnp.cosh(R) - 1.0)
-    assert jnp.allclose(vol, expected, atol=atol), f"vol={vol}, expected={expected}"
+    assert jnp.allclose(vol, expected, atol=1e-7), f"vol={vol}, expected={expected}"
 
 
-def test_volume_monotone_in_R(dtype):
+@pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
+def test_volume_n3_exact(c):
+    """n=3: exact formula Vol = (π/c^{3/2})·(sinh(2√c·R) - 2√c·R), including c ≠ 1.
+
+    Every other value-level volume assertion runs at c = 1, where the ``1/√c^{n-1}``
+    curvature scaling and (at n = 2) the ``ω_{n-1} = 2π^{n/2}/Γ(n/2)`` sphere area are both
+    exactly 1 — deleting either factor from ``volume`` passed the whole file.
+    """
+    R = 1.5
+    sqrt_c = jnp.sqrt(jnp.float64(c))
+    expected = jnp.pi / c**1.5 * (jnp.sinh(2.0 * sqrt_c * R) - 2.0 * sqrt_c * R)
+    vol = uniform_poincare.volume(c=c, n=3, R=R)
+    assert jnp.allclose(vol, expected, rtol=1e-9), f"vol={vol}, expected={expected}"
+
+
+def test_volume_monotone_in_R():
     """Volume increases with R."""
     vols = [float(uniform_poincare.volume(c=1.0, n=3, R=r)) for r in [0.5, 1.0, 2.0, 4.0]]
     for i in range(len(vols) - 1):
         assert vols[i] < vols[i + 1], f"Volume not monotone: {vols}"
-
-
-def test_volume_positive(dtype):
-    """Volume is positive for R > 0."""
-    for n in [2, 3, 5]:
-        for c in [0.1, 1.0, 2.0]:
-            vol = uniform_poincare.volume(c=c, n=n, R=1.0)
-            assert vol > 0, f"Volume non-positive for n={n}, c={c}: {vol}"
 
 
 # ---------------------------------------------------------------------------
@@ -48,10 +57,18 @@ def test_sample_shape(n, dtype):
 
 
 def test_sample_single(dtype):
-    """Single sample (no sample_shape) returns shape (n,)."""
+    """Single sample (no sample_shape) returns shape (n,); jit reproduces the eager draw."""
     key = jax.random.PRNGKey(0)
-    x = uniform_poincare.sample(key, n=3, c=1.0, R=1.0, dtype=dtype)
+    manifold = Poincare(dtype=dtype)
+    x = uniform_poincare.sample(key, n=3, c=1.0, R=1.0, dtype=dtype, manifold_module=manifold)
     assert x.shape == (3,)
+
+    # Folded in from the former standalone test_sample_jit, which only re-asserted the shape.
+    @jax.jit
+    def _sample(k):
+        return uniform_poincare.sample(k, n=3, c=1.0, R=1.0, dtype=dtype, manifold_module=manifold)
+
+    assert jnp.allclose(_sample(key), x, atol=1e-6)
 
 
 def test_sample_batch_shape(dtype):
@@ -74,12 +91,18 @@ def test_samples_in_poincare_ball(dtype):
     assert jnp.all(norms < ball_radius), f"Max norm {jnp.max(norms)} >= ball radius {ball_radius}"
 
 
-def test_samples_within_geodesic_ball(dtype):
-    """All samples have geodesic distance ≤ R from center."""
+@pytest.mark.parametrize("c", [0.1, 0.5, 1.0, 2.0])
+def test_samples_within_geodesic_ball(c, dtype):
+    """All samples have geodesic distance ≤ R from center, across curvatures.
+
+    Absorbs the former ``test_sample_multiple_curvatures``, which asserted the same
+    containment plus a shape already pinned by ``test_sample_shape``.
+    """
     key = jax.random.PRNGKey(8)
     manifold = Poincare(dtype=dtype)
-    c, R = 1.0, 1.5
+    R = 1.5
     samples = uniform_poincare.sample(key, n=3, c=c, R=R, sample_shape=(500,), dtype=dtype, manifold_module=manifold)
+    assert samples.shape == (500, 3)
     dists = jax.vmap(lambda x: manifold.dist_0(x, c))(samples)
     # Allow small numerical tolerance
     assert jnp.all(dists <= R + 1e-5), f"Max dist {jnp.max(dists)} > R={R}"
@@ -96,49 +119,6 @@ def test_samples_within_geodesic_ball_nonorigin_center(dtype):
     )
     dists = jax.vmap(lambda x: manifold.dist(x, center, c))(samples)
     assert jnp.all(dists <= R + 1e-5), f"Max dist {jnp.max(dists)} > R={R}"
-
-
-# ---------------------------------------------------------------------------
-# Multiple curvatures
-# ---------------------------------------------------------------------------
-@pytest.mark.parametrize("c", [0.1, 0.5, 1.0, 2.0])
-def test_sample_multiple_curvatures(c, dtype):
-    """Sampling works across curvature values."""
-    key = jax.random.PRNGKey(10)
-    manifold = Poincare(dtype=dtype)
-    R = 1.0
-    samples = uniform_poincare.sample(key, n=3, c=c, R=R, sample_shape=(100,), dtype=dtype, manifold_module=manifold)
-    assert samples.shape == (100, 3)
-    dists = jax.vmap(lambda x: manifold.dist_0(x, c))(samples)
-    assert jnp.all(dists <= R + 1e-5)
-
-
-# ---------------------------------------------------------------------------
-# JIT compatibility
-# ---------------------------------------------------------------------------
-def test_sample_jit(dtype):
-    """sample is JIT-compatible."""
-    manifold = Poincare(dtype=dtype)
-
-    @jax.jit
-    def _sample(key):
-        return uniform_poincare.sample(key, n=2, c=1.0, R=1.0, sample_shape=(10,), dtype=dtype, manifold_module=manifold)
-
-    samples = _sample(jax.random.PRNGKey(0))
-    assert samples.shape == (10, 2)
-
-
-def test_log_prob_jit(dtype):
-    """log_prob is JIT-compatible."""
-    manifold = Poincare(dtype=dtype)
-
-    @jax.jit
-    def _lp(x):
-        return uniform_poincare.log_prob(x, c=1.0, R=1.0, manifold_module=manifold)
-
-    x = jnp.zeros(2, dtype=dtype)
-    lp = _lp(x)
-    assert jnp.isfinite(lp)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +173,10 @@ def test_log_prob_equals_neg_log_volume(dtype, tolerance):
     vol = uniform_poincare.volume(c=c, n=n, R=R)
     expected = -jnp.log(vol)
     assert jnp.allclose(lp, expected, atol=atol), f"lp={lp}, expected={expected}"
+
+    # Folded in from the former standalone test_log_prob_jit, which only asserted isfinite.
+    lp_jit = jax.jit(lambda xi: uniform_poincare.log_prob(xi, c=c, R=R, manifold_module=manifold))(x)
+    assert jnp.allclose(lp_jit, lp, atol=atol)
 
 
 def test_log_prob_neg_inf_outside(dtype):

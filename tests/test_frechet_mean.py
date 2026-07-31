@@ -19,7 +19,13 @@ from hyperbolix.manifolds import Hyperboloid, Poincare
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.nn_layers.hyperboloid_core import lorentz_midpoint
 
-SEEDS = [10, 11, 12]
+# One seed is enough for the fixed-point properties below: each item already averages over
+# 20-24 wrapped-normal points, and the assertions (Karcher stationarity, the two-point
+# midpoint identity, cross-model agreement) are algebraic properties of the iteration's fixed
+# point, not data-dependent. The pair test keeps two seeds — its content *is* a random pair
+# configuration. The dtype and curvature axes stay (tolerance path / curvature scaling).
+SEEDS = [10]
+PAIR_SEEDS = [10, 11]
 DIMS = [2, 5, 10]
 CURVATURES = [0.3, 1.0, 2.5]
 
@@ -60,7 +66,7 @@ def test_frechet_mean_karcher_stationarity(dtype, c, dim, seed):
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("c", CURVATURES)
-@pytest.mark.parametrize("seed", SEEDS)
+@pytest.mark.parametrize("seed", PAIR_SEEDS)
 def test_frechet_mean_two_points_is_geodesic_midpoint(dtype, c, seed):
     """Mean of two points is equidistant at half the pairwise distance and equals the Lorentz midpoint."""
     atol = 4e-3 if dtype == jnp.float32 else 1e-7

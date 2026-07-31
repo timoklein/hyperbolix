@@ -27,7 +27,11 @@ from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
 from hyperbolix.utils.helpers import compute_pairwise_distances
 
-SEEDS = [10, 11, 12]
+# One seed suffices for the geometric identities below: each item already checks the identity
+# on 16-24 generic points, and ``B @ mean == origin`` / ``⟨p_k, p_k⟩_L = 0`` / Busemann
+# preservation are algebraic properties of the constructed boost/lift, not data-dependent ones.
+# The dtype and curvature axes stay (tolerance path / curvature scaling).
+SEEDS = [10]
 DIMS = [2, 5, 10]
 DIMS_GE3 = [5, 10]
 CURVATURES = [0.3, 1.0, 2.5]
@@ -57,10 +61,14 @@ def _busemann_coords(H: Hyperboloid, pts_NA, q_KD, c) -> jnp.ndarray:
 
 # --- 6. lift_ideals --------------------------------------------------------------------
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("dim", DIMS_GE3)
+@pytest.mark.parametrize("dim", [5])
 @pytest.mark.parametrize("k", [1, 2, 3])
 def test_lift_ideals_are_null_vectors(dtype, dim, k):
-    """After orthonormalization, lifted ideals [1, q_k] are null (⟨p_k, p_k⟩_L = 0)."""
+    """After orthonormalization, lifted ideals [1, q_k] are null (⟨p_k, p_k⟩_L = 0).
+
+    ``-1 + ‖q‖² = 0`` does not depend on ``dim`` beyond ``orthonormalize_rows`` succeeding,
+    so a single ambient dimension is enough.
+    """
     atol = _tol(dtype)
     H = Hyperboloid(dtype=dtype)
     q = _ortho_q(0, k, dim, dtype)
@@ -122,31 +130,34 @@ def test_horo_projection_preserves_busemann(dtype, c, dim, seed):
         assert jnp.allclose(b_x, b_proj, atol=atol)
 
 
-# --- 10. projection lands on the manifold ----------------------------------------------
+# --- 10-11-13. projection properties (shared setup) ------------------------------------
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("c", CURVATURES)
 @pytest.mark.parametrize("k", [1, 2, 3])
-def test_horo_projection_on_manifold(dtype, c, k):
-    """π(x) is a valid hyperboloid point."""
+def test_horo_projection_properties(dtype, c, k):
+    """π lands on the manifold, is idempotent, and its spatial part lies in span(Q).
+
+    The three properties shared one setup (``_hyp_points`` + ``_ortho_q`` + a vmapped
+    ``horo_projection``) across three separate tests; merged here to run that setup once.
+    """
+    atol = 4e-3 if dtype == jnp.float32 else 1e-6
     H = Hyperboloid(dtype=dtype)
-    x = _hyp_points(10, 16, 6, c, sigma=0.5, dtype=dtype)
-    q = _ortho_q(1, k, 6, dtype)
+    dim = 6
+    x = _hyp_points(10, 16, dim, c, sigma=0.5, dtype=dtype)
+    q = _ortho_q(1, k, dim, dtype)
     proj = jax.vmap(horo_projection, in_axes=(0, None, None, None))(x, q, c, VERSION_DEFAULT)
+
+    # (a) π(x) is a valid hyperboloid point.
     assert bool(jax.vmap(H.is_in_manifold, in_axes=(0, None))(proj, c).all())
 
-
-# --- 11. idempotence -------------------------------------------------------------------
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("c", CURVATURES)
-@pytest.mark.parametrize("k", [1, 2, 3])
-def test_horo_projection_idempotent(dtype, c, k):
-    """π(π(x)) == π(x)."""
-    atol = 4e-3 if dtype == jnp.float32 else 1e-6
-    x = _hyp_points(11, 16, 6, c, sigma=0.5, dtype=dtype)
-    q = _ortho_q(2, k, 6, dtype)
-    proj = jax.vmap(horo_projection, in_axes=(0, None, None, None))(x, q, c, VERSION_DEFAULT)
+    # (b) π(π(x)) == π(x).
     proj2 = jax.vmap(horo_projection, in_axes=(0, None, None, None))(proj, q, c, VERSION_DEFAULT)
     assert jnp.allclose(proj, proj2, atol=atol)
+
+    # (c) The spatial part lies in the row span of q (q rows orthonormal ⇒ residual ≈ 0).
+    spatial = proj[:, 1:]  # (N, D)
+    residual = spatial - (spatial @ q.T) @ q
+    assert jnp.allclose(residual, 0.0, atol=atol)
 
 
 # --- 12. fixed points on the origin side -----------------------------------------------
@@ -182,23 +193,6 @@ def test_horo_projection_fixes_origin_side_geodesic(dtype, c):
         candidate = H.expmap(jnp.asarray(s, dtype=dtype) * t_hat, spine, c)
         proj = horo_projection(candidate, q, c, VERSION_DEFAULT)
         assert jnp.allclose(proj, candidate, atol=atol)
-
-
-# --- 13. spatial part in the component span --------------------------------------------
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("c", CURVATURES)
-@pytest.mark.parametrize("k", [2, 3])
-def test_horo_projection_spatial_in_span(dtype, c, k):
-    """The spatial part of π(x) lies in span(Q) (least-squares residual ≈ 0)."""
-    atol = 4e-3 if dtype == jnp.float32 else 1e-6
-    dim = 6
-    x = _hyp_points(12, 16, dim, c, sigma=0.5, dtype=dtype)
-    q = _ortho_q(3, k, dim, dtype)
-    proj = jax.vmap(horo_projection, in_axes=(0, None, None, None))(x, q, c, VERSION_DEFAULT)
-    spatial = proj[:, 1:]  # (N, D)
-    # Residual of the orthogonal projection onto the row span of q (q rows orthonormal).
-    residual = spatial - (spatial @ q.T) @ q
-    assert jnp.allclose(residual, 0.0, atol=atol)
 
 
 # --- 14. K=1 closed form ---------------------------------------------------------------
@@ -246,8 +240,10 @@ def test_loss_grad_finite_and_decreases(dtype, k):
 # --- 16. fit JIT is reused -------------------------------------------------------------
 def test_fit_jit_cache_reuse():
     """A second _fit_jit call with identical statics/shapes/dtypes does not recompile."""
-    if not hasattr(_fit_jit, "_cache_size"):
-        pytest.skip("jitted function does not expose _cache_size (private API unavailable)")
+    # Asserted, not skipped: removing the jax.jit wrapper from _fit_jit — the exact
+    # regression this test names — makes the attribute vanish, and a skip would report
+    # that as a green run.
+    assert hasattr(_fit_jit, "_cache_size"), "_fit_jit is no longer a jax.jit-wrapped callable"
     dtype = jnp.float64
     c = 1.0
     x = _hyp_points(15, 32, 5, c, sigma=0.5, dtype=dtype)
