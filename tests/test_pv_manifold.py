@@ -25,9 +25,13 @@ from hyperbolix.manifolds import ProperVelocity
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module", params=[0.1, 0.5, 1.0, 2.0], ids=lambda c: f"c{c}")
+@pytest.fixture(scope="module", params=[0.1, 2.0], ids=lambda c: f"c{c}")
 def curvature(request: pytest.FixtureRequest) -> float:
-    """Positive curvature parameter c (sectional curvature = -c)."""
+    """Positive curvature parameter c (sectional curvature = -c).
+
+    Two values spanning a factor of 20 on both sides of 1 are enough to catch any missing or
+    extra √c factor; the intermediate values only re-ran the same identities.
+    """
     return float(request.param)
 
 
@@ -37,26 +41,34 @@ def pv_manifold(dtype: jnp.dtype) -> ProperVelocity:
     return ProperVelocity(dtype=dtype)
 
 
-@pytest.fixture(scope="module", params=[2, 5, 10], ids=lambda d: f"dim{d}")
+@pytest.fixture(scope="module", params=[2, 10], ids=lambda d: f"dim{d}")
 def dim(request: pytest.FixtureRequest) -> int:
+    """Ambient dimension. PV has no dimension-dependent code path, so this is pure
+    vectorization width: the minimal case plus one generic value."""
     return int(request.param)
 
 
 @pytest.fixture(scope="module")
-def pv_points(dim: int, dtype: jnp.dtype, rng: np.random.Generator) -> jnp.ndarray:
-    """Batch of PV points sampled as Gaussians in R^n. PV is unconstrained, so no projection."""
+def pv_points(dim: int, dtype: jnp.dtype, seed_jax: int) -> jnp.ndarray:
+    """Batch of PV points sampled as Gaussians in R^n. PV is unconstrained, so no projection.
+
+    Uses a generator derived from (seed, stream, dim) rather than the shared ``rng`` fixture so
+    the sample does not depend on which other tests ran first.
+    """
     num_pts = 256
     np_dtype = np.dtype(dtype.name)
-    data = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)
+    gen = np.random.default_rng([seed_jax, 20, dim])
+    data = gen.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)
     return jnp.asarray(data)
 
 
 @pytest.fixture(scope="module")
-def pv_tangent_vectors(dim: int, dtype: jnp.dtype, rng: np.random.Generator) -> jnp.ndarray:
+def pv_tangent_vectors(dim: int, dtype: jnp.dtype, seed_jax: int) -> jnp.ndarray:
     """Random tangent vectors (any R^n vector is tangent in PV)."""
     num_pts = 256
     np_dtype = np.dtype(dtype.name)
-    data = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype) * 0.3
+    gen = np.random.default_rng([seed_jax, 21, dim])
+    data = gen.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype) * 0.3
     return jnp.asarray(data)
 
 

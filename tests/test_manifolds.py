@@ -3,7 +3,11 @@
 Tests for the hyperbolix backend using vmap-native pure functions.
 Adapted for the new single-point API with vmap for batching.
 
-Fixtures are defined in tests/conftest.py and automatically loaded.
+Fixtures are defined in tests/conftest.py and automatically loaded. The generic tests run on
+``manifold_and_c`` (Euclidean / Poincaré / Hyperboloid); ProperVelocity is covered by
+``tests/test_pv_manifold.py``, whose namesakes are strictly stronger. Manifold-specific tests
+request the dedicated ``poincare_and_c`` / ``hyperboloid_and_c`` fixtures instead of skipping
+three quarters of a four-way parametrization.
 """
 
 import jax
@@ -64,13 +68,9 @@ def _is_hyperboloid(manifold) -> bool:
     return isinstance(manifold, hj.manifolds.Hyperboloid)
 
 
-def _is_pv(manifold) -> bool:
-    return isinstance(manifold, hj.manifolds.ProperVelocity)
-
-
 def _is_gyrovector(manifold) -> bool:
     """Manifolds that carry a gyrovector-space structure (non-trivial scalar mul axioms)."""
-    return _is_euclidean(manifold) or _is_poincare(manifold) or _is_pv(manifold)
+    return _is_euclidean(manifold) or _is_poincare(manifold)
 
 
 def _random_ball_point(rng: np.random.Generator, dim: int, max_radius: float) -> np.ndarray:
@@ -211,8 +211,9 @@ def test_addition(manifold_and_c, tolerance: tuple[float, float], uniform_points
     assert _batch_is_in_manifold(manifold, result5, c)
 
 
+@pytest.mark.parametrize("n", [2, 5])
 def test_hyperboloid_gyro_addition(
-    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
+    n: int, hyperboloid_and_c, tolerance: tuple[float, float], hyperboloid_points: jnp.ndarray
 ) -> None:
     """Deep correctness checks for the Hyperboloid Lorentz gyroaddition (Shi et al. 2026, Eq. 1).
 
@@ -223,10 +224,12 @@ def test_hyperboloid_gyro_addition(
       2. n-gyroaddition: n ⊙ x = x ⊕ x ⊕ … ⊕ x links the gyroaddition (Eq. 1) to the gyro
          scalar multiplication (Eq. 2).
       3. Left cancellation: (⊖x) ⊕ (x ⊕ y) = y, the defining law of a (left) gyrogroup.
+
+    ``n`` (the multiplicity in check 2) is an explicit axis rather than an ``rng`` draw so a
+    single-seed run still exercises more than one multiplicity.
     """
-    manifold, c = manifold_and_c
-    if not _is_hyperboloid(manifold):
-        pytest.skip("Lorentz gyroaddition test only applies to the Hyperboloid manifold")
+    manifold, c = hyperboloid_and_c
+    uniform_points = hyperboloid_points
 
     atol, rtol = tolerance
     if uniform_points.dtype == jnp.dtype("float32"):
@@ -254,7 +257,6 @@ def test_hyperboloid_gyro_addition(
     ys = scalar_mul_batch(quarter, y, c)
 
     # (2) n-gyroaddition: n ⊙ xs = xs ⊕ xs ⊕ … ⊕ xs (n times).
-    n = int(rng.integers(2, 6))
     n_sum = xs
     for _ in range(n - 1):
         n_sum = addition_batch(n_sum, xs, c)
@@ -270,16 +272,15 @@ def test_hyperboloid_gyro_addition(
 
 
 def test_hyperboloid_scalar_mul_eq2(
-    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
+    hyperboloid_and_c, tolerance: tuple[float, float], hyperboloid_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
     """Verify Hyperboloid.scalar_mul equals the paper's Eq. 2: t ⊙ x = Exp_0(t · Log_0(x)).
 
     ``scalar_mul`` is written in the normalized form Exp_0(t · d(0,x) · Log_0(x)/‖Log_0(x)‖);
     since ‖Log_0(x)‖_L = d(0,x) this collapses to Eq. 2. This test confirms the equality.
     """
-    manifold, c = manifold_and_c
-    if not _is_hyperboloid(manifold):
-        pytest.skip("Eq. 2 form check only applies to the Hyperboloid manifold")
+    manifold, c = hyperboloid_and_c
+    uniform_points = hyperboloid_points
 
     atol, rtol = tolerance
     if uniform_points.dtype == jnp.dtype("float32"):
@@ -300,14 +301,19 @@ def test_hyperboloid_scalar_mul_eq2(
     assert _batch_is_in_manifold(manifold, got, c)
 
 
+@pytest.mark.parametrize("n", [3, 6])
 def test_scalar_mul(
-    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
+    n: int, manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
-    """Test scalar multiplication operation."""
+    """Test scalar multiplication operation.
+
+    ``n`` (the multiplicity in the n-gyroaddition check) is an explicit axis rather than an
+    ``rng`` draw so a single-seed run still exercises more than one multiplicity.
+    """
     manifold, c = manifold_and_c
     atol, rtol = tolerance
 
-    if (_is_poincare(manifold) or _is_pv(manifold)) and uniform_points.dtype == jnp.dtype("float32"):
+    if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 2e-2)
 
     # Create scalars - now as 1D array since scalar_mul expects scalar per point
@@ -335,7 +341,6 @@ def test_scalar_mul(
     # Additional gyrovector properties (Euclidean, Poincaré, PV — not Hyperboloid)
     if _is_gyrovector(manifold):
         # N-Gyroaddition property: n ⊗ x = x ⊕ x ⊕ ... ⊕ x (n times)
-        n = rng.integers(3, 10)
         n_sum = jnp.zeros_like(uniform_points)
         for _ in range(n):
             n_sum = addition_batch(n_sum, uniform_points, c)
@@ -429,21 +434,19 @@ def test_scalar_mul(
 
 
 def test_gyration(
-    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
+    poincare_and_c, tolerance: tuple[float, float], poincare_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
     """Test the gyration operation of the PoincareBall.
 
     Gyration is a fundamental operation in gyrogroups that restores commutativity
     in the non-commutative Möbius addition. This test verifies all the gyrogroup
     axioms and properties.
-    """
-    manifold, c = manifold_and_c
 
-    # The gyration operation is only defined for the PoincareBall manifold here
-    # (PV has its own, distinct gyration algebra; we don't exercise it via the
-    # Möbius _gyration helper used in this test).
-    if _is_euclidean(manifold) or _is_hyperboloid(manifold) or _is_pv(manifold):
-        pytest.skip("Möbius gyration test only defined for PoincareBall manifold")
+    Poincaré-only: this exercises the Möbius ``_gyration`` helper (PV has its own, distinct
+    gyration algebra, which is not routed through this helper).
+    """
+    manifold, c = poincare_and_c
+    uniform_points = poincare_points
 
     atol, rtol = tolerance
     x, y, z, a = _split(uniform_points, 4)
@@ -586,16 +589,15 @@ def test_dist_0(manifold_and_c, tolerance: tuple[float, float], uniform_points: 
     assert jnp.allclose(d1, d2, atol=atol, rtol=rtol)
 
 
-def test_hyperboloid_sqdist(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
+def test_hyperboloid_sqdist(hyperboloid_and_c, tolerance: tuple[float, float], hyperboloid_points: jnp.ndarray) -> None:
     """Squared Lorentzian distance (Law et al. 2019), the acosh-free distance proxy.
 
     Checks it is zero at coincidence, non-negative, symmetric, and monotonically tied to the
     geodesic distance via the closed form d_L²(x, y) = (2/c)(cosh(√c · d(x, y)) - 1) — verified
     against an independent acosh-based ``dist``.
     """
-    manifold, c = manifold_and_c
-    if not _is_hyperboloid(manifold):
-        pytest.skip("Squared Lorentzian distance is Hyperboloid-specific.")
+    manifold, c = hyperboloid_and_c
+    uniform_points = hyperboloid_points
     atol, rtol = tolerance
 
     x, y = _split(uniform_points, 2)
@@ -625,17 +627,23 @@ def test_hyperboloid_sqdist(manifold_and_c, tolerance: tuple[float, float], unif
     assert jnp.allclose(d2_xy, expected, atol=max(atol, 1e-3), rtol=max(rtol, 1e-2 if is_f32 else 1e-6))
 
 
-def test_hyperboloid_tangent_norm_zero_vector_finite_grad(manifold_and_c, uniform_points: jnp.ndarray) -> None:
+# ---------------------------------------------------------------------------
+# NaN-gradient regression guards.
+#
+# These are singular-point guards: the failure mode is a 0/0 or 0·inf in a VJP at one specific
+# point, which is independent of the sampled curvature, the ambient dimension and the batch.
+# They therefore use a hardcoded point instead of the fixture matrix (one collected item each).
+
+
+def test_hyperboloid_tangent_norm_zero_vector_finite_grad() -> None:
     """``tangent_norm`` must have a finite gradient at the zero tangent vector.
 
     sqrt'(0) = inf, so a bare ``sqrt(clip(⟨v,v⟩_L, 0))`` yields a 0·inf = NaN gradient at v = 0;
     the ``+ MIN_NORM²`` floor (matching ``_expmap``) keeps it finite.
     """
-    manifold, c = manifold_and_c
-    if not _is_hyperboloid(manifold):
-        pytest.skip("Tangent-norm zero-vector gradient guard is checked on the Hyperboloid.")
+    manifold, c = hj.manifolds.Hyperboloid(dtype=jnp.float64), 1.0
 
-    x0 = uniform_points[0]
+    x0 = manifold.proj(jnp.array([1.0, 0.3, -0.2], dtype=jnp.float64), c)
     v0 = jnp.zeros_like(x0)  # zero tangent vector at x0
 
     n = manifold.tangent_norm(v0, x0, c)
@@ -645,17 +653,15 @@ def test_hyperboloid_tangent_norm_zero_vector_finite_grad(manifold_and_c, unifor
     assert jnp.all(jnp.isfinite(grad))
 
 
-def test_poincare_tangent_norm_zero_vector_finite_grad(manifold_and_c, uniform_points: jnp.ndarray) -> None:
+def test_poincare_tangent_norm_zero_vector_finite_grad() -> None:
     """``tangent_norm`` must have a finite gradient at the zero tangent vector (Poincaré).
 
     ``λ(x)·||v||`` with a bare ``jnp.linalg.norm`` has VJP 0/0 = NaN at v = 0; the safe norm
     ``sqrt(||v||² + MIN_NORM²)`` (matching ``_expmap``/``_proj``) keeps it finite.
     """
-    manifold, c = manifold_and_c
-    if not _is_poincare(manifold):
-        pytest.skip("Tangent-norm zero-vector gradient guard is checked here on the Poincaré ball.")
+    manifold, c = hj.manifolds.Poincare(dtype=jnp.float64), 1.0
 
-    x0 = uniform_points[0]
+    x0 = jnp.array([0.3, -0.2], dtype=jnp.float64)
     v0 = jnp.zeros_like(x0)  # zero tangent vector at x0
 
     n = manifold.tangent_norm(v0, x0, c)
@@ -665,17 +671,15 @@ def test_poincare_tangent_norm_zero_vector_finite_grad(manifold_and_c, uniform_p
     assert jnp.all(jnp.isfinite(grad))
 
 
-def test_poincare_logmap_coincident_finite_grad(manifold_and_c, uniform_points: jnp.ndarray) -> None:
+def test_poincare_logmap_coincident_finite_grad() -> None:
     """``logmap`` must have a finite gradient when y coincides with x (Poincaré).
 
     ``num = ||y - x||`` via a bare ``jnp.linalg.norm`` has VJP 0/0 = NaN at y = x; the safe norm
     keeps the gradient finite w.r.t. both arguments. The forward value is 0 either way.
     """
-    manifold, c = manifold_and_c
-    if not _is_poincare(manifold):
-        pytest.skip("logmap coincident-point gradient guard is checked here on the Poincaré ball.")
+    manifold, c = hj.manifolds.Poincare(dtype=jnp.float64), 1.0
 
-    x0 = _shrink_for_float32(manifold, uniform_points[0], c)
+    x0 = jnp.array([0.3, -0.2], dtype=jnp.float64)
     y0 = x0  # coincident target
 
     v = manifold.logmap(y0, x0, c)
@@ -692,7 +696,7 @@ def test_poincare_logmap_coincident_finite_grad(manifold_and_c, uniform_points: 
 
 
 def test_apollonian_symmetrization_is_dist(
-    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray
+    poincare_and_c, tolerance: tuple[float, float], poincare_points: jnp.ndarray
 ) -> None:
     """Symmetrizing the Apollonian weak metric recovers the geodesic distance.
 
@@ -700,9 +704,8 @@ def test_apollonian_symmetrization_is_dist(
     The √c factor reflects that the paper's Poincaré metric h_{D²} uses the curvature -4
     normalization — exactly half of hyperbolix's curvature -1 ``dist`` (so the factor is 1 at c=1).
     """
-    manifold, c = manifold_and_c
-    if not _is_poincare(manifold):
-        pytest.skip("Apollonian weak metric is Poincaré-specific.")
+    manifold, c = poincare_and_c
+    uniform_points = poincare_points
     atol, rtol = tolerance
 
     x, y = _split(uniform_points, 2)
@@ -719,14 +722,16 @@ def test_apollonian_symmetrization_is_dist(
     assert jnp.allclose(symmetrized, geodesic, atol=atol, rtol=rtol)
 
 
-def test_apollonian_special_values(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
+def test_apollonian_special_values(poincare_and_c, tolerance: tuple[float, float], poincare_points: jnp.ndarray) -> None:
     """Closed-form values against the origin (Papadopoulos & Troyanov Cor 5.2, generalized to c):
 
     δ(x, 0) = log(1 + √c‖x‖)   and   δ(0, x) = -log(1 - √c‖x‖).
+
+    These two closed forms also pin the weak-metric asymmetry δ(x, y) ≠ δ(y, x): they are
+    unequal by construction for x ≠ 0, which is why no separate "non-symmetric" test is needed.
     """
-    manifold, c = manifold_and_c
-    if not _is_poincare(manifold):
-        pytest.skip("Apollonian weak metric is Poincaré-specific.")
+    manifold, c = poincare_and_c
+    uniform_points = poincare_points
     atol, rtol = tolerance
 
     x = _shrink_for_float32(manifold, uniform_points, c)
@@ -743,28 +748,15 @@ def test_apollonian_special_values(manifold_and_c, tolerance: tuple[float, float
     assert jnp.allclose(d_x0, jnp.log1p(sqrt_c_norm), atol=atol, rtol=rtol)
     assert jnp.allclose(d_0x, -jnp.log1p(-sqrt_c_norm), atol=atol, rtol=rtol)
 
-
-def test_apollonian_non_symmetric(manifold_and_c, uniform_points: jnp.ndarray) -> None:
-    """δ is a *weak* metric: δ(x, y) ≠ δ(y, x) for generic distinct points (Cor 5.2)."""
-    manifold, c = manifold_and_c
-    if not _is_poincare(manifold):
-        pytest.skip("Apollonian weak metric is Poincaré-specific.")
-
-    x, y = _split(uniform_points, 2)
-    apoll_batch = jax.vmap(manifold.apollonian_dist, in_axes=(0, 0, None))
-
-    d_xy = apoll_batch(x, y, c)
-    d_yx = apoll_batch(y, x, c)
-
-    # Tight tolerance so "not close" is a meaningful assertion, not float noise.
-    assert not jnp.allclose(d_xy, d_yx, atol=1e-4, rtol=1e-4)
+    # δ is a *weak* metric: it is not symmetric. Tight tolerance so "not close" is a meaningful
+    # assertion, not float noise.
+    assert not jnp.allclose(d_x0, d_0x, atol=1e-4, rtol=1e-4)
 
 
-def test_apollonian_basic_properties(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
+def test_apollonian_basic_properties(poincare_and_c, tolerance: tuple[float, float], poincare_points: jnp.ndarray) -> None:
     """Weak-metric basics: δ(x, x) = 0 and δ(x, y) ≥ 0."""
-    manifold, c = manifold_and_c
-    if not _is_poincare(manifold):
-        pytest.skip("Apollonian weak metric is Poincaré-specific.")
+    manifold, c = poincare_and_c
+    uniform_points = poincare_points
     atol, rtol = tolerance
 
     x, y = _split(uniform_points, 2)
@@ -787,7 +779,6 @@ def test_apollonian_matches_boundary_supremum(dim: int, rng: np.random.Generator
 
     the supremum over the ball boundary sphere. Running dim=3 (not just the disk) confirms the
     maximizer lies in span(x, y) — i.e. the closed form genuinely generalizes beyond n=2.
-    ``rng`` (which depends on ``seed_jax``) also ensures float64 is enabled.
     """
     manifold = hj.manifolds.Poincare(dtype=jnp.float64)
     c = 1.0
@@ -848,9 +839,8 @@ def test_expmap_logmap_basic(
     else:
         origin = jnp.zeros_like(uniform_points)
 
-    # Create random tangent vectors. PV has no tanh-like saturation in expmap,
-    # so sinh(√c·||v||) overflows for large bounds — use a smaller range there.
-    bound = 1.0 if _is_pv(manifold) else 10
+    # Create random tangent vectors.
+    bound = 10
     v = jnp.asarray(rng.uniform(-bound, bound, size=uniform_points.shape), dtype=uniform_points.dtype)
     v0 = v.copy()
 
@@ -884,7 +874,7 @@ def test_expmap_logmap_basic(
         assert jnp.all(jnp.isfinite(v0_retr))
 
     # Numerical stability of logmap - check logmap produces finite tangent vectors
-    if (_is_poincare(manifold) or _is_pv(manifold)) and uniform_points.dtype == jnp.dtype("float32"):
+    if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 3e-2)
 
     logmap_y_x = logmap_batch(y, x, c)
@@ -925,14 +915,15 @@ def test_expmap_0_logmap_0_inverse(manifold_and_c, tolerance: tuple[float, float
     assert jnp.allclose(x_reconstructed, uniform_points, atol=atol, rtol=rtol)
 
 
-def test_ptransp_preserves_norm(
+def test_ptransp_is_an_isometry_and_round_trips(
     manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
-    """Test parallel transport properties: consistency and round-trip stability.
+    """Parallel transport is a linear isometry between tangent spaces.
 
-    Note: This test validates that ptransp is consistent with ptransp_0 and that
-    round-trip transport (origin -> x -> origin) recovers the original vector.
-    We do not test inner product preservation due to numerical limitations.
+    Checks (a) norm preservation ‖PT_{0→x}(u)‖_x = ‖u‖_0 — the defining property, which the
+    previous version of this test claimed in its name but never asserted (audit A1-F5) —
+    plus (b) consistency of ``ptransp`` with ``ptransp_0`` and (c) an origin → x → origin
+    round trip.
     """
     manifold, c = manifold_and_c
     atol, rtol = tolerance
@@ -941,6 +932,7 @@ def test_ptransp_preserves_norm(
     ptransp_batch = jax.vmap(manifold.ptransp, in_axes=(0, 0, 0, None))
     ptransp_0_batch = jax.vmap(manifold.ptransp_0, in_axes=(0, 0, None))
     tangent_proj_batch = jax.vmap(manifold.tangent_proj, in_axes=(0, 0, None))
+    tangent_norm_batch = jax.vmap(manifold.tangent_norm, in_axes=(0, 0, None))
 
     # Origin for consistency checks
     if _is_hyperboloid(manifold):
@@ -966,6 +958,14 @@ def test_ptransp_preserves_norm(
     u_pt = ptransp_0_batch(u, uniform_points, c)
     assert _batch_is_in_tangent_space(manifold, u_pt, uniform_points, c)
 
+    # Isometry: transport preserves the Riemannian norm of the transported vector
+    assert jnp.allclose(
+        tangent_norm_batch(u_pt, uniform_points, c),
+        tangent_norm_batch(u, origin, c),
+        atol=atol,
+        rtol=rtol,
+    )
+
     # Consistency of ptransp with ptransp_0
     u_pt_general = ptransp_batch(u, origin, uniform_points, c)
     assert jnp.allclose(u_pt_general, u_pt, atol=atol, rtol=rtol)
@@ -976,30 +976,14 @@ def test_ptransp_preserves_norm(
     assert _batch_is_in_tangent_space(manifold, u_roundtrip, origin, c)
 
 
-def test_tangent_inner_positive_definite(manifold_and_c, uniform_points: jnp.ndarray, rng: np.random.Generator) -> None:
-    """Test that tangent inner product is positive definite."""
-    manifold, c = manifold_and_c
-
-    # Batch operations using vmap
-    tangent_proj_batch = jax.vmap(manifold.tangent_proj, in_axes=(0, 0, None))
-    tangent_inner_batch = jax.vmap(manifold.tangent_inner, in_axes=(0, 0, 0, None))
-
-    # Create non-zero tangent vectors
-    v = jnp.asarray(rng.normal(0.0, 1.0, size=uniform_points.shape), dtype=uniform_points.dtype)
-
-    # Project onto tangent space (necessary for Hyperboloid)
-    v = tangent_proj_batch(v, uniform_points, c)
-
-    # Inner product <v, v> should be positive
-    inner = tangent_inner_batch(v, v, uniform_points, c)
-
-    assert jnp.all(inner > 0)
-
-
-def test_tangent_inner_symmetric(
+def test_tangent_inner_is_an_inner_product(
     manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
-    """Test that tangent inner product is symmetric."""
+    """``tangent_inner`` must be symmetric, positive definite and bilinear.
+
+    (Merged from the former ``test_tangent_inner_symmetric`` / ``..._positive_definite``, which
+    shared the same setup and one assertion each; linearity in the first slot is added here.)
+    """
     manifold, c = manifold_and_c
     atol, rtol = tolerance
 
@@ -1007,19 +991,27 @@ def test_tangent_inner_symmetric(
     tangent_proj_batch = jax.vmap(manifold.tangent_proj, in_axes=(0, 0, None))
     tangent_inner_batch = jax.vmap(manifold.tangent_inner, in_axes=(0, 0, 0, None))
 
-    # Create two tangent vectors
+    # Create two tangent vectors (projection onto the tangent space is necessary for Hyperboloid)
     u = jnp.asarray(rng.normal(0.0, 1.0, size=uniform_points.shape), dtype=uniform_points.dtype)
     v = jnp.asarray(rng.normal(0.0, 1.0, size=uniform_points.shape), dtype=uniform_points.dtype)
-
-    # Project onto tangent space (necessary for Hyperboloid)
     u = tangent_proj_batch(u, uniform_points, c)
     v = tangent_proj_batch(v, uniform_points, c)
 
-    # <u, v> = <v, u>
+    # Symmetry: <u, v> = <v, u>
     inner_uv = tangent_inner_batch(u, v, uniform_points, c)
     inner_vu = tangent_inner_batch(v, u, uniform_points, c)
-
     assert jnp.allclose(inner_uv, inner_vu, atol=atol, rtol=rtol)
+
+    # Positive definiteness: <v, v> > 0 for the (a.s. nonzero) random tangent vectors
+    assert jnp.all(tangent_inner_batch(v, v, uniform_points, c) > 0)
+
+    # Bilinearity (first slot): <a·u + b·v, v> = a·<u, v> + b·<v, v>
+    a = jnp.asarray(rng.uniform(-2.0, 2.0, size=(uniform_points.shape[0], 1)), dtype=uniform_points.dtype)
+    b = jnp.asarray(rng.uniform(-2.0, 2.0, size=(uniform_points.shape[0], 1)), dtype=uniform_points.dtype)
+    combo = a * u + b * v  # a linear combination of tangent vectors is tangent
+    inner_combo = tangent_inner_batch(combo, v, uniform_points, c)
+    expected = a[:, 0] * inner_uv + b[:, 0] * tangent_inner_batch(v, v, uniform_points, c)
+    assert jnp.allclose(inner_combo, expected, atol=atol, rtol=rtol)
 
 
 def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray) -> None:
@@ -1053,7 +1045,7 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     # near boundary. When points approach ||x|| ≈ 1/√c, the conformal factor λ(x) = 2/(1-c||x||²)
     # can exceed 10,000. The logmap/tangent_norm round-trip (divide by λ, then multiply by λ)
     # loses precision, especially for large distances (>10) involving near-boundary points.
-    if (_is_poincare(manifold) or _is_pv(manifold)) and uniform_points.dtype == jnp.dtype("float32"):
+    if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
         rtol = max(rtol, 5e-2)
 
     # Consistency of tangent_norm with logmap and dist
@@ -1071,18 +1063,41 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     assert jnp.allclose(tangent_norm_logmap_0, dist_0_points, atol=atol, rtol=rtol)
 
 
-def test_egrad2rgrad_on_manifold(manifold_and_c, uniform_points: jnp.ndarray, rng: np.random.Generator) -> None:
-    """Test that Riemannian gradient points lie in tangent space."""
+def test_egrad2rgrad_is_metric_dual(
+    manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
+) -> None:
+    """``egrad2rgrad`` must be the metric dual of the Euclidean gradient, not just tangent.
+
+    Defining property: for every tangent vector v at x,
+
+        ⟨egrad, v⟩_euclidean = g_x(egrad2rgrad(egrad, x), v).
+
+    The tangent-space check alone (the former body of this test) is vacuous on three of the four
+    manifolds — ``Euclidean``/``Poincare._is_in_tangent_space`` return a constant ``True`` and
+    ``ProperVelocity``'s only checks finiteness — so ``egrad2rgrad`` could be replaced by the
+    identity without failing it (audit A1-F3/UM1). It is kept below as a secondary assertion,
+    since it is a real check on the Hyperboloid.
+    """
     manifold, c = manifold_and_c
+    atol, rtol = tolerance
 
     # Batch operations using vmap
     egrad2rgrad_batch = jax.vmap(manifold.egrad2rgrad, in_axes=(0, 0, None))
+    tangent_proj_batch = jax.vmap(manifold.tangent_proj, in_axes=(0, 0, None))
+    tangent_inner_batch = jax.vmap(manifold.tangent_inner, in_axes=(0, 0, 0, None))
 
-    # Create Euclidean gradients
+    # Create Euclidean gradients and test tangent directions
     egrad = jnp.asarray(rng.normal(0.0, 1.0, size=uniform_points.shape), dtype=uniform_points.dtype)
+    v = jnp.asarray(rng.normal(0.0, 1.0, size=uniform_points.shape), dtype=uniform_points.dtype)
+    v = tangent_proj_batch(v, uniform_points, c)  # necessary for Hyperboloid
 
     # Convert to Riemannian gradient
     rgrad = egrad2rgrad_batch(egrad, uniform_points, c)
+
+    # Metric duality
+    euclid_inner = jnp.sum(egrad * v, axis=-1)
+    riem_inner = tangent_inner_batch(rgrad, v, uniform_points, c)
+    assert jnp.allclose(euclid_inner, riem_inner, atol=atol, rtol=rtol)
 
     # Riemannian gradient should be in tangent space
     assert _batch_is_in_tangent_space(manifold, rgrad, uniform_points, c)
@@ -1103,9 +1118,17 @@ def test_is_in_manifold(manifold_and_c, uniform_points: jnp.ndarray) -> None:
         # Points not on hyperboloid surface should not be on manifold
         outside = jnp.ones_like(uniform_points[0]) * 10.0
         assert not manifold.is_in_manifold(outside, c=c)
-    elif _is_pv(manifold):
-        # PV is unconstrained: only non-finite points are off-manifold.
+    else:
+        # Euclidean: unconstrained, so `is_in_manifold` is the constant True — including for
+        # non-finite input. Pinning that here keeps the Euclidean parametrization of this test
+        # from being assertion-free (audit A1-F9).
+        # TODO(audit A1-F9/UM3): ProperVelocity.is_in_manifold rejects NaN/Inf
+        # (proper_velocity.py:407) while Euclidean accepts it (euclidean.py:307). The asymmetry
+        # is a suspected library defect; until it is resolved this test pins current behavior.
+        assert _is_euclidean(manifold)
+        far_away = jnp.ones_like(uniform_points[0]) * 1e12
+        assert bool(manifold.is_in_manifold(far_away, c=c))
         nan_point = uniform_points[0].at[0].set(jnp.nan)
-        assert not bool(manifold.is_in_manifold(nan_point, c=c))
+        assert bool(manifold.is_in_manifold(nan_point, c=c))
         inf_point = uniform_points[0].at[0].set(jnp.inf)
-        assert not bool(manifold.is_in_manifold(inf_point, c=c))
+        assert bool(manifold.is_in_manifold(inf_point, c=c))
