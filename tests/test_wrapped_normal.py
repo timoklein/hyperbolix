@@ -1,12 +1,23 @@
-"""Tests for wrapped normal distribution on hyperboloid."""
+"""Tests for the wrapped normal distribution (hyperboloid and Poincaré ball).
+
+Dimension key:
+  N: number of points      S: sample dimensions (from sample_shape)
+  B: batch dimensions (from a batched mean)
+  D: spatial dim (n)       A: ambient dim (n+1, hyperboloid time coordinate first)
+  Q: radial quadrature nodes                T: angular quadrature nodes
+"""
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+import scipy.stats
 
 from hyperbolix.distributions import wrapped_normal_hyperboloid, wrapped_normal_poincare
-from hyperbolix.distributions._common import sigma_to_cov
+from hyperbolix.distributions._common import gaussian_log_prob, sigma_to_cov
+from hyperbolix.distributions._wrapped_normal_base import _log_det_jacobian_from_r
 from hyperbolix.manifolds import Hyperboloid, Poincare
+from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
 
 # ---------------------------------------------------------------------------
@@ -548,3 +559,330 @@ def test_sample_poincare_tangent_moments_match_sigma(sigma_kind: str) -> None:
     v_ND = 2.0 * jax.vmap(poincare.logmap_0, in_axes=(0, None))(z0_ND, c)
 
     _assert_tangent_moments(v_ND, sigma_to_cov(sigma, n, dtype))
+
+
+# =============================================================================================
+# log_prob value oracles (audit M2-01)
+#
+# Nothing in this file used to assert a log_prob *value*: the entire log-det-Jacobian term could
+# be deleted and every item still passed. The four oracles below pin the value from four
+# independent directions, and with it the reading of the density — it is taken w.r.t. the
+# RIEMANNIAN VOLUME measure of H^n, not the Lebesgue measure of a coordinate chart.
+#
+# All float64 with fixed seeds: these are exact analytic identities, so a float32 axis would
+# only measure rounding.
+# =============================================================================================
+
+_F64 = jnp.float64
+_QUAD_R_MAX = 6.0
+"""Radial cut-off of the polar quadrature. At sigma = 0.5 the tangent-space mass beyond
+r = 6 (12 sigma) is ~e^-72, far below the 1e-3 tolerance."""
+
+
+def _geodesic_frame_h2(c: float, d: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """NumPy H² frame: a mean at geodesic distance ``d`` from the origin plus two unit tangents.
+
+    Built without the library. With ``⟨x,x⟩_L = -1/c`` the unit-speed geodesic ``g`` leaving the
+    origin ``o = (1/√c, 0, 0)`` along the spacelike unit vector ``e₁`` is
+    ``g(t) = cosh(√c·t)·o + sinh(√c·t)/√c · e₁``; the mean is ``g(d)``, its velocity ``g'(d)`` is
+    a unit tangent there, and ``e₂`` (untouched by the geodesic) completes the orthonormal pair.
+    """
+    sqrt_c = np.sqrt(c)
+    o_A = np.array([1.0 / sqrt_c, 0.0, 0.0])
+    e1_A = np.array([0.0, 1.0, 0.0])
+    e2_A = np.array([0.0, 0.0, 1.0])
+    mu_A = np.cosh(sqrt_c * d) * o_A + np.sinh(sqrt_c * d) / sqrt_c * e1_A
+    tangent_A = sqrt_c * np.sinh(sqrt_c * d) * o_A + np.cosh(sqrt_c * d) * e1_A  # g'(d)
+    return mu_A, tangent_A, e2_A
+
+
+@pytest.mark.parametrize("c", [0.4, 1.0, 2.0])
+def test_log_prob_integrates_to_one_over_h2(c: float) -> None:
+    """(a) ``∫ exp(log_prob) dV = 1`` in geodesic polar coordinates, both models, non-origin mean.
+
+    The area element ``(sinh(√c·r)/√c)^{n-1} dr dθ`` is the Riemannian volume of H², the measure
+    the density is defined against — integrating against the Lebesgue element of any chart would
+    not give 1. Discriminating case: every factor of the log-det Jacobian (the ``n-1`` exponent,
+    the ``√c`` inside the sinh, the term itself) moves this integral off 1.
+    """
+    sqrt_c = np.sqrt(c)
+    sigma = 0.5
+    mu_A, b1_A, b2_A = _geodesic_frame_h2(c, d=0.7)
+
+    # Gauss-Legendre in r, periodic trapezoid in theta (spectrally accurate for a smooth
+    # periodic integrand). The observed quadrature error is ~1e-13, 10 orders below the tol.
+    nodes_Q, weights_Q = np.polynomial.legendre.leggauss(160)
+    r_Q = 0.5 * _QUAD_R_MAX * (nodes_Q + 1.0)
+    w_r_Q = 0.5 * _QUAD_R_MAX * weights_Q
+    n_theta = 64
+    theta_T = 2.0 * np.pi * np.arange(n_theta) / n_theta
+
+    r_QT, theta_QT = np.meshgrid(r_Q, theta_T, indexing="ij")
+    dir_QTA = np.cos(theta_QT)[..., None] * b1_A + np.sin(theta_QT)[..., None] * b2_A
+    z_QTA = np.cosh(sqrt_c * r_QT)[..., None] * mu_A + (np.sinh(sqrt_c * r_QT) / sqrt_c)[..., None] * dir_QTA
+    area_QT = np.sinh(sqrt_c * r_QT) / sqrt_c  # (sinh(√c·r)/√c)^{n-1} with n = 2
+    quad_QT = w_r_Q[:, None] * (2.0 * np.pi / n_theta) * area_QT
+
+    hyperboloid, poincare = Hyperboloid(dtype=_F64), Poincare(dtype=_F64)
+    z_NA = jnp.asarray(z_QTA.reshape(-1, 3))
+    mu_jax_A = jnp.asarray(mu_A)
+
+    lp_N = wrapped_normal_hyperboloid.log_prob(z_NA, mu_jax_A, sigma, c, manifold_module=hyperboloid)
+    mass_hyp = float(np.sum(quad_QT * np.asarray(jnp.exp(lp_N)).reshape(quad_QT.shape)))
+    assert mass_hyp == pytest.approx(1.0, abs=1e-3), f"hyperboloid density integrates to {mass_hyp}"
+
+    # Same grid, same volume element: the stereographic isometry preserves dV, so the ball
+    # density must integrate to 1 against the very same weights.
+    z_ball_ND = jax.vmap(iso.hyperboloid_to_poincare, in_axes=(0, None))(z_NA, c)
+    mu_ball_D = iso.hyperboloid_to_poincare(mu_jax_A, c)
+    lp_ball_N = wrapped_normal_poincare.log_prob(z_ball_ND, mu_ball_D, sigma, c, manifold_module=poincare)
+    mass_ball = float(np.sum(quad_QT * np.asarray(jnp.exp(lp_ball_N)).reshape(quad_QT.shape)))
+    assert mass_ball == pytest.approx(1.0, abs=1e-3), f"ball density integrates to {mass_ball}"
+
+
+@pytest.mark.parametrize("c", [0.4, 1.3])
+def test_log_prob_matches_pushforward_change_of_variables(c: float) -> None:
+    """(b) log_prob equals the change-of-variables density of the sampling map itself.
+
+    ``sample`` pushes ``v ~ N(0, Σ)`` through a map ``T``; the image's Lebesgue density in a
+    chart is ``N(v; 0, Σ)/|det ∂T/∂v|`` (Jacobian from ``jacfwd``, never from the library's
+    closed form), and converting a volume-measure density into that chart multiplies by the
+    metric volume factor: ``λ(z)^n`` on the ball, ``√det G = 1/(√c·x₀)`` in the hyperboloid's
+    spatial chart (``G = I - s sᵀ/x₀²``, so ``det G = 1/(c·x₀²)``).
+    """
+    n = 3
+    hyperboloid, poincare = Hyperboloid(dtype=_F64), Poincare(dtype=_F64)
+    sigma_DD = jnp.asarray([[0.30, 0.05, 0.0], [0.05, 0.22, 0.03], [0.0, 0.03, 0.18]], dtype=_F64)
+    mu_A = hyperboloid.expmap_0(hyperboloid.embed_spatial_0(jnp.asarray([0.4, -0.25, 0.1], dtype=_F64)), c)
+    mu_ball_D = iso.hyperboloid_to_poincare(mu_A, c)
+    gauss = scipy.stats.multivariate_normal(mean=np.zeros(n), cov=np.asarray(sigma_DD))
+
+    def spatial_of(v_D):
+        """Sampling map into the hyperboloid's spatial chart: s(v) = expmap_μ(PT_{0→μ}[0, v])_s."""
+        u_A = hyperboloid.ptransp_0(hyperboloid.embed_spatial_0(v_D), mu_A, c)
+        return hyperboloid.expmap(u_A, mu_A, c)[1:]
+
+    def ball_of(v_D):
+        """Sampling map into the ball: z(v) = μ ⊕ exp_0(v/2) (the /2 is λ(0) = 2)."""
+        return poincare.addition(mu_ball_D, poincare.expmap_0(v_D / 2.0, c), c)
+
+    draws_ND = np.random.default_rng(0).multivariate_normal(np.zeros(n), np.asarray(sigma_DD), size=4)
+    for v_D in jnp.asarray(draws_ND, dtype=_F64):
+        log_n_v = float(gauss.logpdf(np.asarray(v_D)))
+
+        s_D = spatial_of(v_D)
+        x0 = jnp.sqrt(1.0 / c + jnp.sum(s_D**2))
+        z_A = jnp.concatenate([x0[None], s_D])
+        lp_A = wrapped_normal_hyperboloid.log_prob(z_A, mu_A, sigma_DD, c, manifold_module=hyperboloid)
+        lhs_hyp = float(lp_A - jnp.log(jnp.sqrt(c) * x0))  # log(p_vol · √det G)
+        rhs_hyp = log_n_v - float(jnp.log(jnp.abs(jnp.linalg.det(jax.jacfwd(spatial_of)(v_D)))))
+        assert lhs_hyp == pytest.approx(rhs_hyp, abs=1e-10)
+
+        z_D = ball_of(v_D)
+        lam = 2.0 / (1.0 - c * jnp.sum(z_D**2))
+        lp_D = wrapped_normal_poincare.log_prob(z_D, mu_ball_D, sigma_DD, c, manifold_module=poincare)
+        lhs_ball = float(lp_D + n * jnp.log(lam))  # log(p_vol · λ^n)
+        rhs_ball = log_n_v - float(jnp.log(jnp.abs(jnp.linalg.det(jax.jacfwd(ball_of)(v_D)))))
+        assert lhs_ball == pytest.approx(rhs_ball, abs=1e-10)
+
+
+def test_log_prob_flat_limit_matches_scipy_gaussian() -> None:
+    """(c) At c = 1e-4 both models reduce to a Euclidean Gaussian in Riemannian coordinates.
+
+    Hyperbolic space flattens as c → 0, so ``log p(exp_0(v)) → log N(v; 0, Σ)`` with the volume
+    measure tending to the Lebesgue one. The residual here is the O(c·r²) curvature correction
+    (~1e-4), while a dropped 2π, a dropped ``|Σ|`` or a mishandled full covariance is an O(1)
+    offset — hence the 1e-3 tolerance rather than a loose one.
+    """
+    c, n = 1e-4, 3
+    hyperboloid, poincare = Hyperboloid(dtype=_F64), Poincare(dtype=_F64)
+    sigma_DD = jnp.asarray([[0.30, 0.05, 0.0], [0.05, 0.22, 0.03], [0.0, 0.03, 0.18]], dtype=_F64)
+    v_ND = jnp.asarray(np.random.default_rng(1).multivariate_normal(np.zeros(n), np.asarray(sigma_DD), size=8), dtype=_F64)
+    reference_N = scipy.stats.multivariate_normal(mean=np.zeros(n), cov=np.asarray(sigma_DD)).logpdf(np.asarray(v_ND))
+
+    mu_0_A = hyperboloid.create_origin(c, n)
+    z_NA = jax.vmap(lambda v_D: hyperboloid.expmap(hyperboloid.embed_spatial_0(v_D), mu_0_A, c))(v_ND)
+    lp_N = wrapped_normal_hyperboloid.log_prob(z_NA, mu_0_A, sigma_DD, c, manifold_module=hyperboloid)
+    assert np.allclose(np.asarray(lp_N), reference_N, atol=1e-3)
+
+    # Ball: exp_0 consumes v/2 because λ(0) = 2, so v is again the Riemannian displacement.
+    z_ND = jax.vmap(lambda v_D: poincare.expmap_0(v_D / 2.0, c))(v_ND)
+    lp_ball_N = wrapped_normal_poincare.log_prob(z_ND, jnp.zeros(n, dtype=_F64), sigma_DD, c, manifold_module=poincare)
+    assert np.allclose(np.asarray(lp_ball_N), reference_N, atol=1e-3)
+
+
+def test_log_prob_agrees_across_the_stereographic_isometry() -> None:
+    """(d) The two models assign the same log-density to corresponding points — no correction.
+
+    ``hyperboloid_to_poincare`` is an isometry, so it carries the Riemannian volume measure over
+    unchanged and the two densities must agree pointwise with *no* Jacobian factor. A model that
+    silently returned a Lebesgue-chart density on one side would need a ``λ^n`` correction here.
+    """
+    c = 1.3
+    hyperboloid, poincare = Hyperboloid(dtype=_F64), Poincare(dtype=_F64)
+    sigma_DD = jnp.asarray([[0.30, 0.05, 0.0], [0.05, 0.22, 0.03], [0.0, 0.03, 0.18]], dtype=_F64)
+    mu_A = hyperboloid.expmap_0(hyperboloid.embed_spatial_0(jnp.asarray([0.4, -0.25, 0.1], dtype=_F64)), c)
+
+    z_NA = wrapped_normal_hyperboloid.sample(
+        jax.random.PRNGKey(3), mu_A, sigma_DD, c, sample_shape=(16,), manifold_module=hyperboloid
+    )
+    lp_hyp_N = wrapped_normal_hyperboloid.log_prob(z_NA, mu_A, sigma_DD, c, manifold_module=hyperboloid)
+
+    z_ball_ND = jax.vmap(iso.hyperboloid_to_poincare, in_axes=(0, None))(z_NA, c)
+    mu_ball_D = iso.hyperboloid_to_poincare(mu_A, c)
+    lp_ball_N = wrapped_normal_poincare.log_prob(z_ball_ND, mu_ball_D, sigma_DD, c, manifold_module=poincare)
+
+    assert jnp.allclose(lp_hyp_N, lp_ball_N, atol=1e-10)
+
+
+# =============================================================================================
+# Batched-mean log_prob (audit M2-03, library fix)
+# =============================================================================================
+
+
+def test_log_prob_accepts_batched_mu_with_sample_shape() -> None:
+    """log_prob handles ``sample``'s own output when the mean is batched (used to raise).
+
+    ``z`` is ``(*S, *B, dim)`` and ``mu`` is ``(*B, dim)``: the sample axes broadcast the mean
+    while the batch axes pair with it. Step 2 (parallel transport to the origin) used to vmap
+    ``u`` and ``mu`` together on axis 0, pairing the leading *sample* axis with the *batch*
+    axis — a TypeError whenever S != B, and a silently mispaired answer at S == B. The
+    per-entry scalar-mean calls below are the oracle for the pairing.
+    """
+    c = 1.0
+    hyperboloid, poincare = Hyperboloid(dtype=_F64), Poincare(dtype=_F64)
+    sigma = 0.3
+    key = jax.random.PRNGKey(0)
+
+    mu_hyp_BA = jax.vmap(lambda m_A: hyperboloid.proj(m_A, c))(
+        jnp.asarray([[1.0, 0.0, 0.0], [1.0, 0.2, -0.1], [1.0, -0.3, 0.15]], dtype=_F64)
+    )
+    mu_ball_BD = jnp.asarray([[0.0, 0.0], [0.2, -0.1], [-0.3, 0.15]], dtype=_F64)
+
+    # S != B (the TypeError case) and S == B (the silent-mispairing case).
+    for n_samples in (5, 3):
+        z_SBA = wrapped_normal_hyperboloid.sample(
+            key, mu_hyp_BA, sigma, c, sample_shape=(n_samples,), manifold_module=hyperboloid
+        )
+        lp_SB = wrapped_normal_hyperboloid.log_prob(z_SBA, mu_hyp_BA, sigma, c, manifold_module=hyperboloid)
+        assert lp_SB.shape == (n_samples, 3)
+        for s in range(n_samples):
+            for b in range(3):
+                one = wrapped_normal_hyperboloid.log_prob(z_SBA[s, b], mu_hyp_BA[b], sigma, c, manifold_module=hyperboloid)
+                assert float(lp_SB[s, b]) == pytest.approx(float(one), abs=1e-12)
+
+        z_ball_SBD = wrapped_normal_poincare.sample(
+            key, mu_ball_BD, sigma, c, sample_shape=(n_samples,), manifold_module=poincare
+        )
+        lp_ball_SB = wrapped_normal_poincare.log_prob(z_ball_SBD, mu_ball_BD, sigma, c, manifold_module=poincare)
+        assert lp_ball_SB.shape == (n_samples, 3)
+        for s in range(n_samples):
+            for b in range(3):
+                one = wrapped_normal_poincare.log_prob(z_ball_SBD[s, b], mu_ball_BD[b], sigma, c, manifold_module=poincare)
+                assert float(lp_ball_SB[s, b]) == pytest.approx(float(one), abs=1e-12)
+
+    # Multi-axis sample_shape keeps every sample axis outside the batch axis.
+    z_224A = wrapped_normal_hyperboloid.sample(key, mu_hyp_BA, sigma, c, sample_shape=(2, 4), manifold_module=hyperboloid)
+    lp_224 = wrapped_normal_hyperboloid.log_prob(z_224A, mu_hyp_BA, sigma, c, manifold_module=hyperboloid)
+    assert lp_224.shape == (2, 4, 3)
+    assert float(lp_224[1, 2, 0]) == pytest.approx(
+        float(wrapped_normal_hyperboloid.log_prob(z_224A[1, 2, 0], mu_hyp_BA[0], sigma, c, manifold_module=hyperboloid)),
+        abs=1e-12,
+    )
+
+
+# =============================================================================================
+# Gradients at the mean (audit M2-08, library fix)
+# =============================================================================================
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_log_prob_gradient_at_the_mean_is_finite_and_zero(dtype) -> None:
+    """∇_z log p(z) is finite and vanishes at z = μ, in both models and both dtypes.
+
+    z = μ is the density's maximum, so the gradient there is exactly 0 — but the Poincaré path
+    reached it through ``sqrt(Σv²)`` with v = 0, whose derivative is infinite, and returned NaN
+    (in float64 as much as float32). Reaching for a KL term or a MAP objective at the mean is
+    the routine way to hit this.
+    """
+    c = 1.0
+    sigma = jnp.asarray(0.5, dtype=dtype)
+    hyperboloid, poincare = Hyperboloid(dtype=dtype), Poincare(dtype=dtype)
+
+    spatial_D = jnp.asarray([0.3, -0.2, 0.1], dtype=dtype)
+    cases = [
+        ("hyperboloid origin", wrapped_normal_hyperboloid, hyperboloid, hyperboloid.create_origin(c, 3)),
+        (
+            "hyperboloid offset",
+            wrapped_normal_hyperboloid,
+            hyperboloid,
+            hyperboloid.expmap_0(hyperboloid.embed_spatial_0(spatial_D), c),
+        ),
+        ("ball origin", wrapped_normal_poincare, poincare, jnp.zeros(3, dtype=dtype)),
+        ("ball offset", wrapped_normal_poincare, poincare, jnp.asarray([0.2, -0.1, 0.05], dtype=dtype)),
+    ]
+    for name, module, manifold, mu in cases:
+        grad = jax.grad(lambda z: module.log_prob(z, mu, sigma, c, manifold_module=manifold))(mu)  # noqa: B023
+        assert bool(jnp.all(jnp.isfinite(grad))), f"{name}: non-finite gradient {grad}"
+        assert float(jnp.max(jnp.abs(grad))) == pytest.approx(0.0, abs=1e-6), f"{name}: gradient {grad}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("n", [2, 3, 5])
+def test_log_det_jacobian_at_zero_radius(dtype, n: int) -> None:
+    """``_log_det_jacobian_from_r`` is 0 with a finite 0 gradient at r = 0, and exact elsewhere.
+
+    A single ``jnp.where`` cannot hide the singular branch: ``log(sinh 0) - log 0`` is NaN and
+    reverse-mode AD multiplies the *unselected* branch by zero, giving 0·NaN = NaN. Neither
+    log_prob can reach r = 0 (both floor the radius first), so only a direct call exercises it.
+    """
+    c = 1.7
+    value = _log_det_jacobian_from_r(jnp.asarray(0.0, dtype=dtype), c, n)
+    grad = jax.grad(lambda r: _log_det_jacobian_from_r(r, c, n))(jnp.asarray(0.0, dtype=dtype))
+    assert float(value) == pytest.approx(0.0, abs=1e-12)
+    assert bool(jnp.isfinite(grad)) and float(grad) == pytest.approx(0.0, abs=1e-12)
+
+    # Away from the singularity the value is the plain closed form (independent NumPy).
+    for r in (0.25, 2.0):
+        x = np.sqrt(c) * r
+        expected = (n - 1) * np.log(np.sinh(x) / x)
+        got = float(_log_det_jacobian_from_r(jnp.asarray(r, dtype=_F64), c, n))
+        assert got == pytest.approx(float(expected), rel=1e-12)
+
+
+# =============================================================================================
+# _common building blocks (audit M2-09)
+# =============================================================================================
+
+
+@pytest.mark.parametrize("sigma_kind", ["scalar", "diag", "full"])
+def test_gaussian_log_prob_matches_scipy(sigma_kind: str) -> None:
+    """``gaussian_log_prob`` equals scipy's multivariate normal for all three sigma forms.
+
+    Also pins the sigma → covariance convention: a scalar/diagonal sigma is a standard
+    *deviation* (squared into the covariance), a matrix is the covariance itself. Swapping those
+    readings leaves every shape and finiteness check in this file green.
+    """
+    n = 3
+    sigma = _sigma_for(sigma_kind, n, _F64)
+    cov_DD = np.asarray(sigma_to_cov(sigma, n, _F64))
+
+    if sigma_kind == "scalar":
+        assert np.allclose(cov_DD, 0.3**2 * np.eye(n))
+    elif sigma_kind == "diag":
+        assert np.allclose(cov_DD, np.diag(np.asarray([0.2, 0.3, 0.4]) ** 2))
+    else:
+        assert np.allclose(cov_DD, np.asarray(sigma))
+
+    v_ND = np.random.default_rng(2).multivariate_normal(np.zeros(n), cov_DD, size=6)
+    expected_N = scipy.stats.multivariate_normal(mean=np.zeros(n), cov=cov_DD).logpdf(v_ND)
+    got_N = gaussian_log_prob(jnp.asarray(v_ND, dtype=_F64), sigma, n, _F64)
+    assert np.allclose(np.asarray(got_N), expected_N, atol=1e-12)
+
+
+def test_sigma_to_cov_rejects_mismatched_dimensions() -> None:
+    """Both validation branches raise: a diagonal of the wrong length and a non-(n, n) matrix."""
+    with pytest.raises(ValueError, match="Diagonal sigma must have length 3"):
+        sigma_to_cov(jnp.asarray([0.1, 0.2], dtype=_F64), 3, _F64)
+    with pytest.raises(ValueError, match=r"Covariance matrix must be \(3, 3\)"):
+        sigma_to_cov(jnp.eye(2, dtype=_F64), 3, _F64)

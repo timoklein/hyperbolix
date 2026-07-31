@@ -19,10 +19,17 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hyperbolix.decomposition import HoroPCA, fit_horopca, frechet_mean, horo_projection, horopca_loss
+from hyperbolix.decomposition import (
+    HoroPCA,
+    fit_horopca,
+    frechet_mean,
+    horo_projection,
+    horopca_loss,
+    transform_horopca,
+)
 from hyperbolix.decomposition.horopca import _fit_jit, lift_ideals, orthonormalize_rows
 from hyperbolix.distributions import wrapped_normal_hyperboloid as wn
-from hyperbolix.manifolds import Hyperboloid, Poincare
+from hyperbolix.manifolds import Euclidean, Hyperboloid, Poincare
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
 from hyperbolix.utils.helpers import compute_pairwise_distances
@@ -389,3 +396,80 @@ def test_poincare_boundary_input_is_finite(dtype):
     assert np.isfinite(np.asarray(model.components_)).all()
     assert np.isfinite(np.asarray(model.losses_)).all()
     assert np.isfinite(np.asarray(z)).all()
+
+
+# --- 21. transform_horopca: the ball read-out is an isometry (audit M2-06) --------------
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("k", [1, 2, 3])
+def test_transform_horopca_ball_coordinates_are_isometric(dtype, c, k):
+    """Pairwise distances agree between the projected hyperboloid points and the K-ball read-out.
+
+    ``transform_horopca``'s second output is ``hyperboloid_to_poincare(proj) @ q_orthoᵀ`` — the
+    docstring claims that is an isometry onto the K-dimensional ball, which holds only because
+    the projected spatial parts already lie in ``span(q_ortho)`` and the isometry is radial. The
+    file otherwise checked the read-out for shape and in-ball membership only, so dropping the
+    frame rotation, transposing it, or reading off the wrong K coordinates all passed.
+    """
+    atol = 4e-3 if dtype == jnp.float32 else 1e-6
+    H, P = Hyperboloid(dtype=dtype), Poincare(dtype=dtype)
+    dim = 6
+    x_NA = _hyp_points(19, 20, dim, c, sigma=0.5, dtype=dtype)
+    q_KD = _ortho_q(2, k, dim, dtype)
+
+    proj_NA, ball_NK = transform_horopca(x_NA, q_KD, c)
+    assert ball_NK.shape == (20, k)
+
+    d_hyp_NN = compute_pairwise_distances(proj_NA, H, c, VERSION_DEFAULT)
+    d_ball_NN = compute_pairwise_distances(ball_NK, P, c, VERSION_DEFAULT)
+    assert jnp.allclose(d_hyp_NN, d_ball_NN, atol=atol)
+
+
+# --- 22. orthonormalize_rows on rank-deficient input (audit M2-12) ----------------------
+@pytest.mark.parametrize(
+    ("name", "q_KD"),
+    [
+        ("duplicate rows", [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+        ("zero row", [[1.0, 2.0, 0.0], [0.0, 0.0, 0.0]]),
+        ("colinear rows", [[1.0, 1.0, 0.0], [2.0, 2.0, 0.0], [0.0, 0.0, 1.0]]),
+    ],
+)
+def test_orthonormalize_rows_on_rank_deficient_input(name, q_KD):
+    """Rank-deficient input still yields finite, exactly row-orthonormal output.
+
+    The horospherical projection's Sherman-Morrison inverse assumes orthonormal rows, so a NaN
+    or a non-orthonormal frame here would surface far downstream as a silently wrong fit — and
+    a fit whose Gaussian init happens to be near-degenerate is exactly how it would arrive.
+
+    Pinned caveat, not a property to rely on: for a rank-deficient input the *span* is not
+    preserved. Householder QR fills the deficient directions with arbitrary complements, so the
+    duplicate-row case returns two distinct axes rather than one repeated direction.
+    """
+    q = jnp.asarray(q_KD, dtype=jnp.float64)
+    out_KD = orthonormalize_rows(q)
+
+    assert out_KD.shape == q.shape
+    assert bool(jnp.isfinite(out_KD).all()), f"{name}: non-finite output {out_KD}"
+    assert jnp.allclose(out_KD @ out_KD.T, jnp.eye(q.shape[0], dtype=jnp.float64), atol=1e-12)
+
+
+# --- 23. HoroPCA input validation (audit M2-13) -----------------------------------------
+def test_horopca_validation_errors():
+    """All four guarded inputs raise: wrong manifold, wrong rank, wrong K, transform before fit."""
+    dtype, c = jnp.float64, 1.0
+    H = Hyperboloid(dtype=dtype)
+    x_NA = _hyp_points(20, 12, 5, c, sigma=0.4, dtype=dtype)
+    key = jax.random.PRNGKey(0)
+
+    with pytest.raises(ValueError, match="supports 'Poincare' or 'Hyperboloid'"):
+        HoroPCA(Euclidean(dtype=dtype), 2)
+
+    with pytest.raises(ValueError, match="Expected a 2D array"):
+        HoroPCA(H, 2).fit(x_NA[0], c, key)
+
+    for bad_k in (0, 6):  # spatial dim is 5
+        with pytest.raises(ValueError, match="n_components must satisfy"):
+            HoroPCA(H, bad_k).fit(x_NA, c, key)
+
+    with pytest.raises(ValueError, match="must be fitted before calling transform"):
+        HoroPCA(H, 2).transform(x_NA)

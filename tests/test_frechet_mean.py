@@ -11,11 +11,12 @@ Correctness anchors (all independent of the iteration itself):
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from hyperbolix.decomposition import frechet_mean
 from hyperbolix.distributions import wrapped_normal_hyperboloid as wn
-from hyperbolix.manifolds import Hyperboloid, Poincare
+from hyperbolix.manifolds import Euclidean, Hyperboloid, Poincare, ProperVelocity
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.nn_layers.hyperboloid_core import lorentz_midpoint
 
@@ -132,3 +133,93 @@ def test_frechet_mean_dtype_and_explicit_init(dtype, c):
 
     mean_explicit = frechet_mean(x, H, c, init_D=x[0], max_iters=300)
     assert jnp.allclose(mean_default, mean_explicit, atol=atol)
+
+
+# =============================================================================================
+# Manifold-generic correctness (audit M2-07)
+#
+# Every test above runs on the Hyperboloid or the Poincaré ball, both of which get a
+# closed-form initial estimate from ``frechet_mean``'s type dispatch. The two below cover the
+# other two branches: Euclidean (where the answer is known exactly) and the generic
+# "start from x[0]" fallback that ProperVelocity takes.
+# =============================================================================================
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_frechet_mean_euclidean_is_the_arithmetic_mean(dtype):
+    """On the Euclidean manifold the Fréchet mean is exactly the arithmetic mean.
+
+    The only closed-form ground truth available for the iteration itself: with logmap(x, m) =
+    x - m the very first Karcher step lands on mean(x) and every later one is a no-op. A wrong
+    step size, a dropped ``mean`` over points, or an off-by-one in the loop shows up here as a
+    plain numeric disagreement rather than as a slower-converging fixed point.
+    """
+    atol = 1e-5 if dtype == jnp.float32 else 1e-12
+    manifold = Euclidean(dtype=dtype)
+    x_NR = jnp.asarray(np.random.default_rng(0).normal(size=(17, 4)), dtype=dtype)
+    mean_R = frechet_mean(x_NR, manifold, 0.0)
+    assert mean_R.dtype == dtype
+    assert jnp.allclose(mean_R, jnp.mean(x_NR, axis=0), atol=atol)
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+def test_frechet_mean_pv_is_a_stationary_point(c):
+    """On ProperVelocity the returned point is a stationary point of Σ d(x_i, ·)².
+
+    Oracle independent of the iteration: autodiff of the Fréchet objective. PV's representation
+    space is unconstrained ℝⁿ and the metric is positive definite, so the Euclidean gradient
+    vanishes exactly where the Riemannian one does. The perturbed control fixes the scale — the
+    gradient is ~1e1 half a unit away, so ~1e-5 at the returned mean is not a vacuous bound.
+    """
+    dtype = jnp.float64  # the residual floor below is the f64 Karcher tolerance, not a property
+    manifold = ProperVelocity(dtype=dtype)
+    x_NR = jnp.asarray(np.random.default_rng(1).normal(size=(20, 4)) / np.sqrt(c), dtype=dtype)
+
+    def objective(mean_R):
+        return jnp.sum(jax.vmap(manifold.dist, in_axes=(0, None, None))(x_NR, mean_R, c) ** 2)
+
+    mean_R = frechet_mean(x_NR, manifold, c, max_iters=300)
+    assert float(jnp.linalg.norm(jax.grad(objective)(mean_R))) < 1e-5
+    assert float(jnp.linalg.norm(jax.grad(objective)(mean_R + 0.5))) > 1.0
+
+
+# =============================================================================================
+# Iteration contract (audit M2-10)
+# =============================================================================================
+
+
+def test_frechet_mean_iteration_knobs_change_the_result():
+    """``max_iters`` and ``tol`` actually gate the loop (they are not decorative).
+
+    Both were passed by every caller and asserted by nothing: a ``while_loop`` condition that
+    ignored either one — or a body that ran to convergence regardless — was invisible. A widely
+    spread cloud (sigma = 0.9) is what makes one Karcher step visibly short of the fixed point.
+    """
+    dtype, c = jnp.float64, 1.0
+    H = Hyperboloid(dtype=dtype)
+    x_NR = _hyp_points(4, 24, 5, c, sigma=0.9, dtype=dtype)
+
+    converged_R = frechet_mean(x_NR, H, c, max_iters=200)
+    one_step_R = frechet_mean(x_NR, H, c, max_iters=1)
+    loose_tol_R = frechet_mean(x_NR, H, c, tol=1e-1)
+
+    assert float(H.dist(one_step_R, converged_R, c)) > 1e-2
+    assert float(H.dist(loose_tol_R, converged_R, c)) > 1e-3
+    # Tightening past the default barely moves the answer: the default tol = 1e-8 on the tangent
+    # update already puts the estimate within ~1e-7 geodesic of the tol = 1e-14 fixed point,
+    # five orders below the two gaps asserted above.
+    assert float(H.dist(frechet_mean(x_NR, H, c, tol=1e-14, max_iters=200), converged_R, c)) < 1e-6
+
+
+def test_frechet_mean_is_not_reverse_mode_differentiable():
+    """Reverse-mode AD through the Karcher loop raises — the documented ``while_loop`` limit.
+
+    Pinned rather than worked around: the docstring promises the loop is "used purely as a
+    numerical solver", and a caller who wires the mean into a loss needs the failure to be this
+    explicit error rather than a silently wrong gradient.
+    """
+    dtype, c = jnp.float64, 1.0
+    H = Hyperboloid(dtype=dtype)
+    x_NR = _hyp_points(4, 8, 5, c, sigma=0.4, dtype=dtype)
+    with pytest.raises(ValueError, match=r"Reverse-mode differentiation does not work for lax\.while_loop"):
+        jax.grad(lambda pts_NR: jnp.sum(frechet_mean(pts_NR, H, c)))(x_NR)

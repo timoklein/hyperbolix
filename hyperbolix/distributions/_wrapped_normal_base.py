@@ -37,16 +37,45 @@ def _log_det_jacobian_from_r(
     sqrt_c_r = sqrt_c * r
 
     threshold = 1e-3
+    small = sqrt_c_r < threshold
 
-    # Standard: log(sinh(x)/x) = log(sinh(x)) - log(x)
-    log_ratio_standard = jnp.log(jnp.sinh(sqrt_c_r)) - jnp.log(sqrt_c_r)
+    # Standard: log(sinh(x)/x) = log(sinh(x)) - log(x).
+    # Double-where: at r = 0 the standard branch is log(0) - log(0) = NaN, and reverse-mode AD
+    # propagates that NaN through the *unselected* side of a single jnp.where. Feeding the
+    # standard branch a dummy x = 1 wherever the Taylor branch wins keeps the values identical
+    # (the branch is discarded there) while making the gradient finite.
+    sqrt_c_r_safe = jnp.where(small, jnp.ones_like(sqrt_c_r), sqrt_c_r)
+    log_ratio_standard = jnp.log(jnp.sinh(sqrt_c_r_safe)) - jnp.log(sqrt_c_r_safe)
 
     # Taylor: log(sinh(x)/x) ~ x^2/6
     log_ratio_taylor = (c * r**2) / 6.0
 
-    log_ratio = jnp.where(sqrt_c_r < threshold, log_ratio_taylor, log_ratio_standard)
+    log_ratio = jnp.where(small, log_ratio_taylor, log_ratio_standard)
 
     return (n - 1) * log_ratio
+
+
+def _vmap_sample_and_batch(fn, n_sample_dims: int, n_batch_dims: int):
+    """Lift a single-point ``fn(x_dim, mu_dim)`` to inputs shaped ``(*S, *B, dim)`` / ``(*B, dim)``.
+
+    The mean's own batch axes ``B`` pair elementwise with the trailing axes of ``x``; the
+    leading sample axes ``S`` broadcast the mean. Building the vmaps inside-out (batch first,
+    then samples) is what makes the outermost vmap correspond to the outermost axis — the same
+    order :func:`_batched_transform` uses on the sampling side.
+
+    Args:
+        fn: Single-point function ``(x_dim, mu_dim) -> out``.
+        n_sample_dims: Number of leading sample axes S (mean broadcast over these).
+        n_batch_dims: Number of mean batch axes B (paired).
+
+    Returns:
+        A callable ``(x, mu) -> out`` accepting the batched shapes.
+    """
+    for _ in range(n_batch_dims):
+        fn = jax.vmap(fn)
+    for _ in range(n_sample_dims):
+        fn = jax.vmap(fn, in_axes=(0, None))
+    return fn
 
 
 def _batched_transform(
