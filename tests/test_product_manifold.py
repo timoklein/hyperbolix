@@ -245,22 +245,35 @@ class TestConstruction:
 
 
 class TestCurvatureSequenceValidation:
-    """ProductManifold methods require an explicit per-factor curvature sequence."""
+    """ProductManifold methods require an explicit per-factor curvature sequence.
 
-    def test_scalar_c_raises(self, product, rng):
-        x = _make_product_point(product, rng)
-        y = _make_product_point(product, rng)
+    Pinned to a single (config, dtype): these are argument-validation and structural-protocol
+    checks in ``ProductManifold`` itself. No factor manifold, factor dimension or floating-point
+    precision participates in the code path, so the 5x2 fixture grid re-ran identical work.
+    """
+
+    @pytest.fixture
+    def fixed_product(self) -> ProductManifold:
+        return ProductManifold(
+            (Poincare(c=0.5, dtype=jnp.float64), 2),
+            (Hyperboloid(c=1.5, dtype=jnp.float64), 4),
+            dtype=jnp.float64,
+        )
+
+    def test_scalar_c_raises(self, fixed_product, rng):
+        x = _make_product_point(fixed_product, rng)
+        y = _make_product_point(fixed_product, rng)
         with pytest.raises(TypeError, match="sequence"):
-            product.dist(x, y, 0.0)  # type: ignore[arg-type]
+            fixed_product.dist(x, y, 0.0)  # type: ignore[arg-type]
 
-    def test_wrong_length_raises(self, product, rng):
-        x = _make_product_point(product, rng)
-        y = _make_product_point(product, rng)
-        too_short = (1.0,) * (product.n_factors + 1)
+    def test_wrong_length_raises(self, fixed_product, rng):
+        x = _make_product_point(fixed_product, rng)
+        y = _make_product_point(fixed_product, rng)
+        too_short = (1.0,) * (fixed_product.n_factors + 1)
         with pytest.raises(ValueError, match="curvatures"):
-            product.dist(x, y, too_short)
+            fixed_product.dist(x, y, too_short)
 
-    def test_satisfies_manifold_protocol(self, product):
+    def test_satisfies_manifold_protocol(self, fixed_product):
         """ProductManifold satisfies the structural ``Manifold`` protocol.
 
         The protocol-level ``Curvature`` type was widened to include
@@ -268,7 +281,7 @@ class TestCurvatureSequenceValidation:
         the scalar shape used by ``Poincare``/``Hyperboloid``/etc. under a
         single protocol.
         """
-        assert isinstance(product, Manifold)
+        assert isinstance(fixed_product, Manifold)
 
 
 # ===========================================================================
@@ -277,6 +290,12 @@ class TestCurvatureSequenceValidation:
 
 
 class TestSplitCombine:
+    @pytest.fixture
+    def dtype(self):
+        """f64 only: slicing, concatenation and the arity check are exact structural operations,
+        so the float32 rerun exercised byte-for-byte the same branch."""
+        return jnp.dtype(jnp.float64)
+
     def test_split_shapes(self, product, rng):
         x = _make_product_point(product, rng)
         parts = product.split(x)
@@ -298,12 +317,47 @@ class TestSplitCombine:
 
 
 # ===========================================================================
-# 4. Decomposition correctness
+# 4. Per-factor routing
 # ===========================================================================
 
 
-class TestDecomposition:
-    """Verify that product ops equal per-factor ops concatenated."""
+class TestPerFactorRouting:
+    """Each product op dispatches the right slice, the right extra arguments and the right
+    curvature to the right factor.
+
+    Scope, stated honestly: both sides of every ``allclose`` below call ``product.split`` and the
+    same factor methods, so none of these can catch an error *inside* a factor's math or in the
+    slice boundaries — the round-trip and closed-form tests elsewhere in this file do that. What
+    they do pin, because the test writes it out independently of the implementation, is the
+    routing: argument order per factor and the ``cs``→factor zip.
+    """
+
+    def test_curvature_routes_to_the_matching_factor(self):
+        """Reversing ``cs`` must change the result.
+
+        The per-op tests above zip ``cs`` to factors independently of the implementation, but they
+        run on configs whose factors differ in dimension (so a mis-zip would crash rather than
+        return a wrong number) or share a curvature (so a mis-zip is invisible). Two equal-dim
+        Poincaré factors at clearly separated curvatures make the routing observable on its own.
+        """
+        pm = ProductManifold(
+            (Poincare(dtype=jnp.float64), 3),
+            (Poincare(dtype=jnp.float64), 3),
+            dtype=jnp.float64,
+        )
+        cs = (0.2, 5.0)
+        cs_rev = tuple(reversed(cs))
+
+        # proj: ‖·‖ = 0.6 is interior to the c=0.2 ball (radius 2.24) but outside the c=5.0 ball
+        # (radius 0.447), so only the correctly-routed curvature leaves the first block untouched.
+        x = jnp.array([0.6, 0.0, 0.0, 0.1, 0.0, 0.0], dtype=jnp.float64)
+        assert not jnp.allclose(pm.proj(x, cs), pm.proj(x, cs_rev))
+
+        v = jnp.array([0.3, -0.1, 0.2, 0.05, 0.4, -0.3], dtype=jnp.float64)
+        assert not jnp.allclose(pm.expmap_0(v, cs), pm.expmap_0(v, cs_rev))
+
+        y = pm.expmap_0(v, cs)
+        assert not jnp.allclose(pm.dist_0(y, cs), pm.dist_0(y, cs_rev))
 
     def test_proj_decomposes(self, product, rng, cs, tolerance):
         atol, _ = tolerance
@@ -443,16 +497,6 @@ class TestDistance:
         dxz = product.dist(x, z, cs)
         assert dxz <= dxy + dyz + 1e-5
 
-    def test_pythagorean_decomposition(self, product, rng, cs, tolerance):
-        """d_P^2 == sum(d_i^2)"""
-        atol, _ = tolerance
-        x = _make_product_point(product, rng)
-        y = _make_product_point(product, rng)
-        d_product = product.dist(x, y, cs)
-        d_components = product.component_dist(x, y, cs)
-        expected = jnp.sqrt(jnp.sum(d_components**2))
-        assert jnp.allclose(d_product, expected, atol=atol)
-
     def test_dist_0(self, product, rng, cs, tolerance):
         atol, _ = tolerance
         x = _make_product_point(product, rng)
@@ -461,7 +505,11 @@ class TestDistance:
         d_to_origin = product.dist(x, o, cs)
         assert jnp.allclose(d_from_origin, d_to_origin, atol=atol)
 
-    def test_dist_l1(self, product, rng, cs, tolerance):
+    def test_dist_l1_aggregator_wiring(self, product, rng, cs, tolerance):
+        """``dist_l1`` sums the component distances — i.e. the public name is wired to the L1
+        aggregator, not to L2 or min. Deliberately narrow: the aggregator is a one-liner over
+        ``component_dist``, so this cannot say anything about the component distances themselves
+        (``test_dist_0`` and the ``TestEdgeCases`` cross-checks anchor those)."""
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
@@ -469,21 +517,15 @@ class TestDistance:
         d_components = product.component_dist(x, y, cs)
         assert jnp.allclose(d_l1, jnp.sum(d_components), atol=atol)
 
-    def test_dist_min(self, product, rng, cs, tolerance):
+    def test_dist_min_aggregator_wiring(self, product, rng, cs, tolerance):
+        """``dist_min`` takes the minimum component distance. Same narrow scope as
+        ``test_dist_l1_aggregator_wiring``: it pins the wiring, not the components."""
         atol, _ = tolerance
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
         d_min = product.dist_min(x, y, cs)
         d_components = product.component_dist(x, y, cs)
         assert jnp.allclose(d_min, jnp.min(d_components), atol=atol)
-
-    def test_l2_geq_component_dists(self, product, rng, cs):
-        """L2 product distance >= every component distance."""
-        x = _make_product_point(product, rng)
-        y = _make_product_point(product, rng)
-        d_l2 = product.dist(x, y, cs)
-        d_components = product.component_dist(x, y, cs)
-        assert jnp.all(d_l2 >= d_components - 1e-6)
 
 
 # ===========================================================================
@@ -526,6 +568,12 @@ class TestRoundTrips:
 
 
 class TestOrigin:
+    @pytest.fixture
+    def dtype(self):
+        """f64 only: the origin is a per-factor constant and these are exactness claims about it,
+        not precision claims — the f32 rerun added no distinct code path."""
+        return jnp.dtype(jnp.float64)
+
     def test_origin_on_manifold(self, product, cs):
         o = product.origin(cs)
         assert o.shape == (product.total_dim,)
@@ -550,6 +598,12 @@ class TestOrigin:
 
 
 class TestTangentSpace:
+    @pytest.fixture
+    def dtype(self):
+        """f64 only: these are structural identities (norm↔inner, idempotence, membership) that
+        route through the same per-factor dispatch in both precisions."""
+        return jnp.dtype(jnp.float64)
+
     def test_tangent_norm_consistent_with_inner(self, product, rng, cs, tolerance):
         """tangent_norm(v, x) == sqrt(tangent_inner(v, v, x))"""
         atol, _ = tolerance
@@ -578,6 +632,12 @@ class TestTangentSpace:
 
 
 class TestJITVmap:
+    @pytest.fixture
+    def dtype(self):
+        """f64 only: ``jax.jit``/``jax.vmap`` are semantics-preserving transforms, so what is being
+        pinned is tracer compatibility of the per-factor Python loop — dtype-independent."""
+        return jnp.dtype(jnp.float64)
+
     def test_dist_jit(self, product, rng, cs):
         x = _make_product_point(product, rng)
         y = _make_product_point(product, rng)
@@ -618,6 +678,9 @@ class TestJITVmap:
         expmap_batch = jax.vmap(product.expmap_0, in_axes=(0, None))
         results = expmap_batch(vs, cs)
         assert results.shape == (batch_size, product.total_dim)
+        # Compare each row to the eager call: a shape-only assertion passes for an identity map.
+        for i in range(batch_size):
+            assert jnp.allclose(results[i], product.expmap_0(vs[i], cs), atol=1e-5)
 
 
 # ===========================================================================
@@ -632,6 +695,9 @@ class TestGradients:
         grad_fn = jax.grad(lambda x_: product.dist(x_, y, cs))
         g = grad_fn(x)
         assert jnp.all(jnp.isfinite(g))
+        # An all-zero gradient is finite too: a stray stop_gradient in the per-factor path would
+        # otherwise pass silently.
+        assert jnp.any(jnp.abs(g) > 1e-8), "gradient is identically zero — a stop_gradient leaked in"
 
     def test_expmap_0_grad_finite(self, product, rng, cs):
         raw = jnp.asarray(rng.normal(0, 0.1, (product.total_dim,)), dtype=product.dtype)
@@ -641,6 +707,7 @@ class TestGradients:
         grad_fn = jax.grad(lambda v_: product.dist(product.expmap_0(v_, cs), y, cs))
         g = grad_fn(v)
         assert jnp.all(jnp.isfinite(g))
+        assert jnp.any(jnp.abs(g) > 1e-8), "gradient is identically zero — a stop_gradient leaked in"
 
     def test_learnable_curvature_gradient(self):
         """Gradients flow to per-factor LearnableCurvature instances via the

@@ -312,7 +312,15 @@ def test_commutative_diagram(
 
 
 def test_jit_and_vmap_compatibility(pv_points: jnp.ndarray, curvature: float, tolerance: tuple[float, float]):
-    """All four new PV maps are JIT- and vmap-compatible and shape-correct."""
+    """All four new PV maps are JIT- and vmap-compatible, shape-correct, and produce the SAME
+    values under ``jax.jit`` as eagerly.
+
+    The jitted-vs-eager comparison is the part that makes this a jit test at all: without it the
+    body only re-ran the round-trips already covered by ``test_round_trip_hyperboloid_pv`` and
+    ``test_round_trip_poincare_pv`` (``jax.jit`` is semantics-preserving, so a round-trip through
+    jitted maps says nothing the eager one does not). The shape assertions stay — they are the only
+    place ``DIM+1`` vs ``DIM`` is pinned.
+    """
     c = curvature
     atol, rtol = tolerance
 
@@ -323,11 +331,13 @@ def test_jit_and_vmap_compatibility(pv_points: jnp.ndarray, curvature: float, to
 
     z = to_h(pv_points, c)
     assert z.shape == (N_POINTS, DIM + 1)  # gains the time component
-    assert jnp.allclose(from_h(z, c), pv_points, atol=atol, rtol=rtol)
+    assert jnp.allclose(z, _batch(iso.pv_to_hyperboloid)(pv_points, c), atol=atol, rtol=rtol)
+    assert jnp.allclose(from_h(z, c), _batch(iso.hyperboloid_to_pv)(z, c), atol=atol, rtol=rtol)
 
     y = to_p(pv_points, c)
     assert y.shape == (N_POINTS, DIM)
-    assert jnp.allclose(from_p(y, c), pv_points, atol=atol, rtol=rtol)
+    assert jnp.allclose(y, _batch(iso.pv_to_poincare)(pv_points, c), atol=atol, rtol=rtol)
+    assert jnp.allclose(from_p(y, c), _batch(iso.poincare_to_pv)(y, c), atol=atol, rtol=rtol)
 
 
 @pytest.mark.parametrize("dim", [1, 2, 5, 10])

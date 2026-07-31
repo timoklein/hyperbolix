@@ -1,5 +1,7 @@
 """Tests for curvature helpers and manifold-as-plain-class behavior."""
 
+import math
+
 import jax
 import jax.numpy as jnp
 import optax
@@ -66,9 +68,8 @@ class TestEuclidean:
         m = Euclidean()
         assert m.c == 0.0
 
-    def test_not_nnx_module(self):
-        m = Euclidean()
-        assert not isinstance(m, nnx.Module)
+    # ``test_not_nnx_module`` used to live here too, byte-identical to
+    # ``TestManifoldIsPlainClass::test_euclidean_not_nnx_module`` above; kept only once.
 
 
 # ===========================================================================
@@ -228,7 +229,14 @@ class TestLearnableCurvatureGradients:
     @pytest.mark.parametrize("parameterization", ["softplus", "log"])
     def test_straight_through_clamp_keeps_gradient_nonzero_past_boundary(self, parameterization):
         """straight_through_clamp=True fixes the gradient-dead ratchet: the forward
-        value stays clamped, but the gradient keeps flowing past the boundary."""
+        value stays clamped, but the gradient keeps flowing past the boundary.
+
+        The straight-through contract is a VALUE contract — ``dc/draw`` past the boundary must be
+        the *unclamped* derivative, not merely something nonzero. An implementation returning any
+        nonzero multiple of it (e.g. ``stop_gradient(c_clipped) + 0.001*(c - stop_gradient(c))``)
+        satisfies ``!= 0.0`` while silently rescaling every curvature update, so the expected value
+        is written out here from the parameterization's own derivative.
+        """
         c = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=True)
         # raw=15.0 pushes c well past c_max=10.0 for both parameterizations (softplus(15)~=15,
         # exp(15)~=3.3e6). (The former exp() overflow at large raw is now guarded — see
@@ -241,7 +249,12 @@ class TestLearnableCurvatureGradients:
         val, grads = nnx.value_and_grad(fn)(c)
         assert float(val) == pytest.approx(10.0)  # forward value still clamped
         assert jnp.isfinite(grads.raw[...])
-        assert float(grads.raw[...]) != 0.0
+        # d(softplus)/draw = sigmoid(raw) ≈ 1.0; d(exp)/draw = exp(raw) ≈ 3.269e6.
+        expected = {
+            "softplus": float(jax.nn.sigmoid(jnp.float32(15.0))),
+            "log": math.exp(15.0),
+        }[parameterization]
+        assert float(grads.raw[...]) == pytest.approx(expected, rel=1e-4)
 
     @pytest.mark.parametrize("straight_through", [False, True])
     def test_log_parameterization_no_nan_gradient_on_exp_overflow(self, straight_through):
@@ -262,8 +275,11 @@ class TestLearnableCurvatureGradients:
             # The straight-through contract must survive the exponent cap: the gradient stays nonzero
             # (dc/draw = exp(capped exponent)) so a raw stranded past the cap can re-enter. A plain
             # jnp.minimum satisfies the isfinite check above with gradient 0 — a permanent freeze —
-            # which is exactly the regression this pins.
-            assert float(grads.raw[...]) != 0.0
+            # which is exactly the regression this pins. Pin the VALUE, not just non-zeroness: the
+            # cap makes the derivative exp(0.99·log(f32max)), the largest exponent exp() can take
+            # without overflowing, and any rescaled straight-through would pass a `!= 0` check.
+            expected = math.exp(0.99 * math.log(float(jnp.finfo(jnp.float32).max)))
+            assert float(grads.raw[...]) == pytest.approx(expected, rel=1e-4)
 
 
 # ===========================================================================
@@ -583,7 +599,9 @@ class TestLearnableCurvatureIdentity:
         val, grads = nnx.value_and_grad(fn)(c)
         assert float(val) == pytest.approx(-10.0)  # forward value still clamped
         assert jnp.isfinite(grads.raw[...])
-        assert float(grads.raw[...]) != 0.0
+        # For the identity parameterization the unclamped derivative is exactly 1.0; a rescaled
+        # straight-through (any nonzero multiple) would pass a bare `!= 0.0` check.
+        assert float(grads.raw[...]) == pytest.approx(1.0, rel=1e-6)
 
 
 class TestStereographicCurvatureTraining:

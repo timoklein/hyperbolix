@@ -28,6 +28,13 @@ from flax import nnx
 import hyperbolix.manifolds.hyperboloid as hyp_mod
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.nn_layers import HypConv2DHyperboloidILNN, HypLinearHyperboloidPLFC
+
+# The hard-clip side of every comparison below is the SHIPPED implementation, imported rather than
+# re-implemented. The file previously defined its own `jnp.sinh(jnp.clip(x, -c, c))` copies, which
+# made it a 33-item gate over code that is not in the library: a `math_utils.sinh -> 0.7*jnp.sinh`
+# mutation left all 33 items passing while `test_math_utils.py::test_sinh` failed (audit A3-02).
+from hyperbolix.utils.math_utils import cosh as hard_cosh
+from hyperbolix.utils.math_utils import sinh as hard_sinh
 from hyperbolix.utils.math_utils import smooth_clamp
 
 DTYPES = [jnp.float32, jnp.float64]
@@ -38,20 +45,10 @@ def _clamp(dtype) -> float:
     return math.log(float(jnp.finfo(dtype).max)) * 0.99
 
 
-# Explicit hard-clip and smooth-clamp wrapped variants (the two implementations under comparison).
-def hard_sinh(x):
-    c = _clamp(x.dtype)
-    return jnp.sinh(jnp.clip(x, -c, c))
-
-
+# The smooth-clamp alternative the shipped hard clip is being compared against.
 def smooth_sinh(x):
     c = _clamp(x.dtype)
     return jnp.sinh(smooth_clamp(x, -c, c))
-
-
-def hard_cosh(x):
-    c = _clamp(x.dtype)
-    return jnp.cosh(jnp.clip(x, -c, c))
 
 
 def smooth_cosh(x):
@@ -125,7 +122,7 @@ def test_sinh_clip_vjp_through_square_valid_regime(dtype):
 
     This is the operating regime of every in-scope layer (PLFC bounds the sinh input to ±v_max≪clamp).
     In the saturated tail sinh**2 overflows to inf for BOTH variants — characterized in
-    test_saturated_tail_is_degenerate_for_both, not asserted finite here.
+    test_saturated_tail_gradient_is_degenerate_for_both_clamps, not asserted finite here.
     """
     clamp = _clamp(dtype)
     # Bound inputs well inside the band; sinh(clamp-1) is still enormous, so use a modest range that
@@ -147,10 +144,15 @@ def test_sinh_clip_vjp_through_square_valid_regime(dtype):
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_saturated_tail_is_degenerate_for_both(dtype):
+def test_saturated_tail_gradient_is_degenerate_for_both_clamps(dtype):
     """Characterizes the saturated tail (|x| >= clamp) for BOTH dtypes — the only regime where hard
     clip and smooth clamp differ, and a regime unreachable by in-scope layers (sinh inputs are
     pre-bounded to +-v_max << clamp; clamp is ~87.8 for f32, ~702.7 for f64).
+
+    NOTE FOR WHOEVER SEES THIS FAIL: the last two assertions pin a NEGATIVE property — that
+    ``grad((sinh o clamp)**2)`` is non-finite for both clamps. A failure here most likely means the
+    behaviour IMPROVED (someone made the saturated-tail gradient finite), not that something
+    regressed. Re-baseline the assertion rather than reverting the improvement.
 
     Established facts (identical structure for f32 and f64):
       * forward sinh(clamp) is finite and hard ~= smooth (the only forward gap is the tiny smoothing

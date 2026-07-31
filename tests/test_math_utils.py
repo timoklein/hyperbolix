@@ -2,6 +2,8 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 
 from hyperbolix.utils.math_utils import (
     acosh,
@@ -146,24 +148,38 @@ def test_atanh():
     expected_valid = jnp.atanh(x_valid)
     assert jnp.allclose(result_valid, expected_valid)
 
-    # Test boundary values (should be clamped away from +/-1)
-    x_boundary = jnp.array([-1.1, -1.0, -0.9999, 0.9999, 1.0, 1.1])
-    result_boundary = atanh(x_boundary)
-
-    # Should not contain inf or nan
-    assert jnp.all(jnp.isfinite(result_boundary))
-
-    # Should be antisymmetric
-    assert jnp.allclose(result_boundary[0], -result_boundary[-1], rtol=1e-5)
-    assert jnp.abs(result_boundary[2]) < 1e10  # Should be finite but large
+    # Boundary values are clamped to ±(1 - 10·eps), so the forward value is the EXACT arctanh of
+    # that clamp point. The margin is the whole point of the guard, so it is what gets pinned:
+    # widening it to 1e5·eps (a real accuracy regression near the Poincaré ball boundary — the f32
+    # input error becomes 1.2e-2) drops the f32 value from 7.166 to ~2.6, whereas the previous
+    # `abs(atanh(-0.9999)) < 1e10` bound was ~2e9x too loose to notice any of it.
+    for dt in (jnp.float32, jnp.float64):
+        margin = 10.0 * float(jnp.finfo(dt).eps)
+        expected = float(np.arctanh(1.0 - margin))  # f32 -> 7.166473, f64 -> 17.217108
+        out = np.asarray(atanh(jnp.array([-1.1, -1.0, 1.0, 1.1], dtype=dt)), dtype=np.float64)
+        assert np.allclose(out, np.array([-expected, -expected, expected, expected]), rtol=1e-5)
 
 
 def test_atanh_gradient_at_boundary():
-    """Gradient at and beyond ±1 is finite (the 10*eps margin bounds atanh')."""
-    for dtype in [jnp.float32, jnp.float64]:
-        for x in [-1.1, -1.0, 1.0, 1.1]:
-            g = jax.grad(lambda a: atanh(a))(jnp.asarray(x, dtype=dtype))
-            assert jnp.isfinite(g)
+    """The ±(1 - 10·eps) clamp bounds ``atanh'`` — pin the exact gradient on both sides of it.
+
+    Outside the band the clip's VJP is zero, so the gradient is exactly 0.0; the previous
+    ``isfinite`` assertion could not tell that apart from any other finite value. Just inside the
+    band the clip is a gradient IDENTITY, so the gradient is exactly the unclamped 1/(1 - x²).
+    Together the two pin where the clamp point sits: at a 1e5·eps margin the in-band point below
+    would be clipped instead and its gradient would collapse to 0.
+    """
+    for dt in (jnp.float32, jnp.float64):
+        margin = 10.0 * float(jnp.finfo(dt).eps)
+        # At/beyond ±1, and anywhere inside the margin: saturated, gradient exactly 0.
+        for x in (-1.1, -1.0, 1.0, 1.1, 1.0 - 0.5 * margin):
+            g = jax.grad(atanh)(jnp.asarray(x, dtype=dt))
+            assert float(g) == 0.0, f"clip VJP not saturated at x={x} ({dt.__name__})"
+        # Just inside the clamp point: the guard is a gradient identity.
+        #   f32 -> 2.097155e5, f64 -> 1.125900e14
+        x_in = 1.0 - 2.0 * margin
+        g_in = float(jax.grad(atanh)(jnp.asarray(x_in, dtype=dt)))
+        assert g_in == pytest.approx(1.0 / (1.0 - x_in**2), rel=1e-5)
 
 
 def test_tanh():
