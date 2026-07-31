@@ -14,6 +14,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import (
     HypRegressionHyperboloid,
+    HypRegressionPoincare,
     HypRegressionPoincarePP,
 )
 
@@ -26,6 +27,81 @@ def get_poincare(dtype: jnp.dtype) -> Poincare:
 def get_hyperboloid(dtype: jnp.dtype) -> Hyperboloid:
     """Get dtype-specific Hyperboloid manifold instance."""
     return Hyperboloid(dtype=dtype)
+
+
+# --------------------------------------------------------------------------- #
+# MLR decision-boundary oracles (audit A9-06)
+#
+# A hyperbolic MLR head returns a *signed* distance to a learned hyperplane. The
+# three properties below are the definition of that object and are independent of
+# how the library computes it, so they pin the logit sign that the shape/finiteness
+# tests (and the shared layer contract) leave completely free:
+#   1. zero on the hyperplane,
+#   2. sign follows the side of the hyperplane the point is on,
+#   3. magnitude grows monotonically with the geodesic margin.
+# --------------------------------------------------------------------------- #
+_MARGINS = jnp.array([-0.6, -0.3, -0.1, 0.1, 0.3, 0.6])
+
+
+def _assert_signed_distance_semantics(logits_T, margins_T):
+    """Logits must be negative/positive on the two sides and increase with the margin."""
+    assert bool(jnp.all(logits_T[margins_T < 0] < 0.0)), f"expected negative logits below the hyperplane: {logits_T}"
+    assert bool(jnp.all(logits_T[margins_T > 0] > 0.0)), f"expected positive logits above the hyperplane: {logits_T}"
+    assert bool(jnp.all(jnp.diff(logits_T) > 0.0)), f"logit not monotone in the margin: {logits_T}"
+
+
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_hyp_regression_poincare_pp_decision_boundary(c):
+    """HNN++ head (Shimizu et al. 2020): signed-distance semantics of the logits."""
+    dtype = jnp.float64
+    manifold = get_poincare(dtype)
+    in_dim, out_dim = 3, 2
+
+    layer = HypRegressionPoincarePP(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), param_dtype=dtype)
+    kernel_PD = jnp.array([[0.7, -0.3, 0.2], [-0.4, 0.5, 0.1]], dtype=dtype)
+    bias_P1 = jnp.array([[0.4], [-0.25]], dtype=dtype)
+    layer.kernel[...] = kernel_PD
+    layer.bias[...] = bias_P1
+
+    for k in range(out_dim):
+        # The hyperplane of class k passes through q_k = exp_0(r_k * z_hat_k),
+        # oriented along z_hat_k; walking along that direction crosses it at r_k.
+        z_hat_D = kernel_PD[k] / jnp.linalg.norm(kernel_PD[k])
+        offsets_T = bias_P1[k, 0] + _MARGINS
+
+        q_D = manifold.expmap_0(bias_P1[k, 0] * z_hat_D, c)
+        assert abs(float(layer(q_D[None, :], c=c)[0, k])) < 1e-10
+
+        pts_TD = jax.vmap(manifold.expmap_0, in_axes=(0, None))(offsets_T[:, None] * z_hat_D[None, :], c)
+        _assert_signed_distance_semantics(layer(pts_TD, c=c)[:, k], _MARGINS)
+
+
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_hyp_regression_poincare_decision_boundary(c):
+    """Ganea et al. 2018 head: signed-distance semantics of the logits.
+
+    Here the hyperplane is stored explicitly as a base point ``p`` plus a tangent
+    normal that the layer parallel-transports to ``p``, so the boundary is ``p``
+    itself and the margin axis is the transported normal.
+    """
+    dtype = jnp.float64
+    manifold = get_poincare(dtype)
+    in_dim, out_dim = 3, 2
+
+    layer = HypRegressionPoincare(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), curvature=c, param_dtype=dtype)
+    kernel_PD = jnp.array([[0.7, -0.3, 0.2], [-0.4, 0.5, 0.1]], dtype=dtype)
+    bias_PD = jnp.array([[0.15, 0.05, -0.1], [-0.2, 0.1, 0.05]], dtype=dtype)
+    layer.kernel[...] = kernel_PD
+    layer.bias[...] = bias_PD
+
+    for k in range(out_dim):
+        p_D = manifold.proj(bias_PD[k], c)
+        assert abs(float(layer(p_D[None, :], c=c)[0, k])) < 1e-10
+
+        a_D = manifold.ptransp_0(kernel_PD[k], p_D, c)
+        a_hat_D = a_D / jnp.linalg.norm(a_D)
+        pts_TD = jax.vmap(manifold.expmap, in_axes=(0, None, None))(_MARGINS[:, None] * a_hat_D[None, :], p_D, c)
+        _assert_signed_distance_semantics(layer(pts_TD, c=c)[:, k], _MARGINS)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])

@@ -32,29 +32,50 @@ def x_BD(dtype):
 
 
 # ---------------------------------------------------------------------------
-# 1. Forward shape preservation (alpha=None)
+# 1. Forward shape/dtype and jit, in the parameter-free configurations
+#    (the alpha=0.9 configuration is covered by test_layer_contract.py)
 # ---------------------------------------------------------------------------
 
 
-def test_forward_shape_no_alpha(x_BD, dtype):
-    layer = HyperPPFeatureScaling(dim=D, rngs=nnx.Rngs(0))
+@pytest.mark.parametrize("activation", [None, jax.nn.gelu], ids=["no_activation", "gelu"])
+def test_forward_shape_dtype_and_jit_parameter_free(x_BD, dtype, activation):
+    layer = HyperPPFeatureScaling(dim=D, activation=activation, alpha=None, rngs=nnx.Rngs(0))
+
     y_BD = layer(x_BD, c=1.0)
+
     assert y_BD.shape == (B, D)
     assert y_BD.dtype == dtype
+    assert jnp.all(jnp.isfinite(y_BD))
+    assert jnp.allclose(jax.jit(lambda x: layer(x, c=1.0))(x_BD), y_BD)
 
 
 # ---------------------------------------------------------------------------
-# 2. Various curvatures produce different outputs
+# 2. Curvature enters only through rho_max = atanh(alpha)/sqrt(c)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("c", [0.1, 0.5, 1.0, 2.0])
-def test_curvature_varies_output(x_BD, c):
+@pytest.mark.parametrize("c", [0.1, 0.5, 2.0])
+def test_curvature_scales_output_by_inverse_sqrt_c(x_BD, dtype, c):
+    """The learned rescaling is the only c-dependence, so y(c) = y(1)/sqrt(c) exactly.
+
+    Steps 1-3 (RMSNorm, activation, 1/sqrt(d)) and the sigmoid gate all see the
+    c-independent pre-rescale features; only rho_max = atanh(alpha)/sqrt(c) carries
+    the curvature (van Spengler et al. 2023, Sec. 3.2). The old version of this test
+    guarded its single assertion with ``if c != 1.0`` and carried a c=1.0 parameter
+    that asserted nothing.
+    """
+    atol = 4e-3 if dtype == jnp.float32 else 1e-12
     layer = HyperPPFeatureScaling(dim=D, alpha=0.9, rngs=nnx.Rngs(0))
-    y1_BD = layer(x_BD, c=c)
-    y2_BD = layer(x_BD, c=1.0)
-    if c != 1.0:
-        assert not jnp.allclose(y1_BD, y2_BD), f"c={c} should differ from c=1.0"
+
+    y_c_BD = layer(x_BD, c=c)
+    y_1_BD = layer(x_BD, c=1.0)
+
+    assert not jnp.allclose(y_c_BD, y_1_BD), f"c={c} should differ from c=1.0"
+    assert jnp.allclose(y_c_BD * jnp.sqrt(jnp.array(c, dtype=dtype)), y_1_BD, atol=atol)
+
+    # Parameter-free mode has no rho_max, so it must ignore c entirely.
+    free_layer = HyperPPFeatureScaling(dim=D, alpha=None, rngs=nnx.Rngs(0))
+    assert jnp.allclose(free_layer(x_BD, c=c), free_layer(x_BD, c=1.0), atol=atol)
 
 
 # ---------------------------------------------------------------------------
@@ -75,19 +96,7 @@ def test_rmsnorm_correctness(x_BD, dtype):
 
 
 # ---------------------------------------------------------------------------
-# 4. Custom activation (gelu)
-# ---------------------------------------------------------------------------
-
-
-def test_custom_activation(x_BD, dtype):
-    layer = HyperPPFeatureScaling(dim=D, activation=jax.nn.gelu, alpha=None, rngs=nnx.Rngs(0))
-    y_BD = layer(x_BD, c=1.0)
-    assert y_BD.shape == (B, D)
-    assert jnp.all(jnp.isfinite(y_BD))
-
-
-# ---------------------------------------------------------------------------
-# 5. Gradient computation (parameter-free mode)
+# 4. Gradient computation (parameter-free mode)
 # ---------------------------------------------------------------------------
 
 
@@ -106,24 +115,7 @@ def test_gradients_without_alpha(dtype):
 
 
 # ---------------------------------------------------------------------------
-# 6. JIT compatibility
-# ---------------------------------------------------------------------------
-
-
-def test_jit_no_alpha(x_BD):
-    layer = HyperPPFeatureScaling(dim=D, rngs=nnx.Rngs(0))
-
-    @jax.jit
-    def forward(x):
-        return layer(x, c=1.0)
-
-    y_BD = forward(x_BD)
-    assert y_BD.shape == (B, D)
-    assert jnp.all(jnp.isfinite(y_BD))
-
-
-# ---------------------------------------------------------------------------
-# 7. Alpha validation errors
+# 5. Alpha validation errors
 # ---------------------------------------------------------------------------
 
 
@@ -139,7 +131,7 @@ def test_alpha_out_of_range():
 
 
 # ---------------------------------------------------------------------------
-# 8. Output norm bounded by rho_max
+# 6. Output norm bounded by rho_max
 # ---------------------------------------------------------------------------
 
 
@@ -164,7 +156,7 @@ def test_output_norm_bounded(dtype):
 
 
 # ---------------------------------------------------------------------------
-# 9. Integration: HyperPP -> expmap_0 -> is_in_manifold
+# 7. Integration: HyperPP -> expmap_0 -> is_in_manifold
 # ---------------------------------------------------------------------------
 
 

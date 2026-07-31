@@ -7,6 +7,7 @@ HypConv2DHyperboloid and hcat-specific tests stay here.
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from flax import nnx
 from jax.scipy.special import digamma
@@ -291,6 +292,47 @@ def test_hypconv_hyperboloid_kernel_init_reset_params():
     hcat_out_ambient_dim = hcat_ambient_dim(in_channels, (kernel_size, kernel_size))
     expected_fan_in_std = float(jnp.sqrt(1.0 / hcat_out_ambient_dim))
     assert abs(float(jnp.std(layer_fan_in.kernel[...])) - expected_fan_in_std) < 0.2 * expected_fan_in_std
+
+
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_hypconv_hyperboloid_1x1_matches_numpy_fhcnn(c):
+    """A 1x1 conv is HCat(single point) = identity followed by the FHCNN linear map.
+
+    Value oracle (audit A6-02): the whole pipeline is transcribed in NumPy from
+    Bdeir et al. 2023 --- ``z = W x + b``, spatial output ``z_s`` kept as is, time
+    coordinate reconstructed as ``sqrt(||z_s||^2 + 1/c)``. A collapsed or negated
+    spatial branch, or a mis-wired patch reshape, fails here.
+    """
+    dtype = jnp.float64
+    manifold = Hyperboloid(dtype=dtype)
+    batch, height, width, in_channels, out_channels = 2, 3, 3, 4, 5
+
+    v = jax.random.normal(jax.random.PRNGKey(0), (batch, height, width, in_channels), dtype=dtype) * 0.3
+    v = v.at[..., 0].set(0.0)
+    x = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.expmap_0(p, c))))(v)
+
+    layer = HypConv2DHyperboloid(
+        manifold_module=manifold,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=1,
+        padding="VALID",
+        rngs=nnx.Rngs(0),
+        param_dtype=dtype,
+    )
+    layer.kernel[...] = jax.random.normal(jax.random.PRNGKey(1), (out_channels, in_channels), dtype=dtype) * 0.4
+    layer.bias[...] = jax.random.normal(jax.random.PRNGKey(2), (1, out_channels), dtype=dtype) * 0.2
+
+    y = layer(x, c=c)
+
+    x_NC = np.asarray(x, dtype=np.float64).reshape(-1, in_channels)
+    z_NO = x_NC @ np.asarray(layer.kernel[...], dtype=np.float64).T + np.asarray(layer.bias[...], dtype=np.float64)
+    ys_ND = z_NO[:, 1:]
+    yt_N1 = np.sqrt(np.sum(ys_ND**2, axis=-1, keepdims=True) + 1.0 / c)
+    expected = np.concatenate([yt_N1, ys_ND], axis=-1).reshape(batch, height, width, out_channels)
+
+    assert np.allclose(np.asarray(y), expected, atol=1e-12)
+    assert np.max(np.abs(expected[..., 1:])) > 0.05  # oracle is non-degenerate
 
 
 def test_hypconv_hyperboloid_invalid_reset_params_errors():
