@@ -1,4 +1,9 @@
-"""Tests for HypConv2DPV (Proper Velocity conv, Chen et al. 2026, Sec 5.3)."""
+"""Tests for HypConv2DPV (Proper Velocity conv, Chen et al. 2026, Sec 5.3).
+
+The shared forward / on-manifold / JIT / gradient / tangent-input contract for
+every layer in the library lives in ``test_layer_contract.py``; only
+HypConv2DPV-specific tests stay here.
+"""
 
 from functools import partial
 
@@ -18,104 +23,6 @@ def _manifold(dtype: jnp.dtype) -> ProperVelocity:
 def _manifold_input(dtype: jnp.dtype, shape: tuple[int, ...], seed: int = 0) -> jnp.ndarray:
     """Gaussian samples: valid PV points (PV is unconstrained)."""
     return jax.random.normal(jax.random.PRNGKey(seed), shape, dtype=dtype) * 0.3
-
-
-@pytest.mark.parametrize("kernel_size", [1, 3, 5])
-@pytest.mark.parametrize("padding", ["SAME", "VALID"])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_conv_output_shape(kernel_size, padding, dtype):
-    batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
-    x = _manifold_input(dtype, (batch_size, height, width, in_channels))
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DPV(
-        manifold_module=_manifold(dtype),
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        rngs=rngs,
-        padding=padding,
-    )
-
-    y = layer(x, c=1.0)
-
-    if padding == "SAME":
-        expected_h, expected_w = height, width
-    else:
-        expected_h = height - kernel_size + 1
-        expected_w = width - kernel_size + 1
-
-    assert y.shape == (batch_size, expected_h, expected_w, out_channels)
-    assert jnp.isfinite(y).all()
-    assert y.dtype == dtype
-
-
-@pytest.mark.parametrize("stride", [1, 2])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_conv_stride(stride, dtype):
-    batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
-    kernel_size = 3
-    x = _manifold_input(dtype, (batch_size, height, width, in_channels))
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DPV(
-        manifold_module=_manifold(dtype),
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        rngs=rngs,
-        padding="SAME",
-    )
-
-    y = layer(x, c=1.0)
-
-    expected_h = (height + stride - 1) // stride
-    expected_w = (width + stride - 1) // stride
-    assert y.shape == (batch_size, expected_h, expected_w, out_channels)
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_conv_output_on_manifold(dtype):
-    """HypConv2DPV returns PV manifold points — verify all are valid."""
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    manifold = _manifold(dtype)
-    x = _manifold_input(dtype, (batch_size, height, width, in_channels))
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DPV(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-    )
-
-    y = layer(x, c=1.0)
-    y_flat = y.reshape(-1, out_channels)
-    is_on = jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(y_flat, 1.0)
-    assert bool(is_on.all())
-
-
-@pytest.mark.parametrize("input_space", ["manifold", "tangent"])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_conv_input_space_modes(input_space, dtype):
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    x = _manifold_input(dtype, (batch_size, height, width, in_channels))
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DPV(
-        manifold_module=_manifold(dtype),
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-        input_space=input_space,
-    )
-
-    y = layer(x, c=1.0)
-    assert jnp.isfinite(y).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -138,53 +45,6 @@ def test_pv_conv_tangent_matches_manual_lift(dtype):
 
     atol = 1e-5 if dtype == jnp.float32 else 1e-10
     assert jnp.allclose(y_manual, y_tangent, atol=atol)
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_conv_gradient(dtype):
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    x = _manifold_input(dtype, (batch_size, height, width, in_channels))
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DPV(
-        manifold_module=_manifold(dtype),
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-    )
-
-    def loss_fn(model):
-        y = model(x, c=1.0)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(loss_fn)(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_conv_jitted(dtype):
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    x = _manifold_input(dtype, (batch_size, height, width, in_channels))
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DPV(
-        manifold_module=_manifold(dtype),
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-    )
-
-    @nnx.jit
-    def forward(module, inputs, curvature):
-        return module(inputs, c=curvature)
-
-    y = forward(layer, x, 1.0)
-    assert jnp.isfinite(y).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])

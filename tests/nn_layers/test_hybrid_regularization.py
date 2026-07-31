@@ -1,6 +1,10 @@
 """Tests for HyperPPFeatureScaling (Hyper++ feature scaling layer).
 
 Dimension key: B=batch, D=embedding dimension
+
+The shared forward / on-manifold / JIT / gradient / tangent-input contract for
+every layer in the library lives in ``test_layer_contract.py``; only
+HyperPPFeatureScaling-specific tests stay here.
 """
 
 import jax
@@ -40,19 +44,7 @@ def test_forward_shape_no_alpha(x_BD, dtype):
 
 
 # ---------------------------------------------------------------------------
-# 2. Forward with learned rescaling (alpha=0.9)
-# ---------------------------------------------------------------------------
-
-
-def test_forward_shape_with_alpha(x_BD, dtype):
-    layer = HyperPPFeatureScaling(dim=D, alpha=0.9, rngs=nnx.Rngs(0))
-    y_BD = layer(x_BD, c=1.0)
-    assert y_BD.shape == (B, D)
-    assert y_BD.dtype == dtype
-
-
-# ---------------------------------------------------------------------------
-# 3. Various curvatures produce different outputs
+# 2. Various curvatures produce different outputs
 # ---------------------------------------------------------------------------
 
 
@@ -66,7 +58,7 @@ def test_curvature_varies_output(x_BD, c):
 
 
 # ---------------------------------------------------------------------------
-# 4. RMSNorm correctness
+# 3. RMSNorm correctness
 # ---------------------------------------------------------------------------
 
 
@@ -83,7 +75,7 @@ def test_rmsnorm_correctness(x_BD, dtype):
 
 
 # ---------------------------------------------------------------------------
-# 6. Custom activation (gelu)
+# 4. Custom activation (gelu)
 # ---------------------------------------------------------------------------
 
 
@@ -95,26 +87,7 @@ def test_custom_activation(x_BD, dtype):
 
 
 # ---------------------------------------------------------------------------
-# 7. Gradient computation with alpha
-# ---------------------------------------------------------------------------
-
-
-def test_gradients_with_alpha(dtype):
-    key = jax.random.PRNGKey(1)
-    x_BD = jax.random.normal(key, (B, D), dtype=dtype)
-    layer = HyperPPFeatureScaling(dim=D, alpha=0.9, rngs=nnx.Rngs(0))
-
-    @nnx.jit
-    def loss_fn(model):
-        return jnp.sum(model(x_BD, c=1.0) ** 2)
-
-    grads = nnx.grad(loss_fn)(layer)
-    assert jnp.all(jnp.isfinite(grads.xi_theta.kernel[...]))
-    assert jnp.all(jnp.isfinite(grads.xi_theta.bias[...]))
-
-
-# ---------------------------------------------------------------------------
-# 8. Gradient computation without alpha (parameter-free)
+# 5. Gradient computation (parameter-free mode)
 # ---------------------------------------------------------------------------
 
 
@@ -133,7 +106,7 @@ def test_gradients_without_alpha(dtype):
 
 
 # ---------------------------------------------------------------------------
-# 9. JIT compatibility
+# 6. JIT compatibility
 # ---------------------------------------------------------------------------
 
 
@@ -149,20 +122,8 @@ def test_jit_no_alpha(x_BD):
     assert jnp.all(jnp.isfinite(y_BD))
 
 
-def test_jit_with_alpha(x_BD):
-    layer = HyperPPFeatureScaling(dim=D, alpha=0.9, rngs=nnx.Rngs(0))
-
-    @jax.jit
-    def forward(x):
-        return layer(x, c=0.5)
-
-    y_BD = forward(x_BD)
-    assert y_BD.shape == (B, D)
-    assert jnp.all(jnp.isfinite(y_BD))
-
-
 # ---------------------------------------------------------------------------
-# 10. Alpha validation errors
+# 7. Alpha validation errors
 # ---------------------------------------------------------------------------
 
 
@@ -178,7 +139,7 @@ def test_alpha_out_of_range():
 
 
 # ---------------------------------------------------------------------------
-# 11. Output norm bounded by rho_max
+# 8. Output norm bounded by rho_max
 # ---------------------------------------------------------------------------
 
 
@@ -203,7 +164,7 @@ def test_output_norm_bounded(dtype):
 
 
 # ---------------------------------------------------------------------------
-# 12. Integration: HyperPP -> expmap_0 -> is_in_manifold
+# 9. Integration: HyperPP -> expmap_0 -> is_in_manifold
 # ---------------------------------------------------------------------------
 
 
