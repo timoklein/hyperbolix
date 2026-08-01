@@ -98,10 +98,11 @@ class LearnableCurvature(nnx.Module):
             ``10.0``. Pass ``None`` to disable, or a float to override.
         straight_through_clamp: If ``True``, the clamp is gradient-transparent:
             the forward value is still clamped to ``[c_min, c_max]``, but the
-            backward gradient is identity rather than zero, so ``raw`` can keep
+            backward gradient flows instead of being zeroed, so ``raw`` can keep
             moving and ``c`` can re-enter the interval once the loss pulls the
             other way (default: ``False`` — plain ``jnp.clip``, see the
-            gradient-dead note below).
+            gradient-dead note below). Outside the interval that pass-through
+            gradient is damped to ``O(1)``; see the re-entry step size note below.
         param_dtype: Storage dtype of the raw parameter (default:
             ``jnp.float32``), pinned so it does not become float64 under
             global ``jax_enable_x64``.
@@ -121,6 +122,31 @@ class LearnableCurvature(nnx.Module):
     training logs: a curvature sitting exactly at ``c_min``/``c_max`` for many
     steps is "pinned", not "chosen". Pass ``straight_through_clamp=True`` to
     keep the forward safety guarantee while eliminating the ratchet.
+
+    Re-entry step size under ``straight_through_clamp=True``: outside
+    ``[c_min, c_max]`` the pass-through gradient is divided by
+    ``max(dc/draw, 1)``, so ``d(c_out)/d(raw) ~= 1`` there and a re-entry step is
+    sized by the loss gradient alone rather than by the parameterization's own
+    gain. Without this, ``log`` (whose ``dc/draw = c`` is scale-invariant, not
+    bounded) overshoots catastrophically: at ``raw = 15`` the un-damped
+    pass-through gradient is ``2*(c_max - 1)*exp(15) ~= 5.9e7``, and a single
+    plain-SGD step at ``lr = 0.05`` moves ``raw`` by ``~-2.9e6`` — clean over the
+    whole interval, landing pinned at the *opposite* wall on step one (audit
+    finding). Switching to ``optax.adam`` did not rescue that: its normalized step
+    moves ``raw`` by only ``~lr`` per step, so it avoids the overshoot but needs
+    ``~(raw - log(c_max)) / lr`` steps to walk back, and the 200-step repro stayed
+    pinned at ``c_max``. The guard is deliberately one-sided: it only ever damps a
+    gain above 1, never amplifies one below it. Per boundary and
+    parameterization — ``log`` past ``c_max``: ``dc/draw = c >> 1``, damped to
+    ``~1`` (the case this exists for); ``log`` below ``c_min``: ``dc/draw = c < 1``,
+    left alone, since dividing by it would be the mirror-image blow-up;
+    ``softplus`` at either boundary: ``dc/draw = sigmoid(raw) <= 1``, an exact
+    no-op (and far below ``c_min`` ``sigmoid(raw) -> 0``, exactly where a
+    two-sided rescale would explode); ``identity``: ``dc/draw = 1``, an exact
+    no-op. Gradients while ``c`` is strictly *inside* the interval are untouched
+    genuine chain-rule gradients, so ``log`` keeps its scale-invariant interior
+    dynamics (the MERU convention) — only the fake straight-through signal
+    outside the clamp is rescaled.
     """
 
     def __init__(
@@ -175,14 +201,14 @@ class LearnableCurvature(nnx.Module):
         self.raw = nnx.Param(jnp.array(raw_init, dtype=param_dtype))
 
     def __call__(self) -> jax.Array:
+        raw = self.raw[...]
         if self._parameterization == "softplus":
-            c = jax.nn.softplus(self.raw[...])
+            c = jax.nn.softplus(raw)
         elif self._parameterization == "log":
             # Cap the exponent so exp() cannot overflow to +inf: an inf here makes the downstream clip's
             # out-of-range cotangent 0*inf = NaN (and, under straight_through_clamp, NaNs the forward value
             # via inf + (-inf)). Below the cap this is a value/grad identity; above it c is already pinned at
             # c_max by the clamp anyway, so nothing meaningful is lost.
-            raw = self.raw[...]
             max_exp = 0.99 * math.log(float(jnp.finfo(raw.dtype).max))
             capped = jnp.minimum(raw, max_exp)
             if self._straight_through_clamp:
@@ -193,19 +219,56 @@ class LearnableCurvature(nnx.Module):
                 capped = jax.lax.stop_gradient(capped) + raw - jax.lax.stop_gradient(raw)
             c = jnp.exp(capped)
         else:  # "identity"
-            c = self.raw[...]
+            c = raw
 
         if self._c_min is not None or self._c_max is not None:
             c_clipped = jnp.clip(c, self._c_min, self._c_max)
             if self._straight_through_clamp:
-                # Forward value stays clamped; backward gradient becomes identity instead of zero, so
-                # `raw` can keep moving and `c` can re-enter the interval once the loss pulls the other way.
-                # Numerically stable form: `c - stop_gradient(c)` is exactly 0, so the forward equals
-                # c_clipped to full precision. The algebraically-equivalent `c + stop_gradient(c_clipped - c)`
-                # cancels catastrophically when c ≫ c_clipped (e.g. log-param with a large raw → c ~ 1e38,
-                # c_clipped = c_max: `c_max - c` loses c_max, and the sum collapses to 0).
-                c = jax.lax.stop_gradient(c_clipped) + (c - jax.lax.stop_gradient(c))
+                # Forward value stays clamped; backward gradient flows instead of being zeroed, so `raw` can
+                # keep moving and `c` can re-enter the interval once the loss pulls the other way.
+                # Numerically stable form: the pass-through term is exactly 0 in the forward (it is
+                # `y - stop_gradient(y)`), so the forward equals c_clipped to full precision. The
+                # algebraically-equivalent `c + stop_gradient(c_clipped - c)` cancels catastrophically when
+                # c ≫ c_clipped (e.g. log-param with a large raw → c ~ 1e38, c_clipped = c_max: `c_max - c`
+                # loses c_max, and the sum collapses to 0).
+                c = jax.lax.stop_gradient(c_clipped) + self._pass_through(raw, c, c_clipped)
             else:
                 c = c_clipped
 
         return c
+
+    def _pass_through(self, raw: jax.Array, c: jax.Array, c_clipped: jax.Array) -> jax.Array:
+        """Straight-through term: exactly ``0.0`` in the forward, carrying the gradient handed to ``raw``.
+
+        Inside ``[c_min, c_max]`` (``c_clipped == c``) the gradient is the genuine chain rule ``dc/draw``,
+        bit-identical to a plain clip's in-range gradient — in particular ``log`` keeps its scale-invariant
+        ``dc/draw = c`` interior dynamics (the MERU convention, and the reason to pick it).
+
+        Where the clamp is active the gradient is a fake signal anyway (the forward value is pinned), and
+        passing ``dc/draw`` through unchanged makes the re-entry step scale with that gain: for ``log`` at
+        ``raw = 15`` it is ``exp(15) ~= 3.3e6``, enough for one plain-SGD step to jump the entire interval
+        and pin ``c`` at the opposite bound. So out there the pass-through gradient is divided by
+        ``max(dc/draw, 1)``, giving ``d(c_out)/d(raw) = 1``.
+
+        The ``max(., 1)`` is a one-sided guard: it only ever damps a gain above 1, never amplifies one
+        below it. That matters at the *lower* bound, where every parameterization's gain shrinks toward 0
+        (``exp(raw) -> 0`` for ``log``, ``sigmoid(raw) -> 0`` for ``softplus``) and a two-sided
+        ``1 / (dc/draw)`` would be the mirror image of the blow-up it fixes. So ``softplus``
+        (``dc/draw = sigmoid(raw) <= 1``) and ``identity`` (``dc/draw = 1``) are exact no-ops at both
+        bounds, and only ``log`` past the upper bound is damped.
+
+        The division is realized by *swapping the carrier* rather than by multiplying by ``1/gain``: where
+        the damping applies, the gradient is carried by ``raw - stop_gradient(raw)`` (derivative exactly 1)
+        instead of ``c - stop_gradient(c)`` (derivative ``dc/draw``). Both are exactly ``0.0``, so the
+        forward is untouched either way, but the swap avoids ever forming ``1/gain`` — which underflows to
+        a subnormal (and is flushed to 0 by XLA) exactly for the huge gains this exists to tame: at the
+        ``log`` exponent cap ``gain ~ 1.4e38``, and the multiplicative form re-froze the gradient at 0.
+        """
+        if self._parameterization == "softplus":
+            grad_gain = jax.nn.sigmoid(raw)  # d(softplus(raw))/draw, bounded by 1 → never damped
+        elif self._parameterization == "log":
+            grad_gain = c  # d(exp(raw))/draw = exp(raw) = c, the pre-clamp value computed above
+        else:  # "identity"
+            grad_gain = jnp.ones_like(c)  # d(raw)/draw = 1 → never damped
+        damped = (c_clipped != c) & (grad_gain > 1.0)
+        return jnp.where(damped, raw - jax.lax.stop_gradient(raw), c - jax.lax.stop_gradient(c))
