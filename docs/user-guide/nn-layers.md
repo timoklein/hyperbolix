@@ -21,7 +21,7 @@ tables below collapse this into per-task decisions.
 | `FGGLinear` | Hyperboloid | Advanced — ~3× faster but init-sensitive. Defaults to the norm-preserving `fan_out` init (`init_bias=0.0`), which suits unnormalized stacks feeding a bounded projection; pass `reset_params="eye", init_bias=0.5` for the reference (BatchNorm-regime) init. Use once you have a working HTC baseline |
 | `HypLinearHyperboloidPLFC` | Hyperboloid | Deep hyperboloid networks — point-to-hyperplane Lorentz FC (PLFC, Shi et al. 2026), the Lorentz analog of the HNN++ formulation. Optional intrinsic gyro-bias via `use_gyro_bias=True` |
 | `HypLinearPoincarePP` | Poincaré | **Default** for Poincaré FC — Euclidean-parameterized weights, works with `optax.adam` |
-| `HypLinearPoincare` | Poincaré | Legacy Ganea 2018 — manifold-valued weights, requires `riemannian_adam`. Prefer `PP` |
+| `HypLinearPoincare` | Poincaré | Legacy Ganea 2018 — manifold-valued bias, requires `riemannian_adam`. Prefer `PP` |
 | `HypLinearPV` | Proper Velocity | PV networks — Euclidean weights, He init |
 
 ### Convolutional
@@ -88,11 +88,13 @@ optimizer choice:
 | **HNN++** (Shimizu 2020 / van Spengler 2023) | Euclidean | `optax.adam` | `*PP` variants on both manifolds | Standard for Poincaré |
 | **PV** (Chen et al. 2026) | Euclidean | `optax.adam` | `HypLinearPV`, `HypConv2DPV` | Use when you want PV's unconstrained $\mathbb{R}^n$ |
 | **FGG** (Klis et al. 2026) | Euclidean | `optax.adam` | `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR` | Advanced — fastest, but init-sensitive |
-| **Ganea (legacy)** | On Poincaré | `riemannian_adam` | `HypLinearPoincare`, `HypRegressionPoincare` | Legacy — prefer `PP` |
+| **Ganea (legacy)** | Bias on Poincaré, kernel Euclidean | `riemannian_adam` | `HypLinearPoincare`, `HypRegressionPoincare` | Legacy — prefer `PP` |
 
-**Bottom line:** every modern layer parameterizes weights in Euclidean space.
-Standard `optax.adam` works. See the [Riemannian Optimizers guide](optimizers.md)
-*(WIP)* for the rare cases where manifold-valued parameters appear.
+**Bottom line:** every modern layer parameterizes weights in Euclidean space,
+and even the legacy Ganea layers keep their *kernel* Euclidean — only the
+*bias* is manifold-valued. Standard `optax.adam` works for everything except
+that one bias. See the [Riemannian Optimizers guide](optimizers.md) *(WIP)*
+for the rare cases where a manifold-valued parameter appears.
 
 ## Channel Conventions
 
@@ -100,7 +102,7 @@ The single most common bug in layer construction is passing the wrong channel
 count — ambient (d+1) vs. spatial (d). The full table lives in the
 [Manifolds guide](manifolds.md#convention-cheat-sheet); the short form:
 
-- **Hyperboloid layers** (`FGGLinear`, `LorentzConv2D`, `HTCLinear`, `HypLinearHyperboloid*`) take **ambient (d+1)**.
+- **Hyperboloid layers** (`FGGLinear`, `LorentzConv2D`, `HTCLinear`, `HypLinearHyperboloid*`) take **ambient (d+1)** for their input channel arg. Exception: `HTCLinear.out_features` is **spatial (d)** — its output is `(B, out_features + 1)` ambient.
 - **HRC normalization** (`HRCLayerNorm`, `HRCBatchNorm`, etc.) takes **spatial (d)**.
 - **Poincaré and PV layers** take **spatial (d)** (no time component).
 
@@ -123,8 +125,10 @@ hyperbolic-aware default — keep it unless you have a reason to change it.
 | Family | Default init | Rationale |
 |---|---|---|
 | `FGGLinear` / `FGGConv2D` | `fan_out`, `std=sqrt(1/out_spatial)`, bias `0.0`, `gain=1.0` | Norm-preserving (`‖z‖ ≈ gain·‖x_spatial‖`) so deep *unnormalized* stacks don't saturate a bounded projection — a deliberate deviation from the Klis et al. BatchNorm-regime reference. Restore the reference with `reset_params="eye"`/`"lorentz_kaiming"` + `init_bias=0.5` |
-| `HypLinear*PP` | Standard normal `std=1.0` (Shimizu 2020 reference) | Tuned empirically for HNN++ formulation |
-| `HypLinearPoincare*` | Scaled normal `std=(2·in·out)^{-0.5}` (van Spengler 2023) | Keeps row norms small so outputs stay away from the boundary |
+| `HypConv2DHyperboloidILNN` | Fan-out normal `std=sqrt(1/out_spatial)` (`kernel_init_std=None`) | Norm-preserving: the PLFC chain linearizes to `y_spatial ≈ W @ u_spatial` near the origin, and the fixed LogCat hands over the per-pixel spatial radius, so this holds gain ≈ 1. `kernel_init_std=0.02` restores the Shi et al. 2026 regime bit-for-bit |
+| `HypLinearHyperboloidPLFC` | Small normal `std=0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init) | `kernel_init_std=1.0` recovers the old HNN++-style init (Shimizu et al. 2020) |
+| `HypLinearPoincare` / `HypLinearPoincarePP` | Fan-in normal `std=1/sqrt(in_dim)` | Keeps row norms small so outputs stay away from the boundary |
+| `HypRegressionPoincare` / `HypRegressionPoincarePP` | Scaled normal `std=(2·in·out)^{-0.5}` (van Spengler 2023) | Sibling-scaled: an unscaled `N(0,1)` kernel gives row norms ≈ `sqrt(in_dim)`, which overwhelms the MLR output scaling |
 | `HTCLinear` | Fan-in uniform `U(-√(3/in), √(3/in))` | Norm-preserving (per-layer Jacobian gain ≈ 1): `htc` applies no nonlinearity, so a fixed bound is contractive at realistic widths — the old `U(-0.02, 0.02)` froze depth-≥2 stacks. The Hypformer reference (Xavier·√2, `bound = 2√(3/(in+out))`) assumes ReLU + LayerNorm between layers; pass it explicitly to recover |
 | `HypLinearHyperboloidFHCNN` | Small uniform `U(-0.02, 0.02)` | Keeps points near the apex `[1/sqrt(c), 0, …]` initially (matches the Bdeir et al. 2023 reference) |
 | `HypLinear*PV` | He init | PV is unconstrained $\mathbb{R}^n$; standard scales work |
@@ -201,14 +205,16 @@ init, and converges across a wide range of configurations.
 ```python
 class HTCClassifier(nnx.Module):
     def __init__(self, in_dim: int, hidden: int, num_classes: int, *, rngs: nnx.Rngs):
-        # in_dim, hidden are AMBIENT (d+1)
+        # in_dim is AMBIENT (d+1); hidden is SPATIAL — HTCLinear.out_features
+        # is the one exception to "Hyperboloid layers take ambient" (see
+        # Channel Conventions above), so its output is ambient (hidden + 1)
         self.manifold = Hyperboloid(c=1.0)
         self.fc1 = HTCLinear(in_features=in_dim, out_features=hidden, rngs=rngs)
-        self.norm = HRCLayerNorm(num_features=hidden - 1, rngs=rngs)  # SPATIAL
-        self.fc2 = HTCLinear(in_features=hidden, out_features=hidden, rngs=rngs)
+        self.norm = HRCLayerNorm(num_features=hidden, rngs=rngs)  # SPATIAL
+        self.fc2 = HTCLinear(in_features=hidden + 1, out_features=hidden, rngs=rngs)
         self.head = HypRegressionHyperboloid(
             manifold_module=self.manifold,
-            in_features=hidden, out_features=num_classes, rngs=rngs,
+            in_dim=hidden + 1, out_dim=num_classes, rngs=rngs,
         )
 
     def __call__(self, x_BAi: jax.Array, c: float = 1.0) -> jax.Array:
@@ -251,7 +257,7 @@ class HypTransformerBlock(nnx.Module):
         d_spatial = dim_ambient - 1
         self.attn_norm = HRCLayerNorm(num_features=d_spatial, rngs=rngs)
         self.attn = HyperbolicSoftmaxAttention(
-            in_features=dim_ambient, n_heads=n_heads, rngs=rngs,
+            in_features=dim_ambient, out_features=d_spatial, num_heads=n_heads, rngs=rngs,
         )
         self.mlp_norm = HRCLayerNorm(num_features=d_spatial, rngs=rngs)
         self.mlp_in = HTCLinear(in_features=dim_ambient,
@@ -281,10 +287,10 @@ class HypResBlock(nnx.Module):
         self.curv2 = LearnableCurvature(init_c=0.1)
         self.conv1 = HypConv2DPoincare(self.manifold, channels, channels,
                                        kernel_size=(3, 3), rngs=rngs)
-        self.bn1 = PoincareBatchNorm2D(self.manifold, channels, rngs=rngs)
+        self.bn1 = PoincareBatchNorm2D(self.manifold, channels)
         self.conv2 = HypConv2DPoincare(self.manifold, channels, channels,
                                        kernel_size=(3, 3), rngs=rngs)
-        self.bn2 = PoincareBatchNorm2D(self.manifold, channels, rngs=rngs)
+        self.bn2 = PoincareBatchNorm2D(self.manifold, channels)
 ```
 
 ## Common Pitfalls
@@ -319,13 +325,13 @@ jit_fn = jax.jit(dist_v0)
 
 ### 4. Mixing layer families incoherently
 
-Stacking `HypLinearPoincare` (manifold-valued weights, expects
-`riemannian_adam`) on top of `HypLinearPoincarePP` (Euclidean weights, expects
-`optax.adam`) gives you a model where one optimizer is wrong for half the
-parameters. Pick one family per network and stay in it; `mark_manifold_param`
-lets the Riemannian optimizer auto-dispatch correctly if you genuinely need a
-mix, but the simpler fix is to migrate the legacy layers to their `PP`
-equivalents.
+Stacking `HypLinearPoincare` (manifold-valued bias, expects
+`riemannian_adam`) on top of `HypLinearPoincarePP` (fully Euclidean weights,
+expects `optax.adam`) gives you a model where one optimizer is wrong for part
+of the parameters. Pick one family per network and stay in it;
+`riemannian_adam` auto-dispatches correctly across a mix of `ManifoldParam`
+and plain `nnx.Param` if you genuinely need one, but the simpler fix is to
+migrate the legacy layers to their `PP` equivalents.
 
 ### 5. Using a Euclidean `Dropout` / `LayerNorm` on hyperboloid points
 

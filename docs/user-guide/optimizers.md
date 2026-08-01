@@ -16,10 +16,10 @@ For per-optimizer signatures, see the
 - Learnable curvature (via the `LearnableCurvature` module).
 
 **The single exception**: the legacy Ganea-style Poincaré layers
-(`HypLinearPoincare`, `HypRegressionPoincare`) parameterize weights *directly
-on the Poincaré ball*, so they need `riemannian_adam` (or `riemannian_sgd`).
-You can usually just migrate to the `PP` equivalents and stay with
-`optax.adam`.
+(`HypLinearPoincare`, `HypRegressionPoincare`) parameterize their **bias**
+*directly on the Poincaré ball* (the kernel stays Euclidean), so they need
+`riemannian_adam` (or `riemannian_sgd`). You can usually just migrate to the
+`PP` equivalents and stay with `optax.adam`.
 
 ## When to Use What
 
@@ -53,9 +53,12 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 
 A common confusion: surely learnable curvature needs Riemannian optimization?
 No. The `LearnableCurvature` module stores a plain Euclidean `nnx.Param`
-that is reparameterized at call time (via `softplus` or `exp`) to stay
-positive. It gets a normal Euclidean gradient and a normal Adam update —
-there's nothing to project, nothing on a manifold.
+that is reparameterized at call time — via `"softplus"` (default,
+`c = softplus(raw)`), `"log"` (`c = exp(raw)`, scale-invariant gradient), or
+`"identity"` (`c = raw`, an unconstrained **signed** curvature for the
+`Stereographic` manifold) — to produce the curvature value. It gets a normal
+Euclidean gradient and a normal Adam update — there's nothing to project,
+nothing on a manifold.
 
 ```python
 from hyperbolix import LearnableCurvature
@@ -72,21 +75,33 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 ## The Legacy Ganea Exception
 
 `HypLinearPoincare` and `HypRegressionPoincare` (Ganea et al. 2018) store
-their weights as **points on the Poincaré ball**. Each gradient step needs to
-respect the ball constraint, which is exactly what `riemannian_adam`
-provides. To use them:
+their **bias** as a point on the Poincaré ball (the kernel stays a plain
+Euclidean `nnx.Param`). Each gradient step on that bias needs to respect the
+ball constraint, which is exactly what `riemannian_adam` provides. The
+constructors already tag the bias with `ManifoldParam` internally, so using
+them is just:
 
 ```python
-from hyperbolix.optim import riemannian_adam, mark_manifold_param
+from hyperbolix.optim import riemannian_adam
+from hyperbolix.nn_layers import HypLinearPoincare
 
-# Tag manifold-valued parameters during model init
-self.weight = mark_manifold_param(
-    nnx.Param(init_value), manifold=poincare, curvature=0.1,
-)
-
-# Riemannian optimizer auto-dispatches: tagged params get Riemannian updates,
-# everything else gets Euclidean Adam.
+model = HypLinearPoincare(manifold_module=poincare, in_dim=32, out_dim=16, rngs=rngs)
 optimizer = nnx.Optimizer(model, riemannian_adam(1e-3), wrt=nnx.Param)
+```
+
+No manual tagging step is required for these built-in layers. If you're
+writing your **own** manifold-valued parameter instead — e.g. a hyperbolic
+embedding table — that's when you reach for `ManifoldParam` (or the
+`mark_manifold_param` convenience wrapper around an existing `nnx.Param`)
+yourself:
+
+```python
+from hyperbolix.optim import ManifoldParam
+
+# Tag your own manifold-valued parameter during model init
+self.embedding = ManifoldParam(
+    init_value, manifold=poincare, curvature=0.1,
+)
 ```
 
 The optimizer walks the model state, applies Riemannian updates wherever it
@@ -114,9 +129,14 @@ You don't need separate optimizers for the Euclidean and manifold parts.
 1. **Using `riemannian_adam` for HTC / FGG / PP / PV layers.** Adds compute
    for no benefit (and occasionally slightly worse numerics). Use
    `optax.adam`.
-2. **Forgetting `mark_manifold_param` on legacy layer weights.** Without the
-   tag, `riemannian_adam` falls back to Euclidean Adam on a manifold-valued
-   tensor — the weights drift off the ball within a few steps.
+2. **Forgetting to tag a hand-rolled manifold-valued parameter.** The
+   built-in legacy layers (`HypLinearPoincare`, `HypRegressionPoincare`)
+   already self-tag their bias with `ManifoldParam` in `__init__` — there's
+   nothing to do for them. The tag matters only when *you* add your own
+   manifold-valued parameter (e.g. a hyperbolic embedding table stored as a
+   plain `nnx.Param`): without `ManifoldParam` / `mark_manifold_param`,
+   `riemannian_adam` falls back to Euclidean Adam on it and the values drift
+   off the ball within a few steps.
 3. **Expecting `riemannian_adam` to need a separate optimizer for the
    Euclidean parts.** It doesn't. One optimizer with `wrt=nnx.Param` handles
    everything; dispatch is via the `ManifoldParam` tag.

@@ -32,7 +32,9 @@ different conventions:
 
 | Layer / Op family | Channel arg | Convention | Example: 32 spatial dims |
 |---|---|---|---|
-| `FGGLinear`, `LorentzConv2D`, `HTCLinear`, `HypLinearHyperboloid*` | `in_features` | **Ambient (d+1)** — includes time | `33` |
+| `FGGLinear`, `HTCLinear` | `in_features` | **Ambient (d+1)** — includes time | `33` |
+| `LorentzConv2D` | `in_channels` | **Ambient (d+1)** — includes time | `33` |
+| `HypLinearHyperboloid*` | `in_dim` | **Ambient (d+1)** — includes time | `33` |
 | `HRCBatchNorm`, `HRCLayerNorm` (Hyperboloid normalization) | `num_features` | **Spatial (d)** — excludes time | `32` |
 | `HypLinearPoincare*`, `HypConv2DPoincare`, `HypRegressionPoincare*` | `in_dim` | **Spatial (d)** — Poincaré has no time | `32` |
 | `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV` | `in_dim` | **Spatial (d)** | `32` |
@@ -367,9 +369,10 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 Only use `riemannian_adam` / `riemannian_sgd` when parameters live **directly
 on the manifold** — typically hyperbolic embedding tables wrapped in
 `ManifoldParam(value, manifold=..., curvature=...)`. The legacy
-`HypLinearPoincare` (Ganea-style) is the only NN layer whose weights are
-manifold-valued; prefer `HypLinearPoincarePP` / `FGGLinear` to avoid the
-need entirely.
+`HypLinearPoincare` and `HypRegressionPoincare` (Ganea-style) are the only NN
+layers with a manifold-valued **bias** — their kernels stay Euclidean;
+prefer `HypLinearPoincarePP` / `HypRegressionPoincarePP` / `FGGLinear` to
+avoid the need entirely.
 
 ### 4. Skipping `proj` after manual point construction
 

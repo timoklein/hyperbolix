@@ -290,9 +290,12 @@ adding a neural network layer, and contributing documentation.
     - User guide: add a row to the "Choosing a Manifold" decision table in
       `docs/user-guide/manifolds.md` and to the convention cheat-sheet.
 
-Optionally, support `learnable=True` by reparameterizing curvature through
-`softplus` and storing `_c_raw` as an `nnx.Param` (see `ManifoldBase`
-implementation).
+Manifolds themselves stay plain, immutable Python classes with a static `c`
+— don't add a `learnable=True` constructor flag or an `_c_raw` param to the
+manifold. Learnable curvature is a separate concern, handled by wrapping the
+manifold's `c` with a `hyperbolix.utils.curvature.LearnableCurvature`
+instance (an `nnx.Module`) on the *caller's* model and passing its output as
+`c` at call time; no changes to the manifold class are needed to support it.
 
 ### Adding a New NN Layer
 
@@ -301,9 +304,11 @@ implementation).
    spatial `d`). See [Manifolds Guide §
    Convention Cheat-Sheet](docs/user-guide/manifolds.md#convention-cheat-sheet).
 2. **Use the family's init scale.** Standard He/Xavier is too large for
-   hyperbolic layers; reuse the convention of the closest family (small
-   uniform for HTC, `lorentz_kaiming` for FGG, scaled normal for Poincaré
-   PP, etc.). See `docs/user-guide/nn-layers.md#initialization-scales`.
+   hyperbolic layers; reuse the convention of the closest family (fan-in-aware
+   uniform for HTC, norm-preserving fan-out normal for FGG — `reset_params=
+   "eye"`/`"lorentz_kaiming"` restores the older BatchNorm-regime reference —
+   fan-in-scaled normal for Poincaré PP, etc.). See
+   `docs/user-guide/nn-layers.md#initialization-scales`.
 3. **Layer constructor conventions**:
     - Accept `manifold_module` (a `Manifold`-protocol instance), not raw
       functions
@@ -317,8 +322,10 @@ implementation).
    and an init-distribution sanity check.
 5. **Export** from `hyperbolix/nn_layers/__init__.py` and add to its `__all__`.
 6. **Document it**:
-    - API reference: add a `:::` autoreference in
-      `docs/api-reference/nn-layers.md`.
+    - API reference: add a `:::` autoreference to the relevant page under
+      `docs/api-reference/nn-layers/` (e.g. `linear.md`, `convolutional.md`,
+      `regression.md`) — that's a directory of per-family pages, not a
+      single file.
     - User guide: add a row to the relevant decision table in
       `docs/user-guide/nn-layers.md`.
 
