@@ -93,10 +93,11 @@ line-length = 127
 
 [tool.pytest.ini_options]
 addopts = "-ra -q" # --log-cli-level=DEBUG
-testpaths = ["tests", "benchmarks"]
+testpaths = ["tests"]
 pythonpath = "hyperbolix"
-# Collect benchmark files in addition to test files
-python_files = ["test_*.py", "*_test.py", "bench_*.py"]
+# Benchmarks (bench_*.py) are excluded from default collection; the CI benchmark
+# job passes `-o python_files="bench_*.py"` explicitly to collect them.
+python_files = ["test_*.py", "*_test.py"]
 
 [dependency-groups]
 dev = [

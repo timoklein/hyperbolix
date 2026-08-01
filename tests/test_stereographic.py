@@ -70,8 +70,10 @@ def c(request: pytest.FixtureRequest) -> float:
     return float(request.param)
 
 
-@pytest.fixture(params=[2, 5, 10], ids=["dim2", "dim5", "dim10"])
+@pytest.fixture(params=[2, 10], ids=["dim2", "dim10"])
 def dim(request: pytest.FixtureRequest) -> int:
+    """Ambient dimension. {2, 10}: no κ-stereographic code path branches on ``dim`` — it is pure
+    vectorization width — so 2 (the disk/circle edge case) plus one generic value suffices."""
     return int(request.param)
 
 
@@ -176,8 +178,6 @@ def test_addition_identity_and_inverse(manifold, points, c, tolerance):
 
 def test_scalar_mul_axioms(manifold, points, c, tolerance):
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     smul = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
     add = jax.vmap(manifold.addition, in_axes=(0, 0, None))
     ones = jnp.ones(points.shape[0], dtype=points.dtype)
@@ -209,8 +209,6 @@ def test_gyration_gyrocommutative_law(manifold, points, c, tolerance):
     pin gyration, because ANY tangent-space isometry preserves norms and inner products — a gyration
     that rotated by the wrong angle would pass it. Gyrocommutativity fails for any wrong rotation."""
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, y, _ = _split3(points)
     add = jax.vmap(manifold.addition, in_axes=(0, 0, None))
     gyr = jax.vmap(manifold.gyration, in_axes=(0, 0, 0, None))
@@ -222,8 +220,6 @@ def test_gyration_gyrocommutative_law(manifold, points, c, tolerance):
 def test_addition_left_cancellation(manifold, points, c, tolerance):
     """``(-x) ⊕ (x ⊕ y) = y`` — the gyrogroup left-cancellation law, in every curvature regime."""
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, y, _ = _split3(points)
     add = jax.vmap(manifold.addition, in_axes=(0, 0, None))
     assert jnp.allclose(add(-x, add(x, y, c), c), y, atol=atol, rtol=rtol)
@@ -353,8 +349,6 @@ def test_expmap_0_logmap_0_inverse(manifold, points, c, tolerance):
 
 def test_expmap_logmap_inverse(manifold, points, c, tolerance):
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, y, _ = _split3(points)
     logmap = jax.vmap(manifold.logmap, in_axes=(0, 0, None))
     expmap = jax.vmap(manifold.expmap, in_axes=(0, 0, None))
@@ -372,8 +366,6 @@ def test_logmap_expmap_roundtrip(manifold, points, c, rng, dtype, tolerance):
     up to floating point.
     """
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, _, _ = _split3(points)
     v = jnp.asarray((rng.normal(size=x.shape) * 0.1).astype(np.dtype(jnp.dtype(dtype).name)))
     z = jax.vmap(manifold.expmap, in_axes=(0, 0, None))(v, x, c)
@@ -394,8 +386,6 @@ def test_expmap_euclidean_limit(manifold, dtype):
 def test_tangent_norm_consistency(manifold, points, c, tolerance):
     # ‖log_x(y)‖_x = d(x, y) at every point (holds for all c, including the factor-2 limit).
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, y, _ = _split3(points)
     v = jax.vmap(manifold.logmap, in_axes=(0, 0, None))(y, x, c)
     tn = jax.vmap(manifold.tangent_norm, in_axes=(0, 0, None))(v, x, c)
@@ -410,8 +400,6 @@ def test_tangent_norm_consistency(manifold, points, c, tolerance):
 
 def test_ptransp_preserves_riemannian_norm(manifold, points, c, tolerance):
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, y, _ = _split3(points)
     origin = jnp.zeros_like(x)
     # Transport a tangent-at-origin vector 0 → y; its Riemannian norm is preserved.
@@ -435,8 +423,6 @@ def test_ptransp_isometry_general(manifold, points, c, rng, dtype, tolerance):
     cross term ``⟨Pu, Pw⟩`` off).
     """
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, y, _ = _split3(points)
     np_dtype = np.dtype(jnp.dtype(dtype).name)
     u = jnp.asarray(rng.normal(size=x.shape).astype(np_dtype))
@@ -466,8 +452,6 @@ def test_egrad2rgrad_metric_duality(manifold, points, c, dim, rng, dtype, tolera
     spherical oracles). A recompute-the-formula check (``rgrad == g/λ²`` using the implementation's own
     ``conformal_factor``) could only ever catch a wrong exponent, not a wrong ``λ`` — this can."""
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, _, _ = _split3(points)
     np_dtype = np.dtype(jnp.dtype(dtype).name)
     g = jnp.asarray(rng.normal(size=x.shape).astype(np_dtype))
@@ -499,8 +483,6 @@ def test_hyperbolic_ktrig_ops_match_poincare(manifold, points, c, dtype, toleran
     if c <= 0:
         pytest.skip("Cross-validation against Poincaré only applies for c > 0.")
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     poincare = Poincare(dtype=dtype)
     x, y, _ = _split3(points)
     # Genuine tangent vectors of moderate norm for the two-point maps.
@@ -538,8 +520,6 @@ def test_hyperbolic_ktrig_ops_match_poincare(manifold, points, c, dtype, toleran
 
 def test_geodesic_endpoints_and_speed(manifold, points, c, tolerance):
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, y, _ = _split3(points)
     geo = jax.vmap(manifold.geodesic, in_axes=(None, 0, 0, None))
     assert jnp.allclose(geo(0.0, x, y, c), x, atol=atol, rtol=rtol)
@@ -556,8 +536,6 @@ def test_geodesic_extrapolation_beyond_endpoint(manifold, points, c, tolerance):
     (previously only interpolation was tested). On the sphere the identity only holds while the
     doubled distance stays inside the injectivity radius ``π·R``, so those pairs are masked out."""
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, y, _ = _split3(points)
     dist = jax.vmap(manifold.dist, in_axes=(0, 0, None))
     geo = jax.vmap(manifold.geodesic, in_axes=(None, 0, 0, None))
@@ -583,8 +561,6 @@ def test_geodesic_unit_contract(manifold, points, c, rng, dtype, tolerance):
     ``t`` stays below the spherical injectivity radius ``π/√|c|`` so ``tan_κ⁻¹∘tan_κ`` stays principal.
     """
     atol, rtol = tolerance
-    if np.dtype(points.dtype) == np.dtype(np.float32):
-        atol, rtol = max(atol, 1e-2), max(rtol, 2e-2)
     x, _, _ = _split3(points)
     u = jnp.asarray(rng.normal(size=x.shape).astype(np.dtype(jnp.dtype(dtype).name)))
 
@@ -942,14 +918,17 @@ def test_shared_gyrovector_core_is_single_source():
         assert getattr(stereo_impl, name) is shared, f"stereographic.{name} diverged from the shared core"
 
 
-@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
-def test_shared_core_bit_identical_to_poincare(dtype, c):
+def test_class_wrappers_add_no_divergent_pre_or_post_processing(dtype):
     """For ``c > 0`` the shared core is EXACTLY (not merely ``allclose``) Poincaré's result.
 
     This is a CLASS-PLUMBING guard, not independent validation: both methods dispatch to the same
     function object (see ``test_shared_gyrovector_core_is_single_source``), so a math error cannot
     fail it. What it CAN catch — and the ``is``-check cannot — is either class's *method* growing
-    divergent pre/post-processing (extra casting, projection, reordering) around the shared call."""
+    divergent pre/post-processing (extra casting, projection, reordering) around the shared call.
+
+    Not parametrized over ``c``: neither side depends on the curvature except through the one shared
+    call, so extra curvatures re-run the same plumbing."""
+    c = 3.0
     x = jnp.array([0.12, -0.2, 0.05], dtype=dtype)
     y = jnp.array([-0.15, 0.1, 0.2], dtype=dtype)
     pm = Poincare(dtype=dtype)

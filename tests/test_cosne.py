@@ -324,8 +324,10 @@ def test_end_to_end_synthetic_clusters():
 # --- 12. JIT cache reuse ---------------------------------------------------------------
 def test_jit_cache_reuse():
     """A second ``_fit_jit`` call with identical statics/shapes/dtypes does not recompile."""
-    if not hasattr(_fit_jit, "_cache_size"):
-        pytest.skip("jitted function does not expose _cache_size (private API unavailable)")
+    # Asserted, not skipped: removing the jax.jit wrapper from _fit_jit — the exact
+    # regression this test names — makes the attribute vanish, and a skip would report
+    # that as a green run.
+    assert hasattr(_fit_jit, "_cache_size"), "_fit_jit is no longer a jax.jit-wrapped callable"
     dtype = jnp.float64
     c = 1.0
     x = _ball_points(17, 32, 5, c, 0.4, dtype)

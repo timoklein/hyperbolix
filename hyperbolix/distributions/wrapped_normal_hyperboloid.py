@@ -14,13 +14,13 @@ References:
     NeurIPS 2019. https://arxiv.org/abs/1901.06033
 """
 
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds.hyperboloid import Hyperboloid
+from ..utils.math_utils import MIN_NORM
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
-from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r
+from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
 
 
 def sample(
@@ -50,6 +50,7 @@ def sample(
         c: Curvature (positive scalar)
         sample_shape: Shape of samples to draw, prepended to output. Default: ()
         dtype: Output dtype. Default: infer from mu
+        manifold_module: Optional Hyperboloid instance. Default: Hyperboloid(dtype)
 
     Returns:
         Samples from wrapped normal distribution, shape sample_shape + mu.shape
@@ -141,6 +142,7 @@ def log_prob(
             - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
             - 2D array (n, n): full covariance matrix (must be SPD)
         c: Curvature (positive scalar)
+        manifold_module: Optional Hyperboloid instance. Default: Hyperboloid(z.dtype)
 
     Returns:
         Log probability, shape (...) (manifold dimension removed)
@@ -177,28 +179,26 @@ def log_prob(
     # Extract spatial dimension
     n = mu.shape[-1] - 1  # Spatial dimension
 
+    # Batching layout: z is (*S, *B, A) and mu is (*B, A). The mean's batch axes pair with z's
+    # trailing axes; the leading sample axes broadcast the mean. Steps 1 and 2 must use the
+    # *same* layout — vmapping u and mu together over axis 0 (as step 2 used to) pairs a sample
+    # axis with a batch axis and fails on sample()'s own output whenever both are present.
+    n_sample_dims = max(z.ndim - mu.ndim, 0)
+    n_batch_dims = mu.ndim - 1
+
     # Step 1: Map z to tangent space at mu: u = log_μ(z), shape (..., A)
-    if z.ndim > mu.ndim:
-        n_sample_dims = z.ndim - mu.ndim
-        logmap_fn = manifold.logmap
-        for _ in range(n_sample_dims):
-            logmap_fn = jax.vmap(logmap_fn, in_axes=(0, None, None))
-        u_SBA = logmap_fn(z, mu, c)
-    elif z.ndim == mu.ndim and mu.ndim > 1:
-        u_SBA = jax.vmap(lambda zz, mm: manifold.logmap(zz, mm, c))(z, mu)
-    else:
-        u_SBA = manifold.logmap(z, mu, c)
+    def _logmap_single(z_A, mu_A):
+        return manifold.logmap(z_A, mu_A, c)
+
+    u_SBA = _vmap_sample_and_batch(_logmap_single, n_sample_dims, n_batch_dims)(z, mu)
 
     # Step 2: Parallel transport from mu to origin: v = PT_{μ→μ₀}(u)
     mu_0_A = manifold.create_origin(c, n)
 
-    if u_SBA.ndim > 1:
-        if mu.ndim > 1:
-            v_SBA = jax.vmap(lambda uu, mm: manifold.ptransp(uu, mm, mu_0_A, c))(u_SBA, mu)
-        else:
-            v_SBA = jax.vmap(lambda uu: manifold.ptransp(uu, mu, mu_0_A, c))(u_SBA)
-    else:
-        v_SBA = manifold.ptransp(u_SBA, mu, mu_0_A, c)
+    def _ptransp_single(u_A, mu_A):
+        return manifold.ptransp(u_A, mu_A, mu_0_A, c)
+
+    v_SBA = _vmap_sample_and_batch(_ptransp_single, n_sample_dims, n_batch_dims)(u_SBA, mu)
 
     # Step 3: Extract spatial components: v = [0, v_bar] at origin
     v_spatial_SBD = v_SBA[..., 1:]
@@ -208,7 +208,7 @@ def log_prob(
 
     # Step 5: Compute log det Jacobian
     # Minkowski norm at origin: r = ||v_spatial|| (since v = [0, v_bar])
-    r_SB = jnp.sqrt(jnp.maximum(jnp.sum(v_spatial_SBD**2, axis=-1), 1e-15))
+    r_SB = jnp.sqrt(jnp.maximum(jnp.sum(v_spatial_SBD**2, axis=-1), MIN_NORM))
     log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 6: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)

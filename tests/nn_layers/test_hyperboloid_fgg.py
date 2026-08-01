@@ -12,6 +12,7 @@ Dimension key: B=batch, I=in_spatial, O=out_spatial, Ai=in_ambient, Ao=out_ambie
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from flax import nnx
 
@@ -46,6 +47,45 @@ def _check_on_hyperboloid(x, c, atol=1e-5):
     """Check Minkowski constraint: -x0^2 + ||x_s||^2 = -1/c."""
     mink = -(x[..., 0:1] ** 2) + jnp.sum(x[..., 1:] ** 2, axis=-1, keepdims=True)
     return jnp.allclose(mink, -1.0 / c, atol=atol)
+
+
+def _ref_spacelike_V(U_IO, b_O, c):
+    """Independent NumPy transcription of Klis et al. 2026 Eq. 12.
+
+    The bias is transported along the geodesic in the direction of the (unit)
+    weight vector, which is where the curvature enters::
+
+        arg   = -sqrt(c) * b / ||w||
+        v_t   = ||w|| * sinh(arg)      (returned negated: Minkowski metric absorbed)
+        v_s   = w * cosh(arg)
+
+    Written without the library's eps floor / zero-column gate; callers therefore
+    pass ``eps`` tiny and keep every column norm well away from zero.
+    """
+    U = np.asarray(U_IO, dtype=np.float64)
+    b = np.asarray(b_O, dtype=np.float64)
+    norm_O = np.sqrt((U**2).sum(axis=0))
+    arg_O = -np.sqrt(c) * b / norm_O
+    v_time_mink_O = -norm_O * np.sinh(arg_O)
+    v_space_IO = U * np.cosh(arg_O)[None, :]
+    return np.concatenate([v_time_mink_O[None, :], v_space_IO], axis=0)
+
+
+def _ref_fgg_forward(x_BAi, U_IO, b_O, c, activation=None):
+    """Independent NumPy transcription of the whole FGG forward (Eq. 12 + matmul + time)."""
+    V_AiO = _ref_spacelike_V(U_IO, b_O, c)
+    z_BO = np.asarray(x_BAi, dtype=np.float64) @ V_AiO
+    if activation is not None:
+        z_BO = activation(z_BO)
+    y_0_B1 = np.sqrt((z_BO**2).sum(-1, keepdims=True) + 1.0 / c)
+    return np.concatenate([y_0_B1, z_BO], axis=-1)
+
+
+def _make_image(key, batch, hw, in_channels, c):
+    """Image-shaped hyperboloid points: (batch, hw, hw, in_channels)."""
+    spatial = jax.random.normal(key, (batch, hw, hw, in_channels - 1), dtype=jnp.float64) * 0.3
+    time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0 / c)
+    return jnp.concatenate([time, spatial], axis=-1)
 
 
 # ===========================================================================
@@ -109,13 +149,47 @@ def test_build_spacelike_V_zero_bias():
 
 
 @pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
-def test_build_spacelike_V_curvatures(c):
-    """V matrix construction works for various curvatures."""
+def test_build_spacelike_V_matches_eq12(c):
+    """V equals the independent Eq. 12 transcription, curvature factor included."""
     U = jax.random.normal(jax.random.PRNGKey(0), (4, 3), dtype=jnp.float64)
-    b = jnp.ones(3, dtype=jnp.float64) * 0.5
-    V = build_spacelike_V(U, b, c=c)
+    b = jnp.array([0.5, -0.8, 1.3], dtype=jnp.float64)
+
+    V = build_spacelike_V(U, b, c=c, eps=1e-14)
+
     assert V.shape == (5, 3)
-    assert jnp.all(jnp.isfinite(V))
+    assert jnp.allclose(V, _ref_spacelike_V(U, b, c), atol=1e-10)
+
+
+def test_build_spacelike_V_bias_transport_depends_on_curvature():
+    """The Eq. 12 bias transport scales with sqrt(c) -- V must vary with curvature.
+
+    Regression guard: dropping the ``sqrt(c)`` factor from ``arg`` makes V (and hence
+    every FGG layer's weights) curvature-independent. Shape / finiteness / on-manifold
+    checks all still pass, because the time coordinate is reconstructed downstream
+    from whatever spatial values come out.
+    """
+    U = jax.random.normal(jax.random.PRNGKey(0), (4, 3), dtype=jnp.float64)
+    b = jnp.array([0.5, -0.8, 1.3], dtype=jnp.float64)
+
+    V_low = build_spacelike_V(U, b, c=0.5, eps=1e-14)
+    V_high = build_spacelike_V(U, b, c=2.0, eps=1e-14)
+
+    assert not jnp.allclose(V_low, V_high, atol=1e-6), "V is curvature-independent (sqrt(c) bias transport lost)"
+
+    # The dependence is exactly the sqrt(c) rescaling of arg: arg(4c) == 2 * arg(c),
+    # so the ratio of transport arguments recovered from the time row must be 2.
+    norm_O = jnp.sqrt(jnp.sum(U**2, axis=0))
+    arg_c1 = jnp.arcsinh(-build_spacelike_V(U, b, c=1.0, eps=1e-14)[0, :] / norm_O)
+    arg_c4 = jnp.arcsinh(-build_spacelike_V(U, b, c=4.0, eps=1e-14)[0, :] / norm_O)
+    assert jnp.allclose(arg_c4, 2.0 * arg_c1, atol=1e-10)
+
+
+def test_build_spacelike_V_zero_bias_is_curvature_free():
+    """With b = 0 the transport vanishes, so V is the same at every curvature."""
+    U = jax.random.normal(jax.random.PRNGKey(0), (4, 3), dtype=jnp.float64)
+    b = jnp.zeros(3, dtype=jnp.float64)
+
+    assert jnp.allclose(build_spacelike_V(U, b, c=0.5), build_spacelike_V(U, b, c=2.0), atol=1e-12)
 
 
 # ===========================================================================
@@ -123,20 +197,19 @@ def test_build_spacelike_V_curvatures(c):
 # ===========================================================================
 
 
-def test_fgg_linear_output_shape():
-    """FGGLinear produces correct output shape."""
-    layer = FGGLinear(33, 65, rngs=nnx.Rngs(0))
-    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 8, 33)
-    y = layer(x, c=1.0)
-    assert y.shape == (8, 65)
-
-
 def test_fgg_linear_on_manifold():
-    """FGGLinear output satisfies hyperboloid constraint."""
+    """FGGLinear output satisfies the hyperboloid constraint, eagerly and jitted."""
     layer = FGGLinear(17, 33, rngs=nnx.Rngs(0))
     x = _make_hyperboloid_points(jax.random.PRNGKey(1), 16, 17)
     y = layer(x, c=1.0)
+    assert y.shape == (16, 33)
     assert _check_on_hyperboloid(y, c=1.0, atol=1e-8)
+
+    @nnx.jit
+    def forward(model, inputs, curvature):
+        return model(inputs, c=curvature)
+
+    assert jnp.allclose(forward(layer, x, 1.0), y, atol=1e-12)
 
 
 @pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
@@ -208,18 +281,53 @@ def test_fgg_linear_gradients():
         assert jnp.all(jnp.isfinite(g)), f"Non-finite gradient: {g}"
 
 
-def test_fgg_linear_jit():
-    """FGGLinear is JIT-compatible."""
-    layer = FGGLinear(17, 33, rngs=nnx.Rngs(0))
-    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 8, 17)
+# ===========================================================================
+# FGG forward numeric oracles (Eq. 12 + matmul + time reconstruction)
+# ===========================================================================
 
-    @nnx.jit
-    def forward(model, inputs, curvature):
-        return model(inputs, c=curvature)
 
-    y = forward(layer, x, 1.0)
-    assert y.shape == (8, 33)
-    assert _check_on_hyperboloid(y, c=1.0, atol=1e-8)
+@pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
+def test_fgg_linear_forward_matches_reference(c):
+    """FGGLinear reproduces the independent NumPy transcription of the forward pass.
+
+    Regression guard: collapsing the spatial output to the origin (``z * 0``) leaves
+    a perfectly valid hyperboloid point at every pixel, so the manifold-constraint,
+    shape, gradient and JIT tests all still pass while the layer computes nothing.
+    """
+    layer = FGGLinear(7, 5, rngs=nnx.Rngs(0), init_bias=0.4, eps=1e-14, param_dtype=jnp.float64)
+    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 4, 7, c=c)
+
+    got = layer(x, c=c)
+    expected = _ref_fgg_forward(x, layer.kernel[...], layer.bias[...], c)
+
+    assert jnp.allclose(got, expected, atol=1e-10)
+    # The reference itself must be non-trivial (guards against an all-origin oracle).
+    assert np.max(np.abs(expected[:, 1:])) > 1e-3
+
+
+def test_fgg_linear_forward_matches_reference_with_activation():
+    """The Euclidean activation is applied to the Minkowski scores, not to the time coordinate."""
+    layer = FGGLinear(7, 5, rngs=nnx.Rngs(0), init_bias=0.4, activation=jax.nn.relu, eps=1e-14, param_dtype=jnp.float64)
+    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 4, 7)
+
+    got = layer(x, c=1.0)
+    expected = _ref_fgg_forward(x, layer.kernel[...], layer.bias[...], 1.0, activation=lambda z: np.maximum(z, 0.0))
+
+    assert jnp.allclose(got, expected, atol=1e-10)
+
+
+def test_fgg_linear_is_not_constant():
+    """Distinct inputs give distinct outputs, and the origin is not a fixed output."""
+    c = 1.0
+    layer = FGGLinear(7, 5, rngs=nnx.Rngs(0), init_bias=0.4)
+    x_a = _make_hyperboloid_points(jax.random.PRNGKey(1), 4, 7, c=c)
+    x_b = _make_hyperboloid_points(jax.random.PRNGKey(2), 4, 7, c=c)
+
+    y_a = layer(x_a, c=c)
+    origin = jnp.concatenate([jnp.full((4, 1), 1.0 / jnp.sqrt(c)), jnp.zeros((4, 4))], axis=-1)
+
+    assert not jnp.allclose(y_a, layer(x_b, c=c), atol=1e-6)
+    assert not jnp.allclose(y_a, origin, atol=1e-6)
 
 
 # ===========================================================================
@@ -227,20 +335,19 @@ def test_fgg_linear_jit():
 # ===========================================================================
 
 
-def test_fgg_mlr_output_shape():
-    """FGGLorentzMLR produces correct output shape."""
-    mlr = FGGLorentzMLR(65, 10, rngs=nnx.Rngs(0))
-    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 8, 65)
-    logits = mlr(x, c=1.0)
-    assert logits.shape == (8, 10)
-
-
 def test_fgg_mlr_finite_output():
-    """FGGLorentzMLR produces finite logits."""
+    """FGGLorentzMLR produces finite logits of the right shape, eagerly and jitted."""
     mlr = FGGLorentzMLR(33, 5, rngs=nnx.Rngs(0))
     x = _make_hyperboloid_points(jax.random.PRNGKey(1), 16, 33)
     logits = mlr(x, c=1.0)
+    assert logits.shape == (16, 5)
     assert jnp.all(jnp.isfinite(logits))
+
+    @nnx.jit
+    def forward(model, inputs, curvature):
+        return model(inputs, c=curvature)
+
+    assert jnp.allclose(forward(mlr, x, 1.0), logits, atol=1e-12)
 
 
 def test_fgg_mlr_gradients():
@@ -257,20 +364,6 @@ def test_fgg_mlr_gradients():
     flat_grads = jax.tree.leaves(grads)
     for g in flat_grads:
         assert jnp.all(jnp.isfinite(g))
-
-
-def test_fgg_mlr_jit():
-    """FGGLorentzMLR is JIT-compatible."""
-    mlr = FGGLorentzMLR(33, 10, rngs=nnx.Rngs(0))
-    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 8, 33)
-
-    @nnx.jit
-    def forward(model, inputs, curvature):
-        return model(inputs, c=curvature)
-
-    logits = forward(mlr, x, 1.0)
-    assert logits.shape == (8, 10)
-    assert jnp.all(jnp.isfinite(logits))
 
 
 @pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
@@ -308,7 +401,7 @@ def test_fgg_conv2d_output_shape():
 
 
 def test_fgg_conv2d_on_manifold():
-    """FGGConv2D output satisfies hyperboloid constraint at each pixel."""
+    """FGGConv2D output satisfies the hyperboloid constraint at each pixel, eagerly and jitted."""
     conv = FGGConv2D(
         hyperboloid,
         in_channels=5,
@@ -316,14 +409,19 @@ def test_fgg_conv2d_on_manifold():
         kernel_size=3,
         rngs=nnx.Rngs(0),
     )
-    spatial = jax.random.normal(jax.random.PRNGKey(1), (2, 6, 6, 4), dtype=jnp.float64) * 0.3
-    time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
-    x = jnp.concatenate([time, spatial], axis=-1)
+    x = _make_image(jax.random.PRNGKey(1), 2, 6, 5, c=1.0)
 
     y = conv(x, c=1.0)
     # Flatten to (N, C) and check each point
     y_flat = y.reshape(-1, 9)
+    assert y.shape == (2, 6, 6, 9)
     assert _check_on_hyperboloid(y_flat, c=1.0, atol=1e-7)
+
+    @nnx.jit
+    def forward(model, inputs, curvature):
+        return model(inputs, c=curvature)
+
+    assert jnp.allclose(forward(conv, x, 1.0), y, atol=1e-12)
 
 
 def test_fgg_conv2d_stride():
@@ -387,27 +485,48 @@ def test_fgg_conv2d_gradients():
         assert jnp.all(jnp.isfinite(g))
 
 
-def test_fgg_conv2d_jit():
-    """FGGConv2D is JIT-compatible."""
+@pytest.mark.parametrize("c", [0.5, 2.0])
+def test_fgg_conv2d_forward_matches_reference(c):
+    """FGGConv2D equals HCat-of-patches followed by the reference FGG linear forward.
+
+    Independent legs: ``extract_patches`` + ``manifold.hcat`` (both separately
+    oracle-tested in test_hyperboloid_conv.py) feed the NumPy Eq. 12 transcription.
+    Catches an origin-collapsed conv forward, which the on-manifold/shape/JIT tests
+    accept because the origin is itself a valid hyperboloid point.
+    """
     conv = FGGConv2D(
         hyperboloid,
-        in_channels=5,
-        out_channels=9,
-        kernel_size=3,
+        in_channels=4,
+        out_channels=6,
+        kernel_size=2,
         rngs=nnx.Rngs(0),
+        padding="VALID",
+        init_bias=0.3,
+        eps=1e-14,
+        param_dtype=jnp.float64,
     )
-    spatial = jax.random.normal(jax.random.PRNGKey(1), (2, 6, 6, 4), dtype=jnp.float64) * 0.3
-    time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0)
-    x = jnp.concatenate([time, spatial], axis=-1)
+    x = _make_image(jax.random.PRNGKey(2), 1, 3, 4, c=c)
 
-    @nnx.jit
-    def forward(model, inputs, curvature):
-        return model(inputs, c=curvature)
+    got = conv(x, c=c)
 
-    y = forward(conv, x, 1.0)
-    assert y.shape == (2, 6, 6, 9)
-    y_flat = y.reshape(-1, 9)
-    assert _check_on_hyperboloid(y_flat, c=1.0, atol=1e-7)
+    patches = extract_patches(x, conv.kernel_size, conv.stride, conv.padding, conv.pad_mode, c)
+    batch, out_h, out_w, kh, kw, in_c = patches.shape
+    hcat_NA = jax.vmap(hyperboloid.hcat, in_axes=(0, None))(patches.reshape(-1, kh * kw, in_c), c)
+    expected = _ref_fgg_forward(hcat_NA, conv.kernel[...], conv.bias[...], c).reshape(batch, out_h, out_w, conv.out_channels)
+
+    assert got.shape == expected.shape
+    assert jnp.allclose(got, expected, atol=1e-10)
+    assert np.max(np.abs(expected[..., 1:])) > 1e-3
+
+
+def test_fgg_conv2d_is_not_constant():
+    """The conv responds to its input: an all-origin map and a random map differ."""
+    c = 1.0
+    conv = FGGConv2D(hyperboloid, in_channels=4, out_channels=6, kernel_size=3, rngs=nnx.Rngs(0))
+    origin = jnp.zeros((1, 4, 4, 4), dtype=jnp.float64).at[..., 0].set(1.0 / jnp.sqrt(c))
+    x = _make_image(jax.random.PRNGKey(3), 1, 4, 4, c=c)
+
+    assert not jnp.allclose(conv(origin, c=c), conv(x, c=c), atol=1e-6)
 
 
 # ===========================================================================

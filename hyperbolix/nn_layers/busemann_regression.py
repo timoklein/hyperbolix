@@ -21,7 +21,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
 
 from ._helpers import validate_hyperboloid_manifold, validate_poincare_manifold
-from .busemann_core import busemann_score, init_weight_norm_params
+from .busemann_core import _busemann_score, _init_weight_norm_params
 
 
 class HypRegressionHyperboloidBusemann(nnx.Module):
@@ -49,7 +49,7 @@ class HypRegressionHyperboloidBusemann(nnx.Module):
     Notes
     -----
     Parameters use the weight-normalization split (``kernel`` directions, ``log_scale``
-    log-magnitudes ``alpha = exp(log_scale)``, ``bias``); see :func:`busemann_core.busemann_score`.
+    log-magnitudes ``alpha = exp(log_scale)``, ``bias``); see :func:`busemann_core._busemann_score`.
 
     References
     ----------
@@ -77,7 +77,7 @@ class HypRegressionHyperboloidBusemann(nnx.Module):
 
         # Direction dim is spatial (ambient - 1) for the Lorentz model.
         in_spatial = in_dim - 1
-        self.kernel, self.log_scale, self.bias = init_weight_norm_params(
+        self.kernel, self.log_scale, self.bias = _init_weight_norm_params(
             rngs, out_dim, in_spatial, std=in_spatial**-0.5, param_dtype=param_dtype
         )
 
@@ -87,7 +87,7 @@ class HypRegressionHyperboloidBusemann(nnx.Module):
         c: float = 1.0,
     ) -> Float[Array, "batch out_dim"]:
         """Forward pass returning Euclidean Busemann logits, shape (batch, out_dim)."""
-        return busemann_score(self.manifold, x, self.kernel[...], self.log_scale[...], self.bias[...], c, self.input_space)
+        return _busemann_score(self.manifold, x, self.kernel[...], self.log_scale[...], self.bias[...], c, self.input_space)
 
 
 class HypRegressionPoincareBusemann(nnx.Module):
@@ -138,7 +138,7 @@ class HypRegressionPoincareBusemann(nnx.Module):
 
         # Direction dim equals the spatial dim (no time component on the ball).
         in_spatial = in_dim
-        self.kernel, self.log_scale, self.bias = init_weight_norm_params(
+        self.kernel, self.log_scale, self.bias = _init_weight_norm_params(
             rngs, out_dim, in_spatial, std=in_spatial**-0.5, param_dtype=param_dtype
         )
 
@@ -148,4 +148,4 @@ class HypRegressionPoincareBusemann(nnx.Module):
         c: float = 1.0,
     ) -> Float[Array, "batch out_dim"]:
         """Forward pass returning Euclidean Busemann logits, shape (batch, out_dim)."""
-        return busemann_score(self.manifold, x, self.kernel[...], self.log_scale[...], self.bias[...], c, self.input_space)
+        return _busemann_score(self.manifold, x, self.kernel[...], self.log_scale[...], self.bias[...], c, self.input_space)

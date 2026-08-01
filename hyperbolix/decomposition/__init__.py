@@ -20,6 +20,8 @@ from .horopca import (
     fit_horopca,
     horo_projection,
     horopca_loss,
+    lift_ideals,
+    orthonormalize_rows,
     transform_horopca,
 )
 
@@ -34,7 +36,9 @@ __all__ = [
     "horopca_loss",
     "joint_probabilities",
     "kl_divergence_loss",
+    "lift_ideals",
     "low_dim_probabilities",
     "magnitude_loss",
+    "orthonormalize_rows",
     "transform_horopca",
 ]

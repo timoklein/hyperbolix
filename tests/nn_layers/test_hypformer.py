@@ -14,17 +14,8 @@ from hyperbolix.nn_layers import (
     HTCLinear,
     hrc,
     hrc_gelu,
-    hrc_leaky_relu,
     hrc_relu,
-    hrc_swish,
-    hrc_tanh,
     htc,
-)
-from hyperbolix.nn_layers.hyperboloid_activations import (
-    hyp_leaky_relu,
-    hyp_relu,
-    hyp_swish,
-    hyp_tanh,
 )
 
 hyperboloid = Hyperboloid()
@@ -44,7 +35,7 @@ def test_hrc_manifold_constraint_same_curvature():
 
 
 def test_hrc_manifold_constraint_different_curvature():
-    """Test that HRC output satisfies hyperboloid constraint when c_in != c_out."""
+    """HRC output satisfies the hyperboloid constraint when c_in != c_out, eagerly and jitted."""
     c_in = 1.0
     c_out = 2.0
     x = jnp.array([1.05, 0.1, -0.2, 0.15])
@@ -53,6 +44,9 @@ def test_hrc_manifold_constraint_different_curvature():
     y = hrc_relu(x, c_in=c_in, c_out=c_out)
 
     assert hyperboloid.is_in_manifold(y, c_out, atol=1e-5)
+
+    y_jit = jax.jit(lambda z, a, b: hrc_relu(z, a, b))(x, c_in, c_out)
+    assert jnp.allclose(y_jit, y, atol=1e-10)
 
 
 def test_hrc_manifold_constraint_batch():
@@ -90,7 +84,7 @@ def test_htc_manifold_constraint_same_curvature():
 
 
 def test_htc_manifold_constraint_different_curvature():
-    """Test that HTC output satisfies hyperboloid constraint when c_in != c_out."""
+    """HTC output satisfies the hyperboloid constraint when c_in != c_out, eagerly and jitted."""
     c_in = 1.0
     c_out = 2.0
     x = jnp.array([1.05, 0.1, -0.2, 0.15])
@@ -105,77 +99,14 @@ def test_htc_manifold_constraint_different_curvature():
 
     assert hyperboloid.is_in_manifold(y, c_out, atol=1e-5)
 
-
-# Equivalence tests
-
-
-def test_hrc_equals_hyp_relu_when_curvatures_equal():
-    """Test that HRC with ReLU matches existing hyp_relu when c_in = c_out."""
-    c = 1.0
-    x = jnp.array([1.05, 0.1, -0.2, 0.15])
-    x = hyperboloid.proj(x, c)
-
-    y_hrc = hrc_relu(x, c_in=c, c_out=c)
-    y_hyp = hyp_relu(x, c)
-
-    assert jnp.allclose(y_hrc, y_hyp, atol=1e-6)
+    y_jit = jax.jit(lambda z, a, b: htc(z, linear, a, b))(x, c_in, c_out)
+    assert jnp.allclose(y_jit, y, atol=1e-10)
 
 
-def test_hrc_equals_hyp_tanh_when_curvatures_equal():
-    """Test that HRC with tanh matches existing hyp_tanh when c_in = c_out."""
-    c = 1.0
-    x = jnp.array([1.05, 0.1, -0.2, 0.15])
-    x = hyperboloid.proj(x, c)
-
-    y_hrc = hrc_tanh(x, c_in=c, c_out=c)
-    y_hyp = hyp_tanh(x, c)
-
-    assert jnp.allclose(y_hrc, y_hyp, atol=1e-6)
-
-
-def test_hrc_equals_hyp_leaky_relu_when_curvatures_equal():
-    """Test that HRC with LeakyReLU matches existing hyp_leaky_relu when c_in = c_out."""
-    c = 1.0
-    negative_slope = 0.01
-    x = jnp.array([1.05, 0.1, -0.2, 0.15])
-    x = hyperboloid.proj(x, c)
-
-    y_hrc = hrc_leaky_relu(x, c_in=c, c_out=c, negative_slope=negative_slope)
-    y_hyp = hyp_leaky_relu(x, c, negative_slope=negative_slope)
-
-    assert jnp.allclose(y_hrc, y_hyp, atol=1e-6)
-
-
-def test_hrc_equals_hyp_swish_when_curvatures_equal():
-    """Test that HRC with Swish matches existing hyp_swish when c_in = c_out."""
-    c = 1.0
-    x = jnp.array([1.05, 0.1, -0.2, 0.15])
-    x = hyperboloid.proj(x, c)
-
-    y_hrc = hrc_swish(x, c_in=c, c_out=c)
-    y_hyp = hyp_swish(x, c)
-
-    assert jnp.allclose(y_hrc, y_hyp, atol=1e-6)
-
-
-def test_hrc_equals_hyp_activations_batch():
-    """Test equivalence with existing activations for batched inputs."""
-    c = 1.0
-    batch_size = 32
-    dim = 5
-
-    x = jax.random.normal(jax.random.PRNGKey(0), (batch_size, dim))
-    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, c)
-
-    # Test ReLU
-    y_hrc = hrc_relu(x, c_in=c, c_out=c)
-    y_hyp = hyp_relu(x, c)
-    assert jnp.allclose(y_hrc, y_hyp, atol=1e-6)
-
-    # Test tanh
-    y_hrc = hrc_tanh(x, c_in=c, c_out=c)
-    y_hyp = hyp_tanh(x, c)
-    assert jnp.allclose(y_hrc, y_hyp, atol=1e-6)
+# NOTE: the former ``hrc_equals_hyp_{relu,tanh,leaky_relu,swish}`` equivalence tests were
+# removed as vacuous: ``hyp_relu(x, c)`` is literally ``return hrc_relu(x, c_in=c, c_out=c)``
+# (and likewise for the other three), so those tests compared a function to itself.
+# The activation semantics are covered by the oracles in test_hyperboloid_activations.py.
 
 
 # Shape tests
@@ -292,45 +223,15 @@ def test_gradients_wrt_curvature():
 
 
 # JIT compatibility tests
+#
+# NOTE: the standalone ``test_hrc_jit`` / ``test_htc_jit`` / ``test_fgg_*_jit``-style
+# smoke tests were folded into their eager siblings, which now assert
+# ``allclose(jitted, eager)`` -- a jitted run that merely produces finite, on-manifold
+# values proves nothing the eager test did not already prove.
 
 
-def test_hrc_jit():
-    """Test that HRC works under JIT compilation."""
-
-    @jax.jit
-    def jitted_hrc(x, c_in, c_out):
-        return hrc_relu(x, c_in, c_out)
-
-    c_in = 1.0
-    c_out = 2.0
-    x = jnp.array([1.05, 0.1, -0.2, 0.15])
-    x = hyperboloid.proj(x, c_in)
-
-    y = jitted_hrc(x, c_in, c_out)
-
-    assert hyperboloid.is_in_manifold(y, c_out, atol=1e-5)
-
-
-def test_htc_jit():
-    """Test that HTC works under JIT compilation."""
-    W = jax.random.normal(jax.random.PRNGKey(0), (3, 4))
-
-    @jax.jit
-    def jitted_htc(x, c_in, c_out):
-        return htc(x, lambda z: z @ W.T, c_in, c_out)
-
-    c_in = 1.0
-    c_out = 2.0
-    x = jnp.array([1.05, 0.1, -0.2, 0.15])
-    x = hyperboloid.proj(x, c_in)
-
-    y = jitted_htc(x, c_in, c_out)
-
-    assert hyperboloid.is_in_manifold(y, c_out, atol=1e-5)
-
-
-def test_hrc_module_nnx_jit():
-    """Test that HRC NNX modules work under nnx.jit."""
+def test_hrc_module_nnx_jit_matches_eager():
+    """HRC NNX modules run under nnx.jit and return the eager result."""
     dropout = HRCDropout(rate=0.1, rngs=nnx.Rngs(dropout=42))
 
     @nnx.jit
@@ -343,8 +244,10 @@ def test_hrc_module_nnx_jit():
     x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, c_in)
 
     y = forward(dropout, x, c_in, c_out)
+    y_eager = dropout(x, c_in, c_out, deterministic=True)
 
     assert y.shape == x.shape
+    assert jnp.allclose(y, y_eager, atol=1e-10)
 
 
 # Edge case tests
@@ -539,7 +442,7 @@ def test_hrc_batchnorm_forward():
 
 
 def test_hrc_batchnorm_curvature_change():
-    """Test HRCBatchNorm with curvature change."""
+    """HRCBatchNorm with curvature change, eagerly and under nnx.jit."""
     bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
 
     c_in = 1.0
@@ -552,6 +455,14 @@ def test_hrc_batchnorm_curvature_change():
     assert y.shape == x.shape
     for i in range(32):
         assert hyperboloid.is_in_manifold(y[i], c_out, atol=1e-5)
+
+    # In training mode the normalization uses batch statistics, so the jitted
+    # forward must reproduce the eager output exactly despite the running-stat update.
+    @nnx.jit
+    def forward(model, inputs, a, b):
+        return model(inputs, a, b, use_running_average=False)
+
+    assert jnp.allclose(forward(bn, x, c_in, c_out), y, atol=1e-10)
 
 
 def test_hrc_batchnorm_training_vs_eval():
@@ -579,20 +490,6 @@ def test_hrc_batchnorm_training_vs_eval():
     assert not jnp.allclose(y_eval, y_train1, atol=1e-6)
 
 
-def test_hrc_batchnorm_shape_preservation():
-    """Test HRCBatchNorm preserves input shape."""
-    bn = HRCBatchNorm(num_features=16, rngs=nnx.Rngs(0))
-
-    # Test with different batch sizes
-    for batch_size in [8, 16, 32]:
-        x = jax.random.normal(jax.random.PRNGKey(batch_size), (batch_size, 17))
-        x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
-
-        y = bn(x, c_in=1.0, c_out=1.0, use_running_average=False)
-
-        assert y.shape == x.shape
-
-
 def test_hrc_batchnorm_gradient():
     """Test gradients through HRCBatchNorm."""
     bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
@@ -612,24 +509,6 @@ def test_hrc_batchnorm_gradient():
     assert hasattr(grads.bn, "bias")
     assert jnp.all(jnp.isfinite(grads.bn.scale[...]))
     assert jnp.all(jnp.isfinite(grads.bn.bias[...]))
-
-
-def test_hrc_batchnorm_jit():
-    """Test HRCBatchNorm works under JIT compilation."""
-    bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
-
-    @nnx.jit
-    def forward(model, x, c_in, c_out):
-        return model(x, c_in, c_out, use_running_average=False)
-
-    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
-    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
-
-    y = forward(bn, x, 1.0, 2.0)
-
-    assert y.shape == x.shape
-    for i in range(32):
-        assert hyperboloid.is_in_manifold(y[i], 2.0, atol=1e-5)
 
 
 def test_hrc_batchnorm_extreme_curvatures():
@@ -671,7 +550,7 @@ def test_hrc_rmsnorm_forward():
 
 
 def test_hrc_rmsnorm_curvature_change():
-    """Test HRCRMSNorm with curvature change."""
+    """HRCRMSNorm with curvature change, eagerly and under nnx.jit."""
     rms = HRCRMSNorm(num_features=4, rngs=nnx.Rngs(0))
 
     c_in = 1.0
@@ -685,19 +564,11 @@ def test_hrc_rmsnorm_curvature_change():
     for i in range(32):
         assert hyperboloid.is_in_manifold(y[i], c_out, atol=1e-5)
 
+    @nnx.jit
+    def forward(model, inputs, a, b):
+        return model(inputs, a, b)
 
-def test_hrc_rmsnorm_shape_preservation():
-    """Test HRCRMSNorm preserves input shape."""
-    rms = HRCRMSNorm(num_features=16, rngs=nnx.Rngs(0))
-
-    # Test with different batch sizes
-    for batch_size in [8, 16, 32]:
-        x = jax.random.normal(jax.random.PRNGKey(batch_size), (batch_size, 17))
-        x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
-
-        y = rms(x, c_in=1.0, c_out=1.0)
-
-        assert y.shape == x.shape
+    assert jnp.allclose(forward(rms, x, c_in, c_out), y, atol=1e-10)
 
 
 def test_hrc_rmsnorm_gradient():
@@ -717,24 +588,6 @@ def test_hrc_rmsnorm_gradient():
     # Check that gradients exist for scale parameter
     assert hasattr(grads.rms, "scale")
     assert jnp.all(jnp.isfinite(grads.rms.scale[...]))
-
-
-def test_hrc_rmsnorm_jit():
-    """Test HRCRMSNorm works under JIT compilation."""
-    rms = HRCRMSNorm(num_features=4, rngs=nnx.Rngs(0))
-
-    @nnx.jit
-    def forward(model, x, c_in, c_out):
-        return model(x, c_in, c_out)
-
-    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5))
-    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x, 1.0)
-
-    y = forward(rms, x, 1.0, 2.0)
-
-    assert y.shape == x.shape
-    for i in range(32):
-        assert hyperboloid.is_in_manifold(y[i], 2.0, atol=1e-5)
 
 
 def test_hrc_rmsnorm_extreme_curvatures():

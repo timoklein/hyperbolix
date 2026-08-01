@@ -27,6 +27,12 @@ class HypRegressionPoincare(nnx.Module):
     """
     Hyperbolic Neural Networks multinomial linear regression layer (Poincaré ball model).
 
+    Superseded by :class:`HypRegressionPoincarePP` (Shimizu et al. 2020); kept for
+    reproduction of Ganea et al. 2018. This head stores each hyperplane as an explicit
+    manifold base point (a ``ManifoldParam`` bias requiring a Riemannian optimizer) plus a
+    parallel-transported tangent normal, where the HNN++ head needs only Euclidean
+    parameters.
+
     Computation steps:
         0) Project the input tensor onto the manifold (optional)
         1) Compute the multinomial linear regression score(s)
@@ -89,7 +95,7 @@ class HypRegressionPoincare(nnx.Module):
         # Static configuration (treated as compile-time constants for JIT)
         validate_poincare_manifold(
             manifold_module,
-            required_methods=("proj", "addition", "expmap_0", "ptransp_0", "conformal_factor", "compute_mlr_pp"),
+            required_methods=("proj", "addition", "expmap_0", "ptransp_0", "conformal_factor"),
         )
         self.manifold = manifold_module
         self.in_dim = in_dim
@@ -99,8 +105,13 @@ class HypRegressionPoincare(nnx.Module):
         self.smoothing_factor = smoothing_factor
 
         # Trainable parameters
-        # Tangent space weight (Euclidean)
-        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype))
+        # Tangent space weight (Euclidean) — scaled to match reference (van Spengler et al. 2023)
+        # Reference uses std = (2 * in_dim * out_dim)^{-0.5}; unscaled normal(0,1) gives
+        # row norms ≈ sqrt(in_dim) which overwhelms the MLR output scaling. The ‖a‖ factors
+        # cancel inside asinh but reappear as the outer ‖a‖ multiplier in _compute_mlr, so
+        # the logits scale linearly with the row norm.
+        std = 1.0 / jnp.sqrt(2.0 * in_dim * out_dim)
+        self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * std)
         # Manifold bias (initialized to small random values)
         self.bias = ManifoldParam(
             jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * 0.01,

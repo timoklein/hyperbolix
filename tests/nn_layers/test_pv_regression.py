@@ -1,4 +1,9 @@
-"""Tests for HypRegressionPV (Proper Velocity MLR layer, Chen et al. 2026)."""
+"""Tests for HypRegressionPV (Proper Velocity MLR layer, Chen et al. 2026).
+
+The shared forward / on-manifold / JIT / gradient / tangent-input contract for
+every layer in the library lives in ``test_layer_contract.py``; only
+HypRegressionPV-specific tests stay here.
+"""
 
 import jax
 import jax.numpy as jnp
@@ -16,38 +21,6 @@ def _manifold(dtype: jnp.dtype) -> ProperVelocity:
 def _manifold_points(dtype: jnp.dtype, shape: tuple[int, ...], seed: int = 0) -> jnp.ndarray:
     """Gaussian samples: valid PV points without any projection (PV is unconstrained)."""
     return jax.random.normal(jax.random.PRNGKey(seed), shape, dtype=dtype) * 0.3
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_regression_forward_shape_and_finite(dtype):
-    batch_size, in_dim, out_dim = 8, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
-
-    rngs = nnx.Rngs(42)
-    layer = HypRegressionPV(_manifold(dtype), in_dim, out_dim, rngs=rngs)
-
-    y = layer(x, c=1.0)
-
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
-    assert y.dtype == dtype
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_regression_jitted_forward(dtype):
-    batch_size, in_dim, out_dim = 8, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
-
-    rngs = nnx.Rngs(42)
-    layer = HypRegressionPV(_manifold(dtype), in_dim, out_dim, rngs=rngs)
-
-    @nnx.jit
-    def forward(module, inputs, curvature):
-        return module(inputs, c=curvature)
-
-    y = forward(layer, x, 1.0)
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -73,41 +46,6 @@ def test_pv_regression_gradient(dtype):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_regression_jitted_gradient(dtype):
-    batch_size, in_dim, out_dim = 4, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
-
-    rngs = nnx.Rngs(42)
-    layer = HypRegressionPV(_manifold(dtype), in_dim, out_dim, rngs=rngs)
-
-    @nnx.jit
-    def loss_fn(module, inputs, curvature):
-        y = module(inputs, c=curvature)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_regression_tangent_input(dtype):
-    """With input_space='tangent', Euclidean input is lifted via expmap_0 inside the layer."""
-    batch_size, in_dim, out_dim = 8, 5, 3
-    v = _manifold_points(dtype, (batch_size, in_dim))
-
-    rngs = nnx.Rngs(42)
-    layer = HypRegressionPV(_manifold(dtype), in_dim, out_dim, rngs=rngs, input_space="tangent")
-
-    y = layer(v, c=1.0)
-
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_pv_regression_tangent_matches_manual_lift(dtype):
     """input_space='tangent' must equal manual expmap_0 + input_space='manifold'."""
     batch_size, in_dim, out_dim = 6, 5, 4
@@ -125,18 +63,19 @@ def test_pv_regression_tangent_matches_manual_lift(dtype):
     assert jnp.allclose(y_manual, y_tangent, atol=atol)
 
 
-@pytest.mark.parametrize("c", [0.1, 1.0, 2.0])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_regression_different_curvatures(dtype, c):
+def test_pv_regression_different_curvatures():
+    """Curvature reaches the forward: the three outputs are pairwise different."""
+    dtype = jnp.float64
     batch_size, in_dim, out_dim = 4, 5, 3
     x = _manifold_points(dtype, (batch_size, in_dim))
 
-    rngs = nnx.Rngs(42)
-    layer = HypRegressionPV(_manifold(dtype), in_dim, out_dim, rngs=rngs)
+    layer = HypRegressionPV(_manifold(dtype), in_dim, out_dim, rngs=nnx.Rngs(42), param_dtype=dtype)
+    outputs = [layer(x, c=c) for c in (0.1, 1.0, 2.0)]
 
-    y = layer(x, c=c)
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
+    assert all(jnp.isfinite(y).all() and y.shape == (batch_size, out_dim) for y in outputs)
+    for i in range(len(outputs)):
+        for j in range(i + 1, len(outputs)):
+            assert not jnp.allclose(outputs[i], outputs[j], atol=1e-8)
 
 
 def test_pv_regression_rejects_bad_input_space():

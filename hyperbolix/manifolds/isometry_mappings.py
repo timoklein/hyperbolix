@@ -44,10 +44,8 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from ..utils.math_utils import MIN_NORM
 from .protocol import Curvature
-
-# Default numerical parameter for safe division
-MIN_DENOM = 1e-15
 
 
 def hyperboloid_to_poincare(
@@ -90,7 +88,7 @@ def hyperboloid_to_poincare(
 
     # Curvature-aware stereographic projection: y_i = x_i / (√c·t + 1).
     # Since t ≥ 1/√c on the hyperboloid, √c·t ≥ 1 and the denominator ≥ 2 — stable.
-    denominator = jnp.maximum(sqrt_c * t + 1.0, MIN_DENOM)
+    denominator = jnp.maximum(sqrt_c * t + 1.0, MIN_NORM)
     return x_spatial / denominator
 
 
@@ -135,7 +133,7 @@ def poincare_to_hyperboloid(
     # Curvature-aware inverse stereographic projection. The spatial part scales
     # by the Poincaré conformal factor 1/(1 - c·||y||²); only the time component
     # carries the extra 1/√c, so the two denominators differ.
-    one_minus = jnp.maximum(1.0 - c * y_sqnorm, MIN_DENOM)
+    one_minus = jnp.maximum(1.0 - c * y_sqnorm, MIN_NORM)
 
     t = (1.0 + c * y_sqnorm) / (one_minus * sqrt_c)
     x_spatial = 2.0 * y / one_minus
@@ -201,7 +199,7 @@ def poincare_to_pv(
     where λ(y) = 2/(1 - c·||y||²) is the Poincaré conformal factor. As y
     approaches the ball boundary (||y||² → 1/c) the image grows without bound —
     expected, since PV is the *unconstrained* R^n model. The denominator is
-    guarded by ``MIN_DENOM`` to avoid division by zero at the boundary.
+    guarded by ``MIN_NORM`` to avoid division by zero at the boundary.
 
     Args:
         y: Point in the Poincaré ball, shape (dim,). Should satisfy ||y||² < 1/c.
@@ -222,7 +220,7 @@ def poincare_to_pv(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    denominator = jnp.maximum(1.0 - c * jnp.dot(y, y), MIN_DENOM)
+    denominator = jnp.maximum(1.0 - c * jnp.dot(y, y), MIN_NORM)
     return 2.0 * y / denominator
 
 

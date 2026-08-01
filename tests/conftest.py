@@ -16,16 +16,32 @@ import hyperbolix as hj
 # Enable float64 support in JAX
 jax.config.update("jax_enable_x64", True)
 
+# Independent RNG stream ids for the package-scoped data fixtures. Each fixture derives its
+# generator from (seed_jax, stream_id, ...) instead of drawing from a single shared generator,
+# so the values a test sees no longer depend on which other tests ran first. Without this a
+# failure found in a full run may not reproduce under ``-k`` (and vice versa).
+_CURVATURE_STREAM = {"euclidean": 0, "poincare": 1, "hyperboloid": 2, "pv": 3}
+_POINTS_STREAM = {"euclidean": 10, "poincare": 11, "hyperboloid": 12, "pv": 13}
 
-@pytest.fixture(scope="package", params=[*range(10, 13)])
+
+@pytest.fixture(scope="package", params=[10])
 def seed_jax(request: pytest.FixtureRequest) -> int:
-    """Global seed for JAX reproducibility (mirrors PyTorch seeds 10, 11, 12)."""
+    """Global seed for JAX reproducibility.
+
+    Single seed by design: every property checked by the fixture-driven manifold tests is a
+    pointwise identity over an i.i.d. sample, so a second seed only redraws the same
+    distribution. The ``params`` list is kept so re-widening the axis stays a one-line change.
+    """
     return request.param
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture
 def rng(seed_jax: int) -> np.random.Generator:
-    """Shared NumPy RNG for JAX tests, seeded to match PyTorch test runs."""
+    """Fresh per-test NumPy RNG, seeded from ``seed_jax``.
+
+    Function-scoped on purpose: several test bodies draw from this generator, and a shared
+    package-scoped generator made those draws depend on test execution order.
+    """
     return np.random.default_rng(seed=seed_jax)
 
 
@@ -43,63 +59,82 @@ def tolerance(dtype: jnp.dtype) -> tuple[float, float]:
     return 1e-7, 1e-7  # float64
 
 
-@pytest.fixture(
-    scope="package",
-    params=[
-        ("euclidean", 0.0),
-        ("poincare", 1.0),
-        ("hyperboloid", 1.0),
-        ("pv", 1.0),
-    ],
-    ids=["Euclidean", "PoincareBall", "Hyperboloid", "ProperVelocity"],
-)
-def manifold_and_c(request: pytest.FixtureRequest, dtype: jnp.dtype, rng: np.random.Generator):
-    """Fixture providing (manifold_instance, curvature) tuples.
+def _make_manifold_and_c(manifold_name: str, dtype: jnp.dtype, seed: int, draw: int = 0):
+    """Build a (manifold_instance, curvature) pair with a sampled curvature.
 
-    Uses class-based manifold interfaces with dtype provided by the
-    package-level dtype fixture. Curvatures are sampled the same way as PyTorch.
+    Curvatures are sampled the same way as PyTorch (exponential, rate=0.5), from a generator
+    derived from (seed, manifold, draw) so the value is independent of test execution order.
+    ``draw`` selects an independent curvature sample; the generic property tests run two draws
+    per hyperbolic manifold because scale-dependent bugs have historically been caught only at
+    curvatures far from 1 (see the sampling note on the hyperboloid generator below).
     """
-    manifold_name, _ = request.param
-
     if manifold_name == "euclidean":
         # Euclidean always has c=0
         return hj.manifolds.Euclidean(dtype=dtype), 0.0
-    elif manifold_name == "poincare":
-        # Poincaré with random positive curvature (exponential distribution, rate=0.5)
-        # Matches PyTorch: torch.empty(1).exponential_(0.5)
-        c = float(rng.exponential(scale=2.0))  # scale = 1/rate
+
+    gen = np.random.default_rng([seed, _CURVATURE_STREAM[manifold_name], draw])
+    # Random positive curvature (exponential distribution, rate=0.5).
+    # Matches PyTorch: torch.empty(1).exponential_(0.5)
+    c = float(gen.exponential(scale=2.0))  # scale = 1/rate
+
+    if manifold_name == "poincare":
         return hj.manifolds.Poincare(dtype=dtype), c
     elif manifold_name == "hyperboloid":
-        # Hyperboloid with random positive curvature
-        c = float(rng.exponential(scale=2.0))
         return hj.manifolds.Hyperboloid(dtype=dtype), c
     elif manifold_name == "pv":
-        # Proper Velocity with random positive curvature (same distribution as Poincaré)
-        c = float(rng.exponential(scale=2.0))
         return hj.manifolds.ProperVelocity(dtype=dtype), c
-    else:
-        raise ValueError(f"Unknown manifold: {manifold_name}")
+    raise ValueError(f"Unknown manifold: {manifold_name}")
 
 
-@pytest.fixture(scope="package", params=[2, 5, 10, 15])
-def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequest, rng: np.random.Generator) -> jnp.ndarray:
+@pytest.fixture(
+    scope="package",
+    params=[("euclidean", 0), ("poincare", 0), ("poincare", 1), ("hyperboloid", 0), ("hyperboloid", 1)],
+    ids=["Euclidean", "PoincareBall-c0", "PoincareBall-c1", "Hyperboloid-c0", "Hyperboloid-c1"],
+)
+def manifold_and_c(request: pytest.FixtureRequest, dtype: jnp.dtype, seed_jax: int):
+    """Fixture providing (manifold_instance, curvature) tuples.
+
+    Two independent curvature draws per hyperbolic manifold: a single sampled curvature would
+    lose the fault-detection power of testing widely separated scales.
+
+    ProperVelocity is intentionally absent: ``tests/test_pv_manifold.py`` covers every property
+    this fixture's consumers check for PV, with strictly stronger oracles (metric duality,
+    paper closed forms, private-helper cross-checks).
+    """
+    manifold_name, draw = request.param
+    return _make_manifold_and_c(manifold_name, dtype, seed_jax, draw)
+
+
+@pytest.fixture(scope="package")
+def poincare_and_c(dtype: jnp.dtype, seed_jax: int):
+    """(Poincare, c) for Poincaré-specific tests (Möbius gyration, Apollonian metric)."""
+    return _make_manifold_and_c("poincare", dtype, seed_jax)
+
+
+@pytest.fixture(scope="package")
+def hyperboloid_and_c(dtype: jnp.dtype, seed_jax: int):
+    """(Hyperboloid, c) for Hyperboloid-specific tests (Lorentz gyroaddition, sqdist)."""
+    return _make_manifold_and_c("hyperboloid", dtype, seed_jax)
+
+
+def _sample_uniform_points(manifold, c: float, dim: int, dtype: jnp.dtype, seed: int) -> jnp.ndarray:
     """Generate uniformly distributed points on the manifold.
 
     Mirrors the PyTorch uniform_points fixture, generating the same number
     and distribution of points but using NumPy arrays converted to JAX.
     """
-    manifold, c = manifold_and_c
-    dim = request.param
     num_pts = 2_500 * 6  # Same as PyTorch
     np_dtype = np.dtype(dtype.name)
 
     if isinstance(manifold, hj.manifolds.Euclidean):
+        rng = np.random.default_rng([seed, _POINTS_STREAM["euclidean"], dim])
         # Euclidean: uniform in box [-100, 100]^d
         lower, upper = -100.0, 100.0
         data = rng.uniform(lower, upper, size=(num_pts, dim)).astype(np_dtype)
         return jnp.asarray(data)
 
     elif isinstance(manifold, hj.manifolds.Poincare):
+        rng = np.random.default_rng([seed, _POINTS_STREAM["poincare"], dim])
         # Poincaré ball: uniform sampling using spherical coordinates
         # Matches PyTorch approach
         random_dirs = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)
@@ -112,6 +147,7 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
         return proj_batch(points, c)
 
     elif isinstance(manifold, hj.manifolds.Hyperboloid):
+        rng = np.random.default_rng([seed, _POINTS_STREAM["hyperboloid"], dim])
         # Hyperboloid: generate points on upper sheet
         # Mirrors PyTorch approach: generate in Poincaré, scale, convert
         random_dirs = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)
@@ -149,6 +185,7 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
         return proj_batch(points, c)
 
     elif isinstance(manifold, hj.manifolds.ProperVelocity):
+        rng = np.random.default_rng([seed, _POINTS_STREAM["pv"], dim])
         # Proper Velocity: unconstrained ℝⁿ. Gaussian samples scaled to 1/√c keep
         # typical geodesic distance to origin of order asinh(1) ~ 0.88, mirroring
         # the hyperbolic manifolds' "moderate distance" regime.
@@ -158,3 +195,28 @@ def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequ
 
     else:
         raise ValueError("Unknown manifold module")
+
+
+@pytest.fixture(scope="package", params=[2, 10])
+def uniform_points(manifold_and_c, dtype: jnp.dtype, request: pytest.FixtureRequest, seed_jax: int) -> jnp.ndarray:
+    """Uniform points on the ``manifold_and_c`` manifold.
+
+    ``dim`` axis is {2, 10}: no manifold has a dimension-dependent code path, so ``dim`` is
+    pure vectorization width — 2 (disk / ambient-3 hyperboloid edge case) plus one generic value.
+    """
+    manifold, c = manifold_and_c
+    return _sample_uniform_points(manifold, c, request.param, dtype, seed_jax)
+
+
+@pytest.fixture(scope="package", params=[2, 10])
+def poincare_points(poincare_and_c, dtype: jnp.dtype, request: pytest.FixtureRequest, seed_jax: int) -> jnp.ndarray:
+    """Uniform points on the Poincaré ball (companion to ``poincare_and_c``)."""
+    manifold, c = poincare_and_c
+    return _sample_uniform_points(manifold, c, request.param, dtype, seed_jax)
+
+
+@pytest.fixture(scope="package", params=[2, 10])
+def hyperboloid_points(hyperboloid_and_c, dtype: jnp.dtype, request: pytest.FixtureRequest, seed_jax: int) -> jnp.ndarray:
+    """Uniform points on the hyperboloid (companion to ``hyperboloid_and_c``)."""
+    manifold, c = hyperboloid_and_c
+    return _sample_uniform_points(manifold, c, request.param, dtype, seed_jax)

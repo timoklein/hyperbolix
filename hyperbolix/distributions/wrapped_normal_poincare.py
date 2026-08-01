@@ -1,7 +1,8 @@
 """Wrapped normal distribution on Poincaré ball.
 
-Simpler implementation than hyperboloid - no parallel transport needed!
-Uses exponential map and Möbius addition.
+Simpler implementation than hyperboloid: ``sample`` needs no parallel transport, just the
+exponential map at the origin and a Möbius addition. ``log_prob`` still parallel-transports
+the log-map back to the origin, exactly as the hyperboloid version does.
 
 Dimension key:
   S: sample dimensions (from sample_shape)
@@ -13,14 +14,14 @@ References:
     NeurIPS 2019. https://arxiv.org/abs/1901.06033
 """
 
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.utils.math_utils import MIN_NORM
 
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
-from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r
+from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
 
 
 def sample(
@@ -51,6 +52,7 @@ def sample(
         c: Curvature (positive scalar)
         sample_shape: Shape of samples to draw, prepended to output. Default: ()
         dtype: Output dtype. Default: infer from mu
+        manifold_module: Optional Poincare instance. Default: Poincare(dtype)
 
     Returns:
         Samples from wrapped normal distribution, shape sample_shape + mu.shape
@@ -146,6 +148,7 @@ def log_prob(
             - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
             - 2D array (n, n): full covariance matrix (must be SPD)
         c: Curvature (positive scalar)
+        manifold_module: Optional Poincare instance. Default: Poincare(z.dtype)
 
     Returns:
         Log probability, shape (...) (spatial dimension removed)
@@ -185,28 +188,26 @@ def log_prob(
     # Extract dimension
     n = mu.shape[-1]  # Dimension of Poincaré ball
 
+    # Batching layout: z is (*S, *B, D) and mu is (*B, D). The mean's batch axes pair with z's
+    # trailing axes; the leading sample axes broadcast the mean. Steps 1 and 2 must use the
+    # *same* layout — vmapping u and mu together over axis 0 (as step 2 used to) pairs a sample
+    # axis with a batch axis and fails on sample()'s own output whenever both are present.
+    n_sample_dims = max(z.ndim - mu.ndim, 0)
+    n_batch_dims = mu.ndim - 1
+
     # Step 1: Map z to tangent space at mu: u = log_μ(z), shape (..., D)
-    if z.ndim > mu.ndim:
-        n_sample_dims = z.ndim - mu.ndim
-        logmap_fn = manifold.logmap
-        for _ in range(n_sample_dims):
-            logmap_fn = jax.vmap(logmap_fn, in_axes=(0, None, None))
-        u_SBD = logmap_fn(z, mu, c)
-    elif z.ndim == mu.ndim and mu.ndim > 1:
-        u_SBD = jax.vmap(lambda zz, mm: manifold.logmap(zz, mm, c))(z, mu)
-    else:
-        u_SBD = manifold.logmap(z, mu, c)
+    def _logmap_single(z_D, mu_D):
+        return manifold.logmap(z_D, mu_D, c)
+
+    u_SBD = _vmap_sample_and_batch(_logmap_single, n_sample_dims, n_batch_dims)(z, mu)
 
     # Step 2: Parallel transport from mu to origin: v = PT_{μ→0}(u)
     mu_0_D = jnp.zeros(n, dtype=dtype)
 
-    if u_SBD.ndim > 1:
-        if mu.ndim > 1:
-            v_SBD = jax.vmap(lambda uu, mm: manifold.ptransp(uu, mm, mu_0_D, c))(u_SBD, mu)
-        else:
-            v_SBD = jax.vmap(lambda uu: manifold.ptransp(uu, mu, mu_0_D, c))(u_SBD)
-    else:
-        v_SBD = manifold.ptransp(u_SBD, mu, mu_0_D, c)
+    def _ptransp_single(u_D, mu_D):
+        return manifold.ptransp(u_D, mu_D, mu_0_D, c)
+
+    v_SBD = _vmap_sample_and_batch(_ptransp_single, n_sample_dims, n_batch_dims)(u_SBD, mu)
 
     # Step 3: Compute log p(v) where v ~ N(0, Σ)
     # Scale to Riemannian coordinates: v_riem = λ(0) · v_euclid = 2 · v
@@ -214,8 +215,11 @@ def log_prob(
     log_p_v_SB = gaussian_log_prob(v_riem_SBD, sigma, n, dtype)
 
     # Step 4: Compute log det Jacobian
-    # Riemannian norm r = λ(0) · ||v||_E = 2 · ||v||_E
-    r_SB = 2.0 * jnp.sqrt(jnp.sum(v_SBD**2, axis=-1))
+    # Riemannian norm r = λ(0) · ||v||_E = 2 · ||v||_E. The floor mirrors the hyperboloid
+    # sibling: sqrt'(0) is infinite, so at z == mu the gradient of the unfloored norm is NaN
+    # (in float64 as much as float32). jnp.maximum's gradient is 0 on the clamped side, which
+    # is the correct derivative here — log det is stationary at r = 0.
+    r_SB = 2.0 * jnp.sqrt(jnp.maximum(jnp.sum(v_SBD**2, axis=-1), MIN_NORM))
     log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 5: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)

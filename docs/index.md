@@ -9,14 +9,14 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 - **6 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), and Product Manifold (mixed-curvature composition) — all with complete geometric operations
 - **Learnable Curvature**: `LearnableCurvature` module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp; works with any `nnx.Optimizer`
 - **Neural Network Layers**: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers
-- **Activation Functions**: 4 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish)
+- **Activation Functions**: 5 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish, GELU)
 - **Riemannian Optimizers**: RAdam and RSGD with automatic manifold parameter detection
 - **Wrapped Normal Distributions**: For probabilistic modeling on hyperbolic manifolds
 - **Dimensionality Reduction**: HoroPCA (Chami et al. 2021), CO-SNE (Guo et al. 2022, hyperbolic t-SNE), and the Fréchet-mean centering primitive — hyperbolic analogues of PCA and t-SNE
 - **Pure JAX/Flax NNX**: No PyTorch dependency, fully compatible with JAX ecosystem
 - **vmap-native API**: Efficient batching through JAX's functional paradigm
 - **JIT-compatible**: All operations support JIT compilation for performance
-- **Comprehensive Test Suite**: 4,400+ tests (parametrized across seeds, dtypes, manifolds) with 100% pass rate
+- **Comprehensive Test Suite**: 3,400+ tests (parametrized across seeds, dtypes, manifolds) with 100% pass rate
 
 ## Quick Example
 

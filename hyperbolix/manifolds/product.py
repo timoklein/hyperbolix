@@ -51,6 +51,11 @@ from jaxtyping import Array, Float
 from ._base import ManifoldBase
 from .protocol import Curvature, ScalarCurvature
 
+# Version selection constant, present so ``dist`` / ``dist_0`` can accept the ``version_idx``
+# that manifold-generic callers always forward. See ``ProductManifold.dist`` for why it cannot
+# be propagated to the factors.
+VERSION_DEFAULT = 0
+
 
 class ProductManifold:
     """Product manifold P = M1 x M2 x ... x Mn.
@@ -91,6 +96,8 @@ class ProductManifold:
         ...     (Poincare, 2, 4, 0.1),      # 4 copies of 2D Poincaré
         ... )
     """
+
+    VERSION_DEFAULT = VERSION_DEFAULT
 
     def __init__(
         self,
@@ -414,8 +421,18 @@ class ProductManifold:
         x: Float[Array, "total_dim"],
         y: Float[Array, "total_dim"],
         c: Curvature,
+        version_idx: int = VERSION_DEFAULT,
     ) -> Float[Array, ""]:
-        """Product distance (L2/Riemannian): d = sqrt(sum d_i^2)."""
+        """Product distance (L2/Riemannian): d = sqrt(sum d_i^2).
+
+        ``version_idx`` is accepted and **ignored**: it is a per-manifold index (Poincaré's 2
+        means the metric-tensor form, the Hyperboloid has no such variant), so one value cannot
+        be forwarded to a heterogeneous product. Each factor uses its own default. The argument
+        exists so manifold-generic callers that always forward one (e.g.
+        ``hyperbolix.utils.helpers.compute_pairwise_distances``) work with product manifolds;
+        call ``component_dist`` directly if you need per-factor control.
+        """
+        del version_idx
         d_per_factor = self.component_dist(x, y, c)
         return jnp.sqrt(jnp.sum(d_per_factor**2))
 
@@ -423,8 +440,10 @@ class ProductManifold:
         self,
         x: Float[Array, "total_dim"],
         c: Curvature,
+        version_idx: int = VERSION_DEFAULT,
     ) -> Float[Array, ""]:
-        """Distance from origin (L2/Riemannian)."""
+        """Distance from origin (L2/Riemannian). ``version_idx`` accepted and ignored (see ``dist``)."""
+        del version_idx
         cs = self._validate_c(c)
         x = self._cast(x)
         parts = self.split(x)
@@ -463,12 +482,17 @@ class ProductManifold:
         self,
         x: Float[Array, "total_dim"],
         c: Curvature,
+        atol: float | None = None,
     ) -> Array:
-        """Check if point is on product manifold (all factors valid)."""
+        """Check if point is on product manifold (all factors valid).
+
+        ``atol`` is forwarded unchanged to every factor, so ``None`` lets each factor resolve
+        its own dtype-aware default (:func:`~hyperbolix.manifolds._base.default_atol`).
+        """
         cs = self._validate_c(c)
         x = self._cast(x)
         parts = self.split(x)
-        checks = [m.is_in_manifold(p, c_i) for m, p, c_i in zip(self._factors, parts, cs, strict=True)]
+        checks = [m.is_in_manifold(p, c_i, atol) for m, p, c_i in zip(self._factors, parts, cs, strict=True)]
         return jnp.all(jnp.stack(checks))
 
     def is_in_tangent_space(
@@ -476,13 +500,15 @@ class ProductManifold:
         v: Float[Array, "total_dim"],
         x: Float[Array, "total_dim"],
         c: Curvature,
+        atol: float | None = None,
     ) -> Array:
-        """Check if vector is in tangent space at x (all factors valid)."""
+        """Check if vector is in tangent space at x (all factors valid); ``atol`` forwarded per factor."""
         cs = self._validate_c(c)
         v, x = self._cast(v), self._cast(x)
         v_parts, x_parts = self.split(v), self.split(x)
         checks = [
-            m.is_in_tangent_space(vp, xp, c_i) for m, vp, xp, c_i in zip(self._factors, v_parts, x_parts, cs, strict=True)
+            m.is_in_tangent_space(vp, xp, c_i, atol)
+            for m, vp, xp, c_i in zip(self._factors, v_parts, x_parts, cs, strict=True)
         ]
         return jnp.all(jnp.stack(checks))
 

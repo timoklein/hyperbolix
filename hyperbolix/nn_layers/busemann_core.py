@@ -26,12 +26,13 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 
-# Gradient-safe floor for the direction-normalization denominator (matches the
-# ``sqrt(sumsq + MIN_NORM**2)`` safe-norm idiom used in the Poincaré manifold).
-MIN_NORM = 1e-15
+# Gradient-safe floor for the direction-normalization denominator: the same
+# ``sqrt(sumsq + MIN_NORM**2)`` safe-norm idiom the manifolds use. Imported (not
+# redefined) so there is one value library-wide.
+from hyperbolix.utils.math_utils import MIN_NORM
 
 
-def init_weight_norm_params(
+def _init_weight_norm_params(
     rngs: nnx.Rngs,
     n_out: int,
     in_spatial: int,
@@ -70,7 +71,7 @@ def init_weight_norm_params(
     return nnx.Param(kernel_KI), nnx.Param(log_scale_K), nnx.Param(bias_K)
 
 
-def busemann_score(
+def _busemann_score(
     manifold: Manifold,
     x_BI: Float[Array, "batch in_features"],
     kernel_KI: Float[Array, "n_out in_spatial"],

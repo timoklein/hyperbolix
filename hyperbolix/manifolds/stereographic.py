@@ -69,10 +69,9 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import atanh, tanh
-from ._base import ManifoldBase
+from ..utils.math_utils import MIN_NORM, atanh, tanh
+from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
-    MIN_NORM,
     _addition,
     _conformal_factor,
     _conformal_factor_batch,
@@ -80,6 +79,12 @@ from ._gyrovector_core import (
     _proj,
 )
 from .protocol import Curvature
+
+# Version selection constant. The κ-stereographic distance has a single implementation; the
+# constant and the ``version_idx`` arguments on ``dist`` / ``dist_0`` exist so manifold-generic
+# callers (e.g. ``hyperbolix.utils.helpers.compute_pairwise_distances``, which always forwards a
+# ``version_idx``) work here. Same accept-and-ignore precedent as ``ProperVelocity``.
+VERSION_DEFAULT = 0
 
 # Switch the κ-trig functions to their (analytic, signed-κ) Taylor series when |κ| falls below this.
 # For |κ| above it the closed forms use the true √|κ| (never the floor), so value AND gradient w.r.t.
@@ -306,19 +311,30 @@ def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) 
     return v
 
 
-def _is_in_manifold(x: Float[Array, "dim"], c: Curvature) -> Array:
-    """Membership test: ``‖x‖² < 1/c`` for ``c > 0`` (ball); always ``True`` for ``c ≤ 0`` (all of R^d)."""
+def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+    """Membership test: ``c‖x‖² < 1 + atol`` for ``c > 0`` (ball); finiteness for ``c ≤ 0`` (all of R^d).
+
+    Written in the dimensionless form ``c‖x‖² < 1`` (like ``Poincare._is_in_manifold``) so a
+    single tolerance means the same thing at every curvature. ``atol`` defaults to
+    :func:`~hyperbolix.manifolds._base.default_atol` for ``x.dtype``; it has no effect on the
+    ``c ≤ 0`` branch, which is unconstrained.
+    """
     x2 = jnp.dot(x, x)
     c_arr = jnp.asarray(c)
-    # Avoid 1/0 when c <= 0 (that branch is discarded by the outer where anyway).
-    c_safe = jnp.where(c_arr > 0, c_arr, jnp.ones_like(c_arr))
-    inside_ball = x2 < 1.0 / c_safe
-    return jnp.where(c_arr > 0, inside_ball, jnp.asarray(True))
+    tol = default_atol(x.dtype) if atol is None else atol
+    finite = jnp.all(jnp.isfinite(x))
+    inside_ball = c_arr * x2 < 1.0 + tol
+    return jnp.where(c_arr > 0, inside_ball, finite)
 
 
-def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Array:
-    """Every vector is a valid tangent vector (tangent space = ambient space)."""
-    return jnp.asarray(True, dtype=bool)
+def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+    """Every finite vector is a valid tangent vector (tangent space = ambient space = R^d).
+
+    ``atol`` is accepted for signature uniformity; a finiteness test has no tolerance to
+    slacken. (This used to return the constant ``True``, which accepted NaN and Inf.)
+    """
+    del x, c, atol
+    return jnp.all(jnp.isfinite(v))
 
 
 def _geodesic(t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
@@ -388,6 +404,8 @@ class Stereographic(ManifoldBase):
         >>> m.dist(x, y, c=-1.0)     # spherical
     """
 
+    VERSION_DEFAULT = VERSION_DEFAULT
+
     def __init__(self, dtype: jnp.dtype = jnp.float32, *, c: float = 1.0) -> None:
         super().__init__(dtype, c=c)
 
@@ -415,12 +433,24 @@ class Stereographic(ManifoldBase):
         r_cast = jnp.asarray(r, dtype=x.dtype)
         return _scalar_mul(r_cast, x, c)
 
-    def dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-        """Geodesic distance ``d_κ(x, y)`` (paper Eq. 4). Note ``→ 2‖x - y‖`` as ``c → 0``."""
+    def dist(
+        self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_DEFAULT
+    ) -> Float[Array, ""]:
+        """Geodesic distance ``d_κ(x, y)`` (paper Eq. 4). Note ``→ 2‖x - y‖`` as ``c → 0``.
+
+        ``version_idx`` is accepted and ignored — there is a single κ-stereographic distance.
+        It exists so manifold-generic callers that always forward one (e.g.
+        ``hyperbolix.utils.helpers.compute_pairwise_distances``) work here too.
+        """
+        del version_idx
         return _dist(self._cast(x), self._cast(y), c)
 
-    def dist_0(self, x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-        """Geodesic distance to the origin ``d_κ(0, x)``. Note ``→ 2‖x‖`` as ``c → 0``."""
+    def dist_0(self, x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
+        """Geodesic distance to the origin ``d_κ(0, x)`` (``version_idx`` accepted and ignored).
+
+        Note ``→ 2‖x‖`` as ``c → 0``.
+        """
+        del version_idx
         return _dist_0(self._cast(x), c)
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
@@ -471,13 +501,15 @@ class Stereographic(ManifoldBase):
         """Project ``v`` onto the tangent space at ``x`` (identity)."""
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
-    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature) -> Array:
-        """Check whether ``x`` lies on the manifold."""
-        return _is_in_manifold(self._cast(x), c)
+    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+        """Check whether ``x`` lies on the manifold (``atol`` default: :func:`default_atol`)."""
+        return _is_in_manifold(self._cast(x), c, atol)
 
-    def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Array:
-        """Check whether ``v`` lies in the tangent space at ``x`` (always ``True``)."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c)
+    def is_in_tangent_space(
+        self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature, atol: float | None = None
+    ) -> Array:
+        """Check that ``v`` has finite entries (the tangent space is all of R^d)."""
+        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
 
     def geodesic(
         self, t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature

@@ -1,7 +1,13 @@
-"""Tests for HypLinearPV (Proper Velocity FC layer, Chen et al. 2026 Thm 5.3)."""
+"""Tests for HypLinearPV (Proper Velocity FC layer, Chen et al. 2026 Thm 5.3).
+
+The shared forward / on-manifold / JIT / gradient / tangent-input contract for
+every layer in the library lives in ``test_layer_contract.py``; only
+HypLinearPV-specific tests stay here.
+"""
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pytest
 from flax import nnx
@@ -20,103 +26,33 @@ def _manifold_points(dtype: jnp.dtype, shape: tuple[int, ...], seed: int = 0) ->
     return jax.random.normal(jax.random.PRNGKey(seed), shape, dtype=dtype) * 0.3
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_linear_forward_shape_and_finite(dtype):
-    batch_size, in_dim, out_dim = 8, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
+def pv_fc_reference(x_BI, kernel_OI, bias_O1, c, inner_activation=None):
+    """NumPy transcription of the PV FC forward (Chen et al. 2026, Eq. 19 + Eq. 22).
 
-    rngs = nnx.Rngs(42)
-    layer = HypLinearPV(_manifold(dtype), in_dim, out_dim, rngs=rngs)
+    Independent of the library:
 
-    y = layer(x, c=1.0)
+        beta_inv(x) = sqrt(1 + c*||x||^2)
+        v_k(x)      = (||z_k||/sqrt(c)) * asinh( cosh(sqrt(c) r_k)*sqrt(c)/||z_k||*<x, z_k>
+                                                 - sinh(sqrt(c) r_k)*beta_inv(x) )   (Eq. 19)
+        y_k         = sinh(sqrt(c) * sigma(v_k(x))) / sqrt(c)                        (Eq. 22)
 
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
-    assert y.dtype == dtype
+    The library's smooth clamp on the asinh argument is a value-identity well inside
+    its bound (~36 at float64, clamping_factor=1), which the test inputs are.
+    """
+    x_BI = np.asarray(x_BI, dtype=np.float64)
+    z_OI = np.asarray(kernel_OI, dtype=np.float64)
+    r_O1 = np.asarray(bias_O1, dtype=np.float64)
+    sqrt_c = np.sqrt(c)
 
+    z_norm_1O = np.linalg.norm(z_OI, axis=-1)[None, :]
+    sqrt_cr_1O = sqrt_c * r_O1.T
+    beta_inv_B1 = np.sqrt(1.0 + c * np.sum(x_BI**2, axis=-1, keepdims=True))
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_linear_output_is_on_manifold(dtype):
-    """PV is unconstrained, so on-manifold reduces to finiteness — but let's confirm."""
-    batch_size, in_dim, out_dim = 8, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
-    manifold = _manifold(dtype)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearPV(manifold, in_dim, out_dim, rngs=rngs)
-    y = layer(x, c=1.0)
-
-    is_on = jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(y, 1.0)
-    assert bool(is_on.all())
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_linear_jitted_forward(dtype):
-    batch_size, in_dim, out_dim = 8, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearPV(_manifold(dtype), in_dim, out_dim, rngs=rngs)
-
-    @nnx.jit
-    def forward(module, inputs, curvature):
-        return module(inputs, c=curvature)
-
-    y = forward(layer, x, 1.0)
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_linear_gradient(dtype):
-    batch_size, in_dim, out_dim = 4, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearPV(_manifold(dtype), in_dim, out_dim, rngs=rngs)
-
-    def loss_fn(model):
-        y = model(x, c=1.0)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(loss_fn)(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_linear_jitted_gradient(dtype):
-    batch_size, in_dim, out_dim = 4, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearPV(_manifold(dtype), in_dim, out_dim, rngs=rngs)
-
-    @nnx.jit
-    def loss_fn(module, inputs, curvature):
-        y = module(inputs, c=curvature)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_linear_tangent_input(dtype):
-    batch_size, in_dim, out_dim = 8, 5, 3
-    v = _manifold_points(dtype, (batch_size, in_dim))
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearPV(_manifold(dtype), in_dim, out_dim, rngs=rngs, input_space="tangent")
-
-    y = layer(v, c=1.0)
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
+    asinh_arg_BO = np.cosh(sqrt_cr_1O) * (sqrt_c / z_norm_1O) * (x_BI @ z_OI.T) - np.sinh(sqrt_cr_1O) * beta_inv_B1
+    v_BO = (z_norm_1O / sqrt_c) * np.arcsinh(asinh_arg_BO)
+    if inner_activation is not None:
+        v_BO = inner_activation(v_BO)
+    return np.sinh(sqrt_c * v_BO) / sqrt_c
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -137,60 +73,57 @@ def test_pv_linear_tangent_matches_manual_lift(dtype):
     assert jnp.allclose(y_manual, y_tangent, atol=atol)
 
 
-@pytest.mark.parametrize("activation", [jax.nn.relu, jnp.tanh])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_linear_inner_activation(dtype, activation):
-    """inner_activation applies inside the outer sinh (paper Eq. 23)."""
-    batch_size, in_dim, out_dim = 4, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
+@pytest.mark.parametrize("c", [0.5, 1.0])
+@pytest.mark.parametrize("inner_activation", [None, jnp.tanh], ids=["no_inner_act", "tanh_inner_act"])
+def test_pv_linear_matches_eq22_transcription(c, inner_activation):
+    """Forward equals the Chen et al. 2026 Eq. 19 + Eq. 22 transcription in NumPy.
 
-    rngs = nnx.Rngs(42)
+    Replaces the old pair of tests (a shape-only ``inner_activation`` smoke test and
+    an "oracle" that recomputed the expected value with ``manifold.compute_mlr`` --
+    the very function under test). Pins the outer ``sinh``: dropping it leaves the
+    Euclidean-limit value ``v`` behind, which the margins used here differ from by
+    tens of percent.
+    """
+    dtype = jnp.float64
+    batch_size, in_dim, out_dim = 4, 5, 3
+    manifold = _manifold(dtype)
+    x = jax.random.normal(jax.random.PRNGKey(0), (batch_size, in_dim), dtype=dtype) * 0.5
+
     layer = HypLinearPV(
-        _manifold(dtype),
+        manifold,
         in_dim,
         out_dim,
-        rngs=rngs,
-        inner_activation=activation,
+        rngs=nnx.Rngs(9),
+        inner_activation=inner_activation,
+        param_dtype=dtype,
     )
-
-    y = layer(x, c=1.0)
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_linear_inner_activation_matches_external(dtype):
-    """Applying inner_activation in-layer must equal manual sigma(v) inside sinh(sqrt_c*sigma(v))/sqrt_c."""
-    batch_size, in_dim, out_dim = 4, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
-    manifold = _manifold(dtype)
-    c = 1.0
-
-    base = HypLinearPV(manifold, in_dim, out_dim, rngs=nnx.Rngs(9), input_space="manifold")
-    activated = HypLinearPV(manifold, in_dim, out_dim, rngs=nnx.Rngs(9), input_space="manifold", inner_activation=jnp.tanh)
-
-    # v = compute_mlr(x, kernel, bias, c)
-    v = manifold.compute_mlr(x, base.kernel[...], base.bias[...], c, base.clamping_factor, base.smoothing_factor)
-    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=v.dtype))
-    expected = jnp.sinh(sqrt_c * jnp.tanh(v)) / sqrt_c
-
-    y = activated(x, c=c)
-    atol = 2e-6 if dtype == jnp.float32 else 1e-12
-    assert jnp.allclose(y, expected, atol=atol)
-
-
-@pytest.mark.parametrize("c", [0.1, 1.0, 2.0])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_pv_linear_different_curvatures(dtype, c):
-    batch_size, in_dim, out_dim = 4, 5, 3
-    x = _manifold_points(dtype, (batch_size, in_dim))
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearPV(_manifold(dtype), in_dim, out_dim, rngs=rngs)
+    layer.kernel[...] = jax.random.normal(jax.random.PRNGKey(1), (out_dim, in_dim), dtype=dtype)
+    layer.bias[...] = jax.random.normal(jax.random.PRNGKey(2), (out_dim, 1), dtype=dtype) * 0.3
 
     y = layer(x, c=c)
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
+    np_activation = np.tanh if inner_activation is not None else None
+    expected = pv_fc_reference(x, layer.kernel[...], layer.bias[...], c, inner_activation=np_activation)
+
+    assert np.allclose(np.asarray(y), expected, atol=1e-11)
+    # The outer sinh must be doing visible work at these margins (it is what a
+    # "sinh deleted" mutation removes, and asinh(sqrt(c)*y)/sqrt(c) recovers v).
+    v_of_y = np.arcsinh(np.sqrt(c) * expected) / np.sqrt(c)
+    assert np.max(np.abs(expected - v_of_y)) > 0.02
+
+
+def test_pv_linear_different_curvatures():
+    """Curvature reaches the forward: the three outputs are pairwise different."""
+    dtype = jnp.float64
+    batch_size, in_dim, out_dim = 4, 5, 3
+    x = _manifold_points(dtype, (batch_size, in_dim))
+
+    layer = HypLinearPV(_manifold(dtype), in_dim, out_dim, rngs=nnx.Rngs(42), param_dtype=dtype)
+    outputs = [layer(x, c=c) for c in (0.1, 1.0, 2.0)]
+
+    assert all(jnp.isfinite(y).all() and y.shape == (batch_size, out_dim) for y in outputs)
+    for i in range(len(outputs)):
+        for j in range(i + 1, len(outputs)):
+            assert not jnp.allclose(outputs[i], outputs[j], atol=1e-8)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])

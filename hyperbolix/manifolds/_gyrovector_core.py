@@ -23,10 +23,8 @@ Dimension key:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from ..utils.math_utils import MIN_NORM
 from .protocol import Curvature
-
-# Smallest safe denominator / squared-norm floor shared across the manifold modules.
-MIN_NORM = 1e-15
 
 
 def _get_max_norm_eps(x: Float[Array, "dim"]) -> float:
@@ -55,6 +53,22 @@ def _proj(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     max_norm_eps = _get_max_norm_eps(x)
     # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
     norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    sqrt_abs_c = jnp.sqrt(jnp.maximum(jnp.abs(jnp.asarray(c)), MIN_NORM))
+    max_norm = jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
+    cond = norm > max_norm
+    return jnp.where(cond, x * (max_norm / norm), x)
+
+
+def _proj_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... dim"]:
+    """Project onto the manifold over arbitrary leading dims (batched :func:`_proj`).
+
+    Same clamp as :func:`_proj`, applied along the last axis, so
+    ``_proj_batch(X, c)[i] == _proj(X[i], c)`` elementwise. Mirrors
+    ``Hyperboloid._proj_batch`` and the ``_conformal_factor_batch`` helper below.
+    """
+    max_norm_eps = _get_max_norm_eps(x)
+    # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
+    norm = jnp.sqrt(jnp.sum(x**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (..., 1)
     sqrt_abs_c = jnp.sqrt(jnp.maximum(jnp.abs(jnp.asarray(c)), MIN_NORM))
     max_norm = jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
     cond = norm > max_norm

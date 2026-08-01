@@ -36,7 +36,8 @@ poincare = Poincare()
 key = jax.random.PRNGKey(42)
 
 # Sample 100 points uniformly from geodesic ball B(origin, R=1.0) in 2D
-samples = uniform_poincare.sample(key, n=100, c=1.0, R=1.0, dim=2)
+# (n is the manifold dimension; the sample count goes in sample_shape)
+samples = uniform_poincare.sample(key, n=2, c=1.0, R=1.0, sample_shape=(100,))
 print(samples.shape)  # (100, 2)
 
 # All samples inside the geodesic ball
@@ -45,10 +46,10 @@ print(is_valid.all())  # True
 
 # Volume of geodesic ball (2D closed-form: 2π(cosh R - 1)/c)
 vol = uniform_poincare.volume(c=1.0, n=2, R=1.0)
-print(vol)  # ~3.086
+print(vol)  # ~3.412 = 2π(cosh 1 − 1)
 
-# Log probability (constant inside ball, -inf outside)
-log_p = jax.vmap(lambda x: uniform_poincare.log_prob(x, c=1.0, R=1.0))(samples)
+# Log probability (constant inside ball, -inf outside); batches natively over leading axes
+log_p = uniform_poincare.log_prob(samples, c=1.0, R=1.0)
 print(jnp.allclose(log_p, log_p[0]))  # True — uniform
 ```
 

@@ -14,7 +14,7 @@ Dimension key:
   S: sample dimensions (from sample_shape)
   D: spatial/manifold dimension (n)
   Q: quadrature points (64 for GL)
-  T: total flattened samples (for rejection sampling)
+  T: total flattened points (rejection sampling, and log_prob's flattened leading axes)
 """
 
 import jax
@@ -22,13 +22,20 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.utils.math_utils import MIN_NORM
 
 # ---------------------------------------------------------------------------
 # 64-point Gauss-Legendre quadrature nodes/weights on [-1, 1].
 # Precomputed with numpy.polynomial.legendre.leggauss(64).
+#
+# Stored as plain Python tuples, not ``jnp.array(..., dtype=float64)``: a module-level
+# float64 array warns (and silently truncates to float32) on every import when
+# ``jax_enable_x64`` is off, and it pins the quadrature — and therefore ``volume``'s
+# return dtype — to one precision regardless of what the caller asked for. ``volume``
+# materializes them at its own working dtype instead.
 # fmt: off
 # ---------------------------------------------------------------------------
-_GL_NODES = jnp.array([
+_GL_NODES = (
     -9.993050417357721704e-01, -9.963401167719552198e-01, -9.910133714767442870e-01, -9.833362538846259771e-01,
     -9.733268277899109755e-01, -9.610087996520537690e-01, -9.464113748584027652e-01, -9.295691721319395695e-01,
     -9.105221370785028245e-01, -8.893154459951141400e-01, -8.659993981540927699e-01, -8.406292962525803159e-01,
@@ -45,9 +52,9 @@ _GL_NODES = jnp.array([
     8.406292962525803159e-01, 8.659993981540927699e-01, 8.893154459951141400e-01, 9.105221370785028245e-01,
     9.295691721319395695e-01, 9.464113748584027652e-01, 9.610087996520537690e-01, 9.733268277899109755e-01,
     9.833362538846259771e-01, 9.910133714767442870e-01, 9.963401167719552198e-01, 9.993050417357721704e-01,
-], dtype=jnp.float64)
+)
 
-_GL_WEIGHTS = jnp.array([
+_GL_WEIGHTS = (
     1.783280721694139931e-03, 4.147033260564499287e-03, 6.504457968978502418e-03, 8.846759826363397028e-03,
     1.116813946013102757e-02, 1.346304789671786024e-02, 1.572603047602503037e-02, 1.795171577569728422e-02,
     2.013482315353008756e-02, 2.227017380838296895e-02, 2.435270256871120004e-02, 2.637746971505491173e-02,
@@ -64,14 +71,23 @@ _GL_WEIGHTS = jnp.array([
     2.637746971505491173e-02, 2.435270256871120004e-02, 2.227017380838296895e-02, 2.013482315353008756e-02,
     1.795171577569728422e-02, 1.572603047602503037e-02, 1.346304789671786024e-02, 1.116813946013102757e-02,
     8.846759826363397028e-03, 6.504457968978502418e-03, 4.147033260564499287e-03, 1.783280721694139931e-03,
-], dtype=jnp.float64)
+)
 # fmt: on
+
+
+def _default_float_dtype() -> jnp.dtype:
+    """JAX's current default float dtype — float64 when ``jax_enable_x64`` is set, else float32.
+
+    Used as the last fallback when neither an explicit ``dtype``, a ``center`` nor a
+    ``manifold_module`` says what precision the caller wants.
+    """
+    return jnp.dtype(jnp.result_type(float))
 
 
 # ---------------------------------------------------------------------------
 # Volume of geodesic ball
 # ---------------------------------------------------------------------------
-def volume(c: float, n: int, R: float) -> Float[Array, ""]:
+def volume(c: float, n: int, R: float, dtype=None) -> Float[Array, ""]:
     """Riemannian volume of a geodesic ball B^n_c(R) in n-dim hyperbolic space.
 
     Vol = ω_{n-1} / c^{(n-1)/2} · ∫₀ᴿ sinh^{n-1}(√c·r) dr
@@ -84,19 +100,26 @@ def volume(c: float, n: int, R: float) -> Float[Array, ""]:
         c: Positive curvature parameter.
         n: Ambient dimension of the Poincaré ball.
         R: Geodesic radius of the ball.
+        dtype: Working/output dtype. Default: JAX's default float dtype.
 
     Returns:
-        Scalar volume.
+        Scalar volume, of dtype ``dtype``.
     """
-    # ω_{n-1} = 2 π^{n/2} / Γ(n/2)
-    omega = 2.0 * jnp.pi ** (n / 2.0) / jnp.exp(jax.lax.lgamma(n / 2.0))
+    working_dtype = jnp.dtype(dtype) if dtype is not None else _default_float_dtype()
 
-    sqrt_c = jnp.sqrt(jnp.float64(c))
+    # ω_{n-1} = 2 π^{n/2} / Γ(n/2)
+    half_n = jnp.asarray(n / 2.0, dtype=working_dtype)
+    omega = 2.0 * jnp.asarray(jnp.pi, dtype=working_dtype) ** half_n / jnp.exp(jax.lax.lgamma(half_n))
+
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=working_dtype))
+    R_arr = jnp.asarray(R, dtype=working_dtype)
 
     # Map GL nodes from [-1, 1] to [0, R]: r = R/2 · (t + 1)
-    r_nodes_Q = (R / 2.0) * (_GL_NODES + 1.0)
+    nodes_Q = jnp.asarray(_GL_NODES, dtype=working_dtype)
+    weights_Q = jnp.asarray(_GL_WEIGHTS, dtype=working_dtype)
+    r_nodes_Q = (R_arr / 2.0) * (nodes_Q + 1.0)
     integrand_Q = jnp.sinh(sqrt_c * r_nodes_Q) ** (n - 1)
-    integral = (R / 2.0) * jnp.sum(_GL_WEIGHTS * integrand_Q)
+    integral = (R_arr / 2.0) * jnp.sum(weights_Q * integrand_Q)
 
     vol = omega / sqrt_c ** (n - 1) * integral
     return vol
@@ -114,7 +137,7 @@ def _sample_uniform_direction(
     """Sample directions uniformly on S^{n-1} via the Muller method."""
     z_SD = jax.random.normal(key, shape=(*shape, n), dtype=dtype)
     norm_S1 = jnp.sqrt(jnp.sum(z_SD**2, axis=-1, keepdims=True))  # (*S, 1)
-    norm_S1 = jnp.maximum(norm_S1, 1e-15)
+    norm_S1 = jnp.maximum(norm_S1, MIN_NORM)
     return z_SD / norm_S1
 
 
@@ -240,7 +263,8 @@ def sample(
         R: Geodesic radius of the ball.
         sample_shape: Batch shape of samples. Default: () → single sample.
         center: Center of the geodesic ball, shape (n,). Default: origin.
-        dtype: Output dtype. Default: float64.
+        dtype: Output dtype. Default: inferred, in order of preference, from ``center``,
+            then ``manifold_module``, then JAX's default float dtype.
         manifold_module: Optional Manifold instance. Default: Poincare(dtype).
 
     Returns:
@@ -256,16 +280,26 @@ def sample(
         >>> x.shape
         (100, 2)
     """
+    # Resolve the working dtype the same way the wrapped-normal siblings do: an explicit
+    # ``dtype`` wins, otherwise it is inferred from the caller's own array (``center`` here,
+    # ``mu`` there). Only when the caller supplies neither does a default apply — the manifold's
+    # dtype if one was passed, else JAX's default float dtype. Hardcoding float64 here silently
+    # upcast float32 pipelines and warned whenever ``jax_enable_x64`` was off.
+    if dtype is not None:
+        dtype = jnp.dtype(dtype)
+    elif center is not None:
+        dtype = jnp.dtype(center.dtype)
+    elif manifold_module is not None:
+        dtype = jnp.dtype(manifold_module.dtype)
+    else:
+        dtype = _default_float_dtype()
+
     if manifold_module is not None:
         manifold = manifold_module
     else:
         from ..manifolds.poincare import Poincare
 
-        _dtype = dtype if dtype is not None else jnp.float64
-        manifold = Poincare(dtype=_dtype)
-
-    if dtype is None:
-        dtype = jnp.float64
+        manifold = Poincare(dtype=dtype)
 
     k1, k2 = jax.random.split(key)
 
@@ -286,17 +320,13 @@ def sample(
             return manifold.addition(center, x0_D, c)
         return x0_D
 
-    # vmap over all sample dimensions
+    # vmap over all sample dimensions. With an empty ``sample_shape`` the loop leaves
+    # ``mapped_fn is _map_single``, so the single-sample case needs no branch of its own.
     mapped_fn = _map_single
     for _ in sample_shape:
         mapped_fn = jax.vmap(mapped_fn)
 
-    if sample_shape:
-        result_SD = mapped_fn(tangents_SD)
-    else:
-        result_SD = _map_single(tangents_SD)
-
-    return result_SD
+    return mapped_fn(tangents_SD)
 
 
 def log_prob(
@@ -315,10 +345,10 @@ def log_prob(
         c: Positive curvature parameter.
         R: Geodesic radius of the ball.
         center: Center of the geodesic ball, shape (n,). Default: origin.
-        manifold_module: Optional Manifold instance. Default: Poincare(dtype).
+        manifold_module: Optional Manifold instance. Default: Poincare(x.dtype).
 
     Returns:
-        Log-probability, shape (...).
+        Log-probability, shape (...), in ``x``'s dtype.
     """
     if manifold_module is not None:
         manifold = manifold_module
@@ -328,23 +358,25 @@ def log_prob(
         manifold = Poincare(dtype=x.dtype)
 
     n = x.shape[-1]
+    leading_shape = x.shape[:-1]
 
-    # Compute geodesic distance from center
-    if center is not None:
-        if x.ndim > 1:
-            dist_fn = jax.vmap(lambda xi: manifold.dist(xi, center, c))
-            d_SB = dist_fn(x)
-        else:
-            d_SB = manifold.dist(x, center, c)
-    else:
-        if x.ndim > 1:
-            dist_fn = jax.vmap(lambda xi: manifold.dist_0(xi, c))
-            d_SB = dist_fn(x)
-        else:
-            d_SB = manifold.dist_0(x, c)
+    def _dist_single(x_D):
+        if center is not None:
+            return manifold.dist(x_D, center, c)
+        return manifold.dist_0(x_D, c)
 
-    log_vol = jnp.log(volume(c, n, R))
+    # ``manifold.dist``/``dist_0`` are single-point ops, so one vmap covers exactly one leading
+    # axis. Flattening every leading axis into a single one (and restoring the shape afterwards)
+    # is what makes the documented ``(..., n) -> (...)`` contract hold for ndim > 2 as well; the
+    # old two-branch form raised a dot_general shape error there.
+    x_flat_TD = x.reshape(-1, n)
+    d_flat_T = jax.vmap(_dist_single)(x_flat_TD)
+    d_S = d_flat_T.reshape(leading_shape)
+
+    # Quadrature at ``x``'s precision: a float64 log-volume would upcast the whole result and
+    # hand a float32 caller a float64 array.
+    log_vol = jnp.log(volume(c, n, R, dtype=x.dtype))
 
     # -log(vol) inside ball, -inf outside
-    inside_SB = d_SB <= R
-    return jnp.where(inside_SB, -log_vol, -jnp.inf)
+    inside_S = d_S <= R
+    return jnp.where(inside_S, -log_vol, jnp.asarray(-jnp.inf, dtype=x.dtype))

@@ -24,7 +24,8 @@ Use jax.vmap for batching:
     >>> dist_batched = jax.vmap(manifold.dist, in_axes=(0, 0, None))
     >>> distances = dist_batched(x_batch, y_batch, 0.0)  # Returns (batch,)
 
-See jax_migration.md for comprehensive usage patterns.
+See the Batching & JIT user guide (docs/user-guide/batching-jit.md) for
+comprehensive usage patterns.
 """
 
 import jax.numpy as jnp
@@ -32,6 +33,13 @@ from jaxtyping import Array, Float
 
 from ._base import ManifoldBase
 from .protocol import Curvature
+
+# Version selection constant. Euclidean distance has a single implementation; the constant and
+# the ``version_idx`` arguments below exist so that manifold-generic callers (e.g.
+# ``hyperbolix.utils.helpers.compute_pairwise_distances``, which always forwards a
+# ``version_idx``) work against every manifold. Same accept-and-ignore precedent as
+# ``ProperVelocity``.
+VERSION_DEFAULT = 0
 
 
 def _proj(x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
@@ -292,35 +300,45 @@ def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature =
     return v
 
 
-def _is_in_manifold(x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
+def _is_in_manifold(x: Float[Array, "dim"], c: Curvature = 0.0, atol: float | None = None) -> Array:
     """Check if point x lies in Euclidean manifold.
 
-    In Euclidean space, all points are valid.
+    Every finite point in R^n is a valid Euclidean point; NaN/Inf entries are not.
 
     Args:
         x: Point to check, shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
+        atol: Accepted for signature uniformity across manifolds. R^n has no constraint to
+            slacken — the check is exact finiteness — so it is unused.
 
     Returns:
-        Always True
+        True iff every entry of x is finite.
     """
-    return jnp.array(True, dtype=bool)
+    del c, atol
+    return jnp.all(jnp.isfinite(x))
 
 
-def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
+def _is_in_tangent_space(
+    v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0, atol: float | None = None
+) -> Array:
     """Check if vector v lies in tangent space at point x.
 
-    In Euclidean space, all vectors are valid tangent vectors.
+    T_x R^n = R^n, so every finite vector is a valid tangent vector; NaN/Inf entries are not.
+    (This used to return the constant ``True``, which accepted both — the same defect fixed
+    for ``_is_in_manifold`` in commit 68c05e3.)
 
     Args:
         v: Vector to check, shape (dim,)
-        x: Euclidean point (ignored), shape (dim,)
+        x: Euclidean point (ignored — the tangent space does not depend on it), shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
+        atol: Accepted for signature uniformity; a finiteness test has no tolerance to
+            slacken, so it is unused.
 
     Returns:
-        Always True
+        True iff every entry of v is finite.
     """
-    return jnp.array(True, dtype=bool)
+    del x, c, atol
+    return jnp.all(jnp.isfinite(v))
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +365,8 @@ class Euclidean(ManifoldBase):
         >>> d = manifold.dist(x, y)
     """
 
+    VERSION_DEFAULT = VERSION_DEFAULT
+
     def __init__(self, dtype: jnp.dtype = jnp.float32) -> None:
         super().__init__(dtype, c=0.0)
 
@@ -364,12 +384,16 @@ class Euclidean(ManifoldBase):
         r_cast = jnp.asarray(r, dtype=x.dtype)
         return _scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
 
-    def dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:
-        """Compute distance."""
+    def dist(
+        self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature = 0.0, version_idx: int = VERSION_DEFAULT
+    ) -> Float[Array, ""]:
+        """Compute distance (``version_idx`` accepted and ignored — see the module docstring)."""
+        del version_idx
         return _dist(self._cast(x), self._cast(y), c)
 
-    def dist_0(self, x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:
-        """Distance from origin."""
+    def dist_0(self, x: Float[Array, "dim"], c: Curvature = 0.0, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
+        """Distance from origin (``version_idx`` accepted and ignored)."""
+        del version_idx
         return _dist_0(self._cast(x), c)
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
@@ -420,10 +444,12 @@ class Euclidean(ManifoldBase):
         """Project onto tangent space."""
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
-    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
-        """Check if on manifold."""
-        return _is_in_manifold(self._cast(x), c)
+    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature = 0.0, atol: float | None = None) -> Array:
+        """Check that all entries are finite (Euclidean space has no other constraint)."""
+        return _is_in_manifold(self._cast(x), c, atol)
 
-    def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
-        """Check if in tangent space."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c)
+    def is_in_tangent_space(
+        self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0, atol: float | None = None
+    ) -> Array:
+        """Check that all entries are finite (T_x R^n = R^n has no other constraint)."""
+        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)

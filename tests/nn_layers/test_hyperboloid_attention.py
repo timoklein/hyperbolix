@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pytest
 from flax import nnx
@@ -17,9 +18,12 @@ from hyperbolix.nn_layers import (
     lorentz_residual,
     spatial_to_hyperboloid,
 )
-from hyperbolix.nn_layers.hyperboloid_core import hrc
 
 hyperboloid = Hyperboloid()
+# Separate float64 instance for the naive-reference oracles: ``proj`` casts to the
+# manifold's dtype, and a float32 input would make the layers run their matmuls in
+# float32 while the NumPy reference runs in float64 (~1e-8 disagreement).
+hyperboloid_f64 = Hyperboloid(dtype=jnp.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -48,17 +52,10 @@ def test_spatial_to_hyperboloid_manifold_constraint():
         assert hyperboloid.is_in_manifold(out[i], c_out, atol=1e-5)
 
 
-def test_spatial_to_hyperboloid_equivalence_with_hrc():
-    """spatial_to_hyperboloid(f(x[1:]), c_in, c_out) == hrc(x, f, c_in, c_out)."""
-    c_in, c_out = 1.0, 2.0
-    x = jnp.array([1.05, 0.1, -0.2, 0.15])
-    x = hyperboloid.proj(x, c_in)
-
-    f = jax.nn.relu
-    y_hrc = hrc(x, f, c_in, c_out)
-    y_s2h = spatial_to_hyperboloid(f(x[1:]), c_in, c_out)
-
-    assert jnp.allclose(y_hrc, y_s2h, atol=1e-6)
+# NOTE: a former ``spatial_to_hyperboloid == hrc`` equivalence test was removed as
+# vacuous -- ``hrc(x, f, c_in, c_out)`` is literally
+# ``spatial_to_hyperboloid(f(x[..., 1:]), c_in, c_out)``, so it compared the function
+# to itself through one extra call frame.
 
 
 def test_spatial_to_hyperboloid_zero_spatial():
@@ -154,7 +151,7 @@ def test_focus_all_non_negative():
 
 
 def test_focus_norm_preserved():
-    """||phi(x)|| ≈ ||relu(x) / |t|||."""
+    """||phi(x)|| ≈ ||relu(x) / |t|||, and the jitted transform matches the eager one."""
     x = jax.random.normal(jax.random.PRNGKey(6), (8, 16))
     t = jnp.array(1.0)
     eps = 1e-7
@@ -165,6 +162,9 @@ def test_focus_norm_preserved():
     actual_norm = jnp.sqrt(jnp.sum(out**2, axis=-1) + eps)
 
     assert jnp.allclose(actual_norm, expected_norm, atol=1e-5)
+
+    out_jit = jax.jit(lambda a, b: focus_transform(a, b, power=2.0, eps=eps))(x, t)
+    assert jnp.allclose(out_jit, out, atol=1e-12)
 
 
 def test_focus_higher_power_concentrates():
@@ -183,19 +183,16 @@ def test_focus_higher_power_concentrates():
     assert entropy(out_high) < entropy(out_low)
 
 
-def test_focus_jit_and_grad():
+def test_focus_temperature_gradient_finite():
+    """The learnable temperature receives a finite gradient."""
     x = jax.random.normal(jax.random.PRNGKey(8), (4, 8))
     t = jnp.array(1.0)
 
-    @jax.jit
     def fn(x_in, temp):
         return jnp.sum(focus_transform(x_in, temp, power=2.0) ** 2)
 
-    val = fn(x, t)
-    assert jnp.isfinite(val)
-
-    grads = jax.grad(fn, argnums=1)(x, t)
-    assert jnp.isfinite(grads)
+    assert jnp.isfinite(fn(x, t))
+    assert jnp.isfinite(jax.grad(fn, argnums=1)(x, t))
 
 
 # ===================================================================
@@ -214,14 +211,24 @@ def _make_attn(cls, in_features, out_features, num_heads, rngs):
 
 
 @pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
-def test_attn_output_shape(cls):
-    """Output shape: (B, N, out_features + 1)."""
+def test_attn_output_shape_and_jit(cls):
+    """Output shape is (B, N, out_features + 1) and the jitted forward matches eager."""
     B, N, A_in, D_out = 2, 4, 6, 8
     rngs = nnx.Rngs(0)
     model = _make_attn(cls, A_in, D_out, num_heads=1, rngs=rngs)
     x = _make_hyp_points(jax.random.PRNGKey(10), B, N, A_in, c=1.0)
     y = model(x, c_in=1.0, c_attn=1.0, c_out=1.0)
     assert y.shape == (B, N, D_out + 1)
+    assert jnp.all(jnp.isfinite(y))
+
+    @nnx.jit
+    def forward(m, inp):
+        return m(inp, c_in=1.0, c_attn=1.0, c_out=1.0)
+
+    y_jit = forward(model, x)
+    # XLA fusion reorders f32 arithmetic by ~1e-7 on O(1) values; 1e-12 is only valid in f64.
+    tol = 1e-5 if y_jit.dtype == jnp.float32 else 1e-12
+    assert jnp.allclose(y_jit, y, rtol=tol, atol=tol)
 
 
 @pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
@@ -255,23 +262,6 @@ def test_attn_gradient_finite(cls):
     leaves = jax.tree.leaves(nnx.state(grads, nnx.Param))
     for leaf in leaves:
         assert jnp.all(jnp.isfinite(leaf))
-
-
-@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
-def test_attn_jit(cls):
-    """JIT compatible."""
-    B, N, A_in, D_out = 2, 4, 6, 5
-    rngs = nnx.Rngs(0)
-    model = _make_attn(cls, A_in, D_out, num_heads=1, rngs=rngs)
-    x = _make_hyp_points(jax.random.PRNGKey(13), B, N, A_in, c=1.0)
-
-    @nnx.jit
-    def forward(m, inp):
-        return m(inp, c_in=1.0, c_attn=1.0, c_out=1.0)
-
-    y = forward(model, x)
-    assert y.shape == (B, N, D_out + 1)
-    assert jnp.all(jnp.isfinite(y))
 
 
 @pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
@@ -319,6 +309,186 @@ def test_attn_mechanisms_differ():
     assert not jnp.allclose(y_lin, y_sm, atol=1e-4)
     assert not jnp.allclose(y_lin, y_full, atol=1e-4)
     assert not jnp.allclose(y_sm, y_full, atol=1e-4)
+
+
+# ===================================================================
+# Naive-reference oracles — pin the query/key/value roles
+#
+# Every other test in this file (shape, manifold constraint, causality,
+# gradients, even the overfit runs) passes unchanged when the q/k/v roles are
+# permuted inside ``_attend``: the permuted layer is still a well-formed,
+# trainable attention mechanism. These reference transcriptions are built
+# straight from the layer's raw parameter arrays -- they never call the layer's
+# own projection or attention code -- so they fix which projection plays which
+# role in the einsum.
+# ===================================================================
+
+
+def _ref_htc(x_NA, kernel, bias, c_in, c_out):
+    """NumPy transcription of HTCLinear: spatial = sqrt(c_in/c_out) * (x @ K + b), time from constraint."""
+    s = np.sqrt(c_in / c_out) * (x_NA @ np.asarray(kernel, np.float64) + np.asarray(bias, np.float64))
+    t = np.sqrt((s**2).sum(-1, keepdims=True) + 1.0 / c_out)
+    return np.concatenate([t, s], axis=-1)
+
+
+def _ref_dense(x, layer):
+    """NumPy transcription of an nnx.Linear."""
+    return x @ np.asarray(layer.kernel[...], np.float64) + np.asarray(layer.bias[...], np.float64)
+
+
+def _ref_spatial_to_hyperboloid(spatial, c_in, c_out, eps):
+    s = np.sqrt(c_in / c_out) * spatial
+    t = np.sqrt(np.maximum((s**2).sum(-1, keepdims=True) + 1.0 / c_out, eps))
+    return np.concatenate([t, s], axis=-1)
+
+
+def _ref_softmax(scores):
+    e = np.exp(scores - scores.max(-1, keepdims=True))
+    return e / e.sum(-1, keepdims=True)
+
+
+def _ref_project_qkv(model, x_BNA, c_in, c_attn):
+    """Per-head q/k/v from the raw HTCLinear parameters (independent of ``_project_qkv``)."""
+    x = np.asarray(x_BNA, np.float64)
+    per_role = []
+    for projections in (model.query_projections, model.key_projections, model.value_projections):
+        per_role.append(
+            np.stack(
+                [_ref_htc(x, p.kernel[...], p.bias[...], c_in, c_attn) for p in projections],
+                axis=2,  # (B, N, H, A)
+            )
+        )
+    return per_role
+
+
+def _ref_lorentz_midpoint(points_MA, weights_NM, c, eps):
+    h = np.einsum("...nm,...ma->...na", weights_NM, points_MA)
+    mink = -(h[..., 0:1] ** 2) + (h[..., 1:] ** 2).sum(-1, keepdims=True)
+    return h / np.sqrt(np.maximum(c * np.abs(mink), eps))
+
+
+def _ref_softmax_attention(model, x_BNA, c_in, c_attn, c_out):
+    q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
+    qs, ks, vs = q[..., 1:], k[..., 1:], v[..., 1:]
+    scores = np.einsum("bnhd,bmhd->bnhm", qs, ks) / np.sqrt(float(qs.shape[-1]))
+    out = np.einsum("bnhm,bmhd->bnhd", _ref_softmax(scores), vs)
+    out = out + _ref_dense(vs, model.residual_proj)
+    return _ref_spatial_to_hyperboloid(out.mean(axis=2), c_attn, c_out, model.eps)
+
+
+def _ref_full_attention(model, x_BNA, c_in, c_attn, c_out):
+    q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
+    eps = model.eps
+    inner = -np.einsum("bnh,bmh->bnhm", q[..., 0], k[..., 0]) + np.einsum("bnhd,bmhd->bnhm", q[..., 1:], k[..., 1:])
+    scores = (2.0 + 2.0 * inner) / (float(model.scale[...]) + eps) + float(model.attn_bias[...])
+    weights = _ref_softmax(scores)
+
+    mid = np.transpose(
+        _ref_lorentz_midpoint(np.transpose(v, (0, 2, 1, 3)), np.transpose(weights, (0, 2, 1, 3)), c_attn, eps),
+        (0, 2, 1, 3),
+    )  # (B, N, H, A)
+    B, N, H, _A = mid.shape
+    averaged = _ref_lorentz_midpoint(mid, np.ones((B, N, 1, H)) / H, c_attn, eps).squeeze(2)
+    return _ref_spatial_to_hyperboloid(averaged[..., 1:], c_attn, c_out, eps)
+
+
+def _ref_linear_attention(model, x_BNA, c_in, c_attn, c_out):
+    q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
+    eps = model.eps
+    temp = jnp.asarray(model.temperature[...], jnp.float64)
+    # focus_transform is a separately-tested public primitive; the roles (applied to
+    # query and key, never to value) are what this oracle pins.
+    fq = np.asarray(focus_transform(jnp.asarray(q[..., 1:]), temp, model.power, eps), np.float64)
+    fk = np.asarray(focus_transform(jnp.asarray(k[..., 1:]), temp, model.power, eps), np.float64)
+    vs = v[..., 1:]
+
+    kv = np.einsum("bnhd,bnhe->bhde", fk, vs)
+    num = np.einsum("bnhd,bhde->bnhe", fq, kv)
+    den = np.einsum("bnhd,bhd->bnh", fq, fk.sum(axis=1))[..., None]
+    out = num / (den + eps) + _ref_dense(vs, model.residual_proj)
+    return _ref_spatial_to_hyperboloid(out.mean(axis=2), c_attn, c_out, eps)
+
+
+def _ref_causal_linear_attention(model, x_BNA, c_in, c_attn, c_out):
+    """Naive O(N²) masked transcription of causal linear attention.
+
+    The layer evaluates the causal case as a prefix scan (Katharopoulos et al. 2020):
+    ``S_n = Σ_{m≤n} φ(k_m)·v_mᵀ``, ``z_n = Σ_{m≤n} φ(k_m)``, ``out_n = φ(q_n)S_n / (φ(q_n)·z_n + ε)``.
+    Undoing the associativity reordering gives the quadratic form written here,
+    ``out_n = Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩·v_m / (Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩ + ε)``, built from a
+    lower-triangular mask and two plain einsums — the scan is never called.
+    """
+    q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
+    eps = model.eps
+    temp = jnp.asarray(model.temperature[...], jnp.float64)
+    fq = np.asarray(focus_transform(jnp.asarray(q[..., 1:]), temp, model.power, eps), np.float64)
+    fk = np.asarray(focus_transform(jnp.asarray(k[..., 1:]), temp, model.power, eps), np.float64)
+    vs = v[..., 1:]
+
+    seq_len = fq.shape[1]
+    mask_NM = np.tril(np.ones((seq_len, seq_len)))
+    scores_BNHM = np.einsum("bnhd,bmhd->bnhm", fq, fk) * mask_NM[None, :, None, :]
+    num_BNHD = np.einsum("bnhm,bmhe->bnhe", scores_BNHM, vs)
+    den_BNH1 = scores_BNHM.sum(-1)[..., None]
+    out = num_BNHD / (den_BNH1 + eps) + _ref_dense(vs, model.residual_proj)
+    return _ref_spatial_to_hyperboloid(out.mean(axis=2), c_attn, c_out, eps)
+
+
+_ATTN_REFERENCES = {
+    HyperbolicSoftmaxAttention: _ref_softmax_attention,
+    HyperbolicFullAttention: _ref_full_attention,
+    HyperbolicLinearAttention: _ref_linear_attention,
+}
+
+
+@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("c_in,c_attn,c_out", [(1.0, 1.0, 1.0), (1.0, 2.0, 0.5)])
+def test_attn_matches_naive_reference(cls, c_in, c_attn, c_out):
+    """Each variant reproduces its naive float64 einsum reference on a small sequence."""
+    B, N, A_in, D_out, H = 2, 3, 5, 4, 2
+    kwargs = {"num_heads": H, "rngs": nnx.Rngs(0), "param_dtype": jnp.float64}
+    if cls is HyperbolicLinearAttention:
+        kwargs["power"] = 2.0
+    model = cls(A_in, D_out, **kwargs)
+
+    raw = jax.random.normal(jax.random.PRNGKey(10), (B, N, A_in), dtype=jnp.float64) * 0.3
+    x = jax.vmap(jax.vmap(hyperboloid_f64.proj, in_axes=(0, None)), in_axes=(0, None))(raw, c_in)
+
+    got = model(x, c_in=c_in, c_attn=c_attn, c_out=c_out)
+    expected = _ATTN_REFERENCES[cls](model, x, c_in, c_attn, c_out)
+
+    assert got.shape == expected.shape
+    assert jnp.allclose(got, expected, atol=1e-12)
+
+
+@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
+def test_attn_reference_is_role_sensitive(cls):
+    """The reference discriminates q/k/v: permuting the projections changes its output.
+
+    Without this the oracle above could hold vacuously for a role-symmetric formula.
+    """
+    B, N, A_in, D_out, H = 2, 3, 5, 4, 2
+    c = 1.0
+    kwargs = {"num_heads": H, "rngs": nnx.Rngs(0), "param_dtype": jnp.float64}
+    if cls is HyperbolicLinearAttention:
+        kwargs["power"] = 2.0
+    model = cls(A_in, D_out, **kwargs)
+
+    raw = jax.random.normal(jax.random.PRNGKey(11), (B, N, A_in), dtype=jnp.float64) * 0.3
+    x = jax.vmap(jax.vmap(hyperboloid_f64.proj, in_axes=(0, None)), in_axes=(0, None))(raw, c)
+
+    baseline = _ATTN_REFERENCES[cls](model, x, c, c, c)
+
+    # Swap the query and value projection weights on the module, then re-evaluate the
+    # reference: a role-blind formula would return the same numbers.
+    for h in range(H):
+        q_proj, v_proj = model.query_projections[h], model.value_projections[h]
+        q_kernel, q_bias = q_proj.kernel[...], q_proj.bias[...]
+        q_proj.kernel[...], q_proj.bias[...] = v_proj.kernel[...], v_proj.bias[...]
+        v_proj.kernel[...], v_proj.bias[...] = q_kernel, q_bias
+
+    swapped = _ATTN_REFERENCES[cls](model, x, c, c, c)
+    assert not jnp.allclose(baseline, swapped, atol=1e-6)
 
 
 # ===================================================================
@@ -425,13 +595,50 @@ def test_causal_no_future_leakage(cls):
         "Causal output at modified positions did not change"
     )
 
+    # Causal masking must survive tracing: the jitted forward reproduces the eager one.
+    @nnx.jit
+    def forward(m, inp):
+        return m(inp, c_in=c, c_attn=c, c_out=c, causal=True)
 
-QUADRATIC_ATTN_CLASSES = [HyperbolicSoftmaxAttention, HyperbolicFullAttention]
+    assert jnp.allclose(forward(model, x_orig), y_orig, atol=1e-5)
 
 
-@pytest.mark.parametrize("cls", QUADRATIC_ATTN_CLASSES, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("seq_len", [4, 48], ids=["short", "long"])
+def test_causal_linear_attention_matches_naive_quadratic_form(seq_len):
+    """The causal ``lax.scan`` reproduces the masked O(N²) einsum it is a reordering of.
+
+    ``test_attn_matches_naive_reference`` only exercises the bidirectional branch, so the
+    entire causal scan of ``HyperbolicLinearAttention`` had no value oracle: transposing the
+    outer product inside ``scan_step`` (a key/value role swap) changed nothing any test
+    looked at.  The ``long`` case is the drift bound — the scan accumulates 48 successive
+    rank-1 updates against the reference's single einsum, and the two must still agree to
+    float64 round-off rather than merely "closely".
+    """
+    B, A_in, D_out, H = 2, 5, 4, 2
+    c = 1.0
+    model = HyperbolicLinearAttention(A_in, D_out, num_heads=H, power=2.0, param_dtype=jnp.float64, rngs=nnx.Rngs(0))
+
+    raw = jax.random.normal(jax.random.PRNGKey(30), (B, seq_len, A_in), dtype=jnp.float64) * 0.3
+    x = jax.vmap(jax.vmap(hyperboloid_f64.proj, in_axes=(0, None)), in_axes=(0, None))(raw, c)
+
+    got = model(x, c_in=c, c_attn=c, c_out=c, causal=True)
+    expected = _ref_causal_linear_attention(model, x, c, c, c)
+
+    assert got.shape == expected.shape
+    assert jnp.allclose(got, expected, rtol=0, atol=1e-12)
+    # The causal mask is load-bearing: the bidirectional reference is a different function.
+    assert not jnp.allclose(got, _ref_linear_attention(model, x, c, c, c), atol=1e-4)
+
+
+@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
 def test_causal_matches_truncated(cls):
-    """Causal output at position n matches bidirectional output on tokens [0..n]."""
+    """Causal output at position n matches bidirectional output on tokens [0..n].
+
+    Previously restricted to the two quadratic variants via a ``QUADRATIC_ATTN_CLASSES``
+    list; the property is a statement about the *mechanism*, not about its complexity, and
+    the linear variant's prefix scan satisfies it exactly (verified to 1e-16 in float64).
+    Excluding it left the scan's prefix boundaries unchecked.
+    """
     B, N, A_in, D_out = 1, 5, 6, 5
     c = 1.0
     rngs = nnx.Rngs(0)
@@ -476,23 +683,6 @@ def test_causal_overfit(cls):
     """Causal attention can still overfit a tiny dataset."""
     initial_loss, final_loss = _run_overfit(cls, causal=True)
     assert final_loss < initial_loss * 0.5, f"Causal loss did not drop: {initial_loss:.4f} → {final_loss:.4f}"
-
-
-@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
-def test_causal_jit_compatible(cls):
-    """Causal mode works under jax.jit."""
-    B, N, A_in, D_out = 2, 4, 6, 5
-    rngs = nnx.Rngs(0)
-    model = _make_attn(cls, A_in, D_out, num_heads=1, rngs=rngs)
-    x = _make_hyp_points(jax.random.PRNGKey(24), B, N, A_in, c=1.0)
-
-    @nnx.jit
-    def forward(m, inp):
-        return m(inp, c_in=1.0, c_attn=1.0, c_out=1.0, causal=True)
-
-    y = forward(model, x)
-    assert y.shape == (B, N, D_out + 1)
-    assert jnp.all(jnp.isfinite(y))
 
 
 @pytest.mark.parametrize("causal", [False, True])

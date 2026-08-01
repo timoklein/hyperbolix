@@ -1,12 +1,16 @@
-"""Tests for Hyperboloid convolutional layers and HCat operation."""
+"""Tests for Hyperboloid convolutional layers and HCat operation.
 
-from functools import partial
+The shared forward / on-manifold / JIT / gradient / tangent-input contract for
+every layer in the library lives in ``test_layer_contract.py``; only
+HypConv2DHyperboloid and hcat-specific tests stay here.
+"""
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from flax import nnx
-from jax.scipy.special import digamma
+from scipy.special import digamma as scipy_digamma
 
 from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers.hyperboloid_conv import HypConv2DHyperboloid
@@ -180,11 +184,20 @@ def _random_hyperboloid_points(key, N, n, c, dtype, scale=0.1):
     return jnp.stack(points)  # (N, n)
 
 
-def _log_radius_scale(N, n, dtype):
-    """Reference digamma scale s = exp(0.5*(psi(N*d/2) - psi(d/2))) with d = n - 1."""
-    d = n - 1
-    n_total = N * d
-    return jnp.exp(0.5 * (digamma(n_total / 2.0) - digamma(d / 2.0))).astype(dtype)
+def _expected_log_radius(k):
+    """E[log ||v||] for v ~ N(0, I_k), from the chi distribution: 0.5*(psi(k/2) + log 2).
+
+    Independent oracle for the log_radius_concat contract — derived from the chi^2
+    moment-generating identity, not transcribed from the library's digamma call.
+    """
+    return 0.5 * (float(scipy_digamma(k / 2.0)) + float(np.log(2.0)))
+
+
+def _implied_scale(points_Nn, result_A):
+    """Recover the scalar block scale the library applied, from its largest spatial entry."""
+    ref_flat = np.asarray(points_Nn, dtype=np.float64)[:, 1:].reshape(-1)
+    idx = int(np.argmax(np.abs(ref_flat)))
+    return float(np.asarray(result_A, dtype=np.float64)[1:][idx] / ref_flat[idx])
 
 
 @pytest.mark.parametrize("N,n,c", [(2, 3, 1.0), (3, 4, 1.0), (4, 5, 0.5), (1, 3, 1.0)])
@@ -207,7 +220,7 @@ def test_log_radius_concat_output_on_manifold(N, n, c, dtype):
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_log_radius_concat_single_point_identity(dtype):
-    """For N=1 the digamma scale is 1, so log_radius_concat reduces to hcat (identity)."""
+    """For N=1 there is nothing to rescale, so log_radius_concat reduces to hcat (identity)."""
     manifold = Hyperboloid(dtype=dtype)
     n, c = 5, 1.0
     points = _random_hyperboloid_points(jax.random.PRNGKey(42), 1, n, c, dtype)
@@ -218,40 +231,76 @@ def test_log_radius_concat_single_point_identity(dtype):
     # Scale == 1 ⇒ returns the input point and matches the unscaled hcat exactly.
     assert jnp.allclose(result, points[0], atol=1e-6)
     assert jnp.allclose(result, manifold.hcat(points, c), atol=1e-6)
-    assert jnp.allclose(_log_radius_scale(1, n, dtype), jnp.asarray(1.0, dtype=dtype), atol=1e-6)
+    assert abs(_implied_scale(points, result) - 1.0) < 1e-6
+
+
+@pytest.mark.parametrize("N,d,c", [(9, 32, 1.0), (9, 3, 1.0), (4, 16, 0.3), (2, 8, 1.0), (3, 5, 2.0)])
+def test_log_radius_concat_preserves_expected_log_radius(N, d, c):
+    """LogCat's declared contract: E[log‖v_spatial‖] does not move with the block count N.
+
+    Independent oracle — for Gaussian spatial parts ``‖v‖² ~ χ²_k`` so
+    ``E[log‖v‖] = ½(ψ(k/2) + log 2)`` (:func:`_expected_log_radius`), computed with
+    SciPy and never read from the library. Discriminating cases, all rejected here by
+    margins ≥ 0.34 against a 0.02 tolerance: scale 1 (plain ``hcat``, off by
+    ``+½·log N``), scale 0 (collapse, ``-inf``), and the inverted digamma difference
+    that shipped through hyperbolix 1.0.0 (off by ``+log N`` — *worse* than hcat).
+    """
+    n_samples = 20_000
+    rng = np.random.default_rng(20260731)
+    space_SNd = rng.standard_normal((n_samples, N, d))
+    time_SN = np.sqrt(1.0 / c + np.sum(space_SNd**2, axis=-1))
+    points_SNn = jnp.asarray(np.concatenate([time_SN[..., None], space_SNd], axis=-1), dtype=jnp.float64)
+
+    manifold = Hyperboloid(dtype=jnp.float64)
+    out_SA = jax.vmap(manifold.log_radius_concat, in_axes=(0, None))(points_SNn, c)
+
+    measured = float(np.mean(np.log(np.linalg.norm(np.asarray(out_SA)[:, 1:], axis=-1))))
+    target = _expected_log_radius(d)  # per-block radius, the quantity that must be preserved
+    assert abs(measured - target) < 0.02, f"E[log r] moved: {measured:.4f} vs target {target:.4f}"
+
+    # Not vacuous: plain concatenation (scale 1) sits at the *widened* chi radius instead,
+    # which is outside the tolerance above — so scale=1 and scale=0 both fail this test.
+    hcat_out_SA = jax.vmap(manifold.hcat, in_axes=(0, None))(points_SNn, c)
+    hcat_measured = float(np.mean(np.log(np.linalg.norm(np.asarray(hcat_out_SA)[:, 1:], axis=-1))))
+    assert abs(hcat_measured - _expected_log_radius(N * d)) < 0.02  # sampler/oracle agree
+    assert abs(hcat_measured - target) > 0.02
 
 
 @pytest.mark.parametrize("N,n,c", [(2, 3, 1.0), (3, 4, 0.5), (4, 5, 1.0)])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_log_radius_concat_scale_and_space(N, n, c, dtype):
-    """Spatial blocks are rescaled by s = exp(0.5*(psi(N*d/2) - psi(d/2))) before stacking."""
+def test_log_radius_concat_blocks_share_one_shrinking_scale(N, n, c, dtype):
+    """Every block is scaled by the *same* scalar, blocks stay in input order, and N>1 shrinks.
+
+    Structural companion to the statistical invariant test: pins the block layout
+    (a per-block or per-coordinate scale would fail) without transcribing the digamma
+    formula. Widening the spatial dimension must shrink each block, so ``scale < 1``.
+    """
     manifold = Hyperboloid(dtype=dtype)
     points = _random_hyperboloid_points(jax.random.PRNGKey(7), N, n, c, dtype)
 
     result = manifold.log_radius_concat(points, c)
 
-    scale = _log_radius_scale(N, n, dtype)
-    expected_space = (scale * points[:, 1:]).reshape(-1)
+    scale = _implied_scale(points, result)
+    expected_space = (scale * np.asarray(points[:, 1:], dtype=np.float64)).reshape(-1)
     tolerance = 1e-5 if dtype == jnp.float32 else 1e-10
-    assert jnp.allclose(result[1:], expected_space, atol=tolerance)
-    # Concatenation widens the spatial dimension (N>1), so blocks are upscaled.
-    assert float(scale) > 1.0
+    assert np.allclose(np.asarray(result[1:], dtype=np.float64), expected_space, atol=tolerance)
+    assert scale < 1.0
 
 
 @pytest.mark.parametrize("N,n,c", [(2, 3, 1.0), (3, 4, 0.5), (4, 5, 1.0)])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_log_radius_concat_time_formula(N, n, c, dtype):
-    """Time coordinate equals sqrt(1/c + s^2 * sum(t_i^2 - 1/c))."""
+    """Time coordinate equals sqrt(1/c + s^2 * sum(t_i^2 - 1/c)) for the applied scale s."""
     manifold = Hyperboloid(dtype=dtype)
     points = _random_hyperboloid_points(jax.random.PRNGKey(11), N, n, c, dtype)
 
     result = manifold.log_radius_concat(points, c)
 
-    scale = _log_radius_scale(N, n, dtype)
-    time_coords = points[:, 0]
-    expected_time = jnp.sqrt(1.0 / c + scale**2 * jnp.sum(time_coords**2 - 1.0 / c))
+    scale = _implied_scale(points, result)
+    time_coords = np.asarray(points[:, 0], dtype=np.float64)
+    expected_time = np.sqrt(1.0 / c + scale**2 * np.sum(time_coords**2 - 1.0 / c))
     tolerance = 1e-5 if dtype == jnp.float32 else 1e-10
-    assert jnp.abs(result[0] - expected_time) < tolerance
+    assert abs(float(result[0]) - expected_time) < tolerance
 
 
 # ============================================================================
@@ -290,6 +339,47 @@ def test_hypconv_hyperboloid_kernel_init_reset_params():
     assert abs(float(jnp.std(layer_fan_in.kernel[...])) - expected_fan_in_std) < 0.2 * expected_fan_in_std
 
 
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_hypconv_hyperboloid_1x1_matches_numpy_fhcnn(c):
+    """A 1x1 conv is HCat(single point) = identity followed by the FHCNN linear map.
+
+    Value oracle (audit A6-02): the whole pipeline is transcribed in NumPy from
+    Bdeir et al. 2023 --- ``z = W x + b``, spatial output ``z_s`` kept as is, time
+    coordinate reconstructed as ``sqrt(||z_s||^2 + 1/c)``. A collapsed or negated
+    spatial branch, or a mis-wired patch reshape, fails here.
+    """
+    dtype = jnp.float64
+    manifold = Hyperboloid(dtype=dtype)
+    batch, height, width, in_channels, out_channels = 2, 3, 3, 4, 5
+
+    v = jax.random.normal(jax.random.PRNGKey(0), (batch, height, width, in_channels), dtype=dtype) * 0.3
+    v = v.at[..., 0].set(0.0)
+    x = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.expmap_0(p, c))))(v)
+
+    layer = HypConv2DHyperboloid(
+        manifold_module=manifold,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=1,
+        padding="VALID",
+        rngs=nnx.Rngs(0),
+        param_dtype=dtype,
+    )
+    layer.kernel[...] = jax.random.normal(jax.random.PRNGKey(1), (out_channels, in_channels), dtype=dtype) * 0.4
+    layer.bias[...] = jax.random.normal(jax.random.PRNGKey(2), (1, out_channels), dtype=dtype) * 0.2
+
+    y = layer(x, c=c)
+
+    x_NC = np.asarray(x, dtype=np.float64).reshape(-1, in_channels)
+    z_NO = x_NC @ np.asarray(layer.kernel[...], dtype=np.float64).T + np.asarray(layer.bias[...], dtype=np.float64)
+    ys_ND = z_NO[:, 1:]
+    yt_N1 = np.sqrt(np.sum(ys_ND**2, axis=-1, keepdims=True) + 1.0 / c)
+    expected = np.concatenate([yt_N1, ys_ND], axis=-1).reshape(batch, height, width, out_channels)
+
+    assert np.allclose(np.asarray(y), expected, atol=1e-12)
+    assert np.max(np.abs(expected[..., 1:])) > 0.05  # oracle is non-degenerate
+
+
 def test_hypconv_hyperboloid_invalid_reset_params_errors():
     with pytest.raises(ValueError, match="reset_params"):
         HypConv2DHyperboloid(
@@ -300,257 +390,3 @@ def test_hypconv_hyperboloid_invalid_reset_params_errors():
             rngs=nnx.Rngs(0),
             reset_params="bogus",
         )
-
-
-@pytest.mark.parametrize("kernel_size", [1, 2, 3])
-@pytest.mark.parametrize("padding", ["SAME", "VALID"])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hypconv_hyperboloid_output_shape(kernel_size, padding, dtype):
-    """Test HypConv2DHyperboloid output shape with different kernel sizes and padding."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
-    c = 1.0
-
-    # Create input feature map (batch, height, width, in_channels)
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-
-    # Project each point to manifold
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.proj(p, c), in_axes=0), in_axes=0), in_axes=0)(x)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloid(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        rngs=rngs,
-        padding=padding,
-    )
-
-    # Forward pass
-    y = layer(x_manifold, c=c)
-
-    # Check output shape
-    if padding == "SAME":
-        expected_height, expected_width = height, width
-    else:  # VALID
-        expected_height = height - kernel_size + 1
-        expected_width = width - kernel_size + 1
-
-    assert y.shape == (batch_size, expected_height, expected_width, out_channels), (
-        f"Expected shape ({batch_size}, {expected_height}, {expected_width}, {out_channels}), got {y.shape}"
-    )
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hypconv_hyperboloid_output_on_manifold(dtype):
-    """Test that all outputs lie on the Hyperboloid manifold."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    c = 1.0
-
-    # Create input
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.proj(p, c), in_axes=0), in_axes=0), in_axes=0)(x)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloid(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-        padding="SAME",
-    )
-
-    # Forward pass
-    y = layer(x_manifold, c=c)
-
-    # Check all outputs are on manifold
-    def check_manifold(point):
-        return manifold.is_in_manifold(point, c)
-
-    # vmap over all dimensions
-    is_on_manifold = jax.vmap(jax.vmap(jax.vmap(check_manifold)))(y)
-    assert is_on_manifold.all(), "Not all outputs lie on the manifold"
-
-
-@pytest.mark.parametrize("stride", [1, 2])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hypconv_hyperboloid_stride(stride, dtype):
-    """Test HypConv2DHyperboloid with different stride values."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
-    kernel_size = 3
-    c = 1.0
-
-    # Create input
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.proj(p, c), in_axes=0), in_axes=0), in_axes=0)(x)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloid(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        rngs=rngs,
-        padding="SAME",
-    )
-
-    # Forward pass
-    y = layer(x_manifold, c=c)
-
-    # Check output shape matches expected stride behavior
-    expected_height = (height + stride - 1) // stride
-    expected_width = (width + stride - 1) // stride
-    assert y.shape == (batch_size, expected_height, expected_width, out_channels)
-
-
-@pytest.mark.parametrize("input_space", ["manifold", "tangent"])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hypconv_hyperboloid_input_space(input_space, dtype):
-    """Test HypConv2DHyperboloid with different input_space settings."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    c = 1.0
-
-    # Create input
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-
-    if input_space == "manifold":
-        # Project to manifold
-        x_input = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.proj(p, c), in_axes=0), in_axes=0), in_axes=0)(x)
-    else:
-        # Keep in tangent space (set time coordinate to 0)
-        x_input = x.at[:, :, :, 0].set(0)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloid(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-        input_space=input_space,
-    )
-
-    # Forward pass
-    y = layer(x_input, c=c)
-
-    # Check outputs are on manifold
-    is_on_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.is_in_manifold(p, c))))(y)
-    assert is_on_manifold.all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hypconv_hyperboloid_gradient(dtype):
-    """Test HypConv2DHyperboloid has valid gradients."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    c = 1.0
-
-    # Create input
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.proj(p, c), in_axes=0), in_axes=0), in_axes=0)(x)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloid(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-    )
-
-    # Define loss function
-    def loss_fn(model):
-        y = model(x_manifold, c=c)
-        return jnp.sum(y**2)
-
-    # Compute gradients
-    loss, grads = nnx.value_and_grad(loss_fn)(layer)
-
-    # Check gradients exist and are finite
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hypconv_hyperboloid_jitted(dtype):
-    """Test HypConv2DHyperboloid under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    c = 1.0
-
-    # Create input
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.proj(p, c), in_axes=0), in_axes=0), in_axes=0)(x)
-
-    # Create layer
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloid(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-    )
-
-    @nnx.jit
-    def forward(module, inputs, curvature):
-        return module(inputs, c=curvature)
-
-    # Forward pass
-    y = forward(layer, x_manifold, c)
-
-    # Check outputs are on manifold
-    is_on_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.is_in_manifold(p, c))))(y)
-    assert is_on_manifold.all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_hypconv_hyperboloid_different_curvatures(dtype):
-    """Test HypConv2DHyperboloid with different curvature values."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-
-    curvatures = [0.5, 1.0, 2.0]
-
-    for c in curvatures:
-        # Create input
-        x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-        proj_fn = partial(manifold.proj, c=c)
-        x_manifold = jax.vmap(jax.vmap(jax.vmap(proj_fn, in_axes=0), in_axes=0), in_axes=0)(x)
-
-        # Create layer
-        rngs = nnx.Rngs(42)
-        layer = HypConv2DHyperboloid(
-            manifold_module=manifold,
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=2,
-            rngs=rngs,
-        )
-
-        # Forward pass
-        y = layer(x_manifold, c=c)
-
-        # Check outputs are on manifold with correct curvature
-        is_in_manifold_fn = partial(manifold.is_in_manifold, c=c)
-        is_on_manifold = jax.vmap(jax.vmap(jax.vmap(is_in_manifold_fn)))(y)
-        assert is_on_manifold.all(), f"Failed for curvature {c}"

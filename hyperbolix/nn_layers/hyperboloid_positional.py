@@ -11,14 +11,16 @@ This module provides positional encoding layers for hyperbolic Transformers:
 References
 ----------
 Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
-Hypformer paper (citation to be added).
+Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
+Hyperbolic Space", 2025.
 """
 
 import jax.numpy as jnp
 from flax import nnx
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
-from .hyperboloid_core import lorentz_residual
+from .hyperboloid_core import lorentz_residual, spatial_to_hyperboloid
 from .hyperboloid_linear import HTCLinear
 
 
@@ -56,6 +58,10 @@ class HypformerPositionalEncoding(nnx.Module):
         HTCLinear's fan-in-aware default ``sqrt(3 / in_features)`` (default: None).
     eps : float, optional
         Numerical stability floor for lorentz_residual (default: 1e-7).
+    param_dtype : DTypeLike
+        Storage dtype of the trainable parameters, forwarded to the internal
+        ``HTCLinear`` (default: jnp.float32). Compute precision follows the input
+        array's dtype.
 
     Attributes
     ----------
@@ -69,7 +75,8 @@ class HypformerPositionalEncoding(nnx.Module):
     References
     ----------
     Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
-    Hypformer paper (citation to be added).
+    Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
+    Hyperbolic Space", 2025.
     """
 
     def __init__(
@@ -81,13 +88,14 @@ class HypformerPositionalEncoding(nnx.Module):
         epsilon: float = 1.0,
         init_bound: float | None = None,
         eps: float = 1e-7,
+        param_dtype: DTypeLike = jnp.float32,
     ):
         if epsilon < 0:
             raise ValueError(
                 f"epsilon must be >= 0 (got {epsilon}): a negative weight can push the "
                 "Lorentzian residual off the upper hyperboloid sheet."
             )
-        self.htc_linear = HTCLinear(in_features, out_features, rngs=rngs, init_bound=init_bound)
+        self.htc_linear = HTCLinear(in_features, out_features, rngs=rngs, init_bound=init_bound, param_dtype=param_dtype)
         self.epsilon = epsilon
         self.eps = eps
 
@@ -201,11 +209,9 @@ def hope(
     # Rotate spatial components (interleaved pairs)
     rotated_SD = _apply_rotary_interleaved(spatial_SD, cos_SF, sin_SF)  # (..., S, D)
 
-    # Reconstruct time: t = sqrt(||rotated||^2 + 1/c)
-    norm_sq_S1 = jnp.sum(rotated_SD**2, axis=-1, keepdims=True)  # (..., S, 1)
-    time_S1 = jnp.sqrt(jnp.maximum(norm_sq_S1 + 1.0 / c, eps))  # (..., S, 1)
-
-    return jnp.concatenate([time_S1, rotated_SD], axis=-1)  # (..., S, A)
+    # Reconstruct time via the hyperboloid constraint (scale = 1 since c_in == c_out),
+    # which is exactly the hrc(z, R, c, c) tail this function is documented to equal.
+    return spatial_to_hyperboloid(rotated_SD, c_in=c, c_out=c, eps=eps)  # (..., S, A)
 
 
 class HyperbolicRoPE(nnx.Module):

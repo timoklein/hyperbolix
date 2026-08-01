@@ -2,6 +2,8 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 
 from hyperbolix.utils.math_utils import (
     acosh,
@@ -60,6 +62,88 @@ def test_smooth_clamp():
     # Values in range should be approximately unchanged
     in_range_mask = (x >= min_val) & (x <= max_val)
     assert jnp.allclose(result[in_range_mask], x[in_range_mask], rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------------------------
+# smooth_clamp gradient oracles (audit M1-07)
+#
+# The three tests above check forward VALUES only: that the output is in range, monotone, and
+# unchanged well inside the interval. The whole point of the softplus clamp over a hard `jnp.clip`
+# is the gradient in the saturated region — a hard clip passes every forward assertion in this file
+# and gives gradient 0 exactly where the smooth version is supposed to keep pushing. The closed
+# forms below come straight from the gate-free implementation (sp(u) = softplus(beta*u)/beta):
+#
+#     smooth_clamp_min(x) = min_value + sp(x - min_value)
+#         d/dx = sigmoid(beta·(x - min_value))          everywhere — no gate, no shift
+#     smooth_clamp_max(x) = max_value - sp(max_value - x)
+#         d/dx = sigmoid(beta·(max_value - x))          everywhere
+#     smooth_clamp(x)     = min_value + sp(x - min_value) - sp(x - max_value)
+#         d/dx = sigmoid(beta·(x - min_value)) - sigmoid(beta·(x - max_value))
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("beta", [10.0, 50.0])
+def test_smooth_clamp_min_gradient_is_the_softplus_sigmoid(beta: float):
+    """d/dx smooth_clamp_min = sigmoid(beta·(x - min_value)) at every x, both sides of the bound.
+
+    The ``beta`` axis is what pins the smoothing factor: dropping the multiplication (``arg = x -
+    min_value``) leaves a valid, monotone, in-range clamp whose gradient no longer depends on ``beta``
+    at all, so both parametrizations would collapse onto the same wrong curve.
+    """
+    min_val = 0.0
+    xs = jnp.array([-1.0, -0.2, -0.01, 0.5, 2.0], dtype=jnp.float32)
+
+    grads = jax.vmap(jax.grad(lambda v: smooth_clamp_min(v, min_val, smoothing_factor=beta)))(xs)
+
+    expected = np.asarray(jax.nn.sigmoid(beta * (xs - min_val)))
+    assert np.allclose(np.asarray(grads), expected, rtol=1e-5, atol=1e-6)
+    # Just past the bound the gradient is attenuated but strictly positive — that is the whole
+    # difference from a hard clip, which would return exactly 0 across the entire clamped region.
+    assert 0.0 < float(grads[1]) < 1.0
+    assert float(grads[0]) < float(grads[1]), "attenuation must deepen with distance past the bound"
+
+
+@pytest.mark.parametrize("beta", [10.0, 50.0])
+def test_smooth_clamp_max_gradient_is_the_softplus_sigmoid(beta: float):
+    """d/dx smooth_clamp_max = sigmoid(beta·(max_value - x)) at every x, both sides of the bound."""
+    max_val = 1.0
+    xs = jnp.array([-1.0, 0.5, 0.99, 1.2, 3.0], dtype=jnp.float32)
+
+    grads = jax.vmap(jax.grad(lambda v: smooth_clamp_max(v, max_val, smoothing_factor=beta)))(xs)
+
+    expected = np.asarray(jax.nn.sigmoid(beta * (max_val - xs)))
+    assert np.allclose(np.asarray(grads), expected, rtol=1e-5, atol=1e-6)
+    assert 0.0 < float(grads[3]) < 1.0
+    # Deep saturation: in float32 ``sigmoid(-100)`` underflows to exactly 0, so far past the bound
+    # the smooth clamp degenerates to a hard clip. Pinned as monotone attenuation rather than
+    # strict positivity, because the latter is false at beta=50 and x=3.
+    assert 0.0 <= float(grads[-1]) <= float(grads[3])
+
+
+@pytest.mark.parametrize("beta", [10.0, 50.0])
+def test_smooth_clamp_gradient_is_the_sigmoid_difference(beta: float):
+    """Two-sided ``smooth_clamp`` gradient = sigmoid(beta·(x - min)) - sigmoid(beta·(x - max)).
+
+    ``smooth_clamp`` is the two-sided difference form, NOT a composition of the one-sided clamps
+    (composing them overshoots narrow windows — pinned in test_smooth_clamp_vs_clip.py). Its
+    derivative is therefore the plain difference of the two boundary sigmoids. Pinning it catches
+    a dropped term or a re-simplification into the composition, which the range-only forward test
+    cannot: the composition also keeps the output inside wide windows.
+    """
+    min_val, max_val = -1.5, 1.5
+    xs = jnp.array([-4.0, -1.6, 0.0, 1.6, 4.0], dtype=jnp.float32)
+
+    grads = jax.vmap(jax.grad(lambda v: smooth_clamp(v, min_val, max_val, smoothing_factor=beta)))(xs)
+
+    x_np = np.asarray(xs, dtype=np.float64)
+    expected = np.asarray(jax.nn.sigmoid(beta * (x_np - min_val))) - np.asarray(jax.nn.sigmoid(beta * (x_np - max_val)))
+
+    assert np.allclose(np.asarray(grads), expected, rtol=1e-4, atol=1e-6)
+    assert float(grads[2]) == pytest.approx(1.0, rel=1e-6), "no attenuation strictly inside the interval"
+    # Symmetric attenuation: just outside each bound the gradient is alive but < 1; far outside it
+    # decays further (to exactly 0 in float32 at beta=50 — see the max-side test).
+    assert 0.0 < float(grads[1]) < 1.0 and 0.0 < float(grads[3]) < 1.0
+    assert float(grads[0]) <= float(grads[1]) and float(grads[-1]) <= float(grads[3])
 
 
 def test_cosh():
@@ -146,24 +230,38 @@ def test_atanh():
     expected_valid = jnp.atanh(x_valid)
     assert jnp.allclose(result_valid, expected_valid)
 
-    # Test boundary values (should be clamped away from +/-1)
-    x_boundary = jnp.array([-1.1, -1.0, -0.9999, 0.9999, 1.0, 1.1])
-    result_boundary = atanh(x_boundary)
-
-    # Should not contain inf or nan
-    assert jnp.all(jnp.isfinite(result_boundary))
-
-    # Should be antisymmetric
-    assert jnp.allclose(result_boundary[0], -result_boundary[-1], rtol=1e-5)
-    assert jnp.abs(result_boundary[2]) < 1e10  # Should be finite but large
+    # Boundary values are clamped to ±(1 - 10·eps), so the forward value is the EXACT arctanh of
+    # that clamp point. The margin is the whole point of the guard, so it is what gets pinned:
+    # widening it to 1e5·eps (a real accuracy regression near the Poincaré ball boundary — the f32
+    # input error becomes 1.2e-2) drops the f32 value from 7.166 to ~2.6, whereas the previous
+    # `abs(atanh(-0.9999)) < 1e10` bound was ~2e9x too loose to notice any of it.
+    for dt in (jnp.float32, jnp.float64):
+        margin = 10.0 * float(jnp.finfo(dt).eps)
+        expected = float(np.arctanh(1.0 - margin))  # f32 -> 7.166473, f64 -> 17.217108
+        out = np.asarray(atanh(jnp.array([-1.1, -1.0, 1.0, 1.1], dtype=dt)), dtype=np.float64)
+        assert np.allclose(out, np.array([-expected, -expected, expected, expected]), rtol=1e-5)
 
 
 def test_atanh_gradient_at_boundary():
-    """Gradient at and beyond ±1 is finite (the 10*eps margin bounds atanh')."""
-    for dtype in [jnp.float32, jnp.float64]:
-        for x in [-1.1, -1.0, 1.0, 1.1]:
-            g = jax.grad(lambda a: atanh(a))(jnp.asarray(x, dtype=dtype))
-            assert jnp.isfinite(g)
+    """The ±(1 - 10·eps) clamp bounds ``atanh'`` — pin the exact gradient on both sides of it.
+
+    Outside the band the clip's VJP is zero, so the gradient is exactly 0.0; the previous
+    ``isfinite`` assertion could not tell that apart from any other finite value. Just inside the
+    band the clip is a gradient IDENTITY, so the gradient is exactly the unclamped 1/(1 - x²).
+    Together the two pin where the clamp point sits: at a 1e5·eps margin the in-band point below
+    would be clipped instead and its gradient would collapse to 0.
+    """
+    for dt in (jnp.float32, jnp.float64):
+        margin = 10.0 * float(jnp.finfo(dt).eps)
+        # At/beyond ±1, and anywhere inside the margin: saturated, gradient exactly 0.
+        for x in (-1.1, -1.0, 1.0, 1.1, 1.0 - 0.5 * margin):
+            g = jax.grad(atanh)(jnp.asarray(x, dtype=dt))
+            assert float(g) == 0.0, f"clip VJP not saturated at x={x} ({dt.__name__})"
+        # Just inside the clamp point: the guard is a gradient identity.
+        #   f32 -> 2.097155e5, f64 -> 1.125900e14
+        x_in = 1.0 - 2.0 * margin
+        g_in = float(jax.grad(atanh)(jnp.asarray(x_in, dtype=dt)))
+        assert g_in == pytest.approx(1.0 / (1.0 - x_in**2), rel=1e-5)
 
 
 def test_tanh():

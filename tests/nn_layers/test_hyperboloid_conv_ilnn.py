@@ -1,9 +1,15 @@
-"""Tests for HypConv2DHyperboloidILNN (Intrinsic Lorentz convolution: LogCat + PLFC, Shi et al. 2026)."""
+"""Tests for HypConv2DHyperboloidILNN (Intrinsic Lorentz convolution: LogCat + PLFC, Shi et al. 2026).
 
-from functools import partial
+The shared forward / on-manifold / JIT / gradient / tangent-input contract for
+every layer in the library lives in ``test_layer_contract.py``; only
+HypConv2DHyperboloidILNN-specific tests stay here.
+"""
+
+import itertools
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from flax import nnx
 
@@ -22,263 +28,61 @@ def _check_on_hyperboloid(x, c, atol=1e-5):
     return jnp.allclose(mink, -1.0 / c, atol=atol)
 
 
-@pytest.mark.parametrize("kernel_size", [1, 2, 3])
-@pytest.mark.parametrize("padding", ["SAME", "VALID"])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_output_shape(kernel_size, padding, dtype):
-    """Test HypConv2DHyperboloidILNN output shape with different kernel sizes and padding."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
-    c = 1.0
+def _implied_logcat_scale(points_KC, logcat_A):
+    """Recover the radius-matching scale that LogCat applied, from one entry.
 
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
+    Deliberately *not* a transcription of the digamma formula: the value (and the
+    direction) of that scale is under review upstream, while the block layout and
+    the time formula asserted below hold for whatever scale the library picks.
+    Consuming exactly one degree of freedom keeps everything else pinned.
+    """
+    ref_flat = np.asarray(points_KC, dtype=np.float64)[:, 1:].reshape(-1)
+    idx = int(np.argmax(np.abs(ref_flat)))
+    return float(np.asarray(logcat_A, dtype=np.float64)[1:][idx] / ref_flat[idx])
+
+
+def _logcat_reference(points_KC, c, scale):
+    """LogCat structure (Shi et al. 2026, Sec. 4.3) for a given radius-matching scale.
+
+    Independent of ``Hyperboloid.log_radius_concat`` except for the scalar ``scale``::
+
+        spatial  = concat_i(scale * x_i[1:])       (input order, blocks kept intact)
+        time     = sqrt(1/c + scale^2 * sum_i(x_i[0]^2 - 1/c))    (Lorentz constraint)
+    """
+    pts_KC = np.asarray(points_KC, dtype=np.float64)
+    spatial = (scale * pts_KC[:, 1:]).reshape(-1)
+    time = np.sqrt(1.0 / c + scale**2 * np.sum(pts_KC[:, 0] ** 2 - 1.0 / c))
+    return np.concatenate([[time], spatial])
+
+
+def _plfc_reference(x_BAi, kernel_OI, bias_O1, c, v_max=10.0):
+    """NumPy transcription of the PLFC forward (Shi et al. 2026, Thm. 1 + Sec. 4.1).
+
+    See ``test_hyperboloid_linear_plfc.plfc_reference`` for the same equations at
+    the linear layer; duplicated here so this file's mutation coverage stands alone.
+    """
+    x_BAi = np.asarray(x_BAi, dtype=np.float64)
+    z_OI = np.asarray(kernel_OI, dtype=np.float64)
+    r_O1 = np.asarray(bias_O1, dtype=np.float64)
+    sqrt_c = np.sqrt(c)
+
+    z_norm_1O = np.linalg.norm(z_OI, axis=-1)[None, :]
+    sqrt_cr_1O = sqrt_c * r_O1.T
+    xt_B1, xs_BI = x_BAi[:, 0:1], x_BAi[:, 1:]
+
+    alpha_BO = -xt_B1 * np.sinh(sqrt_cr_1O) * z_norm_1O + np.cosh(sqrt_cr_1O) * (xs_BI @ z_OI.T)
+    v_BO = (z_norm_1O / sqrt_c) * np.arcsinh(sqrt_c * alpha_BO / z_norm_1O)
+
+    ys_BO = np.sinh(np.clip(sqrt_c * v_BO, -v_max, v_max)) / sqrt_c
+    yt_B1 = np.sqrt(np.sum(ys_BO**2, axis=-1, keepdims=True) + 1.0 / c)
+    return np.concatenate([yt_B1, ys_BO], axis=-1)
+
+
+def _single_patch_setup(c, dtype, kernel_size=2, in_channels=3, out_channels=4, seed=0):
+    """One receptive field: image size == kernel size with VALID padding."""
+    manifold = Hyperboloid(dtype=dtype)
+    x = jax.random.normal(jax.random.PRNGKey(seed), (1, kernel_size, kernel_size, in_channels), dtype=dtype) * 0.3
     x_manifold = _proj_image(x, manifold, c)
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        rngs=rngs,
-        padding=padding,
-    )
-
-    y = layer(x_manifold, c=c)
-
-    if padding == "SAME":
-        expected_height, expected_width = height, width
-    else:
-        expected_height = height - kernel_size + 1
-        expected_width = width - kernel_size + 1
-
-    assert y.shape == (batch_size, expected_height, expected_width, out_channels)
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_output_on_manifold(dtype):
-    """Test that all outputs lie on the Hyperboloid manifold."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    c = 1.0
-    atol = 4e-3 if dtype == jnp.float32 else 1e-7
-
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x_manifold = _proj_image(x, manifold, c)
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-    )
-
-    y = layer(x_manifold, c=c)
-
-    # Flatten to (N, C) and check constraint
-    y_flat = y.reshape(-1, out_channels)
-    assert _check_on_hyperboloid(y_flat, c=c, atol=atol)
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_jitted_forward(dtype):
-    """Test HypConv2DHyperboloidILNN under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    c = 1.0
-
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x_manifold = _proj_image(x, manifold, c)
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-    )
-
-    @nnx.jit
-    def forward(module, inputs, curvature):
-        return module(inputs, c=curvature)
-
-    y = forward(layer, x_manifold, c)
-
-    assert y.shape == (batch_size, height, width, out_channels)
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_gradient(dtype):
-    """Test HypConv2DHyperboloidILNN has valid gradients."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    c = 1.0
-
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x_manifold = _proj_image(x, manifold, c)
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-    )
-
-    def loss_fn(model):
-        y = model(x_manifold, c=c)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(loss_fn)(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_jitted_gradient(dtype):
-    """Test HypConv2DHyperboloidILNN gradients under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    c = 1.0
-
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x_manifold = _proj_image(x, manifold, c)
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-    )
-
-    @nnx.jit
-    def loss_fn(module, inputs, curvature):
-        y = module(inputs, c=curvature)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x_manifold, c))(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_tangent_input(dtype):
-    """Test HypConv2DHyperboloidILNN with tangent space input."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    c = 1.0
-    atol = 4e-3 if dtype == jnp.float32 else 1e-7
-
-    # Tangent vectors at origin (time coordinate is 0)
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x = x.at[:, :, :, 0].set(0.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=2,
-        rngs=rngs,
-        input_space="tangent",
-    )
-
-    y = layer(x, c=c)
-
-    assert y.shape == (batch_size, height, width, out_channels)
-    assert jnp.isfinite(y).all()
-    y_flat = y.reshape(-1, out_channels)
-    assert _check_on_hyperboloid(y_flat, c=c, atol=atol)
-
-
-@pytest.mark.parametrize("stride", [1, 2])
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_stride(stride, dtype):
-    """Test HypConv2DHyperboloidILNN with different stride values."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 8, 8, 3, 4
-    kernel_size = 3
-    c = 1.0
-
-    x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-    x_manifold = _proj_image(x, manifold, c)
-
-    rngs = nnx.Rngs(42)
-    layer = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        rngs=rngs,
-    )
-
-    y = layer(x_manifold, c=c)
-
-    expected_height = (height + stride - 1) // stride
-    expected_width = (width + stride - 1) // stride
-    assert y.shape == (batch_size, expected_height, expected_width, out_channels)
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_different_curvatures(dtype):
-    """Test HypConv2DHyperboloidILNN with different curvature values."""
-    key = jax.random.PRNGKey(42)
-    manifold = Hyperboloid(dtype=dtype)
-    batch_size, height, width, in_channels, out_channels = 2, 4, 4, 3, 3
-    atol = 4e-3 if dtype == jnp.float32 else 1e-7
-
-    for c in [0.5, 1.0, 2.0]:
-        x = jax.random.normal(key, (batch_size, height, width, in_channels), dtype=dtype) * 0.1
-        proj_fn = partial(manifold.proj, c=c)
-        x_manifold = jax.vmap(jax.vmap(jax.vmap(proj_fn)))(x)
-
-        rngs = nnx.Rngs(42)
-        layer = HypConv2DHyperboloidILNN(
-            manifold_module=manifold,
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=2,
-            rngs=rngs,
-        )
-
-        y = layer(x_manifold, c=c)
-
-        y_flat = y.reshape(-1, out_channels)
-        assert _check_on_hyperboloid(y_flat, c=c, atol=atol), f"Failed for curvature {c}"
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_forward_is_plfc_of_log_radius_concat(dtype):
-    """Conv forward equals PLFC(LogCat(patch)) — the Shi et al. 2026 Eq. (11) pipeline."""
-    key = jax.random.PRNGKey(0)
-    manifold = Hyperboloid(dtype=dtype)
-    c = 1.0
-    kernel_size, in_channels, out_channels = 2, 3, 4
-
-    # Image size == kernel size with VALID padding -> exactly one receptive field
-    x = jax.random.normal(key, (1, kernel_size, kernel_size, in_channels), dtype=dtype) * 0.1
-    x_manifold = _proj_image(x, manifold, c)
-
     layer = HypConv2DHyperboloidILNN(
         manifold_module=manifold,
         in_channels=in_channels,
@@ -286,21 +90,88 @@ def test_forward_is_plfc_of_log_radius_concat(dtype):
         kernel_size=kernel_size,
         rngs=nnx.Rngs(42),
         padding="VALID",
+        param_dtype=dtype,
     )
+    return manifold, x_manifold, layer
+
+
+def test_single_patch_uses_row_major_logcat_ordering():
+    """The receptive field enters LogCat in row-major (h, w) order, then PLFC.
+
+    The LogCat point is rebuilt from the patch (``_logcat_reference``) instead of
+    being taken from ``manifold.log_radius_concat`` wholesale, so this pins the
+    block layout and the time formula rather than comparing the library to itself.
+    Only the scalar radius-matching factor is read off the library output — its
+    value is not asserted (see ``_implied_logcat_scale``).
+    """
+    dtype = jnp.float64
+    c = 1.0
+    kernel_size, in_channels, out_channels = 2, 3, 4
+    manifold, x_manifold, layer = _single_patch_setup(c, dtype, kernel_size, in_channels, out_channels)
+
     y = layer(x_manifold, c=c)  # (1, 1, 1, out_channels)
 
-    # Manual pipeline: LogCat over the receptive field, then PLFC with shared weights
     points_KC = x_manifold.reshape(kernel_size * kernel_size, in_channels)
-    logcat_A = manifold.log_radius_concat(points_KC, c)
+    scale = _implied_logcat_scale(points_KC, manifold.log_radius_concat(points_KC, c))
+    logcat_A = jnp.asarray(_logcat_reference(points_KC, c, scale), dtype=dtype)
 
     logcat_dim = (in_channels - 1) * kernel_size**2 + 1
-    plfc = HypLinearHyperboloidPLFC(manifold, logcat_dim, out_channels, rngs=nnx.Rngs(7))
+    plfc = HypLinearHyperboloidPLFC(manifold, logcat_dim, out_channels, rngs=nnx.Rngs(7), param_dtype=dtype)
     plfc.kernel[...] = layer.kernel[...]
     plfc.bias[...] = layer.bias[...]
     expected = plfc(logcat_A[None, :], c=c)
 
-    atol = 1e-5 if dtype == jnp.float32 else 1e-10
-    assert jnp.allclose(y.reshape(1, out_channels), expected, atol=atol)
+    assert jnp.allclose(y.reshape(1, out_channels), expected, atol=1e-10)
+
+
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_ilnn_single_patch_matches_numpy_transcription(c):
+    """Conv forward equals the full LogCat + PLFC pipeline transcribed in NumPy.
+
+    Value oracle (audit A6-03): independent of every library code path the layer
+    uses, so an origin-collapsed PLFC output (or a sign flip in the MLR score)
+    fails here.
+    """
+    dtype = jnp.float64
+    kernel_size, in_channels, out_channels = 2, 3, 5
+    manifold, x_manifold, layer = _single_patch_setup(c, dtype, kernel_size, in_channels, out_channels)
+    layer.kernel[...] = jax.random.normal(jax.random.PRNGKey(1), layer.kernel[...].shape, dtype=dtype) * 0.6
+    layer.bias[...] = jax.random.normal(jax.random.PRNGKey(2), layer.bias[...].shape, dtype=dtype) * 0.3
+
+    y = layer(x_manifold, c=c)
+
+    points_KC = x_manifold.reshape(kernel_size * kernel_size, in_channels)
+    scale = _implied_logcat_scale(points_KC, manifold.log_radius_concat(points_KC, c))
+    logcat_A = _logcat_reference(points_KC, c, scale)
+    expected = _plfc_reference(logcat_A[None, :], layer.kernel[...], layer.bias[...], c, v_max=layer.v_max)
+
+    assert np.allclose(np.asarray(y).reshape(1, out_channels), expected, atol=1e-10)
+    assert np.max(np.abs(expected[:, 1:])) > 0.05  # oracle is non-degenerate
+
+
+def test_ilnn_forward_is_input_dependent():
+    """Two distinct feature maps give distinct outputs (constant-collapse guard)."""
+    dtype = jnp.float64
+    c = 1.0
+    manifold = Hyperboloid(dtype=dtype)
+    in_channels, out_channels = 3, 4
+
+    x = jax.random.normal(jax.random.PRNGKey(5), (2, 4, 4, in_channels), dtype=dtype) * 0.5
+    x_manifold = _proj_image(x, manifold, c)
+    layer = HypConv2DHyperboloidILNN(
+        manifold_module=manifold,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=2,
+        rngs=nnx.Rngs(42),
+        param_dtype=dtype,
+    )
+
+    y = layer(x_manifold, c=c)
+
+    assert float(jnp.max(jnp.abs(y[0] - y[1]))) > 1e-6
+    # Not pinned at the manifold origin [1/sqrt(c), 0, ..., 0].
+    assert float(jnp.max(jnp.abs(y[..., 1:]))) > 1e-6
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -413,25 +284,68 @@ def test_gyro_bias_on_manifold_and_trainable(dtype):
 
 
 def test_kernel_init_std():
-    """Default kernel init follows the PLFC reference (std=0.02); kernel_init_std=1.0 recovers HNN++."""
+    """Default kernel init is fan-out ``sqrt(1/out_spatial)``; explicit values are passed through.
+
+    ``kernel_init_std=0.02`` must still reproduce the Shi et al. 2026 reference draw
+    bit-for-bit (same seed), since that is the documented escape hatch.
+    """
     manifold = Hyperboloid(dtype=jnp.float32)
     in_channels, out_channels, kernel_size = 9, 17, 3  # (16, 72) kernel -> 1152 samples
+    out_spatial = out_channels - 1
 
-    layer_default = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        rngs=nnx.Rngs(42),
-    )
-    layer_hnnpp = HypConv2DHyperboloidILNN(
-        manifold_module=manifold,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=kernel_size,
-        rngs=nnx.Rngs(42),
-        kernel_init_std=1.0,
-    )
+    def build(**kwargs):
+        return HypConv2DHyperboloidILNN(
+            manifold_module=manifold,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            rngs=nnx.Rngs(42),
+            **kwargs,
+        )
 
-    assert abs(float(jnp.std(layer_default.kernel[...])) - 0.02) < 0.005
+    layer_default, layer_ref, layer_hnnpp = build(), build(kernel_init_std=0.02), build(kernel_init_std=1.0)
+
+    expected_std = (1.0 / out_spatial) ** 0.5  # = 0.25 at out_spatial=16
+    assert abs(float(jnp.std(layer_default.kernel[...])) - expected_std) < 0.1 * expected_std
     assert 0.8 < float(jnp.std(layer_hnnpp.kernel[...])) < 1.2
+    # Same seed ⇒ the three inits differ only by their scalar multiplier.
+    assert jnp.allclose(layer_ref.kernel[...], 0.02 * layer_hnnpp.kernel[...], atol=1e-9)
+    assert jnp.allclose(layer_default.kernel[...], expected_std * layer_hnnpp.kernel[...], atol=1e-8)
+
+
+@pytest.mark.parametrize("kernel_size", [2, 3])
+def test_depth3_stack_preserves_spatial_norm_at_init(kernel_size):
+    """A depth-3 stack at the default init neither collapses to the origin nor blows up.
+
+    The default ``kernel_init_std`` is coupled to the LogCat digamma sign fix
+    (2026-07-31): the old fixed ``0.02`` was calibrated against the pre-fix ~sqrt(N)
+    amplification, so under the corrected shrink it contracts the mean spatial norm by
+    ~15x per layer (probe-measured ratio 0.068 for this configuration) and the stack
+    is pinned at the manifold origin by layer 3. Deterministic: float64, fixed seeds.
+    """
+    dtype = jnp.float64
+    c = 0.1
+    channels = 17  # ambient; out_spatial = 16
+    manifold = Hyperboloid(dtype=dtype)
+
+    tangent_BHWC = jax.random.normal(jax.random.PRNGKey(0), (2, 8, 8, channels), dtype=dtype) * 0.3
+    tangent_BHWC = tangent_BHWC.at[..., 0].set(0.0)  # tangent at the origin
+    x_BHWC = jax.vmap(jax.vmap(jax.vmap(lambda t: manifold.expmap_0(t, c))))(tangent_BHWC)
+
+    rngs = nnx.Rngs(1234)
+    norms = [float(jnp.mean(jnp.linalg.norm(x_BHWC[..., 1:], axis=-1)))]
+    for _ in range(3):
+        layer = HypConv2DHyperboloidILNN(
+            manifold_module=manifold,
+            in_channels=channels,
+            out_channels=channels,
+            kernel_size=kernel_size,
+            rngs=rngs,
+            param_dtype=dtype,
+        )
+        x_BHWC = layer(x_BHWC, c=c)
+        norms.append(float(jnp.mean(jnp.linalg.norm(x_BHWC[..., 1:], axis=-1))))
+
+    assert norms[0] > 0.5, f"probe input is degenerate: {norms}"
+    for i, (prev, cur) in enumerate(itertools.pairwise(norms), start=1):
+        assert 0.1 * prev < cur < 10.0 * prev, f"layer {i} spatial-norm gain {cur / prev:.3g} out of band: {norms}"

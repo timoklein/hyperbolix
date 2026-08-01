@@ -1,38 +1,123 @@
-"""Tests for Riemannian-uniform distribution on Poincaré geodesic ball."""
+"""Tests for Riemannian-uniform distribution on Poincaré geodesic ball.
+
+Dimension key:
+  N: number of samples          D: spatial/manifold dimension (n)
+  S: sample axes (sample_shape) T: total flattened points (prod of the leading axes)
+  A, B: the two leading axes of a rank-3 log_prob input
+"""
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+import scipy.stats
 
 from hyperbolix.distributions import uniform_poincare
+from hyperbolix.distributions.uniform_poincare import _sample_uniform_direction
 from hyperbolix.manifolds.poincare import Poincare
 
 
 # ---------------------------------------------------------------------------
 # Volume tests
+#
+# The value-level assertions below run at ``volume``'s default dtype (float64 here, since
+# conftest enables x64) and carry float64 tolerances. The dtype axis itself is exercised
+# separately by ``test_volume_dtype_follows_request``.
 # ---------------------------------------------------------------------------
-def test_volume_n2_c1_exact(dtype, tolerance):
+def test_volume_n2_c1_exact():
     """n=2, c=1: exact formula Vol = 2π(cosh(R) - 1)."""
-    atol, _ = tolerance
     R = 2.0
     vol = uniform_poincare.volume(c=1.0, n=2, R=R)
     expected = 2.0 * jnp.pi * (jnp.cosh(R) - 1.0)
-    assert jnp.allclose(vol, expected, atol=atol), f"vol={vol}, expected={expected}"
+    assert jnp.allclose(vol, expected, atol=1e-7), f"vol={vol}, expected={expected}"
 
 
-def test_volume_monotone_in_R(dtype):
+@pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
+def test_volume_n3_exact(c):
+    """n=3: exact formula Vol = (π/c^{3/2})·(sinh(2√c·R) - 2√c·R), including c ≠ 1.
+
+    Every other value-level volume assertion runs at c = 1, where the ``1/√c^{n-1}``
+    curvature scaling and (at n = 2) the ``ω_{n-1} = 2π^{n/2}/Γ(n/2)`` sphere area are both
+    exactly 1 — deleting either factor from ``volume`` passed the whole file.
+    """
+    R = 1.5
+    sqrt_c = jnp.sqrt(jnp.float64(c))
+    expected = jnp.pi / c**1.5 * (jnp.sinh(2.0 * sqrt_c * R) - 2.0 * sqrt_c * R)
+    vol = uniform_poincare.volume(c=c, n=3, R=R)
+    assert jnp.allclose(vol, expected, rtol=1e-9), f"vol={vol}, expected={expected}"
+
+
+def test_volume_monotone_in_R():
     """Volume increases with R."""
     vols = [float(uniform_poincare.volume(c=1.0, n=3, R=r)) for r in [0.5, 1.0, 2.0, 4.0]]
     for i in range(len(vols) - 1):
         assert vols[i] < vols[i + 1], f"Volume not monotone: {vols}"
 
 
-def test_volume_positive(dtype):
-    """Volume is positive for R > 0."""
-    for n in [2, 3, 5]:
-        for c in [0.1, 1.0, 2.0]:
-            vol = uniform_poincare.volume(c=c, n=n, R=1.0)
-            assert vol > 0, f"Volume non-positive for n={n}, c={c}: {vol}"
+# =============================================================================================
+# dtype propagation (audit E2.1 / E2.3)
+#
+# ``volume`` used to hardcode ``jnp.float64(c)`` and hold its Gauss-Legendre tables as
+# module-level float64 arrays, and ``sample``/``log_prob`` inherited that: a float32 caller got
+# a float64 array back. Both wrapped-normal siblings infer the dtype from the caller's own
+# array (``mu``), which is the convention these tests pin for ``center`` / ``x``.
+# =============================================================================================
+
+
+def test_volume_dtype_follows_request(dtype):
+    """``volume`` computes and returns at the requested dtype (default: JAX's default float)."""
+    vol = uniform_poincare.volume(c=1.0, n=3, R=1.5, dtype=dtype)
+    assert vol.dtype == dtype
+
+    # Same number to float32 precision, whichever dtype the quadrature ran in.
+    vol_default = uniform_poincare.volume(c=1.0, n=3, R=1.5)
+    assert jnp.allclose(vol.astype(jnp.float64), vol_default.astype(jnp.float64), rtol=1e-6)
+
+
+def test_log_prob_dtype_follows_input(dtype):
+    """``log_prob`` returns ``x.dtype`` — no silent float64 upcast from the volume quadrature."""
+    manifold = Poincare(dtype=dtype)
+    x_D = jnp.zeros(3, dtype=dtype)
+    assert uniform_poincare.log_prob(x_D, c=1.0, R=1.5, manifold_module=manifold).dtype == dtype
+
+    # The -inf branch must not upcast either: ``jnp.where`` takes the wider of its two arms.
+    outside_D = jnp.array([0.8, 0.0, 0.0], dtype=dtype)
+    lp_outside = uniform_poincare.log_prob(outside_D, c=1.0, R=0.5, manifold_module=manifold)
+    assert lp_outside.dtype == dtype
+    assert lp_outside == -jnp.inf
+
+    # And without an explicit manifold_module, where the default Poincare(x.dtype) is built.
+    assert uniform_poincare.log_prob(x_D, c=1.0, R=1.5).dtype == dtype
+
+
+def test_sample_dtype_follows_center(dtype):
+    """With no explicit ``dtype``, ``sample`` infers it from ``center`` (mirrors ``mu`` upstream)."""
+    key = jax.random.PRNGKey(3)
+    center_D = jnp.array([0.2, -0.1], dtype=dtype)
+    samples_ND = uniform_poincare.sample(key, n=2, c=1.0, R=1.0, sample_shape=(8,), center=center_D)
+    assert samples_ND.dtype == dtype
+
+
+def test_sample_dtype_follows_manifold_module(dtype):
+    """With neither ``dtype`` nor ``center``, the manifold's dtype decides."""
+    key = jax.random.PRNGKey(4)
+    manifold = Poincare(dtype=dtype)
+    samples_ND = uniform_poincare.sample(key, n=3, c=1.0, R=1.0, sample_shape=(8,), manifold_module=manifold)
+    assert samples_ND.dtype == dtype
+
+
+def test_sample_explicit_dtype_overrides_center(dtype):
+    """An explicit ``dtype`` wins over the inferred one.
+
+    No ``manifold_module`` here on purpose: a manifold instance casts its own outputs to its
+    own dtype, so passing a conflicting one would test ``ManifoldBase._cast``, not the
+    resolution order under test.
+    """
+    key = jax.random.PRNGKey(5)
+    other = jnp.float64 if dtype == jnp.float32 else jnp.float32
+    center_D = jnp.array([0.2, -0.1], dtype=other)
+    samples_ND = uniform_poincare.sample(key, n=2, c=1.0, R=1.0, sample_shape=(8,), center=center_D, dtype=dtype)
+    assert samples_ND.dtype == dtype
 
 
 # ---------------------------------------------------------------------------
@@ -48,10 +133,18 @@ def test_sample_shape(n, dtype):
 
 
 def test_sample_single(dtype):
-    """Single sample (no sample_shape) returns shape (n,)."""
+    """Single sample (no sample_shape) returns shape (n,); jit reproduces the eager draw."""
     key = jax.random.PRNGKey(0)
-    x = uniform_poincare.sample(key, n=3, c=1.0, R=1.0, dtype=dtype)
+    manifold = Poincare(dtype=dtype)
+    x = uniform_poincare.sample(key, n=3, c=1.0, R=1.0, dtype=dtype, manifold_module=manifold)
     assert x.shape == (3,)
+
+    # Folded in from the former standalone test_sample_jit, which only re-asserted the shape.
+    @jax.jit
+    def _sample(k):
+        return uniform_poincare.sample(k, n=3, c=1.0, R=1.0, dtype=dtype, manifold_module=manifold)
+
+    assert jnp.allclose(_sample(key), x, atol=1e-6)
 
 
 def test_sample_batch_shape(dtype):
@@ -74,12 +167,18 @@ def test_samples_in_poincare_ball(dtype):
     assert jnp.all(norms < ball_radius), f"Max norm {jnp.max(norms)} >= ball radius {ball_radius}"
 
 
-def test_samples_within_geodesic_ball(dtype):
-    """All samples have geodesic distance ≤ R from center."""
+@pytest.mark.parametrize("c", [0.1, 0.5, 1.0, 2.0])
+def test_samples_within_geodesic_ball(c, dtype):
+    """All samples have geodesic distance ≤ R from center, across curvatures.
+
+    Absorbs the former ``test_sample_multiple_curvatures``, which asserted the same
+    containment plus a shape already pinned by ``test_sample_shape``.
+    """
     key = jax.random.PRNGKey(8)
     manifold = Poincare(dtype=dtype)
-    c, R = 1.0, 1.5
+    R = 1.5
     samples = uniform_poincare.sample(key, n=3, c=c, R=R, sample_shape=(500,), dtype=dtype, manifold_module=manifold)
+    assert samples.shape == (500, 3)
     dists = jax.vmap(lambda x: manifold.dist_0(x, c))(samples)
     # Allow small numerical tolerance
     assert jnp.all(dists <= R + 1e-5), f"Max dist {jnp.max(dists)} > R={R}"
@@ -96,49 +195,6 @@ def test_samples_within_geodesic_ball_nonorigin_center(dtype):
     )
     dists = jax.vmap(lambda x: manifold.dist(x, center, c))(samples)
     assert jnp.all(dists <= R + 1e-5), f"Max dist {jnp.max(dists)} > R={R}"
-
-
-# ---------------------------------------------------------------------------
-# Multiple curvatures
-# ---------------------------------------------------------------------------
-@pytest.mark.parametrize("c", [0.1, 0.5, 1.0, 2.0])
-def test_sample_multiple_curvatures(c, dtype):
-    """Sampling works across curvature values."""
-    key = jax.random.PRNGKey(10)
-    manifold = Poincare(dtype=dtype)
-    R = 1.0
-    samples = uniform_poincare.sample(key, n=3, c=c, R=R, sample_shape=(100,), dtype=dtype, manifold_module=manifold)
-    assert samples.shape == (100, 3)
-    dists = jax.vmap(lambda x: manifold.dist_0(x, c))(samples)
-    assert jnp.all(dists <= R + 1e-5)
-
-
-# ---------------------------------------------------------------------------
-# JIT compatibility
-# ---------------------------------------------------------------------------
-def test_sample_jit(dtype):
-    """sample is JIT-compatible."""
-    manifold = Poincare(dtype=dtype)
-
-    @jax.jit
-    def _sample(key):
-        return uniform_poincare.sample(key, n=2, c=1.0, R=1.0, sample_shape=(10,), dtype=dtype, manifold_module=manifold)
-
-    samples = _sample(jax.random.PRNGKey(0))
-    assert samples.shape == (10, 2)
-
-
-def test_log_prob_jit(dtype):
-    """log_prob is JIT-compatible."""
-    manifold = Poincare(dtype=dtype)
-
-    @jax.jit
-    def _lp(x):
-        return uniform_poincare.log_prob(x, c=1.0, R=1.0, manifold_module=manifold)
-
-    x = jnp.zeros(2, dtype=dtype)
-    lp = _lp(x)
-    assert jnp.isfinite(lp)
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +250,10 @@ def test_log_prob_equals_neg_log_volume(dtype, tolerance):
     expected = -jnp.log(vol)
     assert jnp.allclose(lp, expected, atol=atol), f"lp={lp}, expected={expected}"
 
+    # Folded in from the former standalone test_log_prob_jit, which only asserted isfinite.
+    lp_jit = jax.jit(lambda xi: uniform_poincare.log_prob(xi, c=c, R=R, manifold_module=manifold))(x)
+    assert jnp.allclose(lp_jit, lp, atol=atol)
+
 
 def test_log_prob_neg_inf_outside(dtype):
     """log_prob is -inf for points outside the geodesic ball."""
@@ -232,6 +292,179 @@ def test_log_prob_batch(dtype, tolerance):
     samples = uniform_poincare.sample(key, n=2, c=c, R=R, sample_shape=(20,), dtype=dtype, manifold_module=manifold)
     lps = uniform_poincare.log_prob(samples, c=c, R=R, manifold_module=manifold)
     assert lps.shape == (20,)
-    vol = uniform_poincare.volume(c=c, n=2, R=R)
+    vol = uniform_poincare.volume(c=c, n=2, R=R, dtype=dtype)
     expected = -jnp.log(vol)
     assert jnp.allclose(lps, expected, atol=atol)
+
+
+@pytest.mark.parametrize("sample_shape", [(), (5,), (2, 3), (2, 3, 4)])
+def test_log_prob_arbitrary_leading_axes(sample_shape, dtype, tolerance):
+    """``log_prob`` honours its documented ``(..., n) -> (...)`` contract at every rank (audit E2.4).
+
+    ``manifold.dist``/``dist_0`` are single-point ops, so the old single ``jax.vmap`` covered
+    exactly one leading axis: ndim > 2 raised ``TypeError: dot_general requires contracting
+    dimensions to have the same shape``. The rank-0 and rank-1 cases are the ones the old code
+    did handle, kept here so the flatten/reshape can't regress them.
+    """
+    atol, _ = tolerance
+    manifold = Poincare(dtype=dtype)
+    c, R, n = 1.0, 1.5, 2
+    key = jax.random.PRNGKey(56)
+    samples_SD = uniform_poincare.sample(key, n=n, c=c, R=R, sample_shape=sample_shape, dtype=dtype, manifold_module=manifold)
+
+    lps_S = uniform_poincare.log_prob(samples_SD, c=c, R=R, manifold_module=manifold)
+    assert lps_S.shape == sample_shape
+    assert lps_S.dtype == dtype
+
+    # Same values as the flattened call, so the reshape is not scrambling the layout.
+    lps_flat_T = uniform_poincare.log_prob(samples_SD.reshape(-1, n), c=c, R=R, manifold_module=manifold)
+    assert jnp.allclose(lps_S.reshape(-1), lps_flat_T, atol=atol)
+
+
+def test_log_prob_leading_axes_mixed_inside_outside(dtype):
+    """A rank-3 input keeps the inside/-inf verdict aligned with each point's position."""
+    manifold = Poincare(dtype=dtype)
+    c, R = 1.0, 0.5
+    # (2, 2, 2): row 0 inside the ball around the origin, row 1 outside it.
+    x_ABD = jnp.array(
+        [[[0.0, 0.0], [0.05, 0.05]], [[0.8, 0.0], [0.0, -0.85]]],
+        dtype=dtype,
+    )
+    lps_AB = uniform_poincare.log_prob(x_ABD, c=c, R=R, manifold_module=manifold)
+    assert lps_AB.shape == (2, 2)
+    assert bool(jnp.all(jnp.isfinite(lps_AB[0])))
+    assert bool(jnp.all(lps_AB[1] == -jnp.inf))
+
+
+# =============================================================================================
+# Radial and angular laws (audit M2-04, M2-11, M2-14)
+#
+# ``test_radial_cdf_n2`` above only touches the n = 2 closed-form branch, at three quantiles.
+# The rejection branch (n >= 3), the non-origin-center path and the direction sampler had no
+# distributional check at all: a sampler that returned the *proposal* instead of the accepted
+# value, ignored ``center``, or drew directions from a lattice would pass every containment,
+# shape and dtype assertion in this file.
+#
+# Fixed seeds and float64 throughout: the assertions are one-sided KS bounds, not p-value
+# lotteries.
+# =============================================================================================
+
+_F64 = jnp.float64
+_KS_N = 8000
+_KS_MAX_D = 0.04
+"""One-sided KS acceptance bound. At N = 8000 the observed null statistics are 0.008-0.016 and
+0.04 is the p ~ 1e-11 point, while the nearest *wrong* law in each family (the n+1 radial
+density, the Beta with a+1) gives 0.05-0.14 — a comfortable margin on both sides."""
+
+
+def _radial_cdf_reference(r_N: np.ndarray, c: float, R: float, n: int) -> np.ndarray:
+    """CDF of the geodesic radius under the Riemannian-uniform law: ∫ sinh^{n-1}(√c t) dt, normalized.
+
+    Independent dense-trapezoid transcription of the radial density (the library computes its
+    volume by 64-point Gauss-Legendre and never forms this CDF).
+    """
+    grid_Q = np.linspace(0.0, R, 40001)
+    density_Q = np.sinh(np.sqrt(c) * grid_Q) ** (n - 1)
+    cumulative_Q = np.concatenate([[0.0], np.cumsum(0.5 * (density_Q[1:] + density_Q[:-1]) * np.diff(grid_Q))])
+    return np.interp(np.clip(r_N, 0.0, R), grid_Q, cumulative_Q / cumulative_Q[-1])
+
+
+@pytest.mark.parametrize(("n", "c", "R"), [(3, 1.0, 2.0), (5, 0.4, 2.5), (8, 2.0, 1.5)])
+def test_radial_law_matches_reference_cdf_rejection_branch(n: int, c: float, R: float) -> None:
+    """n >= 3 (rejection sampler): the geodesic radii follow p(r) ∝ sinh^{n-1}(√c·r) on [0, R].
+
+    Discriminating case: the acceptance exponent ``(n-2)/2``. Dropping it turns the radial law
+    into the n = 2 one, which this KS bound rejects by an order of magnitude, while every other
+    test in the file (containment, shape, dtype, log_prob) stays green.
+    """
+    manifold = Poincare(dtype=_F64)
+    samples_ND = uniform_poincare.sample(
+        jax.random.PRNGKey(20), n=n, c=c, R=R, sample_shape=(_KS_N,), dtype=_F64, manifold_module=manifold
+    )
+    radii_N = np.asarray(jax.vmap(lambda x_D: manifold.dist_0(x_D, c))(samples_ND))
+    statistic = scipy.stats.kstest(radii_N, lambda r: _radial_cdf_reference(r, c, R, n)).statistic
+    assert statistic < _KS_MAX_D, f"KS statistic {statistic:.4f} against p(r) ∝ sinh^{n - 1}(√c·r)"
+
+
+@pytest.mark.parametrize(("n", "c", "R"), [(2, 1.0, 1.0), (3, 0.5, 2.0)])
+def test_radial_law_around_nonorigin_center(n: int, c: float, R: float) -> None:
+    """With a non-origin center the radii *measured from that center* follow the same law.
+
+    The Möbius translation ``center ⊕ ·`` is an isometry, so it must move the ball without
+    reshaping the radial profile. The origin-referenced control below is what makes this a real
+    check of ``center``: a sampler that ignored the argument would still pass the recentered
+    bound if the center were near the origin, but its origin-referenced statistic would stay
+    small instead of blowing up.
+    """
+    manifold = Poincare(dtype=_F64)
+    center_D = jnp.asarray([0.3, -0.15] + [0.1] * (n - 2), dtype=_F64) / np.sqrt(c)
+    samples_ND = uniform_poincare.sample(
+        jax.random.PRNGKey(21),
+        n=n,
+        c=c,
+        R=R,
+        sample_shape=(_KS_N,),
+        center=center_D,
+        dtype=_F64,
+        manifold_module=manifold,
+    )
+
+    radii_N = np.asarray(jax.vmap(lambda x_D: manifold.dist(x_D, center_D, c))(samples_ND))
+    statistic = scipy.stats.kstest(radii_N, lambda r: _radial_cdf_reference(r, c, R, n)).statistic
+    assert statistic < _KS_MAX_D, f"KS statistic {statistic:.4f} for radii around the center"
+
+    radii_from_origin_N = np.asarray(jax.vmap(lambda x_D: manifold.dist_0(x_D, c))(samples_ND))
+    origin_statistic = scipy.stats.kstest(radii_from_origin_N, lambda r: _radial_cdf_reference(r, c, R, n)).statistic
+    assert origin_statistic > 0.1, f"origin-referenced radii also match ({origin_statistic:.4f}): center had no effect"
+
+
+@pytest.mark.parametrize("n", [3, 5, 10])
+def test_direction_marginal_matches_beta(n: int) -> None:
+    """Directions are uniform on S^{n-1}: (u₁+1)/2 follows Beta((n-1)/2, (n-1)/2).
+
+    A moment oracle is provably vacuous here — E[u] = 0 and E[u uᵀ] = I/n hold for *any*
+    sign-symmetric direction law, including one that only ever returns coordinate axes — so the
+    exact first-coordinate marginal is what pins the distribution. Density of u₁ on [-1, 1] is
+    ∝ (1 - u₁²)^{(n-3)/2}; substituting t = (u₁+1)/2 gives the symmetric Beta above.
+    """
+    directions_ND = np.asarray(_sample_uniform_direction(jax.random.PRNGKey(22), n, (_KS_N,), _F64))
+    assert np.max(np.abs(np.linalg.norm(directions_ND, axis=-1) - 1.0)) < 1e-12
+
+    shape_param = (n - 1) / 2.0
+    first_coordinate_N = (directions_ND[:, 0] + 1.0) / 2.0
+    statistic = scipy.stats.kstest(first_coordinate_N, "beta", args=(shape_param, shape_param)).statistic
+    assert statistic < _KS_MAX_D, f"KS statistic {statistic:.4f} against Beta({shape_param}, {shape_param})"
+
+
+# =============================================================================================
+# Rejection-sampler termination (audit M2-15)
+# =============================================================================================
+
+
+@pytest.mark.parametrize(("n", "R"), [(3, 8.0), (20, 4.0), (50, 8.0), (50, 1.0)])
+def test_rejection_sampler_terminates_in_high_dimension(n: int, R: float) -> None:
+    """``_sample_radial_rejection`` finishes and returns valid radii up to n = 50, R = 8.
+
+    The loop has no iteration cap: it runs until *every* position is filled, with per-proposal
+    acceptance ``(u(u+2)/(u_max(u_max+2)))^{(n-2)/2}`` (~1/(n-1)). A tightened acceptance rule,
+    or a reference bound the numerator can never reach, would hang the caller rather than
+    raising — so termination itself is the assertion. The loose KS bound rules out the
+    degenerate escapes (returning the proposal, or a single accepted value broadcast).
+    """
+    c = 1.0
+    n_samples = 256
+    manifold = Poincare(dtype=_F64)
+    samples_ND = uniform_poincare.sample(
+        jax.random.PRNGKey(23), n=n, c=c, R=R, sample_shape=(n_samples,), dtype=_F64, manifold_module=manifold
+    )
+    assert samples_ND.shape == (n_samples, n)
+    assert bool(jnp.isfinite(samples_ND).all())
+
+    radii_N = np.asarray(jax.vmap(lambda x_D: manifold.dist_0(x_D, c))(samples_ND))
+    assert np.all(radii_N <= R + 1e-9), f"max radius {radii_N.max()} exceeds R={R}"
+    assert np.all(radii_N > 0.0)
+    # Loose distributional sanity: at 256 samples the null KS statistic is ~0.05 and 0.20 is
+    # roughly the p = 1e-3 point. (The sharp version of this check is the 8000-sample test above;
+    # here the point is termination, so the bound only has to exclude a degenerate output.)
+    statistic = scipy.stats.kstest(radii_N, lambda r: _radial_cdf_reference(r, c, R, n)).statistic
+    assert statistic < 0.2, f"KS statistic {statistic:.4f}: radii do not follow the target law"

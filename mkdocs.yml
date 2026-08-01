@@ -51,12 +51,6 @@ plugins:
             merge_init_into_class: true
             members_order: source
             show_if_no_docstring: false
-  # mkdocs-jupyter disabled temporarily - causing build timeouts
-  # Will be re-enabled after troubleshooting
-  # - mkdocs-jupyter:
-  #     execute: false
-  #     include_source: true
-  #     ignore_h1_titles: true
   - mike:
       version_selector: true
       css_dir: css
@@ -112,11 +106,6 @@ nav:
       - Batching & JIT: user-guide/batching-jit.md
       - Numerical Stability: user-guide/numerical-stability.md
       - Training Workflows: user-guide/training-workflows.md
-  # Tutorials disabled temporarily (requires mkdocs-jupyter)
-  # - Tutorials:
-  #     - Basic Manifold Operations: tutorials/basic-manifold-ops.ipynb
-  #     - Hyperbolic Neural Networks: tutorials/hyperbolic-nn.ipynb
-  #     - Riemannian Optimization: tutorials/riemannian-optimization.ipynb
   - API Reference:
       - Manifolds: api-reference/manifolds.md
       - Neural Network Layers:

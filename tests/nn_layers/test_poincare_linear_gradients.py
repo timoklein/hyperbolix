@@ -6,6 +6,12 @@ HypLinearPoincarePP with the [None, :]/[0] vmap pattern in downstream applicatio
 The root cause was improper weight initialization (std=1.0 instead of std=1/sqrt(fan_in)),
 which caused layer outputs to saturate at the Poincaré ball boundary, leading to
 gradient overflow in float32 when backpropagating through logmap_0.
+
+The overflow the file guards is a **float32** failure mode, so every test that can
+carry a dtype axis runs on both a float32 and a float64 manifold (the file used to
+run float64 only, i.e. in the precision where the bug cannot reproduce). The
+seed-swept ``..._vmap_pattern_...`` test keeps its original float64 form untouched
+and gets a separate float32 twin.
 """
 
 import jax
@@ -17,14 +23,24 @@ from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import HypLinearPoincare, HypLinearPoincarePP
 
 poincare = Poincare(dtype=jnp.float64)
+poincare_f32 = Poincare(dtype=jnp.float32)
+
+DTYPES = [jnp.float32, jnp.float64]
+DTYPE_IDS = ["f32", "f64"]
 
 
-def test_hyp_linear_poincare_single_layer_gradients_finite():
+def _manifold(dtype):
+    return poincare_f32 if dtype == jnp.float32 else poincare
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
+def test_hyp_linear_poincare_single_layer_gradients_finite(dtype):
     """Single layer should produce finite gradients."""
     key = jax.random.PRNGKey(0)
+    poincare = _manifold(dtype)
     layer = HypLinearPoincare(poincare, 10, 20, rngs=nnx.Rngs(key))
 
-    x = jax.random.normal(key, (8, 10)) * 0.1
+    x = jax.random.normal(key, (8, 10), dtype=dtype) * 0.1
     x_manifold = jax.vmap(poincare.expmap_0, in_axes=(0, None))(x, 1.0)
 
     def loss_fn(m):
@@ -38,9 +54,11 @@ def test_hyp_linear_poincare_single_layer_gradients_finite():
         assert jnp.all(jnp.isfinite(value)), "Gradients contain NaN or Inf"
 
 
-def test_hyp_linear_poincare_chained_layers_gradients_finite():
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
+def test_hyp_linear_poincare_chained_layers_gradients_finite(dtype):
     """Chained layers should produce finite gradients (regression test)."""
     key = jax.random.PRNGKey(0)
+    poincare = _manifold(dtype)
     layer1 = HypLinearPoincare(poincare, 10, 20, rngs=nnx.Rngs(key), input_space="tangent")
     layer2 = HypLinearPoincare(
         poincare,
@@ -50,7 +68,7 @@ def test_hyp_linear_poincare_chained_layers_gradients_finite():
         input_space="manifold",
     )
 
-    x_tangent = jax.random.normal(key, (8, 10)) * 0.5
+    x_tangent = jax.random.normal(key, (8, 10), dtype=dtype) * 0.5
 
     def loss_fn(l1, l2):
         h = l1(x_tangent, 1.0)
@@ -72,12 +90,14 @@ def test_hyp_linear_poincare_chained_layers_gradients_finite():
         assert jnp.all(jnp.isfinite(value)), "Layer 2 gradients contain NaN or Inf"
 
 
-def test_hyp_linear_poincare_pp_single_layer_gradients_finite():
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
+def test_hyp_linear_poincare_pp_single_layer_gradients_finite(dtype):
     """Single layer should produce finite gradients."""
     key = jax.random.PRNGKey(0)
+    poincare = _manifold(dtype)
     layer = HypLinearPoincarePP(poincare, 10, 20, rngs=nnx.Rngs(key), input_space="tangent")
 
-    x = jax.random.normal(key, (8, 10)) * 0.5
+    x = jax.random.normal(key, (8, 10), dtype=dtype) * 0.5
 
     def loss_fn(m):
         out = m(x, 1.0)
@@ -90,13 +110,15 @@ def test_hyp_linear_poincare_pp_single_layer_gradients_finite():
         assert jnp.all(jnp.isfinite(value)), "Gradients contain NaN or Inf"
 
 
-def test_hyp_linear_poincare_pp_chained_layers_gradients_finite():
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
+def test_hyp_linear_poincare_pp_chained_layers_gradients_finite(dtype):
     """Chained layers should produce finite gradients (regression test for issue)."""
     key = jax.random.PRNGKey(0)
+    poincare = _manifold(dtype)
     layer1 = HypLinearPoincarePP(poincare, 12, 32, rngs=nnx.Rngs(key), input_space="tangent")
     layer2 = HypLinearPoincarePP(poincare, 32, 8, rngs=nnx.Rngs(jax.random.PRNGKey(1)), input_space="manifold")
 
-    x_tangent = jax.random.normal(key, (12,))
+    x_tangent = jax.random.normal(key, (12,), dtype=dtype)
 
     def loss_fn(l1, l2):
         h = l1(x_tangent[None, :], 1.0)[0]
@@ -154,12 +176,49 @@ def test_hyp_linear_poincare_pp_vmap_pattern_gradients_finite(seed):
         assert jnp.all(jnp.isfinite(value)), f"Seed {seed}: Gradients contain NaN or Inf"
 
 
-def test_hyp_linear_poincare_pp_layer_outputs_on_manifold():
+@pytest.mark.parametrize("seed", range(10))
+def test_hyp_linear_poincare_pp_vmap_pattern_gradients_finite_f32(seed):
+    """The seed sweep above, on a **float32** manifold.
+
+    The reported failure was a float32 overflow in the ``logmap_0`` backward pass
+    — the precision the sibling test never ran in. Same model, same seeds, same
+    assertion; only the manifold dtype (and therefore the input dtype) changes.
+    """
+    key = jax.random.PRNGKey(seed)
+
+    class TestDynamics(nnx.Module):
+        def __init__(self, in_dim, out_dim, *, rngs, c=1.0):
+            self.c = c
+            self.layer = HypLinearPoincarePP(poincare_f32, in_dim, out_dim, rngs=rngs, input_space="tangent")
+
+        def __call__(self, x):
+            return self.layer(x[None, :], self.c)[0]
+
+    model = TestDynamics(6, 64, rngs=nnx.Rngs(key))
+    batch = jax.random.normal(key, (8, 6), dtype=jnp.float32)
+
+    def loss_fn(m):
+        def per_example(x):
+            out = m(x)
+            return jnp.sum(out**2)
+
+        return jnp.mean(jax.vmap(per_example)(batch))
+
+    _loss, grads = nnx.value_and_grad(loss_fn)(model)
+    grad_state = nnx.state(grads, nnx.Param)
+
+    for _, value in jax.tree_util.tree_flatten_with_path(grad_state)[0]:
+        assert jnp.all(jnp.isfinite(value)), f"Seed {seed}: float32 gradients contain NaN or Inf"
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
+def test_hyp_linear_poincare_pp_layer_outputs_on_manifold(dtype):
     """Layer outputs should be within the Poincaré ball."""
     key = jax.random.PRNGKey(0)
+    poincare = _manifold(dtype)
     layer = HypLinearPoincarePP(poincare, 12, 32, rngs=nnx.Rngs(key), input_space="tangent")
 
-    x = jax.random.normal(key, (8, 12))
+    x = jax.random.normal(key, (8, 12), dtype=dtype)
     outputs = layer(x, 1.0)
     norms = jnp.linalg.norm(outputs, axis=-1)
 
@@ -167,8 +226,10 @@ def test_hyp_linear_poincare_pp_layer_outputs_on_manifold():
     assert jnp.all(norms < 1.0), "All outputs should be within unit ball"
 
 
-def test_world_model_gradients_finite():
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
+def test_world_model_gradients_finite(dtype):
     """Full world model should produce finite gradients."""
+    poincare = _manifold(dtype)
 
     class HyperbolicDynamicsHead(nnx.Module):
         def __init__(self, latent_dim, branching_factor, hidden_dim, *, rngs, curvature=1.0):
@@ -233,9 +294,9 @@ def test_world_model_gradients_finite():
     model = HyperbolicWorldModel(32, 8, 4, 32, rngs=nnx.Rngs(key))
 
     k1, k2, k3 = jax.random.split(jax.random.PRNGKey(100), 3)
-    obs_batch = jax.random.normal(k1, (8, 32))
-    action_batch = jax.nn.one_hot(jax.random.randint(k2, (8,), 0, 4), 4)
-    target_batch = jax.random.normal(k3, (8, 32))
+    obs_batch = jax.random.normal(k1, (8, 32), dtype=dtype)
+    action_batch = jax.nn.one_hot(jax.random.randint(k2, (8,), 0, 4), 4, dtype=dtype)
+    target_batch = jax.random.normal(k3, (8, 32), dtype=dtype)
 
     def loss_fn(m):
         def per_example(o, a, t):

@@ -88,7 +88,7 @@ _GYRO_RMS_METHODS = ("addition", "scalar_mul", "expmap_0", "dist_0", "proj", "em
 # ======================================================================================
 
 
-class GyroBatchNormBase(nnx.Module):
+class _GyroBatchNormBase(nnx.Module):
     """Shared GyroBN logic. Not instantiated directly — use the manifold subclasses.
 
     Subclasses set ``_time_dims`` (1 for Hyperboloid, 0 for PV) and override
@@ -151,8 +151,8 @@ class GyroBatchNormBase(nnx.Module):
         # Learnable affine parameters (spatial tangent / scalar). The bias is a
         # spatial tangent-at-origin vector; lifting it keeps its time coordinate
         # pinned to 0 (so expmap_0 is a clean origin-rooted translation).
-        self.bias = nnx.Param(jnp.zeros((num_features,), dtype=param_dtype))  # GyroBN "weight"
-        self.gamma = nnx.Param(jnp.ones((), dtype=param_dtype))  # GyroBN "shift" (scale gain)
+        self.bias = nnx.Param(jnp.zeros((num_features,), dtype=param_dtype))  # GyroBN "shift" (target mean)
+        self.gamma = nnx.Param(jnp.ones((), dtype=param_dtype))  # GyroBN "weight" (scale gain)
 
         # Running statistics (spatial tangent-at-origin mean + scalar variance).
         self.running_mean = nnx.BatchStat(jnp.zeros((num_features,), dtype=param_dtype))
@@ -227,7 +227,7 @@ class GyroBatchNormBase(nnx.Module):
         return x_out_NF.reshape(orig_shape)
 
 
-class HyperboloidGyroBatchNorm(GyroBatchNormBase):
+class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
     """GyroBN for the Hyperboloid (Lorentz) model.
 
     Inputs are ambient ``(..., D+1)`` hyperboloid points; ``num_features`` is the
@@ -248,7 +248,7 @@ class HyperboloidGyroBatchNorm(GyroBatchNormBase):
         return lorentz_midpoint(x_NF, weights_1N, c)[0]
 
 
-class ProperVelocityGyroBatchNorm(GyroBatchNormBase):
+class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
     """GyroBN for the Proper Velocity (PV) model.
 
     Inputs are ``(..., D)`` PV points; ``num_features = D``. PV has no closed-form
@@ -274,7 +274,7 @@ class ProperVelocityGyroBatchNorm(GyroBatchNormBase):
 # ======================================================================================
 
 
-class GyroRMSNormBase(nnx.Module):
+class _GyroRMSNormBase(nnx.Module):
     """Shared gyro radial RMSNorm logic. Not instantiated directly.
 
     Per-sample, batch-independent: no running statistics, no train/eval distinction.
@@ -343,7 +343,7 @@ class GyroRMSNormBase(nnx.Module):
         return out_NF.reshape(orig_shape)
 
 
-class HyperboloidGyroRMSNorm(GyroRMSNormBase):
+class HyperboloidGyroRMSNorm(_GyroRMSNormBase):
     """Gyro radial RMSNorm for the Hyperboloid (Lorentz) model.
 
     Inputs are ambient ``(..., D+1)`` hyperboloid points; ``num_features = D``.
@@ -354,7 +354,7 @@ class HyperboloidGyroRMSNorm(GyroRMSNormBase):
         super().__init__(manifold_module, num_features, **kwargs)
 
 
-class ProperVelocityGyroRMSNorm(GyroRMSNormBase):
+class ProperVelocityGyroRMSNorm(_GyroRMSNormBase):
     """Gyro radial RMSNorm for the Proper Velocity (PV) model.
 
     Inputs are ``(..., D)`` PV points; ``num_features = D``.
@@ -365,7 +365,7 @@ class ProperVelocityGyroRMSNorm(GyroRMSNormBase):
         super().__init__(manifold_module, num_features, **kwargs)
 
 
-class PoincareGyroRMSNorm(GyroRMSNormBase):
+class PoincareGyroRMSNorm(_GyroRMSNormBase):
     """Gyro radial RMSNorm for the Poincaré ball model.
 
     Inputs are on-ball points ``(..., D)`` (no time coordinate); ``num_features = D``.

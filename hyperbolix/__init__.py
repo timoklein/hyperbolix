@@ -1,13 +1,14 @@
 """Hyperbolix JAX backend - pure functional implementation."""
 
-from . import decomposition, manifolds, utils
-from .nn_layers import PoincareBatchNorm2D
+from . import decomposition, distributions, manifolds, nn_layers, optim, utils
 from .utils.curvature import LearnableCurvature
 
 __all__ = [
     "LearnableCurvature",
-    "PoincareBatchNorm2D",
     "decomposition",
+    "distributions",
     "manifolds",
+    "nn_layers",
+    "optim",
     "utils",
 ]

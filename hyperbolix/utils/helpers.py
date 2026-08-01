@@ -8,11 +8,13 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Key
 
+from ..manifolds.protocol import Curvature, Manifold
+
 
 def compute_pairwise_distances(
     points: Float[Array, "n_points dim"],
-    manifold_module,
-    c: Float[Array, ""] | float,
+    manifold_module: Manifold,
+    c: Curvature,
     version_idx: int = 0,
 ) -> Float[Array, "n_points n_points"]:
     """Compute pairwise geodesic distances between points on a manifold.
@@ -32,8 +34,8 @@ def compute_pairwise_distances(
         points: Points on the manifold, shape (n_points, dim)
             For Hyperboloid: dim is ambient dimension (dim+1)
             For PoincareBall: dim is intrinsic dimension
-        manifold_module: Manifold module (hyperboloid or poincare)
-        c: Curvature parameter (positive scalar)
+        manifold_module: Manifold instance (anything satisfying the ``Manifold`` protocol)
+        c: Curvature parameter (positive scalar; a per-factor sequence for ``ProductManifold``)
         version_idx: Distance version index (manifold-specific, default: 0)
             For Hyperboloid:
                 0 = VERSION_DEFAULT (standard acosh with hard clipping)
@@ -42,25 +44,29 @@ def compute_pairwise_distances(
                 0 = VERSION_MOBIUS_DIRECT (direct Möbius formula)
                 1 = VERSION_MOBIUS (via addition)
                 2 = VERSION_METRIC_TENSOR (metric tensor induced)
+            Euclidean, Stereographic and ProductManifold have a single distance
+            implementation and accept-and-ignore this argument.
 
     Returns:
         Symmetric distance matrix of shape (n_points, n_points)
 
     Examples:
-        >>> import jax.numpy as jnp
-        >>> from hyperbolix.manifolds import hyperboloid
+        >>> import jax
+        >>> from hyperbolix.manifolds import Hyperboloid
         >>> from hyperbolix.utils.helpers import compute_pairwise_distances
         >>>
         >>> # Generate random hyperboloid points
+        >>> manifold = Hyperboloid()
         >>> key = jax.random.PRNGKey(0)
         >>> points = jax.random.normal(key, (100, 11))
-        >>> points = jax.vmap(hyperboloid.proj, in_axes=(0, None))(points, 1.0)
+        >>> points = jax.vmap(manifold.proj, in_axes=(0, None))(points, 1.0)
         >>>
         >>> # Compute pairwise distances
         >>> distmat = compute_pairwise_distances(
-        ...     points, hyperboloid, c=1.0, version_idx=hyperboloid.VERSION_DEFAULT
+        ...     points, manifold, c=1.0, version_idx=manifold.VERSION_DEFAULT
         ... )
-        >>> print(distmat.shape)  # (100, 100)
+        >>> distmat.shape
+        (100, 100)
 
     Notes:
         - The PyTorch reference implementation used explicit chunking for memory
@@ -70,18 +76,9 @@ def compute_pairwise_distances(
         - For large datasets, consider subsampling before calling this function
     """
 
-    # Create vectorized distance function: dist(x, y) -> scalar
-    # Support both legacy module API (`_dist`) and class-based API (`dist`).
-    if hasattr(manifold_module, "dist"):
-        dist_impl = manifold_module.dist
-    elif hasattr(manifold_module, "_dist"):
-        dist_impl = manifold_module._dist
-    else:
-        raise AttributeError("manifold_module must define either 'dist' or '_dist'")
-
     # We need to compute dist for all pairs (i, j)
     def dist_fn(x, y):
-        return dist_impl(x, y, c, version_idx)
+        return manifold_module.dist(x, y, c, version_idx)
 
     # Use vmap to vectorize over both dimensions
     # First vmap over y (columns), then over x (rows)
@@ -158,29 +155,27 @@ def compute_hyperbolic_delta(distmat: Float[Array, "n_points n_points"], version
     # Compute Gromov product matrix: (i|j)_0 for all pairs (i, j)
     gromov_prod_mat = (distmat_i0 + distmat_0j - distmat) / 2.0  # shape: (n, n)
 
-    # Compute the (max, min)-product of the Gromov product matrix with itself
-    # For each triple (i, j, k), we need: min((i|j)_0, (i|k)_0) over k, then max over j
-    # gromov_prod_mat[i, j] = (i|j)_0
-    # gromov_prod_mat[i, k] = (i|k)_0
-    # We want: max_j { max_k { min((i|j)_0, (i|k)_0) } }
+    # (max, min)-matrix product of the Gromov product matrix with itself:
+    #     (G ⊠ G)[i, j] = max_k min( (i|k)_0 , (k|j)_0 )
+    # The two operands must be indexed on DIFFERENT rows — the first on i, the second on the
+    # summation index k. Indexing both on row i (the historical bug) gives
+    # max_k min(G[i,k], G[i,j]) == G[i,j] whenever k = j is admissible, so `delta_matrix` was
+    # identically 0 for every input and `get_delta` always reported 0.
 
-    # Expand dimensions for broadcasting:
-    # gromov_prod_mat.shape = (n, n)
-    # Reshape to compute min over pairs:
-    # gromov_prod_mat[:, None, :] has shape (n, 1, n) - this is (i, j, k) with j=1
-    # gromov_prod_mat[:, :, None] has shape (n, n, 1) - this is (i, j, k) with k=1
-    # Broadcasting: (n, 1, n) and (n, n, 1) -> (n, n, n)
-    # Result[i, j, k] = min((i|j)_0, (i|k)_0)
+    # Computed as a scan over k with a running elementwise maximum, NOT as one broadcast
+    # jnp.minimum((n, 1, n), (1, n, n)): that materializes an (n, n, n) buffer — 27 GB in
+    # float64 at get_delta's default sample_size=1500 — while the scan needs O(n^2) memory
+    # (one (n, n) candidate per step, executed as a compiled loop even when called eagerly).
+    def _step(running_max_NN, gromov_k):
+        col_N, row_N = gromov_k  # G[:, k] = (i|k)_0 and G[k, :] = (k|j)_0
+        cand_NN = jnp.minimum(col_N[:, None], row_N[None, :])  # (i, j) -> min((i|k)_0, (k|j)_0)
+        return jnp.maximum(running_max_NN, cand_NN), None
 
-    min_products = jnp.minimum(
-        gromov_prod_mat[:, None, :],  # shape: (n, 1, n) - (i, 1, k)
-        gromov_prod_mat[:, :, None],  # shape: (n, n, 1) - (i, j, 1)
-    )  # shape: (n, n, n) - (i, j, k)
+    init_NN = jnp.full_like(gromov_prod_mat, -jnp.inf)
+    # xs leading axis is k: (gromov_prod_mat.T)[k] = G[:, k], (gromov_prod_mat)[k] = G[k, :]
+    max_min_prod, _ = jax.lax.scan(_step, init_NN, (gromov_prod_mat.T, gromov_prod_mat))
 
-    # Take maximum over the last dimension (k): max_k { min((i|j)_0, (i|k)_0) }
-    max_min_prod = jnp.max(min_products, axis=2)  # shape: (n, n) - (i, j)
-
-    # Compute delta for each pair: max_k{min((i|j)_0, (i|k)_0)} - (i|j)_0
+    # Compute delta for each pair: max_k{min((i|k)_0, (k|j)_0)} - (i|j)_0
     delta_matrix = max_min_prod - gromov_prod_mat  # shape: (n, n)
 
     # Compute the requested statistic
@@ -198,8 +193,8 @@ def compute_hyperbolic_delta(distmat: Float[Array, "n_points n_points"], version
 
 def get_delta(
     points: Float[Array, "n_points dim"],
-    manifold_module,
-    c: float,
+    manifold_module: Manifold,
+    c: Curvature,
     version_idx: int = 0,
     sample_size: int = 1500,
     version: str = "average",
@@ -213,8 +208,8 @@ def get_delta(
 
     Args:
         points: Points on the manifold, shape (n_points, dim)
-        manifold_module: Manifold module (hyperboloid or poincare)
-        c: Curvature parameter (positive scalar)
+        manifold_module: Manifold instance (anything satisfying the ``Manifold`` protocol)
+        c: Curvature parameter (positive scalar; a per-factor sequence for ``ProductManifold``)
         version_idx: Distance version index (manifold-specific, default: 0)
         sample_size: Maximum number of points to use for delta computation
             (default: 1500). If n_points > sample_size, randomly subsample.
@@ -231,21 +226,22 @@ def get_delta(
 
     Examples:
         >>> import jax
-        >>> import jax.numpy as jnp
-        >>> from hyperbolix.manifolds import hyperboloid
+        >>> from hyperbolix.manifolds import Hyperboloid
         >>> from hyperbolix.utils.helpers import get_delta
         >>>
         >>> # Generate random hyperboloid points
+        >>> manifold = Hyperboloid()
         >>> key = jax.random.PRNGKey(42)
-        >>> points = jax.random.normal(key, (2000, 11))
-        >>> points = jax.vmap(hyperboloid.proj, in_axes=(0, None))(points, 1.0)
+        >>> points = jax.random.normal(key, (400, 11))
+        >>> points = jax.vmap(manifold.proj, in_axes=(0, None))(points, 1.0)
         >>>
-        >>> # Compute delta metrics
+        >>> # Compute delta metrics (subsampling 200 of the 400 points)
         >>> key, subkey = jax.random.split(key)
         >>> delta, diam, rel_delta = get_delta(
-        ...     points, hyperboloid, c=1.0, sample_size=1500, key=subkey
+        ...     points, manifold, c=1.0, sample_size=200, key=subkey
         ... )
-        >>> print(f"Delta: {delta:.4f}, Diameter: {diam:.4f}, Relative: {rel_delta:.4f}")
+        >>> bool(delta > 0.0) and bool(0.0 < rel_delta < 1.0)
+        True
 
     Notes:
         - Subsampling is done randomly without replacement

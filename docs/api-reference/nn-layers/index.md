@@ -15,7 +15,7 @@ manifold-module reference.
 | Page | Contents |
 |---|---|
 | [Linear](linear.md) | Poincaré / Hyperboloid / PV fully-connected layers, including `HTCLinear`, `FGGLinear`, and Busemann FC |
-| [Convolutional](convolutional.md) | HCat, intrinsic-Lorentz (ILNN), FGG, Poincaré, and PV 2D convolutions + `hyp_avg_pool2d` |
+| [Convolutional](convolutional.md) | HCat, intrinsic-Lorentz (ILNN), FGG, Poincaré, and PV 2D convolutions + the conv → FC bridges `hyp_avg_pool2d` / `hyp_flatten2d` |
 | [Normalization](normalization.md) | Poincaré BatchNorm, gyro batch/RMS norm (Hyperboloid & PV), HRC norms + dropout, FGG mean-only BN, Euclidean input scaling |
 | [Attention & Transformer](attention.md) | Linear O(N), softmax O(N²), and full Lorentzian O(N²) attention with causal masking |
 | [Regression & MLR](regression.md) | Point-to-hyperplane and Busemann (point-to-horosphere) classification heads |

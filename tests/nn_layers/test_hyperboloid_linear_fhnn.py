@@ -1,12 +1,23 @@
-"""Tests for HypLinearHyperboloidFHNN (Chen et al. 2021 hyperboloid linear layer)."""
+"""Tests for HypLinearHyperboloidFHNN (Chen et al. 2021 hyperboloid linear layer).
+
+Also home to the value oracle for the FHCNN pure function ``_fhcnn_forward``
+(Bdeir et al. 2023), whose ``normalize=True`` branch no conv layer reaches:
+``HypConv2DHyperboloid`` always calls it with ``normalize=False``, and
+``HypLinearHyperboloidFHCNN`` is the only public entry point into that branch.
+
+The shared forward / on-manifold / JIT / gradient / tangent-input contract for
+every layer in the library lives in ``test_layer_contract.py``; only
+HypLinearHyperboloid{FHNN,FHCNN}-specific tests stay here.
+"""
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from flax import nnx
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.nn_layers import HypLinearHyperboloidFHNN
+from hyperbolix.nn_layers import HypLinearHyperboloidFHCNN, HypLinearHyperboloidFHNN
 
 
 def get_hyperboloid(dtype: jnp.dtype) -> Hyperboloid:
@@ -14,138 +25,60 @@ def get_hyperboloid(dtype: jnp.dtype) -> Hyperboloid:
     return Hyperboloid(dtype=dtype)
 
 
+def _sigmoid(z):
+    return 1.0 / (1.0 + np.exp(-z))
+
+
+def _fhnn_reference(x_BI, kernel_OI, bias_1O, scale, c, eps=1e-5):
+    """NumPy transcription of the FHNN forward (Chen et al. 2021, time-primary form).
+
+    Independent of the library: the paper's four steps written out in NumPy.
+
+        z    = W x + b
+        y0   = exp(s) * sigmoid(z0) + 1/sqrt(c) + eps
+        ||ys|| = sqrt(y0^2 - 1/c)                    (hyperboloid constraint)
+        ys   = ||ys|| * z_s / ||z_s||                (spatial *direction* preserved)
+    """
+    z_BO = np.asarray(x_BI, dtype=np.float64) @ np.asarray(kernel_OI, dtype=np.float64).T
+    z_BO = z_BO + np.asarray(bias_1O, dtype=np.float64)
+    z0_B1, zs_BD = z_BO[:, 0:1], z_BO[:, 1:]
+
+    y0_B1 = np.exp(float(scale)) * _sigmoid(z0_B1) + 1.0 / np.sqrt(c) + eps
+    target_norm_B1 = np.sqrt(y0_B1**2 - 1.0 / c)
+    ys_BD = target_norm_B1 * zs_BD / np.linalg.norm(zs_BD, axis=-1, keepdims=True)
+    return np.concatenate([y0_B1, ys_BD], axis=-1)
+
+
+def _fhcnn_normalize_reference(x_BI, kernel_OI, bias_1O, scale, c, eps=1e-5):
+    """NumPy transcription of the FHCNN ``normalize=True`` forward (Bdeir et al. 2023).
+
+    z   = W x + b
+    s   = exp(scale) * sigmoid(z0)               (spatial-primary: norm is learned)
+    ys  = s * z_s / ||z_s||
+    y0  = sqrt(s^2 + 1/c + eps)                  (time from the constraint)
+    """
+    z_BO = np.asarray(x_BI, dtype=np.float64) @ np.asarray(kernel_OI, dtype=np.float64).T
+    z_BO = z_BO + np.asarray(bias_1O, dtype=np.float64)
+    z0_B1, zs_BD = z_BO[:, 0:1], z_BO[:, 1:]
+
+    s_B1 = np.exp(float(scale)) * _sigmoid(z0_B1)
+    ys_BD = s_B1 * zs_BD / np.linalg.norm(zs_BD, axis=-1, keepdims=True)
+    y0_B1 = np.sqrt(s_B1**2 + 1.0 / c + eps)
+    return np.concatenate([y0_B1, ys_BD], axis=-1)
+
+
+def _hyperboloid_points(key, batch, ambient, c, dtype):
+    """Batch of hyperboloid points from spatial-only tangent vectors at the origin."""
+    manifold = get_hyperboloid(dtype)
+    v = jax.random.normal(key, (batch, ambient), dtype=dtype) * 0.3
+    v = v.at[:, 0].set(0.0)
+    return jax.vmap(manifold.expmap_0, in_axes=(0, None))(v, c)
+
+
 def _check_on_hyperboloid(x, c, atol=1e-5):
     """Check Minkowski constraint: -x0^2 + ||x_s||^2 = -1/c."""
     mink = -(x[..., 0:1] ** 2) + jnp.sum(x[..., 1:] ** 2, axis=-1, keepdims=True)
     return jnp.allclose(mink, -1.0 / c, atol=atol)
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_forward_shape(dtype):
-    """Test HypLinearHyperboloidFHNN output shape and finiteness."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 6, 10
-
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(get_hyperboloid(dtype).expmap_0, in_axes=(0, None), out_axes=0)(v, 1.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloidFHNN(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
-
-    y = layer(x, c=1.0)
-
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_on_manifold(dtype):
-    """Test HypLinearHyperboloidFHNN output lies on the hyperboloid."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 6, 10
-    atol = 4e-3 if dtype == jnp.float32 else 1e-7
-
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(get_hyperboloid(dtype).expmap_0, in_axes=(0, None), out_axes=0)(v, 1.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloidFHNN(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
-
-    y = layer(x, c=1.0)
-
-    assert _check_on_hyperboloid(y, c=1.0, atol=atol)
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_jitted_forward(dtype):
-    """Test HypLinearHyperboloidFHNN under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 6, 10
-
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(get_hyperboloid(dtype).expmap_0, in_axes=(0, None), out_axes=0)(v, 1.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloidFHNN(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
-
-    @nnx.jit
-    def forward(module, inputs, curvature):
-        return module(inputs, c=curvature)
-
-    y = forward(layer, x, 1.0)
-
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_gradient(dtype):
-    """Test HypLinearHyperboloidFHNN has valid gradients (kernel, bias, scale)."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 4, 6, 10
-
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(get_hyperboloid(dtype).expmap_0, in_axes=(0, None), out_axes=0)(v, 1.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloidFHNN(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
-
-    def loss_fn(model):
-        y = model(x, c=1.0)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(loss_fn)(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-    assert jnp.isfinite(grads.scale[...])
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_jitted_gradient(dtype):
-    """Test HypLinearHyperboloidFHNN gradients under nnx.jit."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 4, 6, 10
-
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    x = jax.vmap(get_hyperboloid(dtype).expmap_0, in_axes=(0, None), out_axes=0)(v, 1.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloidFHNN(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs)
-
-    @nnx.jit
-    def loss_fn(module, inputs, curvature):
-        y = module(inputs, c=curvature)
-        return jnp.sum(y**2)
-
-    loss, grads = nnx.value_and_grad(lambda model: loss_fn(model, x, 1.0))(layer)
-
-    assert jnp.isfinite(loss)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-    assert jnp.isfinite(grads.scale[...])
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_tangent_input(dtype):
-    """Test HypLinearHyperboloidFHNN with tangent space input."""
-    key = jax.random.PRNGKey(42)
-    batch_size, in_dim, out_dim = 8, 6, 10
-    atol = 4e-3 if dtype == jnp.float32 else 1e-7
-
-    # Create tangent vector at origin (time coordinate is 0)
-    v = jax.random.normal(key, (batch_size, in_dim), dtype=dtype) * 0.1
-    v = v.at[:, 0].set(0.0)
-
-    rngs = nnx.Rngs(42)
-    layer = HypLinearHyperboloidFHNN(get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs, input_space="tangent")
-
-    y = layer(v, c=1.0)
-
-    assert y.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y).all()
-    assert _check_on_hyperboloid(y, c=1.0, atol=atol)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -169,7 +102,7 @@ def test_time_floor(dtype, c):
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_activation_and_dropout(dtype):
-    """Test HypLinearHyperboloidFHNN with activation and dropout."""
+    """Dropout is actually wired in: training and eval outputs differ, both on-manifold."""
     key = jax.random.PRNGKey(42)
     batch_size, in_dim, out_dim = 8, 6, 10
     atol = 4e-3 if dtype == jnp.float32 else 1e-7
@@ -179,20 +112,18 @@ def test_activation_and_dropout(dtype):
 
     rngs = nnx.Rngs(params=42, dropout=43)
     layer = HypLinearHyperboloidFHNN(
-        get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs, activation=jax.nn.relu, dropout_rate=0.1
+        get_hyperboloid(dtype), in_dim, out_dim, rngs=rngs, activation=jax.nn.relu, dropout_rate=0.5
     )
 
-    # deterministic=False (training mode)
     y_train = layer(x, c=1.0, deterministic=False)
-    assert y_train.shape == (batch_size, out_dim)
-    assert jnp.isfinite(y_train).all()
-    assert _check_on_hyperboloid(y_train, c=1.0, atol=atol)
-
-    # deterministic=True (eval mode)
     y_eval = layer(x, c=1.0, deterministic=True)
-    assert y_eval.shape == (batch_size, out_dim)
+
+    assert jnp.isfinite(y_train).all()
     assert jnp.isfinite(y_eval).all()
+    assert _check_on_hyperboloid(y_train, c=1.0, atol=atol)
     assert _check_on_hyperboloid(y_eval, c=1.0, atol=atol)
+    # A dropped or ignored ``deterministic`` flag would make the two identical.
+    assert not jnp.allclose(y_train, y_eval, atol=1e-4)
 
 
 def test_init_time_column_zeroed():
@@ -236,3 +167,71 @@ def test_fhnn_fhcnn_gradients_at_zero_spatial_norm(dtype):
     out = _fhcnn_forward(x_BI, kernel_OI, bias_1O, manifold, 1.0, "tangent", None, True, scale, 1e-5)
     origin = jnp.concatenate([jnp.ones((1,), dtype=dtype), jnp.zeros((out_dim - 1,), dtype=dtype)])
     assert jnp.allclose(out, origin, atol=1e-6)
+
+
+# --------------------------------------------------------------------------- #
+# Forward value oracles (audit A6-02): independent NumPy transcriptions of the
+# published formulas, so a sign flip or a collapsed spatial output fails here.
+# float64 only — these are exact-agreement assertions.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_fhnn_forward_matches_numpy_transcription(c):
+    """FHNN forward equals the Chen et al. 2021 formulas written out in NumPy.
+
+    Pins the *signed* spatial output: the layer rescales ``z_s`` to the norm the
+    hyperboloid constraint demands but must leave its direction untouched, so
+    negating the spatial branch (or zeroing it) breaks the comparison.
+    """
+    dtype = jnp.float64
+    manifold = get_hyperboloid(dtype)
+    batch_size, in_dim, out_dim = 5, 6, 7
+
+    x = _hyperboloid_points(jax.random.PRNGKey(0), batch_size, in_dim, c, dtype)
+    layer = HypLinearHyperboloidFHNN(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), param_dtype=dtype)
+    # Overwrite the (tiny, time-column-zeroed) default init with a generic dense kernel.
+    layer.kernel[...] = jax.random.normal(jax.random.PRNGKey(1), (out_dim, in_dim), dtype=dtype) * 0.4
+    layer.bias[...] = jax.random.normal(jax.random.PRNGKey(2), (1, out_dim), dtype=dtype) * 0.2
+
+    y = layer(x, c=c)
+    expected = _fhnn_reference(x, layer.kernel[...], layer.bias[...], layer.scale[...], c, eps=layer.eps)
+
+    assert np.allclose(np.asarray(y), expected, atol=1e-12)
+    # Spatial direction is preserved, not reflected.
+    z_BO = np.asarray(x) @ np.asarray(layer.kernel[...]).T + np.asarray(layer.bias[...])
+    cos = np.sum(np.asarray(y)[:, 1:] * z_BO[:, 1:], axis=-1) / (
+        np.linalg.norm(np.asarray(y)[:, 1:], axis=-1) * np.linalg.norm(z_BO[:, 1:], axis=-1)
+    )
+    assert np.allclose(cos, 1.0, atol=1e-12)
+
+
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_fhcnn_normalize_matches_numpy_transcription(c):
+    """FHCNN (``normalize=True``) equals the Bdeir et al. 2023 formulas in NumPy.
+
+    This is the only public entry point into the ``normalize=True`` branch of
+    ``_fhcnn_forward`` (``HypConv2DHyperboloid`` hard-codes ``normalize=False``),
+    so without this test a sign flip on ``scale * z_s / ||z_s||`` is invisible.
+    """
+    dtype = jnp.float64
+    manifold = get_hyperboloid(dtype)
+    batch_size, in_dim, out_dim = 5, 6, 7
+    init_scale, eps = 2.3, 1e-5
+
+    x = _hyperboloid_points(jax.random.PRNGKey(3), batch_size, in_dim, c, dtype)
+    layer = HypLinearHyperboloidFHCNN(
+        manifold,
+        in_dim,
+        out_dim,
+        rngs=nnx.Rngs(0),
+        normalize=True,
+        init_scale=init_scale,
+        eps=eps,
+        param_dtype=dtype,
+    )
+    layer.kernel[...] = jax.random.normal(jax.random.PRNGKey(4), (out_dim, in_dim), dtype=dtype) * 0.4
+    layer.bias[...] = jax.random.normal(jax.random.PRNGKey(5), (1, out_dim), dtype=dtype) * 0.2
+
+    y = layer(x, c=c)
+    expected = _fhcnn_normalize_reference(x, layer.kernel[...], layer.bias[...], init_scale, c, eps=eps)
+
+    assert np.allclose(np.asarray(y), expected, atol=1e-12)

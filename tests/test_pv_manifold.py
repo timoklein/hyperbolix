@@ -25,9 +25,13 @@ from hyperbolix.manifolds import ProperVelocity
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module", params=[0.1, 0.5, 1.0, 2.0], ids=lambda c: f"c{c}")
+@pytest.fixture(scope="module", params=[0.1, 2.0], ids=lambda c: f"c{c}")
 def curvature(request: pytest.FixtureRequest) -> float:
-    """Positive curvature parameter c (sectional curvature = -c)."""
+    """Positive curvature parameter c (sectional curvature = -c).
+
+    Two values spanning a factor of 20 on both sides of 1 are enough to catch any missing or
+    extra √c factor; the intermediate values only re-ran the same identities.
+    """
     return float(request.param)
 
 
@@ -37,26 +41,34 @@ def pv_manifold(dtype: jnp.dtype) -> ProperVelocity:
     return ProperVelocity(dtype=dtype)
 
 
-@pytest.fixture(scope="module", params=[2, 5, 10], ids=lambda d: f"dim{d}")
+@pytest.fixture(scope="module", params=[2, 10], ids=lambda d: f"dim{d}")
 def dim(request: pytest.FixtureRequest) -> int:
+    """Ambient dimension. PV has no dimension-dependent code path, so this is pure
+    vectorization width: the minimal case plus one generic value."""
     return int(request.param)
 
 
 @pytest.fixture(scope="module")
-def pv_points(dim: int, dtype: jnp.dtype, rng: np.random.Generator) -> jnp.ndarray:
-    """Batch of PV points sampled as Gaussians in R^n. PV is unconstrained, so no projection."""
+def pv_points(dim: int, dtype: jnp.dtype, seed_jax: int) -> jnp.ndarray:
+    """Batch of PV points sampled as Gaussians in R^n. PV is unconstrained, so no projection.
+
+    Uses a generator derived from (seed, stream, dim) rather than the shared ``rng`` fixture so
+    the sample does not depend on which other tests ran first.
+    """
     num_pts = 256
     np_dtype = np.dtype(dtype.name)
-    data = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)
+    gen = np.random.default_rng([seed_jax, 20, dim])
+    data = gen.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)
     return jnp.asarray(data)
 
 
 @pytest.fixture(scope="module")
-def pv_tangent_vectors(dim: int, dtype: jnp.dtype, rng: np.random.Generator) -> jnp.ndarray:
+def pv_tangent_vectors(dim: int, dtype: jnp.dtype, seed_jax: int) -> jnp.ndarray:
     """Random tangent vectors (any R^n vector is tangent in PV)."""
     num_pts = 256
     np_dtype = np.dtype(dtype.name)
-    data = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype) * 0.3
+    gen = np.random.default_rng([seed_jax, 21, dim])
+    data = gen.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype) * 0.3
     return jnp.asarray(data)
 
 
@@ -311,6 +323,36 @@ def test_pv_logmap_matches_logmap_0_at_origin(
     assert jnp.allclose(out_general, out_origin, atol=atol, rtol=rtol)
 
 
+def test_pv_retraction_is_exact_euclidean_addition(
+    pv_manifold: ProperVelocity,
+    curvature: float,
+    pv_points: jnp.ndarray,
+    pv_tangent_vectors: jnp.ndarray,
+) -> None:
+    """retraction(v, x) = x + v exactly, R_x(0) = x, and R_x(tv) = exp_x(tv) + O(t^2).
+
+    PV is unconstrained R^n, so the documented retraction is plain vector addition.
+    Quadratic-order agreement with expmap is the defining retraction property:
+    halving the step must shrink the batch-total deviation from expmap by ~4x.
+    """
+    retraction = jax.vmap(pv_manifold.retraction, in_axes=(0, 0, None))
+    expmap = jax.vmap(pv_manifold.expmap, in_axes=(0, 0, None))
+
+    out = retraction(pv_tangent_vectors, pv_points, curvature)
+    assert jnp.array_equal(out, pv_points + pv_tangent_vectors)
+    assert jnp.array_equal(retraction(jnp.zeros_like(pv_points), pv_points, curvature), pv_points)
+
+    # err(t) = ||R_x(tv) - exp_x(tv)|| per point; summed over the batch to average out
+    # per-point noise before taking the quadratic-shrink ratio.
+    def batch_err(t: float) -> float:
+        v_scaled = t * pv_tangent_vectors
+        diff = retraction(v_scaled, pv_points, curvature) - expmap(v_scaled, pv_points, curvature)
+        return float(jnp.sum(jnp.linalg.norm(diff, axis=-1)))
+
+    t = 0.1
+    assert batch_err(t / 2) <= 0.35 * batch_err(t)
+
+
 # ---------------------------------------------------------------------------
 # Parallel transport
 # ---------------------------------------------------------------------------
@@ -486,6 +528,23 @@ def test_pv_is_in_manifold_finite_inputs(pv_manifold: ProperVelocity, curvature:
     assert not bool(pv_manifold.is_in_manifold(bad_inf, curvature))
 
 
+def test_pv_is_in_tangent_space_finite_inputs(
+    pv_manifold: ProperVelocity,
+    curvature: float,
+    pv_points: jnp.ndarray,
+    pv_tangent_vectors: jnp.ndarray,
+) -> None:
+    """Any finite vector is tangent at any PV point (T_x PV = R^n); NaN/Inf vectors are not."""
+    is_tan = jax.vmap(pv_manifold.is_in_tangent_space, in_axes=(0, 0, None))
+    assert bool(jnp.all(is_tan(pv_tangent_vectors, pv_points, curvature)))
+
+    bad_nan = pv_tangent_vectors[0].at[0].set(jnp.nan)
+    assert not bool(pv_manifold.is_in_tangent_space(bad_nan, pv_points[0], curvature))
+
+    bad_inf = pv_tangent_vectors[0].at[0].set(jnp.inf)
+    assert not bool(pv_manifold.is_in_tangent_space(bad_inf, pv_points[0], curvature))
+
+
 def test_pv_proj_is_identity_on_finite_inputs(
     pv_manifold: ProperVelocity,
     curvature: float,
@@ -604,3 +663,63 @@ def test_pv_dpi_norm_identity(curvature: float, pv_points: jnp.ndarray, pv_tange
     rhs = jnp.sum(pv_tangent_vectors**2, axis=-1) - curvature * beta**2 * xv**2
 
     assert jnp.allclose(lhs, rhs, atol=1e-4, rtol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Gradients at the non-smooth points of the distance (audit D1)
+# ---------------------------------------------------------------------------
+
+
+def test_pv_distance_gradients_are_finite_at_the_origin(pv_manifold: ProperVelocity, curvature: float) -> None:
+    """``grad dist(0, 0)`` and ``grad dist_0(0)`` must be finite, not NaN.
+
+    ``_dist`` and ``_dist_0`` used a bare ``jnp.linalg.norm``, whose VJP at the zero vector is
+    ``0/0``. At ``x = y = 0`` the gyro-difference ``-x ⊕ y`` is *exactly* zero, so both
+    gradients came back all-NaN — the same failure class as the wrapped-normal NaN-at-the-mean
+    bug, and exactly what the module's own ``_safe_norm`` (used by every other norm here) exists
+    to prevent. Measured before the fix: ``[nan nan nan]`` for both, in float32 and float64.
+
+    The origin is not incidental: ``dist_0`` at ``x = 0`` is what a "pull the embedding to the
+    origin" regularizer differentiates, and one NaN there poisons a whole parameter tree.
+
+    The finite off-origin gradients are asserted alongside so a "fix" that zeroes the gradient
+    everywhere (e.g. a ``stop_gradient``) fails: at a generic point ``dist_0`` must still have
+    the radial gradient ``x / (‖x‖·√(1 + c‖x‖²))``, checked here against that closed form.
+    """
+    dtype = pv_manifold.dtype
+    zero = jnp.zeros(3, dtype=dtype)
+    x = jnp.array([0.3, -0.4, 0.5], dtype=dtype)
+
+    grad_dist_at_origin = jax.grad(lambda a, b: pv_manifold.dist(a, b, curvature))(zero, zero)
+    grad_dist_0_at_origin = jax.grad(lambda a: pv_manifold.dist_0(a, curvature))(zero)
+
+    assert bool(jnp.all(jnp.isfinite(grad_dist_at_origin)))
+    assert bool(jnp.all(jnp.isfinite(grad_dist_0_at_origin)))
+
+    # Values stay ~0 there: the safe-norm floor shifts them by at most MIN_NORM = 1e-15.
+    assert float(pv_manifold.dist(zero, zero, curvature)) == pytest.approx(0.0, abs=1e-12)
+    assert float(pv_manifold.dist_0(zero, curvature)) == pytest.approx(0.0, abs=1e-12)
+
+    # Off the origin the gradient is unchanged and non-degenerate.
+    grad_dist_0_at_x = jax.grad(lambda a: pv_manifold.dist_0(a, curvature))(x)
+    x_norm = float(np.linalg.norm(np.asarray(x, dtype=np.float64)))
+    expected = np.asarray(x, dtype=np.float64) / (x_norm * np.sqrt(1.0 + curvature * x_norm**2))
+    assert bool(jnp.all(jnp.isfinite(grad_dist_0_at_x)))
+    assert np.allclose(np.asarray(grad_dist_0_at_x, dtype=np.float64), expected, atol=1e-5, rtol=1e-5)
+
+
+def test_pv_distance_gradients_are_finite_at_coincident_points(
+    pv_manifold: ProperVelocity, curvature: float, pv_points: jnp.ndarray
+) -> None:
+    """``grad_x dist(x, x)`` must be finite for a whole batch of coincident pairs.
+
+    ``dist`` is genuinely non-differentiable at ``x == y`` (the metric has a cone point there),
+    so no particular value is asserted — only that autodiff returns numbers. Run over the full
+    256-point fixture and under ``vmap`` because the pre-fix NaN was produced by whichever pair
+    happened to cancel exactly; a single hand-picked pair can miss it.
+    """
+    grad_x = jax.vmap(jax.grad(lambda a, b: pv_manifold.dist(a, b, curvature)), in_axes=(0, 0))
+
+    grads = grad_x(pv_points, pv_points)
+
+    assert bool(jnp.all(jnp.isfinite(grads)))

@@ -1,12 +1,14 @@
-"""Tests for the Busemann neural-network layers (BMLR heads and BFC layers).
+"""Busemann-specific behaviour of the BFC layers (HypLinear{Hyperboloid,Poincare}Busemann).
 
-Covers both models for both layer families:
-  - HypRegression{Hyperboloid,Poincare}Busemann — BMLR classification heads (Euclidean logits).
-  - HypLinear{Hyperboloid,Poincare}Busemann      — BFC layers (output a manifold point).
+The shared forward/gradient/JIT/tangent contract for all four Busemann layers
+(the BMLR heads HypRegression{Hyperboloid,Poincare}Busemann included) lives in
+``test_layer_contract.py``; only the tests that are specific to this family stay
+here.
 """
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from flax import nnx
 
@@ -44,131 +46,60 @@ def _make_ball_points(key, n, in_dim, dtype, c=C):
     return jax.vmap(P.expmap_0, in_axes=(0, None))(v, c)
 
 
-def _check_on_hyperboloid(x, c, atol):
-    mink = -(x[..., 0:1] ** 2) + jnp.sum(x[..., 1:] ** 2, axis=-1, keepdims=True)
-    return jnp.allclose(mink, -1.0 / c, atol=atol)
-
-
-def _check_in_ball(x, c):
-    return bool((jnp.sum(x**2, axis=-1) < 1.0 / c).all())
-
-
 # --------------------------------------------------------------------------- #
-# BMLR heads
+# BMLR logit sign / value oracle (audit A9-06 + M3-G16)
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_bmlr_hyperboloid_forward(dtype):
-    x = _make_hyperboloid_points(jax.random.PRNGKey(0), 8, 9, dtype)
-    layer = HypRegressionHyperboloidBusemann(get_hyperboloid(dtype), in_dim=9, out_dim=5, rngs=nnx.Rngs(0))
-    y = layer(x, C)
-    assert y.shape == (8, 5)
-    assert jnp.isfinite(y).all()
-    assert y.dtype == dtype
+@pytest.mark.parametrize(
+    "layer_cls, manifold_fn, in_dim, embed_tangent, lambda_0",
+    [
+        # Hyperboloid: tangent vectors carry the Minkowski norm, so exp_0(t*v) sits at
+        # geodesic distance t. Poincare: lambda_0 = 2/(1 - c*0) = 2, so the Riemannian
+        # length of the tangent vector t*v is 2t and exp_0(t*v) sits at distance 2t.
+        (HypRegressionHyperboloidBusemann, get_hyperboloid, 9, True, 1.0),
+        (HypRegressionPoincareBusemann, get_poincare, 8, False, 2.0),
+    ],
+    ids=["hyperboloid", "poincare"],
+)
+def test_bmlr_logit_is_affine_along_the_ideal_ray(layer_cls, manifold_fn, in_dim, embed_tangent, lambda_0):
+    """``u_k`` grows by ``alpha_k`` per unit of geodesic distance toward the ideal point ``v_k``.
 
+    Closed-form oracle, independent of the library: along the unit-speed geodesic
+    ray toward ``v``, the Busemann function is ``B^v = -distance`` (both models),
+    so Chen et al. 2026 Eq. 8, ``u_k(x) = -alpha_k*B^{v_k}(x) + b_k``, becomes
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_bmlr_poincare_forward(dtype):
-    x = _make_ball_points(jax.random.PRNGKey(0), 8, 8, dtype)
-    layer = HypRegressionPoincareBusemann(get_poincare(dtype), in_dim=8, out_dim=5, rngs=nnx.Rngs(0))
-    y = layer(x, C)
-    assert y.shape == (8, 5)
-    assert jnp.isfinite(y).all()
-    assert y.dtype == dtype
+        u_k(exp_0(t*v_k)) = alpha_k * lambda_0 * t + b_k,   alpha_k = exp(log_scale_k).
 
+    This pins the logit *sign* (a flipped sign makes the logit fall toward the
+    ideal point), the magnitude ``alpha_k``, the bias offset at the origin
+    (``B^v(origin) = 0``), and the direction normalization of the kernel rows.
+    """
+    dtype = jnp.float64
+    manifold = manifold_fn(dtype)
+    out_dim = 4
+    layer = layer_cls(manifold, in_dim=in_dim, out_dim=out_dim, rngs=nnx.Rngs(0), param_dtype=dtype)
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-def test_bmlr_jit_and_gradients(dtype):
-    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 6, 9, dtype)
-    layer = HypRegressionHyperboloidBusemann(get_hyperboloid(dtype), in_dim=9, out_dim=4, rngs=nnx.Rngs(0))
+    kernel_KI = np.asarray(layer.kernel[...], dtype=np.float64)
+    alpha_K = np.exp(np.asarray(layer.log_scale[...], dtype=np.float64))
+    bias_K = np.asarray(layer.bias[...], dtype=np.float64)
 
-    @nnx.jit
-    def forward(m, inp, c):
-        return m(inp, c)
+    t_T = jnp.array([0.0, 0.3, 0.7, 1.2], dtype=dtype)
+    for k in range(out_dim):
+        v_I = jnp.asarray(kernel_KI[k] / np.linalg.norm(kernel_KI[k]), dtype=dtype)
+        tangent_TI = t_T[:, None] * v_I[None, :]
+        if embed_tangent:
+            tangent_TI = jax.vmap(manifold.embed_spatial_0)(tangent_TI)
+        pts_TI = jax.vmap(manifold.expmap_0, in_axes=(0, None))(tangent_TI, C)
 
-    y = forward(layer, x, C)
-    assert y.shape == (6, 4)
-    assert jnp.isfinite(y).all()
+        logits_T = np.asarray(layer(pts_TI, c=C)[:, k], dtype=np.float64)
+        expected_T = alpha_K[k] * lambda_0 * np.asarray(t_T, dtype=np.float64) + bias_K[k]
 
-    def loss(m):
-        return jnp.sum(m(x, C) ** 2)
-
-    loss_val, grads = nnx.value_and_grad(loss)(layer)
-    assert jnp.isfinite(loss_val)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.log_scale[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-
-
-def test_bmlr_tangent_input_space():
-    """input_space='tangent' lifts Euclidean features before the Busemann head."""
-    dtype = jnp.float32
-    x_tangent = jax.random.normal(jax.random.PRNGKey(2), (5, 9), dtype=dtype) * 0.1
-    layer = HypRegressionHyperboloidBusemann(
-        get_hyperboloid(dtype), in_dim=9, out_dim=3, rngs=nnx.Rngs(0), input_space="tangent"
-    )
-    y = layer(x_tangent, C)
-    assert y.shape == (5, 3)
-    assert jnp.isfinite(y).all()
+        assert np.allclose(logits_T, expected_T, atol=1e-9), f"class {k}: {logits_T} != {expected_T}"
+        assert np.all(np.diff(logits_T) > 0.0)  # rises toward the ideal point
 
 
 # --------------------------------------------------------------------------- #
 # BFC layers
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("use_gyro_bias", [False, True])
-def test_bfc_hyperboloid_on_manifold(dtype, use_gyro_bias):
-    x = _make_hyperboloid_points(jax.random.PRNGKey(0), 8, 9, dtype)
-    layer = HypLinearHyperboloidBusemann(
-        get_hyperboloid(dtype), in_dim=9, out_dim=7, rngs=nnx.Rngs(0), use_gyro_bias=use_gyro_bias
-    )
-    y = layer(x, C)
-    assert y.shape == (8, 7)
-    assert jnp.isfinite(y).all()
-    assert y.dtype == dtype
-    assert _check_on_hyperboloid(y, C, atol=4e-3 if dtype == jnp.float32 else 1e-7)
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
-@pytest.mark.parametrize("use_gyro_bias", [False, True])
-def test_bfc_poincare_in_ball(dtype, use_gyro_bias):
-    x = _make_ball_points(jax.random.PRNGKey(0), 8, 8, dtype)
-    layer = HypLinearPoincareBusemann(get_poincare(dtype), in_dim=8, out_dim=6, rngs=nnx.Rngs(0), use_gyro_bias=use_gyro_bias)
-    y = layer(x, C)
-    assert y.shape == (8, 6)
-    assert jnp.isfinite(y).all()
-    assert y.dtype == dtype
-    assert _check_in_ball(y, C)
-
-
-@pytest.mark.parametrize(
-    "layer_cls, manifold_fn, in_dim, make_pts",
-    [
-        (HypLinearHyperboloidBusemann, get_hyperboloid, 9, _make_hyperboloid_points),
-        (HypLinearPoincareBusemann, get_poincare, 8, _make_ball_points),
-    ],
-)
-def test_bfc_jit_and_gradients(layer_cls, manifold_fn, in_dim, make_pts):
-    dtype = jnp.float32
-    x = make_pts(jax.random.PRNGKey(1), 6, in_dim, dtype)
-    layer = layer_cls(manifold_fn(dtype), in_dim=in_dim, out_dim=7, rngs=nnx.Rngs(0), use_gyro_bias=True)
-
-    @nnx.jit
-    def forward(m, inp, c):
-        return m(inp, c)
-
-    assert jnp.isfinite(forward(layer, x, C)).all()
-
-    def loss(m):
-        return jnp.sum(m(x, C) ** 2)
-
-    loss_val, grads = nnx.value_and_grad(loss)(layer)
-    assert jnp.isfinite(loss_val)
-    assert jnp.isfinite(grads.kernel[...]).all()
-    assert jnp.isfinite(grads.log_scale[...]).all()
-    assert jnp.isfinite(grads.bias[...]).all()
-    assert jnp.isfinite(grads.gyro_bias[...]).all()
-
-
 @pytest.mark.parametrize(
     "layer_cls, manifold_fn, in_dim, make_pts",
     [
@@ -197,7 +128,9 @@ def test_bfc_activation(layer_cls, manifold_fn, in_dim, make_pts):
     """A bounded activation (tanh) keeps the BFC output a valid manifold point."""
     dtype = jnp.float32
     x = make_pts(jax.random.PRNGKey(4), 6, in_dim, dtype)
-    layer = layer_cls(manifold_fn(dtype), in_dim=in_dim, out_dim=6, rngs=nnx.Rngs(0), activation=jax.nn.tanh)
+    manifold = manifold_fn(dtype)
+    layer = layer_cls(manifold, in_dim=in_dim, out_dim=6, rngs=nnx.Rngs(0), activation=jax.nn.tanh)
     y = layer(x, C)
     assert y.shape == (6, 6)
     assert jnp.isfinite(y).all()
+    assert jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(y, C).all()
