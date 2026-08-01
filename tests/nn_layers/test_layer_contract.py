@@ -478,8 +478,10 @@ def test_gradient_contract(spec, dtype):
     grads_jit = jitted_grad(layer, x, spec.c)
 
     # Gradient entries within one kernel span several orders of magnitude, so the
-    # jit/eager tolerance is scaled by the largest entry rather than absolute.
-    rel = _tol(dtype, 1e-5, 1e-11)
+    # jit/eager tolerance is scaled by the largest entry rather than absolute. XLA fusion
+    # reassociation noise on the small (cancellation-dominated) entries measures up to
+    # ~1.2e-5 of the largest entry in f32 depending on host, hence 1e-4 headroom.
+    rel = _tol(dtype, 1e-4, 1e-11)
     for path in spec.grad_paths:
         g_e = _resolve(grads_eager, path)[...]
         g_j = _resolve(grads_jit, path)[...]
