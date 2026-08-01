@@ -160,7 +160,8 @@ class FGGLorentzMLR(nnx.Module):
         Numerical stability floor (default: 1e-7).
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
-        Compute precision of manifold operations is set by the manifold's ``dtype``.
+        This layer takes no ``manifold_module``, so compute precision follows the
+        input array's dtype (the parameters are cast to it).
 
     References
     ----------

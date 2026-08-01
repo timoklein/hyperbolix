@@ -21,15 +21,14 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
-from hyperbolix.manifolds.hyperboloid import Hyperboloid
+
+# MIN_NORM is the library-wide gradient-safety floor for norms: sqrt(sum + MIN_NORM²)
+# has a finite VJP at zero input, unlike linalg.norm, whose 0/0 NaN survives any
+# post-hoc jnp.where masking. Imported (not redefined) so there is one value.
+from hyperbolix.manifolds.hyperboloid import MIN_NORM, Hyperboloid
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid
-
-# Gradient-safety floor for norms (matches hyperbolix.manifolds MIN_NORM):
-# sqrt(sum + MIN_NORM²) has a finite VJP at zero input, unlike linalg.norm,
-# whose 0/0 NaN survives any post-hoc jnp.where masking.
-MIN_NORM = 1e-15
 
 
 def _fhcnn_forward(
@@ -815,7 +814,8 @@ class HTCLinear(nnx.Module):
         Small value for numerical stability (default: 1e-7).
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
-        Compute precision of manifold operations is set by the manifold's ``dtype``.
+        This layer takes no ``manifold_module``, so compute precision follows the
+        input array's dtype (the parameters are cast to it).
 
     Attributes
     ----------
@@ -862,7 +862,8 @@ class HTCLinear(nnx.Module):
 
     References
     ----------
-    Hypformer paper (citation to be added)
+    Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
+    Hyperbolic Space", 2025.
 
     Examples
     --------
@@ -999,7 +1000,8 @@ class FGGLinear(nnx.Module):
         Numerical stability floor (default: 1e-7).
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
-        Compute precision of manifold operations is set by the manifold's ``dtype``.
+        This layer takes no ``manifold_module``, so compute precision follows the
+        input array's dtype (the parameters are cast to it).
 
     References
     ----------

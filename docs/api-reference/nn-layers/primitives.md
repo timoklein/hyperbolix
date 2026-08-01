@@ -24,7 +24,11 @@ The Hyperbolic Transformation Component (HTC) applies a Euclidean function to th
 ## Point assembly & concatenation
 
 Helpers that build valid hyperboloid points from spatial/tangent data and extract
-convolution patches.
+convolution patches. `busemann_fc_poincare_output` is the Poincaré counterpart of
+`sinh_lift_to_hyperboloid` — the same score → manifold-point output map, landing on the
+ball instead of the hyperboloid. `hcat_ambient_dim` gives the ambient width that HCat /
+LogCat produce over a receptive field, which is what you need to size the layer that
+consumes a concatenating conv.
 
 ::: hyperbolix.nn_layers.spatial_to_hyperboloid
     options:
@@ -34,7 +38,15 @@ convolution patches.
     options:
       heading_level: 3
 
+::: hyperbolix.nn_layers.busemann_fc_poincare_output
+    options:
+      heading_level: 3
+
 ::: hyperbolix.nn_layers.build_spacelike_V
+    options:
+      heading_level: 3
+
+::: hyperbolix.nn_layers.hcat_ambient_dim
     options:
       heading_level: 3
 

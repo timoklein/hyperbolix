@@ -16,7 +16,8 @@ Key components:
 
 References
 ----------
-Hypformer paper (citation to be added)
+Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
+Hyperbolic Space", 2025.
 Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026), Section 4.4.
 Salimans & Kingma "Weight Normalization" (2016).
 """

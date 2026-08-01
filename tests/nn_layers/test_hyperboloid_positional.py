@@ -384,6 +384,26 @@ def test_hypformer_pe_custom_epsilon_on_manifold():
         assert hyperboloid.is_in_manifold(out[i], 1.0, atol=1e-4)
 
 
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hypformer_pe_param_dtype(dtype):
+    """``param_dtype`` reaches the internal HTCLinear, so a float64 model can be built.
+
+    Without the forward the HTCLinear weights are pinned to float32 regardless of the
+    requested storage dtype, and ``htc`` casts them down to the input dtype -- silently
+    truncating a float64 model to float32 precision.
+    """
+    d = 6
+    in_features = d + 1
+    pe = HypformerPositionalEncoding(in_features, d, rngs=nnx.Rngs(0), param_dtype=dtype)
+
+    assert pe.htc_linear.kernel[...].dtype == dtype
+    assert pe.htc_linear.bias is not None
+    assert pe.htc_linear.bias[...].dtype == dtype
+
+    x = _make_hyperboloid_points(jax.random.PRNGKey(3), (4, d), c=1.0).astype(dtype)
+    assert pe(x, c=1.0).dtype == dtype
+
+
 def test_hypformer_pe_has_htclinear_params():
     """HypformerPE contains HTCLinear kernel and bias parameters."""
     d = 6

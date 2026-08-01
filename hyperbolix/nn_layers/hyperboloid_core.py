@@ -17,7 +17,8 @@ expensive exp/log maps by using constraint-based time reconstruction.
 
 References
 ----------
-Hypformer paper (citation to be added)
+Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
+Hyperbolic Space", 2025.
 Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026)
 """
 
@@ -682,7 +683,8 @@ def hrc(
 
     References
     ----------
-    Hypformer paper (citation to be added)
+    Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
+    Hyperbolic Space", 2025.
 
     Examples
     --------
@@ -770,7 +772,8 @@ def htc(
 
     References
     ----------
-    Hypformer paper (citation to be added)
+    Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
+    Hyperbolic Space", 2025.
 
     Examples
     --------

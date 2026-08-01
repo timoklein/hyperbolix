@@ -105,6 +105,27 @@ def test_hyp_regression_poincare_decision_boundary(c):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyp_regression_poincare_kernel_init_std(dtype):
+    """Kernel init matches its Poincaré siblings: std = (2 * in_dim * out_dim)^{-0.5}.
+
+    The Ganea head used a bare ``normal(0, 1)``. The ``||a||`` factors cancel inside the
+    ``asinh`` of ``_compute_mlr`` but reappear as the outer ``||a||`` multiplier, so the
+    logits scale linearly with the row norm ``~= sqrt(in_dim)`` — the same failure the
+    HNN++ and Hyperboloid heads already guard against.
+    """
+    in_dim, out_dim = 65, 10
+    layer = HypRegressionPoincare(get_poincare(dtype), in_dim, out_dim, rngs=nnx.Rngs(42), param_dtype=dtype)
+
+    kernel_std = jnp.std(layer.kernel[...])
+    expected_std = 1.0 / jnp.sqrt(2.0 * in_dim * out_dim)
+    assert jnp.abs(kernel_std - expected_std) < 0.2 * expected_std
+
+    # Row norms must be O(1)-small, not O(sqrt(in_dim)) as with the unscaled init.
+    row_norms = jnp.linalg.norm(layer.kernel[...], axis=-1)
+    assert float(jnp.max(row_norms)) < 1.0
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyp_regression_hyperboloid_kernel_init_std(dtype):
     """Kernel init is fan-scaled by the spatial fan-in (in_dim - 1); an unscaled N(0,1)
     would give row norms ~= sqrt(in_dim - 1), overwhelming the MLR output scaling."""

@@ -30,7 +30,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
 
 from ._helpers import validate_hyperboloid_manifold, validate_poincare_manifold
-from .busemann_core import busemann_fc_poincare_output, busemann_score, init_weight_norm_params
+from .busemann_core import _busemann_score, _init_weight_norm_params, busemann_fc_poincare_output
 from .hyperboloid_core import sinh_lift_to_hyperboloid
 from .hyperboloid_linear import _assert_v_max_safe
 
@@ -109,7 +109,7 @@ class HypLinearHyperboloidBusemann(nnx.Module):
         in_spatial = in_dim - 1
         out_spatial = out_dim - 1
         # van Spengler / reference BFC init, computed from the spatial dims.
-        self.kernel, self.log_scale, self.bias = init_weight_norm_params(
+        self.kernel, self.log_scale, self.bias = _init_weight_norm_params(
             rngs, out_spatial, in_spatial, std=(2 * in_spatial * out_spatial) ** -0.5, param_dtype=param_dtype
         )
 
@@ -124,7 +124,7 @@ class HypLinearHyperboloidBusemann(nnx.Module):
         c: float = 1.0,
     ) -> Float[Array, "batch out_dim"]:
         """Forward pass returning a hyperboloid point, shape (batch, out_dim)."""
-        u_BO = busemann_score(self.manifold, x, self.kernel[...], self.log_scale[...], self.bias[...], c, self.input_space)
+        u_BO = _busemann_score(self.manifold, x, self.kernel[...], self.log_scale[...], self.bias[...], c, self.input_space)
         if self.activation is not None:
             u_BO = self.activation(u_BO)
         y_BAo = sinh_lift_to_hyperboloid(u_BO, c, self.v_max)
@@ -209,7 +209,7 @@ class HypLinearPoincareBusemann(nnx.Module):
         # No time component: spatial dim equals the model dim.
         in_spatial = in_dim
         out_spatial = out_dim
-        self.kernel, self.log_scale, self.bias = init_weight_norm_params(
+        self.kernel, self.log_scale, self.bias = _init_weight_norm_params(
             rngs, out_spatial, in_spatial, std=(2 * in_spatial * out_spatial) ** -0.5, param_dtype=param_dtype
         )
 
@@ -224,7 +224,7 @@ class HypLinearPoincareBusemann(nnx.Module):
         c: float = 1.0,
     ) -> Float[Array, "batch out_dim"]:
         """Forward pass returning a Poincaré ball point, shape (batch, out_dim)."""
-        u_BO = busemann_score(self.manifold, x, self.kernel[...], self.log_scale[...], self.bias[...], c, self.input_space)
+        u_BO = _busemann_score(self.manifold, x, self.kernel[...], self.log_scale[...], self.bias[...], c, self.input_space)
         if self.activation is not None:
             u_BO = self.activation(u_BO)
         y_BO = busemann_fc_poincare_output(u_BO, c, self.v_max)

@@ -26,6 +26,11 @@ class HypLinearPoincare(nnx.Module):
     """
     Hyperbolic Neural Networks fully connected layer (Poincaré ball model).
 
+    Superseded by :class:`HypLinearPoincarePP` (Shimizu et al. 2020); kept for
+    reproduction of Ganea et al. 2018. The Möbius matrix-vector product used here
+    routes through ``logmap_0``/``expmap_0``, which is both slower and less stable
+    near the ball boundary than the HNN++ formulation.
+
     Computation steps:
         0) Project the input tensor to the tangent space (optional)
         1) Perform matrix vector multiplication in the tangent space at the origin.
@@ -85,7 +90,7 @@ class HypLinearPoincare(nnx.Module):
         # Static configuration (treated as compile-time constants for JIT)
         validate_poincare_manifold(
             manifold_module,
-            required_methods=("proj", "addition", "expmap_0", "logmap_0", "compute_mlr_pp"),
+            required_methods=("proj", "addition", "expmap_0", "logmap_0"),
         )
         self.manifold = manifold_module
         self.in_dim = in_dim

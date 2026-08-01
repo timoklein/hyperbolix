@@ -1,5 +1,6 @@
 """Hyperbolic neural network layers for JAX/Flax NNX."""
 
+from .busemann_core import busemann_fc_poincare_output
 from .busemann_linear import HypLinearHyperboloidBusemann, HypLinearPoincareBusemann
 from .busemann_regression import HypRegressionHyperboloidBusemann, HypRegressionPoincareBusemann
 from .gyro_normalization import (
@@ -38,6 +39,7 @@ from .hyperboloid_conv import (
 from .hyperboloid_core import (
     build_spacelike_V,
     extract_patches,
+    hcat_ambient_dim,
     hrc,
     htc,
     hyp_avg_pool2d,
@@ -116,9 +118,11 @@ __all__ = [
     "ProperVelocityGyroBatchNorm",
     "ProperVelocityGyroRMSNorm",
     "build_spacelike_V",
+    "busemann_fc_poincare_output",
     "extract_patches",
     "focus_transform",
     "frechet_variance",
+    "hcat_ambient_dim",
     "hope",
     "hrc",
     "hrc_gelu",

@@ -81,21 +81,23 @@ class LorentzConv2D(nnx.Module):
         Padding mode: 'SAME', 'VALID', or explicit padding (default: 'SAME')
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
-        Compute precision of manifold operations is set by the manifold's ``dtype``.
+        Compute precision follows Flax's promotion of the input's and the
+        parameters' dtypes; ``manifold_module`` is used only to validate the
+        input family, its ``dtype`` is not consulted.
 
     Notes
     -----
-    This implementation follows the Hyperbolic Layer (HL) approach from
-    "Fully Hyperbolic Convolutional Neural Networks for Computer Vision".
-
-    The layer operates only on space-like components, making it more
-    computationally efficient than the HCat-based approach (HypConv2DHyperboloid),
-    though it doesn't perform true hyperbolic convolution. Instead, it applies
-    Euclidean operations to spatial components and reconstructs the time component.
+    Superseded by :class:`FGGConv2D` and :class:`HypConv2DHyperboloidILNN`; kept for
+    reproduction of the LResNet results (He et al. 2025). It is not a hyperbolic
+    convolution: it applies a Euclidean convolution to the space-like components and
+    reconstructs the time component from the constraint, so the receptive field is
+    combined in the ambient tangent directions rather than intrinsically. That makes it
+    cheaper than the HCat-based layers (:class:`HypConv2DHyperboloid`) but geometrically
+    weaker — prefer the superseding layers for new work.
 
     See Also
     --------
-    hypformer.hrc : Core HRC function this layer is based on
+    hyperbolix.nn_layers.hyperboloid_core.hrc : Core HRC function this layer is based on
     HypConv2DHyperboloid : Full hyperbolic convolution using HCat concatenation
 
     References
@@ -164,9 +166,10 @@ class LorentzConv2D(nnx.Module):
 
         Notes
         -----
-        This implementation uses the HRC function from hypformer.py, demonstrating that
-        LorentzConv2D (from LResNet) and HRC (from Hypformer) are mathematically equivalent
-        approaches to adapting Euclidean operations for hyperbolic geometry.
+        This implementation uses the ``hrc`` function from
+        :mod:`hyperbolix.nn_layers.hyperboloid_core`, demonstrating that LorentzConv2D
+        (from LResNet) and HRC (from Hypformer) are mathematically equivalent approaches
+        to adapting Euclidean operations for hyperbolic geometry.
         """
 
         # Define convolution as the HRC regularization function f_r
@@ -662,10 +665,13 @@ class FGGConv2D(nnx.Module):
         hcat_out_NA = jax.vmap(self.manifold.hcat, in_axes=(0, None))(patches_flat_NKC, c)
 
         # FGG forward: (hcat_dim,) -> (out_channels,)
+        # Unwrap the nnx.Param to a raw array before the helper (matching FGGLinear):
+        # _get_effective_kernel is annotated Array | None and only worked here because
+        # nnx.Param proxies array ops.
         U_IO = _get_effective_kernel(
-            getattr(self, "kernel", None),
-            getattr(self, "kernel_dir", None),
-            getattr(self, "kernel_scale", None),
+            self.kernel[...] if not self.use_weight_norm else None,
+            self.kernel_dir[...] if self.use_weight_norm else None,
+            self.kernel_scale[...] if self.use_weight_norm else None,
             self.use_weight_norm,
             self.eps,
         )
@@ -724,9 +730,11 @@ class HypConv2DHyperboloidILNN(nnx.Module):
     smoothing_factor : float
         Smoothing factor for the multinomial linear regression output (default: 50.0)
     v_max : float
-        Output-side guard: the sinh argument ``sqrt(c)*v`` is smooth-clamped to
+        Output-side guard: the sinh argument ``sqrt(c)*v`` is hard-clipped to
         ``±v_max``, bounding the output spatial norm by ``sinh(v_max)/sqrt(c)``
         (default: 10.0, matching the Shi et al. 2026 reference implementation).
+        The clip is a plain ``jnp.clip``, not a smooth clamp, so it zeroes the
+        gradient in the saturated tail (matching the sibling PLFC layer).
     use_gyro_bias : bool
         If True, add a learnable intrinsic bias via Lorentz gyroaddition,
         ``y <- y (+) exp_0([0, b])`` with ``b`` initialized to zero — the gyrogroup
@@ -860,7 +868,7 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         c: float = 1.0,
     ) -> Float[Array, "batch out_height out_width out_channels"]:
         """
-        Forward pass through the HNN++ hyperboloid convolutional layer.
+        Forward pass through the ILNN hyperboloid convolutional layer (LogCat + PLFC).
 
         Parameters
         ----------
