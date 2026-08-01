@@ -81,7 +81,7 @@ jobs:
         # test file under tests/.
         test-suite:
           # Top-level: core manifolds
-          - "test_manifolds.py"
+          - "test_manifolds.py test_manifold_oracles.py"
           - "test_stereographic.py"
           - "test_class_based_manifolds.py test_manifold_curvature.py"
           - "test_product_manifold.py test_pv_manifold.py"
@@ -103,7 +103,7 @@ jobs:
           - "nn_layers/test_poincare_linear_gradients.py nn_layers/test_poincare_vq.py"
           - "nn_layers/test_pv_conv.py nn_layers/test_pv_linear.py nn_layers/test_pv_regression.py"
           # NN layer tests: misc/general
-          - "nn_layers/test_regression_layers.py nn_layers/test_nn_layers.py nn_layers/test_busemann_layers.py nn_layers/test_gyro_normalization.py nn_layers/test_hybrid_regularization.py nn_layers/test_dtype_respected_x64.py"
+          - "nn_layers/test_regression_layers.py nn_layers/test_nn_layers.py nn_layers/test_busemann_layers.py nn_layers/test_gyro_normalization.py nn_layers/test_hybrid_regularization.py nn_layers/test_dtype_respected_x64.py nn_layers/test_helpers_validation.py"
           # NOTE: created by a parallel fix agent as part of this test-overhaul
           # branch; does not exist yet at the time this matrix entry was added.
           - "nn_layers/test_layer_contract.py"
