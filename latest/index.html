@@ -1712,7 +1712,7 @@
 <ul>
 <li><strong>6 Manifolds</strong>: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), and Product Manifold (mixed-curvature composition) — all with complete geometric operations</li>
 <li><strong>Learnable Curvature</strong>: <code>LearnableCurvature</code> module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp; works with any <code>nnx.Optimizer</code></li>
-<li><strong>Neural Network Layers</strong>: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers</li>
+<li><strong>Neural Network Layers</strong>: 40+ hyperbolic layers including linear, convolutional, regression, attention, normalization, and PV layers</li>
 <li><strong>Activation Functions</strong>: 5 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish, GELU)</li>
 <li><strong>Riemannian Optimizers</strong>: RAdam and RSGD with automatic manifold parameter detection</li>
 <li><strong>Wrapped Normal Distributions</strong>: For probabilistic modeling on hyperbolic manifolds</li>
@@ -1720,7 +1720,7 @@
 <li><strong>Pure JAX/Flax NNX</strong>: No PyTorch dependency, fully compatible with JAX ecosystem</li>
 <li><strong>vmap-native API</strong>: Efficient batching through JAX's functional paradigm</li>
 <li><strong>JIT-compatible</strong>: All operations support JIT compilation for performance</li>
-<li><strong>Comprehensive Test Suite</strong>: 3,400+ tests (parametrized across seeds, dtypes, manifolds) with 100% pass rate</li>
+<li><strong>Comprehensive Test Suite</strong>: 3,550+ tests (parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles</li>
 </ul>
 <h2 id="quick-example">Quick Example<a class="headerlink" href="#quick-example" title="Permanent link">&para;</a></h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
@@ -1777,7 +1777,7 @@
 </span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="n">output</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">input_data</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="project-status">Project Status<a class="headerlink" href="#project-status" title="Permanent link">&para;</a></h2>
-<p><strong>Stable — current release: v1.0.0.</strong> The public API is complete and stable, reaching functional parity with the broader hyperbolic deep learning ecosystem; changes follow semantic versioning and new layers and manifolds continue to be added. See the <a href="changelog/">Changelog</a> for the full release history.</p>
+<p><strong>Stable — current release: v1.1.0.</strong> The public API is complete and stable, reaching functional parity with the broader hyperbolic deep learning ecosystem; changes follow semantic versioning and new layers and manifolds continue to be added. See the <a href="changelog/">Changelog</a> for the full release history.</p>
 <table>
 <thead>
 <tr>

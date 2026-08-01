@@ -681,6 +681,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#learning-rate-schedules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learning-Rate Schedules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#common-pitfalls" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1481,6 +1492,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#learning-rate-schedules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Learning-Rate Schedules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#common-pitfalls" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1645,6 +1667,30 @@ it for <code>HypLinearPoincarePP</code> / <code>HypRegressionPoincarePP</code> i
 <code>PP</code> variants compute the same operation with Euclidean weights, removing
 the need for Riemannian optimization entirely. The numerics are typically
 cleaner and the optimizer setup is simpler.</p>
+</div>
+<h2 id="learning-rate-schedules">Learning-Rate Schedules<a class="headerlink" href="#learning-rate-schedules" title="Permanent link">&para;</a></h2>
+<p>Both optimizers accept an <code>optax.Schedule</code> (any <code>count -&gt; lr</code> callable) in
+place of a float, and re-read it on every <code>update()</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">optax</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">riemannian_adam</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">schedule</span> <span class="o">=</span> <span class="n">optax</span><span class="o">.</span><span class="n">warmup_cosine_decay_schedule</span><span class="p">(</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">init_value</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">peak_value</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span> <span class="n">warmup_steps</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">decay_steps</span><span class="o">=</span><span class="mi">10_000</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="p">)</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">schedule</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+</span></code></pre></div>
+<p>The schedule is resolved at the <strong>pre-increment</strong> step count, matching optax's
+<code>scale_by_schedule</code>: the k-th <code>update()</code> reads <code>schedule(k - 1)</code>, so the very
+first update uses <code>schedule(0)</code>. Adam-style bias correction deliberately keeps
+the post-increment count (<code>1 - beta**k</code>), which is also what optax's
+<code>scale_by_adam</code> does — the two are different counters by design. Constant
+learning rates are unaffected by this distinction.</p>
+<div class="admonition warning">
+<p class="admonition-title">Behavior change after v1.0.0</p>
+<p>Through v1.0.0 the schedule was resolved at the post-increment count, so a
+warmup ran one step ahead of the equivalent optax setup and <code>schedule(0)</code>
+was never used. Runs that pinned a schedule against an optax baseline will
+shift by one step.</p>
 </div>
 <h2 id="common-pitfalls">Common Pitfalls<a class="headerlink" href="#common-pitfalls" title="Permanent link">&para;</a></h2>
 <ol>
