@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-01
+
+A correctness release. A full audit of the test suite replaced shape-only checks and
+self-comparisons with independently transcribed NumPy/SciPy oracles, and every library
+defect it exposed is fixed below. No new capability beyond `hyp_flatten2d`; several
+corrections change behavior or call signatures, each marked **Breaking** and each with the
+migration in its entry.
+
 ### Added
 - **`hyp_flatten2d`** (`hyperbolix.nn_layers`) — radius-preserving flatten of an NHWC hyperboloid feature map into one manifold point per image via `Hyperboloid.log_radius_concat`: `(B, H, W, A) → (B, H·W·(A−1)+1)`. The naive alternative (reshape + `hcat`) inflates the expected spatial radius by `≈ √(H·W)` (a 4×4 map: 4×); LogCat's digamma rescale hands the classifier head the per-pixel radius unchanged. This is the flatten step for `HypConv2DHyperboloidILNN` stacks feeding `HypRegressionHyperboloid`/`FGGLorentzMLR`
 - **`Poincare.proj_batch`** — batched sibling of `Hyperboloid.proj_batch` (arbitrary leading axes, bit-identical to `vmap(proj)`); HoroPCA and CO-SNE now use it instead of hand-rolled vmaps
@@ -43,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rewrote the layer initialization-scale table to match actual defaults (split `HypLinear*PP` from the regression heads; added `HypLinearHyperboloidPLFC` and `HypConv2DHyperboloidILNN` rows); fixed ambient-vs-spatial channel-convention contradictions (documented the `HTCLinear.out_features`-is-spatial exception; HCat growth is internal — output width is always `out_channels`); corrected "manifold-valued weights" to "manifold-valued bias" for the legacy Ganea layers and repositioned `mark_manifold_param` as guidance for hand-rolled parameters (built-in layers self-tag)
 - Real Hypformer citation (Yang et al. 2025) in 7 docstrings; `LorentzConv2D` attribution unified on LResNet; superseded-by notes on `LorentzConv2D`, `HypLinearPoincare`, `HypRegressionPoincare`; `param_dtype` compute-precision wording corrected across the manifold-free layers; GyroBN shift/weight comment labels un-swapped; `DEVELOPER_GUIDE.md` pointers fixed
 - Deleted the three placeholder "coming soon" tutorial notebooks and the dead commented-out `mkdocs-jupyter` configuration; updated stale `docs/index.md` counts
+- Every `python` fence in `docs/`, `README.md`, and `DEVELOPER_GUIDE.md` is now executed as a check. Four more raised: `smooth_clamp(min_val=, max_val=)` (the arguments are `min_value`/`max_value`), `get_delta(seed=42)` (it takes a `key`), `wrapped_normal_hyperboloid.sample(std=)` (it takes `sigma`), and the `is_in_manifold` example, whose "hyperboloid point" was never on the sheet (`-1.5² + 0.2² + 0.3² + 0.1² = -2.11`, not `-1`) — it now builds the ambient point with `spatial_to_hyperboloid`. The HoroPCA example requested `float64` without enabling x64, so it silently truncated to float32 with three `UserWarning`s
+- New sections for two breaking changes that previously appeared only in this changelog: the `atol` convention and `default_atol` ([Numerical Stability](user-guide/numerical-stability.md#the-atol-convention)) and learning-rate-schedule timing ([Optimizers](user-guide/optimizers.md#learning-rate-schedules))
+- Corrected the layer and test counts in `README.md` and `docs/index.md`: 20+ → 40+ layers, and "3,500+ tests / 850+ test functions" → 3,551 items across 735 test functions
 
 ## [1.0.0] - 2026-07-24
 
@@ -261,7 +272,8 @@ versioning.
 ### References
 - Based on research by Ganea et al. (2018), Bécigneul & Ganea (2019), Bdeir et al. (2023)
 
-[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/timoklein/hyperbolix/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/timoklein/hyperbolix/compare/v0.11.1...v1.0.0
 [0.11.1]: https://github.com/timoklein/hyperbolix/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/timoklein/hyperbolix/compare/v0.10.2...v0.11.0

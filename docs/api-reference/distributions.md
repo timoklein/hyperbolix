@@ -140,7 +140,7 @@ mean_ambient = jnp.concatenate([
 # Sample
 key = jax.random.PRNGKey(123)
 samples = wrapped_normal_hyperboloid.sample(
-    key, mean_ambient, std=0.15, c=1.0, sample_shape=(50,), manifold_module=hyperboloid
+    key, mean_ambient, sigma=0.15, c=1.0, sample_shape=(50,), manifold_module=hyperboloid
 )
 
 # Compute log probabilities

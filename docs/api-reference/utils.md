@@ -29,7 +29,7 @@ y = acosh(x)  # Handles edge cases near 1.0
 
 # Smooth clamping for stability
 z = jnp.array([0.99, 1.0, 1.01])
-z_clamped = smooth_clamp(z, min_val=0.0, max_val=1.0)
+z_clamped = smooth_clamp(z, min_value=0.0, max_value=1.0)
 ```
 
 ## Learnable Curvature
@@ -141,8 +141,8 @@ delta, diameter, rel_delta = get_delta(
     points_proj,
     manifold_module=poincare,
     c=1.0,
-    sample_size=500,  # Number of 4-point samples
-    seed=42
+    sample_size=500,  # Points subsampled before the pairwise distance matrix
+    key=jax.random.PRNGKey(42),  # Only used when len(points) > sample_size
 )
 
 print(f"Delta: {delta:.4f}")

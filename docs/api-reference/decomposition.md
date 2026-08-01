@@ -35,6 +35,10 @@ import jax.numpy as jnp
 from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.decomposition import HoroPCA
 
+# HoroPCA optimizes Busemann coordinates near the ideal boundary — request x64
+# before the first array is created, or every float64 below truncates to float32.
+jax.config.update("jax_enable_x64", True)
+
 manifold = Hyperboloid(dtype=jnp.float64)
 key = jax.random.PRNGKey(0)
 

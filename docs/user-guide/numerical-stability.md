@@ -677,19 +677,39 @@ Each manifold provides `is_in_manifold` for validation:
 
 ```python
 from hyperbolix.manifolds import Poincare, Hyperboloid
+from hyperbolix.nn_layers import spatial_to_hyperboloid
 import jax.numpy as jnp
 
 poincare = Poincare()
 hyperboloid = Hyperboloid()
 
-# Poincaré ball: ||x||² < 1/c
+# Poincaré ball: c·||x||² < 1
 x = jnp.array([0.5, 0.3])
-assert poincare.is_in_manifold(x, c=1.0, atol=1e-5)
+assert poincare.is_in_manifold(x, c=1.0)
 
-# Hyperboloid: -x₀² + Σxᵢ² = -1/c  (with x₀ > 0)
-x_ambient = jnp.array([1.5, 0.2, 0.3, 0.1])  # (dim+1,)
-assert hyperboloid.is_in_manifold(x_ambient, c=1.0, atol=1e-5)
+# Hyperboloid: -x₀² + Σxᵢ² = -1/c  (with x₀ > 0). Building the ambient point
+# from its spatial part is the only way to land on the sheet exactly:
+# x₀ = sqrt(||x_spatial||² + 1/c).
+x_ambient = spatial_to_hyperboloid(jnp.array([0.2, 0.3, 0.1]), 1.0, 1.0)  # (dim+1,)
+assert hyperboloid.is_in_manifold(x_ambient, c=1.0)
 ```
+
+### The `atol` Convention
+
+`is_in_manifold` and `is_in_tangent_space` take `atol: float | None = None`.
+Left as `None`, every manifold resolves it through
+`hyperbolix.manifolds._base.default_atol(dtype) = sqrt(finfo(dtype).eps)` —
+`3.45e-4` in float32, `1.49e-8` in float64. An explicit value is used as given:
+it is never floored, clamped, or ignored (through v1.0.0 the hyperboloid floored
+it at `1e-4`, so no caller could tighten it, and the Poincaré ball dropped it
+entirely). Ball membership tests
+the dimensionless residual `c||x||² - 1`, so one tolerance means the same thing
+at every curvature.
+
+The float64 default is strict enough to matter at large radii: a genuinely
+on-sheet hyperboloid point past hyperbolic distance ~11 accumulates more than
+`1.49e-8` of Lorentz residual just from storing `x₀`, so validate far-out points
+with an explicit `atol` rather than assuming the default is a bug.
 
 ### Batch Validation
 

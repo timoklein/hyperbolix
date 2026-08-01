@@ -124,6 +124,34 @@ You don't need separate optimizers for the Euclidean and manifold parts.
     the need for Riemannian optimization entirely. The numerics are typically
     cleaner and the optimizer setup is simpler.
 
+## Learning-Rate Schedules
+
+Both optimizers accept an `optax.Schedule` (any `count -> lr` callable) in
+place of a float, and re-read it on every `update()`:
+
+```python
+import optax
+from hyperbolix.optim import riemannian_adam
+
+schedule = optax.warmup_cosine_decay_schedule(
+    init_value=0.0, peak_value=1e-3, warmup_steps=100, decay_steps=10_000
+)
+optimizer = nnx.Optimizer(model, riemannian_adam(schedule), wrt=nnx.Param)
+```
+
+The schedule is resolved at the **pre-increment** step count, matching optax's
+`scale_by_schedule`: the k-th `update()` reads `schedule(k - 1)`, so the very
+first update uses `schedule(0)`. Adam-style bias correction deliberately keeps
+the post-increment count (`1 - beta**k`), which is also what optax's
+`scale_by_adam` does — the two are different counters by design. Constant
+learning rates are unaffected by this distinction.
+
+!!! warning "Behavior change after v1.0.0"
+    Through v1.0.0 the schedule was resolved at the post-increment count, so a
+    warmup ran one step ahead of the equivalent optax setup and `schedule(0)`
+    was never used. Runs that pinned a schedule against an optax baseline will
+    shift by one step.
+
 ## Common Pitfalls
 
 1. **Using `riemannian_adam` for HTC / FGG / PP / PV layers.** Adds compute
