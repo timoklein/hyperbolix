@@ -323,6 +323,36 @@ def test_pv_logmap_matches_logmap_0_at_origin(
     assert jnp.allclose(out_general, out_origin, atol=atol, rtol=rtol)
 
 
+def test_pv_retraction_is_exact_euclidean_addition(
+    pv_manifold: ProperVelocity,
+    curvature: float,
+    pv_points: jnp.ndarray,
+    pv_tangent_vectors: jnp.ndarray,
+) -> None:
+    """retraction(v, x) = x + v exactly, R_x(0) = x, and R_x(tv) = exp_x(tv) + O(t^2).
+
+    PV is unconstrained R^n, so the documented retraction is plain vector addition.
+    Quadratic-order agreement with expmap is the defining retraction property:
+    halving the step must shrink the batch-total deviation from expmap by ~4x.
+    """
+    retraction = jax.vmap(pv_manifold.retraction, in_axes=(0, 0, None))
+    expmap = jax.vmap(pv_manifold.expmap, in_axes=(0, 0, None))
+
+    out = retraction(pv_tangent_vectors, pv_points, curvature)
+    assert jnp.array_equal(out, pv_points + pv_tangent_vectors)
+    assert jnp.array_equal(retraction(jnp.zeros_like(pv_points), pv_points, curvature), pv_points)
+
+    # err(t) = ||R_x(tv) - exp_x(tv)|| per point; summed over the batch to average out
+    # per-point noise before taking the quadratic-shrink ratio.
+    def batch_err(t: float) -> float:
+        v_scaled = t * pv_tangent_vectors
+        diff = retraction(v_scaled, pv_points, curvature) - expmap(v_scaled, pv_points, curvature)
+        return float(jnp.sum(jnp.linalg.norm(diff, axis=-1)))
+
+    t = 0.1
+    assert batch_err(t / 2) <= 0.35 * batch_err(t)
+
+
 # ---------------------------------------------------------------------------
 # Parallel transport
 # ---------------------------------------------------------------------------
@@ -496,6 +526,23 @@ def test_pv_is_in_manifold_finite_inputs(pv_manifold: ProperVelocity, curvature:
 
     bad_inf = pv_points[0].at[0].set(jnp.inf)
     assert not bool(pv_manifold.is_in_manifold(bad_inf, curvature))
+
+
+def test_pv_is_in_tangent_space_finite_inputs(
+    pv_manifold: ProperVelocity,
+    curvature: float,
+    pv_points: jnp.ndarray,
+    pv_tangent_vectors: jnp.ndarray,
+) -> None:
+    """Any finite vector is tangent at any PV point (T_x PV = R^n); NaN/Inf vectors are not."""
+    is_tan = jax.vmap(pv_manifold.is_in_tangent_space, in_axes=(0, 0, None))
+    assert bool(jnp.all(is_tan(pv_tangent_vectors, pv_points, curvature)))
+
+    bad_nan = pv_tangent_vectors[0].at[0].set(jnp.nan)
+    assert not bool(pv_manifold.is_in_tangent_space(bad_nan, pv_points[0], curvature))
+
+    bad_inf = pv_tangent_vectors[0].at[0].set(jnp.inf)
+    assert not bool(pv_manifold.is_in_tangent_space(bad_inf, pv_points[0], curvature))
 
 
 def test_pv_proj_is_identity_on_finite_inputs(
