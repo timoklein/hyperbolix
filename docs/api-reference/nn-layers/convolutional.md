@@ -60,9 +60,26 @@ Euclidean activations apply directly between conv layers.
     options:
       heading_level: 3
 
-## Pooling
+## Pooling & flattening (conv → FC bridge)
+
+Two ways to turn an `(B, H', W', C)` hyperboloid feature map into one point per
+sample before a classification head. `hyp_avg_pool2d` averages the spatial parts over
+the grid and keeps the width (`C` in → `C` out). `hyp_flatten2d` keeps every pixel by
+LogCat-concatenating them, so the width grows to `H'·W'·(C−1) + 1`.
+
+!!! warning "Do not flatten a feature map with a plain `reshape`"
+    Concatenating `N = H'·W'` hyperboloid points without the LogCat digamma rescale
+    inflates the flattened point's spatial radius by `≈ √(H'·W')` — the same
+    dimension-widening bias `Hyperboloid.log_radius_concat` exists to correct inside
+    `HypConv2DHyperboloidILNN`'s per-patch concat, but with `N` = the whole feature
+    map instead of one 3×3 receptive field. Use `hyp_flatten2d`; see the
+    [numerical-stability guide](../../user-guide/numerical-stability.md#logcat-flatten).
 
 ::: hyperbolix.nn_layers.hyp_avg_pool2d
+    options:
+      heading_level: 3
+
+::: hyperbolix.nn_layers.hyp_flatten2d
     options:
       heading_level: 3
 

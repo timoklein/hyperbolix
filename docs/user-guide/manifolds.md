@@ -37,6 +37,7 @@ different conventions:
 | `HypLinearPoincare*`, `HypConv2DPoincare`, `HypRegressionPoincare*` | `in_dim` | **Spatial (d)** — Poincaré has no time | `32` |
 | `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV` | `in_dim` | **Spatial (d)** | `32` |
 | `hyp_avg_pool2d` (Hyperboloid global pool) | NHWC channels | **Ambient (d+1)** | `33` |
+| `hyp_flatten2d` (Hyperboloid LogCat flatten) | NHWC channels | **Ambient (d+1)** in, `H·W·d + 1` out | `33` in, `H·W·32 + 1` out |
 | `ProductManifold` factor `dim` | per-factor | **Same as the factor's layer** (ambient for Hyperboloid, spatial otherwise) | `33` for `Hyperboloid`, `32` for `Poincare` |
 
 !!! warning "HRC vs HTC normalization"

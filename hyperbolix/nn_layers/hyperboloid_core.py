@@ -27,6 +27,8 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from hyperbolix.manifolds import Manifold
+from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
 from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 
@@ -515,6 +517,112 @@ def hyp_avg_pool2d(
     x_space_HWD = x[..., 1:]  # (..., H, W, D) — drop time coordinate
     x_pooled_D = jnp.mean(x_space_HWD, axis=(-3, -2))  # (..., D)
     return spatial_to_hyperboloid(x_pooled_D, c_in=c, c_out=c, eps=eps)  # (..., D+1)
+
+
+def hyp_flatten2d(
+    x: Float[Array, "... H W dim_plus_1"],
+    manifold_module: Manifold,
+    c: float,
+) -> Float[Array, "... flat_dim_plus_1"]:
+    """LogCat-flatten a hyperboloid feature map into one point per sample (conv → FC boundary).
+
+    Concatenates the ``H·W`` per-pixel hyperboloid points of a feature map into a single
+    hyperboloid point, using the log-radius-preserving concatenation
+    :meth:`~hyperbolix.manifolds.hyperboloid.Hyperboloid.log_radius_concat` (LogCat, Shi
+    et al. 2026, Sec. 4.3) rather than a plain ``reshape``/``hcat``. This is the flatten
+    step between a hyperboloid convolutional trunk and an FC / MLR head.
+
+    **Why not a plain reshape.** Stacking the ``N = H·W`` spatial blocks without a
+    correction widens the spatial dimension from ``D`` to ``N·D`` while leaving each
+    block's entries untouched. For Gaussian-ish spatial parts ``‖v‖² ~ χ²_k``, so
+    ``E[log‖v‖] = ½·(ψ(k/2) + log 2)`` grows with the dimension ``k``: the flattened
+    point's spatial radius (and hence its geodesic radius from the origin) inflates by
+    ``≈ √(H·W)``. At a conv → FC boundary ``N`` is the whole feature map — tens to low
+    hundreds — so the inflation is far larger than the ``√9`` of a single 3x3 receptive
+    field, and an MLR head fed such a point sits pinned at its saturation cap at init.
+    LogCat rescales every block by the digamma ratio
+    ``s = exp(½·(ψ(D/2) - ψ(N·D/2))) ≈ 1/√N`` before concatenating and then recomputes
+    the time coordinate, so the expected log spatial radius of the flattened point
+    matches that of one pixel.
+
+    Dimension bookkeeping (all hyperboloid channel counts are **ambient**, time first):
+    ``H·W`` blocks of ``D = A - 1`` spatial dims each become one point with ``H·W·D``
+    spatial dims plus a single time coordinate, i.e. ``A' = H·W·(A - 1) + 1``. Note this
+    grows the width — pair it with a dimensionality-reducing head, or pool with
+    :func:`hyp_avg_pool2d` instead when a fixed-width global summary is what you want.
+
+    Parameters
+    ----------
+    x : Array, shape (..., H, W, A)
+        Hyperboloid feature map with curvature ``c`` in **NHWC** layout. The last axis is
+        the ambient per-pixel dimension ``A = D + 1`` (time + spatial); the two axes
+        before it are height ``H`` and width ``W``. Leading axes are treated as batch.
+    manifold_module : Manifold
+        Hyperboloid manifold instance (e.g. ``hyperbolix.manifolds.Hyperboloid()``);
+        must provide ``log_radius_concat``.
+    c : float
+        Curvature parameter (positive, c > 0).
+
+    Returns
+    -------
+    Array, shape (..., H*W*(A-1)+1)
+        One hyperboloid point per sample, on the widened hyperboloid with curvature ``c``.
+
+    Raises
+    ------
+    ValueError
+        If ``x`` has fewer than 3 axes (no ``(H, W, A)`` tail to flatten).
+    TypeError
+        If ``manifold_module`` is not a Hyperboloid-like manifold.
+
+    See Also
+    --------
+    hyperbolix.manifolds.hyperboloid.Hyperboloid.log_radius_concat : The LogCat operation.
+    hyperbolix.manifolds.hyperboloid.Hyperboloid.hcat : Unscaled concatenation (inflates the radius).
+    hyp_avg_pool2d : Dimension-preserving global pool — the alternative conv → FC bridge.
+
+    References
+    ----------
+    Shi et al. "Intrinsic Lorentz Neural Network." ICLR 2026, Sec. 4.3 (LogCat).
+
+    Examples
+    --------
+    >>> import jax
+    >>> import jax.numpy as jnp
+    >>> from hyperbolix.manifolds import Hyperboloid
+    >>> from hyperbolix.nn_layers.hyperboloid_core import hyp_flatten2d
+    >>>
+    >>> hyperboloid = Hyperboloid(dtype=jnp.float32)
+    >>> key = jax.random.PRNGKey(0)
+    >>> v = jax.random.normal(key, (4, 4, 4, 17), dtype=jnp.float32) * 0.1
+    >>> v = v.at[..., 0].set(0.0)  # tangent vectors at the origin
+    >>> x = jax.vmap(jax.vmap(jax.vmap(
+    ...     hyperboloid.expmap_0, in_axes=(0, None)
+    ... ), in_axes=(0, None)), in_axes=(0, None))(v, 1.0)
+    >>> x.shape
+    (4, 4, 4, 17)
+    >>> y = hyp_flatten2d(x, hyperboloid, c=1.0)
+    >>> y.shape  # 4*4 blocks of 16 spatial dims + 1 time coordinate
+    (4, 257)
+    """
+    # Dimension key: H=height, W=width, N=H*W (blocks), D=per-pixel spatial dim,
+    #                A=per-pixel ambient dim (D+1), B=flattened batch, Af=H*W*D+1
+
+    validate_hyperboloid_manifold(manifold_module, ("log_radius_concat",))
+    if x.ndim < 3:
+        raise ValueError(
+            f"hyp_flatten2d expects an NHWC-style array with at least 3 axes (H, W, ambient), got shape {x.shape}."
+        )
+
+    *lead_shape, height, width, ambient = x.shape
+
+    # Collapse leading (batch) axes and the H/W grid: one (N, A) point sequence per sample.
+    points_BNA = x.reshape(-1, height * width, ambient)  # (B, N, A)
+
+    # LogCat per sample: (N, A) -> (N*D+1,). vmap because manifold ops are single-point.
+    flat_BAf = jax.vmap(manifold_module.log_radius_concat, in_axes=(0, None))(points_BNA, c)  # (B, Af)
+
+    return flat_BAf.reshape(*lead_shape, flat_BAf.shape[-1])  # (..., Af)
 
 
 def hrc(

@@ -253,6 +253,80 @@ warning to point at.
 See the [initialization scales table](nn-layers.md#initialization-scales) for
 each layer family's default and how to recover reference inits.
 
+## Flattening a Conv Feature Map: Use LogCat, Not `reshape` {#logcat-flatten}
+
+At the **conv → FC boundary** of a hyperboloid CNN you have an `(B, H', W', C)`
+feature map — one hyperboloid point per pixel — and need one point per sample for
+the classification head. The reflex from Euclidean code is
+`x.reshape(B, H' * W' * C)`, and on the hyperboloid that is wrong twice over: it
+concatenates `H'·W'` time coordinates as if they were features, and even the
+correct-by-construction version (`Hyperboloid.hcat`, which stacks only the spatial
+parts and rebuilds one time coordinate) inflates the radius.
+
+The inflation is a dimension effect, not a bug in `hcat`. For Gaussian-ish spatial
+parts $\|v\|^2 \sim \chi^2_k$, so
+
+$$
+\mathbb{E}[\log \|v\|] = \tfrac{1}{2}\left(\psi(k/2) + \log 2\right),
+$$
+
+which **grows with the dimension $k$**. Concatenating $N = H' \cdot W'$ blocks widens
+$k$ from $d$ to $N\,d$ and lifts the expected log spatial radius by $\approx \tfrac12 \log N$
+— a radius inflation of $\approx \sqrt{H' \cdot W'}$. LogCat
+(`Hyperboloid.log_radius_concat`, Shi et al. 2026 Sec. 4.3) cancels it by shrinking
+every block first:
+
+$$
+s = \exp\!\left(\tfrac{1}{2}\left(\psi(d/2) - \psi(N d/2)\right)\right) \approx \frac{1}{\sqrt{N}},
+$$
+
+then recomputing the time coordinate so the result stays on the (widened) hyperboloid.
+
+!!! warning "Why this bites harder at the FC boundary than inside a conv"
+    `HypConv2DHyperboloidILNN` already applies LogCat to each receptive field, where
+    $N = 9$ for a 3×3 kernel. At the flatten, $N$ is the **entire feature map** —
+    tens to low hundreds — so the naive flatten hands the head a point whose radius
+    is an order of magnitude past what its weights were initialized for. The
+    observed symptom is an MLR head sitting at 100% saturation-cap occupancy at
+    step 0 (logits pinned, gradients ≈ 0), which clears when the flatten uses LogCat.
+
+Use `hyp_flatten2d`, which reshapes the grid to the per-sample point sequence and
+applies LogCat for you:
+
+```python
+import jax
+import jax.numpy as jnp
+from flax import nnx
+
+from hyperbolix.manifolds import Hyperboloid
+from hyperbolix.nn_layers import HypConv2DHyperboloidILNN, HypRegressionHyperboloid, hyp_flatten2d
+
+hyperboloid, c = Hyperboloid(), 1.0
+conv = HypConv2DHyperboloidILNN(
+    manifold_module=hyperboloid, in_channels=17, out_channels=9,
+    kernel_size=3, stride=2, rngs=nnx.Rngs(0),
+)
+head = HypRegressionHyperboloid(
+    manifold_module=hyperboloid, in_dim=4 * 4 * 8 + 1, out_dim=10, rngs=nnx.Rngs(1),
+)
+
+v = 0.1 * jax.random.normal(jax.random.PRNGKey(2), (8, 8, 8, 17))
+x = jax.vmap(jax.vmap(jax.vmap(hyperboloid.expmap_0, in_axes=(0, None)), in_axes=(0, None)), in_axes=(0, None))(
+    v.at[..., 0].set(0.0), c
+)                                          # (8, 8, 8, 17) on-manifold feature map
+
+feat = conv(x, c)                          # (8, 4, 4, 9)  — 9 ambient = 8 spatial + time
+flat = hyp_flatten2d(feat, hyperboloid, c)  # (8, 129)     — 4*4*8 spatial + one time
+logits = head(flat, c)                     # (8, 10)
+```
+
+**Width bookkeeping.** `hyp_flatten2d` grows the ambient dimension from `A` per pixel
+to `H'·W'·(A − 1) + 1`, so size the head accordingly (`in_dim = 4*4*8 + 1 = 129`
+above). If that width is impractical, use `hyp_avg_pool2d` instead — it averages the
+spatial parts over the grid and keeps the width at `A`, at the cost of discarding
+spatial layout. Both are documented on the
+[convolutional API page](../api-reference/nn-layers/convolutional.md#pooling-flattening-conv-fc-bridge).
+
 ## Proper Velocity: An Unconstrained Alternative
 
 The Proper Velocity (PV) model (Chen et al. 2026) sidesteps the conformal-factor and boundary problems above by representing hyperbolic geometry in **unconstrained $\mathbb{R}^n$**. Points carry no norm constraint, so there is no boundary to drift toward and no $\lambda(x) \to \infty$ singularity.
