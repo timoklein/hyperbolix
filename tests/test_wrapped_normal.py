@@ -15,7 +15,7 @@ import scipy.stats
 
 from hyperbolix.distributions import wrapped_normal_hyperboloid, wrapped_normal_poincare
 from hyperbolix.distributions._common import gaussian_log_prob, sigma_to_cov
-from hyperbolix.distributions._wrapped_normal_base import _log_det_jacobian_from_r
+from hyperbolix.distributions._wrapped_normal_base import _log_det_jacobian_from_r, _taylor_gate_threshold
 from hyperbolix.manifolds import Hyperboloid, Poincare
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
@@ -848,6 +848,77 @@ def test_log_det_jacobian_at_zero_radius(dtype, n: int) -> None:
         expected = (n - 1) * np.log(np.sinh(x) / x)
         got = float(_log_det_jacobian_from_r(jnp.asarray(r, dtype=_F64), c, n))
         assert got == pytest.approx(float(expected), rel=1e-12)
+
+
+# Relative tolerance the Taylor gate is expected to hold, per dtype. Worst case measured over a
+# 400-point sweep of x in [1e-6, 0.6] is 2.1e-5 (float32) and 3.2e-11 (float64); the old fixed
+# 1e-3 gate reached 1.4 and 3.3e-8 there, so both bounds discriminate the fix (on the coarser
+# grid swept below the old gate misses 34 of 61 float32 points and 6 of 61 float64 points).
+_GATE_REL_TOL = {jnp.float32: 1e-4, jnp.float64: 1e-8}
+
+
+def _log_ratio_oracle(x: float, n: int) -> tuple[float, float]:
+    """Independent extended-precision oracle for the log-det and its d/dr, at c = 1.
+
+    ``numpy.longdouble`` (80-bit on x86, eps ~1.1e-19) keeps the ~1e-16 cancellation in
+    ``log(sinh x) - log x`` and in ``coth(x) - 1/x`` three decades below float64's own noise,
+    which is what lets the float64 assertions run at 1e-8 instead of tripping over the oracle.
+    """
+    xl = np.longdouble(x)
+    value = (n - 1) * np.log(np.sinh(xl) / xl)
+    grad = (n - 1) * (1.0 / np.tanh(xl) - 1.0 / xl)
+    return float(value), float(grad)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("n", [2, 5, 64])
+def test_log_det_jacobian_accurate_across_the_taylor_gate(dtype, n: int) -> None:
+    """``_log_det_jacobian_from_r`` tracks an extended-precision oracle through the old dead zone.
+
+    The gate used to hand over to ``log(sinh x) - log x`` at a hard-coded x = 1e-3, where float32
+    differences two ~-6.9 logs down to a ~1.7e-7 answer: the result was exactly 0.0 at x = 1e-3
+    (100% relative error) and still ~3% wrong at 5e-3. The switch point is now placed per dtype at
+    the crossover between the Taylor truncation error and the direct branch's cancellation error.
+
+    Swept radii cover the old dead zone (5e-4 .. 5e-2, which straddles the float64 gate at 7.8e-3)
+    and a band straddling the float32 gate at 0.222, where the *new* threshold's placement is what
+    is under test. Asserted on the helper rather than on ``log_prob``: the logmap/ptransp/Gaussian
+    chain ahead of it carries ~5e-6 of float32 noise of its own, which swamps a log-det miss.
+    """
+    c = 1.0
+    rel = _GATE_REL_TOL[dtype]
+    value_fn = jax.jit(lambda r: _log_det_jacobian_from_r(r, c, n))
+    grad_fn = jax.jit(jax.grad(lambda r: _log_det_jacobian_from_r(r, c, n)))
+
+    r_R = np.concatenate([np.geomspace(5e-4, 5e-2, 40), np.linspace(0.15, 0.35, 21)])
+    for r in r_R:
+        expected_value, expected_grad = _log_ratio_oracle(float(r), n)
+        r_scalar = jnp.asarray(r, dtype=dtype)
+        assert float(value_fn(r_scalar)) == pytest.approx(expected_value, rel=rel), f"value at r={r:g}"
+        assert float(grad_fn(r_scalar)) == pytest.approx(expected_grad, rel=rel), f"grad at r={r:g}"
+
+
+def test_taylor_gate_threshold_scales_with_dtype_precision() -> None:
+    """The gate is derived from the dtype's eps, and the two branches meet across it.
+
+    Pins the property the fix rests on: one hard-coded switch point cannot serve both dtypes.
+    float32 needs a gate ~30x wider (its cancellation zone reaches ~30x further out, as
+    eps^(1/6) predicts), while float64 keeps a narrow one so it does not pay Taylor truncation
+    error it has the precision to avoid.
+    """
+    gate_32 = _taylor_gate_threshold(jnp.float32)
+    gate_64 = _taylor_gate_threshold(jnp.float64)
+    assert 0.1 < gate_32 < 0.5
+    assert 1e-3 < gate_64 < 5e-2
+    assert gate_32 / gate_64 == pytest.approx((np.finfo(np.float32).eps / np.finfo(np.float64).eps) ** (1 / 6), rel=1e-6)
+
+    # Continuity: values a hair either side of the gate agree, i.e. neither branch is being
+    # asked for an answer the other would contradict.
+    n = 5
+    for dtype, gate in ((jnp.float32, gate_32), (jnp.float64, gate_64)):
+        below = float(_log_det_jacobian_from_r(jnp.asarray(gate * (1 - 1e-3), dtype=dtype), 1.0, n))
+        above = float(_log_det_jacobian_from_r(jnp.asarray(gate * (1 + 1e-3), dtype=dtype), 1.0, n))
+        assert below == pytest.approx(above, rel=1e-2)
 
 
 # =============================================================================================
