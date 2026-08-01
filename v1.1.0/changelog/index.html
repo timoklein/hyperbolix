@@ -1,0 +1,3483 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Hyperbolic Deep Learning in JAX">
+      
+      
+        <meta name="author" content="Timo Klein, Thomas Lang, Andrii Shkabrii">
+      
+      
+        <link rel="canonical" href="https://hyperbolix.github.io/hyperbolix/v1.1.0/changelog/">
+      
+      
+        <link rel="prev" href="../developer-guide/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.4">
+    
+    
+      
+        <title>Changelog - Hyperbolix</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#changelog" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Hyperbolix" class="md-header__button md-logo" aria-label="Hyperbolix" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Hyperbolix
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Changelog
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/hyperbolix/hyperbolix" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    hyperbolix
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../user-guide/manifolds/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api-reference/manifolds/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../developer-guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Developer Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Hyperbolix" class="md-nav__button md-logo" aria-label="Hyperbolix" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Hyperbolix
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/hyperbolix/hyperbolix" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    hyperbolix
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user-guide/manifolds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manifolds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user-guide/nn-layers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Neural Network Layers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user-guide/optimizers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Riemannian Optimizers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user-guide/batching-jit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Batching & JIT
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user-guide/numerical-stability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numerical Stability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user-guide/training-workflows/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training Workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/manifolds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manifolds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Neural Network Layers
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Neural Network Layers
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/linear/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Linear
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/convolutional/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Convolutional
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/normalization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Normalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/attention/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Attention & Transformer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/regression/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Regression & MLR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/activations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Activations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/positional-encoding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Positional Encoding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/vector-quantization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vector Quantization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/nn-layers/primitives/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Primitives & Helpers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/optimizers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Optimizers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/distributions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Distributions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/decomposition/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decomposition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-reference/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../developer-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unreleased
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#110-2026-08-01" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1.0 - 2026-08-01
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.1.0 - 2026-08-01">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Documentation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#100-2026-07-24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.0.0 - 2026-07-24
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.0.0 - 2026-07-24">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0110-2026-07-14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.11.0 - 2026-07-14
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.11.0 - 2026-07-14">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0102-2026-07-02" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.10.2 - 2026-07-02
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.10.2 - 2026-07-02">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0101-2026-06-30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.10.1 - 2026-06-30
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.10.1 - 2026-06-30">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0100-2026-06-29" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.10.0 - 2026-06-29
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.10.0 - 2026-06-29">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#090-2026-06-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.9.0 - 2026-06-23
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.9.0 - 2026-06-23">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#082-2026-06-12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.8.2 - 2026-06-12
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.8.2 - 2026-06-12">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#081-2026-06-12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.8.1 - 2026-06-12
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.8.1 - 2026-06-12">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#080-2026-06-11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.8.0 - 2026-06-11
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.8.0 - 2026-06-11">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#072-2026-05-22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.7.2 - 2026-05-22
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.7.2 - 2026-05-22">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#071-2026-05-21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.7.1 - 2026-05-21
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.7.1 - 2026-05-21">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#070-2026-05-18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.7.0 - 2026-05-18
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.7.0 - 2026-05-18">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#060-2026-04-20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.6.0 - 2026-04-20
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.6.0 - 2026-04-20">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#053-2026-04-14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.5.3 - 2026-04-14
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.5.3 - 2026-04-14">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#052-2026-04-02" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.5.2 - 2026-04-02
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.5.2 - 2026-04-02">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#051-2026-03-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.5.1 - 2026-03-27
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.5.1 - 2026-03-27">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#050-2026-03-26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.5.0 - 2026-03-26
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.5.0 - 2026-03-26">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#042-2026-03-24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.4.2 - 2026-03-24
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.4.2 - 2026-03-24">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#041-2026-03-19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.4.1 - 2026-03-19
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.4.1 - 2026-03-19">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#040-2026-03-17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.4.0 - 2026-03-17
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.4.0 - 2026-03-17">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#030-2026-03-10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.3.0 - 2026-03-10
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.3.0 - 2026-03-10">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#021-2026-03-06" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.2.1 - 2026-03-06
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.2.1 - 2026-03-06">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#020-2026-03-05" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.2.0 - 2026-03-05
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.2.0 - 2026-03-05">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#014-2026-02-10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.1.4 - 2026-02-10
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.1.4 - 2026-02-10">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unreleased
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#110-2026-08-01" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1.0 - 2026-08-01
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.1.0 - 2026-08-01">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Documentation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#100-2026-07-24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.0.0 - 2026-07-24
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.0.0 - 2026-07-24">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0110-2026-07-14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.11.0 - 2026-07-14
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.11.0 - 2026-07-14">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0102-2026-07-02" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.10.2 - 2026-07-02
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.10.2 - 2026-07-02">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0101-2026-06-30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.10.1 - 2026-06-30
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.10.1 - 2026-06-30">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0100-2026-06-29" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.10.0 - 2026-06-29
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.10.0 - 2026-06-29">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#090-2026-06-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.9.0 - 2026-06-23
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.9.0 - 2026-06-23">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#082-2026-06-12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.8.2 - 2026-06-12
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.8.2 - 2026-06-12">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#081-2026-06-12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.8.1 - 2026-06-12
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.8.1 - 2026-06-12">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#080-2026-06-11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.8.0 - 2026-06-11
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.8.0 - 2026-06-11">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#072-2026-05-22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.7.2 - 2026-05-22
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.7.2 - 2026-05-22">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#071-2026-05-21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.7.1 - 2026-05-21
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.7.1 - 2026-05-21">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#070-2026-05-18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.7.0 - 2026-05-18
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.7.0 - 2026-05-18">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#060-2026-04-20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.6.0 - 2026-04-20
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.6.0 - 2026-04-20">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#053-2026-04-14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.5.3 - 2026-04-14
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.5.3 - 2026-04-14">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#052-2026-04-02" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.5.2 - 2026-04-02
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.5.2 - 2026-04-02">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#051-2026-03-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.5.1 - 2026-03-27
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.5.1 - 2026-03-27">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#050-2026-03-26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.5.0 - 2026-03-26
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.5.0 - 2026-03-26">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#042-2026-03-24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.4.2 - 2026-03-24
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.4.2 - 2026-03-24">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#041-2026-03-19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.4.1 - 2026-03-19
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.4.1 - 2026-03-19">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#040-2026-03-17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.4.0 - 2026-03-17
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.4.0 - 2026-03-17">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#030-2026-03-10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.3.0 - 2026-03-10
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.3.0 - 2026-03-10">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#021-2026-03-06" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.2.1 - 2026-03-06
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.2.1 - 2026-03-06">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#020-2026-03-05" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.2.0 - 2026-03-05
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.2.0 - 2026-03-05">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#014-2026-02-10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.1.4 - 2026-02-10
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.1.4 - 2026-02-10">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="changelog">Changelog<a class="headerlink" href="#changelog" title="Permanent link">&para;</a></h1>
+<p>All notable changes to Hyperbolix will be documented in this file.</p>
+<p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
+and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
+<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.1.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="110-2026-08-01"><a href="https://github.com/timoklein/hyperbolix/compare/v1.0.0...v1.1.0">1.1.0</a> - 2026-08-01<a class="headerlink" href="#110-2026-08-01" title="Permanent link">&para;</a></h2>
+<p>A correctness release. A full audit of the test suite replaced shape-only checks and
+self-comparisons with independently transcribed NumPy/SciPy oracles, and every library
+defect it exposed is fixed below. No new capability beyond <code>hyp_flatten2d</code>; several
+corrections change behavior or call signatures, each marked <strong>Breaking</strong> and each with the
+migration in its entry.</p>
+<h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>hyp_flatten2d</code></strong> (<code>hyperbolix.nn_layers</code>) — radius-preserving flatten of an NHWC hyperboloid feature map into one manifold point per image via <code>Hyperboloid.log_radius_concat</code>: <code>(B, H, W, A) → (B, H·W·(A−1)+1)</code>. The naive alternative (reshape + <code>hcat</code>) inflates the expected spatial radius by <code>≈ √(H·W)</code> (a 4×4 map: 4×); LogCat's digamma rescale hands the classifier head the per-pixel radius unchanged. This is the flatten step for <code>HypConv2DHyperboloidILNN</code> stacks feeding <code>HypRegressionHyperboloid</code>/<code>FGGLorentzMLR</code></li>
+<li><strong><code>Poincare.proj_batch</code></strong> — batched sibling of <code>Hyperboloid.proj_batch</code> (arbitrary leading axes, bit-identical to <code>vmap(proj)</code>); HoroPCA and CO-SNE now use it instead of hand-rolled vmaps</li>
+<li><strong><code>hyperbolix.manifolds._base.default_atol(dtype) = sqrt(finfo(dtype).eps)</code></strong> — the library-wide constraint-tolerance convention (float32 3.45e-4, float64 1.49e-8) that <code>is_in_manifold</code> / <code>is_in_tangent_space</code> resolve <code>None</code> through on every manifold</li>
+<li><strong><code>HypformerPositionalEncoding</code> accepts <code>param_dtype</code></strong> and forwards it to its internal <code>HTCLinear</code> — float64 models were previously impossible (weights pinned to float32)</li>
+<li><strong>New exports</strong>: <code>hcat_ambient_dim</code> and <code>busemann_fc_poincare_output</code> from <code>hyperbolix.nn_layers</code> (both already served as test oracles and answer user-facing sizing questions); <code>lift_ideals</code> and <code>orthonormalize_rows</code> from <code>hyperbolix.decomposition</code></li>
+</ul>
+<h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>Hyperboloid.log_radius_concat</code> scaled the wrong way, amplifying the spatial radius instead of preserving it.</strong> The two digamma arguments were swapped: the shipped <code>exp(½·(ψ(N·d/2) − ψ(d/2)))</code> is <code>≈ √N</code>, so concatenating <code>N</code> blocks <em>inflated</em> the expected log spatial radius by <code>≈ log N</code> — worse than the plain <code>hcat</code> the rescale exists to correct. The correct factor is the shrink <code>exp(½·(ψ(d/2) − ψ(N·d/2))) ≈ 1/√N</code>: for Gaussian spatial parts <code>‖v‖² ~ χ²_k</code> gives <code>E[log‖v‖] = ½(ψ(k/2) + log 2)</code>, so restoring the per-block value after widening <code>d → N·d</code> requires dividing by the ratio of the two chi radii. Nothing raised, because the mis-scaled output is still a valid manifold point (Lorentz residual ~1e-13) — only its radius was wrong. The Shi et al. 2026 reference implementation has the same sign error. Sole affected layer: <code>HypConv2DHyperboloidILNN</code>, where it inflated the spatial radius ≈9.4× per 3×3 conv, compounding with depth (<code>hcat</code>-based layers — FGG, FHNN — never used this path). <strong>Behavior change</strong> — see the coupled default-init change below</li>
+<li><strong><code>hyperbolix.optim.has_manifold_params</code> always returned <code>False</code>.</strong> <code>nnx.Variable</code> is itself a registered pytree node whose single child is the raw array, so the unguarded <code>jax.tree_util.tree_leaves</code> call unwrapped every <code>ManifoldParam</code> into an <code>ArrayImpl</code> before the <code>isinstance</code> check ran — the function reported "no manifold parameters" for a bare <code>ManifoldParam</code>, a dict of parameters, <code>nnx.state(model, nnx.Param)</code> (its own documented usage) and a model alike. The traversal now stops at <code>nnx.Variable</code> leaves. The Riemannian optimizers were <strong>not</strong> affected: <code>_riemannian_base</code> already flattened with that guard everywhere it inspects Variable types, so only callers using <code>has_manifold_params</code> as a guard saw the false negative</li>
+<li><strong>Wrapped-normal <code>log_prob</code> crashed on <code>sample()</code>'s own output whenever the mean was batched and <code>sample_shape</code> non-empty</strong> (both <code>distributions.wrapped_normal_poincare</code> and <code>wrapped_normal_hyperboloid</code>). Step 2 of the density computation vmapped the sample axis <code>S</code> and the mean's batch axis <code>B</code> together, so any call with <code>mu.ndim &gt; 1</code> plus a non-empty <code>sample_shape</code> raised a <code>ValueError</code>/<code>TypeError</code> on shapes the sampler itself produces; step 1 was also mis-batched (2-D <code>mu</code> pushed through the single-point <code>logmap</code>, relying on broadcasting). Both steps now share a <code>_vmap_sample_and_batch</code> helper that vmaps batch axes innermost and sample axes outermost, matching the <code>(*S, *B, dim)</code> layout of the sampling side; previously-working shape combinations are bit-for-bit unchanged. <code>log_prob</code> is now pinned from four independent directions (2-D polar quadrature integrating to 1, change-of-variables vs <code>jacfwd</code> of the sampling map, the flat <code>c → 0</code> limit vs <code>scipy</code> MVN, and the Poincaré↔hyperboloid isometry cross-check with no Jacobian — the density is w.r.t. Riemannian volume)</li>
+<li><strong>Poincaré wrapped-normal <code>log_prob</code> gradient at <code>z == mu</code> was NaN — in float64 too, not just float32.</strong> The radial norm entered the log-det Jacobian without a floor, so the gradient of the norm at the mean produced NaN; it is now floored at <code>1e-15</code> exactly like the hyperboloid sibling (the zero gradient <code>maximum</code> contributes on the clamped side is correct — the log-det is stationary at <code>r = 0</code>). Separately, the shared <code>_log_det_jacobian_from_r</code> helper used a single <code>jnp.where</code> across its Taylor gate, so reverse-mode AD propagated NaN from the unselected <code>log(sinh(x)) − log(x)</code> branch at exactly <code>r = 0</code>; it now uses the double-where idiom. That second defect is unreachable from either <code>log_prob</code> once <code>r</code> is floored, but is fixed for direct callers of the helper</li>
+<li><strong><code>smooth_clamp</code> could exceed its own bounds on narrow windows.</strong> All three clamps (<code>smooth_clamp</code>, <code>smooth_clamp_min</code>, <code>smooth_clamp_max</code>) are re-derived as gate-free closed forms: the two-sided clamp is the difference form <code>min + softplus_β(x−min) − softplus_β(x−max)</code>, provably inside <code>(min, max)</code> for every window and β — composing the two one-sided clamps (the old construction) overshoots a narrow window by up to <code>ln(1+e^(−βw))/β</code>, which for <code>βw ≲ 1</code> is the size of the window itself; a test now pins that the composition fails so it can't be "simplified" back. Evaluation uses the hinge+remainder split <code>clip(x) + tail − tail</code> (tails ≤ <code>ln 2/β</code>), avoiding float32 catastrophic cancellation, and the gradient is exactly <code>sigmoid(β(x−min)) − sigmoid(β(x−max))</code> with correct one-sided values at the hinge. Downstream consequence: the <code>VERSION_SMOOTHENED</code> hyperboloid distance is now monotone with floor <code>acosh(1+ln2/β)/√c ≈ 0.166/√c</code> and agrees with <code>VERSION_DEFAULT</code> beyond <code>≈ 0.8/√c</code> (it was previously non-monotone near coincident points)</li>
+<li><strong><code>Euclidean.is_in_manifold</code> returned constant <code>True</code>, accepting NaN/Inf</strong> — it now checks finiteness. The same defect existed on <code>is_in_tangent_space</code> for <code>Euclidean</code>, <code>Poincare</code>, <em>and</em> <code>Stereographic</code> (the tangent space of an open subset of R^n is R^n — finiteness is the only constraint); all three fixed</li>
+<li><strong>Wrapped-normal log-det-Jacobian Taylor gate is now dtype-aware.</strong> The <code>log(sinh(x)/x)</code> series switch used a float32-tuned threshold in float64 too; it now sits at <code>(10³·eps)^(1/6)</code> per dtype — the crossover where the 2-term series' truncation error (<code>~x⁶/2835</code>) meets the direct branch's cancellation error (<code>~eps·|log x|</code>) — with the series extended to two terms. Validated against a high-precision oracle on both sides of both gates</li>
+<li><strong><code>LearnableCurvature</code>'s straight-through clamp amplified gradients in the clamped region.</strong> With <code>parameterization="log"</code> at the exponent cap, the pass-through handed the raw parameter a gradient scaled by <code>dc/draw = c</code> — up to <code>e^15</code> at the cap — so one step could catapult the parameter across its whole range. The pass-through now divides the clamped-region gradient by <code>max(dc/draw, 1)</code> (implemented as a stop-gradient carrier swap, so no reciprocal is formed that would flush to zero in float32 at the cap). Interior gradients are bit-identical, the forward value is unchanged, and gradients below the lower clamp are never amplified either</li>
+<li><strong><code>ProperVelocity.dist</code>/<code>dist_0</code> returned NaN gradients at the origin</strong> (<code>grad dist(0,0)</code>, <code>grad dist_0(0)</code>): bare <code>jnp.linalg.norm</code> has a <code>0/0</code> VJP at the zero vector. Both now use the module's <code>_safe_norm</code>, whose gradient at 0 is exactly 0 — the correct subgradient. Value shifts by at most <code>1e-15</code>, below float64 resolution of any distance</li>
+<li><strong><code>uniform_poincare</code> hardcoded float64 and broke its own shape contract.</strong> <code>log_prob</code> now returns <code>x.dtype</code> (was always float64) and honours the documented <code>(..., n) → (...)</code> signature at any rank (<code>ndim &gt; 2</code> raised a <code>dot_general</code> <code>TypeError</code>); <code>sample</code> infers its dtype from <code>center</code>, then <code>manifold_module</code>, then JAX's default float; <code>volume</code> takes a <code>dtype</code> argument. The Gauss-Legendre tables are plain Python tuples now, so <code>import hyperbolix</code> no longer emits three <code>UserWarning</code>s (and silently truncated float32 tables) when <code>jax_enable_x64</code> is off</li>
+<li><strong>The two <code>hyperbolix.utils.helpers</code> docstring examples raised <code>AttributeError</code></strong> (they called <code>proj</code> on the module, not an instance); both rewritten and verified via doctest</li>
+</ul>
+<h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>HypConv2DHyperboloidILNN</code> default kernel init is now fan-out and norm-preserving.</strong> <code>kernel_init_std</code> accepts <code>None</code> (the new default), which resolves to <code>sqrt(1 / out_spatial)</code>. Near the origin the PLFC chain linearizes to <code>y_spatial ≈ W @ u_spatial</code> (both <code>asinh</code> and <code>sinh</code> are identity to first order, and the bias starts at 0), so a Gaussian <code>W</code> of shape <code>(O, I)</code> has RMS gain <code>std·sqrt(O)</code>; the corrected LogCat hands over the per-pixel spatial radius unchanged, leaving <code>std = 1/sqrt(O)</code> as the unit-gain choice. This is <strong>coupled to the LogCat fix above</strong> and is not optional: the previous fixed <code>0.02</code> was calibrated against the pre-fix ~√N amplification (the two errors cancelled at width ~64, <code>0.02·sqrt(64)·9 ≈ 1.4</code> for a 3×3 kernel), and under the corrected shrink it contracts the mean spatial norm by 7–15× <em>per layer</em> — a depth-3 stack sits on the manifold origin at init, with no clamp or warning to show for it. Probe-measured per-layer spatial-norm ratios at depth 3 (c=0.1, 3×3, 8×8 input, float64): 0.82–0.95 with the new default versus 0.05–0.15 with <code>0.02</code>. <code>kernel_init_std=0.02</code> still reproduces the Shi et al. 2026 draw bit-for-bit, but it now restores a regime that implicitly assumed the pre-fix LogCat. <code>HypLinearHyperboloidPLFC</code> is unchanged — it has no LogCat</li>
+<li><strong>Breaking: <code>LorentzConv2D</code> requires <code>manifold_module</code> as its first positional argument</strong>, consistent with every other hyperboloid convolution. It is used as a family-identity check (a Poincaré manifold now fails validation instead of being silently misread as <code>[time, space]</code>); no manifold method is called in the forward pass. Update: <code>LorentzConv2D(in_ch, ...)</code> → <code>LorentzConv2D(Hyperboloid(), in_ch, ...)</code></li>
+<li><strong>Breaking: Riemannian optimizer learning-rate schedules are resolved at the pre-increment step count</strong>, matching optax's <code>scale_by_schedule</code>: the k-th <code>update()</code> reads <code>schedule(k−1)</code>, so the first update uses <code>schedule(0)</code>. Previously the schedule ran one step ahead of every optax reference (a warmup's step-0 rate was never used). Constant learning rates are unaffected; Adam-style bias correction deliberately keeps the post-increment count, which is also optax's convention — the two timings are different counters by design</li>
+<li><strong>Breaking: <code>HypRegressionPoincare</code> kernel init changed from <code>normal(0, 1)</code> to <code>std = (2·in_dim·out_dim)^{-0.5}</code></strong>, matching <code>HypRegressionPoincarePP</code> and <code>HypRegressionHyperboloid</code> (van Spengler et al. 2023). The unscaled init gave row norms <code>≈ sqrt(in_dim)</code> that reappear as the outer <code>‖a‖</code> multiplier in the MLR score, scaling the logits linearly: at 128→64 the logit std at init was 74, now 0.58. There is no flag to restore the old init</li>
+<li><strong>Breaking: one <code>atol</code> convention across all manifolds.</strong> <code>is_in_manifold</code> / <code>is_in_tangent_space</code> take <code>atol: float | None = None</code>, resolved via <code>default_atol</code> (see Added); an explicit value is never floored, clamped, or dropped. Previously <code>Hyperboloid.is_in_manifold</code> silently floored <code>atol</code> at <code>1e-4</code> (no caller could tighten it), <code>Poincare</code> ignored it entirely, and <code>Hyperboloid.is_in_tangent_space</code> never forwarded the one it accepted. Ball membership now tests the dimensionless residual <code>c‖x‖² − 1</code>, so one tolerance means the same at every curvature. Float64 hyperboloid membership is much stricter: genuinely on-sheet points past hyperbolic distance ~11 need an explicit <code>atol</code></li>
+<li><strong>Breaking (widening): <code>Euclidean</code>, <code>Stereographic</code>, and <code>ProductManifold</code> <code>dist</code>/<code>dist_0</code> accept a trailing <code>version_idx</code></strong> (accept-and-ignore, per the <code>ProperVelocity</code> precedent), so <code>compute_pairwise_distances</code> and <code>get_delta</code> now work with all six manifolds instead of raising <code>TypeError</code> on three. <code>ProductManifold</code> cannot forward it to heterogeneous factors — use <code>component_dist</code> for per-factor control. The helpers' dead legacy module-API (<code>_dist</code>) fallback is removed</li>
+<li><strong>Breaking (trivial): <code>import hyperbolix</code> exposes all six subpackages</strong> (<code>decomposition</code>, <code>distributions</code>, <code>manifolds</code>, <code>nn_layers</code>, <code>optim</code>, <code>utils</code>) in <code>__all__</code>; <code>hyperbolix.distributions</code> previously raised <code>AttributeError</code> from a fresh interpreter until another module imported it. The lone root layer re-export <code>hyperbolix.PoincareBatchNorm2D</code> is removed with no alias — import it from <code>hyperbolix.nn_layers</code></li>
+<li><strong>Breaking: internal plumbing marked private</strong> — <code>busemann_core.init_weight_norm_params</code> → <code>_init_weight_norm_params</code>, <code>busemann_core.busemann_score</code> → <code>_busemann_score</code>, <code>gyro_normalization.GyroBatchNormBase</code> → <code>_GyroBatchNormBase</code>, <code>GyroRMSNormBase</code> → <code>_GyroRMSNormBase</code></li>
+<li><strong>Internal consolidation</strong>: the <code>1e-15</code> gradient-safety floor has one canonical home, <code>hyperbolix.utils.math_utils.MIN_NORM</code> (the copies in <code>_gyrovector_core</code>, <code>hyperboloid</code>, <code>proper_velocity</code>, <code>busemann_core</code>, <code>hyperboloid_linear</code>, and the three distribution modules are gone; <code>isometry_mappings.MIN_DENOM</code> renamed away); PV's private <code>_mobius_gyration</code> copy is deleted in favour of the shared <code>_gyrovector_core._gyration</code>; <code>_batched_transform</code> is a thin proven-bit-identical wrapper over <code>_vmap_sample_and_batch</code>; <code>hope()</code>'s time reconstruction delegates to <code>spatial_to_hyperboloid</code> (proven bit-identical); <code>frechet_variance</code> is typed manifold-generic (<code>Manifold</code>, matching its Hyperboloid/PV callers); <code>HypLinearPoincare</code>/<code>HypRegressionPoincare</code> drop the never-called <code>compute_mlr_pp</code> from their required manifold methods</li>
+</ul>
+<h3 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Fixed four doc examples that raised on construction (<code>HypRegressionHyperboloid</code>, <code>HyperbolicSoftmaxAttention</code>, <code>PoincareBatchNorm2D</code>, <code>HypConv2DHyperboloid</code>), the <code>riemannian_adam</code> <code>b1</code>/<code>b2</code> example, and the <code>uniform_poincare</code> example (nonexistent <code>dim=</code> argument, sample count passed as the dimension, wrong volume value) — all now execute</li>
+<li>Rewrote the layer initialization-scale table to match actual defaults (split <code>HypLinear*PP</code> from the regression heads; added <code>HypLinearHyperboloidPLFC</code> and <code>HypConv2DHyperboloidILNN</code> rows); fixed ambient-vs-spatial channel-convention contradictions (documented the <code>HTCLinear.out_features</code>-is-spatial exception; HCat growth is internal — output width is always <code>out_channels</code>); corrected "manifold-valued weights" to "manifold-valued bias" for the legacy Ganea layers and repositioned <code>mark_manifold_param</code> as guidance for hand-rolled parameters (built-in layers self-tag)</li>
+<li>Real Hypformer citation (Yang et al. 2025) in 7 docstrings; <code>LorentzConv2D</code> attribution unified on LResNet; superseded-by notes on <code>LorentzConv2D</code>, <code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>; <code>param_dtype</code> compute-precision wording corrected across the manifold-free layers; GyroBN shift/weight comment labels un-swapped; <code>DEVELOPER_GUIDE.md</code> pointers fixed</li>
+<li>Deleted the three placeholder "coming soon" tutorial notebooks and the dead commented-out <code>mkdocs-jupyter</code> configuration; updated stale <code>docs/index.md</code> counts</li>
+<li>Every <code>python</code> fence in <code>docs/</code>, <code>README.md</code>, and <code>DEVELOPER_GUIDE.md</code> is now executed as a check. Four more raised: <code>smooth_clamp(min_val=, max_val=)</code> (the arguments are <code>min_value</code>/<code>max_value</code>), <code>get_delta(seed=42)</code> (it takes a <code>key</code>), <code>wrapped_normal_hyperboloid.sample(std=)</code> (it takes <code>sigma</code>), and the <code>is_in_manifold</code> example, whose "hyperboloid point" was never on the sheet (<code>-1.5² + 0.2² + 0.3² + 0.1² = -2.11</code>, not <code>-1</code>) — it now builds the ambient point with <code>spatial_to_hyperboloid</code>. The HoroPCA example requested <code>float64</code> without enabling x64, so it silently truncated to float32 with three <code>UserWarning</code>s</li>
+<li>New sections for two breaking changes that previously appeared only in this changelog: the <code>atol</code> convention and <code>default_atol</code> (<a href="../user-guide/numerical-stability/#the-atol-convention">Numerical Stability</a>) and learning-rate-schedule timing (<a href="../user-guide/optimizers/#learning-rate-schedules">Optimizers</a>)</li>
+<li>Corrected the layer and test counts in <code>README.md</code> and <code>docs/index.md</code>: 20+ → 40+ layers, and "3,500+ tests / 850+ test functions" → 3,551 items across 735 test functions</li>
+</ul>
+<h2 id="100-2026-07-24"><a href="https://github.com/timoklein/hyperbolix/compare/v0.11.1...v1.0.0">1.0.0</a> - 2026-07-24<a class="headerlink" href="#100-2026-07-24" title="Permanent link">&para;</a></h2>
+<p>First stable release. The public API is considered complete and stable, reaching functional
+parity with the broader hyperbolic deep learning ecosystem; future changes follow semantic
+versioning.</p>
+<h3 id="added_1">Added<a class="headerlink" href="#added_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>CO-SNE</strong> (<code>hyperbolix.decomposition.CoSNE</code>) — dimensionality reduction and visualization for hyperbolic data (Guo et al. 2022), the hyperbolic analogue of t-SNE. A thin sklearn-style class (<code>fit</code> / <code>fit_transform</code>; non-parametric, so no out-of-sample <code>transform</code>, matching sklearn's <code>TSNE</code>) over a pure, JIT-friendly functional core (<code>fit_cosne</code>, <code>conditional_probabilities</code>, <code>joint_probabilities</code>, <code>low_dim_probabilities</code>, <code>kl_divergence_loss</code>, <code>magnitude_loss</code>). High-dimensional similarities are perplexity-calibrated on <strong>squared</strong> hyperbolic distances (paper Eq. 2); low-dimensional similarities use a heavy-tailed Student-t / Cauchy kernel on Poincaré-ball distances (paper Eq. 9 — both the author's-code plain-distance form, default, and the exact squared-distance form via <code>exact_cauchy=True</code>). On top of the t-SNE KL divergence it adds a <strong>magnitude loss</strong> <code>H = (1/N)·Σᵢ(‖xᵢ‖² − ‖yᵢ‖²)²</code> (paper Eq. 10) that preserves each point's distance-to-origin (the hierarchy depth). Optimization is two-stage projected gradient descent on the ball (early-exaggeration KL-only exploration, then KL + magnitude), with the KL gradient Riemannian-scaled by <code>(1 − c‖y‖²)²/4</code> and the magnitude gradient Euclidean (paper §3.7). Curvature-general (a single <code>c</code> for both spaces, passed at fit time); Poincaré input <code>(N, D)</code> → <code>(N, K)</code> ball coordinates, Hyperboloid input <code>(N, A)</code> → <code>(N, K+1)</code>. Uses <strong>exact autodiff gradients</strong> of the declared losses — a deliberate deviation from the reference's demonstrably buggy hand gradients — so the reference learning rates do not transfer; the <code>learning_rate</code> default (<code>0.5</code>) is calibrated on a synthetic-cluster recovery test and documented on the class. Double precision recommended for fitting</li>
+<li><strong>HoroPCA</strong> (<code>hyperbolix.decomposition.HoroPCA</code>) — hyperbolic dimensionality reduction via horospherical projections (Chami et al. 2021). A thin sklearn-style class (<code>fit</code> / <code>transform</code> / <code>fit_transform</code>) over a pure, independently usable and JIT-friendly functional core (<code>fit_horopca</code>, <code>transform_horopca</code>, <code>horo_projection</code>, <code>horopca_loss</code>). All computation runs on the hyperboloid (Poincaré input is mapped in via the exact isometry); K ideal points are jointly optimized with Adam + gradient clipping to maximize the pairwise-distance variance of the horospherically projected data, which preserves every Busemann coordinate. Poincaré input <code>(N, D)</code> → <code>(N, K)</code> ball coordinates; Hyperboloid input <code>(N, A)</code> → <code>(N, K+1)</code>. <code>K = 1</code> is supported via a closed form (the reference's Sherman–Morrison inverse is singular there). Exposes <code>components_</code>, <code>mean_</code>, <code>boost_</code>, <code>losses_</code>, and pairwise-variance-based <code>explained_variance_</code> / <code>total_variance_</code> / <code>explained_variance_ratio_</code>. Double precision recommended for fitting</li>
+<li><strong><code>hyperbolix.decomposition.frechet_mean</code></strong> — manifold-generic Karcher (Fréchet) mean via fixed-point iteration in a <code>lax.while_loop</code> (Lorentz-centroid init on the hyperboloid, projected-mean init on the Poincaré ball). The data-centering primitive HoroPCA builds on; configurable <code>step_size</code> / <code>tol</code> / <code>max_iters</code></li>
+<li><strong><code>Hyperboloid.lorentz_boost(mu, c)</code></strong> — the exact Lorentz boost matrix <code>B</code> with <code>B @ mu = origin</code> (symmetric, proper, orthochronous), used to Fréchet-mean-center data before fitting. Closes a docs–code gap (the method was already advertised in the manifolds API reference)</li>
+</ul>
+<h3 id="changed_1">Changed<a class="headerlink" href="#changed_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>HTCLinear</code> default init is now fan-in-aware and norm-preserving.</strong> <code>init_bound</code> accepts <code>None</code> (the new default), which resolves to <code>sqrt(3 / in_features)</code> — per-layer input-Jacobian gain ≈ 1, since <code>htc</code> applies no nonlinearity to the matmul output. The previous fixed <code>U(-0.02, 0.02)</code> was width-dependent <strong>contractive</strong> (gain <code>0.02/sqrt(3)·sqrt(in_features)</code> ≈ 0.09 at fan-in 65): stacks of ≥ 2 layers collapsed input variation below the float32 noise floor, becoming a constant map with ≈0 gradients — training silently frozen from step 0 (observed in goal-conditioned RL: depth-2 HTC head, c=0.5, frozen through 3.1M steps; escape time monotone in the bound). The <code>0.02</code> was an in-house convention inherited from the FHNN/FHCNN family, <strong>not</strong> the Hypformer reference — the official Hypformer code initializes with Xavier-uniform gain <code>sqrt(2)</code> (<code>bound = 2·sqrt(3/(in+out))</code>, ~15× larger than 0.02 at fan-in 65), intended for its ReLU + LayerNorm regime; recover it by passing that bound explicitly. The attention layers (<code>HyperbolicLinearAttention</code>, <code>HyperbolicSoftmaxAttention</code>, <code>HyperbolicFullAttention</code>) and <code>HypformerPositionalEncoding</code> now default <code>init_bound=None</code> and inherit the fan-in-aware init for their HTC projections (matching the reference, whose Wq/Wk/Wv and positional encoding use the same Xavier init). FHNN/FHCNN/PLFC layers are unchanged — their <code>0.02</code> matches their references (verified against the official Chen 2021, Bdeir 2023, and Shi 2026 code). <strong>Behavior change</strong> — existing HTC models pick up the new init unless they pass <code>init_bound=0.02</code> explicitly (bit-for-bit reproduction of the old init)</li>
+</ul>
+<h2 id="0110-2026-07-14"><a href="https://github.com/timoklein/hyperbolix/compare/v0.10.2...v0.11.0">0.11.0</a> - 2026-07-14<a class="headerlink" href="#0110-2026-07-14" title="Permanent link">&para;</a></h2>
+<h3 id="added_2">Added<a class="headerlink" href="#added_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>κ-Stereographic manifold</strong> (<code>hyperbolix.manifolds.Stereographic</code>) — a single constant-curvature manifold spanning hyperbolic, Euclidean, and spherical geometry via a <strong>signed</strong> curvature <code>c</code> (Bachmann et al. 2020): <code>c &gt; 0</code> is hyperbolic and reproduces <code>Poincare(c)</code> exactly (both now build on a shared internal <code>_gyrovector_core</code> module, so Möbius addition, gyration, conformal factor, and projection are bit-identical), <code>c = 0</code> is the flat limit (carrying the conformal factor-2 metric — see the API reference), and <code>c &lt; 0</code> is the stereographic projection of the sphere. Note the <strong>sign flip vs the paper/geoopt</strong> (<code>κ = -c</code>), chosen so <code>c</code> matches every other hyperbolix manifold. Implements the full <code>Manifold</code> protocol plus <code>conformal_factor</code>, <code>gyration</code>, <code>geodesic</code>, <code>geodesic_unit</code>, and <code>antipode</code>, using curvature-generalized trig functions with a dtype-aware Taylor branch near <code>c = 0</code> — gated on both <code>|κ|</code> and the series argument <code>|κ|·‖x‖²</code>, so extreme chart radii (e.g. near-antipodal spherical points) always keep the exact closed form — and an exact closed-form antipode <code>x/(c‖x‖²)</code>. Verified compatible with <code>ProductManifold</code> factors and the Riemannian optimizers (<code>ManifoldParam</code> + <code>riemannian_adam</code>/<code>riemannian_sgd</code>). The κ-GCN neural-network layers (<code>mobius_matvec</code>, weighted gyromidpoint, <code>dist2plane</code>, <code>sproj</code>) are not yet included. Double precision recommended when training a signed curvature that may cross zero, per the reference</li>
+<li><strong><code>hyperbolix.utils.tanh</code></strong> — clamped hyperbolic tangent whose output stays strictly inside <code>(-1, 1)</code>: clips the input at the analytic saturation bound <code>±0.5·log(2/eps)</code> <em>and</em> the output at <code>±(1 − 10·eps)</code>, because XLA's float32 <code>tanh</code> saturates to exactly <code>1.0</code> slightly before the input bound bites. Matches <code>atanh</code>'s own domain guard, so <code>atanh(tanh(x))</code> can never reach the pole. Used by the κ-stereographic maps in the hyperbolic regime</li>
+<li><strong>Signed <code>identity</code> reparameterization for <code>LearnableCurvature</code></strong> (<code>parameterization="identity"</code>, <code>c = raw</code>) — <strong>signed</strong>, crossing zero smoothly with gradient 1, for learning the <em>sign</em> of curvature with the <code>Stereographic</code> manifold; <code>init_c</code> may be zero or negative, and the default clamp resolves to a symmetric <code>[-10.0, 10.0]</code> (deliberately including 0) instead of the positive <code>[0.1, 10.0]</code> used by <code>softplus</code>/<code>log</code>. The <code>log</code> scheme's exponent is now capped at <code>0.99·log(finfo.max)</code>, so a drifting raw parameter yields a large finite curvature instead of <code>inf</code>; the cap is gradient-transparent under <code>straight_through_clamp=True</code></li>
+</ul>
+<h2 id="0102-2026-07-02"><a href="https://github.com/timoklein/hyperbolix/compare/v0.10.1...v0.10.2">0.10.2</a> - 2026-07-02<a class="headerlink" href="#0102-2026-07-02" title="Permanent link">&para;</a></h2>
+<h3 id="changed_2">Changed<a class="headerlink" href="#changed_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Legacy Ganea layers (<code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>) accept a <code>curvature</code> constructor argument</strong> (float or callable, default 1.0) for their manifold-valued <code>bias</code> tag instead of hardcoding 1.0. The Riemannian optimizer uses this tag for the bias update, so it must match the <code>c</code> passed at call time — previously any <code>c ≠ 1.0</code> silently applied the wrong Riemannian correction to the bias</li>
+</ul>
+<h3 id="fixed_1">Fixed<a class="headerlink" href="#fixed_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Kernel-init corrections across hyperbolic layers: <code>HypRegressionHyperboloid</code> now uses the fan-scaled kernel init matching <code>HypRegressionPoincarePP</code>, and <code>HypConv2DHyperboloid</code> gains an opt-in <code>reset_params="fan_in"</code> for BatchNorm-free encoders</li>
+<li><code>GyroBatchNormBase</code> gains a <code>min_var</code> floor that prevents collapsed-variance saturation</li>
+<li><code>FGGConv2D</code> docstring stated the default weight init is <code>"kaiming"</code>; the actual default is <code>"lorentz_kaiming"</code></li>
+<li><code>PoincareBatchNorm2D</code> now documents that the learned variance is an unconstrained scalar under a sqrt (NaN if driven negative) — kept as-is to match the van Spengler reference, with a workaround noted</li>
+</ul>
+<h2 id="0101-2026-06-30"><a href="https://github.com/timoklein/hyperbolix/compare/v0.10.0...v0.10.1">0.10.1</a> - 2026-06-30<a class="headerlink" href="#0101-2026-06-30" title="Permanent link">&para;</a></h2>
+<h3 id="added_3">Added<a class="headerlink" href="#added_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>GyroBatchNorm</code> and <code>GyroRMSNorm</code></strong> normalization layers for the Hyperboloid and Proper Velocity manifolds</li>
+</ul>
+<h2 id="0100-2026-06-29"><a href="https://github.com/timoklein/hyperbolix/compare/v0.9.0...v0.10.0">0.10.0</a> - 2026-06-29<a class="headerlink" href="#0100-2026-06-29" title="Permanent link">&para;</a></h2>
+<h3 id="added_4">Added<a class="headerlink" href="#added_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>LResNet <code>lorentz_scale</code> (He et al. 2025, Eq. 10)</strong> — Klein-geodesic output rescaling that slides a hyperboloid point along the geodesic ray from the origin to control output norm while staying on the manifold — and a constrained <code>LorentzResidual</code> module built on it</li>
+<li><strong>Busemann MLR and BFC layers</strong> (Chen et al. 2026)</li>
+</ul>
+<h3 id="changed_3">Changed<a class="headerlink" href="#changed_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>FGG layer init defaults changed to norm-preserving.</strong> <code>FGGLinear</code> and <code>FGGConv2D</code> now default to <code>reset_params="fan_out"</code> (Gaussian, <code>std=sqrt(1/out_spatial)</code>) with <code>init_bias=0.0</code> and a new <code>gain=1.0</code> multiplier, so the output spatial norm tracks the input (<code>‖z‖ ≈ gain·‖x_spatial‖</code>) instead of growing as <code>sqrt(out_channels)</code> from step 0. This is a <strong>deliberate deviation from the Klis et al. 2026 classification reference</strong> (which normalizes magnitude away with BatchNorm/<code>FGGMeanOnlyBatchNorm</code> after each layer): it is motivated by <em>unnormalized</em> stacks — e.g. an RL backbone feeding a bounded Poincaré-ball projection, where the fan-in default saturated the projection. The new <code>gain</code> knob sets the effective column std to <code>gain/sqrt(out_spatial)</code>; it is a no-op for <code>reset_params="eye"</code> and is renormalized away under <code>use_weight_norm=True</code>. Restore the previous reference-style init with <code>reset_params="eye", init_bias=0.5</code> (<code>FGGLinear</code>) or <code>reset_params="lorentz_kaiming", init_bias=0.5</code> (<code>FGGConv2D</code>). <code>FGGLorentzMLR</code> (a terminal Euclidean-logits head) is intentionally unchanged. <strong>Behavior change</strong> — existing FGG models pick up the new init unless they pass the old <code>reset_params</code>/<code>init_bias</code> explicitly</li>
+</ul>
+<h2 id="090-2026-06-23"><a href="https://github.com/timoklein/hyperbolix/compare/v0.8.2...v0.9.0">0.9.0</a> - 2026-06-23<a class="headerlink" href="#090-2026-06-23" title="Permanent link">&para;</a></h2>
+<h3 id="changed_4">Changed<a class="headerlink" href="#changed_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Performance improvements across the hyperboloid layers</li>
+<li>Unified the patch-extraction path into a shared <code>hyperboloid_core._extract_patches</code> helper (deduplication, no behavior change)</li>
+</ul>
+<h2 id="082-2026-06-12"><a href="https://github.com/timoklein/hyperbolix/compare/v0.8.1...v0.8.2">0.8.2</a> - 2026-06-12<a class="headerlink" href="#082-2026-06-12" title="Permanent link">&para;</a></h2>
+<h3 id="changed_5">Changed<a class="headerlink" href="#changed_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Renamed <code>HypConv2DHyperboloidPP</code> → <code>HypConv2DHyperboloidILNN</code></strong> — the Shi et al. 2026 Lorentz convolution (LogCat via <code>log_radius_concat</code> + PLFC), with origin padding (<code>pad_mode="origin"</code>) and ILNN improvements</li>
+</ul>
+<h2 id="081-2026-06-12"><a href="https://github.com/timoklein/hyperbolix/compare/v0.8.0...v0.8.1">0.8.1</a> - 2026-06-12<a class="headerlink" href="#081-2026-06-12" title="Permanent link">&para;</a></h2>
+<h3 id="changed_6">Changed<a class="headerlink" href="#changed_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Renamed <code>HypLinearHyperboloidPP</code> → <code>HypLinearHyperboloidPLFC</code></strong> with PLFC (parametrized Lorentz fully-connected) improvements (Shi et al. 2026)</li>
+</ul>
+<h2 id="080-2026-06-11"><a href="https://github.com/timoklein/hyperbolix/compare/v0.7.2...v0.8.0">0.8.0</a> - 2026-06-11<a class="headerlink" href="#080-2026-06-11" title="Permanent link">&para;</a></h2>
+<h3 id="added_5">Added<a class="headerlink" href="#added_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Poincaré vector quantization layers</strong> (<code>hyperbolix.nn_layers</code>):<ul>
+<li><code>HypVQEmbeddingPoincare</code>: HVQ-VAE quantizer (Chen et al. 2025) — explicit on-ball codebook held as a non-parameter <code>nnx.Variable</code> buffer, geodesic nearest-neighbour selection, copy-gradient straight-through estimator, and a hyperbolic-EMA codebook update (GGBall, Bu et al. 2026, Eqs. 41-43) with optional dead-code revival via the <code>ema_update</code> method (called after <code>optimizer.update</code>; the optimizer never touches the codebook, only the commitment loss trains the encoder)</li>
+<li><code>HypVQMLRPoincare</code>: HyperVQ quantizer (Goswami et al. 2025) — implicit codebook = the rows of an internal <code>HypRegressionPoincarePP</code>, Gumbel-Softmax straight-through selection on the categorical weights (so plain <code>optax.adam</code> trains it), with a <code>deterministic</code> flag (toggled by <code>model.eval()</code> / <code>model.train()</code>) for a deterministic argmax MAP estimate at inference</li>
+<li><code>PoincareVQOutput</code>: shared pytree-friendly <code>NamedTuple</code> return type <code>(quantized, indices, loss, perplexity, z)</code>; <code>quantized</code> is cast to float32 at the manifold→decoder boundary</li>
+<li><code>poincare_weighted_midpoint</code>: reusable Poincaré weighted gyromidpoint (GGBall Eq. 41), the Poincaré analog of <code>lorentz_midpoint</code> and a weighted generalization of <code>poincare_midpoint</code></li>
+<li><strong><code>squared_commitment</code> flag on <code>HypVQEmbeddingPoincare</code></strong> (default <code>False</code>). The cited references genuinely disagree on the commitment penalty: HVQ-VAE uses the plain geodesic distance <code>d(z, sg(q))</code>, GGBall's L_HVQVAE uses <code>d²</code> (the Euclidean VQ-VAE convention). The flag selects between them without touching library code</li>
+</ul>
+</li>
+<li><strong><code>Hyperboloid.log_radius_concat</code></strong> — log-radius-preserving concatenation of N Lorentz points (Shi et al. 2026, Sec. 4.3), the hyperboloid analog of Poincaré β-concatenation. Rescales each block's spatial part by <code>exp(½·(ψ(N·d/2) − ψ(d/2)))</code> (digamma <code>ψ</code>) so the expected log spatial radius stays invariant to the post-concat dimension, then recomputes the time coordinate to keep the result on the manifold. Reduces to <code>hcat</code> when <code>N = 1</code>; convolutional layers keep using the unscaled <code>hcat</code> by default</li>
+<li><strong>Isometry mappings now span all three models</strong> — Poincaré ↔ Hyperboloid, Poincaré ↔ Proper Velocity, and Hyperboloid ↔ Proper Velocity. New functions: <code>pv_to_poincare</code>, <code>poincare_to_pv</code>, <code>pv_to_hyperboloid</code>, <code>hyperboloid_to_pv</code> (in <code>hyperbolix.manifolds.isometry_mappings</code>). All six maps are exact, curvature-correct Riemannian isometries (PVNN Eq. 4; Chen et al. 2026). The direct <code>pv_to_hyperboloid</code> (PV coords are the hyperboloid's spatial part; time reconstructed from <code>⟨z,z⟩_L = -1/c</code>) avoids the near-boundary blow-up of composing through the ball</li>
+<li>Self-hosted MathJax with a CI external-host allowlist guard</li>
+</ul>
+<h3 id="changed_7">Changed<a class="headerlink" href="#changed_7" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>All NN layers now take a <code>param_dtype</code> constructor argument (default <code>jnp.float32</code>)</strong> controlling the <em>storage</em> dtype of every trainable parameter and persistent state (batch-norm statistics, VQ codebooks, scalar scales/temperatures). The manifold's <code>dtype</code> controls <em>compute</em> precision only. Under global <code>jax_enable_x64</code>, parameters previously materialized as float64 (2× parameter/optimizer memory, float64 checkpoints); they now stay float32 unless <code>param_dtype=jnp.float64</code> is passed explicitly. The Riemannian optimizers complete the contract: <code>egrad2rgrad</code>/<code>expmap</code>/<code>ptransp</code> run in the manifold dtype, but returned updates and momentum buffers are cast back to the parameter's storage dtype (previously a float32 <code>ManifoldParam</code> next to a float64 manifold silently promoted its optimizer state to float64 after one step). See <a href="../user-guide/numerical-stability/#storage-vs-compute-dtype">Numerical Stability — Storage vs. Compute Dtype</a>. <strong>Breaking changes:</strong><ul>
+<li><code>FGGMeanOnlyBatchNorm(dtype=...)</code> renamed to <code>param_dtype=...</code></li>
+<li><code>PoincareBatchNorm2D</code> and <code>HypVQEmbeddingPoincare</code> state is no longer pinned to <code>manifold.dtype</code> — it defaults to float32; pass <code>param_dtype=manifold.dtype</code> to restore the old behavior</li>
+<li>Checkpoints saved under global x64 before this change carry float64 leaves and will dtype-mismatch on restore into float32-storage modules — re-initialize or cast the state tree on load</li>
+</ul>
+</li>
+<li><strong><code>Hyperboloid.addition</code> now implements the Lorentz gyrovector addition</strong> <code>x ⊕ y = Exp_x(PT_{0→x}(Log_0(y)))</code> (Chen et al. 2025b; Shi et al. 2026, Eq. 1), and <code>ProductManifold.addition</code> delegates it per factor. It forms a gyrocommutative gyrogroup (identity = origin, inverse <code>⊖x = (-1) ⊙ x = [x₀, -x_s]</code>) and coincides with Poincaré Möbius addition under the stereographic isometry. This replaces the earlier coordinate-wise formula, which was incorrect at <em>every</em> curvature (e.g. <code>origin ⊕ y ≠ y</code>) and failed silently via a trailing projection. <code>Hyperboloid.scalar_mul</code> (geodesic scaling, = Eq. 2) is unchanged. <strong>Breaking change</strong> — <code>addition</code> no longer raises <code>NotImplementedError</code></li>
+<li><strong>Breaking: <code>VERSION_LORENTZIAN_PROXY</code> removed from the Poincaré manifold.</strong> The formula treated Poincaré ball coordinate 0 as a Lorentz time component, so it was only meaningful for hyperboloid inputs and returned <code>dist(x, x) = -2/c ≠ 0</code> for ball points; the docs additionally mis-advertised it as "best near boundary". The reference implementation never had it. <code>dist</code>/<code>dist_0</code> now select between 3 versions (<code>VERSION_MOBIUS_DIRECT</code>, <code>VERSION_MOBIUS</code>, <code>VERSION_METRIC_TENSOR</code>). For a true Lorentzian (squared Minkowski) proxy, convert to the hyperboloid via <code>isometry_mappings.poincare_to_hyperboloid</code> first</li>
+</ul>
+<h3 id="fixed_2">Fixed<a class="headerlink" href="#fixed_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Poincaré ↔ Hyperboloid isometry maps were only correct at <code>c=1</code>.</strong> <code>poincare_to_hyperboloid</code> / <code>hyperboloid_to_poincare</code> used unit-ball stereographic formulas missing their <code>√c</code> factors, so round-trips and distance preservation silently failed at any other curvature (the recommended default is <code>c=0.1</code>). Both are now curvature-correct at all <code>c</code>, verified by round-trip, isometry, commutative-diagram, and extreme-curvature tests across dtypes</li>
+<li><strong>Test fixture <code>uniform_points</code> generated hyperboloid points at the wrong geodesic radius for <code>c ≠ 1</code></strong> (an extra <code>/√c</code> on the spatial coordinate, masked by a trailing projection). Corrected so generated points are the exact Poincaré images at any curvature</li>
+<li><strong>Silent float64 promotion under x64 in hyperboloid layers.</strong> Runtime buffers created without an explicit dtype (<code>FGGConv2D</code> SAME/origin padding buffer, causal linear-attention scan carries, full-attention uniform head-averaging weights) now derive their dtype from the input, and the scalar attention parameters (<code>temperature</code>, <code>scale</code>, <code>attn_bias</code>) are cast to the compute dtype at use. Previously, with <code>jax_enable_x64</code> active, these defaulted to float64 and promoted float32 activations through the rest of the layer</li>
+</ul>
+<h2 id="072-2026-05-22"><a href="https://github.com/timoklein/hyperbolix/compare/v0.7.1...v0.7.2">0.7.2</a> - 2026-05-22<a class="headerlink" href="#072-2026-05-22" title="Permanent link">&para;</a></h2>
+<h3 id="changed_8">Changed<a class="headerlink" href="#changed_8" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>ProductManifold</code> curvature API redesigned</strong> — every geometry method (<code>dist</code>, <code>expmap</code>, <code>logmap</code>, <code>proj</code>, <code>origin</code>, <code>tangent_inner</code>, etc.) now takes a positional <code>c</code> argument that must be a sequence of length <code>n_factors</code> (one curvature per factor) instead of the silently-ignored scalar <code>c</code>. There is no default and no scalar broadcast: pass <code>product.curvatures</code> for static curvatures, or build the sequence from <code>LearnableCurvature</code> calls for trainable ones. The protocol-level <code>Curvature</code> type was widened to <code>ScalarCurvature | Sequence[ScalarCurvature]</code> so <code>ProductManifold</code> satisfies the <code>Manifold</code> protocol — <code>isinstance(product, Manifold)</code> is <code>True</code> and generic code typed against <code>Manifold</code> accepts product instances. The product still has no <code>c</code> attribute (use <code>product.curvatures</code>). <strong>Breaking change</strong> — call sites that passed <code>c=0.0</code> (or any scalar) must now pass a per-factor sequence <code>(c_0, c_1, …)</code></li>
+</ul>
+<h3 id="fixed_3">Fixed<a class="headerlink" href="#fixed_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Corrected the <code>ProductManifold</code> API examples and the protocol-conformance claim in the documentation</li>
+</ul>
+<h2 id="071-2026-05-21"><a href="https://github.com/timoklein/hyperbolix/compare/v0.7.0...v0.7.1">0.7.1</a> - 2026-05-21<a class="headerlink" href="#071-2026-05-21" title="Permanent link">&para;</a></h2>
+<h3 id="added_6">Added<a class="headerlink" href="#added_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>LearnableCurvature(nnx.Module)</code></strong> — canonical module for trainable curvature in <code>hyperbolix.utils.curvature</code>, also exported at top level (<code>from hyperbolix import LearnableCurvature</code>). Introduces the <code>softplus</code> (default, <code>c = softplus(raw)</code>, bounded gradient via sigmoid, van Spengler 2023 convention) and <code>log</code> (<code>c = exp(raw)</code>, scale-invariant gradient <code>dc/draw = c</code>, MERU convention, preferred for compiled RL loops) reparameterizations. The default clamp is applied to the recovered <code>c</code> (not the raw parameter) as a hard stability guard for long compiled training loops — <code>[0.1, 10.0]</code> for both schemes; pass <code>c_min=None, c_max=None</code> to disable. Updated by any standard Euclidean <code>nnx.Optimizer</code> — no Riemannian optimizer needed</li>
+</ul>
+<h3 id="changed_9">Changed<a class="headerlink" href="#changed_9" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Manifolds are now plain Python classes</strong> (not <code>nnx.Module</code>). This structurally prevents shared-manifold bugs in <code>nnx.scan</code>/<code>nnx.fori_loop</code> — manifolds become static graphdef attributes with no state pytree entries</li>
+<li><strong><code>learnable=True</code> removed</strong> from manifold constructors. Use the <code>LearnableCurvature</code> module instead — assign one instance per distinct curvature on your model. See the <a href="../user-guide/manifolds/#static-vs-learnable">Manifolds User Guide</a></li>
+<li><strong><code>ProductManifold</code></strong> is now a plain class; <code>from_signature</code> accepts 3- and 4-tuple specs only (5-tuple <code>learnable</code> override removed)</li>
+<li><strong><code>learnable_curvature()</code> / <code>get_curvature()</code> functional helpers replaced</strong> by the <code>LearnableCurvature(nnx.Module)</code> class. The class bundles the raw parameter, reparameterization scheme, and clamp bounds in one object, making accidental init/recovery mismatches structurally impossible. Call sites change from <code>c = get_curvature(self.c_raw)</code> to <code>c = self.curvature()</code>. <strong>Breaking change</strong> — no deprecation shim</li>
+</ul>
+<h2 id="070-2026-05-18"><a href="https://github.com/timoklein/hyperbolix/compare/v0.6.0...v0.7.0">0.7.0</a> - 2026-05-18<a class="headerlink" href="#070-2026-05-18" title="Permanent link">&para;</a></h2>
+<h3 id="added_7">Added<a class="headerlink" href="#added_7" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Product manifold</strong> (<code>hyperbolix.manifolds.ProductManifold</code>) — heterogeneous-curvature composition <span class="arithmatex">\(M_1 \times M_2 \times \dots \times M_n\)</span> where each factor may be any base manifold with its own curvature (Gu et al. 2019). Points are flat concatenated arrays of shape <code>(total_dim,)</code>; geometry methods take a per-factor curvature sequence as positional <code>c</code> at call time. Provides Pythagorean L2 geodesic distance plus auxiliary <code>dist_l1</code> / <code>dist_min</code> / <code>component_dist</code> reductions, full per-factor decomposition of <code>expmap</code>/<code>logmap</code>/<code>ptransp</code>/<code>proj</code>/<code>egrad2rgrad</code>/<code>tangent_inner</code>, an <code>origin(c)</code> helper, and a <code>from_signature</code> factory accepting 3- and 4-tuple specs</li>
+<li><strong>Learnable curvature via an <code>nnx.Module</code></strong> — first-class trainable curvature assigned per distinct curvature on the model (later canonicalized into <code>LearnableCurvature</code> in v0.7.1)</li>
+</ul>
+<h2 id="060-2026-04-20"><a href="https://github.com/timoklein/hyperbolix/compare/v0.5.3...v0.6.0">0.6.0</a> - 2026-04-20<a class="headerlink" href="#060-2026-04-20" title="Permanent link">&para;</a></h2>
+<h3 id="added_8">Added<a class="headerlink" href="#added_8" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Proper Velocity (PV) manifold</strong> (<code>hyperbolix.manifolds.ProperVelocity</code>) — unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> model of hyperbolic geometry from Chen et al. (2026), with complete geometric operations: <code>addition</code>, <code>scalar_mul</code>, <code>dist</code>, <code>expmap</code>/<code>logmap</code> (at origin and arbitrary base points), <code>ptransp</code>/<code>ptransp_0</code>, <code>egrad2rgrad</code>, and Riemannian inner product</li>
+<li><strong>Proper Velocity neural-network layers</strong>:<ul>
+<li><code>HypLinearPV</code>: PV fully-connected layer (Thm 5.3 / Eq. 22)</li>
+<li><code>HypConv2DPV</code>: PV 2D convolution with raw Euclidean patch concatenation (Sec 5.3) — no beta-scaling, dimension-preserving</li>
+<li><code>HypRegressionPV</code>: PV multinomial-logistic-regression head (Thm 5.2 / Eq. 19)</li>
+</ul>
+</li>
+</ul>
+<h2 id="053-2026-04-14"><a href="https://github.com/timoklein/hyperbolix/compare/v0.5.2...v0.5.3">0.5.3</a> - 2026-04-14<a class="headerlink" href="#053-2026-04-14" title="Permanent link">&para;</a></h2>
+<h3 id="added_9">Added<a class="headerlink" href="#added_9" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Hyperbolic average-pooling layer</li>
+</ul>
+<h2 id="052-2026-04-02"><a href="https://github.com/timoklein/hyperbolix/compare/v0.5.1...v0.5.2">0.5.2</a> - 2026-04-02<a class="headerlink" href="#052-2026-04-02" title="Permanent link">&para;</a></h2>
+<h3 id="added_10">Added<a class="headerlink" href="#added_10" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>HypLinearHyperboloidFHNN</code> and <code>HypConv2DHyperboloidFHNN</code> layers (fully-hyperbolic neural network, Bdeir et al. 2023)</li>
+</ul>
+<h2 id="051-2026-03-27"><a href="https://github.com/timoklein/hyperbolix/compare/v0.5.0...v0.5.1">0.5.1</a> - 2026-03-27<a class="headerlink" href="#051-2026-03-27" title="Permanent link">&para;</a></h2>
+<h3 id="added_11">Added<a class="headerlink" href="#added_11" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>PoincareBatchNorm2D</code></strong> — Poincaré ball BatchNorm between conv layers (van Spengler et al. 2023)</li>
+</ul>
+<h2 id="050-2026-03-26"><a href="https://github.com/timoklein/hyperbolix/compare/v0.4.2...v0.5.0">0.5.0</a> - 2026-03-26<a class="headerlink" href="#050-2026-03-26" title="Permanent link">&para;</a></h2>
+<h3 id="removed">Removed<a class="headerlink" href="#removed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>HypRegressionPoincareHDRL</code> layer and its tests</li>
+</ul>
+<h2 id="042-2026-03-24"><a href="https://github.com/timoklein/hyperbolix/compare/v0.4.1...v0.4.2">0.4.2</a> - 2026-03-24<a class="headerlink" href="#042-2026-03-24" title="Permanent link">&para;</a></h2>
+<h3 id="changed_10">Changed<a class="headerlink" href="#changed_10" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Removed <code>HypConv3DHyperboloid</code>; <code>beta_scale</code> is now wrapped in <code>float</code></li>
+</ul>
+<h2 id="041-2026-03-19"><a href="https://github.com/timoklein/hyperbolix/compare/v0.4.0...v0.4.1">0.4.1</a> - 2026-03-19<a class="headerlink" href="#041-2026-03-19" title="Permanent link">&para;</a></h2>
+<h3 id="changed_11">Changed<a class="headerlink" href="#changed_11" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Flattened conv-layer parameter paths via forward-function extraction (cleaner param trees, no behavior change)</li>
+</ul>
+<h2 id="040-2026-03-17"><a href="https://github.com/timoklein/hyperbolix/compare/v0.3.0...v0.4.0">0.4.0</a> - 2026-03-17<a class="headerlink" href="#040-2026-03-17" title="Permanent link">&para;</a></h2>
+<h3 id="added_12">Added<a class="headerlink" href="#added_12" title="Permanent link">&para;</a></h3>
+<ul>
+<li>MkDocs Material documentation system</li>
+<li>Complete API reference documentation</li>
+<li>Getting Started guide</li>
+<li>CI/CD workflow for documentation builds</li>
+</ul>
+<h3 id="changed_12">Changed<a class="headerlink" href="#changed_12" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Adopted Flax NNX layer naming convention (<code>kernel</code>/<code>bias</code>) across all layers</li>
+</ul>
+<h2 id="030-2026-03-10"><a href="https://github.com/timoklein/hyperbolix/compare/v0.2.1...v0.3.0">0.3.0</a> - 2026-03-10<a class="headerlink" href="#030-2026-03-10" title="Permanent link">&para;</a></h2>
+<h3 id="added_13">Added<a class="headerlink" href="#added_13" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>FGG-LNN layers</strong> (<code>FGGLinear</code>, <code>FGGConv2D</code>, <code>FGGLorentzMLR</code>) — fully-generalized Lorentz layers (Klis et al. 2026)</li>
+</ul>
+<h2 id="021-2026-03-06"><a href="https://github.com/timoklein/hyperbolix/compare/v0.2.0...v0.2.1">0.2.1</a> - 2026-03-06<a class="headerlink" href="#021-2026-03-06" title="Permanent link">&para;</a></h2>
+<h3 id="changed_13">Changed<a class="headerlink" href="#changed_13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Migrated benchmarks to Grain data loading</li>
+</ul>
+<h2 id="020-2026-03-05"><a href="https://github.com/timoklein/hyperbolix/compare/v0.1.4...v0.2.0">0.2.0</a> - 2026-03-05<a class="headerlink" href="#020-2026-03-05" title="Permanent link">&para;</a></h2>
+<h3 id="added_14">Added<a class="headerlink" href="#added_14" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Class-based manifold API with automatic dtype casting (<code>Poincare</code>, <code>Hyperboloid</code>, <code>Euclidean</code>)</li>
+<li><code>Manifold</code> structural protocol for type-safe manifold dispatch</li>
+<li>Poincaré convolution layers</li>
+<li>Positional encoding layers for hyperbolic Transformers:<ul>
+<li><code>lorentz_residual</code>: Lorentzian midpoint-based residual connection</li>
+<li><code>hope</code>: Hyperbolic Rotary Positional Encoding (functional)</li>
+<li><code>HyperbolicRoPE</code>: NNX module wrapper for HOPE</li>
+<li><code>HypformerPositionalEncoding</code>: Learnable positional encoding with HTCLinear</li>
+</ul>
+</li>
+<li><strong>Causal attention masking</strong> (<code>causal=True</code>) for all three hyperbolic attention variants:<ul>
+<li><code>HyperbolicSoftmaxAttention</code>: lower-triangular <code>-inf</code> mask before softmax</li>
+<li><code>HyperbolicFullAttention</code>: lower-triangular <code>-inf</code> mask on Lorentzian similarity scores</li>
+<li><code>HyperbolicLinearAttention</code>: O(N) cumulative-sum recurrence via <code>jax.lax.scan</code> (Katharopoulos et al. 2020), keeping O(N) complexity in causal mode</li>
+</ul>
+</li>
+<li>Tiny Shakespeare character-level benchmark (<code>benchmarks/bench_shakespeare_attention.py</code>) comparing all four model variants (Euclidean + 3 hyperbolic) with causal attention</li>
+</ul>
+<h3 id="changed_14">Changed<a class="headerlink" href="#changed_14" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Breaking</strong>: Manifold public functions renamed to private (<code>dist()</code> → <code>_dist()</code>); use class methods instead</li>
+<li>Replaced <code>with_precision()</code> wrapper with the <code>Poincare(dtype=jnp.float64)</code> pattern</li>
+<li><strong>Breaking: <code>HypformerPositionalEncoding.epsilon</code> is no longer a learnable <code>nnx.Param</code></strong> — it is a fixed, non-negative constructor float (default 1.0), matching the Hypformer reference (which keeps it a plain non-trainable tensor). A learnable epsilon could be driven below -1 by gradient descent, where <code>x + epsilon * p</code> leaves the upper hyperboloid sheet and the <code>abs()</code> in the <code>lorentz_residual</code> normalizer silently masks the violation. <code>lorentz_residual</code> now documents the <code>w_y &gt;= 0</code> requirement</li>
+</ul>
+<h2 id="014-2026-02-10"><a href="https://github.com/timoklein/hyperbolix/releases/tag/v0.1.4">0.1.4</a> - 2026-02-10<a class="headerlink" href="#014-2026-02-10" title="Permanent link">&para;</a></h2>
+<h3 id="added_15">Added<a class="headerlink" href="#added_15" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Pure JAX implementation of hyperbolic manifolds (Euclidean, Poincaré, Hyperboloid)</li>
+<li>13+ neural network layers (linear, convolutional, regression)</li>
+<li>Hypformer components: HTC/HRC with curvature-change support</li>
+<li>4 hyperbolic activation functions (ReLU, Leaky ReLU, Tanh, Swish)</li>
+<li>Riemannian optimizers (RSGD, RAdam) with automatic manifold detection</li>
+<li>Isometry mappings between the Poincaré ball and hyperboloid models</li>
+<li>Wrapped normal distributions for VAEs</li>
+<li>Comprehensive test suite (1,400+ tests)</li>
+<li>CI/CD pipeline with benchmarking</li>
+<li>vmap-native API design</li>
+</ul>
+<h3 id="changed_15">Changed<a class="headerlink" href="#changed_15" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Migrated from PyTorch to pure JAX/Flax NNX</li>
+<li>Unified package structure: <code>hyperbolix_jax</code> → <code>hyperbolix</code></li>
+</ul>
+<h3 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Based on research by Ganea et al. (2018), Bécigneul &amp; Ganea (2019), Bdeir et al. (2023)</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/hyperbolix/hyperbolix" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://pypi.org/project/hyperbolix/" target="_blank" rel="noopener" title="pypi.org" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.8 200.5c-7.7-30.9-22.3-54.2-53.4-54.2h-40.1v47.4c0 36.8-31.2 67.8-66.8 67.8H172.7c-29.2 0-53.4 25-53.4 54.3v101.8c0 29 25.2 46 53.4 54.3 33.8 9.9 66.3 11.7 106.8 0 26.9-7.8 53.4-23.5 53.4-54.3v-40.7H226.2v-13.6h160.2c31.1 0 42.6-21.7 53.4-54.2 11.2-33.5 10.7-65.7 0-108.6M286.2 444.7a20.4 20.4 0 1 1 0-40.7 20.4 20.4 0 1 1 0 40.7M167.8 248.1h106.8c29.7 0 53.4-24.5 53.4-54.3V91.9c0-29-24.4-50.7-53.4-55.6-35.8-5.9-74.7-5.6-106.8.1-45.2 8-53.4 24.7-53.4 55.6v40.7h106.9v13.6h-147c-31.1 0-58.3 18.7-66.8 54.2-9.8 40.7-10.2 66.1 0 108.6 7.6 31.6 25.7 54.2 56.8 54.2H101v-48.8c0-35.3 30.5-66.4 66.8-66.4m-6.6-183.4a20.4 20.4 0 1 1 0 40.8 20.4 20.4 0 1 1 0-40.8"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="../javascripts/mathjax/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
