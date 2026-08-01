@@ -1536,10 +1536,10 @@ you when you're in the rare case that does.</p>
 <li>Learnable curvature (via the <code>LearnableCurvature</code> module).</li>
 </ul>
 <p><strong>The single exception</strong>: the legacy Ganea-style Poincaré layers
-(<code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>) parameterize weights <em>directly
-on the Poincaré ball</em>, so they need <code>riemannian_adam</code> (or <code>riemannian_sgd</code>).
-You can usually just migrate to the <code>PP</code> equivalents and stay with
-<code>optax.adam</code>.</p>
+(<code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>) parameterize their <strong>bias</strong>
+<em>directly on the Poincaré ball</em> (the kernel stays Euclidean), so they need
+<code>riemannian_adam</code> (or <code>riemannian_sgd</code>). You can usually just migrate to the
+<code>PP</code> equivalents and stay with <code>optax.adam</code>.</p>
 <h2 id="when-to-use-what">When to Use What<a class="headerlink" href="#when-to-use-what" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1584,9 +1584,12 @@ correctly.</p>
 <h2 id="learnable-curvature-is-also-euclidean">Learnable Curvature Is Also Euclidean<a class="headerlink" href="#learnable-curvature-is-also-euclidean" title="Permanent link">&para;</a></h2>
 <p>A common confusion: surely learnable curvature needs Riemannian optimization?
 No. The <code>LearnableCurvature</code> module stores a plain Euclidean <code>nnx.Param</code>
-that is reparameterized at call time (via <code>softplus</code> or <code>exp</code>) to stay
-positive. It gets a normal Euclidean gradient and a normal Adam update —
-there's nothing to project, nothing on a manifold.</p>
+that is reparameterized at call time — via <code>"softplus"</code> (default,
+<code>c = softplus(raw)</code>), <code>"log"</code> (<code>c = exp(raw)</code>, scale-invariant gradient), or
+<code>"identity"</code> (<code>c = raw</code>, an unconstrained <strong>signed</strong> curvature for the
+<code>Stereographic</code> manifold) — to produce the curvature value. It gets a normal
+Euclidean gradient and a normal Adam update — there's nothing to project,
+nothing on a manifold.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix</span><span class="w"> </span><span class="kn">import</span> <span class="n">LearnableCurvature</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">Model</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
@@ -1599,19 +1602,28 @@ there's nothing to project, nothing on a manifold.</p>
 </span></code></pre></div>
 <h2 id="the-legacy-ganea-exception">The Legacy Ganea Exception<a class="headerlink" href="#the-legacy-ganea-exception" title="Permanent link">&para;</a></h2>
 <p><code>HypLinearPoincare</code> and <code>HypRegressionPoincare</code> (Ganea et al. 2018) store
-their weights as <strong>points on the Poincaré ball</strong>. Each gradient step needs to
-respect the ball constraint, which is exactly what <code>riemannian_adam</code>
-provides. To use them:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">riemannian_adam</span><span class="p">,</span> <span class="n">mark_manifold_param</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Tag manifold-valued parameters during model init</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">mark_manifold_param</span><span class="p">(</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">init_value</span><span class="p">),</span> <span class="n">manifold</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span> <span class="n">curvature</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># Riemannian optimizer auto-dispatches: tagged params get Riemannian updates,</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># everything else gets Euclidean Adam.</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+their <strong>bias</strong> as a point on the Poincaré ball (the kernel stays a plain
+Euclidean <code>nnx.Param</code>). Each gradient step on that bias needs to respect the
+ball constraint, which is exactly what <code>riemannian_adam</code> provides. The
+constructors already tag the bias with <code>ManifoldParam</code> internally, so using
+them is just:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">riemannian_adam</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">HypLinearPoincare</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">model</span> <span class="o">=</span> <span class="n">HypLinearPoincare</span><span class="p">(</span><span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span> <span class="n">in_dim</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">out_dim</span><span class="o">=</span><span class="mi">16</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+</span></code></pre></div>
+<p>No manual tagging step is required for these built-in layers. If you're
+writing your <strong>own</strong> manifold-valued parameter instead — e.g. a hyperbolic
+embedding table — that's when you reach for <code>ManifoldParam</code> (or the
+<code>mark_manifold_param</code> convenience wrapper around an existing <code>nnx.Param</code>)
+yourself:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">ManifoldParam</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># Tag your own manifold-valued parameter during model init</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="bp">self</span><span class="o">.</span><span class="n">embedding</span> <span class="o">=</span> <span class="n">ManifoldParam</span><span class="p">(</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">init_value</span><span class="p">,</span> <span class="n">manifold</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span> <span class="n">curvature</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="p">)</span>
 </span></code></pre></div>
 <p>The optimizer walks the model state, applies Riemannian updates wherever it
 finds a <code>ManifoldParam</code> tag, and falls back to standard Adam everywhere else.
@@ -1639,9 +1651,14 @@ cleaner and the optimizer setup is simpler.</p>
 <li><strong>Using <code>riemannian_adam</code> for HTC / FGG / PP / PV layers.</strong> Adds compute
    for no benefit (and occasionally slightly worse numerics). Use
    <code>optax.adam</code>.</li>
-<li><strong>Forgetting <code>mark_manifold_param</code> on legacy layer weights.</strong> Without the
-   tag, <code>riemannian_adam</code> falls back to Euclidean Adam on a manifold-valued
-   tensor — the weights drift off the ball within a few steps.</li>
+<li><strong>Forgetting to tag a hand-rolled manifold-valued parameter.</strong> The
+   built-in legacy layers (<code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>)
+   already self-tag their bias with <code>ManifoldParam</code> in <code>__init__</code> — there's
+   nothing to do for them. The tag matters only when <em>you</em> add your own
+   manifold-valued parameter (e.g. a hyperbolic embedding table stored as a
+   plain <code>nnx.Param</code>): without <code>ManifoldParam</code> / <code>mark_manifold_param</code>,
+   <code>riemannian_adam</code> falls back to Euclidean Adam on it and the values drift
+   off the ball within a few steps.</li>
 <li><strong>Expecting <code>riemannian_adam</code> to need a separate optimizer for the
    Euclidean parts.</strong> It doesn't. One optimizer with <code>wrt=nnx.Param</code> handles
    everything; dispatch is via the <code>ManifoldParam</code> tag.</li>

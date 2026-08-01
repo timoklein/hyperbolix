@@ -1713,14 +1713,14 @@
 <li><strong>6 Manifolds</strong>: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), and Product Manifold (mixed-curvature composition) — all with complete geometric operations</li>
 <li><strong>Learnable Curvature</strong>: <code>LearnableCurvature</code> module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp; works with any <code>nnx.Optimizer</code></li>
 <li><strong>Neural Network Layers</strong>: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers</li>
-<li><strong>Activation Functions</strong>: 4 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish)</li>
+<li><strong>Activation Functions</strong>: 5 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish, GELU)</li>
 <li><strong>Riemannian Optimizers</strong>: RAdam and RSGD with automatic manifold parameter detection</li>
 <li><strong>Wrapped Normal Distributions</strong>: For probabilistic modeling on hyperbolic manifolds</li>
 <li><strong>Dimensionality Reduction</strong>: HoroPCA (Chami et al. 2021), CO-SNE (Guo et al. 2022, hyperbolic t-SNE), and the Fréchet-mean centering primitive — hyperbolic analogues of PCA and t-SNE</li>
 <li><strong>Pure JAX/Flax NNX</strong>: No PyTorch dependency, fully compatible with JAX ecosystem</li>
 <li><strong>vmap-native API</strong>: Efficient batching through JAX's functional paradigm</li>
 <li><strong>JIT-compatible</strong>: All operations support JIT compilation for performance</li>
-<li><strong>Comprehensive Test Suite</strong>: 4,400+ tests (parametrized across seeds, dtypes, manifolds) with 100% pass rate</li>
+<li><strong>Comprehensive Test Suite</strong>: 3,400+ tests (parametrized across seeds, dtypes, manifolds) with 100% pass rate</li>
 </ul>
 <h2 id="quick-example">Quick Example<a class="headerlink" href="#quick-example" title="Permanent link">&para;</a></h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>

@@ -1840,8 +1840,20 @@ different conventions:</p>
 </thead>
 <tbody>
 <tr>
-<td><code>FGGLinear</code>, <code>LorentzConv2D</code>, <code>HTCLinear</code>, <code>HypLinearHyperboloid*</code></td>
+<td><code>FGGLinear</code>, <code>HTCLinear</code></td>
 <td><code>in_features</code></td>
+<td><strong>Ambient (d+1)</strong> — includes time</td>
+<td><code>33</code></td>
+</tr>
+<tr>
+<td><code>LorentzConv2D</code></td>
+<td><code>in_channels</code></td>
+<td><strong>Ambient (d+1)</strong> — includes time</td>
+<td><code>33</code></td>
+</tr>
+<tr>
+<td><code>HypLinearHyperboloid*</code></td>
+<td><code>in_dim</code></td>
 <td><strong>Ambient (d+1)</strong> — includes time</td>
 <td><code>33</code></td>
 </tr>
@@ -1868,6 +1880,12 @@ different conventions:</p>
 <td>NHWC channels</td>
 <td><strong>Ambient (d+1)</strong></td>
 <td><code>33</code></td>
+</tr>
+<tr>
+<td><code>hyp_flatten2d</code> (Hyperboloid LogCat flatten)</td>
+<td>NHWC channels</td>
+<td><strong>Ambient (d+1)</strong> in, <code>H·W·d + 1</code> out</td>
+<td><code>33</code> in, <code>H·W·32 + 1</code> out</td>
 </tr>
 <tr>
 <td><code>ProductManifold</code> factor <code>dim</code></td>
@@ -2227,9 +2245,10 @@ in <strong>Euclidean space</strong> internally. They do NOT need a Riemannian op
 <p>Only use <code>riemannian_adam</code> / <code>riemannian_sgd</code> when parameters live <strong>directly
 on the manifold</strong> — typically hyperbolic embedding tables wrapped in
 <code>ManifoldParam(value, manifold=..., curvature=...)</code>. The legacy
-<code>HypLinearPoincare</code> (Ganea-style) is the only NN layer whose weights are
-manifold-valued; prefer <code>HypLinearPoincarePP</code> / <code>FGGLinear</code> to avoid the
-need entirely.</p>
+<code>HypLinearPoincare</code> and <code>HypRegressionPoincare</code> (Ganea-style) are the only NN
+layers with a manifold-valued <strong>bias</strong> — their kernels stay Euclidean;
+prefer <code>HypLinearPoincarePP</code> / <code>HypRegressionPoincarePP</code> / <code>FGGLinear</code> to
+avoid the need entirely.</p>
 <h3 id="4-skipping-proj-after-manual-point-construction">4. Skipping <code>proj</code> after manual point construction<a class="headerlink" href="#4-skipping-proj-after-manual-point-construction" title="Permanent link">&para;</a></h3>
 <p>If you build a hyperboloid point by hand from spatial coordinates
 (<code>[sqrt(...), spatial...]</code>), it's correct in float64 but may drift in float32.
