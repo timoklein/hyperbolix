@@ -225,7 +225,10 @@ def test_attn_output_shape_and_jit(cls):
     def forward(m, inp):
         return m(inp, c_in=1.0, c_attn=1.0, c_out=1.0)
 
-    assert jnp.allclose(forward(model, x), y, atol=1e-12)
+    y_jit = forward(model, x)
+    # XLA fusion reorders f32 arithmetic by ~1e-7 on O(1) values; 1e-12 is only valid in f64.
+    tol = 1e-5 if y_jit.dtype == jnp.float32 else 1e-12
+    assert jnp.allclose(y_jit, y, rtol=tol, atol=tol)
 
 
 @pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
