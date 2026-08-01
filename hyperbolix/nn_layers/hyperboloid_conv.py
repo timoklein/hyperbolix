@@ -65,6 +65,8 @@ class LorentzConv2D(nnx.Module):
 
     Parameters
     ----------
+    manifold_module : object
+        Class-based Hyperboloid manifold instance
     in_channels : int
         Number of input channels (ambient dimension, including time component)
     out_channels : int
@@ -104,6 +106,7 @@ class LorentzConv2D(nnx.Module):
 
     def __init__(
         self,
+        manifold_module: Hyperboloid,
         in_channels: int,
         out_channels: int,
         kernel_size: int | tuple[int, int],
@@ -113,6 +116,9 @@ class LorentzConv2D(nnx.Module):
         padding: str = "SAME",
         param_dtype: DTypeLike = jnp.float32,
     ):
+        # Static configuration
+        validate_hyperboloid_manifold(manifold_module, required_methods=("hcat",))
+        self.manifold = manifold_module
         self.in_channels = in_channels
         self.out_channels = out_channels
 

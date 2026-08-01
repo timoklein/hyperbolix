@@ -454,6 +454,7 @@ class FullyHyperbolicCNN_Lorentz(nnx.Module):
     def __init__(self, rngs: nnx.Rngs):
         # Hyperbolic convolutional layers using LorentzConv2D (HRC pattern)
         self.hyp_conv1 = LorentzConv2D(
+            hyperboloid,
             in_channels=2,  # 1 spatial + 1 time
             out_channels=33,  # 32 spatial + 1 time
             kernel_size=3,
@@ -464,6 +465,7 @@ class FullyHyperbolicCNN_Lorentz(nnx.Module):
         self.hyp_bn1 = HRCBatchNorm(32, rngs=rngs)  # Normalize 32 spatial components
 
         self.hyp_conv2 = LorentzConv2D(
+            hyperboloid,
             in_channels=33,
             out_channels=65,  # 64 spatial + 1 time
             kernel_size=3,

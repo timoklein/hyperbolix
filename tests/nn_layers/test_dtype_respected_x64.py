@@ -187,7 +187,7 @@ def test_param_storage_float32_with_float64_manifold():
         HTCLinear(5, 8, rngs=nnx.Rngs(0)),
         FGGLorentzMLR(9, 4, rngs=nnx.Rngs(0)),
         HypConv2DHyperboloid(h64, 4, 8, 3, rngs=nnx.Rngs(0)),
-        LorentzConv2D(4, 8, (3, 3), rngs=nnx.Rngs(0)),
+        LorentzConv2D(h64, 4, 8, (3, 3), rngs=nnx.Rngs(0)),
         HyperbolicFullAttention(5, 4, num_heads=2, rngs=nnx.Rngs(0)),
         HRCBatchNorm(8, rngs=nnx.Rngs(0)),
     ]
