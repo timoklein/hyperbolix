@@ -47,12 +47,9 @@ import jax.numpy as jnp
 from jax.scipy.special import digamma
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import acosh, cosh, sinh, smooth_clamp, smooth_clamp_min
-from ._base import ManifoldBase
+from ..utils.math_utils import MIN_NORM, acosh, cosh, sinh, smooth_clamp, smooth_clamp_min
+from ._base import ManifoldBase, default_atol
 from .protocol import Curvature
-
-# Default numerical parameters
-MIN_NORM = 1e-15
 
 # Version selection constants for _dist() and _dist_0()
 VERSION_DEFAULT = 0
@@ -625,19 +622,20 @@ def _tangent_proj(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     return v - coeff * x_normed
 
 
-def _is_in_manifold(x: Float[Array, "dim_plus_1"], c: Curvature, atol: float = 1e-5) -> Array:
+def _is_in_manifold(x: Float[Array, "dim_plus_1"], c: Curvature, atol: float | None = None) -> Array:
     """Check if point x lies on hyperboloid.
 
     Args:
         x: Point to check, shape (dim+1,)
         c: Curvature (positive)
-        atol: Absolute tolerance
+        atol: Absolute tolerance on the Lorentz-norm residual. ``None`` resolves to
+            :func:`~hyperbolix.manifolds._base.default_atol` for ``x.dtype``.
 
     Returns:
-        True if -x₀² + ||x_rest||² = -1/c and x₀ > 0
+        True if -x₀² + ||x_rest||² = -1/c (within ``atol``) and x₀ > 0
     """
     lorentz_norm = _minkowski_inner(x, x)
-    tol = max(atol, 1e-4)
+    tol = default_atol(x.dtype) if atol is None else atol
     target = -1.0 / c
 
     valid_constraint = jnp.isclose(lorentz_norm, target, atol=tol, rtol=0.0)
@@ -657,12 +655,13 @@ def _is_in_tangent_space(
         v: Vector to check, shape (dim+1,)
         x: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        atol: Absolute tolerance (dtype-aware if None)
+        atol: Absolute tolerance on ⟨v, x⟩_L. ``None`` resolves to
+            :func:`~hyperbolix.manifolds._base.default_atol` for ``v.dtype``.
 
     Returns:
         True if ⟨v, x⟩_L ≈ 0
     """
-    tol = 5e-4 if atol is None else atol
+    tol = default_atol(v.dtype) if atol is None else atol
     mink_inner = _minkowski_inner(v, x)
     return jnp.abs(mink_inner) < tol
 
@@ -1055,13 +1054,15 @@ class Hyperboloid(ManifoldBase):
         """Project vector v onto tangent space at point x."""
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
-    def is_in_manifold(self, x: Float[Array, "dim_plus_1"], c: Curvature, atol: float = 1e-4) -> Array:
-        """Check if point x lies on hyperboloid."""
+    def is_in_manifold(self, x: Float[Array, "dim_plus_1"], c: Curvature, atol: float | None = None) -> Array:
+        """Check if point x lies on hyperboloid (``atol`` default: :func:`default_atol`)."""
         return _is_in_manifold(self._cast(x), c, atol)
 
-    def is_in_tangent_space(self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Array:
-        """Check if vector v lies in tangent space at point x."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c)
+    def is_in_tangent_space(
+        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature, atol: float | None = None
+    ) -> Array:
+        """Check if vector v lies in tangent space at point x (``atol`` default: :func:`default_atol`)."""
+        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
 
     def hcat(
         self,

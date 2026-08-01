@@ -9,8 +9,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.manifolds.poincare import Poincare
+from hyperbolix.manifolds import (
+    Euclidean,
+    Hyperboloid,
+    Poincare,
+    ProductManifold,
+    ProperVelocity,
+    Stereographic,
+)
 from hyperbolix.utils.helpers import (
     compute_hyperbolic_delta,
     compute_pairwise_distances,
@@ -68,6 +74,136 @@ def test_distmat_contract(hyperboloid, poincare, manifold_name: str):
     # Value oracle: entry (i, j) is the geodesic distance between points i and j.
     for i, j in ((0, 1), (3, 7)):
         assert jnp.allclose(distmat[i, j], manifold.dist(points[i], points[j], 1.0, version_idx), rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------------------------
+# Manifold coverage of the two public helpers (audit C2)
+#
+# Both helpers forward ``version_idx`` positionally to ``manifold.dist``. Only Poincare,
+# Hyperboloid and ProperVelocity used to accept it, so
+# ``compute_pairwise_distances(pts, Euclidean(), 0.0)`` raised
+# ``TypeError: dist() takes from 3 to 4 positional arguments but 5 were given`` — the same for
+# Stereographic and ProductManifold. Three of the library's six manifolds could not be used with
+# either of its two public geometry utilities.
+# ---------------------------------------------------------------------------------------------
+
+
+def _manifold_case(name: str, n_points: int = 12, seed: int = 3):
+    """``(manifold, c, points, version_idx)`` for each of the six manifolds.
+
+    Curvature is a per-factor tuple for ``ProductManifold`` and signed for ``Stereographic``,
+    so the case table also covers the two non-scalar/non-positive curvature shapes the helpers
+    have to pass through untouched.
+    """
+    gen = np.random.default_rng(seed)
+    dim = 4
+
+    if name == "euclidean":
+        pts = jnp.asarray(gen.normal(0.0, 1.0, size=(n_points, dim)), dtype=jnp.float64)
+        return Euclidean(dtype=jnp.float64), 0.0, pts, 0
+
+    if name == "poincare":
+        manifold = Poincare(dtype=jnp.float64)
+        raw = jnp.asarray(0.3 * gen.normal(0.0, 1.0, size=(n_points, dim)), dtype=jnp.float64)
+        return manifold, 1.0, jax.vmap(manifold.proj, in_axes=(0, None))(raw, 1.0), manifold.VERSION_MOBIUS_DIRECT
+
+    if name == "hyperboloid":
+        manifold = Hyperboloid(dtype=jnp.float64)
+        raw = jnp.asarray(gen.normal(0.0, 1.0, size=(n_points, dim + 1)), dtype=jnp.float64)
+        return manifold, 1.0, jax.vmap(manifold.proj, in_axes=(0, None))(raw, 1.0), manifold.VERSION_DEFAULT
+
+    if name == "proper_velocity":
+        pts = jnp.asarray(gen.normal(0.0, 1.0, size=(n_points, dim)), dtype=jnp.float64)
+        return ProperVelocity(dtype=jnp.float64), 1.0, pts, 0
+
+    if name == "stereographic_hyperbolic":
+        manifold = Stereographic(dtype=jnp.float64)
+        raw = jnp.asarray(0.3 * gen.normal(0.0, 1.0, size=(n_points, dim)), dtype=jnp.float64)
+        return manifold, 1.0, jax.vmap(manifold.proj, in_axes=(0, None))(raw, 1.0), 0
+
+    if name == "stereographic_spherical":
+        manifold = Stereographic(dtype=jnp.float64)
+        raw = jnp.asarray(0.3 * gen.normal(0.0, 1.0, size=(n_points, dim)), dtype=jnp.float64)
+        return manifold, -1.0, jax.vmap(manifold.proj, in_axes=(0, None))(raw, -1.0), 0
+
+    if name == "product":
+        ball, sheet = Poincare(dtype=jnp.float64), Hyperboloid(dtype=jnp.float64)
+        manifold = ProductManifold((ball, 2), (sheet, 3), dtype=jnp.float64)
+        cs = (1.0, 0.5)
+        ball_pts = jax.vmap(ball.proj, in_axes=(0, None))(
+            jnp.asarray(0.3 * gen.normal(0.0, 1.0, size=(n_points, 2)), dtype=jnp.float64), cs[0]
+        )
+        sheet_pts = jax.vmap(sheet.proj, in_axes=(0, None))(
+            jnp.asarray(gen.normal(0.0, 1.0, size=(n_points, 3)), dtype=jnp.float64), cs[1]
+        )
+        return manifold, cs, jnp.concatenate([ball_pts, sheet_pts], axis=-1), 0
+
+    raise ValueError(f"unknown case {name!r}")
+
+
+MANIFOLD_CASES = [
+    "euclidean",
+    "poincare",
+    "hyperboloid",
+    "proper_velocity",
+    "stereographic_hyperbolic",
+    "stereographic_spherical",
+    "product",
+]
+
+
+@pytest.mark.parametrize("case", MANIFOLD_CASES)
+def test_compute_pairwise_distances_works_on_every_manifold(case: str):
+    """The distance matrix is the manifold's own ``dist`` on every pair, for all six manifolds.
+
+    The value oracle (an off-diagonal entry against a direct ``manifold.dist`` call) is what
+    makes this more than a smoke test: three of these cases used to raise ``TypeError`` outright,
+    and an accept-and-ignore ``version_idx`` added carelessly could just as easily have silenced
+    the error by returning something that is not the geodesic distance.
+    """
+    manifold, c, points, version_idx = _manifold_case(case)
+
+    distmat = compute_pairwise_distances(points, manifold, c, version_idx)
+
+    assert distmat.shape == (points.shape[0], points.shape[0])
+    assert jnp.all(jnp.isfinite(distmat))
+    assert jnp.allclose(distmat, distmat.T, atol=1e-10)
+    assert jnp.allclose(jnp.diag(distmat), 0.0, atol=1e-7)
+    for i, j in ((0, 1), (2, 7)):
+        assert float(distmat[i, j]) == pytest.approx(float(manifold.dist(points[i], points[j], c)), rel=1e-9)
+
+
+@pytest.mark.parametrize("case", MANIFOLD_CASES)
+def test_get_delta_works_on_every_manifold(case: str):
+    """``get_delta`` composes over every manifold and returns ``(delta, max(D), delta/max(D))``.
+
+    Rebuilds the distance matrix through the sibling helper rather than asserting only
+    finiteness, so the two helpers are pinned to the same manifold dispatch.
+    """
+    manifold, c, points, version_idx = _manifold_case(case)
+
+    delta, diam, rel_delta = get_delta(points, manifold, c, version_idx)
+    distmat = compute_pairwise_distances(points, manifold, c, version_idx)
+
+    assert float(diam) > 0.0
+    assert jnp.allclose(diam, jnp.max(distmat), rtol=1e-12)
+    assert jnp.allclose(delta, compute_hyperbolic_delta(distmat, version="average"), rtol=1e-9, atol=1e-12)
+    assert jnp.allclose(rel_delta, delta / diam, rtol=1e-9)
+
+
+@pytest.mark.parametrize("case", ["euclidean", "stereographic_hyperbolic", "product"])
+def test_version_idx_is_accepted_and_ignored_by_the_single_implementation_manifolds(case: str):
+    """Manifolds with one distance implementation return the same matrix for any ``version_idx``.
+
+    Pins the documented contract rather than just the absence of a ``TypeError``: these three
+    accept the argument for protocol uniformity and must not let it select anything.
+    """
+    manifold, c, points, _ = _manifold_case(case)
+
+    base = compute_pairwise_distances(points, manifold, c, 0)
+
+    for version_idx in (1, 2, 7):
+        assert jnp.allclose(compute_pairwise_distances(points, manifold, c, version_idx), base, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("version_idx", [0, 1])

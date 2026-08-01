@@ -51,12 +51,10 @@ import math
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import cosh, sinh, smooth_clamp
+from ..utils.math_utils import MIN_NORM, cosh, sinh, smooth_clamp
 from ._base import ManifoldBase
+from ._gyrovector_core import _gyration
 from .protocol import Curvature
-
-# Default numerical parameters
-MIN_NORM = 1e-15
 
 # Version selection constant. PV currently has a single canonical implementation,
 # kept for API consistency with Poincare / Hyperboloid.
@@ -104,31 +102,6 @@ def _dpi_x(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> Floa
     return term1 - term2
 
 
-def _mobius_gyration(
-    a: Float[Array, "dim"],
-    b: Float[Array, "dim"],
-    z: Float[Array, "dim"],
-    c: Curvature,
-) -> Float[Array, "dim"]:
-    """Möbius gyration gyr_M[a, b]z on the Poincaré ball (self-contained copy).
-
-    Same formula as ``poincare._gyration`` but inlined here so the PV module
-    does not depend on the Poincaré implementation.
-    """
-    c2 = c**2
-    a_sqnorm = jnp.dot(a, a)
-    b_sqnorm = jnp.dot(b, b)
-    ab = jnp.dot(a, b)
-    az = jnp.dot(a, z)
-    bz = jnp.dot(b, z)
-
-    coef_a = -c2 * az * b_sqnorm + c * bz + 2 * c2 * ab * bz
-    coef_b = -c2 * bz * a_sqnorm - c * az
-    num = 2 * (coef_a * a + coef_b * b)
-    denom = jnp.maximum(1 + 2 * c * ab + c2 * a_sqnorm * b_sqnorm, MIN_NORM)
-    return z + num / denom
-
-
 # ---------------------------------------------------------------------------
 # PV gyro-operations
 # ---------------------------------------------------------------------------
@@ -174,10 +147,16 @@ def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float
     ``(1/√c)·asinh(√c·||-x⊕y||)`` (both follow from the tanh/sinh half-angle
     identities). We use the asinh form because jnp.asinh is stable over all
     of R while atanh requires boundary clamping.
+
+    The norm is the module's ``_safe_norm``, not ``jnp.linalg.norm``: at ``x == y == 0`` the
+    gyro-difference ``-x ⊕ y`` is exactly the zero vector, where ``linalg.norm``'s VJP is
+    ``0/0 = NaN``. ``_safe_norm`` returns ``MIN_NORM`` there and its gradient is exactly 0 —
+    the correct subgradient choice at the distance's non-smooth point. The value shifts by at
+    most ``MIN_NORM = 1e-15``, below the float64 resolution of every distance the library uses.
     """
     sqrt_c = jnp.sqrt(c)
     z = _addition(-x, y, c)
-    z_norm = jnp.linalg.norm(z)
+    z_norm = _safe_norm(z)
     return jnp.asinh(sqrt_c * z_norm) / sqrt_c
 
 
@@ -185,9 +164,13 @@ def _dist_0(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Geodesic distance from the PV origin (paper Thm 4.3 simplified).
 
     d(0, x) = (1/√c) · asinh(√c · ||x||)
+
+    Uses ``_safe_norm`` for the same reason as :func:`_dist`: ``jnp.linalg.norm``'s VJP at
+    ``x = 0`` is ``0/0 = NaN``, and the origin is exactly where this function is most often
+    differentiated (it is the PV analogue of the wrapped-normal NaN-at-the-mean bug).
     """
     sqrt_c = jnp.sqrt(c)
-    x_norm = jnp.linalg.norm(x)
+    x_norm = _safe_norm(x)
     return jnp.asinh(sqrt_c * x_norm) / sqrt_c
 
 
@@ -333,8 +316,8 @@ def _ptransp(
     # Differential of π at x applied to v.
     dpi_v = _dpi_x(x, v, c)
 
-    # Möbius gyration in the Poincaré ball.
-    v_tilde = _mobius_gyration(y_bar, -x_bar, dpi_v, c)
+    # Möbius gyration in the Poincaré ball (the shared curvature-generic gyrovector core).
+    v_tilde = _gyration(y_bar, -x_bar, dpi_v, c)
 
     # Eq. 12 (K = -c flips the sign of the second term).
     yv = jnp.dot(y, v_tilde)
@@ -401,8 +384,12 @@ def _proj(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     return jnp.nan_to_num(x)
 
 
-def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float = 1e-5) -> Array:
-    """Every finite point in R^n lies on the PV manifold."""
+def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+    """Every finite point in R^n lies on the PV manifold.
+
+    ``atol`` is accepted for signature uniformity across manifolds; PV is unconstrained, so
+    the check is exact finiteness and there is no tolerance to slacken.
+    """
     del c, atol
     return jnp.all(jnp.isfinite(x))
 
@@ -413,7 +400,7 @@ def _is_in_tangent_space(
     c: Curvature,
     atol: float | None = None,
 ) -> Array:
-    """Every finite vector in R^n is a tangent vector at any PV point."""
+    """Every finite vector in R^n is a tangent vector at any PV point (``atol`` unused, as above)."""
     del x, c, atol
     return jnp.all(jnp.isfinite(v))
 
@@ -624,13 +611,15 @@ class ProperVelocity(ManifoldBase):
 
     # -- Validation ----------------------------------------------------------
 
-    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature, atol: float = 1e-5) -> Array:
-        """Check that all entries are finite (PV has no constraint)."""
+    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+        """Check that all entries are finite (PV has no constraint, so ``atol`` is unused)."""
         return _is_in_manifold(self._cast(x), c, atol)
 
-    def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Array:
-        """Check that v has finite entries (T_x PV = R^n)."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c)
+    def is_in_tangent_space(
+        self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature, atol: float | None = None
+    ) -> Array:
+        """Check that v has finite entries (T_x PV = R^n, so ``atol`` is unused)."""
+        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
 
     def embed_spatial_0(self, v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
         """Identity embedding (no time coordinate). Kept for API parity."""

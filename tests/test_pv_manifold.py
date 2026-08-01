@@ -663,3 +663,63 @@ def test_pv_dpi_norm_identity(curvature: float, pv_points: jnp.ndarray, pv_tange
     rhs = jnp.sum(pv_tangent_vectors**2, axis=-1) - curvature * beta**2 * xv**2
 
     assert jnp.allclose(lhs, rhs, atol=1e-4, rtol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Gradients at the non-smooth points of the distance (audit D1)
+# ---------------------------------------------------------------------------
+
+
+def test_pv_distance_gradients_are_finite_at_the_origin(pv_manifold: ProperVelocity, curvature: float) -> None:
+    """``grad dist(0, 0)`` and ``grad dist_0(0)`` must be finite, not NaN.
+
+    ``_dist`` and ``_dist_0`` used a bare ``jnp.linalg.norm``, whose VJP at the zero vector is
+    ``0/0``. At ``x = y = 0`` the gyro-difference ``-x ⊕ y`` is *exactly* zero, so both
+    gradients came back all-NaN — the same failure class as the wrapped-normal NaN-at-the-mean
+    bug, and exactly what the module's own ``_safe_norm`` (used by every other norm here) exists
+    to prevent. Measured before the fix: ``[nan nan nan]`` for both, in float32 and float64.
+
+    The origin is not incidental: ``dist_0`` at ``x = 0`` is what a "pull the embedding to the
+    origin" regularizer differentiates, and one NaN there poisons a whole parameter tree.
+
+    The finite off-origin gradients are asserted alongside so a "fix" that zeroes the gradient
+    everywhere (e.g. a ``stop_gradient``) fails: at a generic point ``dist_0`` must still have
+    the radial gradient ``x / (‖x‖·√(1 + c‖x‖²))``, checked here against that closed form.
+    """
+    dtype = pv_manifold.dtype
+    zero = jnp.zeros(3, dtype=dtype)
+    x = jnp.array([0.3, -0.4, 0.5], dtype=dtype)
+
+    grad_dist_at_origin = jax.grad(lambda a, b: pv_manifold.dist(a, b, curvature))(zero, zero)
+    grad_dist_0_at_origin = jax.grad(lambda a: pv_manifold.dist_0(a, curvature))(zero)
+
+    assert bool(jnp.all(jnp.isfinite(grad_dist_at_origin)))
+    assert bool(jnp.all(jnp.isfinite(grad_dist_0_at_origin)))
+
+    # Values stay ~0 there: the safe-norm floor shifts them by at most MIN_NORM = 1e-15.
+    assert float(pv_manifold.dist(zero, zero, curvature)) == pytest.approx(0.0, abs=1e-12)
+    assert float(pv_manifold.dist_0(zero, curvature)) == pytest.approx(0.0, abs=1e-12)
+
+    # Off the origin the gradient is unchanged and non-degenerate.
+    grad_dist_0_at_x = jax.grad(lambda a: pv_manifold.dist_0(a, curvature))(x)
+    x_norm = float(np.linalg.norm(np.asarray(x, dtype=np.float64)))
+    expected = np.asarray(x, dtype=np.float64) / (x_norm * np.sqrt(1.0 + curvature * x_norm**2))
+    assert bool(jnp.all(jnp.isfinite(grad_dist_0_at_x)))
+    assert np.allclose(np.asarray(grad_dist_0_at_x, dtype=np.float64), expected, atol=1e-5, rtol=1e-5)
+
+
+def test_pv_distance_gradients_are_finite_at_coincident_points(
+    pv_manifold: ProperVelocity, curvature: float, pv_points: jnp.ndarray
+) -> None:
+    """``grad_x dist(x, x)`` must be finite for a whole batch of coincident pairs.
+
+    ``dist`` is genuinely non-differentiable at ``x == y`` (the metric has a cone point there),
+    so no particular value is asserted — only that autodiff returns numbers. Run over the full
+    256-point fixture and under ``vmap`` because the pre-fix NaN was produced by whichever pair
+    happened to cancel exactly; a single hand-picked pair can miss it.
+    """
+    grad_x = jax.vmap(jax.grad(lambda a, b: pv_manifold.dist(a, b, curvature)), in_axes=(0, 0))
+
+    grads = grad_x(pv_points, pv_points)
+
+    assert bool(jnp.all(jnp.isfinite(grads)))

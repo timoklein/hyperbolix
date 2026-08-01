@@ -1,9 +1,9 @@
 """Manifold Protocol for structural typing.
 
 Defines the common interface shared by all concrete manifold classes
-(``Poincare``, ``Hyperboloid``, ``ProperVelocity``, ``Euclidean``, and
-``ProductManifold``). Use ``Manifold`` as a type hint for any parameter
-that accepts an arbitrary manifold instance.
+(``Poincare``, ``Hyperboloid``, ``ProperVelocity``, ``Euclidean``,
+``Stereographic``, and ``ProductManifold``). Use ``Manifold`` as a type hint
+for any parameter that accepts an arbitrary manifold instance.
 
 This is a ``typing.Protocol`` -- no classes need to explicitly inherit from it.
 Structural subtyping ensures that any object with the right methods is accepted.
@@ -34,14 +34,24 @@ class Manifold(Protocol):
     """Structural protocol for manifold classes.
 
     All concrete manifold classes (``Poincare``, ``Hyperboloid``,
-    ``ProperVelocity``, ``Euclidean``, ``ProductManifold``) satisfy this
-    protocol without modification. For single manifolds, ``c`` is a scalar
-    (``ScalarCurvature``); for ``ProductManifold``, ``c`` is a sequence of
-    length ``n_factors`` (one curvature per factor).
+    ``ProperVelocity``, ``Euclidean``, ``Stereographic``, ``ProductManifold``)
+    satisfy this protocol without modification. For single manifolds, ``c`` is
+    a scalar (``ScalarCurvature``); for ``ProductManifold``, ``c`` is a sequence
+    of length ``n_factors`` (one curvature per factor).
 
     The method signatures use the *minimal common interface* so that
-    manifold-specific optional parameters (e.g. ``version_idx``, ``atol``)
-    do not break compatibility.
+    manifold-specific optional parameters do not break compatibility. Two such
+    parameters are nevertheless uniform across every implementation:
+
+    * ``dist`` / ``dist_0`` take a trailing ``version_idx: int``. Manifolds with
+      a single distance implementation accept and ignore it (documented on each),
+      so a generic caller can always forward one.
+    * ``is_in_manifold`` / ``is_in_tangent_space`` take a trailing
+      ``atol: float | None = None``, resolved through
+      :func:`~hyperbolix.manifolds._base.default_atol` when ``None``. No
+      implementation floors, clamps, or silently drops an explicit value;
+      unconstrained manifolds (Euclidean, ProperVelocity) document that a
+      finiteness test has no tolerance to apply.
     """
 
     dtype: Any

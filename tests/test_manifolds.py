@@ -18,6 +18,7 @@ import pytest
 import hyperbolix as hj
 import hyperbolix.manifolds.poincare as poincare_impl
 from hyperbolix.manifolds import isometry_mappings
+from hyperbolix.manifolds._base import default_atol
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -1130,3 +1131,133 @@ def test_is_in_manifold(manifold_and_c, uniform_points: jnp.ndarray) -> None:
         assert not bool(manifold.is_in_manifold(nan_point, c=c))
         inf_point = uniform_points[0].at[0].set(jnp.inf)
         assert not bool(manifold.is_in_manifold(inf_point, c=c))
+
+
+# ---------------------------------------------------------------------------
+# Constraint-tolerance convention (audit B9 / D3)
+#
+# One convention across all five manifolds: ``atol=None`` resolves through
+# ``manifolds._base.default_atol`` (= sqrt of the dtype's machine epsilon) and an explicit
+# ``atol`` is honoured as given. Historically the three constrained manifolds disagreed —
+# Hyperboloid floored it at 1e-4 (so ``atol=1e-9`` and ``atol=1e-4`` were indistinguishable),
+# Poincaré documented it as "not used", ProperVelocity ``del``-ed it.
+# ---------------------------------------------------------------------------
+
+
+def test_default_atol_is_sqrt_eps_and_dtype_aware() -> None:
+    """``default_atol`` is ``sqrt(finfo(dtype).eps)`` — looser in float32 than in float64."""
+    atol_f32 = default_atol(jnp.float32)
+    atol_f64 = default_atol(jnp.float64)
+
+    assert atol_f32 == pytest.approx(float(np.finfo(np.float32).eps) ** 0.5, rel=1e-12)
+    assert atol_f64 == pytest.approx(float(np.finfo(np.float64).eps) ** 0.5, rel=1e-12)
+    assert atol_f64 < atol_f32, "a float64 check must be strictly tighter than a float32 one"
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
+def test_hyperboloid_is_in_manifold_honours_an_explicit_atol(c: float) -> None:
+    """A point off the sheet by exactly ``R`` is accepted iff ``atol > R``.
+
+    Constructed so the Lorentz-norm residual is *exact*: replacing ``x₀`` by ``sqrt(x₀² - R)``
+    makes ``⟨x, x⟩_L = -1/c + R`` identically. float64 throughout so ``R = 1e-6`` is far above
+    the arithmetic noise.
+
+    This is the test the old implementation fails: ``_is_in_manifold`` opened with
+    ``tol = max(atol, 1e-4)``, so the ``atol=1e-7`` call below accepted the point (1e-6 < 1e-4)
+    and no caller could ever tighten the check. It also pins that the floor's *removal* did not
+    turn into "ignore atol entirely" — the loose call must still accept.
+    """
+    manifold = hj.manifolds.Hyperboloid(dtype=jnp.float64)
+    residual = 1e-6
+
+    on_sheet = manifold.proj(jnp.array([0.0, 0.4, -0.7, 0.2], dtype=jnp.float64), c)
+    off_sheet = on_sheet.at[0].set(jnp.sqrt(on_sheet[0] ** 2 - residual))
+
+    # The construction is exact: verify the residual before relying on it.
+    lorentz = float(manifold.minkowski_inner(off_sheet, off_sheet))
+    assert lorentz == pytest.approx(-1.0 / c + residual, abs=1e-12)
+
+    assert bool(manifold.is_in_manifold(off_sheet, c, atol=1e-5)), "atol > residual must accept"
+    assert not bool(manifold.is_in_manifold(off_sheet, c, atol=1e-7)), "atol < residual must reject"
+    # The genuinely on-sheet point survives a tolerance far below the old 1e-4 floor.
+    assert bool(manifold.is_in_manifold(on_sheet, c, atol=1e-12))
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
+def test_poincare_is_in_manifold_honours_an_explicit_atol(c: float) -> None:
+    """A point outside the ball by exactly ``R`` in ``c‖x‖² - 1`` is accepted iff ``atol > R``.
+
+    ``atol`` used to be documented as "kept for API consistency but not used", so both calls
+    below returned False; the check was a hard ``‖x‖² < 1/c`` with no slack at all. The
+    dimensionless residual ``c‖x‖² - 1`` is what is toleranced, so the same ``atol`` means the
+    same thing at every curvature — hence the three-curvature parametrization.
+    """
+    manifold = hj.manifolds.Poincare(dtype=jnp.float64)
+    residual = 1e-6
+
+    direction = jnp.array([0.4, -0.7, 0.2], dtype=jnp.float64)
+    outside = direction / jnp.linalg.norm(direction) * jnp.sqrt((1.0 + residual) / c)
+
+    assert float(c * jnp.dot(outside, outside)) == pytest.approx(1.0 + residual, abs=1e-12)
+
+    assert bool(manifold.is_in_manifold(outside, c, atol=1e-5)), "atol > residual must accept"
+    assert not bool(manifold.is_in_manifold(outside, c, atol=1e-7)), "atol < residual must reject"
+    # A projected point is strictly inside, so it passes even with zero slack.
+    inside = manifold.proj(direction, c)
+    assert bool(manifold.is_in_manifold(inside, c, atol=0.0))
+
+
+def test_is_in_tangent_space_rejects_non_finite_vectors(manifold_and_c, uniform_points: jnp.ndarray, rng) -> None:
+    """NaN/Inf tangent vectors are rejected on every manifold.
+
+    ``Euclidean._is_in_tangent_space`` and ``Poincare._is_in_tangent_space`` returned the
+    literal constant ``True`` — an assertion-free check that accepted NaN and Inf, the same
+    defect commit 68c05e3 fixed for ``Euclidean.is_in_manifold`` alone. The tangent space of an
+    open subset of R^n *is* R^n, so finiteness is the whole constraint there; the Hyperboloid
+    already rejected them through its ``|⟨v, x⟩_L| < atol`` test.
+
+    A genuine tangent vector is asserted accepted in the same test so "always False" is not a
+    passing implementation either.
+    """
+    manifold, c = manifold_and_c
+    point = uniform_points[0]
+
+    v = jnp.asarray(rng.normal(0.0, 1.0, size=point.shape), dtype=point.dtype)
+    if _is_hyperboloid(manifold):
+        v = manifold.tangent_proj(v, point, c)
+    assert bool(manifold.is_in_tangent_space(v, point, c))
+
+    assert not bool(manifold.is_in_tangent_space(v.at[0].set(jnp.nan), point, c))
+    assert not bool(manifold.is_in_tangent_space(v.at[0].set(jnp.inf), point, c))
+
+
+def test_poincare_proj_batch_matches_the_vmapped_single_point_proj(poincare_and_c, poincare_points: jnp.ndarray) -> None:
+    """``Poincare.proj_batch`` equals ``vmap(proj)`` exactly, and handles extra leading axes.
+
+    Added to close the sibling gap against ``Hyperboloid.proj_batch``; ``decomposition/`` used
+    to hand-roll the vmap at two sites for want of it. Equality is asserted bit-for-bit
+    (``rtol=0, atol=0``) — an approximate check would not notice a batched rewrite that dropped
+    the ``keepdims`` and clamped by the wrong norm.
+
+    Points outside the ball are included: on already-inside points ``proj`` is the identity, so
+    a ``proj_batch`` that returned its input unchanged would pass a test built only from the
+    on-manifold fixture.
+    """
+    manifold, c = poincare_and_c
+    dtype = poincare_points.dtype
+
+    outside = poincare_points[:4] * jnp.asarray(50.0, dtype=dtype)  # well past the boundary
+    points = jnp.concatenate([poincare_points[:4], outside], axis=0)
+
+    batched = manifold.proj_batch(points, c)
+    looped = jax.vmap(manifold.proj, in_axes=(0, None))(points, c)
+
+    assert batched.shape == points.shape
+    assert jnp.allclose(batched, looped, rtol=0, atol=0)
+    assert _batch_is_in_manifold(manifold, batched, c)
+    # The clamp actually fired: the far points moved.
+    assert not jnp.allclose(batched[4:], points[4:])
+
+    # Arbitrary leading dimensions, matching Hyperboloid.proj_batch's contract.
+    stacked = jnp.stack([points, points[::-1]])  # (2, N, dim)
+    assert jnp.allclose(manifold.proj_batch(stacked, c)[0], batched, rtol=0, atol=0)

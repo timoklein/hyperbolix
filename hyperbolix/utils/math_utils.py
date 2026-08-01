@@ -10,6 +10,17 @@ import jax.nn as nn
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+# Canonical gradient-safety floor for norms and denominators, shared library-wide
+# (`manifolds/`, `nn_layers/`, `distributions/`, `decomposition/` all import this name).
+# Two uses, both about derivatives rather than values:
+#   * `sqrt(sum(x**2) + MIN_NORM**2)` has a finite VJP at x = 0, unlike `linalg.norm`, whose
+#     VJP there is 0/0 = NaN.
+#   * `maximum(denom, MIN_NORM)` keeps a division finite when the denominator collapses.
+# 1e-15 is small enough to be invisible next to any float32 or float64 quantity the library
+# works with (float64 eps is 2.2e-16), and `MIN_NORM**2 = 1e-30` is still normal in both
+# dtypes (float32's smallest normal is 1.2e-38), so squaring it does not flush to zero.
+MIN_NORM = 1e-15
+
 
 def _softplus_tail(u: Float[Array, "..."], smoothing_factor: float) -> Float[Array, "..."]:
     """``log(1 + exp(-beta*|u|)) / beta`` — the bounded remainder of the scaled softplus.

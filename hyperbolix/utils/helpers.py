@@ -8,11 +8,13 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Key
 
+from ..manifolds.protocol import Curvature, Manifold
+
 
 def compute_pairwise_distances(
     points: Float[Array, "n_points dim"],
-    manifold_module,
-    c: Float[Array, ""] | float,
+    manifold_module: Manifold,
+    c: Curvature,
     version_idx: int = 0,
 ) -> Float[Array, "n_points n_points"]:
     """Compute pairwise geodesic distances between points on a manifold.
@@ -32,8 +34,8 @@ def compute_pairwise_distances(
         points: Points on the manifold, shape (n_points, dim)
             For Hyperboloid: dim is ambient dimension (dim+1)
             For PoincareBall: dim is intrinsic dimension
-        manifold_module: Manifold module (hyperboloid or poincare)
-        c: Curvature parameter (positive scalar)
+        manifold_module: Manifold instance (anything satisfying the ``Manifold`` protocol)
+        c: Curvature parameter (positive scalar; a per-factor sequence for ``ProductManifold``)
         version_idx: Distance version index (manifold-specific, default: 0)
             For Hyperboloid:
                 0 = VERSION_DEFAULT (standard acosh with hard clipping)
@@ -42,25 +44,29 @@ def compute_pairwise_distances(
                 0 = VERSION_MOBIUS_DIRECT (direct Möbius formula)
                 1 = VERSION_MOBIUS (via addition)
                 2 = VERSION_METRIC_TENSOR (metric tensor induced)
+            Euclidean, Stereographic and ProductManifold have a single distance
+            implementation and accept-and-ignore this argument.
 
     Returns:
         Symmetric distance matrix of shape (n_points, n_points)
 
     Examples:
-        >>> import jax.numpy as jnp
-        >>> from hyperbolix.manifolds import hyperboloid
+        >>> import jax
+        >>> from hyperbolix.manifolds import Hyperboloid
         >>> from hyperbolix.utils.helpers import compute_pairwise_distances
         >>>
         >>> # Generate random hyperboloid points
+        >>> manifold = Hyperboloid()
         >>> key = jax.random.PRNGKey(0)
         >>> points = jax.random.normal(key, (100, 11))
-        >>> points = jax.vmap(hyperboloid.proj, in_axes=(0, None))(points, 1.0)
+        >>> points = jax.vmap(manifold.proj, in_axes=(0, None))(points, 1.0)
         >>>
         >>> # Compute pairwise distances
         >>> distmat = compute_pairwise_distances(
-        ...     points, hyperboloid, c=1.0, version_idx=hyperboloid.VERSION_DEFAULT
+        ...     points, manifold, c=1.0, version_idx=manifold.VERSION_DEFAULT
         ... )
-        >>> print(distmat.shape)  # (100, 100)
+        >>> distmat.shape
+        (100, 100)
 
     Notes:
         - The PyTorch reference implementation used explicit chunking for memory
@@ -196,8 +202,8 @@ def compute_hyperbolic_delta(distmat: Float[Array, "n_points n_points"], version
 
 def get_delta(
     points: Float[Array, "n_points dim"],
-    manifold_module,
-    c: float,
+    manifold_module: Manifold,
+    c: Curvature,
     version_idx: int = 0,
     sample_size: int = 1500,
     version: str = "average",
@@ -211,8 +217,8 @@ def get_delta(
 
     Args:
         points: Points on the manifold, shape (n_points, dim)
-        manifold_module: Manifold module (hyperboloid or poincare)
-        c: Curvature parameter (positive scalar)
+        manifold_module: Manifold instance (anything satisfying the ``Manifold`` protocol)
+        c: Curvature parameter (positive scalar; a per-factor sequence for ``ProductManifold``)
         version_idx: Distance version index (manifold-specific, default: 0)
         sample_size: Maximum number of points to use for delta computation
             (default: 1500). If n_points > sample_size, randomly subsample.
@@ -229,21 +235,22 @@ def get_delta(
 
     Examples:
         >>> import jax
-        >>> import jax.numpy as jnp
-        >>> from hyperbolix.manifolds import hyperboloid
+        >>> from hyperbolix.manifolds import Hyperboloid
         >>> from hyperbolix.utils.helpers import get_delta
         >>>
         >>> # Generate random hyperboloid points
+        >>> manifold = Hyperboloid()
         >>> key = jax.random.PRNGKey(42)
-        >>> points = jax.random.normal(key, (2000, 11))
-        >>> points = jax.vmap(hyperboloid.proj, in_axes=(0, None))(points, 1.0)
+        >>> points = jax.random.normal(key, (400, 11))
+        >>> points = jax.vmap(manifold.proj, in_axes=(0, None))(points, 1.0)
         >>>
-        >>> # Compute delta metrics
+        >>> # Compute delta metrics (subsampling 200 of the 400 points)
         >>> key, subkey = jax.random.split(key)
         >>> delta, diam, rel_delta = get_delta(
-        ...     points, hyperboloid, c=1.0, sample_size=1500, key=subkey
+        ...     points, manifold, c=1.0, sample_size=200, key=subkey
         ... )
-        >>> print(f"Delta: {delta:.4f}, Diameter: {diam:.4f}, Relative: {rel_delta:.4f}")
+        >>> bool(delta > 0.0) and bool(0.0 < rel_delta < 1.0)
+        True
 
     Notes:
         - Subsampling is done randomly without replacement

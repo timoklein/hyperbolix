@@ -606,7 +606,7 @@ def test_isometry_gradients_are_finite_at_the_origin(name: str, fn, x_at_origin)
 def test_isometry_gradients_are_finite_at_the_poincare_boundary():
     """``poincare_to_pv`` blows up in value at ‖y‖ -> 1/√c but must keep a finite gradient.
 
-    The ``MIN_DENOM`` floor is what makes this hold; removing it turns the boundary cotangent into
+    The ``MIN_NORM`` floor is what makes this hold; removing it turns the boundary cotangent into
     a NaN that propagates through any hybrid model touching the ball edge.
     """
     near_boundary_D = jnp.array([1.0 - 1e-12, 0.0], dtype=F64)

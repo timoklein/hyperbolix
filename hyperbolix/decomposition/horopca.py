@@ -30,9 +30,8 @@ import optax
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds import Hyperboloid, Manifold, Poincare
-from ..manifolds._gyrovector_core import _proj as _proj_ball
+from ..manifolds._gyrovector_core import _proj_batch as _proj_batch_ball
 from ..manifolds.hyperboloid import (
-    MIN_NORM,
     VERSION_DEFAULT,
     VERSION_SMOOTHENED,
     _busemann,
@@ -48,6 +47,7 @@ from ..manifolds.hyperboloid import (
 from ..manifolds.isometry_mappings import hyperboloid_to_poincare, poincare_to_hyperboloid
 from ..manifolds.protocol import Curvature
 from ..utils.helpers import compute_pairwise_distances
+from ..utils.math_utils import MIN_NORM
 from .frechet import frechet_mean
 
 # -------------------------------------------------------------------------------------
@@ -360,7 +360,7 @@ class HoroPCA:
         # Ball hygiene BEFORE the lift: poincare_to_hyperboloid floors 1 - c‖y‖² instead of
         # erroring, so an on/outside-boundary point (routine under float32 saturation) would lift
         # to a time coordinate ~1e15 and silently NaN the Fréchet mean.
-        x_ball = jax.vmap(_proj_ball, in_axes=(0, None))(x_cast, c)
+        x_ball = _proj_batch_ball(x_cast, c)
         return jax.vmap(poincare_to_hyperboloid, in_axes=(0, None))(x_ball, c)
 
     def fit(self, x_ND: Float[Array, "N R"], c: Curvature, key: PRNGKeyArray) -> "HoroPCA":

@@ -68,15 +68,15 @@ import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import acosh, atanh, cosh, sinh, smooth_clamp
-from ._base import ManifoldBase
+from ..utils.math_utils import MIN_NORM, acosh, atanh, cosh, sinh, smooth_clamp
+from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
-    MIN_NORM,
     _addition,
     _conformal_factor,
     _conformal_factor_batch,
     _gyration,
     _proj,
+    _proj_batch,
 )
 from .protocol import Curvature
 
@@ -492,39 +492,51 @@ def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) 
     return v
 
 
-def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float = 1e-5) -> Array:
+def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
     """Check if point x lies in Poincaré ball.
+
+    The constraint is tested in its dimensionless form ``c‖x‖² < 1`` rather than as
+    ``‖x‖² < 1/c``, so one tolerance means the same thing at every curvature (``1/c`` spans
+    orders of magnitude; the residual ``c‖x‖² - 1`` does not).
 
     Args:
         x: Point to check, shape (dim,)
         c: Curvature (positive)
-        atol: Absolute tolerance (kept for API consistency but not used)
+        atol: Absolute tolerance on the dimensionless residual ``c‖x‖² - 1``. ``None``
+            resolves to :func:`~hyperbolix.manifolds._base.default_atol` for ``x.dtype``.
 
     Returns:
-        True if ||x||² < 1/c
+        True if ``c‖x‖² < 1 + atol``
 
     Notes:
-        Matches PyTorch implementation which uses strict inequality with no tolerance.
-        The projection function already ensures points are strictly inside the ball.
+        The slack is what makes the check agree with ``_proj``: projection clamps the norm to
+        ``1/√c - eps**0.75``, and re-squaring that in float32 can land a hair above ``1/c``.
+        A point genuinely outside the ball misses by far more than ``atol``.
     """
     x_sqnorm = jnp.dot(x, x)
-    return x_sqnorm < 1.0 / c
+    tol = default_atol(x.dtype) if atol is None else atol
+    return c * x_sqnorm < 1.0 + tol
 
 
-def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Array:
+def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
     """Check if vector v lies in tangent space at point x.
 
-    In Poincaré ball, all vectors are valid tangent vectors.
+    The ball is an open subset of R^d, so its tangent space at every point is all of R^d and
+    the only thing to check is that ``v`` is finite. (This used to return the constant ``True``,
+    which accepted NaN and Inf — the same defect fixed for ``Euclidean.is_in_manifold``.)
 
     Args:
         v: Vector to check, shape (dim,)
-        x: Poincaré ball point (ignored), shape (dim,)
+        x: Poincaré ball point (ignored — the tangent space does not depend on it), shape (dim,)
         c: Curvature (ignored, kept for consistency)
+        atol: Accepted for signature uniformity across manifolds; a finiteness test has no
+            tolerance to slacken, so it is unused.
 
     Returns:
-        Always True
+        True iff every entry of v is finite.
     """
-    return jnp.array(True, dtype=bool)
+    del x, c, atol
+    return jnp.all(jnp.isfinite(v))
 
 
 # ---------------------------------------------------------------------------
@@ -692,6 +704,14 @@ class Poincare(ManifoldBase):
         """Project point onto Poincaré ball by clipping norm."""
         return _proj(self._cast(x), c)
 
+    def proj_batch(self, x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... dim"]:
+        """Project batched points onto the ball (handles arbitrary leading dimensions).
+
+        Batched sibling of :meth:`proj`, matching ``Hyperboloid.proj_batch``. Equivalent to
+        ``jax.vmap(proj, in_axes=(0, None))`` on a 2D input, without materializing the vmap.
+        """
+        return _proj_batch(self._cast(x), c)
+
     def gyration(
         self, x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: Curvature
     ) -> Float[Array, "dim"]:
@@ -782,13 +802,15 @@ class Poincare(ManifoldBase):
         """Project vector v onto tangent space at point x."""
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
-    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature, atol: float = 1e-5) -> Array:
-        """Check if point x lies in Poincaré ball."""
+    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+        """Check if point x lies in Poincaré ball (``atol`` default: :func:`default_atol`)."""
         return _is_in_manifold(self._cast(x), c, atol)
 
-    def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Array:
-        """Check if vector v lies in tangent space at point x."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c)
+    def is_in_tangent_space(
+        self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature, atol: float | None = None
+    ) -> Array:
+        """Check that v has finite entries (T_x B = R^d, so there is no other constraint)."""
+        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
 
     def conformal_factor(self, x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... 1"]:
         """Numerically stable conformal factor lambda(x) = 2 / (1 - c||x||^2).

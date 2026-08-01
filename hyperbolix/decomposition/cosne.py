@@ -504,7 +504,7 @@ class CoSNE:
         if self._is_hyperboloid:
             x_hyp = _proj_batch(x_cast, c)  # hyperboloid hygiene before the isometry (mirrors HoroPCA)
             return jax.vmap(hyperboloid_to_poincare, in_axes=(0, None))(x_hyp, c)
-        return jax.vmap(_proj, in_axes=(0, None))(x_cast, c)  # ball hygiene
+        return self._poincare.proj_batch(x_cast, c)  # ball hygiene
 
     def fit(self, x_ND: Float[Array, "N R"], c: Curvature, key: PRNGKeyArray) -> "CoSNE":
         """Fit the embedding on ``x_ND`` at curvature ``c``.
