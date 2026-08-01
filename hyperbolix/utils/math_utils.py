@@ -11,9 +11,60 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 
+def _softplus_tail(u: Float[Array, "..."], smoothing_factor: float) -> Float[Array, "..."]:
+    """``log(1 + exp(-beta*|u|)) / beta`` — the bounded remainder of the scaled softplus.
+
+    Writing ``sp(u) = log(1 + exp(beta*u))/beta`` for the scaled softplus (``beta =
+    smoothing_factor``), the exact hinge/remainder split is::
+
+        sp(u) = max(u, 0) + _softplus_tail(u)
+
+    The first term is the hard hinge; this one is the smooth remainder, and ``0 < tail <=
+    log(2)/beta`` for **every** ``u``. All three clamps below are built from a hard ``jnp.clip`` /
+    ``maximum`` / ``minimum`` (which is exactly representable and exactly in range) plus these
+    bounded remainders, rather than from the scaled softplus directly. That is what makes the bound
+    hold in floating point: evaluating ``min + sp(x - min) - sp(x - max)`` literally subtracts two
+    nearly equal large numbers once ``x >> max``, and the cancellation error is unbounded relative
+    to a narrow window (measured: float32, window ``[0, 0.01]``, beta=50 -> the literal form returns
+    ``min`` at ``x = 1e6`` and overshoots ``max`` by 2.3e-7 elsewhere).
+
+    ``-|u|`` is spelled ``minimum(u, -u)`` rather than ``-abs(u)`` deliberately. The two agree in
+    value, but JAX's tie-breaking splits ``minimum``'s derivative evenly at ``u == 0``, so this term
+    contributes exactly 0 there and the hinge's own 1/2 is the whole derivative — which is
+    ``sigmoid(0) = 1/2``, the analytic value. ``-abs(u)`` has derivative ``+1`` at 0 in JAX, which
+    would make the derivative *at the clamp boundary* wrong by 1/2.
+
+    Caveat, first derivatives only: the split is exact in value and slope, not in curvature. At
+    exactly ``x == min_value`` (or ``max_value``) a *second* derivative taken by autodiff sees the
+    hinge's kink as flat and returns only the far bound's contribution, missing the near bound's
+    ``beta/4``. Everywhere else — including one ulp away from the bound — it is exact.
+    """
+    return nn.softplus(smoothing_factor * jnp.minimum(u, -u)) / smoothing_factor
+
+
 @functools.partial(jax.jit, static_argnames=["smoothing_factor"])
 def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
-    """Smoothly clamp array values to a minimum using softplus.
+    """Smoothly clamp array values to a minimum using softplus. Range=(min_value, inf).
+
+    Implements the gate-free lower clamp (``beta = smoothing_factor``)::
+
+        smooth_clamp_min(x) = min_value + sp(x - min_value),   sp(u) = log(1 + exp(beta*u)) / beta
+
+    evaluated in the numerically stable hinge + remainder form (see ``_softplus_tail``). Properties,
+    for every ``beta > 0``:
+
+    * **Bounded**: ``sp > 0`` everywhere, so the output is strictly above ``min_value``.
+    * **Smooth and monotone**: ``C^inf`` with derivative ``sigmoid(beta*(x - min_value))`` in
+      ``(0, 1)`` — including *at* ``min_value``, where it is exactly 1/2.
+    * **Identity away from the bound**: above the bound the output exceeds ``x`` by
+      ``log(1 + exp(-beta*d))/beta ~ exp(-beta*d)/beta`` with ``d = x - min_value``; at ``beta=50``
+      that is below the float32 noise floor for ``d >~ 0.3``.
+
+    This replaces a ``jnp.where(x < min_value + eps, softplus_branch, x)`` gate. That gate was
+    discontinuous: ``sp(0) = log(2)/beta``, not 0, so the softplus branch did not glue onto the
+    identity branch at the switch point but jumped by ``log(2)/beta`` (0.0139 at the default
+    ``beta=50``). Composing the two gated one-sided clamps is what let the old ``smooth_clamp``
+    leave its own window.
 
     Args:
         x: Input array of any shape
@@ -23,17 +74,22 @@ def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor:
     Returns:
         Array with values smoothly clamped above min_value
     """
-    eps = jnp.finfo(x.dtype).eps
-    shift = min_value + eps
-    # Use JAX's numerically stable softplus: softplus_beta(x) = softplus(beta*x)/beta
-    arg = smoothing_factor * (x - shift)
-    x_clamped = shift + nn.softplus(arg) / smoothing_factor
-    return jnp.where(x < shift, x_clamped, x)
+    # max(x, min) + tail(x - min) == min + sp(x - min), without evaluating sp directly.
+    return jnp.maximum(x, min_value) + _softplus_tail(x - min_value, smoothing_factor)
 
 
 @functools.partial(jax.jit, static_argnames=["smoothing_factor"])
 def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
-    """Smoothly clamp array values to a maximum using softplus.
+    """Smoothly clamp array values to a maximum using softplus. Range=(-inf, max_value).
+
+    The mirror image of :func:`smooth_clamp_min` (``beta = smoothing_factor``)::
+
+        smooth_clamp_max(x) = max_value - sp(max_value - x),  sp(u) = log(1 + exp(beta*u)) / beta
+
+    so the output is strictly below ``max_value``, ``C^inf``, monotone increasing with derivative
+    ``sigmoid(beta*(max_value - x))`` in ``(0, 1)``, and falls short of ``x`` below the bound by
+    ``log(1 + exp(-beta*d))/beta`` with ``d = max_value - x``. Gate-free for the same reason as the
+    min-side clamp — see :func:`smooth_clamp_min`.
 
     Args:
         x: Input array of any shape
@@ -43,18 +99,48 @@ def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor:
     Returns:
         Array with values smoothly clamped below max_value
     """
-    eps = jnp.finfo(x.dtype).eps
-    shift = max_value - eps
-    arg = smoothing_factor * (shift - x)
-    x_clamped = shift - nn.softplus(arg) / smoothing_factor
-    return jnp.where(x > shift, x_clamped, x)
+    # min(x, max) - tail(x - max) == max - sp(max - x); tail is even, so the same helper serves.
+    return jnp.minimum(x, max_value) - _softplus_tail(x - max_value, smoothing_factor)
 
 
 @functools.partial(jax.jit, static_argnames=["smoothing_factor"])
 def smooth_clamp(
     x: Float[Array, "..."], min_value: float, max_value: float, smoothing_factor: float = 50.0
 ) -> Float[Array, "..."]:
-    """Smoothly clamp array values to a range [min_value, max_value].
+    """Smoothly clamp array values to a range [min_value, max_value]. Range=(min_value, max_value).
+
+    The two-sided clamp is a *difference* of scaled softplus terms, **not** a composition of
+    :func:`smooth_clamp_min` and :func:`smooth_clamp_max` (``beta = smoothing_factor``)::
+
+        smooth_clamp(x) = min_value + sp(x - min_value) - sp(x - max_value)
+
+    with ``sp(u) = log(1 + exp(beta*u)) / beta``, evaluated in the stable hinge + remainder form
+    (see ``_softplus_tail``). For every window width ``w = max_value - min_value > 0`` and every
+    ``beta > 0``:
+
+    * **Bounded**: ``sp`` is increasing so the output is above ``min_value``, and
+      ``sp(u) - sp(u - beta*w) < w`` reduces to ``1 < exp(beta*w)`` — true for any positive window.
+      The output is therefore strictly inside the window, with no constraint linking ``w`` to
+      ``beta``.
+    * **Smooth and monotone**: ``C^inf`` with derivative ``sigmoid(beta*(x - min_value)) -
+      sigmoid(beta*(x - max_value))`` in ``(0, 1)``, exact at the two bounds as well.
+    * **Identity in the interior**: the output differs from ``x`` by ``[exp(-beta*d_min) -
+      exp(-beta*d_max)]/beta`` up to higher order, where ``d_min``/``d_max`` are the distances to
+      the two bounds; at ``beta=50`` that is below the float32 noise floor once ``x`` is ~0.3 from
+      both.
+
+    The composition ``smooth_clamp_min(smooth_clamp_max(x))`` this replaces could return values
+    **outside** the window whenever ``w < log(2)/beta`` (0.0139 at the default ``beta=50``), because
+    each gated one-sided clamp displaced its boundary input by ``log(2)/beta`` rather than by ~0
+    (see :func:`smooth_clamp_min`). Concretely, window ``[0, 0.01]`` at ``beta=50`` returned 0.01386
+    for ``x = 0.0`` — 39% above ``max_value`` for an input that needed no clamping at all. Note that
+    a *composition* of gate-free one-sided clamps does not fix this: it still overshoots by
+    ``log(1 + exp(-beta*w))/beta``, which is of order the window itself in that regime. The
+    difference form above is the one that is provably bounded.
+
+    In floating point the strictness degrades only in the saturated tails, where the remainder terms
+    underflow to 0 and the output equals ``min_value``/``max_value`` exactly (``beta*d`` past ~88 in
+    float32, ~745 in float64). Inclusion in ``[min_value, max_value]`` always holds.
 
     Args:
         x: Input array of any shape
@@ -65,8 +151,13 @@ def smooth_clamp(
     Returns:
         Array with values smoothly clamped to [min_value, max_value]
     """
-    x = smooth_clamp_max(x, max_value, smoothing_factor=smoothing_factor)
-    return smooth_clamp_min(x, min_value, smoothing_factor=smoothing_factor)
+    # clip(x) + tail(x - min) - tail(x - max) == min + sp(x - min) - sp(x - max). The clip supplies
+    # the hinge part exactly (and exactly in range); the two remainders are each <= log(2)/beta.
+    return (
+        jnp.clip(x, min_value, max_value)
+        + _softplus_tail(x - min_value, smoothing_factor)
+        - _softplus_tail(x - max_value, smoothing_factor)
+    )
 
 
 @jax.jit
