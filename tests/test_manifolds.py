@@ -1119,16 +1119,14 @@ def test_is_in_manifold(manifold_and_c, uniform_points: jnp.ndarray) -> None:
         outside = jnp.ones_like(uniform_points[0]) * 10.0
         assert not manifold.is_in_manifold(outside, c=c)
     else:
-        # Euclidean: unconstrained, so `is_in_manifold` is the constant True — including for
-        # non-finite input. Pinning that here keeps the Euclidean parametrization of this test
-        # from being assertion-free (audit A1-F9).
-        # TODO(audit A1-F9/UM3): ProperVelocity.is_in_manifold rejects NaN/Inf
-        # (proper_velocity.py:407) while Euclidean accepts it (euclidean.py:307). The asymmetry
-        # is a suspected library defect; until it is resolved this test pins current behavior.
+        # Euclidean: unconstrained, so `is_in_manifold` only checks finiteness — this keeps the
+        # Euclidean parametrization of this test from being assertion-free (audit A1-F9).
+        # Mirrors ProperVelocity's finite-check expectations (test_pv_manifold.py::
+        # test_pv_is_in_manifold_finite_inputs).
         assert _is_euclidean(manifold)
         far_away = jnp.ones_like(uniform_points[0]) * 1e12
         assert bool(manifold.is_in_manifold(far_away, c=c))
         nan_point = uniform_points[0].at[0].set(jnp.nan)
-        assert bool(manifold.is_in_manifold(nan_point, c=c))
+        assert not bool(manifold.is_in_manifold(nan_point, c=c))
         inf_point = uniform_points[0].at[0].set(jnp.inf)
-        assert bool(manifold.is_in_manifold(inf_point, c=c))
+        assert not bool(manifold.is_in_manifold(inf_point, c=c))

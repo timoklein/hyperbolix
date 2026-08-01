@@ -295,16 +295,17 @@ def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature =
 def _is_in_manifold(x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
     """Check if point x lies in Euclidean manifold.
 
-    In Euclidean space, all points are valid.
+    Every finite point in R^n is a valid Euclidean point; NaN/Inf entries are not.
 
     Args:
         x: Point to check, shape (dim,)
         c: Curvature (ignored, kept for consistency with other manifolds)
 
     Returns:
-        Always True
+        True iff every entry of x is finite.
     """
-    return jnp.array(True, dtype=bool)
+    del c
+    return jnp.all(jnp.isfinite(x))
 
 
 def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
@@ -421,7 +422,7 @@ class Euclidean(ManifoldBase):
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
     def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
-        """Check if on manifold."""
+        """Check that all entries are finite (Euclidean space has no other constraint)."""
         return _is_in_manifold(self._cast(x), c)
 
     def is_in_tangent_space(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Array:
