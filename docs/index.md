@@ -8,7 +8,7 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 
 - **6 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), and Product Manifold (mixed-curvature composition) — all with complete geometric operations
 - **Learnable Curvature**: `LearnableCurvature` module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp; works with any `nnx.Optimizer`
-- **Neural Network Layers**: 20+ hyperbolic layers including linear, convolutional, regression, attention, and PV layers
+- **Neural Network Layers**: 40+ hyperbolic layers including linear, convolutional, regression, attention, normalization, and PV layers
 - **Activation Functions**: 5 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish, GELU)
 - **Riemannian Optimizers**: RAdam and RSGD with automatic manifold parameter detection
 - **Wrapped Normal Distributions**: For probabilistic modeling on hyperbolic manifolds
@@ -16,7 +16,7 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 - **Pure JAX/Flax NNX**: No PyTorch dependency, fully compatible with JAX ecosystem
 - **vmap-native API**: Efficient batching through JAX's functional paradigm
 - **JIT-compatible**: All operations support JIT compilation for performance
-- **Comprehensive Test Suite**: 3,400+ tests (parametrized across seeds, dtypes, manifolds) with 100% pass rate
+- **Comprehensive Test Suite**: 3,550+ tests (parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
 
 ## Quick Example
 
@@ -86,7 +86,7 @@ output = model(input_data, c=1.0)
 
 ## Project Status
 
-**Stable — current release: v1.0.0.** The public API is complete and stable, reaching functional parity with the broader hyperbolic deep learning ecosystem; changes follow semantic versioning and new layers and manifolds continue to be added. See the [Changelog](changelog.md) for the full release history.
+**Stable — current release: v1.1.0.** The public API is complete and stable, reaching functional parity with the broader hyperbolic deep learning ecosystem; changes follow semantic versioning and new layers and manifolds continue to be added. See the [Changelog](changelog.md) for the full release history.
 
 | Capability | Status | Shipped in |
 |---|---|---|

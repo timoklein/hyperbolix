@@ -2,7 +2,7 @@
 
 ## Hyperbolic Deep Learning in JAX
 
-[![Tests](https://img.shields.io/badge/tests-3500%2B%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-3550%2B%20passing-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)]()
 [![JAX](https://img.shields.io/badge/JAX-compatible-orange)]()
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -13,11 +13,11 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 
 - 🌐 **6 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), and Product Manifold (mixed-curvature composition)
 - 🎛️ **Learnable Curvature**: `LearnableCurvature` module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp. Works with any `nnx.Optimizer` — no Riemannian optimizer needed
-- 🧠 **20+ Neural Network Layers**: Linear, convolutional, regression, attention, positional encoding, PV
+- 🧠 **40+ Neural Network Layers**: Linear, convolutional, regression, attention, normalization, positional encoding, PV
 - ⚡ **5 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish, GELU
 - 📈 **Riemannian Optimizers**: RAdam and RSGD with automatic manifold detection
 - 🚀 **Pure JAX/Flax NNX**: vmap-native API, JIT-compatible (10-100x speedup)
-- ✅ **3,500+ tests passing** (850+ test functions, parametrized across seeds, dtypes, manifolds) with comprehensive benchmark suite
+- ✅ **3,550+ tests passing** (735 test functions, parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
 
 ## Quick Start
 
