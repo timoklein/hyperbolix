@@ -127,12 +127,17 @@ def make_riemannian_optimizer(
         ``-> (direction, new_moments, ptransp_indices)``
         Operates on a SINGLE manifold point of shape (D,); the base vmaps it
         over any leading axes. Returns step direction, updated moments, and
-        indices to parallel-transport.
+        indices to parallel-transport. ``count`` here is the POST-increment
+        step count (1-indexed), for Adam-style bias correction — distinct
+        from (and one step ahead of) the count the schedule in ``lr`` was
+        resolved against.
     euclidean_leaf_fn : callable
         ``(grad, moments, lr, count) -> (param_update, new_moments)``
         Returns the parameter update and updated moments for Euclidean params.
+        ``count`` is the same post-increment step count described above.
     learning_rate : float or optax.Schedule
-        Learning rate.
+        Learning rate, resolved at the PRE-increment count (matching optax's
+        ``scale_by_schedule``): the first ``update()`` call reads ``schedule(0)``.
     use_expmap : bool
         Use exponential map (True) or retraction (False).
 
@@ -218,7 +223,13 @@ def make_riemannian_optimizer(
         moment_states = tuple(state[i] for i in range(n_moments))
         count_inc = state[-1] + 1
 
-        lr = _resolve_lr(learning_rate, count_inc)
+        # Schedules are read at the PRE-increment count, matching optax's
+        # scale_by_schedule.update_fn (`step_size_fn(state.count)`, then increment).
+        # The post-increment `count_inc` is still used below for Adam-style bias
+        # correction (`1 - beta**count`), which optax's scale_by_adam evaluates
+        # against the incremented count — schedule timing and bias-correction
+        # timing are deliberately different counters in optax and here.
+        lr = _resolve_lr(learning_rate, state[-1])
 
         # Flatten all pytrees in lock-step
         grad_leaves, treedef = tree_util.tree_flatten(updates, is_leaf=_is_variable_leaf)

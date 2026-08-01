@@ -869,10 +869,9 @@ def test_lr_schedule_changes_the_step_size_each_update():
     once at construction, or resolved only for Euclidean leaves, produces a constant step
     on one of them.
 
-    TODO(hyperbolix): the schedule is evaluated at ``state.count + 1``
-    (``_riemannian_base.py:219-221``), so the very first update uses ``schedule(1)`` while
-    optax's ``scale_by_schedule`` would use ``schedule(0)``.  Pinned as current behaviour,
-    not endorsed — a warmup schedule is off by one step against every optax reference.
+    The schedule is evaluated at the PRE-increment count, matching optax's
+    ``scale_by_schedule.update_fn`` (``step_size_fn(state.count)``, then increment): the
+    first update uses ``schedule(0)``, the k-th update uses ``schedule(k - 1)``.
     """
     c = 1.0
     lr_table = jnp.array([10.0, 1.0, 0.5, 0.25, 0.125])
@@ -901,7 +900,7 @@ def test_lr_schedule_changes_the_step_size_each_update():
         e_prev = model.euclidean[...].copy()
         optimizer.update(model, grads)
 
-        lr = float(lr_table[step])  # NOT lr_table[step - 1]: see the TODO above.
+        lr = float(lr_table[step - 1])  # optax scale_by_schedule timing: schedule(count) pre-increment.
         assert jnp.allclose(model.euclidean[...], e_prev - lr * g_euclidean, rtol=0, atol=1e-12)
         expected = poincare.expmap(-lr * _rgrad(g_manifold, x_prev, c), x_prev, c)
         assert jnp.allclose(model.manifold[...], expected, rtol=0, atol=1e-12)
