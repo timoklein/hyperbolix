@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install
 uv sync --locked --dev
 
-# Run all tests (~3,301 tests)
+# Run all tests (~3,551 tests)
 uv run pytest
 
 # Run a single test file
@@ -80,7 +80,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 - FHCNN layers: small uniform `U(-0.02, 0.02)` (Chen 2021 / Bdeir 2023 reference). `HTCLinear` (and the attention/positional wrappers forwarding `init_bound=None`): fan-in-aware uniform `U(-√(3/in), √(3/in))` — norm-preserving (per-layer Jacobian gain ≈ 1); the old fixed `0.02` contracted depth-≥2 stacks below the float32 noise floor (frozen training). `init_bound=0.02` restores the old init bit-for-bit
 - HypLinearHyperboloidPLFC: small normal `std = 0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init); `kernel_init_std=1.0` recovers the old HNN++-style init (Shimizu et al. 2020). It has no LogCat, so it keeps the reference value
 - `HypConv2DHyperboloidILNN` (formerly `HypConv2DHyperboloidPP`; LogCat via `log_radius_concat` + PLFC, origin padding): fan-out normal `std = sqrt(1/out_spatial)` via `kernel_init_std=None` — **norm-preserving** (the PLFC chain linearizes to `y_spatial ≈ W @ u_spatial` at the origin and the fixed LogCat hands over the per-pixel spatial radius, so gain ≈ 1; probe-measured per-layer ratio 0.82–0.95 at depth 3). Coupled to the 2026-07-31 LogCat digamma sign fix: the old fixed `0.02` was tuned against the pre-fix ~√N amplification and is strongly contractive (ratio 0.05–0.15/layer → origin collapse) under the corrected shrink. `kernel_init_std=0.02` restores the Shi et al. 2026 regime bit-for-bit, which implicitly assumed the pre-fix amplification
-- Poincare layers: scaled normal `std = (2 * in_dim * out_dim)^{-0.5}` (van Spengler et al. 2023)
+- Poincare linear layers (`HypLinearPoincare`, `HypLinearPoincarePP`): fan-in normal `std = 1/sqrt(in_dim)`; Poincare regression heads (`HypRegressionPoincare`, `HypRegressionPoincarePP`): scaled normal `std = (2 * in_dim * out_dim)^{-0.5}` (van Spengler et al. 2023)
 - Standard inits (He, Xavier) are too large for hyperbolic layers
 
 ### Float precision
