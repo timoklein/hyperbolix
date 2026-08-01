@@ -1,7 +1,8 @@
 """Wrapped normal distribution on Poincaré ball.
 
-Simpler implementation than hyperboloid - no parallel transport needed!
-Uses exponential map and Möbius addition.
+Simpler implementation than hyperboloid: ``sample`` needs no parallel transport, just the
+exponential map at the origin and a Möbius addition. ``log_prob`` still parallel-transports
+the log-map back to the origin, exactly as the hyperboloid version does.
 
 Dimension key:
   S: sample dimensions (from sample_shape)
@@ -17,6 +18,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.utils.math_utils import MIN_NORM
 
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
@@ -50,6 +52,7 @@ def sample(
         c: Curvature (positive scalar)
         sample_shape: Shape of samples to draw, prepended to output. Default: ()
         dtype: Output dtype. Default: infer from mu
+        manifold_module: Optional Poincare instance. Default: Poincare(dtype)
 
     Returns:
         Samples from wrapped normal distribution, shape sample_shape + mu.shape
@@ -145,6 +148,7 @@ def log_prob(
             - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
             - 2D array (n, n): full covariance matrix (must be SPD)
         c: Curvature (positive scalar)
+        manifold_module: Optional Poincare instance. Default: Poincare(z.dtype)
 
     Returns:
         Log probability, shape (...) (spatial dimension removed)
@@ -215,7 +219,7 @@ def log_prob(
     # sibling: sqrt'(0) is infinite, so at z == mu the gradient of the unfloored norm is NaN
     # (in float64 as much as float32). jnp.maximum's gradient is 0 on the clamped side, which
     # is the correct derivative here — log det is stationary at r = 0.
-    r_SB = 2.0 * jnp.sqrt(jnp.maximum(jnp.sum(v_SBD**2, axis=-1), 1e-15))
+    r_SB = 2.0 * jnp.sqrt(jnp.maximum(jnp.sum(v_SBD**2, axis=-1), MIN_NORM))
     log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 5: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)

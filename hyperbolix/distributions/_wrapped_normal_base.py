@@ -93,8 +93,10 @@ def _vmap_sample_and_batch(fn, n_sample_dims: int, n_batch_dims: int):
 
     The mean's own batch axes ``B`` pair elementwise with the trailing axes of ``x``; the
     leading sample axes ``S`` broadcast the mean. Building the vmaps inside-out (batch first,
-    then samples) is what makes the outermost vmap correspond to the outermost axis — the same
-    order :func:`_batched_transform` uses on the sampling side.
+    then samples) is what makes the outermost vmap correspond to the outermost axis.
+
+    This is the single batching rule for both directions: :func:`_batched_transform` (the
+    sampling side) is a thin shape-tuple wrapper around it.
 
     Args:
         fn: Single-point function ``(x_dim, mu_dim) -> out``.
@@ -118,12 +120,11 @@ def _batched_transform(
     sample_shape: tuple[int, ...],
     mu_batch_shape: tuple[int, ...],
 ) -> Float[Array, "..."]:
-    """Apply transform_single(v, mu) with appropriate vmap batching.
+    """Apply ``transform_single(v, mu)`` with the shared sample/batch vmap layout.
 
-    Handles three cases:
-    - No batching: direct call
-    - Batch mu only: vmap over batch dims
-    - Samples + batch: vmap over batch dims, then sample dims (broadcast mu)
+    Convenience wrapper over :func:`_vmap_sample_and_batch` for callers that hold the shape
+    tuples rather than the axis counts. Both empty-tuple cases fall out of the general form:
+    with zero vmaps the lifted function *is* ``transform_single``.
 
     Args:
         transform_single: Function (v_single, mu_single) -> z_single
@@ -135,19 +136,4 @@ def _batched_transform(
     Returns:
         Transformed points, shape (*S, *B, dim)
     """
-    if len(sample_shape) == 0 and len(mu_batch_shape) == 0:
-        return transform_single(v, mu)
-
-    if len(sample_shape) == 0:
-        vmapped_fn = transform_single
-        for _ in mu_batch_shape:
-            vmapped_fn = jax.vmap(vmapped_fn)
-        return vmapped_fn(v, mu)
-
-    # sample_shape > 0: vmap over batch dims (both), then sample dims (v only)
-    vmapped_fn = transform_single
-    for _ in mu_batch_shape:
-        vmapped_fn = jax.vmap(vmapped_fn)
-    for _ in sample_shape:
-        vmapped_fn = jax.vmap(vmapped_fn, in_axes=(0, None))
-    return vmapped_fn(v, mu)
+    return _vmap_sample_and_batch(transform_single, len(sample_shape), len(mu_batch_shape))(v, mu)

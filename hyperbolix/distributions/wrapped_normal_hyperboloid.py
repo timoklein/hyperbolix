@@ -18,6 +18,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds.hyperboloid import Hyperboloid
+from ..utils.math_utils import MIN_NORM
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
 
@@ -49,6 +50,7 @@ def sample(
         c: Curvature (positive scalar)
         sample_shape: Shape of samples to draw, prepended to output. Default: ()
         dtype: Output dtype. Default: infer from mu
+        manifold_module: Optional Hyperboloid instance. Default: Hyperboloid(dtype)
 
     Returns:
         Samples from wrapped normal distribution, shape sample_shape + mu.shape
@@ -140,6 +142,7 @@ def log_prob(
             - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
             - 2D array (n, n): full covariance matrix (must be SPD)
         c: Curvature (positive scalar)
+        manifold_module: Optional Hyperboloid instance. Default: Hyperboloid(z.dtype)
 
     Returns:
         Log probability, shape (...) (manifold dimension removed)
@@ -205,7 +208,7 @@ def log_prob(
 
     # Step 5: Compute log det Jacobian
     # Minkowski norm at origin: r = ||v_spatial|| (since v = [0, v_bar])
-    r_SB = jnp.sqrt(jnp.maximum(jnp.sum(v_spatial_SBD**2, axis=-1), 1e-15))
+    r_SB = jnp.sqrt(jnp.maximum(jnp.sum(v_spatial_SBD**2, axis=-1), MIN_NORM))
     log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 6: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)

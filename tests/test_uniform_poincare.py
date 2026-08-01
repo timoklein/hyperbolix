@@ -1,7 +1,9 @@
 """Tests for Riemannian-uniform distribution on Poincaré geodesic ball.
 
 Dimension key:
-  N: number of samples    D: spatial/manifold dimension (n)
+  N: number of samples          D: spatial/manifold dimension (n)
+  S: sample axes (sample_shape) T: total flattened points (prod of the leading axes)
+  A, B: the two leading axes of a rank-3 log_prob input
 """
 
 import jax
@@ -18,8 +20,9 @@ from hyperbolix.manifolds.poincare import Poincare
 # ---------------------------------------------------------------------------
 # Volume tests
 #
-# No dtype axis here: ``volume`` casts ``c`` to float64 internally and takes no array
-# input, so the float32 and float64 parametrizations ran byte-identical code.
+# The value-level assertions below run at ``volume``'s default dtype (float64 here, since
+# conftest enables x64) and carry float64 tolerances. The dtype axis itself is exercised
+# separately by ``test_volume_dtype_follows_request``.
 # ---------------------------------------------------------------------------
 def test_volume_n2_c1_exact():
     """n=2, c=1: exact formula Vol = 2π(cosh(R) - 1)."""
@@ -49,6 +52,72 @@ def test_volume_monotone_in_R():
     vols = [float(uniform_poincare.volume(c=1.0, n=3, R=r)) for r in [0.5, 1.0, 2.0, 4.0]]
     for i in range(len(vols) - 1):
         assert vols[i] < vols[i + 1], f"Volume not monotone: {vols}"
+
+
+# =============================================================================================
+# dtype propagation (audit E2.1 / E2.3)
+#
+# ``volume`` used to hardcode ``jnp.float64(c)`` and hold its Gauss-Legendre tables as
+# module-level float64 arrays, and ``sample``/``log_prob`` inherited that: a float32 caller got
+# a float64 array back. Both wrapped-normal siblings infer the dtype from the caller's own
+# array (``mu``), which is the convention these tests pin for ``center`` / ``x``.
+# =============================================================================================
+
+
+def test_volume_dtype_follows_request(dtype):
+    """``volume`` computes and returns at the requested dtype (default: JAX's default float)."""
+    vol = uniform_poincare.volume(c=1.0, n=3, R=1.5, dtype=dtype)
+    assert vol.dtype == dtype
+
+    # Same number to float32 precision, whichever dtype the quadrature ran in.
+    vol_default = uniform_poincare.volume(c=1.0, n=3, R=1.5)
+    assert jnp.allclose(vol.astype(jnp.float64), vol_default.astype(jnp.float64), rtol=1e-6)
+
+
+def test_log_prob_dtype_follows_input(dtype):
+    """``log_prob`` returns ``x.dtype`` — no silent float64 upcast from the volume quadrature."""
+    manifold = Poincare(dtype=dtype)
+    x_D = jnp.zeros(3, dtype=dtype)
+    assert uniform_poincare.log_prob(x_D, c=1.0, R=1.5, manifold_module=manifold).dtype == dtype
+
+    # The -inf branch must not upcast either: ``jnp.where`` takes the wider of its two arms.
+    outside_D = jnp.array([0.8, 0.0, 0.0], dtype=dtype)
+    lp_outside = uniform_poincare.log_prob(outside_D, c=1.0, R=0.5, manifold_module=manifold)
+    assert lp_outside.dtype == dtype
+    assert lp_outside == -jnp.inf
+
+    # And without an explicit manifold_module, where the default Poincare(x.dtype) is built.
+    assert uniform_poincare.log_prob(x_D, c=1.0, R=1.5).dtype == dtype
+
+
+def test_sample_dtype_follows_center(dtype):
+    """With no explicit ``dtype``, ``sample`` infers it from ``center`` (mirrors ``mu`` upstream)."""
+    key = jax.random.PRNGKey(3)
+    center_D = jnp.array([0.2, -0.1], dtype=dtype)
+    samples_ND = uniform_poincare.sample(key, n=2, c=1.0, R=1.0, sample_shape=(8,), center=center_D)
+    assert samples_ND.dtype == dtype
+
+
+def test_sample_dtype_follows_manifold_module(dtype):
+    """With neither ``dtype`` nor ``center``, the manifold's dtype decides."""
+    key = jax.random.PRNGKey(4)
+    manifold = Poincare(dtype=dtype)
+    samples_ND = uniform_poincare.sample(key, n=3, c=1.0, R=1.0, sample_shape=(8,), manifold_module=manifold)
+    assert samples_ND.dtype == dtype
+
+
+def test_sample_explicit_dtype_overrides_center(dtype):
+    """An explicit ``dtype`` wins over the inferred one.
+
+    No ``manifold_module`` here on purpose: a manifold instance casts its own outputs to its
+    own dtype, so passing a conflicting one would test ``ManifoldBase._cast``, not the
+    resolution order under test.
+    """
+    key = jax.random.PRNGKey(5)
+    other = jnp.float64 if dtype == jnp.float32 else jnp.float32
+    center_D = jnp.array([0.2, -0.1], dtype=other)
+    samples_ND = uniform_poincare.sample(key, n=2, c=1.0, R=1.0, sample_shape=(8,), center=center_D, dtype=dtype)
+    assert samples_ND.dtype == dtype
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +292,48 @@ def test_log_prob_batch(dtype, tolerance):
     samples = uniform_poincare.sample(key, n=2, c=c, R=R, sample_shape=(20,), dtype=dtype, manifold_module=manifold)
     lps = uniform_poincare.log_prob(samples, c=c, R=R, manifold_module=manifold)
     assert lps.shape == (20,)
-    vol = uniform_poincare.volume(c=c, n=2, R=R)
+    vol = uniform_poincare.volume(c=c, n=2, R=R, dtype=dtype)
     expected = -jnp.log(vol)
     assert jnp.allclose(lps, expected, atol=atol)
+
+
+@pytest.mark.parametrize("sample_shape", [(), (5,), (2, 3), (2, 3, 4)])
+def test_log_prob_arbitrary_leading_axes(sample_shape, dtype, tolerance):
+    """``log_prob`` honours its documented ``(..., n) -> (...)`` contract at every rank (audit E2.4).
+
+    ``manifold.dist``/``dist_0`` are single-point ops, so the old single ``jax.vmap`` covered
+    exactly one leading axis: ndim > 2 raised ``TypeError: dot_general requires contracting
+    dimensions to have the same shape``. The rank-0 and rank-1 cases are the ones the old code
+    did handle, kept here so the flatten/reshape can't regress them.
+    """
+    atol, _ = tolerance
+    manifold = Poincare(dtype=dtype)
+    c, R, n = 1.0, 1.5, 2
+    key = jax.random.PRNGKey(56)
+    samples_SD = uniform_poincare.sample(key, n=n, c=c, R=R, sample_shape=sample_shape, dtype=dtype, manifold_module=manifold)
+
+    lps_S = uniform_poincare.log_prob(samples_SD, c=c, R=R, manifold_module=manifold)
+    assert lps_S.shape == sample_shape
+    assert lps_S.dtype == dtype
+
+    # Same values as the flattened call, so the reshape is not scrambling the layout.
+    lps_flat_T = uniform_poincare.log_prob(samples_SD.reshape(-1, n), c=c, R=R, manifold_module=manifold)
+    assert jnp.allclose(lps_S.reshape(-1), lps_flat_T, atol=atol)
+
+
+def test_log_prob_leading_axes_mixed_inside_outside(dtype):
+    """A rank-3 input keeps the inside/-inf verdict aligned with each point's position."""
+    manifold = Poincare(dtype=dtype)
+    c, R = 1.0, 0.5
+    # (2, 2, 2): row 0 inside the ball around the origin, row 1 outside it.
+    x_ABD = jnp.array(
+        [[[0.0, 0.0], [0.05, 0.05]], [[0.8, 0.0], [0.0, -0.85]]],
+        dtype=dtype,
+    )
+    lps_AB = uniform_poincare.log_prob(x_ABD, c=c, R=R, manifold_module=manifold)
+    assert lps_AB.shape == (2, 2)
+    assert bool(jnp.all(jnp.isfinite(lps_AB[0])))
+    assert bool(jnp.all(lps_AB[1] == -jnp.inf))
 
 
 # =============================================================================================

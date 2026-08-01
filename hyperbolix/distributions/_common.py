@@ -1,7 +1,7 @@
 """Common utilities for wrapped normal distributions.
 
 Dimension key:
-  N: spatial/manifold dimension
+  D: spatial/manifold dimension (n)
 """
 
 import jax
@@ -63,8 +63,8 @@ def sample_gaussian(
         Samples from N(0, cov), shape sample_shape + (n,)
     """
     n = cov.shape[0]
-    mean_N = jnp.zeros(n, dtype=dtype or cov.dtype)
-    return jax.random.multivariate_normal(key, mean_N, cov, shape=sample_shape, dtype=dtype)
+    mean_D = jnp.zeros(n, dtype=dtype or cov.dtype)
+    return jax.random.multivariate_normal(key, mean_D, cov, shape=sample_shape, dtype=dtype)
 
 
 def gaussian_log_prob(
