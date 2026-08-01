@@ -24,7 +24,8 @@ Use jax.vmap for batching:
     >>> dist_batched = jax.vmap(manifold.dist, in_axes=(0, 0, None))
     >>> distances = dist_batched(x_batch, y_batch, 0.0)  # Returns (batch,)
 
-See jax_migration.md for comprehensive usage patterns.
+See the Batching & JIT user guide (docs/user-guide/batching-jit.md) for
+comprehensive usage patterns.
 """
 
 import jax.numpy as jnp

@@ -29,7 +29,7 @@ from hyperbolix.manifolds import Manifold
 # Gradient-safe floor for the direction-normalization denominator: the same
 # ``sqrt(sumsq + MIN_NORM**2)`` safe-norm idiom the manifolds use. Imported (not
 # redefined) so there is one value library-wide.
-from hyperbolix.manifolds.hyperboloid import MIN_NORM
+from hyperbolix.utils.math_utils import MIN_NORM
 
 
 def _init_weight_norm_params(

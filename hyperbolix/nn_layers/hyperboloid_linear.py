@@ -25,7 +25,8 @@ from hyperbolix.manifolds import Manifold
 # MIN_NORM is the library-wide gradient-safety floor for norms: sqrt(sum + MIN_NORM²)
 # has a finite VJP at zero input, unlike linalg.norm, whose 0/0 NaN survives any
 # post-hoc jnp.where masking. Imported (not redefined) so there is one value.
-from hyperbolix.manifolds.hyperboloid import MIN_NORM, Hyperboloid
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.utils.math_utils import MIN_NORM
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid

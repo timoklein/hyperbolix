@@ -76,18 +76,9 @@ def compute_pairwise_distances(
         - For large datasets, consider subsampling before calling this function
     """
 
-    # Create vectorized distance function: dist(x, y) -> scalar
-    # Support both legacy module API (`_dist`) and class-based API (`dist`).
-    if hasattr(manifold_module, "dist"):
-        dist_impl = manifold_module.dist
-    elif hasattr(manifold_module, "_dist"):
-        dist_impl = manifold_module._dist
-    else:
-        raise AttributeError("manifold_module must define either 'dist' or '_dist'")
-
     # We need to compute dist for all pairs (i, j)
     def dist_fn(x, y):
-        return dist_impl(x, y, c, version_idx)
+        return manifold_module.dist(x, y, c, version_idx)
 
     # Use vmap to vectorize over both dimensions
     # First vmap over y (columns), then over x (rows)

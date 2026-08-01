@@ -28,6 +28,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
+from hyperbolix.manifolds.protocol import Manifold
 
 from ._helpers import validate_poincare_manifold
 
@@ -142,19 +143,22 @@ def poincare_weighted_midpoint(
 def frechet_variance(
     x_NC: Float[Array, "N C"],
     mean_C: Float[Array, "C"],
-    manifold: Poincare,
+    manifold: Manifold,
     c: float,
 ) -> Float[Array, ""]:
     """Compute Fréchet variance: mean squared geodesic distance to mean.
 
+    Manifold-generic: only ``dist`` is used, so any ``Manifold`` works — the gyro
+    normalization layers call this with Hyperboloid and ProperVelocity instances too.
+
     Parameters
     ----------
     x_NC : Array, shape (N, C)
-        Points on the Poincaré ball.
+        Points on the manifold.
     mean_C : Array, shape (C,)
-        Mean point on the Poincaré ball.
-    manifold : Poincare
-        Poincaré manifold instance.
+        Mean point on the manifold.
+    manifold : Manifold
+        Manifold instance (anything satisfying the ``Manifold`` protocol).
     c : float
         Curvature (positive).
 
