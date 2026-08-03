@@ -104,7 +104,7 @@ print(points.shape)  # (100, 16)
 
 ### Basic JIT Usage
 
-Use `jax.jit` to compile functions for 10-100x speedup:
+Use `jax.jit` to compile functions and make repeated calls fast:
 
 ```python
 from hyperbolix.manifolds import Poincare
@@ -121,7 +121,7 @@ distance = dist_jit(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
 
 !!! tip "JIT Performance"
     - **First call**: Slow (compilation overhead, 100ms-1s)
-    - **Subsequent calls**: Fast (10-100x speedup)
+    - **Subsequent calls**: Fast (compiled XLA execution, no Python dispatch overhead)
     - Most beneficial for large batches (1000+) and high dimensions (128+)
 
 ### Static vs Dynamic Arguments
@@ -359,11 +359,11 @@ def process_batch_bad(x_batch):  # c=1.0 hardcoded
 ```python
 # Small batches: Less JIT benefit
 x_small = jax.random.normal(jax.random.PRNGKey(0), (10, 128))
-# ~10-20x speedup
+# compilation overhead dominates relative to the small workload
 
 # Large batches: Maximum JIT benefit
 x_large = jax.random.normal(jax.random.PRNGKey(0), (1000, 128))
-# ~50-100x speedup
+# batched XLA kernel amortizes overhead across many more elements
 ```
 
 ### 5. Memory vs Computation Trade-offs
@@ -431,17 +431,9 @@ def model_forward(x, c):  # c can vary
     return poincare.proj(x, c)
 ```
 
-## Benchmark Results
+## Why JIT and vmap Help
 
-Typical speedups on M1/M2 Mac or modern GPU:
-
-| Operation | Batch Size | No JIT | With JIT | Speedup |
-|-----------|------------|--------|----------|---------|
-| Distance (dim=128) | 100 | 12 ms | 0.8 ms | 15x |
-| Distance (dim=128) | 1000 | 120 ms | 1.5 ms | 80x |
-| Expmap (dim=256) | 100 | 18 ms | 1.2 ms | 15x |
-| Linear layer forward | 1000 | 45 ms | 2.1 ms | 21x |
-| Full model (3 layers) | 1000 | 150 ms | 6.5 ms | 23x |
+`jax.jit` removes per-call Python dispatch and tracing overhead by compiling a function to XLA once and reusing the compiled kernel on subsequent calls. `jax.vmap` replaces an explicit Python loop over single-point manifold operations with a single batched XLA kernel, avoiding per-element Python overhead. Both effects are largest for small, frequently-called per-point operations — exactly the vmap-native functions in this library — and matter less as the per-call workload (batch size, dimension) grows and Python overhead becomes a smaller fraction of total runtime. Actual speedups depend on hardware, batch size, and dimensionality; profile your own workload with a `jax.jit` warmup (see "Profile Before Optimizing" above) rather than assuming a fixed multiplier.
 
 ## See Also
 
