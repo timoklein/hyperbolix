@@ -7,8 +7,9 @@ This guide will help you install Hyperbolix and run your first examples.
 ### Requirements
 
 - Python 3.12 or higher
-- JAX 0.4.20+ (with CPU or GPU support)
+- JAX (with CPU or GPU support; installed transitively via Flax/Optax — see `pyproject.toml` for exact version pins)
 - Flax NNX 0.12.0+
+- Optax 0.2.6+
 
 ### Install from Source
 
@@ -21,7 +22,7 @@ uv sync  # or pip install -e .
 For GPU support, install JAX with CUDA:
 
 ```bash
-uv pip install "jax[cuda12]>=0.4.20"
+uv pip install "jax[cuda12]"
 ```
 
 ## Quick Start: Distance Computation
