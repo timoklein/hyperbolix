@@ -52,7 +52,7 @@ distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(x_proj, y_proj, c)
 Install from source:
 
 ```bash
-git clone https://github.com/hyperbolix/hyperbolix.git
+git clone https://github.com/timoklein/hyperbolix.git
 cd hyperbolix
 uv sync  # or pip install -e .
 ```
@@ -207,7 +207,7 @@ If you use Hyperbolix in your research, please cite:
   title = {Hyperbolix: Hyperbolic Deep Learning in JAX},
   author = {Klein, Timo and Lang, Thomas and Shkabrii, Andrii},
   year = {2026},
-  url = {https://github.com/hyperbolix/hyperbolix}
+  url = {https://github.com/timoklein/hyperbolix}
 }
 ```
 

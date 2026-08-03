@@ -2,7 +2,7 @@
 
 Contributing to Hyperbolix development.
 
-For detailed development instructions, see [DEVELOPER_GUIDE.md](https://github.com/hyperbolix/hyperbolix/blob/main/DEVELOPER_GUIDE.md) in the repository.
+For detailed development instructions, see [DEVELOPER_GUIDE.md](https://github.com/timoklein/hyperbolix/blob/main/DEVELOPER_GUIDE.md) in the repository.
 
 ## Quick Links
 
@@ -105,4 +105,4 @@ We welcome contributions! Please:
 4. Run pre-commit checks
 5. Submit a pull request
 
-See the full [DEVELOPER_GUIDE.md](https://github.com/hyperbolix/hyperbolix/blob/main/DEVELOPER_GUIDE.md) for details.
+See the full [DEVELOPER_GUIDE.md](https://github.com/timoklein/hyperbolix/blob/main/DEVELOPER_GUIDE.md) for details.

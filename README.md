@@ -67,7 +67,7 @@ operations (see "Learnable curvature" below).
 ## Installation
 
 ```bash
-git clone https://github.com/hyperbolix/hyperbolix.git
+git clone https://github.com/timoklein/hyperbolix.git
 cd hyperbolix
 uv sync  # or: pip install -e .
 ```
@@ -76,7 +76,7 @@ uv sync  # or: pip install -e .
 
 ## Documentation
 
-📖 **[Full Documentation](https://hyperbolix.github.io/hyperbolix/)**
+📖 **[Full Documentation](https://timoklein.github.io/hyperbolix/)**
 
 - **[Getting Started](docs/getting-started.md)** - Installation and first examples
 - **[User Guides](docs/user-guide/)** - Manifolds, layers, optimizers, batching, numerical stability
@@ -130,7 +130,7 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
   title = {Hyperbolix: Hyperbolic Deep Learning in JAX},
   author = {Klein, Timo and Lang, Thomas},
   year = {2026},
-  url = {https://github.com/hyperbolix/hyperbolix}
+  url = {https://github.com/timoklein/hyperbolix}
 }
 ```
 
@@ -154,7 +154,7 @@ See individual module docstrings for detailed references.
 
 Contributions welcome! See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for setup and guidelines.
 
-For bugs or questions, [open an issue](https://github.com/hyperbolix/hyperbolix/issues).
+For bugs or questions, [open an issue](https://github.com/timoklein/hyperbolix/issues).
 
 ## License
 

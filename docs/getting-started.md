@@ -13,7 +13,7 @@ This guide will help you install Hyperbolix and run your first examples.
 ### Install from Source
 
 ```bash
-git clone https://github.com/hyperbolix/hyperbolix.git
+git clone https://github.com/timoklein/hyperbolix.git
 cd hyperbolix
 uv sync  # or pip install -e .
 ```
