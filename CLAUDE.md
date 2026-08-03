@@ -21,17 +21,14 @@ uv run pytest tests/test_manifolds.py::test_dist -v
 uv run pytest -k "dim2"
 
 # Lint and format
-uv run ruff check hyperbolix tests benchmarks
-uv run ruff format hyperbolix tests benchmarks
+uv run ruff check hyperbolix tests
+uv run ruff format hyperbolix tests
 
 # Type check
 uv run pyright hyperbolix
 
 # All pre-commit hooks
 uv run pre-commit run --all-files
-
-# Benchmarks
-uv run pytest benchmarks/ --benchmark-only
 
 # Docs
 uv run mkdocs serve

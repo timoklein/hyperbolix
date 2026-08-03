@@ -7,7 +7,7 @@ For detailed development instructions, see [DEVELOPER_GUIDE.md](https://github.c
 ## Quick Links
 
 - **Setup**: Environment configuration with `uv`
-- **Testing**: Running test suites and benchmarks
+- **Testing**: Running test suites
 - **Linting**: Pre-commit hooks and code quality
 - **CI/CD**: GitHub Actions pipeline
 - **Contributing**: Pull request guidelines
@@ -20,9 +20,6 @@ uv sync --dev
 
 # Run tests
 uv run pytest tests/ -v
-
-# Run benchmarks
-uv run pytest benchmarks/ -v
 
 # Linting and formatting
 uv run pre-commit run --all-files
@@ -42,7 +39,6 @@ hyperbolix/
 │   ├── distributions/    # Probability distributions
 │   └── utils/            # Utilities
 ├── tests/                # Test suite
-├── benchmarks/           # Performance benchmarks
 └── docs/                 # Documentation source
 ```
 

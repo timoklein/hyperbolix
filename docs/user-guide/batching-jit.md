@@ -443,12 +443,6 @@ Typical speedups on M1/M2 Mac or modern GPU:
 | Linear layer forward | 1000 | 45 ms | 2.1 ms | 21x |
 | Full model (3 layers) | 1000 | 150 ms | 6.5 ms | 23x |
 
-Run benchmarks yourself:
-
-```bash
-uv run pytest benchmarks/ --benchmark-only -v
-```
-
 ## See Also
 
 - [Manifolds API](../api-reference/manifolds.md): Manifold function signatures
