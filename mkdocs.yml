@@ -1,6 +1,6 @@
 site_name: Hyperbolix
 site_description: Hyperbolic Deep Learning in JAX
-site_author: Timo Klein, Thomas Lang, Andrii Shkabrii
+site_author: Timo Klein, Thomas Lang
 site_url: https://timoklein.github.io/hyperbolix
 
 repo_name: hyperbolix

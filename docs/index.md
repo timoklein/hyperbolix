@@ -205,7 +205,7 @@ If you use Hyperbolix in your research, please cite:
 ```bibtex
 @software{hyperbolix2026,
   title = {Hyperbolix: Hyperbolic Deep Learning in JAX},
-  author = {Klein, Timo and Lang, Thomas and Shkabrii, Andrii},
+  author = {Klein, Timo and Lang, Thomas},
   year = {2026},
   url = {https://github.com/timoklein/hyperbolix}
 }
