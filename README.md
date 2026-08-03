@@ -72,7 +72,7 @@ cd hyperbolix
 uv sync  # or: pip install -e .
 ```
 
-**Requirements**: Python 3.12+, Flax 0.12+, Optax 0.2.6+ (JAX is installed transitively via Flax/Optax; see `pyproject.toml` for exact version pins)
+**Requirements**: Python 3.12+, JAX 0.9+, Flax 0.12+, Optax 0.2.6+
 
 ## Documentation
 
