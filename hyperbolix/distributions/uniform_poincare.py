@@ -23,6 +23,9 @@ from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
 from hyperbolix.utils.math_utils import MIN_NORM
+from hyperbolix.utils.math_utils import acosh as safe_acosh
+from hyperbolix.utils.math_utils import cosh as safe_cosh
+from hyperbolix.utils.math_utils import sinh as safe_sinh
 
 # ---------------------------------------------------------------------------
 # 64-point Gauss-Legendre quadrature nodes/weights on [-1, 1].
@@ -118,7 +121,9 @@ def volume(c: float, n: int, R: float, dtype=None) -> Float[Array, ""]:
     nodes_Q = jnp.asarray(_GL_NODES, dtype=working_dtype)
     weights_Q = jnp.asarray(_GL_WEIGHTS, dtype=working_dtype)
     r_nodes_Q = (R_arr / 2.0) * (nodes_Q + 1.0)
-    integrand_Q = jnp.sinh(sqrt_c * r_nodes_Q) ** (n - 1)
+    # safe_sinh: expm1-form accuracy fix over XLA's CPU jnp.sinh (up to ~17-496 ulps off for
+    # |x| >= 16), plus its overflow clip for free.
+    integrand_Q = safe_sinh(sqrt_c * r_nodes_Q) ** (n - 1)
     integral = (R_arr / 2.0) * jnp.sum(weights_Q * integrand_Q)
 
     vol = omega / sqrt_c ** (n - 1) * integral
@@ -156,9 +161,13 @@ def _sample_radial_n2(
     u = cosh(√c·r) - 1 is uniform on [0, u_max] when n = 2.
     """
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=dtype))
-    u_max = jnp.cosh(sqrt_c * R) - 1.0
+    # safe_cosh: exp-form accuracy fix over XLA's CPU jnp.cosh (up to ~17-496 ulps off for
+    # |x| >= 16), plus its overflow clip for free.
+    u_max = safe_cosh(sqrt_c * R) - 1.0
     u_S = jax.random.uniform(key, shape=shape, dtype=dtype, minval=0.0, maxval=u_max)
-    r_S = jnp.acosh(u_S + 1.0) / sqrt_c
+    # safe_acosh: domain-clamps to 1 + 10*eps instead of exactly 1.0, removing the singular
+    # gradient a u_S == 0 draw would otherwise expose.
+    r_S = safe_acosh(u_S + 1.0) / sqrt_c
     return r_S
 
 
@@ -178,7 +187,9 @@ def _sample_radial_rejection(
     Uses jax.lax.while_loop for JIT compatibility.
     """
     sqrt_c = jnp.asarray(jnp.sqrt(c), dtype=dtype)
-    u_max = jnp.cosh(sqrt_c * R) - 1.0
+    # safe_cosh: exp-form accuracy fix over XLA's CPU jnp.cosh (up to ~17-496 ulps off for
+    # |x| >= 16), plus its overflow clip for free.
+    u_max = safe_cosh(sqrt_c * R) - 1.0
     # Maximum of u*(u+2) over [0, u_max] is at u = u_max
     ref_val = u_max * (u_max + 2.0)
     exponent = (n - 2) / 2.0
@@ -213,7 +224,9 @@ def _sample_radial_rejection(
     _, u_accepted_T, _ = jax.lax.while_loop(cond_fn, body_fn, init_state)
     u_accepted_T = jnp.asarray(u_accepted_T, dtype=dtype)  # narrow type for pyright
 
-    r_T = jnp.acosh(u_accepted_T + 1.0) / sqrt_c
+    # safe_acosh: domain-clamps to 1 + 10*eps instead of exactly 1.0, removing the singular
+    # gradient a u_accepted_T == 0 draw would otherwise expose.
+    r_T = safe_acosh(u_accepted_T + 1.0) / sqrt_c
     return r_T.reshape(shape)
 
 

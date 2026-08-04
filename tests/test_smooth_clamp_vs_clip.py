@@ -5,7 +5,12 @@ These tests establish the *property* that justifies the change, independent of w
 installed library currently uses, so they remain valid before and after the source edit:
 
   * In the **valid regime** (|x| < overflow clamp), ``sinh(clip(x))`` and ``sinh(smooth_clamp(x))``
-    are bit-/ulp-identical in forward AND gradient (both pass x through untouched).
+    agree in forward AND gradient (both pass x through untouched). Since the 2026-08 accuracy
+    rewrite (git: 0b598b2) the shipped wrapper core is the stable expm1/exp form, NOT
+    ``jnp.sinh``/``jnp.cosh``, so agreement with a builtin-based comparator is a few ulps rather
+    than bitwise; the original bit-identity gate tests (and the Option A bare-``jnp.sinh``
+    redundancy test) were removed once the migration they justified had shipped and the library
+    stopped using bare ``jnp.sinh`` at the PLFC/FGG call sites.
   * ``grad(sinh∘clip)`` is finite for ALL x, including the saturated tail (clip's VJP is 0 there,
     times the finite ``cosh(clamp)`` → 0, no NaN).
   * The only behavioral difference is in the saturated tail under a *squaring* downstream op, where
@@ -14,7 +19,7 @@ installed library currently uses, so they remain valid before and after the sour
     its sinh input to ±v_max=±10 ≪ 87.83 (the guard we keep), so manifold validity and gradient
     finiteness hold under extreme inputs (tested below and in test_hyperboloid_linear_plfc.py).
 
-Section 8 then pins ``smooth_clamp`` itself. Every clamp above uses a very wide window (±87.8 for
+The final section then pins ``smooth_clamp`` itself. Every clamp above uses a very wide window (±87.8 for
 the sinh/cosh guard, ±v_max for PLFC), which is exactly the regime where the old implementation
 happened to be correct; the properties that hold for *narrow* windows are asserted there.
 
@@ -70,12 +75,17 @@ def _grid(dtype, lo, hi, n=4001):
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("fn_hard,fn_smooth", [(hard_sinh, smooth_sinh), (hard_cosh, smooth_cosh)])
 def test_forward_equivalence_valid_regime(dtype, fn_hard, fn_smooth):
-    """Hard clip == smooth clamp (exactly) for |x| < clamp; both finite & saturating beyond."""
+    """Hard clip ~= smooth clamp for |x| < clamp; both finite & saturating beyond.
+
+    Tolerance-based, not bitwise: the shipped wrapper core is the stable expm1/exp form while the
+    smooth comparator goes through ``jnp.sinh``/``jnp.cosh``, so they differ by the builtin's own
+    error (~25 f32 ulps / ~500 f64 ulps at the extremes) — absorbed by rtol=1e-5.
+    """
     clamp = _clamp(dtype)
-    # Valid regime: safely inside the band. Both leave x untouched, so results must be identical.
+    # Valid regime: safely inside the band. Both leave x untouched -> same function up to core ulps.
     x_valid = _grid(dtype, -(clamp - 1.0), clamp - 1.0)
     h, s = fn_hard(x_valid), fn_smooth(x_valid)
-    assert jnp.array_equal(h, s)  # bit-identical (both are the no-op branch -> same jnp.sinh/cosh)
+    assert jnp.allclose(h, s, rtol=1e-5, atol=4e-3 if dtype == jnp.float32 else 1e-7)
     assert jnp.isfinite(h).all()
 
     # Full range including the saturated tail: both stay finite (no inf/nan), bounded by the dtype.
@@ -257,27 +267,7 @@ def test_ilnn_conv_smooth_vs_hard_equivalence_and_manifold(dtype):
 
 
 # ==================================================================================================
-# 5. Option A: PLFC outer guard makes the wrapped inner sinh redundant -> bare jnp.sinh bit-identical
-# ==================================================================================================
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("v_max", [10.0, 20.0])
-def test_plfc_outer_guard_makes_inner_sinh_redundant(dtype, v_max):
-    """smooth_clamp(., +-v_max) bounds the input to (-v_max, v_max) << overflow clamp, so the wrapped
-    sinh's internal guard is a no-op: bare jnp.sinh is bit-identical (Option A is provably exact)."""
-    sf = 50.0
-    x = jnp.linspace(-3 * v_max, 3 * v_max, 5000, dtype=dtype)
-    arg = smooth_clamp(x, -v_max, v_max, sf)
-    # The guard output never leaves the band, so it can never reach the overflow clamp.
-    assert jnp.max(jnp.abs(arg)) <= v_max
-    bare = jnp.sinh(arg)
-    wrapped_hard = hard_sinh(arg)
-    wrapped_smooth = smooth_sinh(arg)
-    assert jnp.array_equal(bare, wrapped_hard)  # hard clip is a no-op on |arg| < clamp
-    assert jnp.array_equal(bare, wrapped_smooth)  # smooth clamp is a no-op too
-
-
-# ==================================================================================================
-# 6. Extreme inputs: hard clip keeps expmap / layers finite and on-manifold
+# 5. Extreme inputs: hard clip keeps expmap / layers finite and on-manifold
 # ==================================================================================================
 def _rel_on_hyperboloid(x, c, rtol):
     """Scale-relative Minkowski check: |(-x0^2 + ||xs||^2) + 1/c| / max(x0^2, 1) <= rtol.
@@ -354,12 +344,12 @@ def test_plfc_extreme_input_finite_gradient_hard_clip(dtype):
 
 
 # ==================================================================================================
-# 7. v_max overflow assertion (introduced with Option A's bare jnp.sinh)
+# 6. v_max overflow assertion (PLFC/ILNN construction guard)
 # ==================================================================================================
 def test_v_max_overflow_assertion():
     """Constructing PLFC/ILNN with a v_max that would overflow the float32 squared norm raises.
 
-    sinh(v_max) must stay below sqrt(finfo(float32).max) (~1.84e19, v_max ≲ 45) so the bare-jnp.sinh
+    sinh(v_max) must stay below sqrt(finfo(float32).max) (~1.84e19, v_max ≲ 45) so the sinh
     output path cannot overflow the time reconstruction.
     """
     manifold = Hyperboloid(dtype=jnp.float32)
@@ -376,7 +366,7 @@ def test_v_max_overflow_assertion():
 
 
 # ==================================================================================================
-# 8. smooth_clamp itself: bounded for EVERY window width (narrow-window overshoot regression)
+# 7. smooth_clamp itself: bounded for EVERY window width (narrow-window overshoot regression)
 # ==================================================================================================
 # Every clamp in sections 1-7 is two-sided with a very wide window, which is the regime where the
 # old implementation was correct. The old ``smooth_clamp`` composed two *gated* one-sided clamps,
