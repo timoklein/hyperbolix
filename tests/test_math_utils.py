@@ -8,6 +8,7 @@ import pytest
 from hyperbolix.utils.math_utils import (
     acosh,
     atanh,
+    capped_exp,
     cosh,
     sinh,
     smooth_clamp,
@@ -234,6 +235,26 @@ def test_sinh_cosh_gradients():
     g = float(jax.grad(cosh)(x))
     expected = float(np.sinh(np.float64(1e-4)))
     assert g == pytest.approx(expected, rel=1e-5)
+
+
+def test_capped_exp():
+    """capped_exp: bitwise exp below the cap, finite (never inf) above it, both dtypes.
+
+    The guard exists for exp of unconstrained trainable log-scale params: a runaway param
+    must saturate at a huge-but-finite value instead of overflowing to inf -> NaN.
+    """
+    for dt in (jnp.float32, jnp.float64):
+        # Value- and gradient-identity to jnp.exp below the cap.
+        x = jnp.asarray([-40.0, -1.0, 0.0, 1.0, 20.0], dtype=dt)
+        assert np.array_equal(np.asarray(capped_exp(x)), np.asarray(jnp.exp(x)))
+        g = float(jax.grad(capped_exp)(jnp.asarray(1.0, dtype=dt)))
+        assert g == float(jnp.exp(jnp.asarray(1.0, dtype=dt)))
+
+        # Above the cap: jnp.exp overflows to inf, capped_exp stays finite with zero gradient.
+        big = jnp.asarray(1e30, dtype=dt)
+        assert not np.isfinite(float(jnp.exp(big)))  # the guard is load-bearing
+        assert np.isfinite(float(capped_exp(big)))
+        assert float(jax.grad(capped_exp)(big)) == 0.0
 
 
 def test_acosh():

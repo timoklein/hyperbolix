@@ -171,6 +171,39 @@ def smooth_clamp(
     )
 
 
+@jax.jit
+def capped_exp(x: Float[Array, "..."]) -> Float[Array, "..."]:
+    """Exponential with an overflow cap on the argument. Domain=(-inf, inf).
+
+    Computes ``exp(minimum(x, 0.99*log(finfo.max)))`` (cap ≈ 87.8 for f32, ≈ 701.8 for f64), so the
+    result cannot overflow to ``+inf``. Intended for ``exp`` of *unconstrained trainable parameters*
+    (e.g. log-scale reparameterizations): a runaway parameter would otherwise produce an ``inf``
+    that turns into NaN downstream (``inf - inf``, ``inf * 0``) and poisons every parameter within
+    one optimizer step. With the cap, a runaway saturates at a huge-but-finite value with finite
+    gradients, so the failure stays visible and recoverable instead of NaN-ing the run.
+
+    The argument is capped rather than the output (``clip(exp(x), max)``) deliberately: an output
+    clip still materializes ``exp(x) = inf`` in the forward pass and ``inf`` in its VJP, exactly
+    the non-finite values the guard exists to prevent.
+
+    Below the cap this is a bitwise value- and gradient-identity to ``jnp.exp``. Above the cap the
+    gradient is exactly 0 (the ``minimum`` selects the constant side) — a parameter past the cap
+    receives no gradient signal to come back down. ``LearnableCurvature``'s ``"log"``
+    parameterization offers an opt-in straight-through backward for that regime; here the plain cap
+    is kept because the straight-through form trades forward-value exactness for it (its
+    ``stop_gradient`` arithmetic rounds through the raw parameter's magnitude), and a scale
+    parameter past ~88 means training has already diverged — the guard's job is containment.
+
+    Args:
+        x: Input array of any shape
+
+    Returns:
+        exp(x) with the argument capped so the result is always finite
+    """
+    clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
+    return jnp.exp(jnp.minimum(x, clamp))
+
+
 @jax.custom_jvp
 def _cosh_stable(x):
     return 0.5 * (jnp.exp(x) + jnp.exp(-x))

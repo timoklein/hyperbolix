@@ -26,7 +26,7 @@ from hyperbolix.manifolds import Manifold
 # has a finite VJP at zero input, unlike linalg.norm, whose 0/0 NaN survives any
 # post-hoc jnp.where masking. Imported (not redefined) so there is one value.
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import MIN_NORM
+from hyperbolix.utils.math_utils import MIN_NORM, capped_exp
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid
@@ -77,8 +77,9 @@ def _fhcnn_forward(
         # below still fires (safe norm of a zero vector is MIN_NORM <= 1e-5).
         x_rem_norm_B1 = jnp.sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (B, 1)
 
-        # Learnable sigmoid scaling
-        scale_B1 = jnp.exp(scale_val) * jax.nn.sigmoid(x0_B1)  # (B, 1)
+        # Learnable sigmoid scaling. capped_exp: scale_val is unconstrained — a runaway param
+        # must saturate finite, not overflow to inf and NaN the time coordinate.
+        scale_B1 = capped_exp(scale_val) * jax.nn.sigmoid(x0_B1)  # (B, 1)
 
         res0_B1 = jnp.sqrt(scale_B1**2 + 1 / c + eps)  # (B, 1)
         res_rem_BD = scale_B1 * x_rem_BD / x_rem_norm_B1  # (B, D)
@@ -145,7 +146,8 @@ def _fhnn_forward(
 
     # Time coordinate via scaled sigmoid with floor at 1/sqrt(c)
     # y0 > 1/sqrt(c) guaranteed by construction (additive floor, not max)
-    y0_B1 = jnp.exp(scale_val) * jax.nn.sigmoid(z0_B1) + 1.0 / jnp.sqrt(c) + eps  # (B, 1)
+    # capped_exp: scale_val is unconstrained — see _fhcnn_forward above.
+    y0_B1 = capped_exp(scale_val) * jax.nn.sigmoid(z0_B1) + 1.0 / jnp.sqrt(c) + eps  # (B, 1)
 
     # Target spatial norm from hyperboloid constraint: ||y_s||^2 = y0^2 - 1/c
     # Always real since y0 > 1/sqrt(c) + eps => y0^2 > 1/c
