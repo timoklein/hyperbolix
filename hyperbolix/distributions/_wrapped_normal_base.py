@@ -12,6 +12,8 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from hyperbolix.utils.math_utils import sinh as safe_sinh
+
 # Taylor gate for ``log(sinh(x)/x)``: the switch point is set where the two branches' error
 # curves cross, which depends on the working precision, so it is derived from the dtype's eps
 # rather than fixed.
@@ -76,7 +78,9 @@ def _log_det_jacobian_from_r(
     # standard branch a dummy x = 1 wherever the Taylor branch wins keeps the values identical
     # (the branch is discarded there) while making the gradient finite.
     sqrt_c_r_safe = jnp.where(small, jnp.ones_like(sqrt_c_r), sqrt_c_r)
-    log_ratio_standard = jnp.log(jnp.sinh(sqrt_c_r_safe)) - jnp.log(sqrt_c_r_safe)
+    # safe_sinh: expm1-form accuracy fix over XLA's CPU jnp.sinh (up to ~17-496 ulps off for
+    # |x| >= 16), and gains its overflow clip for free.
+    log_ratio_standard = jnp.log(safe_sinh(sqrt_c_r_safe)) - jnp.log(sqrt_c_r_safe)
 
     # Taylor: log(sinh(x)/x) = x^2/6 - x^4/180 + O(x^6). A plain polynomial in x^2, so this
     # branch is NaN-free for every finite r and its gradient is exactly 0 at r = 0.

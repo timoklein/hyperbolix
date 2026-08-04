@@ -275,9 +275,11 @@ def sinh_lift_to_hyperboloid(
     """
     sqrt_c = jnp.sqrt(c)
     sinh_arg_BO = jnp.clip(sqrt_c * spatial_BO, -v_max, v_max)
-    # Bare jnp.sinh: the argument is already bounded to ±v_max ≪ the math_utils.sinh overflow
-    # clamp, so the safe variant would only re-clamp redundantly (callers assert v_max safety).
-    res_rem_BO = jnp.sinh(sinh_arg_BO) / sqrt_c
+    # safe_sinh: the argument is already bounded to ±v_max ≪ the math_utils.sinh overflow clamp
+    # (callers assert v_max safety), so the clamp itself is redundant here — but the wrapper's
+    # expm1-form is an accuracy fix (XLA's CPU jnp.sinh is up to ~17-496 ulps off for |x| >= 16),
+    # not just a clamp, so it is still worth routing through.
+    res_rem_BO = safe_sinh(sinh_arg_BO) / sqrt_c
     # Time reconstruction via the hyperboloid constraint (scale = 1 since c_in == c_out).
     return spatial_to_hyperboloid(res_rem_BO, c_in=c, c_out=c, eps=eps)
 

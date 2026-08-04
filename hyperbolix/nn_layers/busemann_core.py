@@ -30,6 +30,7 @@ from hyperbolix.manifolds import Manifold
 # ``sqrt(sumsq + MIN_NORM**2)`` safe-norm idiom the manifolds use. Imported (not
 # redefined) so there is one value library-wide.
 from hyperbolix.utils.math_utils import MIN_NORM
+from hyperbolix.utils.math_utils import sinh as safe_sinh
 
 
 def _init_weight_norm_params(
@@ -163,7 +164,9 @@ def busemann_fc_poincare_output(
         Points inside the Poincaré ball with curvature ``c`` (pre-projection).
     """
     sqrt_c = jnp.sqrt(c)
-    omega_BO = jnp.sinh(jnp.clip(sqrt_c * u_BO, -v_max, v_max)) / sqrt_c
+    # safe_sinh: expm1-form is an accuracy fix over XLA's CPU jnp.sinh (up to ~17-496 ulps off for
+    # |x| >= 16), not just a clamp — the ±v_max clip here is still the output-side overflow guard.
+    omega_BO = safe_sinh(jnp.clip(sqrt_c * u_BO, -v_max, v_max)) / sqrt_c
     omega_sqnorm_B1 = jnp.sum(omega_BO**2, axis=-1, keepdims=True)
     denom_B1 = 1.0 + jnp.sqrt(1.0 + c * omega_sqnorm_B1)
     return omega_BO / denom_B1

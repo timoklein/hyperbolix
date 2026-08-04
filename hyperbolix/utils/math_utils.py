@@ -171,14 +171,25 @@ def smooth_clamp(
     )
 
 
+@jax.custom_jvp
+def _cosh_stable(x):
+    return 0.5 * (jnp.exp(x) + jnp.exp(-x))
+
+
+@_cosh_stable.defjvp
+def _cosh_stable_jvp(primals, tangents):
+    (x,), (t,) = primals, tangents
+    return _cosh_stable(x), (0.5 * (jnp.expm1(x) - jnp.expm1(-x))) * t
+
+
 @jax.jit
 def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic cosine with overflow protection. Domain=(-inf, inf).
 
     Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±709 for f64) before
-    ``jnp.cosh`` so the result cannot overflow the dtype. This is a *pure overflow guard*: for any
-    input that is not about to overflow the clip is a value- and gradient-identity, so the forward
-    pass and the VJP match an unguarded ``jnp.cosh`` throughout the entire valid regime.
+    computing the value so the result cannot overflow the dtype. This is a *pure overflow guard*:
+    for any input that is not about to overflow the clip is a value- and gradient-identity, so the
+    forward pass and the VJP match an unguarded ``cosh`` throughout the entire valid regime.
 
     A hard ``jnp.clip`` is used deliberately rather than a softplus ``smooth_clamp``: it matches the
     domain guards in ``acosh``/``atanh`` below, is free on accelerators, and avoids the ~2 extra
@@ -186,6 +197,16 @@ def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     difference is in the saturated tail (|x| ≥ clamp), where the clip's gradient is 0 instead of a
     tiny nonzero value — acceptable, because that regime is already degenerate (the output is ~1e37)
     and you never want gradients pushing further into overflow.
+
+    XLA's CPU ``jnp.cosh`` is inaccurate: ~17 ulps off for ``|x|`` in ``[16, 512]`` and ~496 ulps for
+    ``[512, 710]`` (f64; the jump sits exactly at the power-of-two boundary 512 — NumPy's ``cosh`` is
+    ≤1.8 ulps throughout), and ~24.5 ulps in f32. The exp-form identity ``cosh(x) = 0.5*(exp(x) +
+    exp(-x))`` has no cancellation (both terms are positive) and measures ≤1.8 ulps f64 / ≤1.4 ulps
+    f32 against an extended-precision reference. But its *naive* autodiff derivative is ``0.5*(exp(x) - exp(-x))``, which
+    cancels near 0 (relative error ~eps/|x|) — the same failure mode the ``atanh`` rewrite above
+    avoids for its own function. ``_cosh_stable`` fixes this with a ``custom_jvp`` that routes
+    ``d/dx cosh`` to the accurate expm1-form ``sinh`` below (``0.5*(expm1(x) - expm1(-x))``) instead
+    of differentiating the exp-form value expression.
 
     Args:
         x: Input array of any shape
@@ -196,7 +217,10 @@ def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     # cosh(x) ≈ exp(x)/2 for large x, so the overflow boundary is x = log(max).
     clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
     x = jnp.clip(x, -clamp, clamp)
-    return jnp.cosh(x)
+    # exp-form value (≤1.8 ulps f64 / ≤1.4 ulps f32 vs XLA CPU cosh's 17-496 / 24.5 ulps); the
+    # custom_jvp above keeps the gradient on the accurate expm1-form sinh instead of the naive
+    # cancelling exp-form derivative.
+    return _cosh_stable(x)
 
 
 @jax.jit
@@ -204,9 +228,9 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic sine with overflow protection. Domain=(-inf, inf).
 
     Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±709 for f64) before
-    ``jnp.sinh`` so the result cannot overflow the dtype. This is a *pure overflow guard*: for any
-    input that is not about to overflow the clip is a value- and gradient-identity, so the forward
-    pass and the VJP match an unguarded ``jnp.sinh`` throughout the entire valid regime.
+    computing the value so the result cannot overflow the dtype. This is a *pure overflow guard*:
+    for any input that is not about to overflow the clip is a value- and gradient-identity, so the
+    forward pass and the VJP match an unguarded ``sinh`` throughout the entire valid regime.
 
     A hard ``jnp.clip`` is used deliberately rather than a softplus ``smooth_clamp``: it matches the
     domain guards in ``acosh``/``atanh`` below, is free on accelerators, and avoids the ~2 extra
@@ -214,6 +238,18 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     difference is in the saturated tail (|x| ≥ clamp), where the clip's gradient is 0 instead of a
     tiny nonzero value — acceptable, because that regime is already degenerate (the output is ~1e37)
     and you never want gradients pushing further into overflow.
+
+    XLA's CPU ``jnp.sinh`` is inaccurate the same way ``jnp.cosh`` is: ~17 ulps off for ``|x|`` in
+    ``[16, 512]`` and ~496 ulps for ``[512, 710]`` (f64, jump at the power-of-two boundary 512;
+    NumPy's ``sinh`` is ≤1.8 ulps throughout), and ~24.5 ulps in f32. The expm1-form identity
+    ``sinh(x) = 0.5*(expm1(x) - expm1(-x))`` is cancellation-free *everywhere*, including near 0 —
+    unlike the naive exp-form ``0.5*(exp(x) - exp(-x))``, the two ``expm1`` terms have opposite signs
+    (``expm1(x) >= 0`` and ``-expm1(-x) >= 0`` for ``x >= 0``, and symmetrically for ``x < 0``), so
+    the subtraction adds magnitudes instead of cancelling them. This measures ≤3.9 ulps f64 / ≤4.2
+    ulps f32 against an extended-precision reference, everywhere, and is faster than ``jnp.sinh``. Unlike ``cosh`` above,
+    ``sinh`` needs no ``custom_jvp``: its natural autodiff derivative is exactly the accurate exp-form
+    ``0.5*(exp(x) + exp(-x))`` (``_cosh_stable``'s value expression), which has no cancellation to
+    begin with.
 
     Args:
         x: Input array of any shape
@@ -224,7 +260,10 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     # sinh(x) ≈ exp(x)/2 for large x, so the overflow boundary is x = log(max).
     clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
     x = jnp.clip(x, -clamp, clamp)
-    return jnp.sinh(x)
+    # expm1-form: cancellation-free everywhere (opposite-signed terms), ≤3.9 ulps f64 vs XLA CPU
+    # sinh's 17-496 ulps, and faster than the builtin. Autodiff of this expression is already the
+    # accurate exp-form cosh, so no custom_jvp is needed here (contrast cosh above).
+    return 0.5 * (jnp.expm1(x) - jnp.expm1(-x))
 
 
 @jax.jit

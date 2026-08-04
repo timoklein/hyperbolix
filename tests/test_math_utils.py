@@ -187,6 +187,55 @@ def test_sinh():
     assert jnp.abs(result_extreme[2]) < 1e-10  # sinh(0) = 0
 
 
+def test_sinh_cosh_f64_ulp_accuracy():
+    """Regression test for XLA's CPU sinh/cosh float64 accuracy hole.
+
+    XLA's CPU ``jnp.sinh``/``jnp.cosh`` are up to ~17 ulps off for ``|x|`` in ``[16, 512]`` and
+    ~496 ulps for ``[512, 710]`` (the jump sits exactly at the power-of-two boundary 512); NumPy's
+    ``sinh``/``cosh`` are <=1.8 ulps throughout. A naive exp-form sinh also fails via cancellation
+    near 0. The library's expm1-form sinh / exp-form-with-custom_jvp cosh pass both regimes at
+    <=8 ulps.
+    """
+    grids = [
+        np.linspace(13.0, 700.0, 20001),  # XLA CPU sinh/cosh's bad regime
+        np.linspace(-2.0, 2.0, 20001),  # cancellation regime for a naive exp-form sinh
+    ]
+    for fn, ref_fn in [(sinh, np.sinh), (cosh, np.cosh)]:
+        for grid in grids:
+            out = np.asarray(fn(jnp.asarray(grid, dtype=jnp.float64)))
+            expected = ref_fn(grid)
+            # Skip the exact zero (sinh(0) == 0): the relative-ulp division is undefined there.
+            mask = expected != 0.0
+            ulp = np.abs(out[mask] - expected[mask]) / np.spacing(np.abs(expected[mask]))
+            assert ulp.max() <= 8.0
+
+
+def test_sinh_cosh_odd_even_symmetry():
+    """sinh(-x) == -sinh(x) and cosh(-x) == cosh(x) bitwise, for both dtypes."""
+    for dt in (jnp.float32, jnp.float64):
+        g = jnp.linspace(0.01, 80.0, 5001, dtype=dt)
+        assert np.array_equal(np.asarray(sinh(-g)), np.asarray(-sinh(g)))
+        assert np.array_equal(np.asarray(cosh(-g)), np.asarray(cosh(g)))
+
+
+def test_sinh_cosh_gradients():
+    """sinh'(0) == 1.0 and cosh'(0) == 0.0 exactly, for both dtypes.
+
+    Also catches a regression of ``cosh``'s ``custom_jvp`` to the naive cancelling exp-form
+    gradient ``0.5*(exp(x) - exp(-x))``: measured, that form errs by ~1.7e-4 relative at
+    ``x = 1e-4`` in float32 while the custom_jvp errs by ~4.6e-8, so the 1e-5 tolerance sits
+    between them with >1 order of margin on each side.
+    """
+    for dt in (jnp.float32, jnp.float64):
+        assert float(jax.grad(sinh)(jnp.asarray(0.0, dtype=dt))) == 1.0
+        assert float(jax.grad(cosh)(jnp.asarray(0.0, dtype=dt))) == 0.0
+
+    x = jnp.asarray(1e-4, dtype=jnp.float32)
+    g = float(jax.grad(cosh)(x))
+    expected = float(np.sinh(np.float64(1e-4)))
+    assert g == pytest.approx(expected, rel=1e-5)
+
+
 def test_acosh():
     """Test numerically stable acosh."""
     # Values away from the domain boundary are exact
