@@ -17,11 +17,13 @@ jobs:
         with:
           fetch-depth: 0  # Full history for mike versioning
 
-      # Pinned exactly: setup-uv has no moving major tag since v8.
+      # Pinned exactly: setup-uv has no moving major tag since v8. Caching is
+      # off for the same reason as in ci.yaml: `uv sync` is ~6.8s from cold
+      # here, so the cache saves nothing and costs an upload.
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
         with:
-          enable-cache: true
+          enable-cache: false
 
       - name: Set up Python
         run: uv python install
