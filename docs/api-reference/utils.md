@@ -16,6 +16,7 @@ Numerically stable implementations of hyperbolic functions.
         - acosh
         - atanh
         - smooth_clamp
+        - capped_exp
 
 ### Usage Example
 
@@ -30,6 +31,18 @@ y = acosh(x)  # Handles edge cases near 1.0
 # Smooth clamping for stability
 z = jnp.array([0.99, 1.0, 1.01])
 z_clamped = smooth_clamp(z, min_value=0.0, max_value=1.0)
+```
+
+Use `capped_exp` instead of `jnp.exp` whenever you `exp()` an unconstrained trainable parameter
+(a log-scale reparameterization, for example) — a runaway parameter saturates to a large finite
+value instead of overflowing to `inf` and NaN-ing the rest of the model on the next optimizer step:
+
+```python
+from hyperbolix.utils.math_utils import capped_exp
+
+log_scale = jnp.array(1e6)  # a runaway trainable parameter
+jnp.exp(log_scale)  # inf -- would NaN downstream
+capped_exp(log_scale)  # finite, saturates at exp(0.99*log(finfo.max))
 ```
 
 ## Learnable Curvature
