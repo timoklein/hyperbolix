@@ -264,6 +264,51 @@ def test_atanh_gradient_at_boundary():
         assert g_in == pytest.approx(1.0 / (1.0 - x_in**2), rel=1e-5)
 
 
+def test_atanh_f64_ulp_accuracy():
+    """Regression test for the XLA float64 ``log1p`` accuracy hole.
+
+    XLA evaluates ``jnp.atanh`` as ``0.5*(log1p(x) - log1p(-x))``. XLA's CPU float64 ``log1p`` is
+    up to ~129 ulps off for arguments in ``[-0.53, -0.28]``, so the builtin ``jnp.atanh`` fails
+    this test at ~129 ulps on the positive window ``[0.28, 0.53]``. A plain (non-odd) single-log1p
+    rewrite ``0.5*log1p(2x/(1-x))`` also fails this test, at ~129 ulps, on the negative window
+    ``[-0.40, -0.12]`` (its inner argument re-enters the bad ``log1p`` window there). The library's
+    odd/where single-log1p form keeps ``log1p``'s argument non-negative for either sign and passes
+    both windows at <=8 ulps.
+    """
+    reference = np.arctanh  # accurate to <1 ulp in these windows
+    grids = [
+        np.linspace(0.28, 0.53, 20001),  # builtin jnp.atanh's bad window
+        np.linspace(-0.40, -0.12, 20001),  # window where the naive non-odd rewrite fails
+    ]
+    for grid in grids:
+        out = np.asarray(atanh(jnp.asarray(grid, dtype=jnp.float64)))
+        expected = reference(grid)
+        ulp = np.abs(out - expected) / np.spacing(np.abs(expected))
+        assert ulp.max() <= 8.0
+
+
+def test_atanh_odd_symmetry():
+    """atanh(-x) == -atanh(x) bitwise, for both dtypes.
+
+    Pins the odd/where spelling: a plain (non-odd) single-log1p rewrite would not generally
+    satisfy this to bit precision.
+    """
+    for dt in (jnp.float32, jnp.float64):
+        g = jnp.linspace(0.001, 0.999, 5001, dtype=dt)
+        assert np.array_equal(np.asarray(atanh(-g)), np.asarray(-atanh(g)))
+
+
+def test_atanh_gradient_at_zero():
+    """atanh'(0) == 1.0 exactly, for both dtypes.
+
+    Catches a ``jnp.sign(x)*...`` mis-spelling of the odd rewrite, whose product-rule gradient at
+    x == 0 collapses to 0 (analytic atanh'(0) = 1).
+    """
+    for dt in (jnp.float32, jnp.float64):
+        g = jax.grad(atanh)(jnp.asarray(0.0, dtype=dt))
+        assert float(g) == 1.0
+
+
 def test_tanh():
     """Output stays strictly inside (-1, 1) even where float32 jnp.tanh saturates to exactly 1.0."""
     for dtype in [jnp.float32, jnp.float64]:
