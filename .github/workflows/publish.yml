@@ -13,18 +13,19 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      # Pinned exactly: setup-uv has no moving major tag since v8.
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v9.0.0
 
       - name: Build package
         run: uv build
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -37,13 +38,19 @@ jobs:
       id-token: write
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
 
+      # This job never checks out the repo -- it only publishes the prebuilt
+      # wheel -- so there is no uv.lock to key a cache on. setup-uv's default
+      # `enable-cache: auto` would switch caching on for hosted runners and warn
+      # that the cache can never be invalidated; disable it explicitly.
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: false
 
       - name: Publish to PyPI
         run: uv publish --check-url https://pypi.org/simple/ --trusted-publishing always dist/*

@@ -13,14 +13,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Full history for mike versioning
 
+      # Pinned exactly: setup-uv has no moving major tag since v8. Caching is
+      # off for the same reason as in ci.yaml: `uv sync` is ~6.8s from cold
+      # here, so the cache saves nothing and costs an upload.
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v9.0.0
         with:
-          enable-cache: true
+          enable-cache: false
 
       - name: Set up Python
         run: uv python install
@@ -38,7 +41,7 @@ jobs:
         run: uv run python scripts/check_external_hosts.py site
 
       - name: Upload documentation artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: documentation-site
           path: site/

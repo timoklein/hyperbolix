@@ -8,25 +8,24 @@ jobs:
     name: Lint (Ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # Exact pin required: setup-uv has no moving major tag since v8 (`@v9`
+      # 404s).
+      #
+      # Caching is off deliberately. Measured on this dependency tree,
+      # `uv sync --locked --dev` takes ~6.8s whether the uv cache is warm, cold
+      # or absent -- uv installs fast enough that there is nothing left for a
+      # cache to save. Enabling it cost ~3s/job to upload a 288 MiB artifact and
+      # made all 22 matrix jobs race for one cache key.
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v9.0.0
         with:
-          enable-cache: true
+          enable-cache: false
 
+      # Reads .python-version.
       - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: ".python-version"
-
-      - name: Cache uv dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
+        run: uv python install
 
       - name: Install dependencies
         run: uv sync --locked --dev
@@ -42,25 +41,24 @@ jobs:
     name: Type Check (Pyright)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # Exact pin required: setup-uv has no moving major tag since v8 (`@v9`
+      # 404s).
+      #
+      # Caching is off deliberately. Measured on this dependency tree,
+      # `uv sync --locked --dev` takes ~6.8s whether the uv cache is warm, cold
+      # or absent -- uv installs fast enough that there is nothing left for a
+      # cache to save. Enabling it cost ~3s/job to upload a 288 MiB artifact and
+      # made all 22 matrix jobs race for one cache key.
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v9.0.0
         with:
-          enable-cache: true
+          enable-cache: false
 
+      # Reads .python-version.
       - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: ".python-version"
-
-      - name: Cache uv dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
+        run: uv python install
 
       - name: Install dependencies
         run: uv sync --locked --dev
@@ -109,25 +107,24 @@ jobs:
           - "nn_layers/test_layer_contract.py"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # Exact pin required: setup-uv has no moving major tag since v8 (`@v9`
+      # 404s).
+      #
+      # Caching is off deliberately. Measured on this dependency tree,
+      # `uv sync --locked --dev` takes ~6.8s whether the uv cache is warm, cold
+      # or absent -- uv installs fast enough that there is nothing left for a
+      # cache to save. Enabling it cost ~3s/job to upload a 288 MiB artifact and
+      # made all 22 matrix jobs race for one cache key.
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v9.0.0
         with:
-          enable-cache: true
+          enable-cache: false
 
+      # Reads .python-version.
       - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: ".python-version"
-
-      - name: Cache uv dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
+        run: uv python install
 
       - name: Install dependencies
         run: uv sync --locked --dev
