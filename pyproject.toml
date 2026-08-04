@@ -42,6 +42,7 @@ classifiers = [
 dependencies = [
     "chex>=0.1.91",
     "flax>=0.12.0",
+    "jax>=0.9",
     "jaxtyping>=0.3.2",
     "optax>=0.2.6",
 ]
@@ -95,8 +96,6 @@ line-length = 127
 addopts = "-ra -q" # --log-cli-level=DEBUG
 testpaths = ["tests"]
 pythonpath = "hyperbolix"
-# Benchmarks (bench_*.py) are excluded from default collection; the CI benchmark
-# job passes `-o python_files="bench_*.py"` explicitly to collect them.
 python_files = ["test_*.py", "*_test.py"]
 
 [dependency-groups]
@@ -113,7 +112,6 @@ dev = [
     "py-spy>=0.4.1",
     "pyright>=1.1.390",
     "pytest>=8.4.2",
-    "pytest-benchmark>=5.1.0",
     "ruff>=0.13.2",
 ]
 

@@ -130,7 +130,7 @@ def test_pool_matches_manual(dtype):
     c = 1.0
     x = _make_hyperboloid_feature_map(key, batch=4, height=7, width=7, spatial_dim=32, c=c, dtype=dtype)
 
-    # Hand-rolled (the pattern from benchmarks)
+    # Hand-rolled equivalent of the same pooling pattern
     x_space = x[..., 1:]  # (4, 7, 7, 32)
     x_pooled = jnp.mean(x_space, axis=(1, 2))  # (4, 32)
     time_coord = jnp.sqrt(jnp.sum(x_pooled**2, axis=-1, keepdims=True) + 1.0 / c)

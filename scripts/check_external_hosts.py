@@ -30,7 +30,7 @@ ALLOWED_HOSTS: frozenset[str] = frozenset(
 )
 
 # Your own GitHub Pages host(s): absolute self-links are not third parties.
-SELF_HOSTS: frozenset[str] = frozenset({"timoklein.github.io", "hyperbolix.github.io"})
+SELF_HOSTS: frozenset[str] = frozenset({"timoklein.github.io"})
 
 _HOST_RE = re.compile(r"https?://([^/\"'\s)]+)", re.IGNORECASE)
 # CSS url(...) and @import targets, inside <style> blocks and .css files.

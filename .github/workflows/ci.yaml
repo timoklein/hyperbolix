@@ -32,10 +32,10 @@ jobs:
         run: uv sync --locked --dev
 
       - name: Run Ruff linter
-        run: uv run ruff check hyperbolix tests benchmarks
+        run: uv run ruff check hyperbolix tests
 
       - name: Run Ruff formatter check
-        run: uv run ruff format --check hyperbolix tests benchmarks
+        run: uv run ruff format --check hyperbolix tests
 
   # Type checking job
   typecheck:
@@ -142,83 +142,3 @@ jobs:
             paths="$paths tests/$f"
           done
           uv run pytest $paths -v
-
-  # Benchmark job - runs on main branch to track performance
-  benchmark:
-    name: Benchmark
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Fetch all history for comparison
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: ".python-version"
-
-      - name: Cache uv dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Install dependencies
-        run: uv sync --locked --dev
-
-      - name: Download previous benchmark data
-        uses: actions/cache@v4
-        with:
-          path: ./cache
-          key: benchmark-${{ runner.os }}-${{ github.ref_name }}
-          restore-keys: |
-            benchmark-${{ runner.os }}-
-
-      - name: Run benchmarks
-        run: |
-          # Run quick benchmark subset (not all parameter combinations)
-          # -o python_files="bench_*.py" is required because pyproject.toml's
-          # default python_files no longer includes bench_*.py (kept out of
-          # the default test collection to avoid zero-assertion items).
-          uv run pytest benchmarks/ \
-            -o python_files="bench_*.py" \
-            --benchmark-only \
-            --benchmark-json=benchmark.json \
-            -k "10-100" \
-            --benchmark-warmup=on
-
-      - name: Compare benchmarks
-        if: github.event_name == 'pull_request'
-        run: |
-          if [ -f cache/benchmark.json ]; then
-            echo "Comparing against previous benchmark..."
-            uv run pytest benchmarks/ \
-              -o python_files="bench_*.py" \
-              --benchmark-only \
-              --benchmark-compare=cache/benchmark.json \
-              --benchmark-compare-fail=mean:10% \
-              -k "10-100"
-          else
-            echo "No previous benchmark found, skipping comparison"
-          fi
-        continue-on-error: true
-
-      - name: Store benchmark result
-        if: github.ref == 'refs/heads/main'
-        run: |
-          mkdir -p cache
-          cp benchmark.json cache/benchmark.json
-
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-results
-          path: benchmark.json

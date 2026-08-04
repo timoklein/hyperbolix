@@ -288,9 +288,9 @@ time_coord = jnp.sqrt(jnp.sum(features**2, axis=-1, keepdims=True) + 1.0 / c)
 x_manifold = jnp.concatenate([time_coord, features], axis=-1)
 ```
 
-Both patterns appear in the MNIST benchmark (`benchmarks/bench_mnist_hyperboloid.py`):
-`FHCNNHybrid` uses Pattern A after a small Euclidean embedding;
-`FullyHyperbolicCNN_*` uses Pattern B per-pixel from raw image values.
+Both patterns in practice: a hybrid CNN (Euclidean stem → hyperbolic head) uses
+Pattern A after a small Euclidean embedding; a fully hyperbolic CNN uses
+Pattern B per-pixel from raw image values.
 
 ## Switching Models: Use the Isometry
 

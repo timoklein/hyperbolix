@@ -3,8 +3,8 @@
 A hyperbolic training loop is just a normal Flax NNX + Optax loop. The
 specifics that differ from Euclidean training are small: pass curvature at
 call time, optionally project, and pick reasonable hyperparameters per
-manifold. This page shows a minimal working loop, points to the benchmark
-files for advanced patterns, and lists the failures you'll actually hit.
+manifold. This page shows a minimal working loop and lists the failures you'll
+actually hit.
 
 ## Minimal Training Loop
 
@@ -85,21 +85,6 @@ Two things worth pointing out:
   inputs that aren't guaranteed small-norm. Use `expmap_0` instead when your
   features come from a small-norm Euclidean embedding.
 
-## Benchmark Map
-
-For end-to-end examples on real data, the benchmarks in `benchmarks/` are the
-authoritative reference. Each file is a self-contained training script.
-
-| File | What it demonstrates |
-|---|---|
-| `bench_mnist_hyperboloid.py` | Hyperboloid CNN — both `FHCNNHybrid` (Euclidean stem → `expmap_0` → hyperbolic head) and `FullyHyperbolicCNN_*` (constraint projection at input, hyperbolic throughout) |
-| `bench_mnist_poincare.py` | Poincaré CNN with per-layer learnable curvature at `init_c=0.1` (van Spengler 2023 recipe) |
-| `bench_mnist_pv.py` | PV CNN — unconstrained $\mathbb{R}^n$ training with no projection step |
-| `bench_shakespeare_attention.py` | Hyperbolic transformer (causal attention) with all four variants: Euclidean baseline + softmax / full / linear hyperbolic attention |
-
-The micro-benchmarks (`bench_manifolds.py`, `bench_nn_layers.py`) test
-per-operation performance, not training workflows.
-
 ## Hyperparameters That Actually Matter
 
 Most defaults from Euclidean training transfer. The exceptions:
@@ -131,5 +116,3 @@ Most defaults from Euclidean training transfer. The exceptions:
   float64, clamping strategies.
 - **[Manifolds Guide](manifolds.md)** — manifold operations, curvature
   workflows, common pitfalls.
-- **`benchmarks/`** — full training scripts for hyperboloid CNN, Poincaré CNN,
-  PV CNN, and hyperbolic transformer on MNIST / Shakespeare.

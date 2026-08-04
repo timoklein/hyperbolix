@@ -16,7 +16,7 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 - 🧠 **40+ Neural Network Layers**: Linear, convolutional, regression, attention, normalization, positional encoding, PV
 - ⚡ **5 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish, GELU
 - 📈 **Riemannian Optimizers**: RAdam and RSGD with automatic manifold detection
-- 🚀 **Pure JAX/Flax NNX**: vmap-native API, JIT-compatible (10-100x speedup)
+- 🚀 **Pure JAX/Flax NNX**: vmap-native API, JIT-compatible
 - ✅ **3,550+ tests passing** (735 test functions, parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
 
 ## Quick Start
@@ -67,16 +67,16 @@ operations (see "Learnable curvature" below).
 ## Installation
 
 ```bash
-git clone https://github.com/hyperbolix/hyperbolix.git
+git clone https://github.com/timoklein/hyperbolix.git
 cd hyperbolix
 uv sync  # or: pip install -e .
 ```
 
-**Requirements**: Python 3.12+, JAX 0.4.20+, Flax 0.8.0+, Optax 0.1.7+
+**Requirements**: Python 3.12+, JAX 0.9+, Flax 0.12+, Optax 0.2.6+
 
 ## Documentation
 
-📖 **[Full Documentation](https://hyperbolix.github.io/hyperbolix/)**
+📖 **[Full Documentation](https://timoklein.github.io/hyperbolix/)**
 
 - **[Getting Started](docs/getting-started.md)** - Installation and first examples
 - **[User Guides](docs/user-guide/)** - Manifolds, layers, optimizers, batching, numerical stability
@@ -130,7 +130,7 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
   title = {Hyperbolix: Hyperbolic Deep Learning in JAX},
   author = {Klein, Timo and Lang, Thomas},
   year = {2026},
-  url = {https://github.com/hyperbolix/hyperbolix}
+  url = {https://github.com/timoklein/hyperbolix}
 }
 ```
 
@@ -154,7 +154,7 @@ See individual module docstrings for detailed references.
 
 Contributions welcome! See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for setup and guidelines.
 
-For bugs or questions, [open an issue](https://github.com/hyperbolix/hyperbolix/issues).
+For bugs or questions, [open an issue](https://github.com/timoklein/hyperbolix/issues).
 
 ## License
 

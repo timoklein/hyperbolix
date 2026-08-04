@@ -52,7 +52,7 @@ distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(x_proj, y_proj, c)
 Install from source:
 
 ```bash
-git clone https://github.com/hyperbolix/hyperbolix.git
+git clone https://github.com/timoklein/hyperbolix.git
 cd hyperbolix
 uv sync  # or pip install -e .
 ```
@@ -104,7 +104,7 @@ output = model(input_data, c=1.0)
 | Poincaré vector quantization (VQ-VAE / HyperVQ) layers | ✅ Stable | v0.8.0 |
 | κ-Stereographic manifold (Bachmann et al. 2020, signed learnable curvature) | ✅ Stable | v0.11.0 |
 | Dimensionality reduction (HoroPCA, CO-SNE, Fréchet mean) | ✅ Stable | v1.0.0 |
-| CI/CD pipeline with benchmarking | ✅ Stable | v0.1.4 |
+| CI/CD pipeline | ✅ Stable | v0.1.4 |
 
 ## Key Concepts
 
@@ -205,9 +205,9 @@ If you use Hyperbolix in your research, please cite:
 ```bibtex
 @software{hyperbolix2026,
   title = {Hyperbolix: Hyperbolic Deep Learning in JAX},
-  author = {Klein, Timo and Lang, Thomas and Shkabrii, Andrii},
+  author = {Klein, Timo and Lang, Thomas},
   year = {2026},
-  url = {https://github.com/hyperbolix/hyperbolix}
+  url = {https://github.com/timoklein/hyperbolix}
 }
 ```
 

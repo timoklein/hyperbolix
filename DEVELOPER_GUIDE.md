@@ -35,10 +35,10 @@ uv run pre-commit run --all-files
 
 ```bash
 # Lint with Ruff
-uv run ruff check hyperbolix tests benchmarks
+uv run ruff check hyperbolix tests
 
 # Format with Ruff
-uv run ruff format hyperbolix tests benchmarks
+uv run ruff format hyperbolix tests
 
 # Type check with Pyright
 uv run pyright hyperbolix
@@ -65,38 +65,6 @@ uv run pytest -v
 uv run pytest -x
 ```
 
-### Running Benchmarks
-
-```bash
-# All benchmarks (recommended: use --benchmark-only)
-uv run pytest benchmarks/ --benchmark-only
-
-# Run benchmarks without --benchmark-only (slower, includes test execution)
-uv run pytest benchmarks/
-
-# Specific benchmark file
-uv run pytest benchmarks/bench_manifolds.py --benchmark-only
-
-# Specific test
-uv run pytest benchmarks/ -k "test_poincare_dist_with_jit" --benchmark-only
-
-# Save baseline
-uv run pytest benchmarks/ --benchmark-only --benchmark-save=my-baseline
-
-# Compare to baseline
-uv run pytest benchmarks/ --benchmark-only --benchmark-compare=my-baseline
-
-# Generate histogram
-uv run pytest benchmarks/ --benchmark-only --benchmark-histogram
-
-# Quick run (subset of parameters)
-uv run pytest benchmarks/ --benchmark-only -k "dim10-batch_size100"
-```
-
-**Note**: Benchmark files (`bench_*.py`) are automatically discovered by pytest. The `--benchmark-only` flag is recommended to skip test execution and only measure performance.
-
-See `benchmarks/README.md` for detailed benchmarking guide.
-
 ## CI/CD Pipeline
 
 The CI pipeline runs automatically on push and pull requests:
@@ -106,25 +74,18 @@ The CI pipeline runs automatically on push and pull requests:
 1. **Lint** - Ruff linting and formatting checks
 2. **Type Check** - Pyright static type analysis
 3. **Test** - Pytest tests (parallelized across test suites)
-4. **Benchmark** - Performance regression detection
 
 ### Viewing Results
 
-- **Benchmarks**: Artifacts available in GitHub Actions run
 - **All checks**: Must pass before merging
 
 ### CI Caching
 
-The pipeline caches:
-
-- `uv` dependencies (speeds up installation)
-- Benchmark baselines (for performance comparison)
-
-Cache keys are based on:
+The pipeline caches `uv` dependencies (speeds up installation). Cache keys are
+based on:
 
 - `uv.lock` file hash
 - OS and Python version
-- Branch name (for benchmarks)
 
 ## Common Tasks
 
@@ -246,18 +207,6 @@ distances = dist_fn(x_batch, y_batch, c)
 # ❌ Bad: JIT inside loop (recompiles every time)
 for x, y in zip(x_batch, y_batch):
     dist = jax.jit(manifold.dist)(x, y, c)  # Don't do this!
-```
-
-### Benchmark Before Optimizing
-
-```bash
-# Save current performance
-uv run pytest benchmarks/ --benchmark-only --benchmark-save=before
-
-# Make changes...
-
-# Compare
-uv run pytest benchmarks/ --benchmark-only --benchmark-compare=before
 ```
 
 ## Extending Hyperbolix
@@ -385,19 +334,6 @@ uv lock --check
 cat .python-version
 ```
 
-### Benchmark Results Are Noisy
-
-```bash
-# Increase warmup rounds
-uv run pytest benchmarks/ --benchmark-only --benchmark-warmup=on
-
-# Increase number of rounds
-uv run pytest benchmarks/ --benchmark-only --benchmark-min-rounds=10
-
-# Disable garbage collection during benchmarks
-uv run pytest benchmarks/ --benchmark-only --benchmark-disable-gc
-```
-
 ### Out of Memory During Tests
 
 ```bash
@@ -440,5 +376,4 @@ git push
 - **CI Pipeline**: `.github/workflows/ci.yaml`
 - **Pyright Config**: `pyproject.toml` → `[tool.pyright]`
 - **Pre-commit Config**: `.pre-commit-config.yaml`
-- **Benchmark Guide**: `benchmarks/README.md`
 - **User Documentation**: `docs/` (built with `uv run mkdocs serve`)
