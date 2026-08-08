@@ -16,6 +16,9 @@ Dimension key:
 
 from __future__ import annotations
 
+import decimal
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -641,3 +644,665 @@ def test_pv_to_poincare_jacobian_matches_central_differences(c: float):
     # Non-trivial map: the Jacobian is not a scaled identity at a generic off-axis point.
     off_diagonal = jacobian - np.diag(np.diag(jacobian))
     assert np.max(np.abs(off_diagonal)) > 1e-3
+
+
+# =============================================================================================
+# M1-15 — Hyperboloid ambient-chart stability: 250-digit Decimal oracles for dist / logmap
+#
+# Every ambient formula built on ``⟨x, y⟩_L = -x₀y₀ + ⟨x_s, y_s⟩`` subtracts two positive numbers
+# of size ``e^(a+b)/(4c)`` to obtain ``cosh(θ)/c``, where ``a = √c·d₀(x)``, ``b = √c·d₀(y)`` and
+# ``θ = √c·d(x, y)``. The surviving significand shrinks by ``e^(a + b - θ)`` — twice the Gromov
+# product — so all precision is gone past ``ln(1/eps)``: 15.9 in float32, 36.0 in float64.
+# The pre-fix ``dist`` returned 0.0015 for a true distance of 1.0 at radius 10 in float32, and
+# ``logmap`` returned NaN from radius ~10 (f32) / ~20 (f64).
+#
+# Unlike the rest of this file these oracles run in BOTH dtypes: the whole point is how the error
+# grows with the radius, and that is dtype-specific.
+#
+# The reference is a pure-stdlib ``decimal`` computation of ``d = arcosh(-c⟨x, y⟩_L)/√c`` and
+# ``log_x(y) = (θ/sinh θ)·(y - cosh(θ)·x)`` at a precision chosen so the cancellation cannot
+# reach the result. Three construction rules matter, and violating any of them measures input
+# rounding instead of algorithm error:
+#
+#   1. the SPATIAL parts are float arrays (in the dtype under test) and the time coordinate is
+#      derived from them IN Decimal, so the oracle's point is exactly on the manifold;
+#   2. the shared direction ``e1`` has all components equal, so two points on the same ray
+#      normalize to the same unit vector and the angle between them is exactly 0;
+#   3. tolerances carry an explicit input-resolution term (see ``_hyperboloid_input_resolution``)
+#      — one ulp of an ambient coordinate is worth a finite amount of geodesic length, and no
+#      implementation reading only the ambient coordinates can beat it.
+# =============================================================================================
+
+_HYP_RADII = (0.01, 3.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0, 80.0)
+"""``√c·d₀`` of the first point. 80 is the last radius whose ``x₀ = cosh(80)`` fits float32."""
+
+_HYP_CONFIGS = (
+    # ("radial", Δ): second point further out along the SAME ray, √c·d = Δ.
+    ("radial", 1e-6),
+    ("radial", 1e-3),
+    ("radial", 1.0),
+    ("radial", 10.0),
+    # ("angular", ψ): second point at the SAME radius, angle ψ at the origin.
+    ("angular", 1e-3),
+    ("angular", 0.1),
+    ("angular", 1.0),
+    ("angular", np.pi),
+    # both at once
+    ("generic", 0.5),
+)
+
+
+class _HyperboloidCase(NamedTuple):
+    """One (x, y) pair plus its Decimal-oracle truth. See ``_hyperboloid_case``."""
+
+    x_A: jnp.ndarray
+    y_A: jnp.ndarray
+    d_ref: float
+    u_ref_A: np.ndarray  # log_x(y), Decimal oracle cast to float64
+    resolution: float  # absolute geodesic uncertainty implied by one ulp of the inputs
+    label: str
+
+
+def _hyperboloid_basis(dim: int) -> tuple[np.ndarray, np.ndarray]:
+    """Two orthonormal spatial directions; ``e1`` has all components equal.
+
+    That equality is load-bearing for the ``radial`` configurations: ``s1·e1`` and ``s2·e1`` then
+    normalize to the *same* float unit vector for any positive scalars ``s1``, ``s2``, so the angle between the two points is
+    exactly 0 and the pair is genuinely collinear in the dtype under test. With a generic direction
+    the two normalizations differ by ~eps, which at radius 80 is an angular separation large enough
+    to dominate the true radial one — an artifact of the construction, not of the library.
+    """
+    e1 = np.ones(dim) / np.sqrt(dim)
+    e2 = np.zeros(dim)
+    e2[0], e2[1] = 1.0, -1.0
+    e2 /= np.linalg.norm(e2)
+    return e1, e2
+
+
+def _hyperboloid_decimal_oracle(x_s: np.ndarray, y_s: np.ndarray, c: float, prec: int):
+    """``(d, log_x(y))`` in ``prec``-digit decimal arithmetic, from the spatial parts alone.
+
+    The time coordinates are derived here as ``x₀ = sqrt(1/c + Σx_s²)``, so the oracle's points are
+    exactly on the manifold. ``arg = c·(x₀y₀ - ⟨x_s, y_s⟩) = -c⟨x, y⟩_L = cosh θ`` (note the sign),
+    ``θ = ln(arg + sqrt(arg² - 1))``, ``d = θ/√c``, and ``log_x(y) = (θ/sinh θ)·(y - arg·x)``.
+    """
+    with decimal.localcontext() as ctx:
+        ctx.prec = prec
+        c_d = decimal.Decimal(float(c))
+        xs = [decimal.Decimal(float(v)) for v in x_s]
+        ys = [decimal.Decimal(float(v)) for v in y_s]
+        x0 = (1 / c_d + sum(v * v for v in xs)).sqrt()
+        y0 = (1 / c_d + sum(v * v for v in ys)).sqrt()
+        arg = c_d * (x0 * y0 - sum(a * b for a, b in zip(xs, ys, strict=True)))
+        theta = (arg + (arg * arg - 1).sqrt()).ln() if arg > 1 else decimal.Decimal(0)
+        d = theta / c_d.sqrt()
+        if theta == 0:
+            u = [decimal.Decimal(0)] * (len(xs) + 1)
+        else:
+            factor = theta / ((theta.exp() - (-theta).exp()) / 2)
+            u = [factor * (y0 - arg * x0)] + [factor * (b - arg * a) for a, b in zip(xs, ys, strict=True)]
+        return d, u, x0, y0
+
+
+def _hyperboloid_input_resolution(a: float, b: float, c: float, d_ref: float, eps: float) -> float:
+    """Absolute geodesic uncertainty of ``d(x, y)`` implied by one ulp of the ambient inputs.
+
+    Two independent legs, both first-order perturbations of the haversine decomposition
+    ``sinh(θ/2) = hypot(P, q)``:
+
+    * **angular** — the unit directions ``x̂_s``, ``ŷ_s`` are only defined to ~eps per component, so
+      the chord ``‖x̂_s - ŷ_s‖`` carries an absolute error ~eps and ``q = ½√c·√(r_x·r_y)·chord``
+      carries ``q_eps = ½√c·√(r_x·r_y)·eps``. Propagating through ``S² = P² + q²`` gives
+      ``(2·q·q_eps + q_eps²)/(√c·C·S)``. The quadratic term is what dominates for nearly collinear
+      pairs at large radius, where the *fake* eps-angle can exceed the true one.
+    * **radial** — one ulp of the time coordinate ``x₀`` perturbs ``P = sinh((a - b)/2)`` by ~eps/2,
+      worth ``eps/(√c·C)`` of geodesic length.
+
+    This is a property of the ambient chart, not of any implementation: at radius ``a`` an ambient
+    coordinate has an ulp of ``eps·e^a``, and no function of ``(x, y)`` alone can resolve two points
+    closer together than that. Cases where the bound exceeds 10% of the true distance are simply not
+    representable and are skipped.
+    """
+    sqrt_c = np.sqrt(c)
+    half = sqrt_c * d_ref / 2.0
+    if half > 350.0 or d_ref == 0.0:
+        return np.inf
+    sinh_half, cosh_half = np.sinh(half), np.cosh(half)
+    p = np.sinh((a - b) / 2.0)
+    q = np.sqrt(max(sinh_half**2 - p * p, 0.0))
+    r_x, r_y = np.sinh(a) / sqrt_c, np.sinh(b) / sqrt_c
+    q_eps = 0.5 * sqrt_c * np.sqrt(r_x * r_y) * eps
+    angular = (2.0 * q * q_eps + q_eps**2) / (sqrt_c * cosh_half * sinh_half)
+    radial = eps / (sqrt_c * cosh_half)
+    return float(angular + radial)
+
+
+def _hyperboloid_case(a: float, kind: str, param: float, c: float, dim: int, dtype) -> _HyperboloidCase | None:
+    """Build one oracle case, or ``None`` if it is not representable in ``dtype``."""
+    if kind == "radial":
+        b, psi = a + param, 0.0
+    elif kind == "angular":
+        b, psi = a, param
+    else:
+        b, psi = a + 1.0, param
+    if max(a, b) > 88.0:  # cosh(88) overflows float32
+        return None
+
+    e1, e2 = _hyperboloid_basis(dim)
+    sqrt_c = np.sqrt(c)
+    x_s = np.asarray((np.sinh(a) / sqrt_c) * e1, dtype=dtype)
+    direction = e1 if psi == 0.0 else np.cos(psi) * e1 + np.sin(psi) * e2
+    y_s = np.asarray((np.sinh(b) / sqrt_c) * direction, dtype=dtype)
+    if not (np.all(np.isfinite(x_s)) and np.all(np.isfinite(y_s))):
+        return None
+
+    prec = int(4.0 * max(a, b) / np.log(10.0)) + 40
+    d_dec, u_dec, x0, y0 = _hyperboloid_decimal_oracle(x_s, y_s, c, prec)
+    d_ref = float(d_dec)
+    if d_ref == 0.0:
+        return None
+    x_A = np.concatenate([[float(x0)], x_s]).astype(dtype)
+    y_A = np.concatenate([[float(y0)], y_s]).astype(dtype)
+    u_ref_A = np.array([float(v) for v in u_dec])
+    if not (np.all(np.isfinite(x_A)) and np.all(np.isfinite(y_A)) and np.all(np.isfinite(u_ref_A))):
+        return None
+
+    eps = float(np.finfo(dtype).eps)
+    resolution = _hyperboloid_input_resolution(a, b, c, d_ref, eps)
+    label = f"c={c} dim={dim} a={a} {kind}({param:g}) d={d_ref:.6g}"
+    return _HyperboloidCase(jnp.asarray(x_A), jnp.asarray(y_A), d_ref, u_ref_A, resolution, label)
+
+
+def _hyperboloid_cases(c: float, dtype):
+    """Every representable, resolvable case of the (radius x configuration x dim) grid."""
+    for dim in (2, 10):
+        for a in _HYP_RADII:
+            for kind, param in _HYP_CONFIGS:
+                case = _hyperboloid_case(a, kind, param, c, dim, dtype)
+                if case is None or case.resolution > 0.1 * case.d_ref:
+                    continue
+                yield case
+
+
+_HYP_DTYPES = [(jnp.float32, 2e-6), (jnp.float64, 1e-13)]
+_HYP_DTYPE_IDS = ["f32", "f64"]
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_dist_matches_the_decimal_oracle(dtype, rtol: float, c: float):
+    """``dist`` vs a 250-digit reference across radii 0.01 .. 80 and separations 1e-6 .. 2·radius.
+
+    Measured worst case over the grid: 30% of the tolerance below (float64) and 46% (float32), i.e.
+    a factor ~2 of margin. The pre-fix ``acosh(-c⟨x, y⟩_L)`` arm is wrong by 100% on most of this
+    grid past radius 10 — it returns 0 wherever the clipped argument rounds to exactly 1.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    n_checked = 0
+    for case in _hyperboloid_cases(c, dtype):
+        n_checked += 1
+        d = float(manifold.dist(case.x_A, case.y_A, c))
+        tol = rtol * case.d_ref + 4.0 * case.resolution
+        assert abs(d - case.d_ref) <= tol, f"{case.label}: {d} vs {case.d_ref} (tol {tol})"
+    assert n_checked >= 40, f"grid collapsed to {n_checked} cases"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_logmap_matches_the_decimal_oracle(dtype, rtol: float, c: float):
+    """``logmap`` vs the same reference, scaled by ``‖u_ref‖∞``.
+
+    The input-resolution term is weighted 8x more heavily than for ``dist``: the tangent vector is
+    ``d·(cos φ·e_rad + sin φ·e_ang)``, and near a purely radial geodesic ``cos φ ≈ ±1``, so a
+    *relative* perturbation of ``sinh(θ/2)`` lands on ``cos φ`` at full size while it reaches ``d``
+    only after division by ``√c·C·d``. Measured worst case: 37% (float64) / 19% (float32) of tol.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    for case in _hyperboloid_cases(c, dtype):
+        u = np.asarray(manifold.logmap(case.y_A, case.x_A, c), dtype=np.float64)
+        scale = float(np.max(np.abs(case.u_ref_A)))
+        tol = (rtol + 32.0 * case.resolution / case.d_ref) * scale
+        assert np.max(np.abs(u - case.u_ref_A)) <= tol, f"{case.label}: max|u - u_ref| too large"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_logmap_is_tangent_relative_to_its_own_scale(dtype, rtol: float, c: float):
+    """``|⟨u, x⟩_L| / (‖u‖∞·‖x‖∞)`` stays at the rounding floor — a RELATIVE tangency test.
+
+    An absolute ``atol`` on ``⟨u, x⟩_L`` is meaningless here: at radius 30 both ``u`` and ``x`` have
+    ambient components of order 1e13, so a perfectly tangent vector still shows an inner product of
+    order 1e10. No correct implementation passes an absolute test.
+
+    This also pins that :func:`_logmap` does *not* call ``_tangent_proj``: that helper routes
+    through the cancelling ``_minkowski_inner`` and returns NaN here from radius ~10 (float32).
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    tang_rtol = 3e-7 if dtype is jnp.float32 else 5e-15
+    for case in _hyperboloid_cases(c, dtype):
+        u = np.asarray(manifold.logmap(case.y_A, case.x_A, c), dtype=np.float64)
+        x = np.asarray(case.x_A, dtype=np.float64)
+        assert np.all(np.isfinite(u)), f"{case.label}: logmap is not finite"
+        inner = -u[0] * x[0] + float(np.dot(u[1:], x[1:]))
+        relative = abs(inner) / (np.max(np.abs(u)) * np.max(np.abs(x)))
+        tol = tang_rtol + 8.0 * case.resolution / case.d_ref
+        assert relative <= tol, f"{case.label}: relative tangency {relative:.3e} > {tol:.3e}"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_tangent_norm_of_logmap_equals_dist(dtype, rtol: float, c: float):
+    """``‖log_x(y)‖_x == d(x, y)`` wherever the ambient chart can still represent it.
+
+    ``tangent_norm``'s own resolution limit is ``eps·√c·x₀`` *relative* — one power of ``x₀`` worse
+    than ``dist``'s, because a tangent vector's ambient components are ``e^a`` times its Riemannian
+    length, so the radial/angular split it needs is destroyed by input rounding first. Cases past
+    ``eps·√c·x₀ > 0.05`` (radius ~28 in float64, ~13 in float32) are therefore skipped: they are
+    not representable, not wrong. Within the representable range the measured worst case is 30%
+    (float64) / 45% (float32) of the tolerance.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    eps = float(np.finfo(dtype).eps)
+    n_checked = 0
+    for case in _hyperboloid_cases(c, dtype):
+        chart_limit = eps * np.sqrt(c) * float(case.x_A[0])
+        if chart_limit > 0.05:
+            continue
+        n_checked += 1
+        u = manifold.logmap(case.y_A, case.x_A, c)
+        norm = float(manifold.tangent_norm(u, case.x_A, c))
+        tol = rtol * case.d_ref + 4.0 * case.resolution + 4.0 * chart_limit * case.d_ref
+        assert abs(norm - case.d_ref) <= tol, f"{case.label}: ‖log‖ = {norm} vs d = {case.d_ref}"
+    assert n_checked >= 20, f"grid collapsed to {n_checked} cases"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_sqdist_matches_the_oracle_closed_form(dtype, rtol: float, c: float):
+    """``d_L² = (2/c)·(cosh(√c·d) - 1)`` with ``d`` from the Decimal oracle (Law et al. 2019).
+
+    Restricted to ``√c·d < 30`` so the closed form itself does not overflow; the point is the
+    *identity*, and the cancellation being tested lives at every scale.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    for case in _hyperboloid_cases(c, dtype):
+        theta = np.sqrt(c) * case.d_ref
+        if theta > 30.0:
+            continue
+        # 4·sinh²(θ/2)/c, not (2/c)(cosh θ - 1): the latter cancels for small θ (at θ = 1e-6 it
+        # loses 12 digits) and would measure the reference's rounding, not the library's.
+        expected = 4.0 * np.sinh(theta / 2.0) ** 2 / c
+        got = float(manifold.sqdist(case.x_A, case.y_A, c))
+        # d_L² = 4·S²/c, so its relative error is twice that of S = sinh(θ/2). Converting the
+        # distance tolerance into an S tolerance costs a factor C/S = coth(θ/2): the same input
+        # resolution buys a much tighter distance than it does a squared Lorentzian distance.
+        sinh_half, cosh_half = np.sinh(theta / 2.0), np.cosh(theta / 2.0)
+        rel = (rtol * case.d_ref + 4.0 * case.resolution) * np.sqrt(c) * cosh_half / sinh_half
+        rel_floor = 16.0 * float(np.finfo(dtype).eps)  # plain rounding of the squaring itself
+        assert got == pytest.approx(expected, rel=4.0 * rel + rel_floor, abs=1e-300)
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_dist_is_bitwise_symmetric(dtype, rtol: float, c: float):
+    """``d(x, y) == d(y, x)`` to the bit, on every grid case.
+
+    The haversine form is symmetric by construction only if the two arguments enter symmetrically:
+    ``P`` flips sign (and ``S = |hypot(P, q)|`` does not), ``chord`` and ``√r_x·√r_y`` are
+    symmetric. A one-sided floor or a ``x₀/r_x`` factor leaking into the distance would break it.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    for case in _hyperboloid_cases(c, dtype):
+        forward = np.asarray(manifold.dist(case.x_A, case.y_A, c))
+        backward = np.asarray(manifold.dist(case.y_A, case.x_A, c))
+        assert np.array_equal(forward, backward), case.label
+
+
+# ---------------------------------------------------------------------------------------------
+# Configurations with an analytic answer — no oracle needed, so nothing can be circular.
+# ---------------------------------------------------------------------------------------------
+
+
+def _hyperboloid_point(a: float, c: float, direction: np.ndarray, dtype) -> jnp.ndarray:
+    """Point at geodesic radius ``a/√c`` along the unit spatial ``direction``."""
+    sqrt_c = np.sqrt(c)
+    return jnp.asarray(np.concatenate([[np.cosh(a) / sqrt_c], (np.sinh(a) / sqrt_c) * direction]).astype(dtype))
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("a", [0.5, 5.0, 20.0, 45.0])
+def test_hyperboloid_dist_on_a_shared_ray_is_the_radius_difference(dtype, rtol: float, c: float, a: float):
+    """ψ = 0: ``d = |a - b|/√c`` exactly, at every radius. ψ = π: ``d = (a + b)/√c``.
+
+    Both are one-dimensional facts about the geodesic through the origin, so they need no oracle at
+    all — and they are precisely the configurations the cancelling ``acosh`` form gets worst, since
+    the Gromov product ``a + b - θ`` equals ``2·min(a, b)`` on a shared ray.
+    """
+    e1, _ = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=dtype)
+    b = a + 1.5
+    same_ray = float(manifold.dist(_hyperboloid_point(a, c, e1, dtype), _hyperboloid_point(b, c, e1, dtype), c))
+    assert same_ray == pytest.approx(1.5 / np.sqrt(c), rel=max(rtol, 1e-6))
+
+    opposite = float(manifold.dist(_hyperboloid_point(a, c, e1, dtype), _hyperboloid_point(b, c, -e1, dtype), c))
+    assert opposite == pytest.approx((a + b) / np.sqrt(c), rel=max(rtol, 1e-6))
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("a", [0.5, 5.0, 20.0, 45.0])
+def test_hyperboloid_dist_and_logmap_to_the_origin_match_the_origin_variants(dtype, rtol: float, c: float, a: float):
+    """``dist(x, origin) == dist_0(x)`` and ``logmap(origin, x) == d·e_rad``.
+
+    ``dist_0``/``logmap_0`` read the geodesic radius straight off ``x₀`` and have no cancellation to
+    lose, so they are an independent reference for the general two-point code path. The log map to
+    the origin must be exactly the inward unit radial direction scaled by the distance.
+    """
+    e1, _ = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=dtype)
+    x_A = _hyperboloid_point(a, c, e1, dtype)
+    origin_A = manifold.create_origin(c, 4)
+
+    d = float(manifold.dist(x_A, origin_A, c))
+    assert d == pytest.approx(float(manifold.dist_0(x_A, c)), rel=max(rtol, 1e-6))
+    assert d == pytest.approx(a / np.sqrt(c), rel=max(rtol, 1e-6))
+
+    sqrt_c = np.sqrt(c)
+    e_rad_A = -sqrt_c * np.concatenate([[np.sinh(a) / sqrt_c], (np.cosh(a) / sqrt_c) * e1])
+    u = np.asarray(manifold.logmap(origin_A, x_A, c), dtype=np.float64)
+    assert np.allclose(u, d * e_rad_A, rtol=max(rtol, 1e-6) * 10.0, atol=0.0)
+
+    # ...and the reverse direction falls back to logmap_0, which is exact at the origin.
+    u0 = np.asarray(manifold.logmap(x_A, origin_A, c), dtype=np.float64)
+    assert np.allclose(u0, np.asarray(manifold.logmap_0(x_A, c), dtype=np.float64), rtol=1e-12, atol=0.0)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("a", [5.0, 30.0])
+def test_hyperboloid_dist_is_exactly_zero_with_an_exactly_zero_gradient_at_coincidence(dtype, a: float):
+    """``d(x, x) == 0`` and ``∇d(x, x) == 0`` bit for bit, at any radius.
+
+    The haversine form gets this for free — ``P`` and ``chord`` are both exactly 0 — so the
+    ``where(x == y, 0.0, ...)`` guard the ``acosh`` arm needs is gone. That guard only ever fixed
+    the *forward* value; the gradient still had to survive ``acosh'`` near its pole.
+    """
+    e1, _ = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=dtype)
+    c = 1.3
+    x_A = _hyperboloid_point(a, c, e1, dtype)
+
+    assert float(manifold.dist(x_A, x_A, c)) == 0.0
+    assert float(manifold.sqdist(x_A, x_A, c)) == 0.0
+    grad = np.asarray(jax.grad(lambda p: manifold.dist(p, x_A, c))(x_A))
+    assert np.all(grad == 0.0), grad
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_dist_gradient_at_the_origin_is_the_inward_unit_direction(dtype, c: float):
+    """At ``x`` = origin, ``∇_{x_s} d(x, y) = -ŷ_s`` with ``|∇| = 1``.
+
+    This is the test that pins the ``MIN_NORM`` *floor* on the spatial radius (rather than an
+    exact-zero ``where``): at the origin ``q ∝ √MIN_NORM`` while ``∂chord/∂x_s ∝ 1/MIN_NORM``, and
+    ``∂S/∂q = q/S`` restores the last ``√MIN_NORM``. The floors cancel exactly and the gradient is
+    floor-independent. An exact-zero guard would return 0 here and freeze every parameter
+    initialized at the origin.
+    """
+    e1, _ = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=dtype)
+    origin_A = manifold.create_origin(c, 4)
+    y_A = _hyperboloid_point(2.0, c, e1, dtype)
+
+    grad = np.asarray(jax.grad(lambda p: manifold.dist(p, y_A, c))(origin_A), dtype=np.float64)
+
+    assert np.all(np.isfinite(grad))
+    assert np.allclose(grad[1:], -e1, rtol=1e-5, atol=1e-6)
+    assert float(np.linalg.norm(grad[1:])) == pytest.approx(1.0, rel=1e-5)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("a", [2.0, 8.0, 10.0, 30.0, 45.0])
+def test_hyperboloid_dist_and_logmap_derivatives_stay_finite_and_bounded(dtype, a: float):
+    """``|∇_x d|∞ ≤ 1`` and a finite ``logmap`` Jacobian, out to radius 45 in both dtypes.
+
+    The distance is 1-Lipschitz in the Riemannian metric; in the ambient chart the metric only
+    contracts, so the ambient gradient can never exceed 1 in magnitude. A NaN or an exploding
+    entry here is the signature of the old ``acosh``/``_minkowski_inner`` path, which returns NaN
+    gradients from radius ~10 in float32.
+    """
+    e1, e2 = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=dtype)
+    c = 1.0
+    x_A = _hyperboloid_point(a, c, e1, dtype)
+    y_A = _hyperboloid_point(a, c, np.cos(0.3) * e1 + np.sin(0.3) * e2, dtype)
+
+    grad = np.asarray(jax.grad(lambda p: manifold.dist(p, y_A, c))(x_A), dtype=np.float64)
+    assert np.all(np.isfinite(grad))
+    assert np.max(np.abs(grad)) <= 1.0 + 1e-5
+
+    jac = jax.jacobian(lambda p: manifold.logmap(y_A, p, c))(x_A)
+    assert bool(jnp.all(jnp.isfinite(jac))), f"logmap Jacobian is not finite at radius {a}"
+    jac_y = jax.jacobian(lambda p: manifold.logmap(p, x_A, c))(y_A)
+    assert bool(jnp.all(jnp.isfinite(jac_y)))
+
+
+@pytest.mark.parametrize("a", [1.0, 4.0, 8.0])
+def test_hyperboloid_dist_gradient_agrees_between_float32_and_float64(a: float):
+    """The float32 gradient tracks the float64 one where float32 can still represent the geometry."""
+    e1, e2 = _hyperboloid_basis(4)
+    c = 1.0
+    y_dir = np.cos(0.7) * e1 + np.sin(0.7) * e2
+
+    grads = {}
+    for dtype in (jnp.float32, jnp.float64):
+        manifold = Hyperboloid(dtype=dtype)
+        x_A = _hyperboloid_point(a, c, e1, dtype)
+        y_A = _hyperboloid_point(a + 0.5, c, y_dir, dtype)
+        grads[dtype] = np.asarray(jax.grad(lambda p, m=manifold, y=y_A: m.dist(p, y, c))(x_A), dtype=np.float64)
+
+    scale = np.max(np.abs(grads[jnp.float64]))
+    assert np.max(np.abs(grads[jnp.float32] - grads[jnp.float64])) <= 2e-5 * scale
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_stable_and_legacy_arms_agree_in_the_legacy_regime(c: float):
+    """version_idx 0/1 (stable) == 2/3 (legacy acosh) while ``√c·d₀ < 2.5``.
+
+    The cap is essential and one-sided: below it the cancellation in ``⟨x, y⟩_L`` has not yet eaten
+    the significand, so the two arms must agree to near machine precision. Above it the *legacy*
+    arm is the one drifting, which is the whole reason for the rewrite — comparing there would pin
+    the bug rather than the fix.
+    """
+    e1, e2 = _hyperboloid_basis(5)
+    manifold = Hyperboloid(dtype=jnp.float64)
+    for a in (0.05, 0.8, 1.7, 2.4):
+        for psi in (0.0, 0.3, 1.2, np.pi):
+            for b in (a, min(a + 0.6, 2.5)):
+                x_A = _hyperboloid_point(a, c, e1, jnp.float64)
+                y_A = _hyperboloid_point(b, c, np.cos(psi) * e1 + np.sin(psi) * e2, jnp.float64)
+                if a == b and psi == 0.0:
+                    continue  # coincident: both arms return exactly 0
+                stable = float(manifold.dist(x_A, y_A, c, version_idx=0))
+                legacy = float(manifold.dist(x_A, y_A, c, version_idx=2))
+                assert stable == pytest.approx(legacy, rel=1e-11), f"a={a} b={b} psi={psi}"
+                # The smoothened pair agrees too, above their (different) positive floors.
+                stable_s = float(manifold.dist(x_A, y_A, c, version_idx=1))
+                assert stable_s == pytest.approx(stable, rel=1e-11, abs=1e-13)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+def test_hyperboloid_smoothened_arm_has_a_strictly_positive_floor(dtype):
+    """version_idx 1 never returns 0, and equals the plain arm everywhere above its floor.
+
+    The floor is ``2·arcsinh(10·eps)/√c``: 2.4e-6 in float32, 4.4e-15 in float64. It is applied in
+    quadrature (``hypot(S, ε)``), not through ``smooth_clamp_min``, whose ``log(2)/β`` softplus
+    remainder would shift *every* distance in the working range by ~0.028.
+    """
+    e1, e2 = _hyperboloid_basis(3)
+    manifold = Hyperboloid(dtype=dtype)
+    c = 1.0
+    x_A = _hyperboloid_point(2.0, c, e1, dtype)
+
+    floor = float(manifold.dist(x_A, x_A, c, version_idx=1))
+    expected_floor = 2.0 * np.arcsinh(10.0 * float(jnp.finfo(dtype).eps))
+    assert floor > 0.0
+    assert floor == pytest.approx(expected_floor, rel=1e-5)
+
+    y_A = _hyperboloid_point(2.0, c, np.cos(0.4) * e1 + np.sin(0.4) * e2, dtype)
+    assert float(manifold.dist(x_A, y_A, c, version_idx=1)) == pytest.approx(
+        float(manifold.dist(x_A, y_A, c, version_idx=0)), rel=1e-6
+    )
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+def test_hyperboloid_dist_obeys_the_triangle_inequality_at_radius_30(dtype):
+    """Random triples deep in the formerly-broken regime still satisfy ``d(x,z) ≤ d(x,y) + d(y,z)``.
+
+    At radius 30 the pre-fix float32 ``dist`` returned 0 for most pairs, which passes the triangle
+    inequality vacuously — so this is paired with a check that the distances are not degenerate.
+    """
+    rng = np.random.default_rng(0)
+    manifold = Hyperboloid(dtype=dtype)
+    c = 1.0
+    for _ in range(20):
+        pts = []
+        for _ in range(3):
+            direction = rng.normal(size=4)
+            direction /= np.linalg.norm(direction)
+            pts.append(_hyperboloid_point(30.0, c, direction, dtype))
+        d_xy = float(manifold.dist(pts[0], pts[1], c))
+        d_yz = float(manifold.dist(pts[1], pts[2], c))
+        d_xz = float(manifold.dist(pts[0], pts[2], c))
+        assert d_xz <= d_xy + d_yz + 1e-4 * max(1.0, d_xz)
+        assert d_xy > 1.0, "distances collapsed — the regime is not being exercised"
+
+
+def test_hyperboloid_dist_matches_the_oracle_at_tiny_curvature():
+    """c = 1e-6: the ``√c`` factors are 1e-3 apart from 1, which a c-independent bug hides.
+
+    ``√c·d₀ = 10`` here means a *geodesic* radius of 1e4 and a spatial radius of ~1.1e7 — the one
+    corner of the parameter space where the ``1/√c`` scaling and the exponential growth pull in
+    opposite directions.
+    """
+    c = 1e-6
+    case = _hyperboloid_case(10.0, "angular", 0.3, c, 4, np.float64)
+    assert case is not None
+    manifold = Hyperboloid(dtype=jnp.float64)
+    d = float(manifold.dist(case.x_A, case.y_A, c))
+    assert abs(d - case.d_ref) <= 1e-13 * case.d_ref + 4.0 * case.resolution
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+def test_hyperboloid_dist_and_logmap_are_jit_and_vmap_clean(dtype):
+    """Jitted == eager for the new arms, and a vmapped call equals the Python loop.
+
+    ``version_idx`` is static, so the switch must be resolved at trace time; the frame is a
+    ``NamedTuple`` (a pytree), which is what keeps it traceable at all.
+    """
+    e1, e2 = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=dtype)
+    c = 1.0
+    xs = jnp.stack([_hyperboloid_point(a, c, e1, dtype) for a in (0.5, 5.0, 12.0)])
+    ys = jnp.stack([_hyperboloid_point(a + 0.3, c, np.cos(0.4) * e1 + np.sin(0.4) * e2, dtype) for a in (0.5, 5.0, 12.0)])
+
+    for version_idx in (0, 1):
+        eager = np.array([float(manifold.dist(x, y, c, version_idx=version_idx)) for x, y in zip(xs, ys, strict=True)])
+        jitted = jax.jit(manifold.dist, static_argnames=["version_idx"])
+        assert np.array_equal(
+            np.array([float(jitted(x, y, c, version_idx=version_idx)) for x, y in zip(xs, ys, strict=True)]), eager
+        )
+        batched = jax.vmap(manifold.dist, in_axes=(0, 0, None, None))(xs, ys, c, version_idx)
+        assert np.array_equal(np.asarray(batched, dtype=np.float64), eager)
+
+    logs_eager = np.stack([np.asarray(manifold.logmap(y, x, c)) for x, y in zip(xs, ys, strict=True)])
+    logs_vmap = np.asarray(jax.vmap(manifold.logmap, in_axes=(0, 0, None))(ys, xs, c))
+    assert np.allclose(logs_vmap, logs_eager, rtol=1e-6, atol=0.0)
+    assert np.allclose(np.asarray(jax.jit(manifold.logmap)(ys[0], xs[0], c)), logs_eager[0], rtol=1e-6, atol=0.0)
+
+
+def test_hyperboloid_dist_survives_the_last_representable_float32_radius():
+    """Radius 85 (``x₀ = 4.1e36``, one step below float32's 3.4e38 ceiling) computes cleanly.
+
+    The intermediate ``√u_x·√u_y`` is 8e36 here, while the "simplification" ``√(u_x·u_y)`` would
+    need 6.4e73 and overflow. Beyond representability (``x₀`` already inf) the result must be inf,
+    never NaN — an inf stays visible, a NaN poisons every parameter it reaches.
+    """
+    e1, e2 = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=jnp.float32)
+    c = 1.0
+    x_A = _hyperboloid_point(85.0, c, e1, jnp.float32)
+    y_A = _hyperboloid_point(84.0, c, np.cos(0.5) * e1 + np.sin(0.5) * e2, jnp.float32)
+    assert np.isfinite(float(x_A[0])) and float(x_A[0]) > 1e36
+
+    d = float(manifold.dist(x_A, y_A, c))
+    assert np.isfinite(d)
+    assert d == pytest.approx(85.0 + 84.0 - 2.0 * np.log(1.0 / np.sin(0.25)), rel=1e-3)
+
+    overflowed_A = x_A.at[0].set(jnp.inf)
+    d_inf = float(manifold.dist(overflowed_A, y_A, c))
+    assert np.isinf(d_inf), f"expected inf for an unrepresentable point, got {d_inf}"
+
+
+# ---------------------------------------------------------------------------------------------
+# tangent_norm: the ambient Minkowski norm is wrong by 100% on unit tangent vectors at radius 10.
+# ---------------------------------------------------------------------------------------------
+
+
+def _ambient_lorentz_norm(v: np.ndarray) -> float:
+    """The pre-fix body: ``sqrt(clip(-v₀² + ‖v_s‖², 0) + MIN_NORM²)``, which ignores ``x`` entirely."""
+    return float(np.sqrt(max(-(v[0] ** 2) + float(np.dot(v[1:], v[1:])), 0.0) + 1e-15**2))
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("a", [0.5, 4.0, 8.0, 12.0])
+def test_hyperboloid_tangent_norm_is_one_on_exactly_unit_tangent_vectors(dtype, c: float, a: float):
+    """``‖e_rad‖_x = ‖e_ang‖_x = ‖(e_rad + e_ang)/√2‖_x = 1``, built analytically.
+
+    The frame vectors are unit by construction (``⟨e_rad, e_rad⟩_L = c·(x₀² - r_x²) = 1``), so this
+    needs no oracle. Eliminating ``v₀`` through the tangency condition costs one power of ``x₀`` in
+    the error instead of two, which is the entire fix.
+    """
+    e1, e2 = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=dtype)
+    sqrt_c = np.sqrt(c)
+    x_A = _hyperboloid_point(a, c, e1, dtype)
+    e_rad = -sqrt_c * np.concatenate([[np.sinh(a) / sqrt_c], (np.cosh(a) / sqrt_c) * e1])
+    e_ang = np.concatenate([[0.0], e2])
+
+    tol = 1e-4 if dtype is jnp.float32 else 1e-9
+    for v_np in (e_rad, e_ang, (e_rad + e_ang) / np.sqrt(2.0)):
+        v = jnp.asarray(v_np.astype(dtype))
+        assert float(manifold.tangent_norm(v, x_A, c)) == pytest.approx(1.0, abs=tol)
+
+
+def test_hyperboloid_tangent_norm_beats_the_ambient_minkowski_form_at_large_radius():
+    """Regression pin: at radius 20 the ambient form collapses to the ``MIN_NORM`` floor.
+
+    ``-v₀² + ‖v_s‖²`` subtracts two numbers of size ``(√c·x₀)² = 2.4e16`` to get 1, so in float64
+    the difference is pure rounding — it clips to 0 and the old ``+ MIN_NORM²`` floor returns 1e-15
+    for a vector whose true norm is exactly 1. The base-point form returns 1.
+    """
+    e1, _ = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=jnp.float64)
+    c, a = 1.0, 20.0
+    x_A = _hyperboloid_point(a, c, e1, jnp.float64)
+    e_rad = -np.concatenate([[np.sinh(a)], np.cosh(a) * e1])
+
+    assert float(manifold.tangent_norm(jnp.asarray(e_rad), x_A, c)) == pytest.approx(1.0, abs=1e-9)
+    assert _ambient_lorentz_norm(e_rad) < 1e-3, "the ambient form no longer fails — pin is stale"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+def test_hyperboloid_tangent_norm_is_zero_with_a_finite_gradient_at_the_zero_vector(dtype):
+    """``‖0‖_x == 0`` exactly, with a finite (zero) gradient — no ``MIN_NORM²`` floor needed."""
+    e1, _ = _hyperboloid_basis(4)
+    manifold = Hyperboloid(dtype=dtype)
+    c = 1.0
+    x_A = _hyperboloid_point(3.0, c, e1, dtype)
+    zero = jnp.zeros_like(x_A)
+
+    assert float(manifold.tangent_norm(zero, x_A, c)) == 0.0
+    grad = np.asarray(jax.grad(lambda v: manifold.tangent_norm(v, x_A, c))(zero))
+    assert np.all(np.isfinite(grad))
