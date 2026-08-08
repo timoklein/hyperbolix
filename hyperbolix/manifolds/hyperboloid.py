@@ -33,8 +33,16 @@ Use jax.vmap for batching and jax.jit for compilation:
     >>> distance = dist_jit(x, y, c=1.0, version_idx=VERSION_DEFAULT)
 
 Version Constants:
-    VERSION_DEFAULT (0): Standard acosh distance with hard clipping
-    VERSION_SMOOTHENED (1): Smoothened distance with soft clamping
+    VERSION_DEFAULT (0): Cancellation-free hyperbolic-haversine distance (hard floor at 0).
+        Accurate at any representable radius — see the numerical-stability guide.
+    VERSION_SMOOTHENED (1): Hyperbolic-haversine distance with a strictly-positive floor
+        (soft clamping), same cancellation-free evaluation as VERSION_DEFAULT.
+    VERSION_LEGACY (2): Pre-fix acosh-based distance with hard clipping, reproduced
+        bit-for-bit for reproducibility. Routes through the Minkowski inner product and loses
+        all precision once √c·(d₀(x) + d₀(y) - d(x, y)) exceeds ln(1/eps) — 15.9 (float32) /
+        36.0 (float64). Use only to match results computed before this fix.
+    VERSION_LEGACY_SMOOTHENED (3): VERSION_LEGACY with soft clamping. Same precision loss
+        past the threshold above.
 
 Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
@@ -65,6 +73,8 @@ from .protocol import Curvature
 # Version selection constants for _dist() and _dist_0()
 VERSION_DEFAULT = 0
 VERSION_SMOOTHENED = 1
+VERSION_LEGACY = 2
+VERSION_LEGACY_SMOOTHENED = 3
 
 
 def _create_origin(c: Curvature, dim: int, dtype=jnp.float32) -> Float[Array, "dim_plus_1"]:
@@ -1220,6 +1230,8 @@ class Hyperboloid(ManifoldBase):
 
     VERSION_DEFAULT = VERSION_DEFAULT
     VERSION_SMOOTHENED = VERSION_SMOOTHENED
+    VERSION_LEGACY = VERSION_LEGACY
+    VERSION_LEGACY_SMOOTHENED = VERSION_LEGACY_SMOOTHENED
 
     def create_origin(self, c: Curvature, dim: int) -> Float[Array, "dim_plus_1"]:
         """Create hyperboloid origin [1/√c, 0, ..., 0]."""
@@ -1271,6 +1283,11 @@ class Hyperboloid(ManifoldBase):
 
     def sqdist(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
         """Squared Lorentzian distance ``d_L²(x, y) = -2/c - 2⟨x,y⟩_L`` (Law et al. 2019).
+
+        That is the mathematical definition; it is now evaluated cancellation-free as
+        ``d_L² = 4·sinh²(√c·d(x,y)/2)/c`` off the :func:`_polar_frame` decomposition instead of the
+        literal subtraction, which loses precision the same way :func:`_dist_legacy` does (see
+        :func:`_sqdist`'s docstring for the full derivation).
 
         A fast, ``acosh``-free dissimilarity that is monotone in the geodesic :meth:`dist`
         (``d_L² = (2/c)(cosh(√c·d) - 1)``) but is **not** the squared geodesic distance and **not**
