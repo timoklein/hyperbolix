@@ -120,6 +120,20 @@ A single constant-curvature manifold spanning **hyperbolic, Euclidean, and spher
 
 The hyperboloid (Lorentz) model with Minkowski geometry.
 
+!!! note "Distance Versions"
+    The Hyperboloid `dist` method has a `version_idx` parameter selecting between 4 formulations:
+
+    - `VERSION_DEFAULT` (0): cancellation-free hyperbolic-haversine distance (default, accurate at
+      any representable radius)
+    - `VERSION_SMOOTHENED` (1): same evaluation, with a strictly-positive floor at coincidence
+    - `VERSION_LEGACY` (2): pre-fix acosh-based distance, reproduced bit-for-bit
+    - `VERSION_LEGACY_SMOOTHENED` (3): `VERSION_LEGACY` with soft clamping
+
+    Constants are available as `hyperboloid.VERSION_DEFAULT` etc., or from
+    `hyperbolix.manifolds.hyperboloid`. See the [numerical-stability guide](
+    ../user-guide/numerical-stability.md#hyperboloid-distance-versions) for when to use each and
+    the cancellation failure mode `VERSION_DEFAULT` fixes.
+
 !!! note "Lorentz Operations"
     The Hyperboloid class includes specialized operations for convolutional layers:
 
