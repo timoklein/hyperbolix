@@ -32,7 +32,7 @@ import numpy as np
 import pytest
 
 from hyperbolix.manifolds.euclidean import Euclidean
-from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT, Hyperboloid
+from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT, VERSION_LEGACY, Hyperboloid
 from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT, Poincare
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
 
@@ -123,6 +123,21 @@ CASES = [
         make=lambda dtype: Hyperboloid(dtype=dtype),
         c=1.0,
         version_idx=VERSION_DEFAULT,
+        x_raw=[1.0, 0.1, 0.2],
+        y_raw=[1.0, 0.3, 0.4],
+        x2_raw=[1.0, 0.15, 0.25],
+        y2_raw=[1.0, 0.35, 0.45],
+        v_raw=[0.0, 0.05, 0.05],
+        oracle=_oracle_hyperboloid,
+    ),
+    ManifoldCase(
+        # Same points as the "Hyperboloid" case above, bound to VERSION_LEGACY instead of
+        # VERSION_DEFAULT: the acosh-based oracle is exact at these small radii for both arms,
+        # so this pins the legacy switch slot against the same independent oracle.
+        name="HyperboloidLegacy",
+        make=lambda dtype: Hyperboloid(dtype=dtype),
+        c=1.0,
+        version_idx=VERSION_LEGACY,
         x_raw=[1.0, 0.1, 0.2],
         y_raw=[1.0, 0.3, 0.4],
         x2_raw=[1.0, 0.15, 0.25],

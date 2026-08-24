@@ -172,6 +172,110 @@ def smooth_clamp(
 
 
 @jax.jit
+def safe_norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
+    """Euclidean norm over the last axis, computed max-scaled. Domain=R^n, Range=[0, inf).
+
+    Divides by ``max|v|`` before squaring, so the sum of squares always sits in ``[1, n]`` no
+    matter how large or small ``v`` is. That is what the library's older
+    ``sqrt(sum(v**2) + MIN_NORM**2)`` idiom cannot do, in *both* directions:
+
+    * **Overflow**: ``sum(v**2)`` overflows float32 once ``|v| > 1.8e19`` — reached by the spatial
+      part of a hyperboloid point at radius 44 (``sinh(44) = 1.6e18`` … radius 45 already squares
+      past ``3.4e38``), while the norm itself, ``1.6e18``, is perfectly representable.
+    * **Underflow**: the ``+ MIN_NORM**2 = 1e-30`` floor *dominates* any genuinely small vector.
+      A float32 chord of ``1e-34`` (a legitimate angular separation between two nearly parallel
+      unit vectors) comes back as ``1e-15``, i.e. 19 orders of magnitude too large.
+
+    The scale is wrapped in ``stop_gradient``, which makes the VJP exactly ``v/‖v‖`` — the analytic
+    derivative, with no contribution from differentiating the scaling itself.
+
+    At ``v == 0`` the result is exactly ``0`` and the VJP is exactly ``0`` (the derivative does not
+    exist there; zero is the finite, direction-free choice). Both need the **double** ``where``
+    below: sanitizing only the output leaves ``sqrt(0)``'s infinite derivative inside the VJP,
+    where it meets the outer ``where``'s zero cotangent as ``0 * inf = NaN``. The first ``where``
+    replaces the *argument* of the ``sqrt`` so the infinite derivative is never created.
+
+    Non-finite inputs are passed through rather than turned into NaN: a vector holding an ``inf``
+    returns ``inf``. Callers use that to keep an out-of-range point visibly degenerate instead of
+    silently NaN-poisoning everything downstream.
+
+    Args:
+        v: Input array, norm taken over the last axis
+
+    Returns:
+        ``‖v‖₂`` over the last axis, shape ``v.shape[:-1]``
+    """
+    scale = jax.lax.stop_gradient(jnp.max(jnp.abs(v), axis=-1))
+    is_zero = scale == 0.0
+    # Divide by 1 (not by the scale) in the degenerate cases: 0 would give 0/0, inf would give
+    # inf/inf. With divisor 1 the inf case flows through as sum(v**2) = inf -> inf.
+    divisor = jnp.where((scale > 0.0) & jnp.isfinite(scale), scale, jnp.ones_like(scale))
+    sq = jnp.sum((v / divisor[..., None]) ** 2, axis=-1)
+    # Double-where, first half: sqrt'(0) = inf would become 0*inf = NaN in the VJP below.
+    sq_safe = jnp.where(is_zero, jnp.ones_like(sq), sq)
+    # Double-where, second half: exact 0 forward, exactly-zero VJP at v = 0.
+    return jnp.where(is_zero, jnp.zeros_like(sq), divisor * jnp.sqrt(sq_safe))
+
+
+@jax.jit
+def safe_hypot(p: Float[Array, "..."], q: Float[Array, "..."]) -> Float[Array, "..."]:
+    """``sqrt(p² + q²)`` without intermediate overflow or underflow. Range=[0, inf).
+
+    The two-argument form of :func:`safe_norm`, with the same max-scaling and the same double
+    ``where``: exact ``0`` and exactly-zero gradient at ``p == q == 0``, no ``p**2`` materialized
+    (so ``safe_hypot(1e30, 1.0)`` is finite in float32 even though ``1e30**2`` is not), and
+    non-finite inputs pass through as ``inf`` rather than NaN.
+
+    Used to build a hyperbolic ``sinh(θ/2)`` out of two non-negative contributions whose squares
+    routinely straddle the dtype's whole exponent range.
+
+    Args:
+        p: First leg (any shape, broadcast against ``q``)
+        q: Second leg
+
+    Returns:
+        ``sqrt(p² + q²)``
+    """
+    scale = jax.lax.stop_gradient(jnp.maximum(jnp.abs(p), jnp.abs(q)))
+    is_zero = scale == 0.0
+    divisor = jnp.where((scale > 0.0) & jnp.isfinite(scale), scale, jnp.ones_like(scale))
+    sq = (p / divisor) ** 2 + (q / divisor) ** 2
+    sq_safe = jnp.where(is_zero, jnp.ones_like(sq), sq)
+    return jnp.where(is_zero, jnp.zeros_like(sq), divisor * jnp.sqrt(sq_safe))
+
+
+@jax.jit
+def safe_normalize(v: Float[Array, "... n"]) -> Float[Array, "... n"]:
+    """``v/‖v‖`` over the last axis, returning the **exact zero vector** at ``v == 0``.
+
+    Same max-scaled, double-``where`` construction as :func:`safe_norm`, so the result is a unit
+    vector for every non-zero ``v`` (including magnitudes that would overflow or flush a
+    sum-of-squares) and exactly ``0`` with a finite (zero) gradient at ``v == 0``.
+
+    There is deliberately **no** ``maximum(‖v‖, MIN_NORM)`` floor on the denominator. This is used
+    to build the *angular* unit vector of a geodesic frame, whose pre-normalization length is
+    ``sin(ψ)`` for the angle ``ψ`` between two points; a ``1e-15`` floor against a genuine
+    ``sin(ψ) = 1e-19`` would shrink the resulting direction by a factor of ``1e4`` instead of
+    returning a unit vector. The exact-zero return at ``v == 0`` is the well-defined case
+    (``ψ = 0``: no angular direction exists, and the frame's angular coefficient is zero there),
+    which is why the floor is not needed.
+
+    Args:
+        v: Input array, normalized over the last axis
+
+    Returns:
+        ``v/‖v‖₂``, or the zero vector where ``v`` is zero
+    """
+    scale = jax.lax.stop_gradient(jnp.max(jnp.abs(v), axis=-1, keepdims=True))
+    is_zero = scale == 0.0
+    divisor = jnp.where((scale > 0.0) & jnp.isfinite(scale), scale, jnp.ones_like(scale))
+    scaled = v / divisor
+    sq = jnp.sum(scaled**2, axis=-1, keepdims=True)
+    sq_safe = jnp.where(is_zero, jnp.ones_like(sq), sq)
+    return jnp.where(is_zero, jnp.zeros_like(v), scaled / jnp.sqrt(sq_safe))
+
+
+@jax.jit
 def capped_exp(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Exponential with an overflow cap on the argument. Domain=(-inf, inf).
 

@@ -65,6 +65,65 @@ dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
     # If > 7, create Poincare(dtype=jnp.float64) instead
     ```
 
+### The Hyperboloid's Two-Point Cancellation Failure Mode
+
+The distance-from-origin table above governs single-point operations (`dist_0`, `logmap_0`,
+`expmap_0`), which read the radius straight off the ambient time coordinate and were always
+accurate on the Hyperboloid. Point-to-point operations (`dist`, `logmap`, `sqdist`,
+`tangent_norm`) are governed by a different, two-point quantity — being far from the origin is
+not itself the problem; two points far from the origin **and close together** is.
+
+Every one of these operations used to go through the Minkowski inner product
+$\langle x, y\rangle_L = -x_0y_0 + \langle x_s, y_s\rangle$, which for two hyperboloid points is a
+subtraction of two positive terms each roughly $e^{\sqrt{c}\,(d_0(x) + d_0(y))}$ in size, leaving a
+result proportional to $e^{\sqrt{c}\,d(x,y)}$. The number of significant digits lost is set by the
+**Gromov-product-like quantity**
+$$
+\sqrt{c}\,\bigl(d_0(x) + d_0(y) - d(x, y)\bigr),
+$$
+and once it exceeds $\ln(1/\epsilon)$ — 15.9 for float32, 36.0 for float64 — every digit of the
+result is cancellation noise. Two nearby points that are each individually far from the origin hit
+this constantly (e.g. points sampled along a shared geodesic ray, or clustered leaf embeddings in a
+deep hierarchy), while a single point far from the origin, or two points that are merely far from
+each other, does not.
+
+Concretely, before this fix: float32 `dist` returned `0.0015` for a true distance of `1.0` for two
+points at radius 10 from the origin — not a large relative error but a *complete loss of
+information*, since the correct value could have been anything below the float32 noise floor.
+`logmap` returned `NaN` from radius ~10 (float32) / ~20 (float64); `tangent_norm` returned ~0 on
+tangent vectors of exactly unit length past radius 8 (float32) / 20 (float64) — a 100% error with
+no warning. Deep metric-learning embeddings routinely sit at radius 30–60, so this was not an edge
+case in practice.
+
+As of this fix, `dist`, `logmap`, `sqdist`, and `tangent_norm` under the default `version_idx`
+(`VERSION_DEFAULT` / `VERSION_SMOOTHENED`) are evaluated through a cancellation-free "hyperbolic
+haversine" decomposition and are accurate at any representable radius — see
+[Hyperboloid Distance Versions](#hyperboloid-distance-versions) below for the version constants,
+and [Known Limitations](#hyperboloid-known-limitations) for the operations that still route
+through the Minkowski inner product and remain unsafe past the threshold above. `VERSION_LEGACY` /
+`VERSION_LEGACY_SMOOTHENED` reproduce the old acosh-based arms bit-for-bit, for reproducing results
+computed before this fix.
+
+#### Known Limitations {#hyperboloid-known-limitations}
+
+The two-point cancellation fix covers `dist`, `logmap`, `sqdist`, and `tangent_norm`. The
+following Hyperboloid operations still route through the Minkowski inner product and remain
+unsafe past the `ln(1/eps)` threshold above:
+
+- `expmap` (the two-point form — `expmap_0` is unaffected)
+- `ptransp`
+- `tangent_proj`
+- `tangent_inner`
+- `egrad2rgrad`
+- `is_in_manifold`
+
+`tangent_norm` is exact to radius ~15 (float32) / ~25 (float64) — one power of `cosh` better than
+before this fix (was accurate only to radius ~8 float32 / ~20 float64, then floored to ~0 past
+that on exactly-unit tangent vectors), but not unlimited like `dist`/`logmap`/`sqdist`.
+Origin-chart operations (`dist_0`, `logmap_0`, `expmap_0`) read the radius straight off the
+ambient time coordinate, never routed through the Minkowski inner product, and remain exact
+everywhere.
+
 ## Storage vs. Compute Dtype
 
 Hyperbolix separates two dtype concerns that are easy to conflate:
@@ -368,7 +427,7 @@ x_rec = pv.expmap_0(y, c)      # round-trips to x_large
 ### Choosing a Manifold for Stability
 
 - **Poincaré ball**: compact, bounded — fine for small distances ($<5$) and visualization; clamp or use float64 past that.
-- **Hyperboloid**: unbounded radius, but the constraint $\langle x, x\rangle_L = -1/c$ must be maintained and can drift under Euclidean updates.
+- **Hyperboloid**: unbounded radius, and `dist`/`logmap`/`sqdist`/`tangent_norm` are now cancellation-free at any representable radius (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)). The constraint $\langle x, x\rangle_L = -1/c$ must still be maintained and can drift under Euclidean updates, and `expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, and `egrad2rgrad` still route through the Minkowski inner product — see [Known Limitations](#hyperboloid-known-limitations).
 - **Proper Velocity**: unconstrained $\mathbb{R}^n$, stable at large radii, exact Euclidean retraction (plain `optax.adam` / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large.
 - **κ-Stereographic**: identical numerics to the Poincaré ball for $c > 0$ (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near $c = 0$ — see the [dedicated section below](#stereographic-near-zero-curvature).
 
@@ -561,10 +620,58 @@ print(f"Version 2: {d2:.6f}")
 
 **Special cases**:
 - **Near-boundary points** (||x|| > 0.9): Use `Poincare(dtype=jnp.float64)`, or convert to the
-  hyperboloid via `isometry_mappings.poincare_to_hyperboloid` and use `Hyperboloid.dist`
-  (the hyperboloid is unbounded, so there is no boundary to saturate)
+  hyperboloid via `isometry_mappings.poincare_to_hyperboloid` and use `Hyperboloid.dist` —
+  `dist`/`logmap` are now genuinely safe there at any representable radius (see [above](
+  #the-hyperboloids-two-point-cancellation-failure-mode)). The contrast that motivates this
+  advice: the Poincaré ball itself cannot even *represent* a point past $d_0 \approx 12.65/\sqrt{c}$
+  (float32) / $27.7/\sqrt{c}$ (float64) — `proj`'s boundary clamp saturates there — while the
+  hyperboloid chart's representable ceiling is $\sqrt{c}\,d \approx 88$ (float32), where `cosh`
+  overflows.
 - **Very high dimensions** (> 1000): `VERSION_METRIC_TENSOR` (version 2) may be more stable
 - **Debugging**: Compare all versions — significant differences indicate numerical issues
+
+### Hyperboloid Distance Versions {#hyperboloid-distance-versions}
+
+The Hyperboloid manifold has its own four-way `version_idx`, orthogonal to the Poincaré versions
+above:
+
+```python
+from hyperbolix.manifolds import Hyperboloid
+import jax.numpy as jnp
+
+hyperboloid = Hyperboloid()
+x = hyperboloid.proj(jnp.array([1.0, 0.1, 0.2]), c=1.0)
+y = hyperboloid.proj(jnp.array([1.0, 0.3, 0.4]), c=1.0)
+c = 1.0
+
+# VERSION_DEFAULT (0): cancellation-free hyperbolic-haversine distance — the default.
+d0 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_DEFAULT)
+
+# VERSION_SMOOTHENED (1): same evaluation, with a strictly-positive floor at coincidence.
+d1 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_SMOOTHENED)
+
+# VERSION_LEGACY (2): pre-fix acosh-based distance, reproduced bit-for-bit.
+d2 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_LEGACY)
+
+# VERSION_LEGACY_SMOOTHENED (3): VERSION_LEGACY with soft clamping.
+d3 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_LEGACY_SMOOTHENED)
+```
+
+**When to use which**:
+
+- `VERSION_DEFAULT` — the default, and the right choice for new code. Accurate at any
+  representable radius (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)).
+- `VERSION_SMOOTHENED` — same numerics, but coincident points return a small positive distance
+  with a well-defined gradient instead of exactly 0. Useful when a downstream `1/dist` or `log
+  dist` would otherwise divide by zero. The floor is tiny: $2\,\mathrm{arcsinh}(10\epsilon)/\sqrt{c}
+  \approx 2.4\text{e-}6/\sqrt{c}$ in float32 (vs. float64's $\approx 4.4\text{e-}15/\sqrt{c}$) — a
+  large drop from the legacy smoothened floor of $\mathrm{acosh}(1 + \ln 2/\beta)/\sqrt{c}
+  \approx 0.166/\sqrt{c}$, which shifted *every* distance in the working range, not just
+  coincident ones.
+- `VERSION_LEGACY` / `VERSION_LEGACY_SMOOTHENED` — reproduce the pre-fix acosh-based arms
+  bit-for-bit. Use these only to match results computed before this fix; they lose all precision
+  past the cancellation threshold described [above](
+  #the-hyperboloids-two-point-cancellation-failure-mode).
 
 ### Using Versions with JIT
 
