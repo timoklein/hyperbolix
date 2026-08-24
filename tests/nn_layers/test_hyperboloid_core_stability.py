@@ -12,7 +12,11 @@ term is ``O(||x_i - x_j||^2)``. These tests
 (a) prove the identity exactly in rational arithmetic (``fractions.Fraction``, no floats),
 (b) pin the float32 accuracy gain against transcriptions of the old naive bodies, which double
     as anti-reversion oracles — a revert to the naive form makes them fail, and
-(c) check the two forms still agree at ordinary radii, plus edge cases and jit/vmap.
+(c) check the two forms still agree at ordinary radii, plus edge cases and jit/vmap, and
+(d) pin that the outputs stay on the sheet even for inputs float storage cannot keep on it (a
+    boundary-lifted Poincare point) — the identity assumes exactly on-sheet inputs, so the outputs'
+    time coordinate is reconstructed from their spatial part to restore the invariant the old
+    self-normalizing form had.
 
 Dimension key:
   M: points per midpoint    N: midpoint outputs    A: ambient dim (= D + 1)
@@ -30,7 +34,9 @@ import pytest
 # here too: every float64 reference in this file depends on it.
 jax.config.update("jax_enable_x64", True)
 
-from hyperbolix.manifolds import Hyperboloid  # noqa: E402
+from hyperbolix.decomposition.frechet import frechet_mean  # noqa: E402
+from hyperbolix.manifolds import Hyperboloid, Poincare  # noqa: E402
+from hyperbolix.manifolds.isometry_mappings import poincare_to_hyperboloid  # noqa: E402
 from hyperbolix.nn_layers.hyperboloid_core import lorentz_midpoint, lorentz_residual  # noqa: E402
 
 # ---------------------------------------------------------------------------------------
@@ -425,3 +431,107 @@ def test_jit_vmap_smoke():
     assert bool(jnp.all(jnp.isfinite(mid_BNA)))
     flat_KA = mid_BNA.reshape(-1, _D + 1)
     assert bool(jnp.all(jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(flat_KA, c)))
+
+
+# ---------------------------------------------------------------------------------------
+# 10. Inputs that float storage cannot keep on the sheet (boundary-lifted Poincare points)
+# ---------------------------------------------------------------------------------------
+
+
+def _boundary_lifted_point(d, c, dtype=jnp.float64):
+    """Hyperboloid lift of a Poincare point sitting exactly on the ball boundary.
+
+    ``Poincare.proj`` nudges the point just inside the boundary; the lift then puts it at
+    ``x_0 ~ 5.5e11`` (c = 1, float64), a radius at which the sheet constraint cannot be *stored*:
+    it needs ``eps * x_0^2 << 1/c``, and here ``eps64 * x_0^2 ~ 67``. The point's own computed
+    Lorentz residual is O(1), so the identity-based Minkowski norm — which assumes exactly on-sheet
+    inputs — has no valid input. This is precisely the ``test_horopca`` boundary-input case.
+    """
+    boundary_D = jnp.zeros(d, dtype=dtype).at[0].set(1.0 / jnp.sqrt(jnp.asarray(c, dtype=dtype)))
+    inside_D = Poincare(dtype=dtype).proj(boundary_D, c)
+    return poincare_to_hyperboloid(inside_D, c)
+
+
+def _lorentz_sq(z_A):
+    """``<z, z>_L`` of a single point (float64)."""
+    return float(-(z_A[0] ** 2) + jnp.sum(z_A[1:] ** 2))
+
+
+def _sheet_tol(z_A):
+    """How closely ``<z,z>_L = -1/c`` can be *checked* for a point of this radius.
+
+    The check itself subtracts two ``z_0^2``-sized squares, so it cannot resolve the constraint
+    below ``eps64 * z_0^2`` no matter how exactly on-sheet ``z`` is; the factor 4 covers the
+    accumulation over the spatial sum. Aggregating a boundary-lifted point (``x_0 ~ 5.5e11``) with
+    ordinary ones puts the output far out too, so this floor is the binding one there.
+
+    Worked example (``z_0 = 5.87e5``, the ``w_y = 0.5`` residual case):
+    ``4 * 2.22e-16 * (5.87e5)^2 = 3.1e-4`` — and the measured deviation is 6.1e-5, i.e. 1 ulp of
+    ``z_0^2`` (relative 1.8e-16). Below ``z_0 ~ 1.1e5`` the fixed ``1e-5`` is the binding bound.
+    """
+    eps64 = float(jnp.finfo(jnp.float64).eps)
+    return max(1e-5, 4.0 * eps64 * float(z_A[0]) ** 2)
+
+
+def _points_with_extreme(seed, d, c, m, extreme_at):
+    """``M`` on-sheet points with the boundary-lifted point inserted at index ``extreme_at``."""
+    keys = jax.random.split(jax.random.PRNGKey(seed), m - 1)
+    pts = [_onsheet(k, d, c, 1.0 + 0.1 * i) for i, k in enumerate(keys)]
+    pts.insert(extreme_at, _boundary_lifted_point(d, c))
+    return jnp.stack(pts)  # (M, A)
+
+
+@pytest.mark.parametrize("extreme_at", [0, 16])
+def test_lorentz_midpoint_offsheet_extreme_input_stays_on_sheet(extreme_at):
+    """A point too far out to be *stored* on the sheet must still yield an on-sheet midpoint.
+
+    Regression for ``test_horopca.py::test_poincare_boundary_input_is_finite[float64]``: the
+    identity-based Minkowski norm assumes exactly on-sheet inputs, so with this input its output
+    landed off the sheet (measured residual 4.8e-3) and ``frechet_mean``'s Karcher loop then
+    diverged to NaN. The output's time coordinate is now reconstructed from its spatial part, which
+    restores the self-normalizing property the old naive form had. ``extreme_at = 0`` additionally
+    covers the reference-point choice: with the old ``p = points_0`` every ``delta_m`` inherited the
+    extreme radius.
+    """
+    c, m = 1.0, 32
+    pts_MA = _points_with_extreme(80 + extreme_at, _D, c, m, extreme_at)
+    w_NM = jnp.full((1, m), 1.0 / m, dtype=jnp.float64)
+
+    out_NA = lorentz_midpoint(pts_MA, w_NM, c)
+
+    assert bool(jnp.all(jnp.isfinite(out_NA))), f"extreme_at={extreme_at}: non-finite midpoint {out_NA}"
+    assert float(out_NA[0, 0]) > 0.0, f"extreme_at={extreme_at}: midpoint not on the upper sheet"
+    resid, tol = abs(_lorentz_sq(out_NA[0]) + 1.0 / c), _sheet_tol(out_NA[0])
+    assert resid < tol, f"extreme_at={extreme_at}: midpoint off the sheet by {resid:.3e} (tol {tol:.1e})"
+
+
+@pytest.mark.parametrize("w_y", [0.5, 1.0])
+def test_lorentz_residual_offsheet_extreme_input_stays_on_sheet(w_y):
+    """Same for the two-point aggregator: ``x`` unstorably far out, ``y`` ordinary."""
+    c = 1.0
+    x_A = _boundary_lifted_point(_D, c)
+    y_A = _onsheet(jax.random.PRNGKey(90), _D, c, 1.5)
+
+    out_A = lorentz_residual(x_A, y_A, w_y, c)
+
+    assert bool(jnp.all(jnp.isfinite(out_A))), f"w_y={w_y}: non-finite output {out_A}"
+    assert float(out_A[0]) > 0.0, f"w_y={w_y}: output not on the upper sheet"
+    resid, tol = abs(_lorentz_sq(out_A) + 1.0 / c), _sheet_tol(out_A)
+    assert resid < tol, f"w_y={w_y}: output off the sheet by {resid:.3e} (tol {tol:.1e})"
+
+
+def test_frechet_mean_with_boundary_lifted_point_is_finite():
+    """``frechet_mean`` initializes from ``lorentz_midpoint``; an off-sheet init NaNs the loop.
+
+    Direct regression of the CI failure, independent of HoroPCA.
+    """
+    c, m = 1.0, 32
+    manifold = Hyperboloid(dtype=jnp.float64)
+    pts_MA = _points_with_extreme(81, _D, c, m, extreme_at=0)
+
+    mean_A = frechet_mean(pts_MA, manifold, c)
+
+    assert bool(jnp.all(jnp.isfinite(mean_A))), f"frechet_mean is not finite: {mean_A}"
+    assert float(mean_A[0]) > 0.0, "frechet_mean not on the upper sheet"
+    resid, tol = abs(_lorentz_sq(mean_A) + 1.0 / c), _sheet_tol(mean_A)
+    assert resid < tol, f"frechet_mean off the sheet by {resid:.3e} (tol {tol:.1e})"
