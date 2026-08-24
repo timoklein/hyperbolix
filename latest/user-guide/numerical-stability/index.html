@@ -726,6 +726,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#the-hyperboloids-two-point-cancellation-failure-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Hyperboloid's Two-Point Cancellation Failure Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1014,6 +1025,17 @@
     <span class="md-ellipsis">
       
         Which Version to Use?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyperboloid-distance-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hyperboloid Distance Versions
       
     </span>
   </a>
@@ -1970,6 +1992,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#the-hyperboloids-two-point-cancellation-failure-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Hyperboloid's Two-Point Cancellation Failure Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2258,6 +2291,17 @@
     <span class="md-ellipsis">
       
         Which Version to Use?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyperboloid-distance-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hyperboloid Distance Versions
       
     </span>
   </a>
@@ -2604,6 +2648,58 @@
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># If &gt; 7, create Poincare(dtype=jnp.float64) instead</span>
 </span></code></pre></div>
 </div>
+<h3 id="the-hyperboloids-two-point-cancellation-failure-mode">The Hyperboloid's Two-Point Cancellation Failure Mode<a class="headerlink" href="#the-hyperboloids-two-point-cancellation-failure-mode" title="Permanent link">&para;</a></h3>
+<p>The distance-from-origin table above governs single-point operations (<code>dist_0</code>, <code>logmap_0</code>,
+<code>expmap_0</code>), which read the radius straight off the ambient time coordinate and were always
+accurate on the Hyperboloid. Point-to-point operations (<code>dist</code>, <code>logmap</code>, <code>sqdist</code>,
+<code>tangent_norm</code>) are governed by a different, two-point quantity — being far from the origin is
+not itself the problem; two points far from the origin <strong>and close together</strong> is.</p>
+<p>Every one of these operations used to go through the Minkowski inner product
+<span class="arithmatex">\(\langle x, y\rangle_L = -x_0y_0 + \langle x_s, y_s\rangle\)</span>, which for two hyperboloid points is a
+subtraction of two positive terms each roughly <span class="arithmatex">\(e^{\sqrt{c}\,(d_0(x) + d_0(y))}\)</span> in size, leaving a
+result proportional to <span class="arithmatex">\(e^{\sqrt{c}\,d(x,y)}\)</span>. The number of significant digits lost is set by the
+<strong>Gromov-product-like quantity</strong>
+$$
+\sqrt{c}\,\bigl(d_0(x) + d_0(y) - d(x, y)\bigr),
+$$
+and once it exceeds <span class="arithmatex">\(\ln(1/\epsilon)\)</span> — 15.9 for float32, 36.0 for float64 — every digit of the
+result is cancellation noise. Two nearby points that are each individually far from the origin hit
+this constantly (e.g. points sampled along a shared geodesic ray, or clustered leaf embeddings in a
+deep hierarchy), while a single point far from the origin, or two points that are merely far from
+each other, does not.</p>
+<p>Concretely, before this fix: float32 <code>dist</code> returned <code>0.0015</code> for a true distance of <code>1.0</code> for two
+points at radius 10 from the origin — not a large relative error but a <em>complete loss of
+information</em>, since the correct value could have been anything below the float32 noise floor.
+<code>logmap</code> returned <code>NaN</code> from radius ~10 (float32) / ~20 (float64); <code>tangent_norm</code> returned ~0 on
+tangent vectors of exactly unit length past radius 8 (float32) / 20 (float64) — a 100% error with
+no warning. Deep metric-learning embeddings routinely sit at radius 30–60, so this was not an edge
+case in practice.</p>
+<p>As of this fix, <code>dist</code>, <code>logmap</code>, <code>sqdist</code>, and <code>tangent_norm</code> under the default <code>version_idx</code>
+(<code>VERSION_DEFAULT</code> / <code>VERSION_SMOOTHENED</code>) are evaluated through a cancellation-free "hyperbolic
+haversine" decomposition and are accurate at any representable radius — see
+<a href="#hyperboloid-distance-versions">Hyperboloid Distance Versions</a> below for the version constants,
+and <a href="#hyperboloid-known-limitations">Known Limitations</a> for the operations that still route
+through the Minkowski inner product and remain unsafe past the threshold above. <code>VERSION_LEGACY</code> /
+<code>VERSION_LEGACY_SMOOTHENED</code> reproduce the old acosh-based arms bit-for-bit, for reproducing results
+computed before this fix.</p>
+<h4 id="hyperboloid-known-limitations">Known Limitations<a class="headerlink" href="#hyperboloid-known-limitations" title="Permanent link">&para;</a></h4>
+<p>The two-point cancellation fix covers <code>dist</code>, <code>logmap</code>, <code>sqdist</code>, and <code>tangent_norm</code>. The
+following Hyperboloid operations still route through the Minkowski inner product and remain
+unsafe past the <code>ln(1/eps)</code> threshold above:</p>
+<ul>
+<li><code>expmap</code> (the two-point form — <code>expmap_0</code> is unaffected)</li>
+<li><code>ptransp</code></li>
+<li><code>tangent_proj</code></li>
+<li><code>tangent_inner</code></li>
+<li><code>egrad2rgrad</code></li>
+<li><code>is_in_manifold</code></li>
+</ul>
+<p><code>tangent_norm</code> is exact to radius ~15 (float32) / ~25 (float64) — one power of <code>cosh</code> better than
+before this fix (was accurate only to radius ~8 float32 / ~20 float64, then floored to ~0 past
+that on exactly-unit tangent vectors), but not unlimited like <code>dist</code>/<code>logmap</code>/<code>sqdist</code>.
+Origin-chart operations (<code>dist_0</code>, <code>logmap_0</code>, <code>expmap_0</code>) read the radius straight off the
+ambient time coordinate, never routed through the Minkowski inner product, and remain exact
+everywhere.</p>
 <h2 id="storage-vs-compute-dtype">Storage vs. Compute Dtype<a class="headerlink" href="#storage-vs-compute-dtype" title="Permanent link">&para;</a></h2>
 <p>Hyperbolix separates two dtype concerns that are easy to conflate:</p>
 <ul>
@@ -2872,7 +2968,7 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 <h3 id="choosing-a-manifold-for-stability">Choosing a Manifold for Stability<a class="headerlink" href="#choosing-a-manifold-for-stability" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Poincaré ball</strong>: compact, bounded — fine for small distances (<span class="arithmatex">\(&lt;5\)</span>) and visualization; clamp or use float64 past that.</li>
-<li><strong>Hyperboloid</strong>: unbounded radius, but the constraint <span class="arithmatex">\(\langle x, x\rangle_L = -1/c\)</span> must be maintained and can drift under Euclidean updates.</li>
+<li><strong>Hyperboloid</strong>: unbounded radius, and <code>dist</code>/<code>logmap</code>/<code>sqdist</code>/<code>tangent_norm</code> are now cancellation-free at any representable radius (see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>). The constraint <span class="arithmatex">\(\langle x, x\rangle_L = -1/c\)</span> must still be maintained and can drift under Euclidean updates, and <code>expmap</code>, <code>ptransp</code>, <code>tangent_proj</code>, <code>tangent_inner</code>, and <code>egrad2rgrad</code> still route through the Minkowski inner product — see <a href="#hyperboloid-known-limitations">Known Limitations</a>.</li>
 <li><strong>Proper Velocity</strong>: unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span>, stable at large radii, exact Euclidean retraction (plain <code>optax.adam</code> / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large.</li>
 <li><strong>κ-Stereographic</strong>: identical numerics to the Poincaré ball for <span class="arithmatex">\(c &gt; 0\)</span> (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near <span class="arithmatex">\(c = 0\)</span> — see the <a href="#stereographic-near-zero-curvature">dedicated section below</a>.</li>
 </ul>
@@ -2991,27 +3087,69 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 - Best for most applications</p>
 <p><strong>Special cases</strong>:
 - <strong>Near-boundary points</strong> (||x|| &gt; 0.9): Use <code>Poincare(dtype=jnp.float64)</code>, or convert to the
-  hyperboloid via <code>isometry_mappings.poincare_to_hyperboloid</code> and use <code>Hyperboloid.dist</code>
-  (the hyperboloid is unbounded, so there is no boundary to saturate)
+  hyperboloid via <code>isometry_mappings.poincare_to_hyperboloid</code> and use <code>Hyperboloid.dist</code> —
+  <code>dist</code>/<code>logmap</code> are now genuinely safe there at any representable radius (see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>). The contrast that motivates this
+  advice: the Poincaré ball itself cannot even <em>represent</em> a point past <span class="arithmatex">\(d_0 \approx 12.65/\sqrt{c}\)</span>
+  (float32) / <span class="arithmatex">\(27.7/\sqrt{c}\)</span> (float64) — <code>proj</code>'s boundary clamp saturates there — while the
+  hyperboloid chart's representable ceiling is <span class="arithmatex">\(\sqrt{c}\,d \approx 88\)</span> (float32), where <code>cosh</code>
+  overflows.
 - <strong>Very high dimensions</strong> (&gt; 1000): <code>VERSION_METRIC_TENSOR</code> (version 2) may be more stable
 - <strong>Debugging</strong>: Compare all versions — significant differences indicate numerical issues</p>
-<h3 id="using-versions-with-jit">Using Versions with JIT<a class="headerlink" href="#using-versions-with-jit" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+<h3 id="hyperboloid-distance-versions">Hyperboloid Distance Versions<a class="headerlink" href="#hyperboloid-distance-versions" title="Permanent link">&para;</a></h3>
+<p>The Hyperboloid manifold has its own four-way <code>version_idx</code>, orthogonal to the Poincaré versions
+above:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Hyperboloid</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
 </span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="c1"># IMPORTANT: version_idx must be static for JIT</span>
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
-</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_distances</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">y_batch</span><span class="p">,</span> <span class="n">c</span><span class="p">):</span>
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>    <span class="c1"># Version baked into function body (static)</span>
-</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>    <span class="k">return</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span>
-</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>        <span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a>    <span class="p">)(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">y_batch</span><span class="p">)</span>
-</span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a>
-</span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a><span class="c1"># Or use static_argnames</span>
-</span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a><span class="n">dist_jit</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">,</span> <span class="n">static_argnames</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;version_idx&#39;</span><span class="p">])</span>
-</span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a><span class="n">d</span> <span class="o">=</span> <span class="n">dist_jit</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="n">hyperboloid</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">()</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="n">x</span> <span class="o">=</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">]),</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="n">y</span> <span class="o">=</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">]),</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">1.0</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="c1"># VERSION_DEFAULT (0): cancellation-free hyperbolic-haversine distance — the default.</span>
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="n">d0</span> <span class="o">=</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">hyperboloid</span><span class="o">.</span><span class="n">VERSION_DEFAULT</span><span class="p">)</span>
+</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>
+</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="c1"># VERSION_SMOOTHENED (1): same evaluation, with a strictly-positive floor at coincidence.</span>
+</span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="n">d1</span> <span class="o">=</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">hyperboloid</span><span class="o">.</span><span class="n">VERSION_SMOOTHENED</span><span class="p">)</span>
+</span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a>
+</span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a><span class="c1"># VERSION_LEGACY (2): pre-fix acosh-based distance, reproduced bit-for-bit.</span>
+</span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a><span class="n">d2</span> <span class="o">=</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">hyperboloid</span><span class="o">.</span><span class="n">VERSION_LEGACY</span><span class="p">)</span>
+</span><span id="__span-16-17"><a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a>
+</span><span id="__span-16-18"><a id="__codelineno-16-18" name="__codelineno-16-18" href="#__codelineno-16-18"></a><span class="c1"># VERSION_LEGACY_SMOOTHENED (3): VERSION_LEGACY with soft clamping.</span>
+</span><span id="__span-16-19"><a id="__codelineno-16-19" name="__codelineno-16-19" href="#__codelineno-16-19"></a><span class="n">d3</span> <span class="o">=</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">hyperboloid</span><span class="o">.</span><span class="n">VERSION_LEGACY_SMOOTHENED</span><span class="p">)</span>
+</span></code></pre></div>
+<p><strong>When to use which</strong>:</p>
+<ul>
+<li><code>VERSION_DEFAULT</code> — the default, and the right choice for new code. Accurate at any
+  representable radius (see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>).</li>
+<li><code>VERSION_SMOOTHENED</code> — same numerics, but coincident points return a small positive distance
+  with a well-defined gradient instead of exactly 0. Useful when a downstream <code>1/dist</code> or <code>log
+  dist</code> would otherwise divide by zero. The floor is tiny: <span class="arithmatex">\(2\,\mathrm{arcsinh}(10\epsilon)/\sqrt{c}
+  \approx 2.4\text{e-}6/\sqrt{c}\)</span> in float32 (vs. float64's <span class="arithmatex">\(\approx 4.4\text{e-}15/\sqrt{c}\)</span>) — a
+  large drop from the legacy smoothened floor of <span class="arithmatex">\(\mathrm{acosh}(1 + \ln 2/\beta)/\sqrt{c}
+  \approx 0.166/\sqrt{c}\)</span>, which shifted <em>every</em> distance in the working range, not just
+  coincident ones.</li>
+<li><code>VERSION_LEGACY</code> / <code>VERSION_LEGACY_SMOOTHENED</code> — reproduce the pre-fix acosh-based arms
+  bit-for-bit. Use these only to match results computed before this fix; they lose all precision
+  past the cancellation threshold described <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>.</li>
+</ul>
+<h3 id="using-versions-with-jit">Using Versions with JIT<a class="headerlink" href="#using-versions-with-jit" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="c1"># IMPORTANT: version_idx must be static for JIT</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_distances</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">y_batch</span><span class="p">,</span> <span class="n">c</span><span class="p">):</span>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>    <span class="c1"># Version baked into function body (static)</span>
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>    <span class="k">return</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span>
+</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>        <span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a>    <span class="p">)(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">y_batch</span><span class="p">)</span>
+</span><span id="__span-17-13"><a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a>
+</span><span id="__span-17-14"><a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a><span class="c1"># Or use static_argnames</span>
+</span><span id="__span-17-15"><a id="__codelineno-17-15" name="__codelineno-17-15" href="#__codelineno-17-15"></a><span class="n">dist_jit</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">,</span> <span class="n">static_argnames</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;version_idx&#39;</span><span class="p">])</span>
+</span><span id="__span-17-16"><a id="__codelineno-17-16" name="__codelineno-17-16" href="#__codelineno-17-16"></a><span class="n">d</span> <span class="o">=</span> <span class="n">dist_jit</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="projection-strategies">Projection Strategies<a class="headerlink" href="#projection-strategies" title="Permanent link">&para;</a></h2>
 <h3 id="why-project">Why Project?<a class="headerlink" href="#why-project" title="Permanent link">&para;</a></h3>
@@ -3026,35 +3164,35 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 - After <code>proj</code> (redundant)</p>
 <h3 id="projection">Projection<a class="headerlink" href="#projection" title="Permanent link">&para;</a></h3>
 <p>Projection ensures points stay on the manifold by clipping norms:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>
-</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="c1"># Project to Poincaré ball</span>
-</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="n">x_proj</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
-</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>
-</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="c1"># Projection is numerically stable and automatically handles edge cases</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="c1"># Project to Poincaré ball</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="n">x_proj</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="c1"># Projection is numerically stable and automatically handles edge cases</span>
 </span></code></pre></div>
 <h3 id="projection-in-training">Projection in Training<a class="headerlink" href="#projection-in-training" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">HypLinearPoincare</span>
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">flax</span><span class="w"> </span><span class="kn">import</span> <span class="n">nnx</span>
-</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>
-</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>
-</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="k">class</span><span class="w"> </span><span class="nc">HyperbolicModel</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rngs</span><span class="p">):</span>
-</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">layer1</span> <span class="o">=</span> <span class="n">HypLinearPoincare</span><span class="p">(</span><span class="n">poincare</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
-</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">layer2</span> <span class="o">=</span> <span class="n">HypLinearPoincare</span><span class="p">(</span><span class="n">poincare</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
-</span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>
-</span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">):</span>
-</span><span id="__span-18-13"><a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a>        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer1</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
-</span><span id="__span-18-14"><a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a>        <span class="c1"># Project after layer (layer already includes projection internally)</span>
-</span><span id="__span-18-15"><a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a>
-</span><span id="__span-18-16"><a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a>        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer2</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
-</span><span id="__span-18-17"><a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a>        <span class="c1"># Final projection</span>
-</span><span id="__span-18-18"><a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a>        <span class="n">x</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">xi</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">xi</span><span class="p">,</span> <span class="n">c</span><span class="p">))(</span><span class="n">x</span><span class="p">)</span>
-</span><span id="__span-18-19"><a id="__codelineno-18-19" name="__codelineno-18-19" href="#__codelineno-18-19"></a>        <span class="k">return</span> <span class="n">x</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">HypLinearPoincare</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">flax</span><span class="w"> </span><span class="kn">import</span> <span class="n">nnx</span>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>
+</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="k">class</span><span class="w"> </span><span class="nc">HyperbolicModel</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rngs</span><span class="p">):</span>
+</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">layer1</span> <span class="o">=</span> <span class="n">HypLinearPoincare</span><span class="p">(</span><span class="n">poincare</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">layer2</span> <span class="o">=</span> <span class="n">HypLinearPoincare</span><span class="p">(</span><span class="n">poincare</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>
+</span><span id="__span-19-12"><a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">):</span>
+</span><span id="__span-19-13"><a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer1</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-19-14"><a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a>        <span class="c1"># Project after layer (layer already includes projection internally)</span>
+</span><span id="__span-19-15"><a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a>
+</span><span id="__span-19-16"><a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a>        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer2</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-19-17"><a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a>        <span class="c1"># Final projection</span>
+</span><span id="__span-19-18"><a id="__codelineno-19-18" name="__codelineno-19-18" href="#__codelineno-19-18"></a>        <span class="n">x</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">xi</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">xi</span><span class="p">,</span> <span class="n">c</span><span class="p">))(</span><span class="n">x</span><span class="p">)</span>
+</span><span id="__span-19-19"><a id="__codelineno-19-19" name="__codelineno-19-19" href="#__codelineno-19-19"></a>        <span class="k">return</span> <span class="n">x</span>
 </span></code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Layer Projection</p>
@@ -3064,89 +3202,89 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 <h3 id="edge-case-1-points-near-the-boundary">Edge Case 1: Points Near the Boundary<a class="headerlink" href="#edge-case-1-points-near-the-boundary" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: NaN or Inf in gradients, exploding losses</p>
 <p><strong>Solution</strong>:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Check if points are too close to boundary</span>
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">check_boundary_proximity</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">):</span>
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>    <span class="n">norms</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>    <span class="n">max_norm</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>    <span class="n">proximity</span> <span class="o">=</span> <span class="n">norms</span> <span class="o">/</span> <span class="n">max_norm</span>
-</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>
-</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>    <span class="k">if</span> <span class="n">jnp</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">proximity</span> <span class="o">&gt;</span> <span class="mf">0.95</span><span class="p">):</span>
-</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;WARNING: Points near boundary (max proximity: </span><span class="si">{</span><span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">proximity</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
-</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>        <span class="k">return</span> <span class="kc">True</span>
-</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>    <span class="k">return</span> <span class="kc">False</span>
-</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>
-</span><span id="__span-19-12"><a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a><span class="c1"># Clip if needed</span>
-</span><span id="__span-19-13"><a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_clip_to_interior</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">safety_factor</span><span class="o">=</span><span class="mf">0.9</span><span class="p">):</span>
-</span><span id="__span-19-14"><a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a>    <span class="n">max_allowed</span> <span class="o">=</span> <span class="n">safety_factor</span> <span class="o">/</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
-</span><span id="__span-19-15"><a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a>    <span class="n">norms</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-19-16"><a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a>    <span class="n">scale</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">max_allowed</span> <span class="o">/</span> <span class="p">(</span><span class="n">norms</span> <span class="o">+</span> <span class="mf">1e-8</span><span class="p">))</span>
-</span><span id="__span-19-17"><a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a>    <span class="k">return</span> <span class="n">x_batch</span> <span class="o">*</span> <span class="n">scale</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># Check if points are too close to boundary</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">check_boundary_proximity</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">):</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>    <span class="n">norms</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>    <span class="n">max_norm</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>    <span class="n">proximity</span> <span class="o">=</span> <span class="n">norms</span> <span class="o">/</span> <span class="n">max_norm</span>
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a>    <span class="k">if</span> <span class="n">jnp</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">proximity</span> <span class="o">&gt;</span> <span class="mf">0.95</span><span class="p">):</span>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;WARNING: Points near boundary (max proximity: </span><span class="si">{</span><span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">proximity</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a>        <span class="k">return</span> <span class="kc">True</span>
+</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a>    <span class="k">return</span> <span class="kc">False</span>
+</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a>
+</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a><span class="c1"># Clip if needed</span>
+</span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13" href="#__codelineno-20-13"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_clip_to_interior</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">safety_factor</span><span class="o">=</span><span class="mf">0.9</span><span class="p">):</span>
+</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14" href="#__codelineno-20-14"></a>    <span class="n">max_allowed</span> <span class="o">=</span> <span class="n">safety_factor</span> <span class="o">/</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
+</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15" href="#__codelineno-20-15"></a>    <span class="n">norms</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-20-16"><a id="__codelineno-20-16" name="__codelineno-20-16" href="#__codelineno-20-16"></a>    <span class="n">scale</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">max_allowed</span> <span class="o">/</span> <span class="p">(</span><span class="n">norms</span> <span class="o">+</span> <span class="mf">1e-8</span><span class="p">))</span>
+</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17" href="#__codelineno-20-17"></a>    <span class="k">return</span> <span class="n">x_batch</span> <span class="o">*</span> <span class="n">scale</span>
 </span></code></pre></div></p>
 <h3 id="edge-case-2-zero-or-near-zero-vectors">Edge Case 2: Zero or Near-Zero Vectors<a class="headerlink" href="#edge-case-2-zero-or-near-zero-vectors" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: Division by zero warnings, NaN in tangent operations</p>
 <p><strong>Solution</strong>:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># Manifold functions handle this internally with MIN_NORM</span>
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1"># But you can add explicit checks:</span>
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>
-</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_normalize</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-8</span><span class="p">):</span>
-</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>    <span class="n">norm</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
-</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">norm</span> <span class="o">&gt;</span> <span class="n">eps</span><span class="p">,</span> <span class="n">v</span> <span class="o">/</span> <span class="n">norm</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">v</span><span class="p">))</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Manifold functions handle this internally with MIN_NORM</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1"># But you can add explicit checks:</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_normalize</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-8</span><span class="p">):</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>    <span class="n">norm</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">norm</span> <span class="o">&gt;</span> <span class="n">eps</span><span class="p">,</span> <span class="n">v</span> <span class="o">/</span> <span class="n">norm</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">v</span><span class="p">))</span>
 </span></code></pre></div></p>
 <h3 id="edge-case-3-large-learning-rates">Edge Case 3: Large Learning Rates<a class="headerlink" href="#edge-case-3-large-learning-rates" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: Points shoot to boundary, training collapse</p>
 <p><strong>Solution</strong>:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Use conservative learning rates</span>
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">riemannian_adam</span>
-</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>
-</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1"># For Poincaré ball</span>
-</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">)</span>  <span class="c1"># Not 1e-2 or higher!</span>
-</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
-</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1"># For Hyperboloid</span>
-</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="mf">5e-4</span><span class="p">)</span>  <span class="c1"># Even more conservative</span>
-</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>
-</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="c1"># Use learning rate scheduling</span>
-</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a><span class="kn">from</span><span class="w"> </span><span class="nn">optax</span><span class="w"> </span><span class="kn">import</span> <span class="n">exponential_decay</span>
-</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a>
-</span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13" href="#__codelineno-21-13"></a><span class="n">schedule</span> <span class="o">=</span> <span class="n">exponential_decay</span><span class="p">(</span>
-</span><span id="__span-21-14"><a id="__codelineno-21-14" name="__codelineno-21-14" href="#__codelineno-21-14"></a>    <span class="n">init_value</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span>
-</span><span id="__span-21-15"><a id="__codelineno-21-15" name="__codelineno-21-15" href="#__codelineno-21-15"></a>    <span class="n">transition_steps</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span>
-</span><span id="__span-21-16"><a id="__codelineno-21-16" name="__codelineno-21-16" href="#__codelineno-21-16"></a>    <span class="n">decay_rate</span><span class="o">=</span><span class="mf">0.96</span><span class="p">,</span>
-</span><span id="__span-21-17"><a id="__codelineno-21-17" name="__codelineno-21-17" href="#__codelineno-21-17"></a>    <span class="n">staircase</span><span class="o">=</span><span class="kc">True</span>
-</span><span id="__span-21-18"><a id="__codelineno-21-18" name="__codelineno-21-18" href="#__codelineno-21-18"></a><span class="p">)</span>
-</span><span id="__span-21-19"><a id="__codelineno-21-19" name="__codelineno-21-19" href="#__codelineno-21-19"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="n">schedule</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Use conservative learning rates</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">riemannian_adam</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="c1"># For Poincaré ball</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">)</span>  <span class="c1"># Not 1e-2 or higher!</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># For Hyperboloid</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="mf">5e-4</span><span class="p">)</span>  <span class="c1"># Even more conservative</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>
+</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="c1"># Use learning rate scheduling</span>
+</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="kn">from</span><span class="w"> </span><span class="nn">optax</span><span class="w"> </span><span class="kn">import</span> <span class="n">exponential_decay</span>
+</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a>
+</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="n">schedule</span> <span class="o">=</span> <span class="n">exponential_decay</span><span class="p">(</span>
+</span><span id="__span-22-14"><a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a>    <span class="n">init_value</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span>
+</span><span id="__span-22-15"><a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a>    <span class="n">transition_steps</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span>
+</span><span id="__span-22-16"><a id="__codelineno-22-16" name="__codelineno-22-16" href="#__codelineno-22-16"></a>    <span class="n">decay_rate</span><span class="o">=</span><span class="mf">0.96</span><span class="p">,</span>
+</span><span id="__span-22-17"><a id="__codelineno-22-17" name="__codelineno-22-17" href="#__codelineno-22-17"></a>    <span class="n">staircase</span><span class="o">=</span><span class="kc">True</span>
+</span><span id="__span-22-18"><a id="__codelineno-22-18" name="__codelineno-22-18" href="#__codelineno-22-18"></a><span class="p">)</span>
+</span><span id="__span-22-19"><a id="__codelineno-22-19" name="__codelineno-22-19" href="#__codelineno-22-19"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="n">schedule</span><span class="p">)</span>
 </span></code></pre></div></p>
 <h3 id="edge-case-4-high-curvature-values">Edge Case 4: High Curvature Values<a class="headerlink" href="#edge-case-4-high-curvature-values" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: Numerical instability, rapid convergence to boundary</p>
 <p><strong>Solution</strong>:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Keep curvature moderate</span>
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">1.0</span>  <span class="c1"># Good default</span>
-</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>
-</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="c1"># High curvature (c &gt; 1) increases numerical challenges</span>
-</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">0.1</span>  <span class="c1"># Lower curvature = larger hyperbolic space = more stable</span>
-</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
-</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># If learning curvature, clip it</span>
-</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">clip_curvature</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">min_c</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">max_c</span><span class="o">=</span><span class="mf">10.0</span><span class="p">):</span>
-</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">min_c</span><span class="p">,</span> <span class="n">max_c</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Keep curvature moderate</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">1.0</span>  <span class="c1"># Good default</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="c1"># High curvature (c &gt; 1) increases numerical challenges</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">0.1</span>  <span class="c1"># Lower curvature = larger hyperbolic space = more stable</span>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a><span class="c1"># If learning curvature, clip it</span>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">clip_curvature</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">min_c</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">max_c</span><span class="o">=</span><span class="mf">10.0</span><span class="p">):</span>
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">min_c</span><span class="p">,</span> <span class="n">max_c</span><span class="p">)</span>
 </span></code></pre></div></p>
 <h2 id="checking-manifold-constraints">Checking Manifold Constraints<a class="headerlink" href="#checking-manifold-constraints" title="Permanent link">&para;</a></h2>
 <h3 id="validation-functions">Validation Functions<a class="headerlink" href="#validation-functions" title="Permanent link">&para;</a></h3>
 <p>Each manifold provides <code>is_in_manifold</code> for validation:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span><span class="p">,</span> <span class="n">Hyperboloid</span>
-</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">spatial_to_hyperboloid</span>
-</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>
-</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="n">hyperboloid</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">()</span>
-</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>
-</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="c1"># Poincaré ball: c·||x||² &lt; 1</span>
-</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a><span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">])</span>
-</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10" href="#__codelineno-23-10"></a><span class="k">assert</span> <span class="n">poincare</span><span class="o">.</span><span class="n">is_in_manifold</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
-</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11" href="#__codelineno-23-11"></a>
-</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12" href="#__codelineno-23-12"></a><span class="c1"># Hyperboloid: -x₀² + Σxᵢ² = -1/c  (with x₀ &gt; 0). Building the ambient point</span>
-</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13" href="#__codelineno-23-13"></a><span class="c1"># from its spatial part is the only way to land on the sheet exactly:</span>
-</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14" href="#__codelineno-23-14"></a><span class="c1"># x₀ = sqrt(||x_spatial||² + 1/c).</span>
-</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15" href="#__codelineno-23-15"></a><span class="n">x_ambient</span> <span class="o">=</span> <span class="n">spatial_to_hyperboloid</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">]),</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># (dim+1,)</span>
-</span><span id="__span-23-16"><a id="__codelineno-23-16" name="__codelineno-23-16" href="#__codelineno-23-16"></a><span class="k">assert</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">is_in_manifold</span><span class="p">(</span><span class="n">x_ambient</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span><span class="p">,</span> <span class="n">Hyperboloid</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">spatial_to_hyperboloid</span>
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
+</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="n">hyperboloid</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">()</span>
+</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a>
+</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a><span class="c1"># Poincaré ball: c·||x||² &lt; 1</span>
+</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a><span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">])</span>
+</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a><span class="k">assert</span> <span class="n">poincare</span><span class="o">.</span><span class="n">is_in_manifold</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11" href="#__codelineno-24-11"></a>
+</span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12" href="#__codelineno-24-12"></a><span class="c1"># Hyperboloid: -x₀² + Σxᵢ² = -1/c  (with x₀ &gt; 0). Building the ambient point</span>
+</span><span id="__span-24-13"><a id="__codelineno-24-13" name="__codelineno-24-13" href="#__codelineno-24-13"></a><span class="c1"># from its spatial part is the only way to land on the sheet exactly:</span>
+</span><span id="__span-24-14"><a id="__codelineno-24-14" name="__codelineno-24-14" href="#__codelineno-24-14"></a><span class="c1"># x₀ = sqrt(||x_spatial||² + 1/c).</span>
+</span><span id="__span-24-15"><a id="__codelineno-24-15" name="__codelineno-24-15" href="#__codelineno-24-15"></a><span class="n">x_ambient</span> <span class="o">=</span> <span class="n">spatial_to_hyperboloid</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">]),</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># (dim+1,)</span>
+</span><span id="__span-24-16"><a id="__codelineno-24-16" name="__codelineno-24-16" href="#__codelineno-24-16"></a><span class="k">assert</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">is_in_manifold</span><span class="p">(</span><span class="n">x_ambient</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
 </span></code></pre></div>
 <h3 id="the-atol-convention">The <code>atol</code> Convention<a class="headerlink" href="#the-atol-convention" title="Permanent link">&para;</a></h3>
 <p><code>is_in_manifold</code> and <code>is_in_tangent_space</code> take <code>atol: float | None = None</code>.
@@ -3163,22 +3301,22 @@ on-sheet hyperboloid point past hyperbolic distance ~11 accumulates more than
 <code>1.49e-8</code> of Lorentz residual just from storing <code>x₀</code>, so validate far-out points
 with an explicit <code>atol</code> rather than assuming the default is a bug.</p>
 <h3 id="batch-validation">Batch Validation<a class="headerlink" href="#batch-validation" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>
-</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">validate_batch</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">):</span>
-</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Check if all points in batch satisfy manifold constraint.&quot;&quot;&quot;</span>
-</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a>    <span class="n">valid</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">is_in_manifold</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">atol</span><span class="p">))(</span><span class="n">x_batch</span><span class="p">)</span>
-</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a>    <span class="n">num_valid</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">valid</span><span class="p">)</span>
-</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a>    <span class="n">total</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">x_batch</span><span class="p">)</span>
-</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a>
-</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11" href="#__codelineno-24-11"></a>    <span class="k">if</span> <span class="n">num_valid</span> <span class="o">&lt;</span> <span class="n">total</span><span class="p">:</span>
-</span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12" href="#__codelineno-24-12"></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;WARNING: </span><span class="si">{</span><span class="n">total</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">num_valid</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">total</span><span class="si">}</span><span class="s2"> points off manifold&quot;</span><span class="p">)</span>
-</span><span id="__span-24-13"><a id="__codelineno-24-13" name="__codelineno-24-13" href="#__codelineno-24-13"></a>        <span class="n">violations</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="o">~</span><span class="n">valid</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
-</span><span id="__span-24-14"><a id="__codelineno-24-14" name="__codelineno-24-14" href="#__codelineno-24-14"></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Violating indices: </span><span class="si">{</span><span class="n">violations</span><span class="p">[:</span><span class="mi">10</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>  <span class="c1"># Show first 10</span>
-</span><span id="__span-24-15"><a id="__codelineno-24-15" name="__codelineno-24-15" href="#__codelineno-24-15"></a>
-</span><span id="__span-24-16"><a id="__codelineno-24-16" name="__codelineno-24-16" href="#__codelineno-24-16"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">valid</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">validate_batch</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">):</span>
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Check if all points in batch satisfy manifold constraint.&quot;&quot;&quot;</span>
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a>    <span class="n">valid</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">is_in_manifold</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">atol</span><span class="p">))(</span><span class="n">x_batch</span><span class="p">)</span>
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a>    <span class="n">num_valid</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">valid</span><span class="p">)</span>
+</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a>    <span class="n">total</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">x_batch</span><span class="p">)</span>
+</span><span id="__span-25-10"><a id="__codelineno-25-10" name="__codelineno-25-10" href="#__codelineno-25-10"></a>
+</span><span id="__span-25-11"><a id="__codelineno-25-11" name="__codelineno-25-11" href="#__codelineno-25-11"></a>    <span class="k">if</span> <span class="n">num_valid</span> <span class="o">&lt;</span> <span class="n">total</span><span class="p">:</span>
+</span><span id="__span-25-12"><a id="__codelineno-25-12" name="__codelineno-25-12" href="#__codelineno-25-12"></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;WARNING: </span><span class="si">{</span><span class="n">total</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">num_valid</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">total</span><span class="si">}</span><span class="s2"> points off manifold&quot;</span><span class="p">)</span>
+</span><span id="__span-25-13"><a id="__codelineno-25-13" name="__codelineno-25-13" href="#__codelineno-25-13"></a>        <span class="n">violations</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="o">~</span><span class="n">valid</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="__span-25-14"><a id="__codelineno-25-14" name="__codelineno-25-14" href="#__codelineno-25-14"></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Violating indices: </span><span class="si">{</span><span class="n">violations</span><span class="p">[:</span><span class="mi">10</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>  <span class="c1"># Show first 10</span>
+</span><span id="__span-25-15"><a id="__codelineno-25-15" name="__codelineno-25-15" href="#__codelineno-25-15"></a>
+</span><span id="__span-25-16"><a id="__codelineno-25-16" name="__codelineno-25-16" href="#__codelineno-25-16"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">valid</span><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="best-practices-summary">Best Practices Summary<a class="headerlink" href="#best-practices-summary" title="Permanent link">&para;</a></h2>
 <div class="admonition success">
@@ -3202,38 +3340,38 @@ with an explicit <code>atol</code> rather than assuming the default is a bug.</p
 <ol>
 <li>
 <p><strong>Check for NaN/Inf</strong>:
-   <div class="language-python highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="k">assert</span> <span class="n">jnp</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">x_batch</span><span class="p">)),</span> <span class="s2">&quot;NaN or Inf detected in data&quot;</span>
+   <div class="language-python highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="k">assert</span> <span class="n">jnp</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">x_batch</span><span class="p">)),</span> <span class="s2">&quot;NaN or Inf detected in data&quot;</span>
 </span></code></pre></div></p>
 </li>
 <li>
 <p><strong>Verify manifold constraints</strong>:
-   <div class="language-python highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="n">validate_batch</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">)</span>
+   <div class="language-python highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="n">validate_batch</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">)</span>
 </span></code></pre></div></p>
 </li>
 <li>
 <p><strong>Check boundary proximity</strong>:
-   <div class="language-python highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="n">check_boundary_proximity</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+   <div class="language-python highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="n">check_boundary_proximity</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
 </span></code></pre></div></p>
 </li>
 <li>
 <p><strong>Switch to float64</strong>:
-   <div class="language-python highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="n">x_batch</span> <span class="o">=</span> <span class="n">x_batch</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+   <div class="language-python highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="n">x_batch</span> <span class="o">=</span> <span class="n">x_batch</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
 </span></code></pre></div></p>
 </li>
 <li>
 <p><strong>Try different version</strong>:
-   <div class="language-python highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># Try VERSION_METRIC_TENSOR if VERSION_MOBIUS_DIRECT fails</span>
-</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="n">dist</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">poincare</span><span class="o">.</span><span class="n">VERSION_METRIC_TENSOR</span><span class="p">)</span>
+   <div class="language-python highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># Try VERSION_METRIC_TENSOR if VERSION_MOBIUS_DIRECT fails</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="n">dist</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">poincare</span><span class="o">.</span><span class="n">VERSION_METRIC_TENSOR</span><span class="p">)</span>
 </span></code></pre></div></p>
 </li>
 <li>
 <p><strong>Use float64 manifold</strong>:
-   <div class="language-python highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
-</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="n">poincare_f64</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="n">dist</span> <span class="o">=</span> <span class="n">poincare_f64</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+   <div class="language-python highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
+</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="n">poincare_f64</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="n">dist</span> <span class="o">=</span> <span class="n">poincare_f64</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></p>
 </li>
 </ol>
