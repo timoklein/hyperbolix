@@ -629,6 +629,84 @@ def test_hyperboloid_sqdist(hyperboloid_and_c, tolerance: tuple[float, float], h
 
 
 # ---------------------------------------------------------------------------
+# Cancellation-free dist/logmap/tangent_norm at large radius (WS-A hyperbolic-haversine fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyperboloid_dist_stable_exact_along_radial_geodesic(dtype: jnp.dtype) -> None:
+    """dist along a shared radial geodesic is exactly ``|t1 - t2|`` — a closed form the
+    Minkowski-inner cancellation bug corrupted past radius ~10 (f32) / ~20 (f64) under the old
+    acosh arm, now VERSION_LEGACY.
+
+    ``x = expmap_0(t1 * v_hat)``, ``y = expmap_0(t2 * v_hat)`` lie on the same geodesic ray
+    through the origin (c = 1), so ``d(x, y) = |t1 - t2|`` exactly. VERSION_LEGACY is checked to
+    be off by more than 10x the dtype tolerance at the larger pair: a regression guard that fails
+    loudly if the switch wiring is ever reverted so VERSION_DEFAULT points at the legacy arm.
+    """
+    c = 1.0
+    manifold = hj.manifolds.Hyperboloid(dtype=dtype)
+    dim = 5
+    v_hat = jnp.zeros(dim + 1, dtype=dtype).at[1].set(1.0)  # unit spatial tangent at the origin
+
+    if dtype == jnp.float32:
+        atol, rtol = 4e-3, 4e-3
+        pairs = [(9.0, 10.0), (29.0, 30.0)]
+    else:
+        atol, rtol = 1e-7, 1e-7
+        pairs = [(19.0, 20.0), (55.0, 60.0)]
+
+    for t1, t2 in pairs:
+        x = manifold.expmap_0(jnp.asarray(t1, dtype=dtype) * v_hat, c)
+        y = manifold.expmap_0(jnp.asarray(t2, dtype=dtype) * v_hat, c)
+        expected = abs(t1 - t2)
+
+        d_default = manifold.dist(x, y, c)
+        assert jnp.allclose(d_default, expected, atol=atol, rtol=rtol)
+
+    # Regression guard at the larger, more cancellation-prone pair: the legacy arm must be
+    # visibly wrong, or this test would silently stop catching a reverted switch.
+    t1, t2 = pairs[-1]
+    x = manifold.expmap_0(jnp.asarray(t1, dtype=dtype) * v_hat, c)
+    y = manifold.expmap_0(jnp.asarray(t2, dtype=dtype) * v_hat, c)
+    expected = abs(t1 - t2)
+    d_legacy = manifold.dist(x, y, c, version_idx=hj.manifolds.Hyperboloid.VERSION_LEGACY)
+    assert abs(float(d_legacy) - expected) > 10.0 * atol
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyperboloid_logmap_finite_and_norm_consistent_at_large_radius(dtype: jnp.dtype) -> None:
+    """logmap stays finite and its tangent_norm matches dist at large radius.
+
+    Same radial-geodesic construction as the dist test above, kept within the tangent_norm
+    validity WS-A measured (exact to radius ~25 f64 / ~15 f32): the old ``_minkowski_inner``
+    route NaN'd logmap from radius ~10 (f32) / ~20 (f64) and floored tangent_norm to ~0 past
+    radius 8 (f32) / 20 (f64) on exactly-unit tangent vectors.
+    """
+    c = 1.0
+    manifold = hj.manifolds.Hyperboloid(dtype=dtype)
+    dim = 5
+    v_hat = jnp.zeros(dim + 1, dtype=dtype).at[1].set(1.0)
+
+    if dtype == jnp.float32:
+        atol, rtol = 4e-3, 4e-3
+        t1, t2 = 9.0, 10.0
+    else:
+        atol, rtol = 1e-7, 1e-7
+        t1, t2 = 19.0, 20.0
+
+    x = manifold.expmap_0(jnp.asarray(t1, dtype=dtype) * v_hat, c)
+    y = manifold.expmap_0(jnp.asarray(t2, dtype=dtype) * v_hat, c)
+
+    v = manifold.logmap(y, x, c)
+    assert jnp.all(jnp.isfinite(v))
+
+    d = manifold.dist(x, y, c)
+    n = manifold.tangent_norm(v, x, c)
+    assert jnp.allclose(n, d, atol=atol, rtol=rtol)
+
+
+# ---------------------------------------------------------------------------
 # NaN-gradient regression guards.
 #
 # These are singular-point guards: the failure mode is a 0/0 or 0·inf in a VJP at one specific

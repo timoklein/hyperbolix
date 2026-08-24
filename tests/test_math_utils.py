@@ -6,10 +6,14 @@ import numpy as np
 import pytest
 
 from hyperbolix.utils.math_utils import (
+    MIN_NORM,
     acosh,
     atanh,
     capped_exp,
     cosh,
+    safe_hypot,
+    safe_norm,
+    safe_normalize,
     sinh,
     smooth_clamp,
     smooth_clamp_max,
@@ -390,6 +394,166 @@ def test_tanh():
         # Non-saturated regime: value-identity to jnp.tanh.
         mid = jnp.array([-1.0, -0.5, 0.0, 0.3, 1.0], dtype=dtype)
         assert jnp.allclose(tanh(mid), jnp.tanh(mid), atol=1e-6)
+
+
+# ---------------------------------------------------------------------------------------------
+# safe_norm / safe_hypot / safe_normalize
+#
+# These replace the library's ``sqrt(sum(v**2) + MIN_NORM**2)`` idiom wherever the *magnitude*
+# range matters rather than just the gradient at zero. Two failure modes are pinned below, one at
+# each end of the exponent range, plus the exact VJP:
+#
+#   overflow  — ``sum(v**2)`` leaves float32 at |v| ~ 1.8e19, while the norm itself is
+#               representable up to 3.4e38 (the hyperboloid spatial radius passes 1.8e19 at
+#               geodesic radius 44).
+#   underflow — the ``+ MIN_NORM**2`` floor is 1e-30, so any true norm below 1e-15 is replaced by
+#               1e-15. A float32 angular chord of 1e-34 is a legitimate input, not noise.
+#   VJP       — with the scale under ``stop_gradient`` the derivative is exactly ``v/‖v‖``; at
+#               v = 0 it is exactly 0, which requires sanitizing the sqrt ARGUMENT (a where on the
+#               output alone still builds ``0 * sqrt'(0) = 0 * inf = NaN`` inside the VJP).
+# ---------------------------------------------------------------------------------------------
+
+
+def test_safe_norm_matches_numpy_across_300_orders_of_magnitude():
+    """float64: correct norms for magnitudes 1e-300 .. 1e300.
+
+    The reference is ``‖direction‖ · 10**exponent`` rather than ``np.linalg.norm(v)``, because
+    NumPy's own norm squares first and therefore overflows past ~1e154 and flushes below ~1e-162 —
+    the exact failure this function exists to avoid, on the exact same inputs.
+    """
+    directions = np.array([[3.0, 4.0, 0.0], [1.0, 1.0, 1.0], [-2.0, 0.5, 7.0]])
+    unit_norms = np.linalg.norm(directions, axis=-1)
+    for exponent in range(-300, 301, 10):
+        v = directions * (10.0**exponent)
+        out = np.asarray(safe_norm(jnp.asarray(v, dtype=jnp.float64)))
+        expected = unit_norms * (10.0**exponent)
+        assert np.allclose(out, expected, rtol=1e-15, atol=0.0), f"exponent {exponent}"
+
+
+def test_safe_norm_does_not_overflow_or_underflow_in_float32():
+    """The two regimes the ``sqrt(sum(v**2) + MIN_NORM**2)`` idiom gets wrong, in float32.
+
+    ``1e30`` and ``1e-34`` are both perfectly representable float32 values (max 3.4e38, smallest
+    normal 1.2e-38); only their *squares* are not (1e60 overflows, 1e-68 flushes to zero).
+    """
+    big = jnp.asarray([1e30, 0.0, 0.0], dtype=jnp.float32)
+    assert float(safe_norm(big)) == pytest.approx(1e30, rel=1e-6)
+    assert np.isfinite(float(safe_norm(big)))
+    # The naive idiom overflows here — pin that the guard is load-bearing.
+    assert not np.isfinite(float(jnp.sqrt(jnp.sum(big**2) + MIN_NORM**2)))
+
+    tiny = jnp.asarray([3e-34, 4e-34, 0.0], dtype=jnp.float32)
+    assert float(safe_norm(tiny)) == pytest.approx(5e-34, rel=1e-5)
+    # The naive idiom returns the MIN_NORM floor, 19 orders of magnitude too large.
+    assert float(jnp.sqrt(jnp.sum(tiny**2) + MIN_NORM**2)) == pytest.approx(1e-15, rel=1e-3)
+
+
+def test_safe_norm_is_exactly_zero_with_an_exactly_zero_gradient_at_the_origin():
+    """Forward 0 and VJP 0 at v = 0, both dtypes — the double-``where``'s whole job."""
+    for dt in (jnp.float32, jnp.float64):
+        zero = jnp.zeros(4, dtype=dt)
+        assert float(safe_norm(zero)) == 0.0
+        g = np.asarray(jax.grad(safe_norm)(zero))
+        assert np.all(np.isfinite(g)) and np.all(g == 0.0)
+
+
+def test_safe_norm_gradient_is_the_unit_vector():
+    """grad(safe_norm)(v) == v/‖v‖ exactly, at ordinary and extreme magnitudes.
+
+    ``stop_gradient`` on the max-scale is what makes this hold: differentiating through the scale
+    would add a term proportional to the sign of the largest component.
+    """
+    for v_np in ([3.0, -4.0, 12.0], [1e-30, 2e-30, -2e-30], [1e150, -1e150, 0.0]):
+        v = jnp.asarray(v_np, dtype=jnp.float64)
+        g = np.asarray(jax.grad(safe_norm)(v))
+        expected = np.asarray(v_np) / np.linalg.norm(v_np)
+        assert np.allclose(g, expected, rtol=1e-14, atol=0.0)
+        assert float(np.linalg.norm(g)) == pytest.approx(1.0, rel=1e-14)
+
+
+def test_safe_norm_batches_over_leading_axes():
+    """The norm is taken over the last axis only, for any number of leading axes."""
+    v = jnp.asarray(np.arange(24, dtype=np.float64).reshape(2, 3, 4))
+    out = np.asarray(safe_norm(v))
+    assert out.shape == (2, 3)
+    assert np.allclose(out, np.linalg.norm(np.asarray(v), axis=-1), rtol=1e-15)
+
+
+def test_safe_norm_passes_infinity_through():
+    """A vector holding an inf returns inf, not NaN (out-of-range points stay visibly degenerate)."""
+    v = jnp.asarray([np.inf, 1.0, 0.0], dtype=jnp.float64)
+    assert np.isinf(float(safe_norm(v)))
+
+
+def test_safe_hypot_matches_numpy_and_survives_extreme_legs():
+    """Value oracle vs ``np.hypot``, plus the float32 leg that squares out of range."""
+    legs = [(3.0, 4.0), (1e-20, 1e-25), (0.0, 2.5), (-7.0, 0.0), (1e150, 1e150)]
+    for p, q in legs:
+        out = float(safe_hypot(jnp.asarray(p, dtype=jnp.float64), jnp.asarray(q, dtype=jnp.float64)))
+        assert out == pytest.approx(float(np.hypot(p, q)), rel=1e-14)
+
+    p32 = jnp.asarray(1e30, dtype=jnp.float32)
+    q32 = jnp.asarray(1.0, dtype=jnp.float32)
+    assert np.isfinite(float(safe_hypot(p32, q32)))
+    assert float(safe_hypot(p32, q32)) == pytest.approx(1e30, rel=1e-6)
+    assert not np.isfinite(float(jnp.sqrt(p32**2 + q32**2)))  # the guard is load-bearing
+
+
+def test_safe_hypot_is_exactly_zero_with_zero_gradients_at_the_origin():
+    """0 forward and 0 in both partial derivatives at p == q == 0, both dtypes."""
+    for dt in (jnp.float32, jnp.float64):
+        z = jnp.asarray(0.0, dtype=dt)
+        assert float(safe_hypot(z, z)) == 0.0
+        gp, gq = jax.grad(safe_hypot, argnums=(0, 1))(z, z)
+        assert float(gp) == 0.0 and float(gq) == 0.0
+
+
+def test_safe_hypot_gradient_matches_the_closed_form():
+    """d/dp hypot = p/hypot, d/dq hypot = q/hypot — including at a leg that would overflow."""
+    p, q = 1e150, -3e149
+    gp, gq = jax.grad(safe_hypot, argnums=(0, 1))(jnp.asarray(p), jnp.asarray(q))
+    h = float(np.hypot(p, q))
+    assert float(gp) == pytest.approx(p / h, rel=1e-14)
+    assert float(gq) == pytest.approx(q / h, rel=1e-14)
+
+
+def test_safe_normalize_returns_unit_vectors_and_an_exact_zero_at_the_origin():
+    """Unit output at every magnitude; the exact zero vector (finite gradient) at v = 0."""
+    # The reference direction is built at unit scale and then compared: ``np.linalg.norm`` itself
+    # overflows on the 1e200 row.
+    for direction, scale in (([3.0, -4.0, 0.0], 1.0), ([1.0, 0.0, 0.0], 1e-33), ([1.0, 1.0, 0.0], 1e200)):
+        v_np = np.asarray(direction) * scale
+        out = np.asarray(safe_normalize(jnp.asarray(v_np, dtype=jnp.float64)))
+        assert float(np.linalg.norm(out)) == pytest.approx(1.0, rel=1e-14)
+        assert np.allclose(out, np.asarray(direction) / np.linalg.norm(direction), rtol=1e-14)
+
+    for dt in (jnp.float32, jnp.float64):
+        zero = jnp.zeros(3, dtype=dt)
+        out = np.asarray(safe_normalize(zero))
+        assert np.all(out == 0.0)
+        g = np.asarray(jax.jacobian(safe_normalize)(zero))
+        assert np.all(np.isfinite(g))
+
+
+def test_safe_normalize_has_no_min_norm_floor_on_the_denominator():
+    """A direction of length 1e-19 normalizes to a UNIT vector, not to a 1e-4-scaled one.
+
+    A ``maximum(‖v‖, MIN_NORM)`` floor (the library's older idiom) would divide by 1e-15 here and
+    return a vector of length 1e-4. The angular leg of the hyperboloid geodesic frame is built
+    from exactly such a vector, so the floor would silently shrink the direction.
+    """
+    v = jnp.asarray([1e-19, 0.0, 0.0], dtype=jnp.float64)
+    out = np.asarray(safe_normalize(v))
+    assert out[0] == pytest.approx(1.0, rel=1e-14)
+
+
+def test_safe_norm_family_preserves_dtype():
+    """float32 in, float32 out — no silent promotion under global x64."""
+    for dt in (jnp.float32, jnp.float64):
+        v = jnp.asarray([0.3, -0.4, 0.5], dtype=dt)
+        assert safe_norm(v).dtype == dt
+        assert safe_normalize(v).dtype == dt
+        assert safe_hypot(v[0], v[1]).dtype == dt
 
 
 def test_dtype_consistency():

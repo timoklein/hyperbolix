@@ -33,27 +33,48 @@ Use jax.vmap for batching and jax.jit for compilation:
     >>> distance = dist_jit(x, y, c=1.0, version_idx=VERSION_DEFAULT)
 
 Version Constants:
-    VERSION_DEFAULT (0): Standard acosh distance with hard clipping
-    VERSION_SMOOTHENED (1): Smoothened distance with soft clamping
+    VERSION_DEFAULT (0): Cancellation-free hyperbolic-haversine distance (hard floor at 0).
+        Accurate at any representable radius — see the numerical-stability guide.
+    VERSION_SMOOTHENED (1): Hyperbolic-haversine distance with a strictly-positive floor
+        (soft clamping), same cancellation-free evaluation as VERSION_DEFAULT.
+    VERSION_LEGACY (2): Pre-fix acosh-based distance with hard clipping, reproduced
+        bit-for-bit for reproducibility. Routes through the Minkowski inner product and loses
+        all precision once √c·(d₀(x) + d₀(y) - d(x, y)) exceeds ln(1/eps) — 15.9 (float32) /
+        36.0 (float64). Use only to match results computed before this fix.
+    VERSION_LEGACY_SMOOTHENED (3): VERSION_LEGACY with soft clamping. Same precision loss
+        past the threshold above.
 
 Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
 """
 
 import math
+from typing import NamedTuple
 
 import jax.lax as lax
 import jax.numpy as jnp
 from jax.scipy.special import digamma
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, acosh, cosh, sinh, smooth_clamp, smooth_clamp_min
+from ..utils.math_utils import (
+    MIN_NORM,
+    acosh,
+    cosh,
+    safe_hypot,
+    safe_norm,
+    safe_normalize,
+    sinh,
+    smooth_clamp,
+    smooth_clamp_min,
+)
 from ._base import ManifoldBase, default_atol
 from .protocol import Curvature
 
 # Version selection constants for _dist() and _dist_0()
 VERSION_DEFAULT = 0
 VERSION_SMOOTHENED = 1
+VERSION_LEGACY = 2
+VERSION_LEGACY_SMOOTHENED = 3
 
 
 def _create_origin(c: Curvature, dim: int, dtype=jnp.float32) -> Float[Array, "dim_plus_1"]:
@@ -193,9 +214,186 @@ def _scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[
     return res
 
 
+class _PolarFrame(NamedTuple):
+    """Cancellation-free polar decomposition of a hyperboloid point pair (see :func:`_polar_frame`).
+
+    Shared by ``_dist_stable``, ``_dist_stable_smoothened``, ``_sqdist`` and ``_logmap`` so the
+    distance and the log map cannot drift apart. ``NamedTuple`` is a pytree, so this is jit- and
+    vmap-clean and costs nothing at trace time.
+
+    Dimension key:
+        D: spatial dim    A: ambient dim (= D + 1, time coordinate first)
+    """
+
+    sqrt_c: Float[Array, ""]
+    r_x: Float[Array, ""]  # ‖x_s‖ = sinh(a)/√c
+    r_y: Float[Array, ""]  # ‖y_s‖ = sinh(b)/√c
+    r_x_pos: Float[Array, ""]  # max(r_x, MIN_NORM) — see the floor note in _polar_frame
+    r_y_pos: Float[Array, ""]
+    x_hat_D: Float[Array, "dim"]  # x_s / r_x_pos (zero vector at the origin)
+    y_hat_D: Float[Array, "dim"]
+    x_time: Float[Array, ""]  # x₀ = cosh(a)/√c
+    sinh_half_gap: Float[Array, ""]  # P = sinh((a - b)/2)
+    q_angular: Float[Array, ""]  # q = ½·√c·√(r_x·r_y)·‖x̂ - ŷ‖
+    sinh_half: Float[Array, ""]  # S = sinh(θ/2) = hypot(P, q),  θ = √c·d(x, y)
+    cosh_half: Float[Array, ""]  # C = cosh(θ/2) = hypot(1, S)
+    chord: Float[Array, ""]  # ‖x̂ - ŷ‖ = 2·sin(ψ/2)
+    csum: Float[Array, ""]  # ‖x̂ + ŷ‖ = 2·cos(ψ/2)
+
+
+def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> _PolarFrame:
+    """Hyperbolic haversine decomposition of the pair ``(x, y)``, free of catastrophic cancellation.
+
+    **The problem.** Every ambient-chart formula built on ``⟨x, y⟩_L = -x₀y₀ + ⟨x_s, y_s⟩``
+    subtracts two positive numbers of size ``e^(a+b)/(4c)`` to obtain ``cosh(θ)/c``, where
+    ``a = √c·d₀(x)``, ``b = √c·d₀(y)`` and ``θ = √c·d(x, y)``. The surviving significand is
+    ``e^(a + b - θ)`` times smaller than the operands — twice the Gromov product — so *all*
+    precision is gone once ``a + b - θ`` exceeds ``ln(1/eps)``: 15.9 in float32, 36.0 in float64.
+    Measured: float32 ``dist`` returns 0.0015 for a true distance of 1.0 at radius 10.
+
+    **The fix.** The hyperbolic law of cosines, rewritten in half-angle (haversine) form, is a sum
+    of two *non-negative* terms, so nothing cancels::
+
+        sinh²(θ/2) = sinh²((a - b)/2) + (c/4)·r_x·r_y·‖x̂_s - ŷ_s‖²
+
+    with ``r_x = ‖x_s‖``, ``x̂_s = x_s/r_x``. It follows from ``cosh θ = cosh a cosh b -
+    sinh a sinh b cos ψ`` and ``‖x̂ - ŷ‖² = 2 - 2cos ψ`` via ``sinh²(t/2) = (cosh t - 1)/2``. Both
+    roots are then taken through the on-manifold identities ``sinh a = √c·r_x``, ``cosh a = √c·x₀``,
+    ``e^a = √c·(x₀ + r_x)``, which involve only additions of positive quantities:
+
+    * ``P := sinh((a - b)/2) = ½·(u_x - u_y)/(√u_x·√u_y)`` with ``u_x = x₀ + r_x``.
+    * ``q := ½·√c·√r_x·√r_y·chord``, so that ``q² = (c/4)·r_x·r_y·chord²``.
+    * ``S := hypot(P, q) = sinh(θ/2)`` and ``C := hypot(1, S) = cosh(θ/2)``.
+
+    **Operation orderings that are load-bearing** (each measured, do not "simplify"):
+
+    * ``√u_x`` and ``√u_y`` are taken *separately*. ``√(u_x·u_y)`` overflows float32 as soon as
+      ``a + b > 88``, while the quotient itself is perfectly representable.
+    * ``√r_x·√r_y·chord``, never ``√(r_x·r_y)`` and never ``chord²·r_x·r_y``: both alternatives
+      square a spatial radius, which leaves float32 at radius 44.
+    * every norm goes through :func:`~hyperbolix.utils.math_utils.safe_norm`, whose max-scaling is
+      what keeps a legitimate ``1e-34`` chord from being flushed to the ``MIN_NORM`` floor.
+    * ``(u_x - u_y)`` is a difference, not a quotient of exponentials: for ``a ≈ b`` (small
+      distances) the subtraction of nearby floats is exact (Sterbenz), whereas the algebraically
+      equal ``½·(√(u_x/u_y) - √(u_y/u_x))`` loses all significance there.
+
+    **The MIN_NORM floor on the radii is deliberate and must stay a floor** (``maximum``), not a
+    ``where``-style exact-zero guard. At ``x`` exactly at the origin the two floors cancel *exactly*
+    in the gradient: ``q ∝ √(r_x_pos) = √MIN_NORM`` while ``∂chord/∂x_s ∝ 1/r_x_pos = 1/MIN_NORM``,
+    and the ``∂S/∂q = q/S`` factor restores the remaining ``√MIN_NORM``. The product is
+    floor-independent and yields the analytically correct ``∇_{x_s} d = -ŷ_s`` with ``|∇| = 1``.
+    Replacing the floor with an exact zero would make that gradient vanish and freeze every
+    origin-initialized parameter.
+
+    Args:
+        x: Hyperboloid point, shape (dim+1,)
+        y: Hyperboloid point, shape (dim+1,)
+        c: Curvature (positive)
+
+    Returns:
+        The shared :class:`_PolarFrame`.
+    """
+    sqrt_c = jnp.sqrt(c)
+    x_time, y_time = x[0], y[0]
+    x_s_D, y_s_D = x[1:], y[1:]
+
+    r_x = safe_norm(x_s_D)
+    r_y = safe_norm(y_s_D)
+    r_x_pos = jnp.maximum(r_x, MIN_NORM)
+    r_y_pos = jnp.maximum(r_y, MIN_NORM)
+    x_hat_D = x_s_D / r_x_pos
+    y_hat_D = y_s_D / r_y_pos
+
+    # e^a = √c·u_x, so P = sinh((a-b)/2) = (u_x - u_y)/(2·√u_x·√u_y) — the √c cancels.
+    # On the upper sheet u = x₀ + r_x >= x₀ >= 1/√c > 0, so the MIN_NORM floor is a no-op for every
+    # valid point; it only stops a fully degenerate input (an all-zero "point", x₀ = 0) from
+    # turning the quotient into 0/0 = NaN.
+    u_x = jnp.maximum(x_time + r_x, MIN_NORM)
+    u_y = jnp.maximum(y_time + r_y, MIN_NORM)
+    # A point past the dtype's representable radius has x₀ = inf (the sqrt inside _proj
+    # overflowed), where the exact quotient is inf/inf = NaN. Return ±inf instead: the geodesic
+    # distance there really is infinite, and an inf stays visible downstream while a NaN silently
+    # poisons every parameter it touches. Value- and gradient-identity whenever both are finite.
+    representable = jnp.isfinite(u_x) & jnp.isfinite(u_y)
+    sinh_half_gap = jnp.where(
+        representable,
+        0.5 * (u_x - u_y) / (jnp.sqrt(u_x) * jnp.sqrt(u_y)),
+        jnp.where(u_x > u_y, jnp.inf, -jnp.inf),
+    )
+
+    chord = safe_norm(x_hat_D - y_hat_D)  # 2·sin(ψ/2)
+    csum = safe_norm(x_hat_D + y_hat_D)  # 2·cos(ψ/2)
+    # Grouped so the two radii meet each other first: float multiplication is commutative but not
+    # associative, so ``(k·√r_x)·√r_y`` and ``(k·√r_y)·√r_x`` differ in the last ulp and ``dist``
+    # would stop being *bitwise* symmetric under swapping x and y.
+    q_angular = (0.5 * sqrt_c * chord) * (jnp.sqrt(r_x_pos) * jnp.sqrt(r_y_pos))
+
+    sinh_half = safe_hypot(sinh_half_gap, q_angular)
+    cosh_half = safe_hypot(jnp.ones_like(sinh_half), sinh_half)
+
+    return _PolarFrame(
+        sqrt_c=sqrt_c,
+        r_x=r_x,
+        r_y=r_y,
+        r_x_pos=r_x_pos,
+        r_y_pos=r_y_pos,
+        x_hat_D=x_hat_D,
+        y_hat_D=y_hat_D,
+        x_time=x_time,
+        sinh_half_gap=sinh_half_gap,
+        q_angular=q_angular,
+        sinh_half=sinh_half,
+        cosh_half=cosh_half,
+        chord=chord,
+        csum=csum,
+    )
+
+
 # Distance implementations for lax.switch
-def _dist_default(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
-    """Standard acosh distance with hard clipping."""
+def _dist_stable(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    """Cancellation-free geodesic distance, ``d = 2·arcsinh(sinh(θ/2))/√c`` (hyperbolic haversine).
+
+    Reads ``S = sinh(θ/2)`` off the :func:`_polar_frame` decomposition, which builds it as a sum of
+    non-negative terms instead of subtracting the two large halves of ``⟨x, y⟩_L``. No ``acosh``,
+    no domain clamp, and no ``where(x == y, ...)`` coincidence guard: ``x == y`` gives ``P = 0`` and
+    ``chord = 0`` exactly, hence ``S = 0``, ``d = 0`` and an exactly-zero gradient by construction.
+
+    It also removes the float32 resolution floor the ``acosh`` form imposed: ``acosh``'s
+    ``1 + 10·eps`` domain clamp made every distance below ~1.5e-3 unrepresentable, whereas
+    ``arcsinh`` is exact near 0.
+
+    ``jnp.arcsinh`` is used directly — measured ≤2.5 ulp in both dtypes with a clean derivative
+    ``1/√(1 + S²)``, so no ``custom_jvp`` is needed anywhere in this path.
+    """
+    frame = _polar_frame(x, y, c)
+    return 2.0 * jnp.arcsinh(frame.sinh_half) / frame.sqrt_c
+
+
+def _dist_stable_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    """:func:`_dist_stable` with a strictly-positive floor: ``S`` is replaced by ``hypot(S, ε)``.
+
+    ``ε = 10·eps`` puts the floor at ``2·arcsinh(ε)/√c`` ≈ 2.4e-6 (float32) / 4.4e-15 (float64),
+    which is the smoothened arm's contract: a distance that is never exactly zero, with gradients
+    that stay finite through coincidence. Because ``hypot`` is smooth and the floor enters in
+    quadrature, the perturbation is ``O(ε²/S)`` — invisible at any distance above the floor.
+
+    ``smooth_clamp_min`` is deliberately *not* used here (the legacy arm's approach). Its softplus
+    remainder adds ``log(2)/β = 0.0139`` at the clamp point and never fully decays, so it would
+    shift **every** distance in the working range by ~0.028 rather than only lifting zero.
+    """
+    frame = _polar_frame(x, y, c)
+    eps = 10.0 * float(jnp.finfo(x.dtype).eps)
+    sinh_half_floored = safe_hypot(frame.sinh_half, jnp.asarray(eps, dtype=x.dtype))
+    return 2.0 * jnp.arcsinh(sinh_half_floored) / frame.sqrt_c
+
+
+def _dist_legacy(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    """Standard acosh distance with hard clipping.
+
+    Kept for reference and comparison only. It routes through :func:`_minkowski_inner` and so loses
+    all precision once ``√c·(d₀(x) + d₀(y) - d(x, y))`` exceeds ``ln(1/eps)`` — see
+    :func:`_polar_frame`. Prefer :func:`_dist_stable`.
+    """
     sqrt_c = jnp.sqrt(c)
     lorentz_inner = _minkowski_inner(x, y)
     arg = jnp.clip(-c * lorentz_inner, min=1.0)
@@ -205,8 +403,8 @@ def _dist_default(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], 
     return jnp.where(same, 0.0, res)  # type: ignore[return-value]
 
 
-def _dist_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
-    """Smoothened distance with soft clamping."""
+def _dist_legacy_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    """Smoothened distance with soft clamping. Legacy — see :func:`_dist_legacy`."""
     sqrt_c = jnp.sqrt(c)
     lorentz_inner = _minkowski_inner(x, y)
     arg = smooth_clamp_min(-c * lorentz_inner, 1.0)
@@ -236,7 +434,7 @@ def _dist(
     References:
         Nickel & Kiela. "Poincaré embeddings for learning hierarchical representations." NeurIPS 2017.
     """
-    return lax.switch(version_idx, [_dist_default, _dist_smoothened], x, y, c)
+    return lax.switch(version_idx, [_dist_stable, _dist_stable_smoothened, _dist_legacy, _dist_legacy_smoothened], x, y, c)
 
 
 def _sqdist(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
@@ -245,6 +443,14 @@ def _sqdist(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Cur
     Computes the squared Lorentzian distance of Law et al. (2019):
 
         d_L²(x, y) = -2/c - 2 * ⟨x, y⟩_L
+
+    evaluated **cancellation-free** as ``d_L² = (4/c)·sinh²(θ/2) = 4·S²/c`` off the
+    :func:`_polar_frame` decomposition (``S = sinh(θ/2)``, ``θ = √c·d(x, y)``). The two expressions
+    are algebraically identical on the manifold, but the literal one subtracts two positive numbers
+    of size ``e^(a+b)/(2c)`` to obtain a result of size ``e^θ/c`` and so loses all precision past
+    the ``ln(1/eps)`` Gromov-product threshold described in :func:`_polar_frame`. The haversine form
+    is a sum of non-negative terms, which also makes the old ``clip(min=0)`` unnecessary: the result
+    is non-negative by construction and exactly 0 at ``x == y``.
 
     This is **not** the square of the geodesic distance :func:`_dist`. Since ⟨x,x⟩_L = ⟨y,y⟩_L =
     -1/c on the manifold, the two are related by a monotone closed form:
@@ -271,10 +477,9 @@ def _sqdist(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Cur
     References:
         Law et al. "Lorentzian Distance Learning for Hyperbolic Representations." ICML 2019.
     """
-    # d_L² = ||x - y||²_L = -2/c - 2⟨x,y⟩_L >= 0. Clip the float-rounding sliver below 0 at
-    # coincidence (the true minimum is 0, where the gradient is 0 anyway).
-    sqdist = -2.0 / c - 2.0 * _minkowski_inner(x, y)
-    return jnp.clip(sqdist, min=0.0)
+    # d_L² = ||x - y||²_L = (4/c)·sinh²(θ/2). Non-negative by construction — no clip needed.
+    frame = _polar_frame(x, y, c)
+    return 4.0 * frame.sinh_half**2 / c
 
 
 # Distance from origin implementations for lax.switch
@@ -316,7 +521,10 @@ def _dist_0(x: Float[Array, "dim_plus_1"], c: Curvature, version_idx: int = VERS
     References:
         Nickel & Kiela. "Poincaré embeddings for learning hierarchical representations." NeurIPS 2017.
     """
-    return lax.switch(version_idx, [_dist_0_default, _dist_0_smoothened], x, c)
+    # Slots 2/3 duplicate 0/1: ``dist_0`` reads the geodesic radius straight off ``x₀`` and has no
+    # cancellation to fix, so it has no legacy/stable split. The duplication keeps ``version_idx``
+    # meaning the same thing here as in :func:`_dist` (same precedent as ``poincare._dist_0``).
+    return lax.switch(version_idx, [_dist_0_default, _dist_0_smoothened, _dist_0_default, _dist_0_smoothened], x, c)
 
 
 def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
@@ -403,28 +611,82 @@ def _retraction(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c:
 
 
 def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
-    """Logarithmic map: map point y to tangent space at point x.
+    """Logarithmic map: map point y to tangent space at **x** (the second argument is the base point).
+
+    Built in an orthonormal geodesic frame at ``x`` instead of from ``y + c·⟨x, y⟩_L·x``. The
+    textbook direction vector is a difference of two ambient vectors of size ``e^(a+b)``, so it
+    inherits the ``_minkowski_inner`` cancellation described in :func:`_polar_frame` twice over
+    (once in the inner product, once in the normalization) and returns NaN from radius ~10 in
+    float32 / ~20 in float64.
+
+    The frame is exactly tangent and exactly orthonormal *analytically*::
+
+        e_rad = -√c·(r_x, x₀·x̂_s)         unit, Minkowski-orthogonal to x, pointing at the origin
+        e_ang = (0, n̂),  n̂ = normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)
+        log_x(y) = d·(cos φ · e_rad + sin φ · e_ang)
+
+    (``⟨e_rad, e_rad⟩_L = c·(x₀² - r_x²) = 1`` and ``⟨e_rad, x⟩_L = 0`` are exact identities on the
+    manifold.) The angle ``φ`` between the geodesic and the inward radial direction comes from
+
+        cos φ·sinh θ = 2P·cosh((a - b)/2) + 2q²·coth a,   sin φ·sinh θ = sin ψ·sinh b
+
+    which, using ``sinh θ = 2·S·C`` and ``sin ψ = chord·csum/2``, factor into products of
+    **individually bounded** ratios of :func:`_polar_frame` quantities::
+
+        cos φ = (P/S)·(hypot(1, P)/C) + (q/S)·(q/C)·(x₀/r_x)
+        sin φ = (q/S)·(csum/2)·√r_y/(√r_x·C)
+
+    with ``|P/S| ≤ 1``, ``q/S ≤ 1``, ``q/C ≤ 1``, ``hypot(1, P)/C ≤ 1`` and ``csum/2 ≤ 1``. The one
+    unbounded factor, ``coth a = x₀/r_x``, is multiplied by ``q² = O(r_x)``, so the product is
+    ``O(1)``; writing it as the ratio product above (rather than forming ``q²`` first) is what keeps
+    it from overflowing at large radius, where ``q`` alone is ~1e18 in float32.
+
+    The result is **not** passed through :func:`_tangent_proj`: that helper routes through
+    :func:`_minkowski_inner` and would reintroduce exactly the NaN this rewrite removes. It is not
+    needed — the frame is tangent by construction, with a measured relative residual
+    ``|⟨u, x⟩_L|/(‖u‖∞·‖x‖∞)`` of ≤2.3e-7 (float32) / ≤2.9e-16 (float64). For the same reason
+    ``‖log_x(y)‖_x = d(x, y)`` holds by construction: ``d`` is taken from the same frame.
+
+    At ``x`` exactly at the origin the radial leg degenerates (``r_x = 0`` ⇒ ``e_rad = 0``), so the
+    result falls back to :func:`_logmap_0`, which is exact there. Both branches of the ``where`` are
+    finite — the ``MIN_NORM``-floored denominators guarantee it — so the ``where``'s VJP is NaN-free.
 
     Args:
-        y: Hyperboloid point, shape (dim+1,)
-        x: Hyperboloid point, shape (dim+1,)
+        y: Hyperboloid point to map, shape (dim+1,)
+        x: Hyperboloid point serving as the base of the tangent space, shape (dim+1,)
         c: Curvature (positive)
 
     Returns:
-        Tangent vector log_x(y), shape (dim+1,)
+        Tangent vector log_x(y) at x, shape (dim+1,)
 
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    mink_inner = _minkowski_inner(x, y)
-    dist_xy = _dist(x, y, c=c)
-    direction = y + c * mink_inner * x
+    frame = _polar_frame(x, y, c)
+    dist_xy = 2.0 * jnp.arcsinh(frame.sinh_half) / frame.sqrt_c
 
-    dir_sqnorm = _minkowski_inner(direction, direction)
-    dir_norm = jnp.sqrt(jnp.maximum(dir_sqnorm, MIN_NORM))
-    res = dist_xy * direction / dir_norm
-    res = _tangent_proj(res, x, c)
-    return res
+    # S = 0 exactly at x == y, where the direction is arbitrary; floor the denominator so the
+    # discarded ratios stay finite (they are multiplied by dist_xy = 0 anyway).
+    sinh_half_pos = jnp.maximum(frame.sinh_half, MIN_NORM)
+    cos_phi = (frame.sinh_half_gap / sinh_half_pos) * (
+        safe_hypot(jnp.ones_like(frame.sinh_half_gap), frame.sinh_half_gap) / frame.cosh_half
+    ) + (frame.q_angular / sinh_half_pos) * (frame.q_angular / frame.cosh_half) * (frame.x_time / frame.r_x_pos)
+    sin_phi = (
+        (frame.q_angular / sinh_half_pos)
+        * (frame.csum / 2.0)
+        * jnp.sqrt(frame.r_y_pos)
+        / (jnp.sqrt(frame.r_x_pos) * frame.cosh_half)
+    )
+
+    # Inward unit radial direction, exactly tangent at x.
+    e_rad_A = -frame.sqrt_c * jnp.concatenate([frame.r_x[None], frame.x_time * frame.x_hat_D])
+    # Unit angular direction: the component of ŷ_s orthogonal to x̂_s. Exactly the zero vector when
+    # the two points share a ray (ψ = 0 or π), which is also where sin φ = 0.
+    n_hat_D = safe_normalize(frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D) * frame.x_hat_D)
+    e_ang_A = jnp.concatenate([jnp.zeros(1, dtype=x.dtype), n_hat_D])
+
+    res = dist_xy * (cos_phi * e_rad_A + sin_phi * e_ang_A)
+    return jnp.where(frame.r_x > 0, res, _logmap_0(y, c))
 
 
 def _logmap_0(y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
@@ -555,7 +817,30 @@ def _tangent_inner(
 
 
 def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
-    """Compute norm of tangent vector v at point x.
+    """Riemannian norm ``‖v‖_x`` of a vector **assumed tangent at x**, computed without cancellation.
+
+    ``v`` is required to satisfy ``⟨v, x⟩_L = 0``; the base point ``x`` is what makes that
+    assumption usable. Eliminating ``v₀`` through it (``v₀·x₀ = ⟨v_s, x_s⟩``) turns the Lorentz
+    norm into a sum of two non-negative terms::
+
+        t = ⟨v_s, x̂_s⟩                                       (radial component of v_s)
+        ‖v‖²_L = ‖v_s - t·x̂_s‖² + (t/(√c·x₀))²               (√c·x₀ = cosh a ≥ 1)
+
+    The literal ambient form ``-v₀² + ‖v_s‖²`` instead subtracts two numbers of size
+    ``(√c·x₀·‖v‖)²``, so its relative error grows like ``c·x₀²·eps``: measured on an *exactly unit*
+    radial tangent vector it returns 0.87 at radius 8 and 1e-15 (i.e. the ``MIN_NORM`` floor, a
+    100% error) at radius 10 in float32, and collapses the same way past radius 20 in float64.
+    The form above errs like ``√c·x₀·eps`` instead — one power of ``x₀`` better, which roughly
+    doubles the usable radius (float32: exact to radius ~15; float64: to ~25).
+
+    That remaining ``√c·x₀·eps`` term is *not* an artifact of this formula but of the ambient chart:
+    at radius ``a`` the tangent vector's ambient components are ``e^a`` times its Riemannian length,
+    so one ulp of the representation already costs that much. No implementation reading only
+    ``(v, x)`` can do better.
+
+    ``safe_norm``/``safe_hypot`` compose the two terms, so nothing overflows at large radius and
+    ``v = 0`` returns exactly 0 with an exactly-zero (hence finite) gradient — the ``MIN_NORM²``
+    floor the previous implementation needed for that is no longer required.
 
     Args:
         v: Tangent vector at x, shape (dim+1,)
@@ -565,10 +850,16 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     Returns:
         Riemannian norm ||v||_x, scalar
     """
-    inner = jnp.clip(_tangent_inner(v, v, x, c), min=0.0)
-    # +MIN_NORM² keeps sqrt's gradient finite at v=0 (sqrt'(0)=inf); matches the safe norm in
-    # _expmap. A bare clip(min=0.0) leaves the gradient as inf at the origin of the tangent space.
-    return jnp.sqrt(inner + MIN_NORM**2)
+    sqrt_c = jnp.sqrt(c)
+    x_s_D = x[1:]
+    v_s_D = v[1:]
+    x_hat_D = x_s_D / jnp.maximum(safe_norm(x_s_D), MIN_NORM)
+
+    radial = jnp.dot(v_s_D, x_hat_D)
+    perp_norm = safe_norm(v_s_D - radial * x_hat_D)
+    # √c·x₀ = cosh a >= 1 on the upper sheet, so the floor is a no-op for every valid base point;
+    # it only keeps a degenerate x (x₀ = 0) from dividing by zero.
+    return safe_hypot(perp_norm, radial / jnp.maximum(sqrt_c * x[0], MIN_NORM))
 
 
 def _egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
@@ -939,6 +1230,8 @@ class Hyperboloid(ManifoldBase):
 
     VERSION_DEFAULT = VERSION_DEFAULT
     VERSION_SMOOTHENED = VERSION_SMOOTHENED
+    VERSION_LEGACY = VERSION_LEGACY
+    VERSION_LEGACY_SMOOTHENED = VERSION_LEGACY_SMOOTHENED
 
     def create_origin(self, c: Curvature, dim: int) -> Float[Array, "dim_plus_1"]:
         """Create hyperboloid origin [1/√c, 0, ..., 0]."""
@@ -990,6 +1283,11 @@ class Hyperboloid(ManifoldBase):
 
     def sqdist(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
         """Squared Lorentzian distance ``d_L²(x, y) = -2/c - 2⟨x,y⟩_L`` (Law et al. 2019).
+
+        That is the mathematical definition; it is now evaluated cancellation-free as
+        ``d_L² = 4·sinh²(√c·d(x,y)/2)/c`` off the :func:`_polar_frame` decomposition instead of the
+        literal subtraction, which loses precision the same way :func:`_dist_legacy` does (see
+        :func:`_sqdist`'s docstring for the full derivation).
 
         A fast, ``acosh``-free dissimilarity that is monotone in the geodesic :meth:`dist`
         (``d_L² = (2/c)(cosh(√c·d) - 1)``) but is **not** the squared geodesic distance and **not**
