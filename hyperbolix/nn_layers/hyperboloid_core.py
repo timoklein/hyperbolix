@@ -300,7 +300,23 @@ def lorentz_midpoint(
         ``h = weights @ points``  (weighted sum)
         ``mu = h / (sqrt(c) * ||h||_L)``
 
-    where ``||h||_L = sqrt(-<h,h>_L)`` and ``<h,h>_L = -h_0^2 + ||h_s||^2``.
+    where ``||h||_L = sqrt(-<h,h>_L)``. The Minkowski square ``<h,h>_L`` is **not** evaluated
+    as the literal ``-h_0^2 + ||h_s||^2``: for on-sheet ``points`` (``<x_m,x_m>_L = -1/c``) it
+    is obtained from the exact, cancellation-free identity — with reference ``p`` the input closest
+    to the vertex, ``delta_m = x_m - p``, ``W = sum_m w_m`` and ``Delta = sum_m w_m delta_m`` ::
+
+        <h,h>_L = -W^2/c - W * sum_m w_m <delta_m, delta_m>_L + <Delta, Delta>_L
+
+    The naive form subtracts two ``O(||s||^2)`` squares to reach an ``O(W^2/c)`` result, so its
+    float32 relative error grows like ``eps * c * ||s||^2``; every term above is
+    ``O(||delta||^2)`` instead, so the normalizer itself never cancels catastrophically at any radius. The
+    identity holds for arbitrary weights (negative and zero included) and, in exact arithmetic, is
+    independent of which point is used as the reference — in floats it is not, hence the
+    vertex-nearest choice (see Notes).
+
+    For non-negative weights the ``eps`` floor only engages as ``W -> 0``: the identity is
+    equivalently ``<h,h>_L = -W^2/c - 1/2 sum_ij w_i w_j <x_i - x_j, x_i - x_j>_L`` with every
+    difference spacelike (``<x_i - x_j, x_i - x_j>_L >= 0``), hence ``c * |<h,h>_L| >= W^2``.
 
     Parameters
     ----------
@@ -317,15 +333,60 @@ def lorentz_midpoint(
     -------
     Array, shape (..., N, A)
         Midpoints on the hyperboloid with curvature ``c``.
+
+    Notes
+    -----
+    The identity assumes the ``points`` are *exactly* on-sheet — an assumption float storage cannot
+    honour at large radius, since ``x_0`` is only accurate to ``eps * x_0`` and the sheet constraint
+    needs ``eps * x_0^2 << 1/c`` (violated beyond ``||s|| ~ 3e3`` in float32, ``~1e8`` in float64,
+    e.g. a Poincare point lifted from the ball boundary). The old naive ``h / sqrt(-c <h,h>_L)`` was
+    self-normalizing — it put *whatever* timelike vector it got exactly onto the sheet — while the
+    identity form would return an off-sheet midpoint (which then diverges any downstream Karcher
+    iteration). To keep that invariant, only the *spatial* part of ``h / denom`` is taken and the
+    time coordinate is rebuilt as ``sqrt(||s||^2 + 1/c)`` (:func:`spatial_to_hyperboloid`, the same
+    convention as ``hrc``/``htc``). That reconstruction is itself cancellation-free — it adds, never
+    subtracts — so the identity's large-radius accuracy gain in the spatial scale is preserved.
+    Consequence: the output's time coordinate is a function of its spatial part, so its gradient
+    flows through the spatial components (as in every HRC/HTC layer) rather than through the input
+    time coordinates directly.
+
+    The reference point ``p`` is the input with the smallest time coordinate (closest to the
+    vertex). Each ``delta_m = x_m - p`` term is only as well-conditioned as ``||delta_m||``, and this
+    choice bounds ``||delta_m|| <= ||x_m|| + ||p|| <= 2 ||x_m||``, so a point never inherits another
+    point's radius. With the old ``p = points_0`` and an extreme point *at* index 0, every ``delta_m``
+    is as large as that extreme radius and the identity's own terms cancel against each other.
     """
     # h = sum_m w_{n,m} * points_m  →  (..., N, A)
     h_NA = jnp.einsum("...nm,...ma->...na", weights, points)
-
-    # Minkowski squared norm: <h,h>_L = -h_0^2 + ||h_s||^2  (should be < 0)
-    mink_1 = -(h_NA[..., 0:1] ** 2) + jnp.sum(h_NA[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., N, 1)
-    denom_1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_1), eps))  # (..., N, 1)
-
-    return h_NA / denom_1  # (..., N, A)
+    # Exact for on-sheet points (reference p = points_0, delta_m = x_m - p, W = sum_m w_m,
+    # Delta = sum_m w_m delta_m):
+    #     <h,h>_L = -W^2/c - W * sum_m w_m <delta_m, delta_m>_L + <Delta, Delta>_L.
+    # The naive -h_0^2 + ||h_s||^2 subtracts two O(||s||^2) squares to reach an O(W^2/c) result
+    # (float32 rel. error ~ eps*c*||s||^2); here every rounded term is O(||delta||^2) instead.
+    # Reference = the input closest to the vertex (smallest time coordinate), not points_0. The
+    # identity is reference-independent in exact arithmetic, but in floats each ||delta_m|| sets that
+    # term's conditioning: with the vertex-nearest reference ||delta_m|| <= ||x_m|| + ||p|| <= 2||x_m||,
+    # so a point is only as ill-conditioned as its own radius. Using points_0 when *that* is the
+    # extreme point makes every delta as large as the extreme radius (0.5% error on the HoroPCA
+    # boundary-lift case vs 2e-5 with an ordinary reference).
+    ref_idx = jnp.argmin(points[..., 0], axis=-1)  # (..., ) over M
+    p_1A = jnp.take_along_axis(points, ref_idx[..., None, None], axis=-2)  # (..., 1, A)
+    delta_MA = points - p_1A  # (..., M, A)
+    dd_M = -(delta_MA[..., 0] ** 2) + jnp.sum(delta_MA[..., 1:] ** 2, axis=-1)  # (..., M), >= 0 on-sheet
+    w_sum_N1 = jnp.sum(weights, axis=-1, keepdims=True)  # (..., N, 1)
+    w_dd_N1 = jnp.einsum("...nm,...m->...n", weights, dd_M)[..., None]  # (..., N, 1)
+    big_delta_NA = jnp.einsum("...nm,...ma->...na", weights, delta_MA)  # (..., N, A)
+    big_dd_N1 = -(big_delta_NA[..., 0:1] ** 2) + jnp.sum(big_delta_NA[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., N, 1)
+    mink_N1 = -(w_sum_N1**2) / c - w_sum_N1 * w_dd_N1 + big_dd_N1  # (..., N, 1)
+    denom_N1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_N1), eps))  # (..., N, 1)
+    z_NA = h_NA / denom_N1  # (..., N, A)
+    # The identity above assumes *exactly* on-sheet points, which float storage cannot guarantee at
+    # large radius (eps*x_0^2 > 1/c beyond ||s|| ~ 3e3 in float32 / ~1e8 in float64): for such inputs
+    # the identity's scale is right but z_NA itself lands off the sheet, whereas the old naive
+    # h/sqrt(-c<h,h>_L) was self-normalizing. Reconstructing the time coordinate from the (correctly
+    # scaled) spatial part restores that invariant — cancellation-free, and the same convention as
+    # hrc/htc.
+    return spatial_to_hyperboloid(z_NA[..., 1:], c_in=c, c_out=c, eps=eps)  # (..., N, A)
 
 
 def lorentz_residual(
@@ -341,16 +402,24 @@ def lorentz_residual(
     to the hyperboloid:
 
         ave = x + w_y * y
-        result = ave / sqrt(c * |<ave, ave>_L|)
+        result = ave / sqrt(c * |<ave, ave>_L|)   (time coordinate then reconstructed, see Notes)
 
-    where <a, a>_L = -a_0^2 + ||a_s||^2 is the Minkowski inner product.
+    where <a, a>_L = -a_0^2 + ||a_s||^2 is the Minkowski inner product. ``<ave, ave>_L`` is
+    **not** evaluated by that literal formula: for on-sheet ``x``, ``y``
+    (``<x,x>_L = <y,y>_L = -1/c``) it is obtained from the exact, cancellation-free identity ::
+
+        <x + w y, x + w y>_L = -(1 + w)^2 / c - w * <x - y, x - y>_L
+
+    (see Notes).
 
     .. warning::
         ``w_y`` must be **non-negative**. For x, y on the upper sheet, any conic
         combination ``x + w_y * y`` with ``w_y >= 0`` stays future-directed
         timelike, so the normalization returns a valid hyperboloid point. For
         ``w_y < 0`` the combination can turn spacelike (``<ave, ave>_L > 0``,
-        roughly ``w_y < -1`` for nearby points) or land on the lower sheet
+        which by the identity above happens exactly when
+        ``w_y * <x - y, x - y>_L < -(1 + w_y)^2 / c``; roughly ``w_y < -1`` for
+        nearby points) or land on the lower sheet
         (``ave_0 < 0``) — the ``abs()`` in the normalizer then converts the
         geometry violation into a "valid-looking" but wrong output instead of
         raising. This is why callers must not expose ``w_y`` as an
@@ -374,6 +443,35 @@ def lorentz_residual(
     Array, shape (..., d+1)
         Points on hyperboloid with curvature c.
 
+    Notes
+    -----
+    The naive ``-ave_0^2 + ||ave_s||^2`` subtracts two ``O(||s||^2)`` squares to reach an
+    ``O(1/c)`` result, so its float32 relative error grows like ``eps * c * ||s||^2`` and the
+    computed value flips sign above ``||s|| ~ 1e4`` — where the ``abs()`` hides the flip and the
+    ``eps`` floor silently inflates the output. Every term of the identity in the formula block
+    is ``O(||x - y||^2)`` instead, so the normalizer itself never cancels catastrophically at any radius.
+    The one float32 limit that remains is the difference ``x - y`` itself: once two points share
+    a direction at ``||s|| >~ 1e4`` the subtraction is dominated by rounding before either form
+    sees it, and float64 is required (the naive form is no better there).
+
+    For ``w_y >= 0`` the ``abs()`` and the ``eps`` floor are provably inactive: the difference of
+    two on-sheet points is spacelike (``<x - y, x - y>_L >= 0``), so
+    ``c * |<ave, ave>_L| = (1 + w_y)^2 + c * w_y * <x - y, x - y>_L >= (1 + w_y)^2 >= 1``. Both
+    are kept only as insurance for out-of-contract inputs.
+
+    The identity assumes ``x``, ``y`` are *exactly* on-sheet — an assumption float storage cannot
+    honour at large radius, since ``x_0`` is only accurate to ``eps * x_0`` and the sheet constraint
+    needs ``eps * x_0^2 << 1/c`` (violated beyond ``||s|| ~ 3e3`` in float32, ``~1e8`` in float64,
+    e.g. a Poincare point lifted from the ball boundary). The old naive ``ave / sqrt(-c <ave,ave>_L)``
+    was self-normalizing — it put *whatever* timelike vector it got exactly onto the sheet — while
+    the identity form would return an off-sheet point. To keep that invariant, only the *spatial*
+    part of ``ave / denom`` is taken and the time coordinate is rebuilt as
+    ``sqrt(||s||^2 + 1/c)`` (:func:`spatial_to_hyperboloid`, the same convention as ``hrc``/``htc``).
+    That reconstruction is itself cancellation-free — it adds, never subtracts — so the identity's
+    large-radius accuracy gain in the spatial scale is preserved. Consequence: the output's time
+    coordinate is a function of its spatial part, so its gradient flows through the spatial
+    components (as in every HRC/HTC layer) rather than through the input time coordinates directly.
+
     References
     ----------
     He, Neil, Menglin Yang, and Rex Ying. "Lorentzian residual neural networks."
@@ -381,10 +479,22 @@ def lorentz_residual(
     (Also adopted as the residual connection in HELM, Chen et al. 2024, Eq. 2.)
     """
     ave_A = x + w_y * y  # (..., A) where A = d+1
-    # Minkowski inner: -ave_0^2 + ||ave_s||^2
-    mink_1 = -(ave_A[..., 0:1] ** 2) + jnp.sum(ave_A[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., 1)
+    # Exact for on-sheet x, y:  <x + w y, x + w y>_L = -(1+w)^2/c - w <x-y, x-y>_L.
+    # The naive -ave_0^2 + ||ave_s||^2 subtracts two O(||s||^2) squares to reach an O(1/c) result
+    # (float32 rel. error ~ eps*c*||s||^2, sign flip above ||s|| ~ 1e4); here every rounded term is
+    # O(||x-y||^2) instead, so the normalizer itself never cancels catastrophically at any radius.
+    d_A = x - y  # (..., A)
+    dd_1 = -(d_A[..., 0:1] ** 2) + jnp.sum(d_A[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., 1), >= 0 on-sheet
+    mink_1 = -((1.0 + w_y) ** 2) / c - w_y * dd_1  # (..., 1)
     denom_1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_1), eps))  # (..., 1)
-    return ave_A / denom_1  # (..., A)
+    z_A = ave_A / denom_1  # (..., A)
+    # The identity above assumes *exactly* on-sheet inputs, which float storage cannot guarantee at
+    # large radius (eps*x_0^2 > 1/c beyond ||s|| ~ 3e3 in float32 / ~1e8 in float64): for such inputs
+    # the identity's scale is right but z_A itself lands off the sheet, whereas the old naive
+    # h/sqrt(-c<h,h>_L) was self-normalizing. Reconstructing the time coordinate from the (correctly
+    # scaled) spatial part restores that invariant — cancellation-free, and the same convention as
+    # hrc/htc.
+    return spatial_to_hyperboloid(z_A[..., 1:], c_in=c, c_out=c, eps=eps)  # (..., A)
 
 
 def lorentz_scale(

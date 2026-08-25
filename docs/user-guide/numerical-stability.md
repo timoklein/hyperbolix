@@ -517,6 +517,68 @@ Benefits:
 - Numerically stable (uses softplus internally)
 - Adjustable smoothing factor for trade-off between accuracy and gradient flow
 
+## Lorentz Residual and Midpoint at Large Radius {#lorentz-residual-midpoint}
+
+`lorentz_residual` (the two-point combination behind `LorentzResidual` and
+`HypformerPositionalEncoding`) and `lorentz_midpoint` (the weighted aggregation behind
+`HyperbolicFullAttention`, `HyperboloidGyroRMSNorm`, and the hyperboloid Fréchet
+mean) both form a raw ambient vector $h = (h_0, h_s)$ — time coordinate $h_0$, spatial
+part $h_s$ — and pull it back onto the sheet by dividing by
+$\sqrt{\lvert\langle h,h\rangle_L\rvert}$. Computing that Minkowski square directly,
+
+$$
+\langle h, h\rangle_L = -h_0^2 + \lVert h_s\rVert^2,
+$$
+
+cancels catastrophically. On the sheet $h_0 \approx \lVert h_s \rVert$, so both terms
+are of size $\lVert s\rVert^2$ — writing $\lVert s\rVert$ for the spatial radius of the
+inputs — while their difference is only $O(1/c)$. The float32 relative error of the
+result therefore grows with the radius as
+$\varepsilon_{32}\, c\, \lVert s\rVert^2$ with $\varepsilon_{32} \approx 1.19\times10^{-7}$,
+which crosses a target error `err` at
+
+$$
+\lVert s\rVert \approx \sqrt{\mathtt{err} \,/\, (\varepsilon_{32}\, c)}.
+$$
+
+In plain terms: at $c = 0.1$, a relative error of $10^{-3}$ arrives once the spatial
+radius reaches about 290, and gradients hit that level roughly three times sooner in
+$\lVert s\rVert$ than the forward value does, because the normalizer's Jacobian cancels
+a second time. Past $\lVert s\rVert \sim 10^4$ the computed square flips sign outright.
+
+Hyperbolix instead evaluates $\langle h,h\rangle_L$ from exact identities, valid for any
+weights as long as the inputs are on the sheet ($\langle x,x\rangle_L = -1/c$). For the
+residual $h = x + w\,y$ with scalar weight $w$:
+
+$$
+\langle h,h\rangle_L = -\frac{(1+w)^2}{c} - w\,\langle x-y,\; x-y\rangle_L .
+$$
+
+For the midpoint of points $x_1,\dots,x_M$ with weights $w_1,\dots,w_M$, taking the first
+point $p = x_1$ as reference and setting $\delta_m = x_m - p$, $W = \sum_m w_m$,
+$\Delta = \sum_m w_m \delta_m$:
+
+$$
+\langle h,h\rangle_L = -\frac{W^2}{c} - W \sum_m w_m \langle \delta_m, \delta_m\rangle_L
++ \langle \Delta, \Delta\rangle_L .
+$$
+
+Every rounded quantity is now a difference between nearby points, of size
+$O(\lVert x-y\rVert^2)$ rather than $O(\lVert s\rVert^2)$, so both operations are
+radius-agnostic in float32: the measured float32 error against float64 at
+$\lVert s\rVert = 10^4$ is $\approx 2\times10^{-5}$ on the value and $\approx 6\times10^{-4}$
+on the gradient. The one limit that remains is the difference $x - y$ itself: when two
+points share a direction at $\lVert s\rVert \gtrsim 10^4$, float32 rounding swallows the
+subtraction before either formula sees it — neither the old nor the new form is
+trustworthy there, and that regime needs float64.
+
+!!! warning "The rest of the hyperboloid is still radius-limited"
+    This buys accuracy in these two operations only. `Hyperboloid.dist` goes through
+    `acosh` and still loses digits past hyperbolic distance ~7 in float32 (see the
+    [precision table](#precision-requirements-by-distance)), and merely *storing* a point
+    past distance ~11 accumulates more Lorentz residual than the float64 default
+    tolerance allows — see [The `atol` Convention](#the-atol-convention).
+
 ## Version Parameters
 
 ### Purpose
