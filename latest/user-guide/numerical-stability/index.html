@@ -987,6 +987,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#lorentz-residual-midpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lorentz Residual and Midpoint at Large Radius
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#version-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2253,6 +2264,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#lorentz-residual-midpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lorentz Residual and Midpoint at Large Radius
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#version-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3054,6 +3076,58 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 - Differentiable everywhere (no gradient discontinuities)
 - Numerically stable (uses softplus internally)
 - Adjustable smoothing factor for trade-off between accuracy and gradient flow</p>
+<h2 id="lorentz-residual-midpoint">Lorentz Residual and Midpoint at Large Radius<a class="headerlink" href="#lorentz-residual-midpoint" title="Permanent link">&para;</a></h2>
+<p><code>lorentz_residual</code> (the two-point combination behind <code>LorentzResidual</code> and
+<code>HypformerPositionalEncoding</code>) and <code>lorentz_midpoint</code> (the weighted aggregation behind
+<code>HyperbolicFullAttention</code>, <code>HyperboloidGyroRMSNorm</code>, and the hyperboloid Fréchet
+mean) both form a raw ambient vector <span class="arithmatex">\(h = (h_0, h_s)\)</span> — time coordinate <span class="arithmatex">\(h_0\)</span>, spatial
+part <span class="arithmatex">\(h_s\)</span> — and pull it back onto the sheet by dividing by
+<span class="arithmatex">\(\sqrt{\lvert\langle h,h\rangle_L\rvert}\)</span>. Computing that Minkowski square directly,</p>
+<div class="arithmatex">\[
+\langle h, h\rangle_L = -h_0^2 + \lVert h_s\rVert^2,
+\]</div>
+<p>cancels catastrophically. On the sheet <span class="arithmatex">\(h_0 \approx \lVert h_s \rVert\)</span>, so both terms
+are of size <span class="arithmatex">\(\lVert s\rVert^2\)</span> — writing <span class="arithmatex">\(\lVert s\rVert\)</span> for the spatial radius of the
+inputs — while their difference is only <span class="arithmatex">\(O(1/c)\)</span>. The float32 relative error of the
+result therefore grows with the radius as
+<span class="arithmatex">\(\varepsilon_{32}\, c\, \lVert s\rVert^2\)</span> with <span class="arithmatex">\(\varepsilon_{32} \approx 1.19\times10^{-7}\)</span>,
+which crosses a target error <code>err</code> at</p>
+<div class="arithmatex">\[
+\lVert s\rVert \approx \sqrt{\mathtt{err} \,/\, (\varepsilon_{32}\, c)}.
+\]</div>
+<p>In plain terms: at <span class="arithmatex">\(c = 0.1\)</span>, a relative error of <span class="arithmatex">\(10^{-3}\)</span> arrives once the spatial
+radius reaches about 290, and gradients hit that level roughly three times sooner in
+<span class="arithmatex">\(\lVert s\rVert\)</span> than the forward value does, because the normalizer's Jacobian cancels
+a second time. Past <span class="arithmatex">\(\lVert s\rVert \sim 10^4\)</span> the computed square flips sign outright.</p>
+<p>Hyperbolix instead evaluates <span class="arithmatex">\(\langle h,h\rangle_L\)</span> from exact identities, valid for any
+weights as long as the inputs are on the sheet (<span class="arithmatex">\(\langle x,x\rangle_L = -1/c\)</span>). For the
+residual <span class="arithmatex">\(h = x + w\,y\)</span> with scalar weight <span class="arithmatex">\(w\)</span>:</p>
+<div class="arithmatex">\[
+\langle h,h\rangle_L = -\frac{(1+w)^2}{c} - w\,\langle x-y,\; x-y\rangle_L .
+\]</div>
+<p>For the midpoint of points <span class="arithmatex">\(x_1,\dots,x_M\)</span> with weights <span class="arithmatex">\(w_1,\dots,w_M\)</span>, taking the first
+point <span class="arithmatex">\(p = x_1\)</span> as reference and setting <span class="arithmatex">\(\delta_m = x_m - p\)</span>, <span class="arithmatex">\(W = \sum_m w_m\)</span>,
+<span class="arithmatex">\(\Delta = \sum_m w_m \delta_m\)</span>:</p>
+<div class="arithmatex">\[
+\langle h,h\rangle_L = -\frac{W^2}{c} - W \sum_m w_m \langle \delta_m, \delta_m\rangle_L
++ \langle \Delta, \Delta\rangle_L .
+\]</div>
+<p>Every rounded quantity is now a difference between nearby points, of size
+<span class="arithmatex">\(O(\lVert x-y\rVert^2)\)</span> rather than <span class="arithmatex">\(O(\lVert s\rVert^2)\)</span>, so both operations are
+radius-agnostic in float32: the measured float32 error against float64 at
+<span class="arithmatex">\(\lVert s\rVert = 10^4\)</span> is <span class="arithmatex">\(\approx 2\times10^{-5}\)</span> on the value and <span class="arithmatex">\(\approx 6\times10^{-4}\)</span>
+on the gradient. The one limit that remains is the difference <span class="arithmatex">\(x - y\)</span> itself: when two
+points share a direction at <span class="arithmatex">\(\lVert s\rVert \gtrsim 10^4\)</span>, float32 rounding swallows the
+subtraction before either formula sees it — neither the old nor the new form is
+trustworthy there, and that regime needs float64.</p>
+<div class="admonition warning">
+<p class="admonition-title">The rest of the hyperboloid is still radius-limited</p>
+<p>This buys accuracy in these two operations only. <code>Hyperboloid.dist</code> goes through
+<code>acosh</code> and still loses digits past hyperbolic distance ~7 in float32 (see the
+<a href="#precision-requirements-by-distance">precision table</a>), and merely <em>storing</em> a point
+past distance ~11 accumulates more Lorentz residual than the float64 default
+tolerance allows — see <a href="#the-atol-convention">The <code>atol</code> Convention</a>.</p>
+</div>
 <h2 id="version-parameters">Version Parameters<a class="headerlink" href="#version-parameters" title="Permanent link">&para;</a></h2>
 <h3 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h3>
 <p>Many manifold operations have multiple mathematically equivalent formulations that differ in numerical properties. The <code>version_idx</code> parameter selects which to use.</p>
