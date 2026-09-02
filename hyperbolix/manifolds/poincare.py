@@ -68,13 +68,14 @@ import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, acosh, atanh, cosh, sinh, smooth_clamp
+from ..utils.math_utils import MIN_NORM, acosh, atanh, cosh, sinh, smooth_clamp, tanh
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
     _conformal_factor,
     _conformal_factor_batch,
     _gyration,
+    _max_norm,
     _proj,
     _proj_batch,
 )
@@ -307,9 +308,20 @@ def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     # unlike jnp.linalg.norm(v) which produces NaN gradients (0/0).
     # This matters when zero tangent vectors arise (e.g., all-black pixel patches).
     v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
-    c_norm_prod = jnp.sqrt(c) * v_norm
-    res = jnp.tanh(c_norm_prod) / c_norm_prod * v
-    res = _proj(res, c)
+    sqrt_c = jnp.sqrt(c)
+    c_norm_prod = sqrt_c * v_norm
+    # Boundary clamp applied to the *scalar* instead of via _proj on the (dim,) result. The result
+    # is ‖res‖ = (t/c_norm_prod)·‖v‖ ≤ t/√c because v_norm ≥ ‖v‖, so capping t at √c·max_norm
+    # already guarantees ‖res‖ ≤ max_norm — exactly _proj's postcondition — while a trailing
+    # _proj(res, c) would re-reduce ‖res‖ over the op's own output, i.e. one extra XLA reduction
+    # kernel over (B, dim)-sized data under jit(vmap).
+    # `tanh` is the clamped wrapper (input clip at ±0.5·log(2/eps), output clip at 1 - 10·eps). At
+    # c ≈ 1 that output bound sits *above* √c·max_norm = 1 - √c·eps**0.75, so the `minimum` is what
+    # binds; where it does not (very small c) the wrapper only shrinks t further, which can never
+    # break the ‖res‖ ≤ max_norm bound. _max_norm takes c_norm_prod only for its dtype — the dtype
+    # the removed _proj would have seen on `res`.
+    t = jnp.minimum(tanh(c_norm_prod), sqrt_c * _max_norm(c_norm_prod, c))
+    res = t / c_norm_prod * v
     return res
 
 

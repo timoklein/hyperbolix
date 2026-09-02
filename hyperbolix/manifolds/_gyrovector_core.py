@@ -32,6 +32,20 @@ def _get_max_norm_eps(x: Float[Array, "dim"]) -> float:
     return float(jnp.finfo(x.dtype).eps ** 0.75)
 
 
+def _max_norm(x: Float[Array, "..."], c: Curvature) -> Float[Array, ""]:
+    """Largest row norm :func:`_proj` admits: ``1/√|c| - eps**0.75`` for ``c > 0``, else unbounded.
+
+    Factored out of :func:`_proj` so a caller that already knows the norm it is about to produce can
+    apply the same bound *on the scalar* instead of re-reducing over a ``(…, dim)`` result — see
+    ``poincare._expmap_0``. Same ``√|c|`` floor at ``√MIN_NORM`` and same ``1e15`` stand-in for the
+    boundary-free ``c ≤ 0`` case as the historical inline expression, so :func:`_proj` is unchanged
+    bit-for-bit. Only ``x``'s dtype is read, never its values.
+    """
+    max_norm_eps = _get_max_norm_eps(x)
+    sqrt_abs_c = jnp.sqrt(jnp.maximum(jnp.abs(jnp.asarray(c)), MIN_NORM))
+    return jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
+
+
 def _conformal_factor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)``.
 
@@ -50,11 +64,9 @@ def _conformal_factor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
 def _proj(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Project onto the manifold. A boundary exists only for ``c > 0`` (``‖x‖ < 1/√c``); for ``c ≤ 0``
     (Euclidean / spherical) the space is all of R^d and this is the identity."""
-    max_norm_eps = _get_max_norm_eps(x)
     # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
     norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
-    sqrt_abs_c = jnp.sqrt(jnp.maximum(jnp.abs(jnp.asarray(c)), MIN_NORM))
-    max_norm = jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
+    max_norm = _max_norm(x, c)
     cond = norm > max_norm
     return jnp.where(cond, x * (max_norm / norm), x)
 

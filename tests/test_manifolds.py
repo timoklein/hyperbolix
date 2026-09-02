@@ -1032,6 +1032,128 @@ def test_expmap_0_logmap_0_inverse(manifold_and_c, tolerance: tuple[float, float
     assert jnp.allclose(x_reconstructed, uniform_points, atol=atol, rtol=rtol)
 
 
+# ---------------------------------------------------------------------------------------------
+# Poincaré expmap_0: the boundary clamp moved from the (dim,) result onto the scalar coefficient
+# ---------------------------------------------------------------------------------------------
+#
+# ``_expmap_0`` used to compute ``tanh(√c‖v‖)/(√c‖v‖) · v`` and then call ``_proj`` on the result.
+# ``_proj`` re-reduces ‖·‖ over the op's own output, which under ``jit(vmap)`` at B = 1e7 costs a
+# whole extra XLA reduction kernel over (B, dim)-sized data. The current implementation caps the
+# scalar coefficient instead, which is mathematically the same clamp. The three tests below pin
+# (a) agreement with the old formula, including on the rows the old ``_proj`` actually clamped,
+# (b) the postcondition ``‖exp_0(v)‖ ≤ max_norm`` the removed ``_proj`` used to provide, and
+# (c) the gradient behaviour (finite at v = 0, Jacobian unchanged away from the clamp).
+
+_EXPMAP_0_DIM = 32
+_EXPMAP_0_NORMS = (1e-3, 1e-2, 0.1, 1.0, 5.0, 8.0, 10.0, 20.0)
+
+
+def _expmap_0_reference(v_D: jnp.ndarray, c: float) -> jnp.ndarray:
+    """The pre-change ``poincare._expmap_0``, written out verbatim as the reference.
+
+    Raw ``jnp.tanh`` (not the clamped ``math_utils`` wrapper) followed by the ``_proj`` boundary
+    clamp on the ``(dim,)`` result — deliberately independent of the implementation under test.
+    """
+    v_norm = jnp.sqrt(jnp.sum(v_D**2) + poincare_impl.MIN_NORM**2)
+    c_norm_prod = jnp.sqrt(c) * v_norm
+    return poincare_impl._proj(jnp.tanh(c_norm_prod) / c_norm_prod * v_D, c)
+
+
+def _expmap_0_directions(dtype: jnp.dtype, seed: int, n: int = 64) -> jnp.ndarray:
+    """``n`` random unit directions in ``_EXPMAP_0_DIM`` dimensions."""
+    dirs_ND = np.random.default_rng(seed).normal(size=(n, _EXPMAP_0_DIM))
+    dirs_ND /= np.linalg.norm(dirs_ND, axis=1, keepdims=True)
+    return jnp.asarray(dirs_ND, dtype=dtype)
+
+
+def _expmap_0_max_norm(dtype: jnp.dtype, c: float) -> float:
+    """``_proj``'s boundary, recomputed from the documented formula rather than from the helper."""
+    return 1.0 / np.sqrt(c) - float(jnp.finfo(dtype).eps ** 0.75)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
+def test_poincare_expmap_0_matches_the_projected_tanh_formula(dtype: jnp.dtype, c: float) -> None:
+    """Scalar-clamp ``expmap_0`` reproduces ``_proj(tanh(√c‖v‖)/(√c‖v‖) · v)`` to a few ulps.
+
+    The ``‖v‖ ∈ {8, 10, 20}`` rows are the point of the test: float32 ``jnp.tanh`` saturates to
+    exactly 1.0 at ``√c‖v‖ ≈ 8``, so those are precisely the rows the old ``_proj`` clamped. The
+    test asserts that at least one row on the grid was clamped, so a rewrite that stopped
+    clamping altogether could not pass by making both sides trivially equal.
+
+    Tolerance is stated in ulps because the two paths differ only in the rounding of a handful of
+    scalar operations (and, off the clamp, in ``math_utils.tanh``'s ``expm1`` rewrite of the raw
+    ``jnp.tanh`` the reference uses). Worst row-relative move measured on this grid, jax 0.9.1:
+    3.05e-7 = 2.6 ulps at ``c = 2.5`` in float32 and 6.0e-16 = 2.7 ulps in float64 on CPU, lower
+    on the A100; the bounds below are 4e-7 (3.4 ulps) and 1e-15 (4.5 ulps). Dropping the clamp
+    would move the affected rows by ``eps**0.75`` ≈ 6.4e-6 relative in float32 — 16x the bound —
+    so this still bites.
+    """
+    atol_rel = 4e-7 if dtype == jnp.float32 else 1e-15
+    dirs_ND = _expmap_0_directions(dtype, seed=424242)
+    max_norm = _expmap_0_max_norm(dtype, c)
+
+    new_fn = jax.vmap(poincare_impl._expmap_0, in_axes=(0, None))
+    old_fn = jax.vmap(_expmap_0_reference, in_axes=(0, None))
+
+    clamped_rows = 0
+    for norm in _EXPMAP_0_NORMS:
+        v_ND = dirs_ND * jnp.asarray(norm, dtype=dtype)
+        new_ND = np.asarray(new_fn(v_ND, c), dtype=np.float64)
+        old_ND = np.asarray(old_fn(v_ND, c), dtype=np.float64)
+
+        relative = np.linalg.norm(new_ND - old_ND, axis=1) / np.linalg.norm(old_ND, axis=1)
+        assert relative.max() <= atol_rel, f"‖v‖={norm}, c={c}: max relative move {relative.max():.3e}"
+
+        # A row sitting on the boundary is a row the old path had to clamp.
+        clamped_rows += int(np.sum(np.linalg.norm(old_ND, axis=1) >= max_norm * (1.0 - 1e-6)))
+
+    assert clamped_rows > 0, "grid never reached the boundary — the clamp was never exercised"
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
+def test_poincare_expmap_0_stays_inside_the_projection_boundary(dtype: jnp.dtype, c: float) -> None:
+    """Every output row satisfies ``‖exp_0(v)‖ ≤ max_norm``, the postcondition ``_proj`` provided.
+
+    ``max_norm = 1/√c - eps**0.75`` is recomputed here from the documented formula, not read back
+    from ``_gyrovector_core``. The ``4·eps`` slack covers the rounding of the scalar coefficient;
+    measured worst overshoot is 1.4 ulps (float32) / 2.3 ulps (float64) of ``max_norm``.
+    """
+    dirs_ND = _expmap_0_directions(dtype, seed=424242)
+    max_norm = _expmap_0_max_norm(dtype, c)
+    bound = max_norm * (1.0 + 4.0 * float(jnp.finfo(dtype).eps))
+    new_fn = jax.vmap(poincare_impl._expmap_0, in_axes=(0, None))
+
+    for norm in _EXPMAP_0_NORMS:
+        v_ND = dirs_ND * jnp.asarray(norm, dtype=dtype)
+        out_norms = np.linalg.norm(np.asarray(new_fn(v_ND, c), dtype=np.float64), axis=1)
+        assert out_norms.max() <= bound, f"‖v‖={norm}, c={c}: {out_norms.max():.17g} > {bound:.17g}"
+
+
+def test_poincare_expmap_0_gradients_survive_the_scalar_clamp(dtype: jnp.dtype) -> None:
+    """``grad`` is finite at ``v = 0`` and the Jacobian is unchanged away from the boundary.
+
+    The ``sqrt(‖v‖² + MIN_NORM²)`` safe norm is what keeps the gradient at the origin finite
+    (``jnp.linalg.norm``'s VJP there is 0/0); the clamp must not disturb it. Away from the clamp
+    the two coefficients differ only in ``tanh``'s own rounding, so the Jacobians agree far inside
+    the stated tolerances: measured max absolute difference 0.0 (CPU, both dtypes) and 8.9e-8
+    (float32) / 1.1e-16 (float64) on the A100.
+    """
+    c = 1.0
+    atol = 1e-5 if dtype == jnp.float32 else 1e-12
+
+    grad_D = jax.grad(lambda v: jnp.sum(poincare_impl._expmap_0(v, c)))(jnp.zeros((_EXPMAP_0_DIM,), dtype=dtype))
+    assert bool(jnp.all(jnp.isfinite(grad_D)))
+
+    # ‖v‖ ≤ 2 keeps tanh(√c‖v‖) well below saturation, i.e. strictly inside the clamp.
+    dirs_ND = _expmap_0_directions(dtype, seed=7, n=4)
+    for norm in (1e-3, 0.1, 1.0, 2.0):
+        for direction_D in dirs_ND:
+            v_D = direction_D * jnp.asarray(norm, dtype=dtype)
+            jac_new_DD = jax.jacfwd(lambda u: poincare_impl._expmap_0(u, c))(v_D)
+            jac_old_DD = jax.jacfwd(lambda u: _expmap_0_reference(u, c))(v_D)
+            assert jnp.allclose(jac_new_DD, jac_old_DD, atol=atol, rtol=0.0)
+
+
 def test_ptransp_is_an_isometry_and_round_trips(
     manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
