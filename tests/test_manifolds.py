@@ -302,6 +302,44 @@ def test_hyperboloid_scalar_mul_eq2(
     assert _batch_is_in_manifold(manifold, got, c)
 
 
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
+@pytest.mark.parametrize("t", [0.5, 2.0])
+def test_hyperboloid_scalar_mul_matches_the_closed_form_near_the_origin(dtype, c: float, t: float) -> None:
+    """``t ⊙ x`` against its closed form, down to spatial radius 1e-8.
+
+    With ``d₀ = arcsinh(√c‖x_s‖)/√c`` and ``x̂_s = x_s/‖x_s‖``::
+
+        (t ⊙ x)₀   = cosh(√c·t·d₀)/√c
+        (t ⊙ x)_s  = sinh(√c·t·d₀)/√c · x̂_s
+
+    ``scalar_mul`` used to renormalize ``log_0(x)`` through ``sqrt(maximum(‖v‖², MIN_NORM))``,
+    an effective 3.16e-8 floor on the tangent norm that this grid walks straight into (it was
+    hidden behind ``dist_0``'s own, larger 1.5e-3 acosh floor and only became reachable once that
+    was removed). It is now ``exp_0(t · log_0(x))`` with no floor at all.
+
+    Float32 stops at radius 1e-3: below that ``cosh(√c·t·d₀)`` is 1.0 to the last bit, so the
+    time coordinate carries no information and only the spatial part is meaningful.
+    """
+    manifold = hj.manifolds.Hyperboloid(dtype=dtype)
+    sqrt_c = np.sqrt(c)
+    radii = (1e-8, 1e-6, 1e-3, 1.0) if dtype == jnp.float64 else (1e-3, 1.0)
+    rtol = 1e-12 if dtype == jnp.float64 else 1e-5
+
+    direction = np.zeros(8)
+    direction[0] = 1.0
+
+    for r in radii:
+        x_s = r * direction
+        x_A = jnp.asarray(np.concatenate([[np.sqrt(1.0 / c + r**2)], x_s]).astype(dtype))
+
+        d0 = np.arcsinh(sqrt_c * r) / sqrt_c
+        expected_A = np.concatenate([[np.cosh(sqrt_c * t * d0) / sqrt_c], (np.sinh(sqrt_c * t * d0) / sqrt_c) * direction])
+
+        got_A = np.asarray(manifold.scalar_mul(t, x_A, c), dtype=np.float64)
+        assert np.allclose(got_A, expected_A, rtol=rtol, atol=0.0), f"r={r}: {got_A} != {expected_A}"
+
+
 @pytest.mark.parametrize("n", [3, 6])
 def test_scalar_mul(
     n: int, manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator

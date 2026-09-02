@@ -384,6 +384,42 @@ def test_rms_radius_normalization(cfg_rms, dim, gamma, dtype):
     assert jnp.allclose(radii, expected, atol=atol)
 
 
+@pytest.mark.parametrize("gamma", [0.5, 1.0, 2.0])
+@pytest.mark.parametrize("input_radius", [1e-4, 1e-2])
+def test_rms_radius_normalization_from_a_tiny_input_radius_float32(gamma, input_radius):
+    """Samples inside the old float32 ``dist_0`` floor still normalize to ``gamma``.
+
+    ``HyperboloidGyroRMSNorm`` divides by ``dist_0(x)``. The pre-fix ``acosh`` arm reported
+    1.5441e-3 for *every* float32 radius below that, so a batch at radius 1e-4 was rescaled by a
+    factor ~15x too small and came out at ~0.065·gamma instead of gamma; at 1e-2 the ``x₀``
+    resolution alone cost ~5e-4 relative. Float32 only — this is a float32 failure mode.
+
+    ``eps`` is set to 1e-9 rather than the 1e-6 default so the regularizer's deliberate
+    ``gamma·r/(r + eps)`` shortfall (1% at r = 1e-4 with the default) does not mask the effect
+    under test; the exact target is asserted as well, exactly as in ``test_rms_radius_normalization``.
+    """
+    dtype = jnp.float32
+    manifold = Hyperboloid(dtype=dtype)
+    rms = HyperboloidGyroRMSNorm(manifold, num_features=8, eps=1e-9)
+    rms.gamma[...] = jnp.asarray(gamma, dtype=rms.gamma[...].dtype)
+
+    # Points at an exact geodesic radius: expmap_0 of a tangent vector of that spatial norm.
+    directions_ND = jax.random.normal(jax.random.PRNGKey(21), (16, 8), dtype=dtype)
+    directions_ND /= jnp.linalg.norm(directions_ND, axis=-1, keepdims=True)
+    v_NA = manifold.embed_spatial_0(input_radius * directions_ND)
+    x_NA = jax.vmap(manifold.expmap_0, in_axes=(0, None))(v_NA, 1.0)
+
+    out_NA = rms(x_NA, c=1.0)
+    assert jnp.all(jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(out_NA, 1.0))
+
+    r_in_N = jax.vmap(manifold.dist_0, in_axes=(0, None))(x_NA, 1.0)
+    radii_N = jax.vmap(manifold.dist_0, in_axes=(0, None))(out_NA, 1.0)
+
+    assert jnp.allclose(r_in_N, input_radius, rtol=1e-4), "input radius is not what the test intends"
+    assert jnp.allclose(radii_N, gamma, rtol=1e-4)
+    assert jnp.allclose(radii_N, gamma * r_in_N / (r_in_N + rms.eps), rtol=1e-4)
+
+
 @pytest.mark.parametrize("dtype", DTYPES)
 def test_rms_batch_independence(cfg_rms, dtype):
     """A point's output is identical whether normalized alone or inside a batch."""

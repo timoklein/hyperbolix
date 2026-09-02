@@ -991,22 +991,34 @@ def test_hyperboloid_dist_on_a_shared_ray_is_the_radius_difference(dtype, rtol: 
 
 @pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
 @pytest.mark.parametrize("c", CURVATURES)
-@pytest.mark.parametrize("a", [0.5, 5.0, 20.0, 45.0])
+@pytest.mark.parametrize("a", [1e-4, 1e-3, 1e-2, 0.5, 5.0, 20.0, 45.0])
 def test_hyperboloid_dist_and_logmap_to_the_origin_match_the_origin_variants(dtype, rtol: float, c: float, a: float):
     """``dist(x, origin) == dist_0(x)`` and ``logmap(origin, x) == d·e_rad``.
 
-    ``dist_0``/``logmap_0`` read the geodesic radius straight off ``x₀`` and have no cancellation to
-    lose, so they are an independent reference for the general two-point code path. The log map to
-    the origin must be exactly the inward unit radial direction scaled by the distance.
+    ``dist_0``/``logmap_0`` read the geodesic radius off the spatial part, which resolves it at
+    every radius, so they are an independent reference for the general two-point code path. The log
+    map to the origin must be exactly the inward unit radial direction scaled by the distance.
+
+    Below ``a ~ 1e-2`` the limiting arm is the **pairwise** one, not ``dist_0``: ``_polar_frame``
+    forms ``u_x - u_y = (x₀ + r_x) - (y₀ + r_y)``, which loses ``eps·x₀`` and leaves an O(eps/a)
+    relative error (measured 2.5e-4 at ``a = 1e-4`` in float32 and 5.4e-12 in float64, against a
+    ``dist_0`` that is exact to 1.2e-7 / 0 there). Fixing ``_polar_frame`` is separate work, so the
+    pairwise comparison is given the ``20·eps/a`` its own arm supports — a no-op for ``a >~ 1`` —
+    while ``dist_0`` is still held to the full tolerance against the analytic ``a/√c``.
     """
     e1, _ = _hyperboloid_basis(4)
     manifold = Hyperboloid(dtype=dtype)
     x_A = _hyperboloid_point(a, c, e1, dtype)
     origin_A = manifold.create_origin(c, 4)
 
+    tight = max(rtol, 1e-6)
+    pairwise_rel = max(tight, 20.0 * float(jnp.finfo(dtype).eps) / a)
+
     d = float(manifold.dist(x_A, origin_A, c))
-    assert d == pytest.approx(float(manifold.dist_0(x_A, c)), rel=max(rtol, 1e-6))
-    assert d == pytest.approx(a / np.sqrt(c), rel=max(rtol, 1e-6))
+    d_0 = float(manifold.dist_0(x_A, c))
+    assert d_0 == pytest.approx(a / np.sqrt(c), rel=tight)
+    assert d == pytest.approx(d_0, rel=pairwise_rel)
+    assert d == pytest.approx(a / np.sqrt(c), rel=pairwise_rel)
 
     sqrt_c = np.sqrt(c)
     e_rad_A = -sqrt_c * np.concatenate([[np.sinh(a) / sqrt_c], (np.cosh(a) / sqrt_c) * e1])
@@ -1016,6 +1028,111 @@ def test_hyperboloid_dist_and_logmap_to_the_origin_match_the_origin_variants(dty
     # ...and the reverse direction falls back to logmap_0, which is exact at the origin.
     u0 = np.asarray(manifold.logmap(x_A, origin_A, c), dtype=np.float64)
     assert np.allclose(u0, np.asarray(manifold.logmap_0(x_A, c), dtype=np.float64), rtol=1e-12, atol=0.0)
+
+
+# ---------------------------------------------------------------------------------------------
+# dist_0 / logmap_0 read the radius off the spatial part (WS-A follow-up to the pairwise fix).
+#
+# The ``acosh(√c·x₀)`` arm these replaced could not resolve a small radius at all: ``acosh``'s
+# ``1 + 10·eps`` domain clamp flattened every float32 radius below ``sqrt(20·eps) = 1.5e-3`` onto
+# that single value (54% error at 1e-3, 1500x at 1e-6), and above it ``x₀ = cosh(√c·d)/√c`` still
+# only stores ``d`` to ``sqrt(eps)`` resolution.
+# ---------------------------------------------------------------------------------------------
+
+# Spatial radii spanning the formerly-unrepresentable regime (1e-8 … 1e-3) and the working range.
+# The geodesic radius of such a point is ``arcsinh(√c·r)/√c ≤ 4.9/√c`` even at r = 40, so nothing
+# here approaches a float32 overflow for the curvatures under test.
+_DIST_0_RADII = [1e-8, 1e-6, 1e-4, 1e-3, 1e-2, 0.1, 1.0, 5.0, 20.0, 40.0]
+# Tighter than ``_HYP_DTYPES``: the arcsinh arm is accurate to ~1e-7 (float32) / ~3e-16 (float64)
+# at every radius above, so there is no reason to allow the two-point arm's slack here.
+_DIST_0_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-14}
+
+
+def _hyperboloid_point_at_spatial_radius(r: float, c: float, direction: np.ndarray, dtype) -> jnp.ndarray:
+    """Point with spatial part ``r·direction``; ``x₀`` completed from the constraint.
+
+    Its geodesic radius is ``arcsinh(√c·r)/√c`` — the value ``dist_0`` must return. Built from the
+    spatial part rather than from ``cosh(a)``/``sinh(a)`` so the small radius survives the cast: at
+    ``r = 1e-6`` the ``cosh`` time coordinate is 1.0 to the last float32 bit, which is exactly the
+    information loss under test.
+    """
+    x_s = r * direction
+    x0 = np.sqrt(1.0 / c + float(np.dot(x_s, x_s)))
+    return jnp.asarray(np.concatenate([[x0], x_s]).astype(dtype))
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_dist_0_matches_the_arcsinh_closed_form_at_every_radius(dtype, c: float):
+    """``dist_0(x) == arcsinh(√c‖x_s‖)/√c`` (slot 0) and its floored twin (slot 1).
+
+    The identity is exact on the sheet, so this is an oracle rather than a cross-check: slot 1's
+    own closed form is ``arcsinh(hypot(√c‖x_s‖, 20·eps))/√c``, which is the same number to well
+    inside the tolerance once the radius clears the floor.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    sqrt_c = np.sqrt(c)
+    eps = float(jnp.finfo(dtype).eps)
+    rtol = _DIST_0_RTOL[dtype]
+    rng = np.random.default_rng(11)
+
+    for r in _DIST_0_RADII:
+        direction = rng.normal(size=8)
+        direction /= np.linalg.norm(direction)
+        x_A = _hyperboloid_point_at_spatial_radius(r, c, direction, dtype)
+
+        expected = np.arcsinh(sqrt_c * r) / sqrt_c
+        assert float(manifold.dist_0(x_A, c, version_idx=0)) == pytest.approx(expected, rel=rtol), f"r={r}"
+
+        expected_floored = np.arcsinh(np.hypot(sqrt_c * r, 20.0 * eps)) / sqrt_c
+        assert float(manifold.dist_0(x_A, c, version_idx=1)) == pytest.approx(expected_floored, rel=rtol), f"r={r}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_logmap_0_is_the_radius_along_the_input_direction(dtype, c: float):
+    """``log_0(x) = [0, d₀(x)·x̂_s]``: time slot exactly 0, direction preserved, norm ``= dist_0``."""
+    manifold = Hyperboloid(dtype=dtype)
+    sqrt_c = np.sqrt(c)
+    rtol = _DIST_0_RTOL[dtype]
+    rng = np.random.default_rng(12)
+
+    for r in _DIST_0_RADII:
+        direction = rng.normal(size=8)
+        direction /= np.linalg.norm(direction)
+        x_A = _hyperboloid_point_at_spatial_radius(r, c, direction, dtype)
+
+        v_A = np.asarray(manifold.logmap_0(x_A, c), dtype=np.float64)
+        assert v_A[0] == 0.0, f"r={r}: log_0 must be tangent at the origin, so its time slot is 0"
+
+        norm = float(np.linalg.norm(v_A[1:]))
+        assert norm == pytest.approx(np.arcsinh(sqrt_c * r) / sqrt_c, rel=rtol), f"r={r}"
+        assert np.allclose(v_A[1:] / norm, direction, rtol=rtol, atol=rtol), f"r={r}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+def test_hyperboloid_logmap_0_inverts_expmap_0_across_the_paper_radius_grid(dtype):
+    """``log_0(exp_0(v)) == v`` at every radius on the paper grid, dim 8.
+
+    Pre-fix float32 medians were 1.5e3 at ``r = 1e-6`` and 5.4e-1 at ``r = 1e-3`` — the round trip
+    did not merely lose precision, it returned a different point. The float64 tolerance is pinned
+    two orders below the measured median (1.4e-16) rather than at the plan's 1e-13.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    c = 1.0
+    rtol = 1e-6 if dtype == jnp.float32 else 1e-14
+    rng = np.random.default_rng(13)
+
+    for r in (1e-3, 1e-2, 0.1, 1.0, 5.0, 10.0, 20.0):
+        directions_ND = rng.normal(size=(64, 8))
+        directions_ND /= np.linalg.norm(directions_ND, axis=-1, keepdims=True)
+        v_NA = jnp.asarray(np.concatenate([np.zeros((64, 1)), r * directions_ND], axis=-1).astype(dtype))
+
+        points_NA = jax.vmap(manifold.expmap_0, in_axes=(0, None))(v_NA, c)
+        back_NA = jax.vmap(manifold.logmap_0, in_axes=(0, None))(points_NA, c)
+
+        residual_N = np.linalg.norm(np.asarray(back_NA - v_NA, dtype=np.float64), axis=-1) / r
+        assert float(np.median(residual_N)) < rtol, f"r={r}: median relative round-trip error"
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
@@ -1059,6 +1176,42 @@ def test_hyperboloid_dist_gradient_at_the_origin_is_the_inward_unit_direction(dt
     assert np.all(np.isfinite(grad))
     assert np.allclose(grad[1:], -e1, rtol=1e-5, atol=1e-6)
     assert float(np.linalg.norm(grad[1:])) == pytest.approx(1.0, rel=1e-5)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+def test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian(dtype):
+    """A zero-initialized gyro-bias must receive gradient. On 1.1.2 it received exactly none.
+
+    ``x ⊕ exp_0([0, b])`` goes through ``_logmap_0``, whose ``dist_0`` carried a bitwise
+    ``where(x == origin, 0, ...)`` guard. At ``b = 0`` the guard selected the constant branch, so
+    ``∂(x ⊕ ·)/∂b`` was the **exactly zero matrix** in both dtypes (measured Frobenius norm 0.0,
+    float32 and float64), freezing every origin-initialized hyperboloid gyro-bias at its init
+    value — ``hyperboloid_linear.py``, ``hyperboloid_conv.py`` and both Busemann FC layers.
+    With the radius read off the spatial part the guard is gone; the same Jacobian now has
+    Frobenius norm 3.2806 for the point below.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    c = 1.0
+    dim = 8
+    rng = np.random.default_rng(0)
+    direction = rng.normal(size=dim)
+    direction /= np.linalg.norm(direction)
+    x_A = _hyperboloid_point(1.0, c, direction, dtype)  # on-sheet, geodesic radius 1
+
+    def biased(b_D):
+        bias_pt_A = manifold.expmap_0(jnp.concatenate([jnp.zeros((1,), b_D.dtype), b_D]), c)
+        return manifold.addition(x_A, bias_pt_A, c)
+
+    jac_AD = np.asarray(jax.jacfwd(biased)(jnp.zeros((dim,), dtype=dtype)), dtype=np.float64)
+    assert np.all(np.isfinite(jac_AD))
+    assert float(np.linalg.norm(jac_AD)) > 0.0, "zero-initialized gyro-bias receives no gradient"
+
+    # The companion guarantee: dist_0's own gradient at the origin must stay finite for both
+    # non-legacy arms (safe_norm / safe_hypot give an exactly-zero, hence finite, VJP there).
+    origin_A = manifold.create_origin(c, dim)
+    for version_idx in (0, 1):
+        g_A = jax.grad(lambda p, v=version_idx: manifold.dist_0(p, c, version_idx=v))(origin_A)
+        assert bool(jnp.all(jnp.isfinite(g_A))), f"non-finite dist_0 gradient at the origin, slot {version_idx}"
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
@@ -1153,6 +1306,71 @@ def test_hyperboloid_smoothened_arm_has_a_strictly_positive_floor(dtype):
     assert float(manifold.dist(x_A, y_A, c, version_idx=1)) == pytest.approx(
         float(manifold.dist(x_A, y_A, c, version_idx=0)), rel=1e-6
     )
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_dist_0_smoothened_arm_has_a_strictly_positive_floor(dtype, c: float):
+    """``dist_0(origin, version_idx=1)`` equals ``arcsinh(20·eps)/√c``, and slot 0 is exactly 0.
+
+    2.4e-6 (float32) / 4.4e-15 (float64) at ``c = 1`` — first-order the pairwise smoothened arm's
+    ``2·arcsinh(10·eps)/√c``, so the two agree on what "never exactly zero" means. The legacy
+    smoothened arm's ``smooth_clamp_min`` put the floor at 0.16632/√c instead, i.e. 80% error at a
+    true radius of 0.1, in **both** dtypes.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    origin_A = manifold.create_origin(c, 8)
+
+    floor = float(manifold.dist_0(origin_A, c, version_idx=1))
+    expected_floor = float(np.arcsinh(20.0 * float(jnp.finfo(dtype).eps)) / np.sqrt(c))
+    assert floor > 0.0
+    assert floor == pytest.approx(expected_floor, rel=1e-6)
+
+    # The plain arm has a hard zero at the origin (safe_norm returns exactly 0 there).
+    assert float(manifold.dist_0(origin_A, c, version_idx=0)) == 0.0
+
+
+# Recorded on 1.1.2 (commit 370e9db) before the rewrite, at the on-sheet point with spatial radius
+# 1e-3, c = 1.0, dim 8, direction e1 — i.e. a true geodesic radius of 9.99999833e-4. Slot 2 shows
+# acosh's 1 + 10·eps domain clamp (float32 floor sqrt(20·eps) = 1.5441e-3, a 54% overstatement);
+# slot 3 shows smooth_clamp_min's log(2)/50 remainder (floor acosh(1 + log(2)/50) = 0.16632).
+_DIST_0_LEGACY_GOLDEN = {
+    (jnp.float32, 2): 0.0015440807910636067,
+    (jnp.float64, 2): 0.0009999998333921221,
+    (jnp.float64, 3): 0.16632065504083338,
+}
+# Slot 3 in float32 is the one entry that is not bit-stable across XLA backends (the softplus in
+# smooth_clamp_min differs in the last ulp: 0.16632071137 on CPU, 0.16632072628 on an A100), so it
+# is pinned to the recorded value at one float32 ulp instead of bitwise.
+_DIST_0_LEGACY_GOLDEN_F32_SMOOTHENED = 0.16632071137428284
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+def test_hyperboloid_dist_0_legacy_slots_reproduce_the_pre_fix_values(dtype):
+    """Slots 2/3 must return the pre-fix numbers bit for bit — that is the whole point of keeping them.
+
+    Slots 2/3 used to duplicate 0/1 for ``dist_0`` (unlike ``dist``, where they were already the
+    legacy acosh arms). They now carry the acosh implementation, so a result computed before this
+    change stays reproducible by naming ``VERSION_LEGACY``.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    c = 1.0
+    e1 = np.zeros(8)
+    e1[0] = 1.0
+    x_A = _hyperboloid_point_at_spatial_radius(1e-3, c, e1, dtype)
+
+    assert float(manifold.dist_0(x_A, c, version_idx=2)) == _DIST_0_LEGACY_GOLDEN[(dtype, 2)]
+    if dtype == jnp.float64:
+        assert float(manifold.dist_0(x_A, c, version_idx=3)) == _DIST_0_LEGACY_GOLDEN[(dtype, 3)]
+    else:
+        assert float(manifold.dist_0(x_A, c, version_idx=3)) == pytest.approx(_DIST_0_LEGACY_GOLDEN_F32_SMOOTHENED, rel=1e-6)
+
+    # Well above both legacy floors the four slots describe the same geometry again.
+    far_A = _hyperboloid_point_at_spatial_radius(5.0, c, e1, dtype)
+    stable = float(manifold.dist_0(far_A, c, version_idx=0))
+    assert stable == pytest.approx(np.arcsinh(5.0), rel=1e-6)
+    for version_idx in (2, 3):
+        assert float(manifold.dist_0(far_A, c, version_idx=version_idx)) == pytest.approx(stable, rel=1e-6)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
