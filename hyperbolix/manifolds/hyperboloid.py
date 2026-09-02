@@ -776,7 +776,8 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_
     ``d₀(y)/‖y_s‖``, so ``‖log_0(y)‖ = d₀(y)`` holds by construction rather than by cancelling a
     floored numerator against an un-floored denominator — the arrangement this replaced, which
     returned an exactly-zero radial Jacobian entry below float32 radius 1.5e-3 (the ``acosh``
-    clamp) and one ~1500 times too large at 1e-6 (the floored 1.5e-3 divided by 1e-6). Because ``arcsinh(u)/u → 1`` as ``u → 0`` and the
+    clamp) and one ~1500 times too large at 1e-6 (the floored 1.5e-3 divided by 1e-6). Because
+    ``arcsinh(u)/u → 1`` as ``u → 0`` and the
     ``MIN_NORM`` floor keeps ``u ≥ √c·1e-15``, the ratio is never 0/0.
 
     ``version_idx`` is intentionally not threaded through: there is nothing to switch on any more.
