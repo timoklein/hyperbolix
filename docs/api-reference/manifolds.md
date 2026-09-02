@@ -129,10 +129,24 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
     - `VERSION_LEGACY` (2): pre-fix acosh-based distance, reproduced bit-for-bit
     - `VERSION_LEGACY_SMOOTHENED` (3): `VERSION_LEGACY` with soft clamping
 
+    The same four slots select an arm of `dist_0`, which is a separate implementation:
+
+    - `VERSION_DEFAULT` (0): `arcsinh(√c·‖x_s‖)/√c`, read off the spatial part (default, exact at
+      every radius, no domain clamp)
+    - `VERSION_SMOOTHENED` (1): the same with `‖x_s‖` floored in quadrature, giving a floor of
+      `arcsinh(20·eps)/√c` (≈2.4e-6/√c float32, ≈4.4e-15/√c float64)
+    - `VERSION_LEGACY` (2) / `VERSION_LEGACY_SMOOTHENED` (3): the pre-fix `acosh(√c·x₀)` arms,
+      whose clamps floor the returned radius at 1.54e-3/√c (float32, hard clip) and 0.16632/√c
+      (both dtypes, soft clamp)
+
+    **Breaking**: slots 2 and 3 of `dist_0` used to duplicate slots 0 and 1; they now select the
+    legacy arms, matching what those slots already meant for `dist`.
+
     Constants are available as `hyperboloid.VERSION_DEFAULT` etc., or from
     `hyperbolix.manifolds.hyperboloid`. See the [numerical-stability guide](
-    ../user-guide/numerical-stability.md#hyperboloid-distance-versions) for when to use each and
-    the cancellation failure mode `VERSION_DEFAULT` fixes.
+    ../user-guide/numerical-stability.md#hyperboloid-distance-versions) for when to use each, the
+    cancellation failure mode `VERSION_DEFAULT` fixes, and the [origin-chart rewrite](
+    ../user-guide/numerical-stability.md#hyperboloid-origin-chart) behind the `dist_0` arms.
 
 !!! note "Lorentz Operations"
     The Hyperboloid class includes specialized operations for convolutional layers:

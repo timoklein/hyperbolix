@@ -68,10 +68,11 @@ dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ### The Hyperboloid's Two-Point Cancellation Failure Mode
 
 The distance-from-origin table above governs single-point operations (`dist_0`, `logmap_0`,
-`expmap_0`), which read the radius straight off the ambient time coordinate and were always
-accurate on the Hyperboloid. Point-to-point operations (`dist`, `logmap`, `sqdist`,
-`tangent_norm`) are governed by a different, two-point quantity — being far from the origin is
-not itself the problem; two points far from the origin **and close together** is.
+`expmap_0`), which read the geodesic radius off the **spatial** part of the point and have their
+own near-origin story, described in [The Hyperboloid Origin Chart](#hyperboloid-origin-chart)
+below. Point-to-point operations (`dist`, `logmap`, `sqdist`, `tangent_norm`) are governed by a
+different, two-point quantity — being far from the origin is not itself the problem; two points
+far from the origin **and close together** is.
 
 Every one of these operations used to go through the Minkowski inner product
 $\langle x, y\rangle_L = -x_0y_0 + \langle x_s, y_s\rangle$, which for two hyperboloid points is a
@@ -120,9 +121,64 @@ unsafe past the `ln(1/eps)` threshold above:
 `tangent_norm` is exact to radius ~15 (float32) / ~25 (float64) — one power of `cosh` better than
 before this fix (was accurate only to radius ~8 float32 / ~20 float64, then floored to ~0 past
 that on exactly-unit tangent vectors), but not unlimited like `dist`/`logmap`/`sqdist`.
-Origin-chart operations (`dist_0`, `logmap_0`, `expmap_0`) read the radius straight off the
-ambient time coordinate, never routed through the Minkowski inner product, and remain exact
-everywhere.
+Origin-chart operations (`dist_0`, `logmap_0`, `expmap_0`) never routed through the Minkowski
+inner product, so the threshold above does not apply to them. They had a different problem at the
+*small*-radius end, fixed separately and described next.
+
+### The Hyperboloid Origin Chart {#hyperboloid-origin-chart}
+
+`dist_0` and `logmap_0` used to recover the geodesic radius from the ambient **time** coordinate
+$x_0$, and that coordinate cannot resolve a small radius. On the sheet
+
+$$
+x_0 = \frac{\cosh(\sqrt{c}\,d)}{\sqrt{c}} \approx \frac{1 + c\,d^2/2}{\sqrt{c}},
+$$
+
+so $d$ is stored only to $\sqrt{\varepsilon}$ resolution (relative error $\varepsilon/(2cd^2)$),
+and `acosh`'s `1 + 10·eps` domain clamp flattened every float32 radius below
+$\sqrt{20\varepsilon}/\sqrt{c} = 1.54\text{e-}3$ onto exactly zero. Both operations now read the
+radius off the **spatial** part instead, where the same number is available exactly:
+
+$$
+d_0(x) = \frac{\operatorname{arcsinh}(\sqrt{c}\,\lVert x_s\rVert)}{\sqrt{c}},
+\qquad
+\log_0(y) = \Bigl[0,\; \frac{\operatorname{arcsinh}(u)}{u}\, y_s\Bigr],\quad u = \sqrt{c}\,\lVert y_s\rVert .
+$$
+
+`arcsinh` needs no domain clamp (its argument is a norm) and its derivative is bounded by 1, so
+$\lVert \log_0(y)\rVert = d_0(y)$ now holds by construction at every radius. Median relative
+error at $c = 1$, dim 8, before → after (A100, jax 0.9.1; the CPU backend and jax 0.11.0 agree in
+every floored cell):
+
+| radius | float32 `dist_0` | float32 `log_0(exp_0(v))` | float64 `dist_0` | float64 round trip |
+| --- | --- | --- | --- | --- |
+| 1e-6 | 1.5e3 → 2.5e-9 | 1.5e3 → 0 | 4.4e-5 → 0 | 4.4e-5 → 1.3e-16 |
+| 1e-3 | 5.4e-1 → 9.8e-8 | 5.4e-1 → 0 | 5.9e-11 → 0 | 1.5e-10 → 1.2e-16 |
+| 1e-2 | 5.0e-4 → 2.7e-8 | 5.2e-4 → 0 | 1.0e-12 → 1.7e-16 | 8.3e-13 → 1.2e-16 |
+| 0.1 | 3.5e-6 → 1.8e-8 | 1.4e-7 → 3.9e-8 | 7.6e-15 → 1.4e-16 | 9.5e-15 → 1.1e-16 |
+| 1 to 40 | ≤7.1e-8 → ≤5.2e-8 | ≤1.0e-7 → ≤8.8e-8 | ≤1.3e-16 → ≤1.9e-16 | ≤1.4e-16 → ≤1.4e-16 |
+
+!!! warning "A zero-initialised hyperboloid gyro-bias could not train"
+    The old `dist_0` returned a constant `0` under a bitwise `at_origin` guard, so
+    $\partial(x \oplus b)/\partial b$ at $b = $ origin was the exact zero matrix in **both**
+    dtypes. Gyro addition inherits that guard through `logmap_0`, so the bias of any
+    `HypLinearHyperboloidPLFC`, `HypConv2DHyperboloidILNN`, or `HypLinearHyperboloidBusemann`
+    built with `use_gyro_bias=True` sat at the origin, received an exactly-zero gradient, and
+    never moved. Measured gyro-bias gradient L2 at init (c = 1, dim 8, float32): `0.0` before,
+    `1.37` / `4.24` / `3.07` after. The Poincaré `HypLinearPoincareBusemann` bias uses Möbius
+    addition and was never affected. A model trained with one of the three hyperboloid biases was
+    trained with it pinned to the origin.
+
+Operations that inherit the fix without any change of their own: gyro `addition`, `scalar_mul`,
+`logmap`'s origin fallback, and `HyperboloidGyroRMSNorm`, which divides by `dist_0` and so
+mis-normalised every float32 sample inside radius 1.5e-3.
+
+!!! note "`dist_0` is the accurate route to the origin, not `dist(origin, x)`"
+    The pairwise `dist` is a separate code path, and near the origin it still carries an
+    $O(\varepsilon/r)$ relative error from the gap term of its polar decomposition: in float32,
+    4.6e-2 at radius 1e-6 and ~1e-3 at 1e-4. Closing that is a separate planned change. Until
+    then, use `dist_0(x, c)` rather than `dist(origin, x, c)` whenever the distance is to the
+    origin.
 
 ## Storage vs. Compute Dtype
 
@@ -278,6 +334,45 @@ import jax.numpy as jnp
 poincare_f64 = Poincare(dtype=jnp.float64)
 dist_precise = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ```
+
+### The Round-Trip Ceiling {#poincare-roundtrip-ceiling}
+
+`proj` keeps points inside $1/\sqrt{c}$ by a margin of `eps**0.75`
+(`_gyrovector_core._get_max_norm_eps`), which caps the largest geodesic radius the ball can
+represent at $\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$. Past that radius `expmap_0`
+saturates and `logmap_0(expmap_0(v))` hands back the ceiling instead of `v`. Measured ceilings
+(median returned radius on a round trip, in units of $1/\sqrt{c}$):
+
+| library | float32 | float64 | boundary margin |
+| --- | --- | --- | --- |
+| hyperbolix | 6.32 | 13.86 | `eps**0.75` |
+| geoopt, hypLL | 3.11 | 6.10 | fixed 4e-3, fixed 1e-5 |
+| unguarded closed form | 8.66 | 18.72 | none |
+
+The margin is deliberate. It stops short of the unguarded limit so the conformal factor stays
+under ~3e5 (float32) / ~1e12 (float64), and it still leaves twice the radius the fixed margins
+used elsewhere allow. If your embeddings need larger radii, switch to the hyperboloid or to
+`ProperVelocity` rather than shrinking the margin.
+
+### Float32 Accuracy Near the Origin Depends on the Backend
+
+XLA's float32 transcendental kernels are a few ulps off, and near the origin that is the whole
+error budget of a Poincaré round trip. Exact bit-pattern ulp error against a float64 reference
+(20k inputs in $[10^{-4}, 0.9]$, max / mean):
+
+| function | XLA GPU | XLA CPU | torch CPU | torch CUDA |
+| --- | --- | --- | --- | --- |
+| `tanh` | 4 / 0.85 | 4 / 0.90 | 1 / 0.01 | 2 / 0.17 |
+| `atanh` | 3 / 0.45 | 2 / 0.25 | 1 / 0.00 | 3 / 0.45 |
+| `arcsinh` | 2 | 2 | 2 | 2 |
+| `expm1` | 1 | 5 | n/a | n/a |
+
+Consequence: float32 `logmap_0(expmap_0(v))` at radius $10^{-3}$ (dim 32, median relative error)
+is 2.4e-7 on the CPU backend and exactly 0 on GPU. A torch-based library reaches ~1.5e-8 on CPU,
+because torch's CPU `tanh`/`atanh` are correctly rounded; on CUDA it has no such edge (torch's
+CUDA `atanh` is bit-identical to XLA's). The closed forms are the same in both cases, so this is
+a kernel difference rather than a formula difference, but it does mean that a near-origin float32
+accuracy number is only meaningful with its backend quoted.
 
 ## Init Scale vs. Depth
 
@@ -573,8 +668,11 @@ subtraction before either formula sees it — neither the old nor the new form i
 trustworthy there, and that regime needs float64.
 
 !!! warning "The rest of the hyperboloid is still radius-limited"
-    This buys accuracy in these two operations only. `Hyperboloid.dist` goes through
-    `acosh` and still loses digits past hyperbolic distance ~7 in float32 (see the
+    This buys accuracy in these two operations only. `Hyperboloid.dist`'s default and
+    smoothened slots (`VERSION_DEFAULT`/`VERSION_SMOOTHENED`) use the same cancellation-free
+    hyperbolic-haversine form and stay accurate at any representable radius; only the legacy
+    slots (`VERSION_LEGACY`/`VERSION_LEGACY_SMOOTHENED`) route through the Minkowski inner
+    product via `acosh` and still lose digits past hyperbolic distance ~7 in float32 (see the
     [precision table](#precision-requirements-by-distance)), and merely *storing* a point
     past distance ~11 accumulates more Lorentz residual than the float64 default
     tolerance allows — see [The `atol` Convention](#the-atol-convention).
@@ -633,7 +731,21 @@ print(f"Version 2: {d2:.6f}")
 ### Hyperboloid Distance Versions {#hyperboloid-distance-versions}
 
 The Hyperboloid manifold has its own four-way `version_idx`, orthogonal to the Poincaré versions
-above:
+above. The same four slots select an arm of both the pairwise `dist` and the origin distance
+`dist_0`, which are different implementations:
+
+| slot | `dist` arm | `dist_0` arm | floor |
+| --- | --- | --- | --- |
+| `VERSION_DEFAULT` (0) | cancellation-free hyperbolic haversine | `arcsinh(√c·‖x_s‖)/√c` | none: exactly 0 at coincidence / at the origin |
+| `VERSION_SMOOTHENED` (1) | the same, floored in quadrature | the same, with `‖x_s‖` floored in quadrature | `2·arcsinh(10·eps)/√c` and `arcsinh(20·eps)/√c`, equal to first order: ≈2.4e-6/√c (float32), ≈4.4e-15/√c (float64) |
+| `VERSION_LEGACY` (2) | pre-fix `acosh` form, hard clip | `acosh(clip(√c·x₀, 1))/√c` | 1.54e-3/√c in float32, 6.7e-8/√c in float64 (the `acosh` domain clamp) |
+| `VERSION_LEGACY_SMOOTHENED` (3) | pre-fix `acosh` form, soft clamp | `acosh(smooth_clamp_min(√c·x₀, 1))/√c` | 0.16632/√c, in **both** dtypes, on every point that is not bitwise the origin |
+
+!!! warning "Breaking: slots 2 and 3 of `dist_0` changed meaning"
+    `dist_0(..., version_idx=2)` and `version_idx=3` used to duplicate slots 0 and 1. They now
+    select the pre-fix `acosh` arms, matching what those slots have meant for the pairwise `dist`
+    since 1.1.2. Code that passed 2 or 3 to `dist_0` and expected the default behavior must pass
+    `VERSION_DEFAULT` (0) or `VERSION_SMOOTHENED` (1).
 
 ```python
 from hyperbolix.manifolds import Hyperboloid
@@ -675,21 +787,30 @@ d3 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_LEGACY_SMOOTHENED
 
 ### Using Versions with JIT
 
+Manifold operations are single-point functions: batch them with `jax.vmap` and compile the result
+with `jax.jit` yourself. An uncompiled `vmap` re-traces dozens of primitives on every call and
+runs 10-100x slower than the compiled path; that is the expected cost of the calling convention,
+not a bug.
+
+`version_idx` does **not** have to be a static argument. The version switch is a `lax.switch`,
+which accepts a traced index, so a dynamic `version_idx` compiles and runs. Making it static
+(baking it into the function body, or `static_argnames`) is a compile-size optimization: it
+lets XLA drop the branches you do not use.
+
 ```python
 import jax
 from hyperbolix.manifolds import Poincare
 
 poincare = Poincare()
 
-# IMPORTANT: version_idx must be static for JIT
+# Recommended: bake the version into the function body, then jit the batched call.
 @jax.jit
 def compute_distances(x_batch, y_batch, c):
-    # Version baked into function body (static)
     return jax.vmap(
         lambda x, y: poincare.dist(x, y, c, version_idx=0)
     )(x_batch, y_batch)
 
-# Or use static_argnames
+# Or mark it static explicitly
 dist_jit = jax.jit(poincare.dist, static_argnames=['version_idx'])
 d = dist_jit(x, y, c=1.0, version_idx=0)
 ```

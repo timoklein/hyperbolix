@@ -71,7 +71,7 @@ The `in_axes` parameter specifies which axes to map over:
 # - Map over axis 0 of first argument (x_batch)
 # - Map over axis 0 of second argument (y_batch)
 # - Don't map over curvature (c) — use same value for all
-# - Don't map over version_idx — static argument
+# - Don't map over version_idx (it indexes a fixed set of implementations, not data)
 ```
 
 Common patterns:
@@ -114,7 +114,7 @@ poincare = Poincare()
 # Without JIT
 distance = poincare.dist(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
 
-# With JIT (version_idx is static since it controls which kernel to run)
+# With JIT (version_idx marked static here for compile size; a dynamic value also works via lax.switch)
 dist_jit = jax.jit(poincare.dist, static_argnames=['version_idx'])
 distance = dist_jit(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
 ```

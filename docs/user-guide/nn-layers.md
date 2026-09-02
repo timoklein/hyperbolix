@@ -308,16 +308,18 @@ Modern layers don't need one. The Euclidean defaults — `optax.adam`,
 `riemannian_adam` only when parameters live directly on a manifold (typically a
 hyperbolic embedding table); see the [Optimizers guide](optimizers.md) *(WIP)*.
 
-### 3. Forgetting `version_idx` is static
+### 3. Leaving `version_idx` dynamic under JIT
 
 Several Poincaré ops (`dist`, `expmap`, `logmap`) take a `version_idx` selecting
-between multiple formulations. Under JIT, this argument must be **static**:
+between multiple formulations. `jax.lax.switch` accepts a traced index, so this
+argument does not have to be static. Marking it static is still recommended:
+it compiles only the selected variant instead of every arm.
 
 ```python
-# ❌ Traces a new graph on every call
+# Works, but compiles every variant into one lax.switch
 jit_fn = jax.jit(lambda x, y, idx: poincare.dist(x, y, c=1.0, version_idx=idx))
 
-# ✅ Bind the variant before JIT-ing
+# Recommended: bind the variant before JIT-ing, compiles only that arm
 from functools import partial
 dist_v0 = partial(poincare.dist, version_idx=0)
 jit_fn = jax.jit(dist_v0)
