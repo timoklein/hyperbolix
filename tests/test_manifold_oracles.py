@@ -1306,3 +1306,137 @@ def test_hyperboloid_tangent_norm_is_zero_with_a_finite_gradient_at_the_zero_vec
     assert float(manifold.tangent_norm(zero, x_A, c)) == 0.0
     grad = np.asarray(jax.grad(lambda v: manifold.tangent_norm(v, x_A, c))(zero))
     assert np.all(np.isfinite(grad))
+
+
+# =============================================================================================
+# Hyperboloid parallel transport — a VALUE oracle for the general x -> y transport
+#
+# Not one of the F6-M1 audit specs: it closes a gap this file left. ``ptransp`` was covered only by
+# *property* tests in tests/test_manifolds.py (it is an isometry, it round-trips, it agrees with
+# ``ptransp_0`` at the origin). Those constrain the map up to a rotation of the target tangent
+# space: a transport that is *an* isometry T_xM -> T_yM but not the Levi-Civita one — say the
+# correct formula composed with a spatial rotation, or one built from the wrong pair of points —
+# satisfies every one of them. Only a value oracle separates them.
+#
+# The closed form (Lou et al. 2020, "Differentiating through the Fréchet mean", the same reference
+# the implementation cites; standard for the Lorentz model since Nickel & Kiela 2018):
+#
+#     PT_{x->y}(v) = v + ⟨y, v⟩_L / (1/c - ⟨x, y⟩_L) · (x + y),   ⟨a, b⟩_L = -a₀b₀ + ⟨a_s, b_s⟩
+#
+# Independence, on the same terms as the rest of this file: the expression is transcribed into
+# NumPy float64 here, and *every operand it is fed is also built in NumPy* — the base points come
+# from the NumPy ``exp_0`` closed form ``cosh(√c‖v_s‖)/√c · e₀ + sinh(√c‖v_s‖)/(√c‖v_s‖) · v``
+# rather than from ``manifold.expmap_0``, and the tangent vectors are Minkowski-projected in NumPy
+# (``v = w + c⟨x, w⟩_L·x``, which annihilates ⟨x, ·⟩_L because ⟨x, x⟩_L = -1/c). No hyperbolix call
+# appears anywhere upstream of ``expected_BA``, so this is library-vs-reference, not
+# library-vs-itself.
+#
+# This is the oracle used for the ``Hyperboloid``/``ptransp`` row of the reproduction repo's
+# Table 2, where its own tangency invariant ⟨y, PT v⟩_L = 0 was checked to 1e-14..1e-15 over the
+# whole (curvature x dimension) grid; ``test_..._oracle_is_tangent_at_the_target`` re-runs that
+# guard here so the oracle cannot rot silently underneath the comparison.
+# =============================================================================================
+
+_PTRANSP_DIMS = [2, 10]
+"""Spatial dimensions: the minimal case plus one generic value, as in tests/conftest.py."""
+
+_PTRANSP_N = 64
+"""Sampled (x, y, v) triples per cell."""
+
+
+def _np_lorentz(x_BA: np.ndarray, y_BA: np.ndarray) -> np.ndarray:
+    """⟨x, y⟩_L = -x₀y₀ + ⟨x_s, y_s⟩, time coordinate first. Pure NumPy, float64."""
+    return -x_BA[..., 0] * y_BA[..., 0] + np.sum(x_BA[..., 1:] * y_BA[..., 1:], axis=-1)
+
+
+def _np_hyperboloid_expmap_0(v_BA: np.ndarray, c: float) -> np.ndarray:
+    """NumPy ``exp_0``: builds the sample points without calling the library's own map."""
+    sqrt_c = np.sqrt(c)
+    arg_B1 = sqrt_c * np.linalg.norm(v_BA[..., 1:], axis=-1, keepdims=True)
+    time_B1 = np.cosh(arg_B1) / sqrt_c
+    space_BD = np.sinh(arg_B1) / arg_B1 * v_BA[..., 1:]
+    return np.concatenate([time_B1, space_BD], axis=-1)
+
+
+def _np_hyperboloid_ptransp(v_BA: np.ndarray, x_BA: np.ndarray, y_BA: np.ndarray, c: float) -> np.ndarray:
+    """``PT_{x->y}(v) = v + ⟨y, v⟩_L/(1/c - ⟨x, y⟩_L)·(x + y)``, transcribed in NumPy float64."""
+    coef_B1 = (_np_lorentz(y_BA, v_BA) / (1.0 / c - _np_lorentz(x_BA, y_BA)))[..., None]
+    return v_BA + coef_B1 * (x_BA + y_BA)
+
+
+def _np_sample_hyperboloid_points(rng: np.random.Generator, n: int, dim: int, c: float) -> np.ndarray:
+    """``n`` points at geodesic radius in ``[0.05, 2]/√c``, via the NumPy ``exp_0`` oracle.
+
+    Radii are capped at ``2/√c`` on purpose: past that the ambient chart's own cancellation starts
+    to dominate (that regime is what the Decimal-oracle section above is for), and this test is
+    about the transport formula, not about the conditioning of ⟨x, y⟩_L.
+    """
+    direction_BD = rng.normal(size=(n, dim))
+    direction_BD /= np.linalg.norm(direction_BD, axis=-1, keepdims=True)
+    radius_B1 = (0.05 + 1.95 * rng.random((n, 1))) / np.sqrt(c)
+    v_BA = np.concatenate([np.zeros((n, 1)), direction_BD * radius_B1], axis=-1)
+    return _np_hyperboloid_expmap_0(v_BA, c)
+
+
+def _np_sample_tangent_at(rng: np.random.Generator, x_BA: np.ndarray, c: float) -> np.ndarray:
+    """Generic tangent vectors at ``x``, Minkowski-projected and rescaled to Riemannian norm ~1.
+
+    ``v = w + c⟨x, w⟩_L·x`` is exactly tangent because ⟨x, x⟩_L = -1/c, so the correction cancels
+    ⟨x, w⟩_L. The ambient ``w`` has a non-zero time component, so ``v`` is a *generic* tangent
+    vector rather than one of the purely spatial ones ``ptransp_0`` is usually fed — a transport
+    that mishandles the time coordinate has nowhere to hide.
+    """
+    w_BA = rng.normal(size=x_BA.shape)
+    v_BA = w_BA + c * _np_lorentz(x_BA, w_BA)[..., None] * x_BA
+    norm_B1 = np.sqrt(_np_lorentz(v_BA, v_BA))[..., None]  # positive: the metric is Riemannian on T_xM
+    return v_BA / norm_B1
+
+
+def _ptransp_case(c: float, dim: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``(x, y, v, PT_{x->y}v)`` for one cell — everything NumPy float64, seeded per cell."""
+    # Positional integer stream ids, not hash(): str/float hashing is salted per process, so a
+    # hash-derived seed would silently change the sampled grid from run to run.
+    rng = np.random.default_rng([0, dim, round(1000 * c)])
+    x_BA = _np_sample_hyperboloid_points(rng, _PTRANSP_N, dim, c)
+    y_BA = _np_sample_hyperboloid_points(rng, _PTRANSP_N, dim, c)
+    v_BA = _np_sample_tangent_at(rng, x_BA, c)
+    return x_BA, y_BA, v_BA, _np_hyperboloid_ptransp(v_BA, x_BA, y_BA, c)
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("dim", _PTRANSP_DIMS)
+def test_hyperboloid_ptransp_oracle_is_tangent_at_the_target(c: float, dim: int):
+    """Guards the oracle itself: ⟨y, PT v⟩_L == 0 and the transport is a Lorentz isometry.
+
+    Both hold identically for the closed form given ⟨x, v⟩_L = 0, so a mistranscription (a sign, a
+    ``1/c`` turned into ``c``, ``x + y`` written as ``x - y``) breaks them — and the value
+    comparison below would otherwise be measuring a broken reference.
+    """
+    x_BA, y_BA, v_BA, expected_BA = _ptransp_case(c, dim)
+
+    assert np.max(np.abs(_np_lorentz(x_BA, v_BA))) < 1e-12, "the sampled v is not tangent at x"
+    assert np.max(np.abs(_np_lorentz(y_BA, expected_BA))) < 1e-12, "PT v is not tangent at y"
+    # An isometry: the Riemannian norm is carried across unchanged.
+    assert np.allclose(_np_lorentz(expected_BA, expected_BA), _np_lorentz(v_BA, v_BA), rtol=1e-12, atol=1e-13)
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("dim", _PTRANSP_DIMS)
+def test_hyperboloid_ptransp_matches_the_numpy_oracle(c: float, dim: int):
+    """``Hyperboloid.ptransp(v, x, y, c)`` equals the NumPy closed form to 1e-12 absolute.
+
+    Argument order is the library's own: ``ptransp(v, x, y, c)`` transports ``v`` *from* ``x`` *to*
+    ``y``, and the ambient layout keeps the time coordinate at index 0. Measured worst case over the
+    grid: 1.9e-14, i.e. ~2% of the tolerance — in line with the 5.5e-14 the reproduction repo
+    records for this operation over a comparable float64 grid.
+    """
+    manifold = Hyperboloid(dtype=F64)
+    x_BA, y_BA, v_BA, expected_BA = _ptransp_case(c, dim)
+
+    ptransp_batch = jax.vmap(manifold.ptransp, in_axes=(0, 0, 0, None))
+    got_BA = np.asarray(ptransp_batch(jnp.asarray(v_BA), jnp.asarray(x_BA), jnp.asarray(y_BA), c), dtype=np.float64)
+
+    assert np.max(np.abs(got_BA - expected_BA)) <= 1e-12
+    # Non-degenerate: the transport genuinely moves the vector, so "matches" is not "is the
+    # identity". At these radii the correction term is of order the vector itself.
+    assert np.max(np.abs(expected_BA - v_BA)) > 0.1
