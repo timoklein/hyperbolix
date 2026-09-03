@@ -1244,7 +1244,21 @@ def _compute_mlr(
     """
     sqrt_c = jnp.sqrt(c)
     sqrt_cr_1P = sqrt_c * r.T  # r:(P,1) → r.T:(1,P)
-    z_norm_1P = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm).T  # (1,P)
+    # The floor is a `where` on a comparison against the constant, not `clip`/`jnp.maximum`.
+    # `jnp.maximum(n, eps)` carries the tie-breaking JVP `g * [n == ans] / (1 + [eps == ans])`
+    # (jax's `_balanced_eq`), which tests the *operand* for bit equality with the *result*. That
+    # is safe only while both are the same value in the compiled graph. XLA:GPU emits
+    # `n = sqrt(sum(z*z))` twice here — once as its own fusion, once recomputed inside the
+    # backward fusion — and its per-process fusion autotuner may pick different emitters for the
+    # two (NATIVE_EMITTER vs BLOCK_LEVEL_EMITTER/Triton). The two copies then differ by 1 ulp,
+    # `[n == ans]` is false, and the entire `d‖z‖` branch of the gradient is silently zeroed for
+    # that output row — measured 1.0e-2 relative on `test_gradient_contract[linear_plfc-f32]`,
+    # firing in ~2 of 3 process launches on an A100. The `where` compares `n` against `min_enorm`
+    # (0.027 vs 1e-15 here), which no 1-ulp disagreement can flip. Forward values and the CPU
+    # gradient are bit-identical; only NaN input differs (`maximum` propagates it, `where` floors
+    # it), and a NaN `z` is already outside this function's contract.
+    z_enorm_P1 = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True)  # (P,1)
+    z_norm_1P = jnp.where(z_enorm_P1 > min_enorm, z_enorm_P1, min_enorm).T  # (1,P)
     x0_B1 = x[:, 0:1]  # time coordinate
     x_rem_BD = x[:, 1:]  # space coordinates, D = in_dim-1
     # TF32 (the XLA:GPU default for float32 matmuls on Ampere/Hopper) feeds the alpha_BP
