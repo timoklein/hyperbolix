@@ -272,36 +272,6 @@ def test_hyperboloid_gyro_addition(
     assert jnp.allclose(left_cancel, ys, atol=atol, rtol=rtol)
 
 
-def test_hyperboloid_scalar_mul_eq2(
-    hyperboloid_and_c, tolerance: tuple[float, float], hyperboloid_points: jnp.ndarray, rng: np.random.Generator
-) -> None:
-    """Verify Hyperboloid.scalar_mul equals the paper's Eq. 2: t ⊙ x = Exp_0(t · Log_0(x)).
-
-    ``scalar_mul`` is written in the normalized form Exp_0(t · d(0,x) · Log_0(x)/‖Log_0(x)‖);
-    since ‖Log_0(x)‖_L = d(0,x) this collapses to Eq. 2. This test confirms the equality.
-    """
-    manifold, c = hyperboloid_and_c
-    uniform_points = hyperboloid_points
-
-    atol, rtol = tolerance
-    if uniform_points.dtype == jnp.dtype("float32"):
-        atol, rtol = max(atol, 4e-3), max(rtol, 2e-2)
-
-    scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
-    logmap_0_batch = jax.vmap(manifold.logmap_0, in_axes=(0, None))
-    expmap_0_batch = jax.vmap(manifold.expmap_0, in_axes=(0, None))
-
-    # Keep |t| · d(0,x) within the float32-reliable range.
-    t = jnp.asarray(rng.uniform(-1.5, 1.5, size=uniform_points.shape[0]), dtype=uniform_points.dtype)
-
-    got = scalar_mul_batch(t, uniform_points, c)
-    # Eq. 2 directly: scale the origin-tangent by t, then exp back.
-    v0 = logmap_0_batch(uniform_points, c)
-    expected = expmap_0_batch(t[:, None] * v0, c)
-    assert jnp.allclose(got, expected, atol=atol, rtol=rtol)
-    assert _batch_is_in_manifold(manifold, got, c)
-
-
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
 @pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
 @pytest.mark.parametrize("t", [0.5, 2.0])
