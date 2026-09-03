@@ -2081,3 +2081,112 @@ def test_poincare_metric_tensor_dist_gradient_is_the_conformal_factor_at_small_s
     x_D, _ = _poincare_nearby_pair(r, 0.0, dtype)
     assert float(manifold.dist(x_D, x_D, c, version_idx=2)) == 0.0
     assert np.all(np.isfinite(np.asarray(grad_fn(x_D, x_D), dtype=np.float64)))
+
+
+# ---------------------------------------------------------------------------------------------
+# Safe-norm sweep — the additive-epsilon norm idiom, replaced library-wide.
+#
+# The old idiom ``sqrt(sum(x**2) + MIN_NORM**2)`` gave ``sqrt`` a finite derivative at ``x = 0``,
+# which ``jnp.linalg.norm`` does not (its VJP there is ``0/0 = NaN``). It bought that with two
+# defects, both documented on ``math_utils.safe_norm``:
+#
+#   * **Overflow** — ``sum(x**2)`` overflows float32 once any coordinate passes 1.8e19, even
+#     though the norm is representable. Measured on the parent (``parent_gate/gate.py``):
+#     ``Hyperboloid.proj`` at float32 spatial radius 5e19 returns ``x0 = inf``, and already at
+#     1e19 the constraint ``-x0² + ‖x_s‖²`` evaluates to exactly ``0`` instead of ``-1/c``
+#     (the sum of squares is exact, but ``sqrt`` of it loses the ``1/c``). The Poincaré
+#     ``_gyrovector_core._proj`` fails worse: at radius 1e20 the clamp ``x·(max_norm/inf)``
+#     collapses the point onto the **origin** rather than onto the ball boundary.
+#   * **Underflow** — the ``1e-30`` floor dominates a genuinely small vector, with relative
+#     residual ``MIN_NORM²/(2r²)``: 5.0e-15 at float64 radius 1e-8 (measured on the parent), and
+#     41 % at float32 radius 1e-15 (2.83e-15 returned where 2.00e-15 is correct).
+#
+# ``safe_norm`` / ``safe_hypot`` / ``safe_sqrt`` are max-scaled, so neither happens, and all
+# three give an exact ``0`` with an exactly-zero VJP at the zero vector. See
+# ``logs/2026-09-03_safe_norm_sweep/inventory.md`` for the full site list.
+# ---------------------------------------------------------------------------------------------
+
+# Radii chosen so the residual is the *only* error term: at these radii atanh(z) == z to well
+# beyond float64, so the analytic form is exact in both dtypes.
+_TINY_RADIUS = {jnp.float32: 1e-15, jnp.float64: 1e-8}
+# float32: the parent returns 2.83e-15 for 2.00e-15 (41 % off). float64: the parent's residual is
+# MIN_NORM²/(2r²) = 5.0e-15, so 1e-14 would not gate it — 1e-15 does, and the sweep lands at ~1e-16.
+_TINY_RADIUS_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-15}
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+def test_poincare_dist_0_matches_the_analytic_form_at_a_tiny_radius(dtype, c: float):
+    """``dist_0(x) == 2·atanh(√c‖x‖)/√c`` at a radius where the old ``+ MIN_NORM²`` dominated.
+
+    The additive floor made ``‖x‖`` come back as ``sqrt(r² + 1e-30)``. At float32 ``r = 1e-15``
+    that is ``1.41e-15``, i.e. a 41 % overestimate of the radius and of the distance; at float64
+    ``r = 1e-8`` it is a 5e-15 relative overestimate. ``safe_norm`` returns ``r`` exactly.
+    """
+    manifold = Poincare(dtype=dtype)
+    r = _TINY_RADIUS[dtype]
+    x_D = jnp.zeros(4, dtype=dtype).at[0].set(dtype(r))
+
+    expected = 2.0 * np.arctanh(np.sqrt(c) * r) / np.sqrt(c)
+    got = float(manifold.dist_0(x_D, c))
+    assert got == pytest.approx(expected, rel=_TINY_RADIUS_RTOL[dtype]), f"c={c} r={r}"
+
+    # The same statement for the pairwise arm, whose numerator is the same norm.
+    y_D = jnp.zeros(4, dtype=dtype)
+    assert float(manifold.dist(y_D, x_D, c)) == pytest.approx(expected, rel=_TINY_RADIUS_RTOL[dtype])
+
+
+def _zero_gradient_cases() -> list[tuple[str, object, object]]:
+    """``(name, fn, x0)`` triples whose gradient at ``x0`` must be exactly zero, not NaN."""
+    c = 1.0
+    zeros_D = jnp.zeros(4, dtype=F64)
+    zeros_6 = jnp.zeros(6, dtype=F64)
+    euc, poi, pv = Euclidean(dtype=F64), Poincare(dtype=F64), ProperVelocity(dtype=F64)
+    hyp, ster = Hyperboloid(dtype=F64), Stereographic(dtype=F64)
+    prod = ProductManifold((Poincare(dtype=F64), 3), (Euclidean(dtype=F64), 3), dtype=F64)
+    origin_A = hyp.create_origin(c, 3)
+    return [
+        ("euclidean.dist_0", lambda v: euc.dist_0(v, c), zeros_D),
+        ("euclidean.dist(x, x)", lambda v: euc.dist(v, v, c), zeros_D),
+        ("euclidean.tangent_norm", lambda v: euc.tangent_norm(v, zeros_D, c), zeros_D),
+        ("poincare.dist_0", lambda v: poi.dist_0(v, c), zeros_D),
+        ("poincare.dist(x, x)", lambda v: poi.dist(v, v, c), zeros_D),
+        ("poincare.tangent_norm", lambda v: poi.tangent_norm(v, zeros_D, c), zeros_D),
+        ("stereographic.dist_0", lambda v: ster.dist_0(v, c), zeros_D),
+        ("stereographic.tangent_norm", lambda v: ster.tangent_norm(v, zeros_D, c), zeros_D),
+        ("pv.dist_0", lambda v: pv.dist_0(v, c), zeros_D),
+        ("pv.tangent_norm", lambda v: pv.tangent_norm(v, zeros_D, c), zeros_D),
+        ("hyperboloid.tangent_norm", lambda v: hyp.tangent_norm(v, origin_A, c), jnp.zeros(4, dtype=F64)),
+        ("product.dist_0", lambda v: prod.dist_0(v, [c, 0.0]), zeros_6),
+        ("product.dist(x, x)", lambda v: prod.dist(v, v, [c, 0.0]), zeros_6),
+        ("product.tangent_norm", lambda v: prod.tangent_norm(v, zeros_6, [c, 0.0]), zeros_6),
+    ]
+
+
+@pytest.mark.parametrize("name,fn,x0", _zero_gradient_cases(), ids=[c[0] for c in _zero_gradient_cases()])
+def test_converted_norms_have_an_exactly_zero_gradient_at_the_zero_vector(name, fn, x0):
+    """Every converted norm site gives ``grad == 0`` at the zero vector — not NaN, not inf.
+
+    Zero is the finite, direction-free choice at a point where the derivative does not exist, and
+    it is what ``safe_norm``/``safe_sqrt``'s double-``where`` construction produces. Measured on
+    the parent, the Euclidean, Proper-Velocity ``tangent_norm`` and every ``ProductManifold``
+    entry returned NaN (bare ``jnp.linalg.norm``, or ``sqrt'(0) = inf`` meeting a zero cotangent).
+    """
+    g = np.asarray(jax.grad(fn)(x0), dtype=np.float64)
+    assert np.all(np.isfinite(g)), f"{name}: {g}"
+    assert np.all(g == 0.0), f"{name}: {g}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+def test_safe_sqrt_is_exact_and_zero_gradient_at_zero(dtype):
+    """The new ``math_utils.safe_sqrt``: value of ``jnp.sqrt``, derivative 0 (not inf) at 0."""
+    from hyperbolix.utils.math_utils import safe_sqrt
+
+    x = jnp.asarray([0.0, 1e-30, 1e-8, 1.0, 4.0, 1e30], dtype=dtype)
+    np.testing.assert_array_equal(np.asarray(safe_sqrt(x)), np.asarray(jnp.sqrt(x)))
+
+    g = np.asarray(jax.grad(lambda v: safe_sqrt(v))(jnp.asarray(0.0, dtype=dtype)))
+    assert g == 0.0
+    # Away from zero it is the ordinary derivative.
+    g1 = float(jax.grad(lambda v: safe_sqrt(v))(jnp.asarray(4.0, dtype=dtype)))
+    assert g1 == pytest.approx(0.25, rel=1e-6)

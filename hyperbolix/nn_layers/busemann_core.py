@@ -26,10 +26,9 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 
-# Gradient-safe floor for the direction-normalization denominator: the same
-# ``sqrt(sumsq + MIN_NORM**2)`` safe-norm idiom the manifolds use. Imported (not
-# redefined) so there is one value library-wide.
-from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, clamp_to
+# MIN_NORM is the library-wide floor for the init-time log-magnitude; the row normalization
+# itself uses ``safe_normalize``. Imported (not redefined) so there is one value library-wide.
+from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, clamp_to, safe_norm, safe_normalize
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 
 
@@ -67,7 +66,10 @@ def _init_weight_norm_params(
         param-norm logging).
     """
     kernel_KI = std * jax.random.normal(rngs.params(), (n_out, in_spatial), dtype=param_dtype)
-    log_scale_K = jnp.log(jnp.maximum(jnp.linalg.norm(kernel_KI, axis=-1), MIN_NORM))
+    # `safe_norm`, not `jnp.linalg.norm`: max-scaled, so a large-std kernel cannot overflow the
+    # sum of squares. The MIN_NORM floor stays — `log` needs a positive argument, and an
+    # all-zero row is a legitimate draw. (Init-time only; nothing is differentiated here.)
+    log_scale_K = jnp.log(jnp.maximum(safe_norm(kernel_KI), MIN_NORM))
     bias_K = jnp.zeros((n_out,), dtype=param_dtype)
     return nnx.Param(kernel_KI), nnx.Param(log_scale_K), nnx.Param(bias_K)
 
@@ -117,9 +119,11 @@ def _busemann_score(
 
     work_dtype = x_BI.dtype
     kernel_KI = kernel_KI.astype(work_dtype)
-    # Row-normalize directions to the unit sphere (gradient-safe at zero rows).
-    norm_K1 = jnp.sqrt(jnp.sum(kernel_KI**2, axis=-1, keepdims=True) + MIN_NORM**2)
-    v_unit_KI = kernel_KI / norm_K1
+    # Row-normalize directions to the unit sphere. `safe_normalize` is exactly the old
+    # `k / sqrt(sum(k**2) + MIN_NORM**2)` idiom, max-scaled: it returns the same exact zero row
+    # for a dead output channel, with an exactly-zero VJP instead of a 1e-15-floored one, and it
+    # cannot overflow the sum of squares.
+    v_unit_KI = safe_normalize(kernel_KI)
     # capped_exp: log_scale_K is unconstrained — a runaway param must saturate finite, not
     # overflow to inf and NaN the logits.
     alpha_K = capped_exp(log_scale_K.astype(work_dtype))

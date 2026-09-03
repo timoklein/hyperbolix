@@ -48,7 +48,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import floor_at
+from ..utils.math_utils import floor_at, safe_norm, safe_sqrt
 from ._base import ManifoldBase
 from .protocol import Curvature, ScalarCurvature
 
@@ -372,8 +372,12 @@ class ProductManifold:
         x: Float[Array, "total_dim"],
         c: Curvature,
     ) -> Float[Array, ""]:
-        """Riemannian norm (sqrt of tangent inner product with itself)."""
-        return jnp.sqrt(floor_at(self.tangent_inner(v, v, x, c), 0.0))
+        """Riemannian norm (sqrt of tangent inner product with itself).
+
+        ``safe_sqrt``, not a bare ``jnp.sqrt``: at ``v = 0`` the inner product is exactly 0, where
+        ``sqrt'`` is infinite and reverse-mode AD forms ``0 * inf = NaN`` for the whole row.
+        """
+        return safe_sqrt(floor_at(self.tangent_inner(v, v, x, c), 0.0))
 
     def egrad2rgrad(
         self,
@@ -435,7 +439,10 @@ class ProductManifold:
         """
         del version_idx
         d_per_factor = self.component_dist(x, y, c)
-        return jnp.sqrt(jnp.sum(d_per_factor**2))
+        # `safe_norm` over the per-factor distances: the L2 combination is a Euclidean norm, so
+        # the primitive applies directly. Exact 0 with an exactly-zero gradient when every factor
+        # distance is 0 (x == y), where the bare `sqrt(sum(d**2))` had an infinite derivative.
+        return safe_norm(d_per_factor)
 
     def dist_0(
         self,
@@ -448,8 +455,11 @@ class ProductManifold:
         cs = self._validate_c(c)
         x = self._cast(x)
         parts = self.split(x)
-        d_sq = jnp.stack([m.dist_0(p, c_i) ** 2 for m, p, c_i in zip(self._factors, parts, cs, strict=True)])
-        return jnp.sqrt(jnp.sum(d_sq))
+        # Stack the per-factor distances themselves, not their squares, and let `safe_norm` do the
+        # L2 combination: nothing is squared (no overflow at large factor distances) and the
+        # gradient at the product origin is exactly 0 instead of NaN.
+        d_per_factor = jnp.stack([m.dist_0(p, c_i) for m, p, c_i in zip(self._factors, parts, cs, strict=True)])
+        return safe_norm(d_per_factor)
 
     def dist_l1(
         self,

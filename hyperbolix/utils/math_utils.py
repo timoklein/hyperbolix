@@ -311,6 +311,41 @@ def safe_hypot(p: Float[Array, "..."], q: Float[Array, "..."]) -> Float[Array, "
 
 
 @jax.jit
+def safe_sqrt(x: Float[Array, "..."]) -> Float[Array, "..."]:
+    """``sqrt(x)`` with an exactly-zero derivative at ``x == 0`` instead of ``inf``. Range=[0, inf).
+
+    The scalar counterpart of :func:`safe_norm`, for the quantities that are already a squared
+    magnitude when they arrive: a Minkowski or Riemannian quadratic form ``g_x(v, v)``, a sum of
+    per-factor squared distances. Those cannot be routed through ``safe_norm`` (its input is the
+    *vector*, and a Minkowski form is not a Euclidean norm), yet they hit the same wall: at
+    ``x = 0`` the true derivative ``1/(2*sqrt(x))`` is infinite, and reverse-mode AD multiplies it
+    by the incoming cotangent — which for the usual ``v = 0`` case is exactly ``0``, giving
+    ``0 * inf = NaN`` for the whole row.
+
+    The library's older answer was to add ``MIN_NORM**2`` under the ``sqrt``, which has the same
+    two defects :func:`safe_norm` documents: the ``1e-30`` floor dominates a genuinely small ``x``
+    (a form of ``1e-40`` comes back as ``1e-15``), and it does nothing about a large one.
+
+    Same **double** ``where`` as :func:`safe_norm`: the first replaces the *argument* so the
+    infinite derivative is never created, the second restores the exact ``0`` forward value. A
+    negative ``x`` still yields NaN (as ``jnp.sqrt`` does) — callers that can produce a slightly
+    negative form from rounding wrap the argument in ``floor_at(x, 0.0)`` first, which is the
+    honest place for that decision. ``inf`` passes through as ``inf``.
+
+    Args:
+        x: Non-negative input array of any shape
+
+    Returns:
+        ``sqrt(x)``, with derivative ``0`` (not ``inf``) wherever ``x == 0``
+    """
+    is_zero = x == 0.0
+    # Double-where, first half: sqrt'(0) = inf would become 0*inf = NaN in the VJP below.
+    x_safe = jnp.where(is_zero, jnp.ones_like(x), x)
+    # Double-where, second half: exact 0 forward, exactly-zero VJP at x = 0.
+    return jnp.where(is_zero, jnp.zeros_like(x), jnp.sqrt(x_safe))
+
+
+@jax.jit
 def safe_normalize(v: Float[Array, "... n"]) -> Float[Array, "... n"]:
     """``v/‖v‖`` over the last axis, returning the **exact zero vector** at ``v == 0``.
 

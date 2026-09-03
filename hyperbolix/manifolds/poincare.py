@@ -68,7 +68,7 @@ import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, sinh, smooth_clamp, tanh
+from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, smooth_clamp, tanh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
@@ -102,10 +102,13 @@ def _scalar_mul(r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, 
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Safe norm: sqrt(||x||² + eps²) has finite gradients at x=0. The previous
-    # maximum(norm, MIN_NORM) only guarded the forward — linalg.norm's VJP at 0
-    # is 0/0 = NaN, and 0-cotangent · NaN is still NaN.
-    x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
+    # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
+    # unreachable here. `safe_sqrt`'s double-`where` supplies the same finite (zero) derivative
+    # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
+    # The `floor_at` is the deliberate part -- `x_norm` is a *divisor* two lines down, so it must
+    # stay bounded away from 0; above ~1e-14 the two forms agree to rounding.
+    x_norm = floor_at(safe_sqrt(jnp.sum(x**2)), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * x_norm
     # `tanh` is the math_utils wrapper (matching _expmap_0 and _expmap), not XLA's kernel: more
     # accurate in float32, and its ±(1 - 10·eps) output clip pairs with `atanh`'s own domain guard
@@ -132,8 +135,13 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curva
     sqrt_c = jnp.sqrt(c)
     x2y2 = jnp.dot(x, x, precision=MATMUL_PRECISION) * jnp.dot(y, y, precision=MATMUL_PRECISION)
     xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
-    # Safe norm: finite gradient at x == y (norm's VJP at 0 is 0/0 = NaN)
-    num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
+    # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
+    # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
+    # unreachable here. `safe_sqrt`'s double-`where` supplies the same finite (zero) derivative
+    # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
+    # This is a numerator, not a divisor, so no floor is needed: the old `+ MIN_NORM**2` was purely
+    # the sqrt-gradient guard and it cost a 1e-15 floor on every genuinely small separation.
+    num = safe_sqrt(jnp.sum((y - x) ** 2))
     denom = jnp.sqrt(floor_at(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
     xysum_norm = num / denom
     dist_c = atanh(sqrt_c * xysum_norm)
@@ -144,8 +152,12 @@ def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -
     """Möbius distance via addition."""
     sqrt_c = jnp.sqrt(c)
     diff = _addition(-x, y, c)
-    # Safe norm: finite gradient at x == y (diff = 0)
-    diff_norm = jnp.sqrt(jnp.sum(diff**2) + MIN_NORM**2)
+    # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
+    # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
+    # unreachable here. `safe_sqrt`'s double-`where` supplies the same finite (zero) derivative
+    # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
+    # `diff` is `_addition`'s projected output, so it is a ball point. Not a divisor, so no floor.
+    diff_norm = safe_sqrt(jnp.sum(diff**2))
     dist_c = atanh(sqrt_c * diff_norm)
     return 2 * dist_c / sqrt_c
 
@@ -227,7 +239,10 @@ def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvatur
     # At x=y the Gram term is exactly 0, so G = 1 - c‖x‖² = denom and δ(x,x)=0 to machine precision.
     gram = x2 * y2 - xy**2  # ‖x‖²‖y‖² - ⟨x,y⟩² ≥ 0 (squared area of the x,y parallelogram)
     G = jnp.sqrt(floor_at((1.0 - c * xy) ** 2 + c**2 * gram, MIN_NORM))
-    num = sqrt_c * jnp.linalg.norm(x - y) + G
+    # `safe_sqrt`, not `jnp.linalg.norm`: at x == y the latter's VJP is 0/0 = NaN, and 0*NaN
+    # survives every downstream operation, so grad(delta)(x, x) was NaN. Both arguments are ball
+    # points, so the sum of squares cannot overflow and no max-scaling is needed.
+    num = sqrt_c * safe_sqrt(jnp.sum((x - y) ** 2)) + G
     # Denominator 1 - c‖y‖² = 2/λ(y); reuse the already-clamped conformal factor so the
     # near-boundary floor matches the rest of the module (δ → ∞ as y → ∂ball is expected).
     denom = 2.0 / _conformal_factor(y, c)
@@ -261,8 +276,13 @@ def _dist(
 def _dist_0_mobius(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Möbius distance from origin (mobius_direct and mobius use same formula)."""
     sqrt_c = jnp.sqrt(c)
-    # Safe norm: finite gradient at the origin
-    x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
+    # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
+    # unreachable here. `safe_sqrt`'s double-`where` supplies the same finite (zero) derivative
+    # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
+    # The old `+ MIN_NORM**2` put a hard floor of 1e-15 on the radius, so d_0 of a float32 point at
+    # radius 1e-15 came back 40 % too large and every radius below that collapsed onto one value.
+    x_norm = safe_sqrt(jnp.sum(x**2))
     dist_c = atanh(sqrt_c * x_norm)
     return 2 * dist_c / sqrt_c
 
@@ -340,10 +360,10 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Safe norm: sqrt(||v||² + eps²) has well-defined gradients at v=0,
-    # matching _expmap_0. The previous maximum(·, MIN_NORM) only guarded the
-    # forward — linalg.norm's VJP at 0 is 0/0 = NaN, and 0·NaN is still NaN.
-    v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    # `safe_norm` + explicit `floor_at`: the floor is deliberate (`c_norm_prod` divides two lines
+    # below, and `tanh(t)/t → 1` needs t > 0), the max-scaling is the fix for the old spelling's
+    # float32 overflow past coordinate 1.8e19. Matches _expmap_0.
+    v_norm = floor_at(safe_norm(v), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * v_norm
     lambda_x = _conformal_factor(x, c)
     # ||second_term|| = |tanh(·)|/√c < 1/√c, i.e. strictly inside the ball, so an explicit _proj
@@ -426,9 +446,10 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     sub = _addition(-x, y, c)
     x2y2 = jnp.dot(x, x, precision=MATMUL_PRECISION) * jnp.dot(y, y, precision=MATMUL_PRECISION)
     xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
-    # Safe norm: finite gradient at x == y (raw norm's VJP at 0 is 0/0 = NaN). Identical quantity
-    # and form to _dist_mobius_direct's num — keep the two consistent.
-    num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
+    # `safe_sqrt`: exact 0 and exactly-zero VJP at x == y. Identical quantity and form to
+    # _dist_mobius_direct's num -- keep the two consistent. No floor here: `c_norm_prod` below
+    # already carries the explicit divisor floor.
+    num = safe_sqrt(jnp.sum((y - x) ** 2))
     denom = jnp.sqrt(floor_at(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
     sub_norm = num / denom
     c_norm_prod = floor_at(jnp.sqrt(c) * sub_norm, MIN_NORM)
@@ -530,9 +551,9 @@ def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) 
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_x = _conformal_factor(x, c)
-    # Safe norm: sqrt(||v||² + eps²) keeps the gradient finite at v=0. A bare jnp.linalg.norm
-    # has VJP 0/0 = NaN there (and 0-cotangent · NaN stays NaN), matching the _expmap/_proj idiom.
-    return lambda_x * jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    # `safe_norm`: exact 0 with an exactly-zero VJP at v = 0 (a bare jnp.linalg.norm has VJP
+    # 0/0 = NaN there). Returned, not divided by, so no floor — ‖0‖_x is exactly 0.
+    return lambda_x * safe_norm(v)
 
 
 def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
@@ -650,8 +671,11 @@ def _compute_mlr_pp(
     sqrt_c = jnp.sqrt(c)
     sqrt_c2r_1P = 2 * sqrt_c * r.T  # (1, P) — r is (P, 1), .T broadcasts
 
-    # Safe norm: sqrt(sum(z²) + eps²) avoids NaN gradients at z=0
-    z_norm_P1 = jnp.sqrt(jnp.sum(z**2, axis=-1, keepdims=True) + min_enorm**2)  # (P, 1)
+    # `safe_norm` + `floor_at`: `z_norm_P1` is a divisor below (`z / z_norm_P1`), so the floor at
+    # `min_enorm` is the deliberate part; the max-scaling removes the old spelling's float32
+    # overflow and its 1e-15 floor on small hyperplane normals. Mirrors
+    # `poincare_regression._compute_mlr`'s `floor_at(safe_norm(a)[:, None], min_enorm)`.
+    z_norm_P1 = floor_at(safe_norm(z)[:, None], min_enorm)  # (P, 1)
 
     # Conformal factor lam(x) = 2 / (1 - c||x||²) per HNN++ Eq. 26 (boundary-clamped).
     # NOTE: van Spengler's poincare-resnet repo has 2*(1 - c||x||²) here — a

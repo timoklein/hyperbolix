@@ -69,7 +69,7 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, atanh, clamp_to, floor_at, tanh
+from ..utils.math_utils import MIN_NORM, atanh, clamp_to, floor_at, safe_norm, tanh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
@@ -211,8 +211,10 @@ def _artan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
 def _scalar_mul(r: Float[Array, ""], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """κ-scalar multiplication ``r ⊗_κ x = tan_κ(r·tan_κ⁻¹(‖x‖))·x/‖x‖`` (paper Eq. 3, ``κ = -c``)."""
     k = -c
-    # Safe norm: finite gradient at x = 0.
-    x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    # `safe_norm` + `floor_at`: the floor is deliberate (`x_norm` divides on the next line), the
+    # max-scaling replaces `sqrt(sum(x**2) + MIN_NORM**2)`, which overflows float32 past
+    # coordinate 1.8e19 and floors every radius below 1e-15.
+    x_norm = floor_at(safe_norm(x), MIN_NORM)
     res = _tan_k(r * _artan_k(x_norm, k), k) * (x / x_norm)
     return _proj(res, c)
 
@@ -224,23 +226,24 @@ def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float
     """
     k = -c
     diff = _addition(-x, y, c)
-    # Safe norm: finite gradient at x == y (diff = 0).
-    diff_norm = jnp.sqrt(jnp.sum(diff**2) + MIN_NORM**2)
+    # `safe_norm`: exact 0 and exactly-zero VJP at x == y; not a divisor, so no floor.
+    diff_norm = safe_norm(diff)
     return 2.0 * _artan_k(diff_norm, k)
 
 
 def _dist_0(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Geodesic distance to the origin ``d_κ(0, x) = 2·tan_κ⁻¹(‖x‖)``. Reduces to ``2‖x‖`` as ``c → 0``."""
     k = -c
-    x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    # `safe_norm`: exact 0 at the origin, and no 1e-15 floor on a genuinely small radius.
+    x_norm = safe_norm(x)
     return 2.0 * _artan_k(x_norm, k)
 
 
 def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Exponential map ``exp^κ_x(v) = x ⊕_κ (tan_κ(λ^κ_x‖v‖/2)·v/‖v‖)`` (paper Eq. 6, ``κ = -c``)."""
     k = -c
-    # Safe norm: well-defined gradient at v = 0.
-    v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    # `safe_norm` + `floor_at`: `v_norm` divides below, so the floor stays; see _scalar_mul.
+    v_norm = floor_at(safe_norm(v), MIN_NORM)
     lam = _conformal_factor(x, c)
     second_term = _tan_k(lam * v_norm / 2.0, k) * (v / v_norm)
     return _addition(x, second_term, c)
@@ -262,8 +265,8 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     """Logarithmic map ``log^κ_x(y) = (2/λ^κ_x)·tan_κ⁻¹(‖s‖)·s/‖s‖`` with ``s = (-x) ⊕_κ y`` (paper Eq. 7)."""
     k = -c
     sub = _addition(-x, y, c)
-    # Safe norm: finite gradient at x == y (sub = 0).
-    sub_norm = jnp.sqrt(jnp.sum(sub**2) + MIN_NORM**2)
+    # `safe_norm` + `floor_at`: `sub_norm` divides below, so the floor stays; see _scalar_mul.
+    sub_norm = floor_at(safe_norm(sub), MIN_NORM)
     lam = _conformal_factor(x, c)
     return 2.0 * _artan_k(sub_norm, k) * (sub / (lam * sub_norm))
 
@@ -297,8 +300,8 @@ def _tangent_inner(u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Arra
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Riemannian norm ``‖v‖_x = λ^κ_x·‖v‖``."""
     lambda_x = _conformal_factor(x, c)
-    # Safe norm: finite gradient at v = 0.
-    return lambda_x * jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    # `safe_norm`: exact 0 with an exactly-zero VJP at v = 0; returned, not divided by.
+    return lambda_x * safe_norm(v)
 
 
 def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
@@ -348,7 +351,8 @@ def _geodesic(t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"
 def _geodesic_unit(t: Float[Array, ""], x: Float[Array, "dim"], u: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Unit-speed geodesic ``gamma(t) = x ⊕_κ (tan_κ(t/2)·u/‖u‖)`` from ``x`` in direction ``u``."""
     k = -c
-    u_norm = jnp.sqrt(jnp.sum(u**2) + MIN_NORM**2)
+    # `safe_norm` + `floor_at`: `u_norm` divides on the next line, so the floor stays.
+    u_norm = floor_at(safe_norm(u), MIN_NORM)
     second_term = _tan_k(t / 2.0, k) * (u / u_norm)
     return _addition(x, second_term, c)
 
@@ -368,12 +372,16 @@ def _antipode(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     genuinely diverges (the sphere flattens), so very small ``|c|`` yields correspondingly huge outputs."""
     c_arr = jnp.asarray(c)
     is_spherical = c_arr < 0
-    # Safe squared norm: keeps the inversion (and its gradient) finite at x = 0.
-    x2 = jnp.sum(x**2) + MIN_NORM**2
-    # Substitute a benign curvature in the DISCARDED inversion for c ≥ 0 so 1/(c·x2) cannot divide by
+    # x/(c·‖x‖²) is evaluated below as (x/r)/(c·r) with r = ‖x‖: algebraically identical, but
+    # nothing is squared, so the inversion of a far-out point no longer overflows float32 (the old
+    # `sum(x**2) + MIN_NORM**2` returned inf past coordinate 1.8e19, i.e. antipode = 0). The
+    # MIN_NORM floor is deliberate and unchanged: r is a divisor, and the chart antipode of the
+    # ORIGIN is the point at infinity, which the floor renders as 0 (see the docstring).
+    r = floor_at(safe_norm(x), MIN_NORM)
+    # Substitute a benign curvature in the DISCARDED inversion for c ≥ 0 so 1/(c·r²) cannot divide by
     # zero at c = 0 and leak a NaN gradient through the jnp.where into the selected -x branch.
     safe_c = jnp.where(is_spherical, c_arr, -jnp.ones_like(c_arr))
-    spherical = x / (safe_c * x2)
+    spherical = (x / r) / (safe_c * r)
     return jnp.where(is_spherical, spherical, -x)
 
 

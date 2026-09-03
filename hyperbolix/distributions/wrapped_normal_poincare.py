@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
-from hyperbolix.utils.math_utils import MIN_NORM, floor_at
+from hyperbolix.utils.math_utils import safe_norm
 
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
@@ -215,11 +215,13 @@ def log_prob(
     log_p_v_SB = gaussian_log_prob(v_riem_SBD, sigma, n, dtype)
 
     # Step 4: Compute log det Jacobian
-    # Riemannian norm r = λ(0) · ||v||_E = 2 · ||v||_E. The floor mirrors the hyperboloid
-    # sibling: sqrt'(0) is infinite, so at z == mu the gradient of the unfloored norm is NaN
-    # (in float64 as much as float32). floor_at's gradient is 0 on the clamped side, which
-    # is the correct derivative here — log det is stationary at r = 0.
-    r_SB = 2.0 * jnp.sqrt(floor_at(jnp.sum(v_SBD**2, axis=-1), MIN_NORM))
+    # Riemannian norm r = λ(0) · ||v||_E = 2 · ||v||_E, via `safe_norm`. It supplies exactly what
+    # the old `sqrt(floor_at(sum(v**2), MIN_NORM))` was there for — a finite (zero) gradient at
+    # z == mu, where sqrt'(0) is infinite — without the floor's side effect: flooring the *squared*
+    # norm at 1e-15 pinned r at 2·3.16e-8 for every tangent vector shorter than that, and
+    # `sum(v**2)` overflowed float32 past ||v|| = 1.8e19. `_log_det_jacobian_from_r` is already
+    # NaN-free and stationary at r = 0 (double-`where` plus the Taylor branch), so r = 0 is safe.
+    r_SB = 2.0 * safe_norm(v_SBD)
     log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 5: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)

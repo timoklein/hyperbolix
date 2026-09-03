@@ -31,6 +31,7 @@ comprehensive usage patterns.
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from ..utils.math_utils import safe_norm
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from .protocol import Curvature
@@ -98,8 +99,13 @@ def _dist(
 
     Returns:
         Euclidean distance ||x - y||, scalar
+
+    Notes:
+        ``safe_norm``, not ``jnp.linalg.norm``: the latter's VJP at ``x == y`` is ``0/0 = NaN``,
+        and ``0-cotangent * NaN`` stays NaN, so ``jax.grad(dist)(x, x)`` was NaN. Reachable
+        through a ``ProductManifold`` with a Euclidean factor.
     """
-    return jnp.linalg.norm(x - y)
+    return safe_norm(x - y)
 
 
 def _dist_0(x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:
@@ -111,8 +117,11 @@ def _dist_0(x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:
 
     Returns:
         Euclidean distance ||x||, scalar
+
+    Notes:
+        ``safe_norm``, not ``jnp.linalg.norm``: the latter's VJP at the origin is ``0/0 = NaN``.
     """
-    return jnp.linalg.norm(x)
+    return safe_norm(x)
 
 
 def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:
@@ -265,8 +274,11 @@ def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature =
 
     Returns:
         Norm ||v||, scalar
+
+    Notes:
+        ``safe_norm``, not ``jnp.linalg.norm``: the latter's VJP at ``v = 0`` is ``0/0 = NaN``.
     """
-    return jnp.linalg.norm(v)
+    return safe_norm(v)
 
 
 def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, "dim"]:

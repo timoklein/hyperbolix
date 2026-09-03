@@ -44,7 +44,7 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, floor_at
+from ..utils.math_utils import MIN_NORM, floor_at, safe_hypot, safe_norm
 from ..utils.precision import MATMUL_PRECISION
 from .protocol import Curvature
 
@@ -181,7 +181,11 @@ def pv_to_poincare(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    beta_inv = jnp.sqrt(1.0 + c * jnp.dot(x, x, precision=MATMUL_PRECISION))  # 1/β_x = √(1 + c·||x||²)
+    # √(1 + c·||x||²) as a two-leg hypot: `dot(x, x)` overflows float32 once ||x|| passes
+    # 1.8e19/√c, and `x / (1 + inf)` then maps a far-out PV point to the *origin* instead of near
+    # the ball boundary. `safe_hypot` never materialises the square.
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
+    beta_inv = safe_hypot(jnp.asarray(1.0, dtype=x.dtype), sqrt_c * safe_norm(x))  # 1/β_x
     return x / (1.0 + beta_inv)
 
 
@@ -264,7 +268,10 @@ def pv_to_hyperboloid(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026.
     """
-    time = jnp.sqrt(1.0 / c + jnp.dot(x, x, precision=MATMUL_PRECISION))  # z₀ = √(1/c + ||x||²) ≥ 1/√c
+    # √(1/c + ||x||²) as a two-leg hypot — the same shape as `Hyperboloid._proj`, and the same
+    # fix: `dot(x, x)` overflows float32 past ||x|| = 1.8e19, returning an infinite time slot for
+    # a point whose time slot is perfectly representable.
+    time = safe_hypot(safe_norm(x), jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype)))
     return jnp.concatenate([time[None], x])
 
 

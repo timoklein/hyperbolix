@@ -186,6 +186,44 @@ mis-normalised every float32 sample inside radius 1.5e-3.
     (where the extra `where` changes the VJP's fusion) against a 4-ulp CPU-vs-GPU spread the unchanged
     code already had.
 
+### No Norm Is an Additive Epsilon Any More {#safe-norms}
+
+Anywhere the library needs a Euclidean norm on a differentiated path it calls one of three
+`math_utils` primitives instead of the old `sqrt(sum(x**2) + MIN_NORM**2)` idiom: `safe_norm`
+(max-scaled, for an input whose magnitude is unbounded), `safe_hypot` (the two-leg
+$\sqrt{p^2+q^2}$), or `safe_sqrt` (for a quantity that arrives already squared — a Minkowski or
+Riemannian form, or a sum of squares that provably cannot overflow).
+
+The old idiom was a *gradient* guard: it gives `sqrt` a finite derivative at $x = 0$, which
+`jnp.linalg.norm` does not (its VJP there is $0/0 =$ NaN). It paid for that at both ends of the
+exponent range. **At the top**, $\sum_i x_i^2$ overflows float32 as soon as any coordinate passes
+$1.8\times10^{19}$, even though the norm itself is representable — this is the hyperboloid radius
+ceiling, where `proj` returned an infinite time slot for a point whose time slot is a perfectly
+ordinary float (and, one radius earlier, an $x_0$ whose Minkowski residual was $0$ rather than
+$-1/c$). The Poincaré ball's boundary clamp failed the same way but louder: with
+$\lVert x\rVert = \infty$ the clamp $x \cdot (r_{\max} / \lVert x \rVert)$ evaluates to the
+**zero vector**, so the farthest representable point was projected onto the origin. **At the
+bottom**, the additive $\texttt{MIN\_NORM}^2 = 10^{-30}$ dominates any genuinely small vector,
+with relative residual $\texttt{MIN\_NORM}^2/(2r^2)$: $5.0\times10^{-15}$ for a float64 point at
+radius $10^{-8}$, and 41 % for a float32 point at radius $10^{-15}$, where `dist_0` returned
+$2.83\times10^{-15}$ for a true $2.00\times10^{-15}$.
+
+Which primitive goes where is a cost decision, not a taste one. Max-scaling costs a second
+reduction over the input, and on `Poincare.dist` — whose argument is a *ball* point, so
+$\sum_i x_i^2 \le 4/c$ and overflow is unreachable — that reduction is 2 extra XLA kernels at
+batch $10^7$ for a failure mode that cannot occur. Those sites use `safe_sqrt(sum(x**2))`, which
+is the same double-`where` construction on the scalar and compiles to exactly the kernel count the
+old idiom did. Tangent vectors, unprojected inputs, hyperboloid and proper-velocity coordinates,
+and layer weights are all unbounded, and those use `safe_norm`.
+
+All three return an exact `0` with an **exactly zero** VJP at the zero vector — the finite,
+direction-free choice at a point where the derivative does not exist — and pass a non-finite input
+through as `inf` rather than turning it into NaN. Where a norm is a *divisor* the floor is still
+there, but as `floor_at(safe_norm(x), MIN_NORM)`: a multiplicative floor, exact everywhere above
+itself, instead of an additive one that perturbs every value. One subtlety when the floored norm
+feeds a $\sinh(t)/t$: the floor has to be applied to $t$ itself and not only to the denominator,
+or the ratio is $0$ at $t = 0$ instead of $1$.
+
 !!! note "The pairwise `dist` reads the same radial gap off the spatial part"
     `dist` is a separate code path, and it used to carry its own $O(\varepsilon/r)$ relative error
     near the origin: its polar decomposition needs $u_x - u_y$ with $u = x_0 + \lVert x_s\rVert$,
@@ -1012,12 +1050,14 @@ def safe_clip_to_interior(x_batch, c=1.0, safety_factor=0.9):
 
 **Solution**:
 ```python
-# Manifold functions handle this internally with MIN_NORM
-# But you can add explicit checks:
+# Manifold functions handle this internally: every norm on a differentiated path goes
+# through math_utils.safe_norm, which returns an exact 0 with an exactly-zero gradient
+# at v = 0 (see "Every Norm Is Max-Scaled" above). If you need the same in your own code,
+# use the library's primitives rather than rolling a floor:
+from hyperbolix.utils import safe_norm, safe_normalize
 
-def safe_normalize(v, eps=1e-8):
-    norm = jnp.linalg.norm(v)
-    return jnp.where(norm > eps, v / norm, jnp.zeros_like(v))
+norm = safe_norm(v)            # 0 at v = 0, gradient 0, no sum of squares to overflow
+unit = safe_normalize(v)       # exact zero vector at v = 0, unit vector everywhere else
 ```
 
 ### Edge Case 3: Large Learning Rates

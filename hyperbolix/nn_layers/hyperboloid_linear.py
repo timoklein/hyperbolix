@@ -22,11 +22,11 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 
-# MIN_NORM is the library-wide gradient-safety floor for norms: sqrt(sum + MIN_NORM²)
-# has a finite VJP at zero input, unlike linalg.norm, whose 0/0 NaN survives any
-# post-hoc jnp.where masking. Imported (not redefined) so there is one value.
+# MIN_NORM is the library-wide gradient-safety floor for norms; `safe_norm`/`safe_hypot` are the
+# max-scaled primitives that compute them without materialising a sum of squares. Imported (not
+# redefined) so there is one value.
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, floor_at
+from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, floor_at, safe_hypot, safe_norm
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import MATMUL_PRECISION, build_spacelike_V, htc, sinh_lift_to_hyperboloid
@@ -73,15 +73,18 @@ def _fhcnn_forward(
 
     # Static branch - JIT friendly
     if normalize:
-        # Safe norm: finite gradient at zero spatial input; the origin mask
-        # below still fires (safe norm of a zero vector is MIN_NORM <= 1e-5).
-        x_rem_norm_B1 = jnp.sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (B, 1)
+        # `safe_norm` + `floor_at`: the floor is deliberate (`x_rem_norm_B1` is a divisor two
+        # lines down), the max-scaling removes the old spelling's float32 overflow past spatial
+        # coordinate 1.8e19. The origin mask below still fires (the floored norm is 1e-15 <= 1e-5).
+        x_rem_norm_B1 = floor_at(safe_norm(x_rem_BD)[..., None], MIN_NORM)  # (B, 1)
 
         # Learnable sigmoid scaling. capped_exp: scale_val is unconstrained — a runaway param
         # must saturate finite, not overflow to inf and NaN the time coordinate.
         scale_B1 = capped_exp(scale_val) * jax.nn.sigmoid(x0_B1)  # (B, 1)
 
-        res0_B1 = jnp.sqrt(scale_B1**2 + 1 / c + eps)  # (B, 1)
+        # sqrt(scale^2 + 1/c + eps) as a two-leg hypot: nothing squared, so a saturated scale
+        # cannot overflow the time slot. Same value to rounding.
+        res0_B1 = safe_hypot(scale_B1, jnp.sqrt(jnp.asarray(1 / c + eps, dtype=x_BO.dtype)))  # (B, 1)
         res_rem_BD = scale_B1 * x_rem_BD / x_rem_norm_B1  # (B, D)
 
         res_BA = jnp.concatenate([res0_B1, res_rem_BD], axis=-1)  # (B, A)
@@ -93,8 +96,11 @@ def _fhcnn_forward(
         mask_B1 = x_rem_norm_B1 <= 1e-5
         res_BA = jnp.where(mask_B1, origin_BA, res_BA)
     else:
-        # Reconstruct time from space: x0 = sqrt(||x_rem||^2 + 1/c)
-        res0_B1 = jnp.sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True) + 1 / c)  # (B, 1)
+        # Reconstruct time from space: x0 = sqrt(||x_rem||^2 + 1/c), as a two-leg hypot. Same
+        # shape (and same fix) as Hyperboloid._proj: `sum(x_rem**2)` overflows float32 past
+        # spatial radius 1.8e19 and returns an infinite time slot for a representable point.
+        inv_sqrt_c = jnp.asarray(1.0, dtype=x_BO.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x_BO.dtype))
+        res0_B1 = safe_hypot(safe_norm(x_rem_BD)[..., None], inv_sqrt_c)  # (B, 1)
         res_BA = jnp.concatenate([res0_B1, x_rem_BD], axis=-1)  # (B, A)
 
     return res_BA
@@ -154,9 +160,10 @@ def _fhnn_forward(
     target_norm_B1 = jnp.sqrt(y0_B1**2 - 1.0 / c)  # (B, 1)
 
     # Rescale spatial to satisfy hyperboloid constraint.
-    # Safe norm: finite gradient at zero spatial input (linalg.norm's VJP at 0
-    # is NaN and survives both the maximum() and the jnp.where below).
-    z_rem_norm_B1 = jnp.sqrt(jnp.sum(z_rem_BD**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (B, 1)
+    # `safe_norm`: exact 0 with an exactly-zero VJP at zero spatial input (linalg.norm's VJP at 0
+    # is NaN and survives both the floor and the jnp.where below), and no sum of squares to
+    # overflow. No floor here -- `floor_at(., eps)` on the next line is the divisor guard.
+    z_rem_norm_B1 = safe_norm(z_rem_BD)[..., None]  # (B, 1)
     z_rem_norm_safe_B1 = floor_at(z_rem_norm_B1, eps)  # avoid division by zero
     y_rem_BD = target_norm_B1 / z_rem_norm_safe_B1 * z_rem_BD  # (B, D)
 
@@ -315,7 +322,10 @@ def _get_effective_kernel(
     if use_weight_norm:
         assert kernel_scale is not None and kernel_dir is not None
         g_pos_O = jax.nn.softplus(kernel_scale)  # (O,) force positive magnitudes
-        v_norm_O = jnp.sqrt(jnp.sum(kernel_dir**2, axis=0) + eps)  # (O,)
+        # Column norms (axis 0) via `safe_norm` on the transpose, floored at sqrt(eps) so the
+        # division below stays finite: `sqrt(sum(v**2) + eps) == floor_at(||v||, sqrt(eps))` to
+        # rounding, with nothing squared.
+        v_norm_O = floor_at(safe_norm(kernel_dir.T), jnp.sqrt(jnp.asarray(eps, dtype=kernel_dir.dtype)))  # (O,)
         return g_pos_O[None, :] * kernel_dir / v_norm_O[None, :]  # (I, O)
     assert kernel is not None
     return kernel
@@ -344,8 +354,10 @@ def _fgg_linear_forward(
     if activation is not None:
         z_BO = activation(z_BO)
 
-    # Reconstruct hyperboloid point: spatial = z, time from constraint
-    y_0_B1 = jnp.sqrt(jnp.sum(z_BO**2, axis=-1, keepdims=True) + 1.0 / c)  # (B, 1)
+    # Reconstruct hyperboloid point: spatial = z, time from constraint, as a two-leg hypot.
+    # Same shape (and same overflow fix) as Hyperboloid._proj.
+    inv_sqrt_c = jnp.asarray(1.0, dtype=z_BO.dtype) / jnp.sqrt(jnp.asarray(c, dtype=z_BO.dtype))
+    y_0_B1 = safe_hypot(safe_norm(z_BO)[..., None], inv_sqrt_c)  # (B, 1)
 
     return jnp.concatenate([y_0_B1, z_BO], axis=-1)  # (B, Ao)
 

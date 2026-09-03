@@ -78,6 +78,7 @@ from ..utils.math_utils import (
     safe_hypot,
     safe_norm,
     safe_normalize,
+    safe_sqrt,
     sinh,
     smooth_clamp,
     smooth_clamp_min,
@@ -665,9 +666,15 @@ def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Cur
     """
     sqrt_c = jnp.sqrt(c)
     v_sqnorm = floor_at(_minkowski_inner(v, v), 0.0)
-    # Safe norm: +MIN_NORM² keeps sqrt's gradient finite at v=0
-    # (sqrt'(0) = inf; the forward-only maximum below can't undo that NaN).
-    v_norm = jnp.sqrt(v_sqnorm + MIN_NORM**2)
+    # `safe_sqrt` + `floor_at`, not the old `sqrt(v_sqnorm + MIN_NORM**2)`. Both give sqrt a finite
+    # derivative at v = 0, but the additive 1e-30 also floored the *value* at 1e-15, so a tangent
+    # vector of Minkowski norm 1e-20 was reported 1e5x too long. The floor itself has to stay, and
+    # has to be applied HERE rather than only to `denom` below: `sinh(c_norm_prod)/denom` is a
+    # sinhc, and it is 1 in the limit only while numerator and denominator are the *same* floored
+    # quantity. An unfloored `c_norm_prod = 0` against `denom = MIN_NORM` gives sinhc = 0, which
+    # zeroes the whole Jacobian of a zero-initialised gyro-bias
+    # (test_manifold_oracles.py::test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian).
+    v_norm = floor_at(safe_sqrt(v_sqnorm), MIN_NORM)
     c_norm_prod = sqrt_c * v_norm
 
     denom = floor_at(c_norm_prod, MIN_NORM)

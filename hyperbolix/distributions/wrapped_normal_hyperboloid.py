@@ -14,11 +14,10 @@ References:
     NeurIPS 2019. https://arxiv.org/abs/1901.06033
 """
 
-import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds.hyperboloid import Hyperboloid
-from ..utils.math_utils import MIN_NORM, floor_at
+from ..utils.math_utils import safe_norm
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
 
@@ -207,8 +206,11 @@ def log_prob(
     log_p_v_SB = gaussian_log_prob(v_spatial_SBD, sigma, n, dtype)
 
     # Step 5: Compute log det Jacobian
-    # Minkowski norm at origin: r = ||v_spatial|| (since v = [0, v_bar])
-    r_SB = jnp.sqrt(floor_at(jnp.sum(v_spatial_SBD**2, axis=-1), MIN_NORM))
+    # Minkowski norm at origin: r = ||v_spatial|| (since v = [0, v_bar]). `safe_norm` gives the
+    # finite (zero) gradient at z == mu that the old `floor_at(sum(v**2), MIN_NORM)` was there
+    # for, without flooring r at 3.16e-8 and without `sum(v**2)` overflowing float32.
+    # `_log_det_jacobian_from_r` is already NaN-free and stationary at r = 0.
+    r_SB = safe_norm(v_spatial_SBD)
     log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 6: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)

@@ -51,7 +51,7 @@ import math
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, cosh, floor_at, sinh, smooth_clamp
+from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_hypot, safe_norm, safe_sqrt, sinh, smooth_clamp
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from ._gyrovector_core import _gyration
@@ -149,15 +149,17 @@ def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float
     identities). We use the asinh form because jnp.asinh is stable over all
     of R while atanh requires boundary clamping.
 
-    The norm is the module's ``_safe_norm``, not ``jnp.linalg.norm``: at ``x == y == 0`` the
-    gyro-difference ``-x ⊕ y`` is exactly the zero vector, where ``linalg.norm``'s VJP is
-    ``0/0 = NaN``. ``_safe_norm`` returns ``MIN_NORM`` there and its gradient is exactly 0 —
-    the correct subgradient choice at the distance's non-smooth point. The value shifts by at
-    most ``MIN_NORM = 1e-15``, below the float64 resolution of every distance the library uses.
+    The norm is :func:`~hyperbolix.utils.math_utils.safe_norm`, not ``jnp.linalg.norm``: at
+    ``x == y == 0`` the gyro-difference ``-x ⊕ y`` is exactly the zero vector, where
+    ``linalg.norm``'s VJP is ``0/0 = NaN``. ``safe_norm`` returns an exact ``0`` there with an
+    exactly-zero gradient — the correct subgradient choice at the distance's non-smooth point.
+    It is used in preference to the module's floored ``_safe_norm`` because the norm is not a
+    divisor here, so ``d(x, y) == 0`` is now exact instead of ``MIN_NORM``-floored, and a
+    genuinely small separation is no longer rounded up to ``1e-15``.
     """
     sqrt_c = jnp.sqrt(c)
     z = _addition(-x, y, c)
-    z_norm = _safe_norm(z)
+    z_norm = safe_norm(z)
     return jnp.asinh(sqrt_c * z_norm) / sqrt_c
 
 
@@ -166,12 +168,14 @@ def _dist_0(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
 
     d(0, x) = (1/√c) · asinh(√c · ||x||)
 
-    Uses ``_safe_norm`` for the same reason as :func:`_dist`: ``jnp.linalg.norm``'s VJP at
+    Uses ``safe_norm`` for the same reason as :func:`_dist`: ``jnp.linalg.norm``'s VJP at
     ``x = 0`` is ``0/0 = NaN``, and the origin is exactly where this function is most often
-    differentiated (it is the PV analogue of the wrapped-normal NaN-at-the-mean bug).
+    differentiated (it is the PV analogue of the wrapped-normal NaN-at-the-mean bug). Not the
+    floored ``_safe_norm``: the norm is not a divisor here, so ``d(0, 0)`` is exactly 0 and a
+    small radius is reported exactly rather than floored at ``1e-15``.
     """
     sqrt_c = jnp.sqrt(c)
-    x_norm = _safe_norm(x)
+    x_norm = safe_norm(x)
     return jnp.asinh(sqrt_c * x_norm) / sqrt_c
 
 
@@ -228,8 +232,12 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     # g_x(v, v) = ⟨v, v⟩ - c·β_x²·⟨x, v⟩²
     xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
     g_vv = jnp.dot(v, v, precision=MATMUL_PRECISION) - c * beta_x**2 * xv**2
-    g_vv_safe = floor_at(g_vv, 0.0) + MIN_NORM**2
-    g_norm = jnp.sqrt(g_vv_safe)
+    # `safe_sqrt` + `floor_at` rather than the old `sqrt(floor_at(g_vv, 0) + MIN_NORM**2)`: the
+    # additive 1e-30 dominated any genuinely small metric norm (a form of 1e-40 came back as
+    # 1e-15), while the multiplicative floor keeps the one property `arg` actually needs — being
+    # a nonzero divisor for `sinh(arg)/arg` below. `safe_sqrt` supplies the finite (zero)
+    # derivative at g_vv = 0 that the additive term used to provide.
+    g_norm = floor_at(safe_sqrt(floor_at(g_vv, 0.0)), MIN_NORM)
     arg = sqrt_c * g_norm
 
     # sinhc(arg) = sinh(arg)/arg; the safe norm guarantees arg > 0.
@@ -350,9 +358,14 @@ def _tangent_inner(
 
 
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Riemannian norm ||v||_x = √g_x(v, v)."""
+    """Riemannian norm ||v||_x = √g_x(v, v).
+
+    ``safe_sqrt``, not a bare ``jnp.sqrt``: at ``v = 0`` the metric form is exactly 0, where
+    ``sqrt'`` is infinite and reverse-mode AD forms ``0 * inf = NaN`` for the whole row. The
+    ``floor_at(., 0.0)`` is kept for the (rounding-only) negative side of the form.
+    """
     inner = _tangent_inner(v, v, x, c)
-    return jnp.sqrt(floor_at(inner, 0.0))
+    return safe_sqrt(floor_at(inner, 0.0))
 
 
 def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
@@ -454,10 +467,14 @@ def _compute_mlr(
     sqrt_c = jnp.sqrt(c)
     sr_1P = sqrt_c * r.T  # (1, P)
 
-    # Safe norm on z so that z=0 rows do not create NaNs.
-    z_norm_P1 = jnp.sqrt(jnp.sum(z**2, axis=-1, keepdims=True) + min_enorm**2)  # (P, 1)
+    # `safe_norm` + `floor_at`: `z_norm_P1` divides below, so the floor at `min_enorm` is the
+    # deliberate part; the max-scaling removes the old spelling's float32 overflow and its
+    # `min_enorm` floor on genuinely small direction rows.
+    z_norm_P1 = floor_at(safe_norm(z)[:, None], min_enorm)  # (P, 1)
 
-    beta_inv_x_B1 = jnp.sqrt(1.0 + c * jnp.sum(x**2, axis=-1, keepdims=True))  # (B, 1)
+    # sqrt(1 + c*||x||^2) as a two-leg hypot: no `sum(x**2)` to overflow float32 at
+    # ||x|| > 1.8e19/sqrt(c), where the old spelling returned inf and drove the score to inf.
+    beta_inv_x_B1 = safe_hypot(jnp.ones_like(x[..., :1]), sqrt_c * safe_norm(x)[:, None])  # (B, 1)
 
     xz_BP = jnp.einsum("bi,oi->bo", x, z, precision=MATMUL_PRECISION)  # (B, P)
 
