@@ -2136,6 +2136,90 @@ def test_poincare_dist_0_matches_the_analytic_form_at_a_tiny_radius(dtype, c: fl
     assert float(manifold.dist(y_D, x_D, c)) == pytest.approx(expected, rel=_TINY_RADIUS_RTOL[dtype])
 
 
+# Above spatial radius sqrt(1/(2*c*eps32)) -- 3.7e3 at c = 0.3, 2.0e3 at c = 1, 1.3e3 at c = 2.5 --
+# NO float32 x0 satisfies -x0² + ‖x_s‖² = -1/c: consecutive float32 near x0 are 2·x0²·eps apart in
+# the squared domain, and 1/c is smaller than that gap. (`nn_layers/hyperboloid_core.py` documents
+# the same limit.) So the overflow band is checked against the *time slot*, x0 = sqrt(1/c + ‖x_s‖²)
+# rounded to float32, and the constraint itself is checked at a radius float32 can represent.
+_OVERFLOW_RADII = [5e19, 1e20]  # 1.8e19 is where sum(x_s**2) overflows float32
+_REPRESENTABLE_RADII = [1.0, 10.0, 100.0]
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("r", _OVERFLOW_RADII)
+def test_hyperboloid_proj_time_slot_survives_the_float32_overflow(c: float, r: float):
+    """``proj`` past float32 spatial radius 1.8e19: ``x0`` finite and correct to float32 rounding.
+
+    The old ``sqrt(floor_at(1/c + dot(x_s, x_s), MIN_NORM))`` forms the sum of squares, which
+    overflows while ``‖x_s‖`` — and therefore ``x0`` — is a perfectly ordinary float. Measured on
+    the parent: ``x0 = inf`` at both radii, at every curvature.
+    """
+    manifold = Hyperboloid(dtype=jnp.float32)
+    x_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(r))
+
+    x0 = float(np.asarray(manifold.proj(x_A, c), dtype=np.float64)[0])
+    reference = float(np.float32(np.sqrt(1.0 / c + np.float64(r) ** 2)))
+    assert np.isfinite(x0), f"c={c} r={r}: x0={x0}"
+    assert x0 == reference, f"c={c} r={r}: x0={x0:.6e} != float32(sqrt(1/c + r^2))={reference:.6e}"
+
+    # proj_batch must agree with proj row for row.
+    batch = jnp.stack([x_A, x_A])
+    x0_batch = np.asarray(manifold.proj_batch(batch, c), dtype=np.float64)[:, 0]
+    assert np.all(x0_batch == reference), f"c={c} r={r}: {x0_batch}"
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("r", _REPRESENTABLE_RADII)
+def test_hyperboloid_proj_still_satisfies_the_constraint_in_the_ordinary_band(c: float, r: float):
+    """The control: where float32 *can* represent ``-x0² + ‖x_s‖² = -1/c``, it still holds.
+
+    Guards the overflow fix against having traded the ordinary regime for the extreme one.
+    """
+    manifold = Hyperboloid(dtype=jnp.float32)
+    x_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(r))
+
+    p64 = np.asarray(manifold.proj(x_A, c), dtype=np.float64)
+    assert p64[0] > 0.0, "the time slot must stay on the upper sheet"
+    minkowski = -(p64[0] ** 2) + float(np.dot(p64[1:], p64[1:]))
+    assert minkowski == pytest.approx(-1.0 / c, rel=1e-3), f"c={c} r={r}"
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_expmap_0_saturates_to_a_consistent_point_not_an_infinite_time_slot(c: float):
+    """``expmap_0`` of a length-1e19 tangent vector saturates; it must saturate *on the sheet*.
+
+    A tangent vector that long is past the ``sinh`` clamp, so the result is the clamp's saturation
+    value — that part is expected. What was wrong is that ``proj`` then gave it an **infinite**
+    time slot beside a finite spatial part: measured on the parent, ``[inf, 7.0e37, 0, 0]``. At
+    saturation the on-sheet asymptote is ``x0 = ‖x_s‖`` (the ``1/c`` is 38 orders below), and that
+    is what it returns now.
+    """
+    manifold = Hyperboloid(dtype=jnp.float32)
+    v_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(1e19))
+
+    y64 = np.asarray(manifold.expmap_0(v_A, c), dtype=np.float64)
+    assert np.all(np.isfinite(y64)), f"c={c}: {y64}"
+    spatial = float(np.linalg.norm(y64[1:]))
+    assert spatial > 0.0, f"c={c}: {y64}"
+    assert y64[0] == pytest.approx(spatial, rel=1e-6), f"c={c}: x0={y64[0]:.6e} ||y_s||={spatial:.6e}"
+
+
+@pytest.mark.parametrize("r", [1e19, 1e20])
+def test_poincare_proj_clamps_a_far_point_to_the_boundary_not_to_the_origin(r: float):
+    """``_proj`` past the float32 overflow radius must land on the ball boundary.
+
+    With the overflowing norm the clamp is ``x · (max_norm / inf) = 0``: the farthest possible
+    input produced the *origin*, the point that is farthest from where it belongs. Measured on
+    the parent at ``r = 1e20``: ``‖proj(x)‖ = 0.0``.
+    """
+    c = 1.0
+    x_D = jnp.zeros(4, dtype=jnp.float32).at[0].set(jnp.float32(r))
+    p_D = np.asarray(_proj(x_D, c), dtype=np.float64)
+
+    max_norm = 1.0 / np.sqrt(c) - float(np.finfo(np.float32).eps) ** 0.75
+    assert float(np.linalg.norm(p_D)) == pytest.approx(max_norm, rel=1e-5), f"r={r}"
+
+
 def _zero_gradient_cases() -> list[tuple[str, object, object]]:
     """``(name, fn, x0)`` triples whose gradient at ``x0`` must be exactly zero, not NaN."""
     c = 1.0

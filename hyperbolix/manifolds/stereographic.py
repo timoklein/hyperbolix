@@ -252,7 +252,11 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
 def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Exponential map at the origin ``exp^κ_0(v) = tan_κ(‖v‖)·v/‖v‖``. Reduces to ``v`` as ``c → 0``."""
     k = -c
-    v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    # `safe_norm` + `floor_at`: `v` is a tangent vector (unbounded), and `v_norm` divides on the
+    # same line, so both halves are needed. Unlike Poincare this module takes a *signed* curvature
+    # -- for c < 0 the chart is the sphere minus a point, whose radius diverges near the antipode,
+    # so no site here can assume a bounded input.
+    v_norm = floor_at(safe_norm(v), MIN_NORM)
     return _proj(_tan_k(v_norm, k) * (v / v_norm), c)
 
 
@@ -274,7 +278,9 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
 def _logmap_0(y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Logarithmic map at the origin ``log^κ_0(y) = tan_κ⁻¹(‖y‖)·y/‖y‖``. Reduces to ``y`` as ``c → 0``."""
     k = -c
-    y_norm = jnp.sqrt(jnp.sum(y**2) + MIN_NORM**2)
+    # `safe_norm` + `floor_at`: divisor on the same line, and the chart radius is unbounded for
+    # c < 0 (see _expmap_0).
+    y_norm = floor_at(safe_norm(y), MIN_NORM)
     return _artan_k(y_norm, k) * (y / y_norm)
 
 

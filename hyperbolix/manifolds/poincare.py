@@ -389,10 +389,12 @@ def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Safe norm: sqrt(||v||² + eps²) has well-defined gradients at v=0,
-    # unlike jnp.linalg.norm(v) which produces NaN gradients (0/0).
-    # This matters when zero tangent vectors arise (e.g., all-black pixel patches).
-    v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    # `safe_norm` + `floor_at`. `v` is a *tangent* vector, so unlike the ball-point sites in this
+    # module its magnitude is unbounded and the max-scaling earns its second reduction: the old
+    # `sum(v**2)` overflowed float32 above coordinate 1.8e19. The floor is deliberate --
+    # `c_norm_prod` divides three lines down, and `tanh(t)/t -> 1` needs numerator and denominator
+    # to be the same floored quantity.
+    v_norm = floor_at(safe_norm(v), MIN_NORM)
     sqrt_c = jnp.sqrt(c)
     c_norm_prod = sqrt_c * v_norm
     # Boundary clamp applied to the *scalar* instead of via _proj on the (dim,) result. The result
@@ -471,8 +473,11 @@ def _logmap_0(y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Safe norm: sqrt(||y||² + eps²) has well-defined gradients at y=0.
-    y_norm = jnp.sqrt(jnp.sum(y**2) + MIN_NORM**2)
+    # `safe_sqrt` + `floor_at`: `y` is a ball point (`sum(y**2) <= 1/c`), so the max-scaling
+    # `safe_norm` would pay a second reduction for an overflow that cannot happen. The floor is
+    # deliberate -- `c_norm_prod` divides on the next line, and `atanh(t)/t -> 1` needs numerator
+    # and denominator to be the same floored quantity.
+    y_norm = floor_at(safe_sqrt(jnp.sum(y**2)), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * y_norm
     res = atanh(c_norm_prod) / c_norm_prod * y
     return res

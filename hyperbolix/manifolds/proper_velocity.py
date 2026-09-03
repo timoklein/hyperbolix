@@ -74,20 +74,35 @@ def _create_origin(c: Curvature, dim: int, dtype=jnp.float32) -> Float[Array, "d
 
 
 def _beta(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """PV beta factor β_x = 1/√(1 + c·||x||²)."""
-    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
-    return 1.0 / jnp.sqrt(1.0 + c * x_sqnorm)
+    """PV beta factor β_x = 1/√(1 + c·||x||²). Reciprocal of :func:`_beta_inv`, see there."""
+    return 1.0 / _beta_inv(x, c)
 
 
 def _beta_inv(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Reciprocal of the PV beta factor: 1/β_x = √(1 + c·||x||²)."""
-    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
-    return jnp.sqrt(1.0 + c * x_sqnorm)
+    """Reciprocal of the PV beta factor: 1/β_x = √(1 + c·||x||²).
+
+    Evaluated as the two-leg ``safe_hypot(1, √c·‖x‖)`` rather than
+    ``sqrt(1 + c·dot(x, x))``. Proper-velocity coordinates are unconstrained -- that is the point
+    of the model -- so ``dot(x, x)`` genuinely reaches the float32 overflow at ``‖x‖ = 1.8e19``
+    (geodesic radius ``arcsinh(1.8e19) ≈ 44``), where the old form returned ``inf`` and ``_beta``
+    collapsed to 0, silently zeroing every coefficient built from it.
+    """
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
+    return safe_hypot(jnp.asarray(1.0, dtype=x.dtype), sqrt_c * safe_norm(x))
 
 
 def _safe_norm(x: Float[Array, "dim"]) -> Float[Array, ""]:
-    """Numerically safe Euclidean norm √(||x||² + MIN_NORM²) with smooth gradient at x=0."""
-    return jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    """Euclidean norm floored at ``MIN_NORM``, for the sites that divide by it.
+
+    ``floor_at(safe_norm(x), MIN_NORM)``, not the old ``sqrt(sum(x**2) + MIN_NORM**2)``. The floor
+    is what the callers need -- ``_scalar_mul``, ``_expmap_0``, ``_logmap_0`` and ``_logmap`` all
+    form an ``f(arg)/arg`` whose limit is 1 only while the two are the same floored quantity --
+    but making it multiplicative removes the old spelling's two defects: ``sum(x**2)`` overflowed
+    float32 above coordinate 1.8e19, and the additive ``1e-30`` perturbed every value between
+    ``MIN_NORM`` and ``10·MIN_NORM``. ``_dist``/``_dist_0`` do not divide by the norm and use the
+    unfloored ``safe_norm`` directly.
+    """
+    return floor_at(safe_norm(x), MIN_NORM)
 
 
 def _dpi_x(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:

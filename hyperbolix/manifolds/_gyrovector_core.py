@@ -25,7 +25,7 @@ Dimension key:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, floor_at
+from ..utils.math_utils import MIN_NORM, floor_at, safe_norm
 from ..utils.precision import MATMUL_PRECISION
 from .protocol import Curvature
 
@@ -67,8 +67,14 @@ def _conformal_factor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
 def _proj(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Project onto the manifold. A boundary exists only for ``c > 0`` (``‖x‖ < 1/√c``); for ``c ≤ 0``
     (Euclidean / spherical) the space is all of R^d and this is the identity."""
-    # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
-    norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    # `safe_norm` + `floor_at`. The floor is deliberate: `norm` divides in the *untaken* branch
+    # of the `where` too, and 0-cotangent times that branch's inf is NaN. The max-scaling is the
+    # fix -- `x` here is by definition unprojected, and `sum(x**2)` overflows float32 above
+    # coordinate 1.8e19. That mattered more than anywhere else in the library: with `norm = inf`
+    # the clamp `x * (max_norm / inf)` is the ZERO VECTOR, so the farthest representable point was
+    # projected onto the origin instead of onto the boundary (measured: ||proj(x)|| = 0.0 at
+    # float32 radius 1e20, now 0.99999).
+    norm = floor_at(safe_norm(x), MIN_NORM)
     max_norm = _max_norm(x, c)
     cond = norm > max_norm
     return jnp.where(cond, x * (max_norm / norm), x)
@@ -85,8 +91,8 @@ def _proj_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... d
     it reads only ``x``'s dtype, so it is a scalar either way and the clamp is bit-identical (probed
     over a (64, 16) batch, both dtypes, ``c`` in {0.3, 1, 2.5}, rows inside and past the boundary).
     """
-    # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
-    norm = jnp.sqrt(jnp.sum(x**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (..., 1)
+    # `safe_norm` + `floor_at` over the last axis; see :func:`_proj` for both halves.
+    norm = floor_at(safe_norm(x)[..., None], MIN_NORM)  # (..., 1)
     max_norm = _max_norm(x, c)
     cond = norm > max_norm
     return jnp.where(cond, x * (max_norm / norm), x)
