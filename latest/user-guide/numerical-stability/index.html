@@ -2872,12 +2872,23 @@ trained with it pinned to the origin.</p>
 <code>logmap</code>'s origin fallback, and <code>HyperboloidGyroRMSNorm</code>, which divides by <code>dist_0</code> and so
 mis-normalised every float32 sample inside radius 1.5e-3.</p>
 <div class="admonition note">
-<p class="admonition-title"><code>dist_0</code> is the accurate route to the origin, not <code>dist(origin, x)</code></p>
-<p>The pairwise <code>dist</code> is a separate code path, and near the origin it still carries an
-<span class="arithmatex">\(O(\varepsilon/r)\)</span> relative error from the gap term of its polar decomposition: in float32,
-4.6e-2 at radius 1e-6 and ~1e-3 at 1e-4. Closing that is a separate planned change. Until
-then, use <code>dist_0(x, c)</code> rather than <code>dist(origin, x, c)</code> whenever the distance is to the
-origin.</p>
+<p class="admonition-title">The pairwise <code>dist</code> reads the same radial gap off the spatial part</p>
+<p><code>dist</code> is a separate code path, and it used to carry its own <span class="arithmatex">\(O(\varepsilon/r)\)</span> relative error
+near the origin: its polar decomposition needs <span class="arithmatex">\(u_x - u_y\)</span> with <span class="arithmatex">\(u = x_0 + \lVert x_s\rVert\)</span>,
+and forming that difference directly throws away the <span class="arithmatex">\(\varepsilon\,x_0\)</span> that <span class="arithmatex">\(x_0\)</span> is stored
+with. In float32 that was 4.6e-2 relative at radius 1e-6 and 1.4e-4 at 1e-4. It now uses the
+on-sheet identity <span class="arithmatex">\(x_0 - y_0 = (\lVert x_s\rVert^2 - \lVert y_s\rVert^2)/(x_0 + y_0)\)</span>, i.e.</p>
+<div class="arithmatex">\[
+u_x - u_y = (\lVert x_s\rVert - \lVert y_s\rVert)
+            \Bigl(1 + \frac{\lVert x_s\rVert + \lVert y_s\rVert}{x_0 + y_0}\Bigr),
+\]</div>
+<p>which subtracts only the spatial radii. Float32 <code>dist(origin, x)</code> is now within 3.1e-7 of
+<code>dist_0(x)</code> at every radius from 1e-8 up, and two float32 points at radius 1e-3 separated by
+1e-3 agree with the float64 answer to 1.5e-7 (was 3.3e-5). <code>dist_0(x, c)</code> remains marginally
+cheaper and marginally tighter than <code>dist(origin, x, c)</code> — at <span class="arithmatex">\(y\)</span> exactly at the origin the
+<code>MIN_NORM</code> floor on <span class="arithmatex">\(\lVert y_s\rVert\)</span> leaves a <span class="arithmatex">\(\tfrac12\,\)</span><code>MIN_NORM</code><span class="arithmatex">\(/\lVert x_s\rVert\)</span>
+relative residual in the pairwise arm — but the two no longer disagree in any digit float32
+can see.</p>
 </div>
 <h2 id="storage-vs-compute-dtype">Storage vs. Compute Dtype<a class="headerlink" href="#storage-vs-compute-dtype" title="Permanent link">&para;</a></h2>
 <p>Hyperbolix separates two dtype concerns that are easy to conflate:</p>
