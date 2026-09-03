@@ -168,6 +168,11 @@ CASE_IDS = [case.name for case in CASES]
 # semantic difference (a dropped factor, a wrong ``version_idx`` branch) could hide in.
 ULP_TOL = {"rtol": 1e-13, "atol": 1e-15}
 
+# Tolerance for "the float64 kernel on float32-rounded inputs matches it on exact inputs" in
+# ``test_dtype_policy_casts_inputs_to_manifold_dtype``. Derived, not guessed -- see the comment
+# at the assertion: 4x the 2.11e-6 input-rounding bound of the worst case (HyperboloidLegacy).
+DTYPE_ROUNDING_RTOL = 1e-5
+
 
 def _prepare(case: ManifoldCase, dtype: jnp.dtype):
     """Instantiate the manifold and project the raw points/vectors onto it."""
@@ -315,7 +320,16 @@ def test_dtype_policy_casts_inputs_to_manifold_dtype(case: ManifoldCase) -> None
 
     # Bound methods keep their own instance's dtype, and the two agree numerically.
     assert jnp.allclose(d_up, d_down, rtol=1e-5)
-    assert jnp.allclose(d_up, dist_f64(x64, y64, case.c), rtol=1e-6)
+    # ``d_up`` runs the float64 kernel on float32-rounded inputs, so the gap is input-rounding
+    # amplified by the distance formula. Legacy hyperboloid arm, d = acosh(u)/√c with
+    # u = -c⟨x,y⟩_L: dd/du = 1/(√c·√(u²-1)) and u - 1 ≈ c·d²/2 for small d, so
+    # Δd/d ≈ Δu/(c·d²); with Δu ≤ eps32·(|x₀y₀| + |x_s·y_s|) = 1.50e-7 and d = 0.2662 that is
+    # 2.11e-6. Times a safety factor of 4 (rounded up) = 1e-5. CPU and GPU differ because the
+    # Lorentz inner product's reduction order differs: the measured gap is 4.1e-7 on CPU and
+    # 2.11e-6 on an A100, i.e. the A100 sits exactly at the bound and the old rtol=1e-6 failed
+    # there. Every other case in CASES measures ≤ 4.6e-8.
+    # (Derivation and a 20-pair margin check: logs/2026-09-03_test_infra/probe_dtype_policy_bound.py)
+    assert jnp.allclose(d_up, dist_f64(x64, y64, case.c), rtol=DTYPE_ROUNDING_RTOL)
 
     # The same holds under jit, with one compilation per dtype.
     counted_f64, traces_f64 = _counted(dist_f64)
