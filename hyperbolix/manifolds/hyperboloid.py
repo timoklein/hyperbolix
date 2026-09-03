@@ -82,6 +82,7 @@ from ..utils.math_utils import (
     smooth_clamp,
     smooth_clamp_min,
 )
+from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from .protocol import Curvature
 
@@ -111,7 +112,7 @@ def _minkowski_inner(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"
         Minkowski inner product, scalar
     """
     x0y0 = x[0] * y[0]
-    x_rest_y_rest = jnp.dot(x[1:], y[1:])
+    x_rest_y_rest = jnp.dot(x[1:], y[1:], precision=MATMUL_PRECISION)
     return -x0y0 + x_rest_y_rest
 
 
@@ -149,7 +150,7 @@ def _proj(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus
         Projected point with -x₀² + ||x_rest||² = -1/c, x₀ > 0, shape (dim+1,)
     """
     x_rest = x[1:]
-    x_rest_sqnorm = jnp.dot(x_rest, x_rest)
+    x_rest_sqnorm = jnp.dot(x_rest, x_rest, precision=MATMUL_PRECISION)
     x0_new = jnp.sqrt(floor_at(1.0 / c + x_rest_sqnorm, MIN_NORM))
     return jnp.concatenate([x0_new[None], x_rest])
 
@@ -803,7 +804,7 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Cur
     e_rad_A = -frame.sqrt_c * jnp.concatenate([frame.r_x[None], frame.x_time * frame.x_hat_D])
     # Unit angular direction: the component of ŷ_s orthogonal to x̂_s. Exactly the zero vector when
     # the two points share a ray (ψ = 0 or π), which is also where sin φ = 0.
-    n_hat_D = safe_normalize(frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D) * frame.x_hat_D)
+    n_hat_D = safe_normalize(frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D, precision=MATMUL_PRECISION) * frame.x_hat_D)
     e_ang_A = jnp.concatenate([jnp.zeros(1, dtype=x.dtype), n_hat_D])
 
     res = dist_xy * (cos_phi * e_rad_A + sin_phi * e_ang_A)
@@ -994,7 +995,7 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     v_s_D = v[1:]
     x_hat_D = x_s_D / floor_at(safe_norm(x_s_D), MIN_NORM)
 
-    radial = jnp.dot(v_s_D, x_hat_D)
+    radial = jnp.dot(v_s_D, x_hat_D, precision=MATMUL_PRECISION)
     perp_norm = safe_norm(v_s_D - radial * x_hat_D)
     # √c·x₀ = cosh a >= 1 on the upper sheet, so the floor is a no-op for every valid base point;
     # it only keeps a degenerate x (x₀ = 0) from dividing by zero.
@@ -1269,11 +1270,11 @@ def _compute_mlr(
     x0_B1 = x[:, 0:1]  # time coordinate
     x_rem_BD = x[:, 1:]  # space coordinates, D = in_dim-1
     # TF32 (the XLA:GPU default for float32 matmuls on Ampere/Hopper) feeds the alpha_BP
-    # difference below, so this dot takes the same HIGHEST annotation as the Lorentz dots in
-    # nn_layers/hyperboloid_core.MATMUL_PRECISION — spelled out here rather than imported,
-    # since manifolds/ must not depend on nn_layers/. Measured on an A100: the eager float32
-    # gradient of _compute_mlr goes from 1.5e-4 to 2.7e-7 relative against a float64 reference.
-    zx_rem_BP = jnp.einsum("bi,oi->bo", x_rem_BD, z, precision=lax.Precision.HIGHEST)
+    # difference below, so this dot carries the library-wide MATMUL_PRECISION from
+    # hyperbolix.utils.precision (a neutral home both manifolds/ and nn_layers/ import from;
+    # nn_layers.hyperboloid_core.MATMUL_PRECISION re-exports it). Measured on an A100: the eager
+    # float32 gradient of _compute_mlr goes from 1.5e-4 to 2.7e-7 relative vs a float64 reference.
+    zx_rem_BP = jnp.einsum("bi,oi->bo", x_rem_BD, z, precision=MATMUL_PRECISION)
     alpha_BP = -x0_B1 * sinh(sqrt_cr_1P) * z_norm_1P + cosh(sqrt_cr_1P) * zx_rem_BP
     asinh_arg_BP = sqrt_c * alpha_BP / z_norm_1P
 
@@ -1315,7 +1316,8 @@ def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: Curvatur
         Chen, Schölkopf, and Sebe. "Hyperbolic Busemann Neural Networks." 2026, Eq. 4.
     """
     sqrt_c = jnp.sqrt(c)
-    arg = sqrt_c * (x[0] - jnp.dot(x[1:], v))  # = -sqrt_c * minkowski_inner(x, [1, v]); > 0 on the upper sheet
+    # = -sqrt_c * minkowski_inner(x, [1, v]); > 0 on the upper sheet
+    arg = sqrt_c * (x[0] - jnp.dot(x[1:], v, precision=MATMUL_PRECISION))
     return jnp.log(floor_at(arg, MIN_NORM)) / sqrt_c
 
 

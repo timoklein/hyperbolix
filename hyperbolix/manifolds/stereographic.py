@@ -70,6 +70,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, atanh, clamp_to, floor_at, tanh
+from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
@@ -290,7 +291,7 @@ def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> 
 def _tangent_inner(u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Riemannian inner product ``⟨u, v⟩_x = (λ^κ_x)²·⟨u, v⟩``."""
     lambda_x = _conformal_factor(x, c)
-    return lambda_x**2 * jnp.dot(u, v)
+    return lambda_x**2 * jnp.dot(u, v, precision=MATMUL_PRECISION)
 
 
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
@@ -319,7 +320,7 @@ def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float | None = N
     :func:`~hyperbolix.manifolds._base.default_atol` for ``x.dtype``; it has no effect on the
     ``c ≤ 0`` branch, which is unconstrained.
     """
-    x2 = jnp.dot(x, x)
+    x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
     c_arr = jnp.asarray(c)
     tol = default_atol(x.dtype) if atol is None else atol
     finite = jnp.all(jnp.isfinite(x))

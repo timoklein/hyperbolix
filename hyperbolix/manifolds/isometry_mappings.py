@@ -45,6 +45,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, floor_at
+from ..utils.precision import MATMUL_PRECISION
 from .protocol import Curvature
 
 
@@ -127,7 +128,7 @@ def poincare_to_hyperboloid(
     References:
         Wikipedia: Hyperboloid model - Relation to other models
     """
-    y_sqnorm = jnp.dot(y, y)
+    y_sqnorm = jnp.dot(y, y, precision=MATMUL_PRECISION)
     sqrt_c = jnp.sqrt(c)
 
     # Curvature-aware inverse stereographic projection. The spatial part scales
@@ -180,7 +181,7 @@ def pv_to_poincare(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    beta_inv = jnp.sqrt(1.0 + c * jnp.dot(x, x))  # 1/β_x = √(1 + c·||x||²)
+    beta_inv = jnp.sqrt(1.0 + c * jnp.dot(x, x, precision=MATMUL_PRECISION))  # 1/β_x = √(1 + c·||x||²)
     return x / (1.0 + beta_inv)
 
 
@@ -220,7 +221,7 @@ def poincare_to_pv(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    denominator = floor_at(1.0 - c * jnp.dot(y, y), MIN_NORM)
+    denominator = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), MIN_NORM)
     return 2.0 * y / denominator
 
 
@@ -263,7 +264,7 @@ def pv_to_hyperboloid(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026.
     """
-    time = jnp.sqrt(1.0 / c + jnp.dot(x, x))  # z₀ = √(1/c + ||x||²) ≥ 1/√c
+    time = jnp.sqrt(1.0 / c + jnp.dot(x, x, precision=MATMUL_PRECISION))  # z₀ = √(1/c + ||x||²) ≥ 1/√c
     return jnp.concatenate([time[None], x])
 
 

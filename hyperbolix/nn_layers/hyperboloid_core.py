@@ -33,20 +33,12 @@ from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
 from hyperbolix.utils.math_utils import clamp_to, floor_at
 from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
+from hyperbolix.utils.precision import MATMUL_PRECISION
 
-# Matmul precision for the cancellation-sensitive dots in this module and in the attention
-# layers. On Ampere/Hopper, XLA:GPU defaults float32 matmuls to TF32, whose 10-bit mantissa
-# carries ~1e-3 relative error — far coarser than float32's ~1e-7. The dots this constant
-# annotates feed cancellations whose entire design assumes float32 accuracy: the Lorentz
-# inner product ``<x,y>_L = -x_0 y_0 + <x_s, y_s>`` (a difference of two matmuls) and the
-# ``lorentz_midpoint`` normalizer (whose cancellation-free identity exists precisely to keep
-# the float32 error at O(eps) for any radius). Measured on an A100: the f32-vs-f64 relative
-# error of ``lorentz_midpoint`` is 4.6e-5 … 2.6e-4 at the TF32 default and 2.6e-8 … 1.6e-7
-# with HIGHEST — a ~2000x accuracy loss that HIGHEST removes.
-#
-# HIGHEST is a no-op on CPU (no TF32 path) and for float64 anywhere, so this costs nothing
-# outside float32 GPU matmuls; on tensor-core GPUs it trades GEMM throughput for accuracy.
-MATMUL_PRECISION = jax.lax.Precision.HIGHEST
+# MATMUL_PRECISION used to be defined here; its home is now hyperbolix.utils.precision, a
+# neutral module both manifolds/ and nn_layers/ import from (manifolds/ must not depend on
+# nn_layers/). The import above keeps `hyperboloid_core.MATMUL_PRECISION` working for existing
+# importers; see hyperbolix/utils/precision.py for the TF32 rationale and the measurements.
 
 
 def build_spacelike_V(
@@ -191,6 +183,7 @@ def extract_patches(
         window_strides=(stride_h, stride_w),
         padding="VALID",
         dimension_numbers=("NHWC", "OIHW", "NHWC"),
+        precision=MATMUL_PRECISION,
     )
 
     # 3. Reshape to separate channels and kernel dims, then transpose to point-major.

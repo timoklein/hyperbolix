@@ -26,6 +26,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, floor_at
+from ..utils.precision import MATMUL_PRECISION
 from .protocol import Curvature
 
 
@@ -54,7 +55,7 @@ def _conformal_factor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     For ``c > 0`` the denominator → 0 at the ball boundary and is floored with a dtype-eps margin (the
     historical Poincaré behavior); for ``c ≤ 0`` the denominator is ``≥ 1`` and the floor never bites.
     """
-    x2 = jnp.dot(x, x)
+    x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
     max_norm_eps = _get_max_norm_eps(x)
     abs_c = jnp.abs(jnp.asarray(c))
     sqrt_abs_c = jnp.sqrt(floor_at(abs_c, MIN_NORM))
@@ -98,16 +99,16 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> F
     References:
         Ungar. "A gyrovector space approach to hyperbolic geometry." 2022.
     """
-    x2 = jnp.dot(x, x)
-    y2 = jnp.dot(y, y)
-    xy = jnp.dot(x, y)
+    x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
+    y2 = jnp.dot(y, y, precision=MATMUL_PRECISION)
+    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
     # s = x + y is one extra (dim,)-sized elementwise op; ``s2`` and ``xs`` are the two extra
     # *input* reductions that make ‖num‖ computable without ever touching the (dim,) output. That
     # is the whole point: the old `_proj(num/denom, c)` re-reduced the op's own result, which under
     # jit(vmap) forces XLA to materialise the unprojected (B, dim) array and read it back.
     s_D = x + y
-    s2 = jnp.dot(s_D, s_D)
-    xs = jnp.dot(x, s_D)
+    s2 = jnp.dot(s_D, s_D, precision=MATMUL_PRECISION)
+    xs = jnp.dot(x, s_D, precision=MATMUL_PRECISION)
 
     # A - B = (1 + 2c·xy + c·y2) - (1 - c·x2) = c(x2 + 2xy + y2) = c‖x+y‖² *exactly*, so the
     # historical numerator A·x + B·y is identically B·s + (c·s2)·x. This grouping is the one that
@@ -156,11 +157,11 @@ def _gyration(x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "d
         Ungar. "A gyrovector space approach to hyperbolic geometry." 2022.
     """
     c2 = c**2
-    x_sqnorm = jnp.dot(x, x)  # scalar
-    y_sqnorm = jnp.dot(y, y)  # scalar
-    xy = jnp.dot(x, y)  # scalar
-    xz = jnp.dot(x, z)  # scalar
-    yz = jnp.dot(y, z)  # scalar
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)  # scalar
+    y_sqnorm = jnp.dot(y, y, precision=MATMUL_PRECISION)  # scalar
+    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)  # scalar
+    xz = jnp.dot(x, z, precision=MATMUL_PRECISION)  # scalar
+    yz = jnp.dot(y, z, precision=MATMUL_PRECISION)  # scalar
 
     coeff_x = -c2 * xz * y_sqnorm + c * yz + 2 * c2 * xy * yz  # scalar
     coeff_y = -c2 * yz * x_sqnorm - c * xz  # scalar

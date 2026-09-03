@@ -69,6 +69,7 @@ import jax.scipy.special
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, acosh, atanh, cap_at, cosh, floor_at, sinh, smooth_clamp, tanh
+from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
@@ -125,8 +126,8 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
 def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Direct Möbius distance formula (fastest)."""
     sqrt_c = jnp.sqrt(c)
-    x2y2 = jnp.dot(x, x) * jnp.dot(y, y)
-    xy = jnp.dot(x, y)
+    x2y2 = jnp.dot(x, x, precision=MATMUL_PRECISION) * jnp.dot(y, y, precision=MATMUL_PRECISION)
+    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
     # Safe norm: finite gradient at x == y (norm's VJP at 0 is 0/0 = NaN)
     num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
     denom = jnp.sqrt(floor_at(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
@@ -147,7 +148,7 @@ def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -
 
 def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Metric tensor induced distance."""
-    xy_diff_sqnorm = jnp.dot(x - y, x - y)
+    xy_diff_sqnorm = jnp.dot(x - y, x - y, precision=MATMUL_PRECISION)
     # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)). A bare 1 - c||x||² hits 0
     # for an unprojected near-boundary point and blows up the divide; reuse the module-wide floor.
     one_minus_cx = 2.0 / _conformal_factor(x, c)
@@ -185,9 +186,9 @@ def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvatur
         Papadopoulos & Troyanov. "Weak metrics on Euclidean domains." (Theorem 2.)
     """
     sqrt_c = jnp.sqrt(c)
-    x2 = jnp.dot(x, x)
-    y2 = jnp.dot(y, y)
-    xy = jnp.dot(x, y)
+    x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
+    y2 = jnp.dot(y, y, precision=MATMUL_PRECISION)
+    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
     # G = |c·x·ȳ - 1| generalized to ℝⁿ, i.e. G² = c²‖x‖²‖y‖² - 2c⟨x,y⟩ + 1. We use the
     # Gram-determinant form (1 - c⟨x,y⟩)² + c²(‖x‖²‖y‖² - ⟨x,y⟩²): a sum of two non-negative
     # terms (Cauchy-Schwarz ⇒ Gram det ≥ 0), so no catastrophic cancellation near the boundary.
@@ -236,7 +237,7 @@ def _dist_0_mobius(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
 
 def _dist_0_metric_tensor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Metric tensor distance from origin."""
-    x_sqnorm = jnp.dot(x, x)
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
     # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)) so a near-boundary point
     # cannot drive the denominator to 0; consistent with _dist_metric_tensor and _apollonian_dist.
     one_minus_cx = 2.0 / _conformal_factor(x, c)
@@ -359,8 +360,8 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sub = _addition(-x, y, c)
-    x2y2 = jnp.dot(x, x) * jnp.dot(y, y)
-    xy = jnp.dot(x, y)
+    x2y2 = jnp.dot(x, x, precision=MATMUL_PRECISION) * jnp.dot(y, y, precision=MATMUL_PRECISION)
+    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
     # Safe norm: finite gradient at x == y (raw norm's VJP at 0 is 0/0 = NaN). Identical quantity
     # and form to _dist_mobius_direct's num — keep the two consistent.
     num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
@@ -447,7 +448,7 @@ def _tangent_inner(u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Arra
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_x = _conformal_factor(x, c)
-    return lambda_x**2 * jnp.dot(u, v)
+    return lambda_x**2 * jnp.dot(u, v, precision=MATMUL_PRECISION)
 
 
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
@@ -525,7 +526,7 @@ def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float | None = N
         ``1/√c - eps**0.75``, and re-squaring that in float32 can land a hair above ``1/c``.
         A point genuinely outside the ball misses by far more than ``atol``.
     """
-    x_sqnorm = jnp.dot(x, x)
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
     tol = default_atol(x.dtype) if atol is None else atol
     return c * x_sqnorm < 1.0 + tol
 
@@ -593,7 +594,7 @@ def _compute_mlr_pp(
     # transcription bug the same author fixed in hypll. Do not "restore" it.
     lam_B1 = _conformal_factor_batch(x, c)  # (B, 1)
 
-    z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1)  # (B, P)
+    z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1, precision=MATMUL_PRECISION)  # (B, P)
     asinh_arg_BP = sqrt_c * lam_B1 * z_unitx_BP * cosh(sqrt_c2r_1P) - (lam_B1 - 1) * sinh(sqrt_c2r_1P)  # (B, P)
 
     eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
@@ -676,7 +677,7 @@ def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> F
     """
     sqrt_c = jnp.sqrt(c)
     num = jnp.sum((v - sqrt_c * x) ** 2)
-    denom = floor_at(1.0 - c * jnp.dot(x, x), MIN_NORM)
+    denom = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), MIN_NORM)
     return jnp.log(num / denom) / sqrt_c
 
 

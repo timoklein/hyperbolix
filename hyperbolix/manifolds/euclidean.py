@@ -31,6 +31,7 @@ comprehensive usage patterns.
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from .protocol import Curvature
 
@@ -249,7 +250,7 @@ def _tangent_inner(
     Returns:
         Inner product <u, v>, scalar
     """
-    return jnp.dot(u, v)
+    return jnp.dot(u, v, precision=MATMUL_PRECISION)
 
 
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature = 0.0) -> Float[Array, ""]:

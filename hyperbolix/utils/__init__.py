@@ -18,6 +18,7 @@ from .math_utils import (
 )
 
 __all__ = [
+    "MATMUL_PRECISION",
     "LearnableCurvature",
     "acosh",
     "atanh",

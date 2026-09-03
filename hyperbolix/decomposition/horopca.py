@@ -48,6 +48,7 @@ from ..manifolds.isometry_mappings import hyperboloid_to_poincare, poincare_to_h
 from ..manifolds.protocol import Curvature
 from ..utils.helpers import compute_pairwise_distances
 from ..utils.math_utils import MIN_NORM, floor_at
+from ..utils.precision import MATMUL_PRECISION
 from .frechet import frechet_mean
 
 # -------------------------------------------------------------------------------------
@@ -137,12 +138,12 @@ def horo_projection(
     def _span_coeffs(y_A: Float[Array, "A"]) -> Float[Array, "K"]:
         # Minkowski inner products ⟨y, p_k⟩_L = -y_0 + q_k · y_s, then apply the closed-form
         # inverse of the null-lift Gram G = I - 𝟙𝟙ᵀ: G⁻¹ = I + 𝟙𝟙ᵀ/(1-K) (Sherman-Morrison).
-        by_K = -y_A[0] + q_ortho_KD @ y_A[1:]  # (K,)
+        by_K = -y_A[0] + jnp.matmul(q_ortho_KD, y_A[1:], precision=MATMUL_PRECISION)  # (K,)
         return by_K + (jnp.sum(by_K) / (1.0 - num_components)) * jnp.ones(num_components, dtype=dtype)
 
     # (1) Minkowski projection of x onto span(p_k), normalized onto the manifold (the spine).
     coeffs_K = _span_coeffs(x_A)
-    mp_A = coeffs_K @ p_KA  # (A,) projection of x onto the ideal span
+    mp_A = jnp.matmul(coeffs_K, p_KA, precision=MATMUL_PRECISION)  # (A,) projection of x onto the ideal span
     mp_inner = _minkowski_inner(mp_A, mp_A)  # < 0 (timelike) for a valid spine
     spine_A = mp_A / jnp.sqrt(floor_at(-c * mp_inner, MIN_NORM))
     # Sheet hygiene BEFORE _proj: _proj rebuilds a positive time from the spatial part and
@@ -153,7 +154,8 @@ def horo_projection(
     # (2) Unit tangent at the spine pointing toward the origin (⊥ span(P) ⇒ tangent at spine).
     origin_A = _create_origin(c, dim, dtype)
     origin_coeffs_K = _span_coeffs(origin_A)
-    proj_span_o_A = origin_coeffs_K @ p_KA  # projection of the origin onto the ideal span
+    # projection of the origin onto the ideal span
+    proj_span_o_A = jnp.matmul(origin_coeffs_K, p_KA, precision=MATMUL_PRECISION)
     tangent_A = origin_A - proj_span_o_A  # spacelike, ⊥ span(P)
     tangent_inner = _minkowski_inner(tangent_A, tangent_A)  # > 0 (spacelike)
     unit_tangent_A = tangent_A / jnp.sqrt(floor_at(tangent_inner, MIN_NORM))
@@ -255,7 +257,7 @@ def transform_horopca(
     """
     proj_NA = jax.vmap(horo_projection, in_axes=(0, None, None, None))(x_NA, q_ortho_KD, c, VERSION_DEFAULT)
     ball_ND = jax.vmap(hyperboloid_to_poincare, in_axes=(0, None))(proj_NA, c)  # (N, D) full ball coords
-    ball_NK = ball_ND @ q_ortho_KD.T  # (N, K) coordinates in the component frame
+    ball_NK = jnp.matmul(ball_ND, q_ortho_KD.T, precision=MATMUL_PRECISION)  # (N, K) coordinates in the component frame
     return proj_NA, ball_NK
 
 
@@ -392,7 +394,7 @@ class HoroPCA:
                 max_iters=self.frechet_max_iters,
             )
             boost_AA = self._hyperboloid.lorentz_boost(mean_A, c)
-            x_work_NA = _proj_batch(x_hyp_NA @ boost_AA.T, c)
+            x_work_NA = _proj_batch(jnp.matmul(x_hyp_NA, boost_AA.T, precision=MATMUL_PRECISION), c)
         else:
             ambient = x_hyp_NA.shape[1]
             mean_A = _create_origin(c, ambient - 1, self.manifold.dtype)
@@ -438,7 +440,7 @@ class HoroPCA:
 
         c = self.c_
         x_hyp_NA = self._to_hyperboloid(x_ND, c)
-        x_work_NA = _proj_batch(x_hyp_NA @ self.boost_.T, c)
+        x_work_NA = _proj_batch(jnp.matmul(x_hyp_NA, self.boost_.T, precision=MATMUL_PRECISION), c)
         _, ball_NK = _transform_jit(x_work_NA, self.components_, c)
 
         if self._is_hyperboloid:

@@ -52,6 +52,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, cosh, floor_at, sinh, smooth_clamp
+from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from ._gyrovector_core import _gyration
 from .protocol import Curvature
@@ -74,13 +75,13 @@ def _create_origin(c: Curvature, dim: int, dtype=jnp.float32) -> Float[Array, "d
 
 def _beta(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """PV beta factor β_x = 1/√(1 + c·||x||²)."""
-    x_sqnorm = jnp.dot(x, x)
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
     return 1.0 / jnp.sqrt(1.0 + c * x_sqnorm)
 
 
 def _beta_inv(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Reciprocal of the PV beta factor: 1/β_x = √(1 + c·||x||²)."""
-    x_sqnorm = jnp.dot(x, x)
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
     return jnp.sqrt(1.0 + c * x_sqnorm)
 
 
@@ -95,7 +96,7 @@ def _dpi_x(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> Floa
     dπ_x(v) = β_x/(1+β_x)·v - c·β_x³/(1+β_x)²·⟨x, v⟩·x
     """
     beta_x = _beta(x, c)
-    xv = jnp.dot(x, v)
+    xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
     one_plus_beta = 1.0 + beta_x
     term1 = (beta_x / one_plus_beta) * v
     term2 = (c * beta_x**3 / one_plus_beta**2) * xv * x
@@ -113,7 +114,7 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> F
     x ⊕ y = x + y + {(1 - β_y)/β_y + c·β_x/(1+β_x)·⟨x, y⟩}·x
     """
     beta_x = _beta(x, c)
-    xy = jnp.dot(x, y)
+    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
 
     # Numerically robust form for (1 - β_y)/β_y = 1/β_y - 1 = √(1+c||y||²) - 1.
     # This avoids catastrophic cancellation for ||y|| ≈ 0.
@@ -225,8 +226,8 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     dpi_v = _dpi_x(x, v, c)
 
     # g_x(v, v) = ⟨v, v⟩ - c·β_x²·⟨x, v⟩²
-    xv = jnp.dot(x, v)
-    g_vv = jnp.dot(v, v) - c * beta_x**2 * xv**2
+    xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
+    g_vv = jnp.dot(v, v, precision=MATMUL_PRECISION) - c * beta_x**2 * xv**2
     g_vv_safe = floor_at(g_vv, 0.0) + MIN_NORM**2
     g_norm = jnp.sqrt(g_vv_safe)
     arg = sqrt_c * g_norm
@@ -255,7 +256,7 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     beta_x = _beta(x, c)
 
     z = _addition(-x, y, c)
-    xz = jnp.dot(x, z)
+    xz = jnp.dot(x, z, precision=MATMUL_PRECISION)
     z_norm = _safe_norm(z)
     arg = sqrt_c * z_norm
 
@@ -288,7 +289,7 @@ def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> 
     PT_{0→y}(v) = v + c·β_y/(1+β_y) · ⟨y, v⟩ · y
     """
     beta_y = _beta(y, c)
-    yv = jnp.dot(y, v)
+    yv = jnp.dot(y, v, precision=MATMUL_PRECISION)
     coef = c * beta_y / (1.0 + beta_y)
     return v + coef * yv * y
 
@@ -320,7 +321,7 @@ def _ptransp(
     v_tilde = _gyration(y_bar, -x_bar, dpi_v, c)
 
     # Eq. 12 (K = -c flips the sign of the second term).
-    yv = jnp.dot(y, v_tilde)
+    yv = jnp.dot(y, v_tilde, precision=MATMUL_PRECISION)
     coef1 = (1.0 + beta_x) / beta_x
     coef2 = c * (1.0 + beta_x) * beta_y / ((1.0 + beta_y) * beta_x)
     return coef1 * v_tilde + coef2 * yv * y
@@ -342,9 +343,9 @@ def _tangent_inner(
     g_x(u, v) = ⟨u, v⟩ - c·β_x²·⟨x, u⟩·⟨x, v⟩
     """
     beta_x = _beta(x, c)
-    uv = jnp.dot(u, v)
-    xu = jnp.dot(x, u)
-    xv = jnp.dot(x, v)
+    uv = jnp.dot(u, v, precision=MATMUL_PRECISION)
+    xu = jnp.dot(x, u, precision=MATMUL_PRECISION)
+    xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
     return uv - c * beta_x**2 * xu * xv
 
 
@@ -369,7 +370,7 @@ def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature
 
         rgrad = grad + c · ⟨x, grad⟩ · x.
     """
-    xg = jnp.dot(x, grad)
+    xg = jnp.dot(x, grad, precision=MATMUL_PRECISION)
     return grad + c * xg * x
 
 
@@ -458,7 +459,7 @@ def _compute_mlr(
 
     beta_inv_x_B1 = jnp.sqrt(1.0 + c * jnp.sum(x**2, axis=-1, keepdims=True))  # (B, 1)
 
-    xz_BP = jnp.einsum("bi,oi->bo", x, z)  # (B, P)
+    xz_BP = jnp.einsum("bi,oi->bo", x, z, precision=MATMUL_PRECISION)  # (B, P)
 
     # Eq. 19 asinh argument, in (B, P).
     term_A_BP = cosh(sr_1P) * (sqrt_c / z_norm_P1.T) * xz_BP
