@@ -368,7 +368,9 @@ error budget of a Poincaré round trip. Exact bit-pattern ulp error against a fl
 | `expm1` | 1 | 5 | n/a | n/a |
 
 Consequence: float32 `logmap_0(expmap_0(v))` at radius $10^{-3}$ (dim 32, median relative error)
-is 2.4e-7 on the CPU backend and exactly 0 on GPU. A torch-based library reaches ~1.5e-8 on CPU,
+was 2.4e-7 on the CPU backend with raw XLA kernels and exactly 0 on GPU; hyperbolix's own `tanh`
+and `atanh` wrappers (series below 1/8, `expm1` form above) bring the CPU backend to exactly 0 as
+well, see the changelog. A torch-based library reaches ~1.5e-8 on CPU with raw kernels,
 because torch's CPU `tanh`/`atanh` are correctly rounded; on CUDA it has no such edge (torch's
 CUDA `atanh` is bit-identical to XLA's). The closed forms are the same in both cases, so this is
 a kernel difference rather than a formula difference, but it does mean that a near-origin float32

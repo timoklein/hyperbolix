@@ -404,7 +404,8 @@ def test_tanh():
 # close part of that gap with two rewrites, each gated on a measured seam:
 #
 #   * ``tanh(x) = expm1(2|x|)/(expm1(2|x|) + 2)`` for ``|x| >= 1/8`` (float32) / ``>= 1/2``
-#     (float64), XLA's ``tanh`` below it;
+#     (float64); below the seam, ``x - x^3/3 + 2x^5/15 - 17x^7/315`` in float32 and XLA's
+#     ``tanh`` in float64;
 #   * ``atanh(x) = x + x^3/3 + ... + x^9/9`` for ``|x| < 1/8`` in float32 only, the single-log1p
 #     form above it and on the whole float64 domain.
 #
@@ -450,17 +451,24 @@ def _correctly_rounded_f32(np_fn, x_N: np.ndarray) -> np.ndarray:
 
 
 def test_tanh_f32_ulp_accuracy_near_zero():
-    """Below the 1/8 seam ``tanh`` is still XLA's own kernel, so it must not get WORSE than 4 ulp.
+    """Below the 1/8 seam the truncated odd series must be correctly rounded to <=1 ulp.
 
-    Measured on 20k log-uniform float32 inputs in [1e-4, 0.125] (max / mean ulp): XLA GPU
-    4 / 0.87, XLA CPU 4 / 0.96 — identical to the unwrapped ``jnp.tanh``, which is the point.
-    The bound is what stops the ``expm1`` rewrite from being pushed below 1/8: measured there,
-    ``expm1(2x)/(expm1(2x) + 2)`` is 3 ulp on GPU but **6** on CPU (mean 0.96 -> 1.08), a real
-    regression on the backend CI runs on.
+    Measured on 20k log-uniform float32 inputs in [1e-4, 0.125] (max / mean ulp), at both signs:
+    XLA's own kernel — which is what the wrapper used here before the series landed — is 4 / 0.87
+    on XLA GPU and 4 / 0.96 on XLA CPU; the series
+    ``x - x^3/3 + 2x^5/15 - 17x^7/315`` is 1 / 0.16 on both. Its own truncation is negligible on
+    this range: the first dropped term is ``62 x^9/2835``, 1.6e-10 absolute (1.3e-9 relative) at
+    x = 1/8 against a float32 eps of 1.2e-7, so what this bound pins is that the rewrite is in
+    place at all.
+
+    The series is also what keeps the ``expm1`` form from simply being pushed below 1/8: measured
+    on this range ``expm1(2x)/(expm1(2x) + 2)`` is 3 ulp on GPU but **6** on CPU (mean 0.96 ->
+    1.08), a regression on the backend CI runs on.
     """
     x_N = _log_uniform_f32(1e-4, 0.125)
-    got_N = np.asarray(tanh(jnp.asarray(x_N)), dtype=np.float32)
-    assert _max_ulp_f32(got_N, _correctly_rounded_f32(np.tanh, x_N)) <= 4.0
+    for signed_N in (x_N, -x_N):
+        got_N = np.asarray(tanh(jnp.asarray(signed_N)), dtype=np.float32)
+        assert _max_ulp_f32(got_N, _correctly_rounded_f32(np.tanh, signed_N)) <= 1.0
 
 
 def test_tanh_f32_ulp_accuracy_in_the_tail():
@@ -510,16 +518,22 @@ def test_tanh_and_atanh_seams_are_continuous():
 
     A ``jnp.where`` seam is only harmless if the two kernels it switches between are
     indistinguishable there. Measured branch-to-branch distance at the three points:
-    ``tanh``'s float32 seam (1/8) is 0/1/0 ulp on XLA CPU but 2/1/2 on XLA GPU, and its float64
-    seam (1/2) is 0/1/1 on both; ``atanh``'s float32 seam (1/8) is 0/0/0 on both. The GPU's 2 ulp
-    is inherent to switching between two kernels that are individually 3-4 ulp approximations, so
-    the step at the seam is smaller than either branch's own error — what has to hold on top of
-    it is that the wrapper stays monotone there, which is asserted separately below.
+    ``tanh``'s float32 seam (1/8, series vs ``expm1`` form) is 1/1/1 ulp on XLA CPU and 1/0/1 on
+    XLA GPU, and its float64 seam (1/2, ``jnp.tanh`` vs ``expm1`` form) is 1/0/1 on CPU and 0/1/1
+    on GPU; ``atanh``'s float32 seam (1/8) is 0/0/0 on both. A 1 ulp step is smaller than either
+    branch's own error — what has to hold on top of it is that the wrapper stays monotone there,
+    which is asserted separately below. (Before the float32 ``tanh`` series landed, its below-seam
+    branch was XLA's own ``tanh`` and this seam measured 0/1/0 on CPU but 2/1/2 on GPU.)
     """
 
     def tanh_expm1_branch(x):
         t = jnp.expm1(2.0 * jnp.abs(x))
         return t / (t + 2.0)
+
+    def tanh_series_branch(x):
+        a = jnp.abs(x)
+        x2 = a * a
+        return a * (1.0 + x2 * (-1.0 / 3.0 + x2 * (2.0 / 15.0 - x2 * (17.0 / 315.0))))
 
     def atanh_log1p_branch(x):
         a = jnp.abs(x)
@@ -530,10 +544,12 @@ def test_tanh_and_atanh_seams_are_continuous():
         return x * (1.0 + x2 * (1.0 / 3.0 + x2 * (1.0 / 5.0 + x2 * (1.0 / 7.0 + x2 / 9.0))))
 
     for dt, np_dt in ((jnp.float32, np.float32), (jnp.float64, np.float64)):
-        seams = [(0.125 if dt is jnp.float32 else 0.5, jnp.tanh, tanh_expm1_branch)]
+        # Below the seam float32 uses the odd series and float64 uses XLA's own tanh.
+        below_tanh = tanh_series_branch if dt is jnp.float32 else jnp.tanh
+        seams = [(0.125 if dt is jnp.float32 else 0.5, below_tanh, tanh_expm1_branch, tanh)]
         if dt is jnp.float32:  # float64 atanh has no seam: the log1p form covers the whole domain
-            seams.append((0.125, atanh_series_branch, atanh_log1p_branch))
-        for seam, below_fn, above_fn in seams:
+            seams.append((0.125, atanh_series_branch, atanh_log1p_branch, atanh))
+        for seam, below_fn, above_fn, wrapper in seams:
             s = np_dt(seam)
             pts = np.array([np.nextafter(s, np_dt(0)), s, np.nextafter(s, np_dt(2))], dtype=np_dt)
             x = jnp.asarray(pts, dtype=dt)
@@ -546,7 +562,7 @@ def test_tanh_and_atanh_seams_are_continuous():
             assert gap.max() <= 2.0, f"{np_dt.__name__} seam at {seam}: {gap} ulp between branches"
             # The wrapper's own output must still be non-decreasing across the seam: a 2 ulp
             # branch gap that reordered two neighbouring inputs would be a real discontinuity.
-            out = np.asarray(tanh(x) if below_fn is jnp.tanh else atanh(x), dtype=np_dt)
+            out = np.asarray(wrapper(x), dtype=np_dt)
             assert np.all(np.diff(out.astype(np.float64)) >= 0.0), f"{np_dt.__name__} seam at {seam}: {out}"
 
 
@@ -619,6 +635,33 @@ def test_atanh_gradient_is_finite_and_matches_the_closed_form():
         tol_N = 8.0 * eps * expected_N  # = 8*eps/(1 - x**2), the cancellation floor
         assert np.all(np.abs(grad_N - expected_N) / expected_N <= tol_N)
         assert np.all(np.abs(jac_N - expected_N) / expected_N <= tol_N)
+
+
+def test_tanh_float64_keeps_xla_tanh_below_its_own_seam_bitwise():
+    """float64 ``tanh`` must be bit-for-bit XLA's ``tanh`` below 1/2 — the series is float32-only.
+
+    The truncated degree-7 series is 1.3e-9 relative at x = 1/8, which is ~6e6 float64 ulps:
+    usable in float32, catastrophic in float64. This pins the ``_is_low_precision`` dtype gate by
+    rebuilding the expected float64 kernel inline (no dependency on a checkout of the previous
+    version) on 20k seeded inputs spanning both sides of the float64 seam, at both signs.
+    """
+    rng = np.random.default_rng(_ULP_SEED)
+    x_N = np.concatenate(
+        [
+            np.exp(rng.uniform(np.log(1e-6), np.log(0.5), size=_ULP_N // 2)),
+            np.exp(rng.uniform(np.log(0.5), np.log(16.0), size=_ULP_N // 2)),
+        ]
+    )
+    x_N = np.concatenate([x_N, -x_N])
+    x = jnp.asarray(x_N, dtype=jnp.float64)
+
+    # The inline expectation deliberately omits the wrapper's output clip, so the samples stop at
+    # 16: in float64 that clip only starts binding at atanh(1 - 10*eps) = 17.2.
+    abs_x = jnp.abs(x)
+    t = jnp.expm1(2.0 * abs_x)
+    magnitude = jnp.where(abs_x >= 0.5, t / (t + 2.0), jnp.tanh(abs_x))
+    expected = jnp.where(x >= 0, magnitude, -magnitude)
+    assert np.array_equal(np.asarray(tanh(x)), np.asarray(expected))
 
 
 def test_atanh_float64_is_the_log1p_form_bitwise_on_the_whole_domain():
