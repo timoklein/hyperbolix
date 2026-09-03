@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds.hyperboloid import Hyperboloid
-from ..utils.math_utils import MIN_NORM
+from ..utils.math_utils import MIN_NORM, floor_at
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
 
@@ -208,7 +208,7 @@ def log_prob(
 
     # Step 5: Compute log det Jacobian
     # Minkowski norm at origin: r = ||v_spatial|| (since v = [0, v_bar])
-    r_SB = jnp.sqrt(jnp.maximum(jnp.sum(v_spatial_SBD**2, axis=-1), MIN_NORM))
+    r_SB = jnp.sqrt(floor_at(jnp.sum(v_spatial_SBD**2, axis=-1), MIN_NORM))
     log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 6: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)

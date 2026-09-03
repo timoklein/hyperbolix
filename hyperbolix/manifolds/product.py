@@ -48,6 +48,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from ..utils.math_utils import floor_at
 from ._base import ManifoldBase
 from .protocol import Curvature, ScalarCurvature
 
@@ -372,7 +373,7 @@ class ProductManifold:
         c: Curvature,
     ) -> Float[Array, ""]:
         """Riemannian norm (sqrt of tangent inner product with itself)."""
-        return jnp.sqrt(jnp.maximum(self.tangent_inner(v, v, x, c), 0.0))
+        return jnp.sqrt(floor_at(self.tangent_inner(v, v, x, c), 0.0))
 
     def egrad2rgrad(
         self,

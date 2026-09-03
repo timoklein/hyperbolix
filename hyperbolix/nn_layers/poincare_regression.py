@@ -19,7 +19,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import ManifoldParam
-from ..utils.math_utils import smooth_clamp
+from ..utils.math_utils import floor_at, smooth_clamp
 from ._helpers import validate_poincare_manifold
 
 
@@ -170,8 +170,9 @@ class HypRegressionPoincare(nnx.Module):
         # Inner product with a: sum(sub * a, axis=-1)
         suba_BP = jnp.sum(sub_BPD * a[None, :, :], axis=-1)  # (B, P)
 
-        # Norm of a
-        a_norm_P1 = jnp.linalg.norm(a, ord=2, axis=-1, keepdims=True).clip(min=min_enorm)  # (P, 1)
+        # Norm of a. `floor_at` (a `where` against the constant) rather than `.clip(min=…)`:
+        # see `manifolds/hyperboloid._compute_mlr` for the XLA:GPU tie-break this avoids.
+        a_norm_P1 = floor_at(jnp.linalg.norm(a, ord=2, axis=-1, keepdims=True), min_enorm)  # (P, 1)
 
         # Conformal factor for sub
         lambda_sub_BP1 = self.manifold.conformal_factor(sub_BPD, c)  # (B, P, 1)

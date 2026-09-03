@@ -73,6 +73,7 @@ from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
+from hyperbolix.utils.math_utils import floor_at
 
 from ._helpers import validate_hyperboloid_manifold, validate_poincare_manifold, validate_pv_manifold
 from .hyperboloid_core import lorentz_midpoint
@@ -199,10 +200,10 @@ class _GyroBatchNormBase(nnx.Module):
 
         if use_running_average:
             mu_F = self.manifold.expmap_0(self._lift(self.running_mean[...]), c)
-            var = jnp.maximum(self.running_var[...], self.min_var)
+            var = floor_at(self.running_var[...], self.min_var)
         else:
             mu_F = self._batch_mean(x_NF, c)
-            var = jnp.maximum(frechet_variance(x_NF, mu_F, self.manifold, c), self.min_var)
+            var = floor_at(frechet_variance(x_NF, mu_F, self.manifold, c), self.min_var)
 
             # EMA update (no gradient flow; cast back to the stat storage dtype).
             rm_D = self._lower(self.manifold.logmap_0(mu_F, c))

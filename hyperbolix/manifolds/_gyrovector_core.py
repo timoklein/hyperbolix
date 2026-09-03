@@ -25,7 +25,7 @@ Dimension key:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM
+from ..utils.math_utils import MIN_NORM, floor_at
 from .protocol import Curvature
 
 
@@ -44,7 +44,7 @@ def _max_norm(x: Float[Array, "..."], c: Curvature) -> Float[Array, ""]:
     bit-for-bit. Only ``x``'s dtype is read, never its values.
     """
     max_norm_eps = _get_max_norm_eps(x)
-    sqrt_abs_c = jnp.sqrt(jnp.maximum(jnp.abs(jnp.asarray(c)), MIN_NORM))
+    sqrt_abs_c = jnp.sqrt(floor_at(jnp.abs(jnp.asarray(c)), MIN_NORM))
     return jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
 
 
@@ -57,9 +57,9 @@ def _conformal_factor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     x2 = jnp.dot(x, x)
     max_norm_eps = _get_max_norm_eps(x)
     abs_c = jnp.abs(jnp.asarray(c))
-    sqrt_abs_c = jnp.sqrt(jnp.maximum(abs_c, MIN_NORM))
+    sqrt_abs_c = jnp.sqrt(floor_at(abs_c, MIN_NORM))
     boundary_floor = 2.0 * sqrt_abs_c * max_norm_eps - abs_c * max_norm_eps**2
-    denom = jnp.maximum(1.0 - c * x2, jnp.where(jnp.asarray(c) > 0, boundary_floor, MIN_NORM))
+    denom = floor_at(1.0 - c * x2, jnp.where(jnp.asarray(c) > 0, boundary_floor, MIN_NORM))
     return 2.0 / denom
 
 
@@ -83,7 +83,7 @@ def _proj_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... d
     max_norm_eps = _get_max_norm_eps(x)
     # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
     norm = jnp.sqrt(jnp.sum(x**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (..., 1)
-    sqrt_abs_c = jnp.sqrt(jnp.maximum(jnp.abs(jnp.asarray(c)), MIN_NORM))
+    sqrt_abs_c = jnp.sqrt(floor_at(jnp.abs(jnp.asarray(c)), MIN_NORM))
     max_norm = jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
     cond = norm > max_norm
     return jnp.where(cond, x * (max_norm / norm), x)
@@ -117,7 +117,7 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> F
     coef_b = 1 - c * x2  # B
     coef_g = c * s2  # A - B
     num_D = coef_b * s_D + coef_g * x
-    denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, MIN_NORM)
+    denom = floor_at(1 + 2 * c * xy + c**2 * x2 * y2, MIN_NORM)
 
     # ‖num‖² expanded in the same two coefficients that built `num_D`, so the clamp decision is
     # consistent with the vector it is applied to (an independently derived norm, e.g. the equally
@@ -165,7 +165,7 @@ def _gyration(x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "d
     coeff_x = -c2 * xz * y_sqnorm + c * yz + 2 * c2 * xy * yz  # scalar
     coeff_y = -c2 * yz * x_sqnorm - c * xz  # scalar
     num_D = 2 * (coeff_x * x + coeff_y * y)  # (dim,)
-    denom = jnp.maximum(1 + 2 * c * xy + c2 * x_sqnorm * y_sqnorm, MIN_NORM)  # scalar
+    denom = floor_at(1 + 2 * c * xy + c2 * x_sqnorm * y_sqnorm, MIN_NORM)  # scalar
 
     return z + num_D / denom
 
@@ -177,7 +177,7 @@ def _conformal_factor_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[A
     max_norm_eps = jnp.asarray(float(jnp.finfo(dtype).eps ** 0.75), dtype=dtype)
     x2 = jnp.sum(x**2, axis=-1, keepdims=True)  # (..., 1)
     abs_c = jnp.abs(c_arr)
-    sqrt_abs_c = jnp.sqrt(jnp.maximum(abs_c, MIN_NORM))
+    sqrt_abs_c = jnp.sqrt(floor_at(abs_c, MIN_NORM))
     boundary_floor = 2.0 * sqrt_abs_c * max_norm_eps - abs_c * max_norm_eps**2
-    denom = jnp.maximum(jnp.asarray(1.0, dtype=dtype) - c_arr * x2, jnp.where(c_arr > 0, boundary_floor, MIN_NORM))
+    denom = floor_at(jnp.asarray(1.0, dtype=dtype) - c_arr * x2, jnp.where(c_arr > 0, boundary_floor, MIN_NORM))
     return 2.0 / denom

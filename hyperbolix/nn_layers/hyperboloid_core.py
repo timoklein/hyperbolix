@@ -30,6 +30,7 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
+from hyperbolix.utils.math_utils import clamp_to, floor_at
 from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 
@@ -93,7 +94,7 @@ def build_spacelike_V(
     gate_O = norm_sq_O / (norm_sq_O + eps)  # (O,)
 
     # Argument for sinh/cosh: -sqrt(c) * b / ||w||, gated for zero columns
-    arg_O = jnp.clip(-jnp.sqrt(c) * b_O * gate_O / norm_O, -100.0, 100.0)  # (O,)
+    arg_O = clamp_to(-jnp.sqrt(c) * b_O * gate_O / norm_O, -100.0, 100.0)  # (O,)
 
     # Time row: negate to absorb Minkowski metric I_{1,D}
     # v_time = ||w|| * sinh(arg), v_time_mink = -v_time
@@ -244,7 +245,7 @@ def spatial_to_hyperboloid(
     scaled_D = scale * spatial  # (..., D)
 
     norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
-    x0 = jnp.sqrt(jnp.maximum(norm_sq + 1.0 / c_out, eps))  # (...)
+    x0 = jnp.sqrt(floor_at(norm_sq + 1.0 / c_out, eps))  # (...)
 
     return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D+1)
 
@@ -288,7 +289,7 @@ def sinh_lift_to_hyperboloid(
         Points on the hyperboloid with curvature ``c`` (time coordinate first).
     """
     sqrt_c = jnp.sqrt(c)
-    sinh_arg_BO = jnp.clip(sqrt_c * spatial_BO, -v_max, v_max)
+    sinh_arg_BO = clamp_to(sqrt_c * spatial_BO, -v_max, v_max)
     # safe_sinh: the argument is already bounded to ±v_max ≪ the math_utils.sinh overflow clamp
     # (callers assert v_max safety), so the clamp itself is redundant here — but the wrapper's
     # expm1-form is an accuracy fix (XLA's CPU jnp.sinh is up to ~17-496 ulps off for |x| >= 16),
@@ -392,7 +393,7 @@ def lorentz_midpoint(
     big_delta_NA = jnp.einsum("...nm,...ma->...na", weights, delta_MA, precision=MATMUL_PRECISION)  # (..., N, A)
     big_dd_N1 = -(big_delta_NA[..., 0:1] ** 2) + jnp.sum(big_delta_NA[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., N, 1)
     mink_N1 = -(w_sum_N1**2) / c - w_sum_N1 * w_dd_N1 + big_dd_N1  # (..., N, 1)
-    denom_N1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_N1), eps))  # (..., N, 1)
+    denom_N1 = jnp.sqrt(floor_at(c * jnp.abs(mink_N1), eps))  # (..., N, 1)
     z_NA = h_NA / denom_N1  # (..., N, A)
     # The identity above assumes *exactly* on-sheet points, which float storage cannot guarantee at
     # large radius (eps*x_0^2 > 1/c beyond ||s|| ~ 3e3 in float32 / ~1e8 in float64): for such inputs
@@ -500,7 +501,7 @@ def lorentz_residual(
     d_A = x - y  # (..., A)
     dd_1 = -(d_A[..., 0:1] ** 2) + jnp.sum(d_A[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., 1), >= 0 on-sheet
     mink_1 = -((1.0 + w_y) ** 2) / c - w_y * dd_1  # (..., 1)
-    denom_1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_1), eps))  # (..., 1)
+    denom_1 = jnp.sqrt(floor_at(c * jnp.abs(mink_1), eps))  # (..., 1)
     z_A = ave_A / denom_1  # (..., A)
     # The identity above assumes *exactly* on-sheet inputs, which float storage cannot guarantee at
     # large radius (eps*x_0^2 > 1/c beyond ||s|| ~ 3e3 in float32 / ~1e8 in float64): for such inputs
