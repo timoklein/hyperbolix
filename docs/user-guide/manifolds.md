@@ -401,5 +401,5 @@ in the [API reference](../api-reference/nn-layers/index.md):
 
 - **[API Reference: Manifolds](../api-reference/manifolds.md)** — full method signatures and docstrings.
 - **[Numerical Stability Guide](numerical-stability.md)** — when to use float64, conformal factor pitfalls, clamping strategies.
-- **[Batching & JIT Guide](batching-jit.md)** — `jax.vmap` patterns, JIT static arguments, version_idx static-ness.
+- **[Batching & JIT Guide](batching-jit.md)** — `jax.vmap` patterns, JIT static arguments, version_idx as a static vs. dynamic argument.
 - **[Training Workflows](training-workflows.md)** *(WIP)* — end-to-end training examples.

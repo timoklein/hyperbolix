@@ -397,6 +397,298 @@ def test_tanh():
 
 
 # ---------------------------------------------------------------------------------------------
+# tanh / atanh float32 ulp accuracy
+#
+# ``tanh`` and ``atanh`` are the two primitives every Poincare map is built on, and in float32
+# XLA's own kernels are 4 ulp / 3 ulp rational approximations (torch's are ~0.5 ulp). The wrappers
+# close part of that gap with two rewrites, each gated on a measured seam:
+#
+#   * ``tanh(x) = expm1(2|x|)/(expm1(2|x|) + 2)`` for ``|x| >= 1/8`` (float32) / ``>= 1/2``
+#     (float64); below the seam, ``x - x^3/3 + 2x^5/15 - 17x^7/315`` in float32 and XLA's
+#     ``tanh`` in float64;
+#   * ``atanh(x) = x + x^3/3 + ... + x^9/9`` for ``|x| < 1/8`` in float32 only, the single-log1p
+#     form above it and on the whole float64 domain.
+#
+# The bounds below are the CPU-safe ones — they must hold on the CI CPU runner AND on GPU — and
+# each docstring records the separately measured GPU and CPU numbers behind its bound. Ulp
+# distance is exact, taken from the bit patterns, so a bound of "2 ulp" means "at most two
+# float32 values away from the correctly rounded result".
+# ---------------------------------------------------------------------------------------------
+
+_ULP_SEED = 0
+_ULP_N = 20_000
+
+
+def _ordinal(a_N: np.ndarray) -> np.ndarray:
+    """Monotone integer total order over float32: adjacent floats differ by exactly 1."""
+    bits_N = np.ascontiguousarray(a_N).view(np.int32).astype(np.int64)
+    out_N = bits_N.copy()
+    neg_N = bits_N < 0
+    # Masked assignment, not np.where: ``offset - bits`` would overflow int64 on the positive
+    # bit patterns np.where evaluates and then discards.
+    out_N[neg_N] = np.int64(-(2**31)) - bits_N[neg_N]
+    return out_N
+
+
+def _max_ulp_f32(got_N: np.ndarray, ref_N: np.ndarray) -> float:
+    """Exact maximum bit-pattern ulp distance between two float32 arrays."""
+    return float(np.abs(_ordinal(got_N) - _ordinal(ref_N)).max())
+
+
+def _log_uniform_f32(lo: float, hi: float, seed: int = _ULP_SEED, n: int = _ULP_N) -> np.ndarray:
+    """``n`` seeded log-uniform float32 samples on ``[lo, hi]`` — the probe script's sampling."""
+    rng = np.random.default_rng(seed)
+    return np.exp(rng.uniform(np.log(lo), np.log(hi), size=n)).astype(np.float32)
+
+
+def _correctly_rounded_f32(np_fn, x_N: np.ndarray) -> np.ndarray:
+    """Reference: evaluate in float64 on the stored float32 inputs, round back to float32.
+
+    Double rounding can differ from a single correct rounding only for inputs whose exact result
+    sits within 2^-29 relative of a float32 tie — far below the 1-4 ulp effects measured here.
+    """
+    return np_fn(x_N.astype(np.float64)).astype(np.float32)
+
+
+def test_tanh_f32_ulp_accuracy_near_zero():
+    """Below the 1/8 seam the truncated odd series must be correctly rounded to <=1 ulp.
+
+    Measured on 20k log-uniform float32 inputs in [1e-4, 0.125] (max / mean ulp), at both signs:
+    XLA's own kernel — which is what the wrapper used here before the series landed — is 4 / 0.87
+    on XLA GPU and 4 / 0.96 on XLA CPU; the series
+    ``x - x^3/3 + 2x^5/15 - 17x^7/315`` is 1 / 0.16 on both. Its own truncation is negligible on
+    this range: the first dropped term is ``62 x^9/2835``, 1.6e-10 absolute (1.3e-9 relative) at
+    x = 1/8 against a float32 eps of 1.2e-7, so what this bound pins is that the rewrite is in
+    place at all.
+
+    The series is also what keeps the ``expm1`` form from simply being pushed below 1/8: measured
+    on this range ``expm1(2x)/(expm1(2x) + 2)`` is 3 ulp on GPU but **6** on CPU (mean 0.96 ->
+    1.08), a regression on the backend CI runs on.
+    """
+    x_N = _log_uniform_f32(1e-4, 0.125)
+    for signed_N in (x_N, -x_N):
+        got_N = np.asarray(tanh(jnp.asarray(signed_N)), dtype=np.float32)
+        assert _max_ulp_f32(got_N, _correctly_rounded_f32(np.tanh, signed_N)) <= 1.0
+
+
+def test_tanh_f32_ulp_accuracy_in_the_tail():
+    """Above the seam the ``expm1`` rewrite must hold <=2 ulp where XLA's ``tanh`` gives 4.
+
+    Measured on 20k log-uniform float32 inputs in [0.9, 7] (max / mean ulp): ``jnp.tanh`` is
+    4 / 0.82 on XLA GPU and 4 / 0.72 on XLA CPU; the wrapper is 2 / 0.40 on GPU and 1 / 0.04
+    on CPU.
+
+    The upper end is 7, not 8, deliberately: the wrapper clips its OUTPUT to +-(1 - 10*eps) so a
+    downstream ``atanh`` can never reach the pole, and in float32 that clip starts binding at
+    x = atanh(1 - 10*eps) = 7.168. Past that point the deviation from ``tanh`` is the guard (~16
+    ulp at x = 8), not the kernel, so measuring the kernel means staying below it.
+    """
+    x_N = _log_uniform_f32(0.9, 7.0)
+    got_N = np.asarray(tanh(jnp.asarray(x_N)), dtype=np.float32)
+    assert _max_ulp_f32(got_N, _correctly_rounded_f32(np.tanh, x_N)) <= 2.0
+
+
+def test_atanh_f32_ulp_accuracy_near_zero():
+    """Below the 1/8 seam the truncated odd series must be correctly rounded to <=1 ulp.
+
+    Measured on 20k log-uniform float32 inputs in [1e-4, 0.125] (max / mean ulp): the single-log1p
+    form is 3 / 0.48 on XLA GPU and 2 / 0.28 on XLA CPU (``jnp.arctanh`` itself: 3 / 0.48 GPU,
+    1 / 0.24 CPU); the series is 1 / 0.33 on both. The series' own truncation is negligible here —
+    the first dropped term is x^11/11, 1.1e-11 relative at x = 1/8 against a float32 eps of 1.2e-7
+    — so what this bound really pins is that the rewrite is in place at all.
+    """
+    x_N = _log_uniform_f32(1e-4, 0.125)
+    got_N = np.asarray(atanh(jnp.asarray(x_N)), dtype=np.float32)
+    assert _max_ulp_f32(got_N, _correctly_rounded_f32(np.arctanh, x_N)) <= 1.0
+
+
+def test_atanh_f32_ulp_accuracy_above_the_seam():
+    """Above 1/8 the single-log1p form carries the whole range and must stay within 3 ulp.
+
+    Measured on 20k log-uniform float32 inputs in [0.125, 0.9] (max / mean ulp): 2 / 0.33 on XLA
+    GPU, 3 / 0.42 on XLA CPU. The bound is the CPU one so the test holds on both backends.
+    """
+    x_N = _log_uniform_f32(0.125, 0.9)
+    got_N = np.asarray(atanh(jnp.asarray(x_N)), dtype=np.float32)
+    assert _max_ulp_f32(got_N, _correctly_rounded_f32(np.arctanh, x_N)) <= 3.0
+
+
+def test_tanh_and_atanh_seams_are_continuous():
+    """Both branches of each seam agree to <=2 ulp when evaluated at the seam +-1 ulp.
+
+    A ``jnp.where`` seam is only harmless if the two kernels it switches between are
+    indistinguishable there. Measured branch-to-branch distance at the three points:
+    ``tanh``'s float32 seam (1/8, series vs ``expm1`` form) is 1/1/1 ulp on XLA CPU and 1/0/1 on
+    XLA GPU, and its float64 seam (1/2, ``jnp.tanh`` vs ``expm1`` form) is 1/0/1 on CPU and 0/1/1
+    on GPU; ``atanh``'s float32 seam (1/8) is 0/0/0 on both. A 1 ulp step is smaller than either
+    branch's own error — what has to hold on top of it is that the wrapper stays monotone there,
+    which is asserted separately below. (Before the float32 ``tanh`` series landed, its below-seam
+    branch was XLA's own ``tanh`` and this seam measured 0/1/0 on CPU but 2/1/2 on GPU.)
+    """
+
+    def tanh_expm1_branch(x):
+        t = jnp.expm1(2.0 * jnp.abs(x))
+        return t / (t + 2.0)
+
+    def tanh_series_branch(x):
+        a = jnp.abs(x)
+        x2 = a * a
+        return a * (1.0 + x2 * (-1.0 / 3.0 + x2 * (2.0 / 15.0 - x2 * (17.0 / 315.0))))
+
+    def atanh_log1p_branch(x):
+        a = jnp.abs(x)
+        return 0.5 * jnp.log1p(2.0 * a / (1.0 - a))
+
+    def atanh_series_branch(x):
+        x2 = x * x
+        return x * (1.0 + x2 * (1.0 / 3.0 + x2 * (1.0 / 5.0 + x2 * (1.0 / 7.0 + x2 / 9.0))))
+
+    for dt, np_dt in ((jnp.float32, np.float32), (jnp.float64, np.float64)):
+        # Below the seam float32 uses the odd series and float64 uses XLA's own tanh.
+        below_tanh = tanh_series_branch if dt is jnp.float32 else jnp.tanh
+        seams = [(0.125 if dt is jnp.float32 else 0.5, below_tanh, tanh_expm1_branch, tanh)]
+        if dt is jnp.float32:  # float64 atanh has no seam: the log1p form covers the whole domain
+            seams.append((0.125, atanh_series_branch, atanh_log1p_branch, atanh))
+        for seam, below_fn, above_fn, wrapper in seams:
+            s = np_dt(seam)
+            pts = np.array([np.nextafter(s, np_dt(0)), s, np.nextafter(s, np_dt(2))], dtype=np_dt)
+            x = jnp.asarray(pts, dtype=dt)
+            lo = np.asarray(below_fn(x), dtype=np_dt)
+            hi = np.asarray(above_fn(x), dtype=np_dt)
+            # Gap in ulps *of the working dtype* — np.spacing must therefore be taken before the
+            # float64 widening, or a float32 seam would be measured against float64's grid.
+            spacing = np.spacing(np.abs(lo)).astype(np.float64)
+            gap = np.abs(lo.astype(np.float64) - hi.astype(np.float64)) / spacing
+            assert gap.max() <= 2.0, f"{np_dt.__name__} seam at {seam}: {gap} ulp between branches"
+            # The wrapper's own output must still be non-decreasing across the seam: a 2 ulp
+            # branch gap that reordered two neighbouring inputs would be a real discontinuity.
+            out = np.asarray(wrapper(x), dtype=np_dt)
+            assert np.all(np.diff(out.astype(np.float64)) >= 0.0), f"{np_dt.__name__} seam at {seam}: {out}"
+
+
+def test_tanh_odd_symmetry():
+    """tanh(-x) == -tanh(x) bitwise, for both dtypes.
+
+    ``expm1(2x)`` and ``expm1(-2x)`` are not negatives of each other, so the rewrite is only odd
+    to the last bit because it is evaluated on ``|x|`` with the sign restored by ``jnp.where``.
+    Spelling it on ``x`` directly breaks this (measured: ~5000 of 20001 grid points differ).
+    """
+    for dt in (jnp.float32, jnp.float64):
+        g = jnp.asarray(np.concatenate([np.linspace(1e-6, 60.0, 20001), [0.125, 0.5, 8.0]]), dtype=dt)
+        assert np.array_equal(np.asarray(tanh(-g)), np.asarray(-tanh(g)))
+
+
+def test_tanh_gradient_is_finite_and_matches_sech2():
+    """``tanh``'s gradient is finite on the whole real line and equals ``1 - tanh(x)**2``.
+
+    Both ``jnp.where`` branches are evaluated *and differentiated*, so the ``expm1`` branch has to
+    stay finite even where it is not selected: ``expm1(2x)`` overflows to inf past x = 44 (f32),
+    and ``inf/inf = NaN`` would poison the selected branch's cotangent. The input clip to
+    +-0.5*log(2/eps) is what prevents that, and x = +-100 below is past the overflow point.
+
+    Beyond the guards the gradient is 0 by design (the clips' VJP), so the comparison against
+    ``1 - tanh**2`` runs only where neither guard binds. That region is read off the *computed*
+    output rather than from ``atanh(1 - 10*eps)``: in float32 the grid near 1 is 5.96e-8 coarse,
+    so the output clip already binds at x ~ 7.13, well inside the analytic 7.168.
+    """
+    for dt, atol in ((jnp.float32, 1e-6), (jnp.float64, 1e-14)):
+        xs_N = np.concatenate([np.linspace(-50.0, 50.0, 2001), [0.0, 0.125, -0.125, 0.5, -0.5, 100.0, -100.0]]).astype(
+            np.float64
+        )
+        x = jnp.asarray(xs_N, dtype=dt)
+        grad_N = np.asarray(jax.vmap(jax.grad(tanh))(x), dtype=np.float64)
+        jac_N = np.asarray(jax.vmap(jax.jacfwd(tanh))(x), dtype=np.float64)
+        assert np.all(np.isfinite(grad_N)), f"non-finite jax.grad ({dt.__name__})"
+        assert np.all(np.isfinite(jac_N)), f"non-finite jax.jacfwd ({dt.__name__})"
+
+        max_out = 1.0 - 10.0 * float(jnp.finfo(dt).eps)
+        unsaturated = np.asarray(jnp.abs(tanh(x)), dtype=np.float64) < max_out
+        expected_N = 1.0 - np.tanh(xs_N) ** 2
+        assert np.abs(grad_N[unsaturated] - expected_N[unsaturated]).max() <= atol
+        assert np.abs(jac_N[unsaturated] - expected_N[unsaturated]).max() <= atol
+        # The seam itself and the origin, pinned exactly.
+        assert float(jax.grad(tanh)(jnp.asarray(0.0, dtype=dt))) == 1.0
+
+
+def test_atanh_gradient_is_finite_and_matches_the_closed_form():
+    """``atanh``'s gradient is finite on [-0.999, 0.999] and equals ``1/(1 - x**2)``.
+
+    Covers the seam at +-1/8 and the origin, where the series branch takes over: both branches are
+    differentiated by ``jnp.where``, and the log1p branch's ``1 - |x|`` denominator is what the
+    domain clip keeps bounded away from zero (>= 10*eps).
+
+    The tolerance is the conditioning of the problem, not a fixed number: forming ``1 - x**2``
+    near ``|x| = 1`` cancels, so no float implementation can beat a relative error of
+    ``eps/(1 - x**2)`` (5.96e-5 at |x| = 0.999 in float32). Measured, both dtypes come in at
+    1.4x that bound at worst and ~3 eps on |x| <= 0.9; the factor 8 leaves ~6x margin at the
+    worst point without letting a genuinely wrong derivative through.
+    """
+    for dt in (jnp.float32, jnp.float64):
+        eps = float(jnp.finfo(dt).eps)
+        xs_N = np.concatenate([np.linspace(-0.999, 0.999, 2001), [0.0, 0.125, -0.125]]).astype(np.float64)
+        x = jnp.asarray(xs_N, dtype=dt)
+        grad_N = np.asarray(jax.vmap(jax.grad(atanh))(x), dtype=np.float64)
+        jac_N = np.asarray(jax.vmap(jax.jacfwd(atanh))(x), dtype=np.float64)
+        assert np.all(np.isfinite(grad_N)), f"non-finite jax.grad ({dt.__name__})"
+        assert np.all(np.isfinite(jac_N)), f"non-finite jax.jacfwd ({dt.__name__})"
+        expected_N = 1.0 / (1.0 - xs_N**2)
+        tol_N = 8.0 * eps * expected_N  # = 8*eps/(1 - x**2), the cancellation floor
+        assert np.all(np.abs(grad_N - expected_N) / expected_N <= tol_N)
+        assert np.all(np.abs(jac_N - expected_N) / expected_N <= tol_N)
+
+
+def test_tanh_float64_keeps_xla_tanh_below_its_own_seam_bitwise():
+    """float64 ``tanh`` must be bit-for-bit XLA's ``tanh`` below 1/2 — the series is float32-only.
+
+    The truncated degree-7 series is 1.3e-9 relative at x = 1/8, which is ~6e6 float64 ulps:
+    usable in float32, catastrophic in float64. This pins the ``_is_low_precision`` dtype gate by
+    rebuilding the expected float64 kernel inline (no dependency on a checkout of the previous
+    version) on 20k seeded inputs spanning both sides of the float64 seam, at both signs.
+    """
+    rng = np.random.default_rng(_ULP_SEED)
+    x_N = np.concatenate(
+        [
+            np.exp(rng.uniform(np.log(1e-6), np.log(0.5), size=_ULP_N // 2)),
+            np.exp(rng.uniform(np.log(0.5), np.log(16.0), size=_ULP_N // 2)),
+        ]
+    )
+    x_N = np.concatenate([x_N, -x_N])
+    x = jnp.asarray(x_N, dtype=jnp.float64)
+
+    # The inline expectation deliberately omits the wrapper's output clip, so the samples stop at
+    # 16: in float64 that clip only starts binding at atanh(1 - 10*eps) = 17.2.
+    abs_x = jnp.abs(x)
+    t = jnp.expm1(2.0 * abs_x)
+    magnitude = jnp.where(abs_x >= 0.5, t / (t + 2.0), jnp.tanh(abs_x))
+    expected = jnp.where(x >= 0, magnitude, -magnitude)
+    assert np.array_equal(np.asarray(tanh(x)), np.asarray(expected))
+
+
+def test_atanh_float64_is_the_log1p_form_bitwise_on_the_whole_domain():
+    """float64 ``atanh`` must be bit-for-bit the odd single-log1p form — the series is float32-only.
+
+    The truncated series is 1.1e-11 relative at x = 1/8, which is ~5e4 float64 ulps: usable in
+    float32, catastrophic in float64. This pins the ``_is_low_precision`` dtype gate by rebuilding
+    the expected float64 kernel inline (no dependency on a checkout of the previous version), on
+    20k seeded inputs spanning both sides of the float32 seam.
+    """
+    rng = np.random.default_rng(_ULP_SEED)
+    x_N = np.concatenate(
+        [
+            np.exp(rng.uniform(np.log(1e-6), np.log(0.125), size=_ULP_N // 2)),
+            np.exp(rng.uniform(np.log(0.125), np.log(0.999), size=_ULP_N // 2)),
+        ]
+    )
+    x_N = np.concatenate([x_N, -x_N])
+    x = jnp.asarray(x_N, dtype=jnp.float64)
+
+    abs_x = jnp.abs(x)
+    half_log1p = 0.5 * jnp.log1p(2.0 * abs_x / (1.0 - abs_x))
+    expected = jnp.where(x >= 0, half_log1p, -half_log1p)
+    assert np.array_equal(np.asarray(atanh(x)), np.asarray(expected))
+
+
+# ---------------------------------------------------------------------------------------------
 # safe_norm / safe_hypot / safe_normalize
 #
 # These replace the library's ``sqrt(sum(v**2) + MIN_NORM**2)`` idiom wherever the *magnitude*

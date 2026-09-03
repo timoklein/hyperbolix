@@ -426,6 +426,24 @@ def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return jnp.acosh(x)
 
 
+def _is_low_precision(dtype) -> bool:
+    """True for float32 and narrower, False for float64. Static: ``dtype`` is known at trace time.
+
+    Both accuracy rewrites below (``atanh``'s truncated series, ``tanh``'s ``expm1`` seam) are
+    profitable only when the working precision is coarse enough to hide their extra error, so both
+    gate on this. The 1e-10 threshold sits in the empty gap between float32's eps (1.2e-7) and
+    float64's (2.2e-16); float16/bfloat16 land on the float32 side, which is the correct side for
+    them (their eps is coarser still).
+    """
+    return float(jnp.finfo(dtype).eps) > 1e-10
+
+
+# Below |x| = 1/8 the odd Maclaurin series `x + x^3/3 + ... + x^9/9` is exact to float32 rounding:
+# the first dropped term is x^11/11, i.e. 1.1e-11 relative to x at x = 1/8 (float32 eps is 1.2e-7),
+# and smaller for smaller x. It is NOT below float64 eps, hence the `_is_low_precision` gate.
+_ATANH_SERIES_SEAM = 0.125
+
+
 @jax.jit
 def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic tangent with domain clamping. Domain=(-1, 1).
@@ -446,7 +464,18 @@ def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     ``jnp.sign(x)*...`` spelling is also wrong (its product-rule gradient at ``x == 0`` collapses
     to 0 instead of the analytic 1). This form measures at max 2.8 ulps (f64, both signs),
     bit-identical to the builtin at the clip boundary, exact gradients, and ~1.7x faster than
-    ``jnp.atanh`` (one ``log1p`` instead of two).
+    ``jnp.atanh`` (one ``log1p`` instead of two). Upstream fixed the ``log1p`` hole in jax 0.11.1
+    (openxla/xla#46765, jax-ml/jax#39707), but the rewrite is kept: it costs nothing, and it is
+    what protects users still on jax <= 0.11.0.
+
+    Below ``|x| = 1/8`` **in float32** the ``log1p`` form is replaced by the odd Maclaurin series
+    ``x + x^3/3 + x^5/5 + x^7/7 + x^9/9`` (Horner in ``x**2``, evaluated on ``x`` itself so it is
+    odd by construction). The series is exact to float32 rounding there — the first dropped term
+    is ``x^11/11``, 1.1e-11 relative at ``x = 1/8`` against a float32 eps of 1.2e-7 — and it
+    removes the rounding that the division ``2|x|/(1 - |x|)`` costs the ``log1p`` form near zero.
+    Measured on 20k log-uniform float32 inputs in ``[1e-4, 0.125]``: max ulp 3 -> 1 (mean 0.48 ->
+    0.33) on XLA GPU, 2 -> 1 (mean 0.28 -> 0.33) on XLA CPU. float64 keeps the ``log1p`` form on
+    the whole domain: 1.1e-11 relative is ~5e4 float64 ulps, so the series is unusable there.
 
     Args:
         x: Input array of any shape
@@ -464,8 +493,42 @@ def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     # the gradient at x == 0 exact. Measured: 129 -> 2.8 ulps max (f64), value- and
     # gradient-identical at the clip boundary, and ~1.7x faster (one log1p instead of two).
     abs_x = jnp.abs(x)
+    # The clip above IS the sanitised argument this branch needs: it leaves 1 - abs_x >= 10*eps
+    # (1.19e-6 in f32, 2.2e-15 in f64), so the quotient, the log1p and their gradients are finite
+    # for every real input — required because jnp.where below evaluates BOTH branches and their
+    # gradients, and a NaN in the unselected one would leak into the selected one's cotangent.
     half_log1p = 0.5 * jnp.log1p(2.0 * abs_x / (1.0 - abs_x))
-    return jnp.where(x >= 0, half_log1p, -half_log1p)
+    out = jnp.where(x >= 0, half_log1p, -half_log1p)
+    if not _is_low_precision(x.dtype):
+        return out
+    # Odd Maclaurin series through x**9, Horner in x**2. Needs no sanitising of its own: a
+    # degree-9 polynomial on |x| <= 1 is bounded (|series| <= 1.788), as is its derivative.
+    x2 = x * x
+    series = x * (1.0 + x2 * (1.0 / 3.0 + x2 * (1.0 / 5.0 + x2 * (1.0 / 7.0 + x2 / 9.0))))
+    return jnp.where(abs_x >= _ATANH_SERIES_SEAM, out, series)
+
+
+# Where `tanh(x) = expm1(2x)/(expm1(2x) + 2)` takes over, per precision. Below the seam float32
+# uses the odd Maclaurin series (see the comment under the constants) and float64 uses `jnp.tanh`.
+# Measured with exact bit-pattern ulps on 20k log-uniform inputs per cell against a
+# correctly-rounded reference (XLA GPU jax 0.9.1 and 0.11.0; XLA CPU), max ulp `jnp.tanh` ->
+# `expm1` form:
+#   float32  [1e-4, 0.0625] 4 -> 6 (CPU, a REGRESSION), [0.0625, 0.125] 4 -> 4,
+#            [0.125, 0.25] 4 -> 4, [0.25, 0.5] 3 -> 2, [0.5, 0.9] 2 -> 1, [0.9, 7] 4 -> 1 (CPU);
+#            [0.9, 8] 4 -> 2 (GPU). So float32 hands over at 1/8: the last bin that is a wash and
+#            the first one above the regression.
+#   float64  XLA's own tanh is already <= 1 ulp on GPU across the whole range, and the expm1 form
+#            is 2 ulp below 0.5 there (a regression); from 0.5 up it ties on GPU (max 1, mean
+#            0.055 -> 0.053 on [0.9, 7]) and strictly wins on CPU ([0.5, 0.9] 3 -> 2,
+#            [0.9, 7] 5 -> 1). So float64 hands over at 1/2, not 1/8.
+_TANH_EXPM1_SEAM_LOW_PRECISION = 0.125
+_TANH_EXPM1_SEAM_FLOAT64 = 0.5
+
+# Below the float32 seam neither kernel above is used: the odd Maclaurin series
+# `x - x^3/3 + 2x^5/15 - 17x^7/315` is exact to float32 rounding there. The first dropped term is
+# `62 x^9 / 2835`, i.e. 1.6e-10 absolute (1.3e-9 relative) at x = 1/8 against a float32 eps of
+# 1.2e-7, and smaller for smaller x. It is NOT below float64 eps (1.3e-9 relative is ~6e6 float64
+# ulps), hence the `_is_low_precision` gate, exactly as for `atanh`'s series above.
 
 
 @jax.jit
@@ -477,10 +540,34 @@ def tanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     output clip is required *in addition* because XLA's float32 ``tanh`` saturates to **exactly** ``1.0``
     slightly earlier (≈ x = 8), which the input clip alone does not prevent — and an exact ``1.0`` would make
     a downstream ``atanh`` singular. The output bound matches ``atanh``'s own ``±(1 - 10*eps)`` domain guard,
-    so ``atanh(tanh(x))`` can never reach the pole. Within the non-saturated range this is a value- and
-    gradient-identity to ``jnp.tanh``; only the saturated tail is affected (gradient 0 there, as for
-    ``cosh``/``sinh``). Mirrors the domain-guard philosophy of ``acosh``/``atanh`` above and the
-    ``tanh(clamp)`` guard in the geoopt κ-stereographic reference.
+    so ``atanh(tanh(x))`` can never reach the pole. Outside the saturated tail the guards are a value- and
+    gradient-identity (the tail's gradient is 0, as for ``cosh``/``sinh``). Mirrors the domain-guard
+    philosophy of ``acosh``/``atanh`` above and the ``tanh(clamp)`` guard in the geoopt κ-stereographic
+    reference.
+
+    Away from zero the value comes from the algebraic identity ``tanh(x) = expm1(2x)/(expm1(2x) +
+    2)`` rather than XLA's rational approximation to ``tanh``. Evaluated on ``|x|`` (sign restored
+    by ``jnp.where``, so the result is odd to the last bit), the form is cancellation-free —
+    numerator and denominator are both positive and the denominator never drops below 2 — and it
+    keeps the saturating tail accurate, where the whole signal lives in
+    ``1 - tanh(x) = 2/(expm1(2|x|) + 2)``. It is *worse* than the builtin near zero (where
+    ``expm1(2x) ≈ 2x`` and the division adds roundings the builtin does not pay), so it is used
+    only above a measured, precision-dependent seam: 1/8 in float32, 1/2 in float64 (see the
+    ``_TANH_EXPM1_SEAM_*`` comment above for the ulp table behind both). Measured on 20k
+    log-uniform float32 inputs, max ulp: ``[0.9, 7]`` 4 -> 2 on XLA GPU and 4 -> 1 on XLA CPU.
+
+    Below ``|x| = 1/8`` **in float32** neither kernel is used: the value comes from the odd
+    Maclaurin series ``x - x^3/3 + 2x^5/15 - 17x^7/315`` (Horner in ``x**2``, evaluated on
+    ``|x|`` so the sign restoration below keeps it odd to the last bit), mirroring ``atanh``'s
+    series branch above. The series is exact to float32 rounding on that range — the first
+    dropped term is ``62 x^9/2835``, 1.6e-10 absolute (1.3e-9 relative) at ``x = 1/8`` against a
+    float32 eps of 1.2e-7 — so it replaces XLA's 4 ulp rational approximation with a polynomial
+    whose only error is its own rounding, and unlike the ``expm1`` form it does not pay a
+    division near zero. Measured on 20k log-uniform float32 inputs in ``[1e-4, 0.125]``, max /
+    mean ulp: 4 / 0.96 -> 1 / 0.16 on XLA CPU and 4 / 0.87 -> 1 / 0.16 on XLA GPU (the
+    ``expm1`` form on that same range is 3 on GPU but **6** on CPU, which is why the seam does
+    not simply move down). float64 keeps XLA's ``tanh`` below its own 1/2 seam: 1.3e-9 relative
+    is ~6e6 float64 ulps, so the series is unusable there.
 
     Args:
         x: Input array of any shape
@@ -490,7 +577,32 @@ def tanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """
     # 1 - tanh(x) ≈ 2*exp(-2x); require it ≥ eps ⇒ x ≤ 0.5*log(2/eps) is the analytic bound.
     clamp = 0.5 * jnp.log(2.0 / jnp.finfo(x.dtype).eps)
-    out = jnp.tanh(jnp.clip(x, -clamp, clamp))
+    # This clip is also the sanitised argument the expm1 branch needs. jnp.where evaluates BOTH
+    # branches and their gradients, and expm1(2x) overflows to inf for x > 44 (f32) / 355 (f64),
+    # where inf/inf = NaN would leak into the *selected* branch's cotangent. Clipping first bounds
+    # the branch argument at ±8.32 (f32) / ±18.4 (f64), so expm1(2x) tops out at 1.7e7 / 9.5e15 —
+    # finite in both dtypes, for every real input including ±inf.
+    x_safe = jnp.clip(x, -clamp, clamp)
+    seam = _TANH_EXPM1_SEAM_LOW_PRECISION if _is_low_precision(x.dtype) else _TANH_EXPM1_SEAM_FLOAT64
+    # Evaluated on |x| with the sign restored via `where`, exactly as `atanh` above: `expm1(2x)`
+    # and `expm1(-2x)` are not negatives of each other, so the raw quotient is not an odd function
+    # to the last bit. Restoring the sign this way (rather than with `sign(x)*...`, whose
+    # product-rule gradient at x == 0 would collapse to 0) makes tanh(-x) == -tanh(x) bitwise for
+    # every input, and keeps the gradient at 0 exactly 1 (jnp.abs' VJP at 0 is +1). The two
+    # below-the-seam branches are odd on |x| for the same reason: XLA's own tanh is already
+    # bitwise odd, and the series' leading factor is abs_x.
+    abs_x = jnp.abs(x_safe)
+    t = jnp.expm1(2.0 * abs_x)
+    if _is_low_precision(x.dtype):
+        # Degree-7 odd Maclaurin series, Horner in abs_x**2. Needs no sanitising of its own: on
+        # the clipped |x| <= 8.32 the polynomial and its derivative are bounded (~1.5e5 and
+        # ~1.3e5), so the branch jnp.where does not select is still finite in value and cotangent.
+        x2 = abs_x * abs_x
+        below_seam = abs_x * (1.0 + x2 * (-1.0 / 3.0 + x2 * (2.0 / 15.0 - x2 * (17.0 / 315.0))))
+    else:
+        below_seam = jnp.tanh(abs_x)
+    magnitude = jnp.where(abs_x >= seam, t / (t + 2.0), below_seam)
+    out = jnp.where(x_safe >= 0, magnitude, -magnitude)
     # Also clamp the output: XLA's float32 tanh reaches exactly 1.0 before the input bound bites.
     max_out = 1.0 - 10.0 * float(jnp.finfo(x.dtype).eps)
     return jnp.clip(out, -max_out, max_out)

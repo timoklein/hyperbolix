@@ -33,16 +33,30 @@ Use jax.vmap for batching and jax.jit for compilation:
     >>> distance = dist_jit(x, y, c=1.0, version_idx=VERSION_DEFAULT)
 
 Version Constants:
-    VERSION_DEFAULT (0): Cancellation-free hyperbolic-haversine distance (hard floor at 0).
-        Accurate at any representable radius — see the numerical-stability guide.
-    VERSION_SMOOTHENED (1): Hyperbolic-haversine distance with a strictly-positive floor
-        (soft clamping), same cancellation-free evaluation as VERSION_DEFAULT.
-    VERSION_LEGACY (2): Pre-fix acosh-based distance with hard clipping, reproduced
-        bit-for-bit for reproducibility. Routes through the Minkowski inner product and loses
-        all precision once √c·(d₀(x) + d₀(y) - d(x, y)) exceeds ln(1/eps) — 15.9 (float32) /
-        36.0 (float64). Use only to match results computed before this fix.
-    VERSION_LEGACY_SMOOTHENED (3): VERSION_LEGACY with soft clamping. Same precision loss
-        past the threshold above.
+    The same four slots select an arm of *both* the pairwise ``dist`` and the origin distance
+    ``dist_0``; the two are listed separately below because they are different implementations.
+
+    VERSION_DEFAULT (0):
+        ``dist``: cancellation-free hyperbolic-haversine distance (hard floor at 0). Accurate at
+        any representable radius — see the numerical-stability guide.
+        ``dist_0``: ``arcsinh(√c·‖x_s‖)/√c``, read off the spatial part. Exact at every radius,
+        no domain clamp, derivative bounded by 1.
+    VERSION_SMOOTHENED (1):
+        ``dist``: the same cancellation-free evaluation with a strictly-positive floor of
+        ``2·arcsinh(10·eps)/√c`` applied in quadrature.
+        ``dist_0``: VERSION_DEFAULT with the spatial radius floored in quadrature, giving a floor
+        of ``arcsinh(20·eps)/√c`` — the same floor to first order.
+    VERSION_LEGACY (2):
+        ``dist``: pre-fix acosh-based distance with hard clipping, reproduced bit-for-bit for
+        reproducibility. Routes through the Minkowski inner product and loses all precision once
+        √c·(d₀(x) + d₀(y) - d(x, y)) exceeds ln(1/eps) — 15.9 (float32) / 36.0 (float64).
+        ``dist_0``: pre-fix ``acosh(clip(√c·x₀, 1))/√c``. ``acosh``'s ``1 + 10·eps`` domain clamp
+        makes every radius below ``sqrt(20·eps)/√c`` (1.5e-3 in float32) unrepresentable, and
+        recovering the radius from ``x₀ = cosh(√c·d)/√c`` costs a further ``eps/(2·d²)`` relative.
+        Use either only to match results computed before this fix.
+    VERSION_LEGACY_SMOOTHENED (3): VERSION_LEGACY with soft clamping (``smooth_clamp_min``), and
+        the same precision loss. For ``dist_0`` the softplus remainder additionally puts a
+        ``0.16632/√c`` floor under *every* point that is not bitwise the origin, in both dtypes.
 
 Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
@@ -203,14 +217,14 @@ def _scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Map to tangent space, scale geodesic length, map back
+    # r ⊗ x = exp_0(r · log_0(x)) — the paper's Eq. 2 verbatim. ``_logmap_0`` already carries both
+    # the geodesic radius (‖log_0 x‖ = d₀(x) by construction) and the direction, so the
+    # normalize-then-rescale detour this replaced was an identity times a ``sqrt(maximum(‖v‖²,
+    # MIN_NORM))`` floor. That floor pinned ‖log_0 x‖ at 3.16e-8 and made every point inside that
+    # radius come back scaled by the wrong factor — invisible only while ``dist_0`` had its own,
+    # larger acosh floor in front of it.
     v = _logmap_0(x, c)
-    v_sqnorm = _minkowski_inner(v, v)
-    v_norm = jnp.sqrt(jnp.maximum(v_sqnorm, MIN_NORM))
-    unit_tangent = v / v_norm
-    dist0 = _dist_0(x, c)
-    tangent = r * dist0 * unit_tangent
-    res = _expmap_0(tangent, c)
+    res = _expmap_0(r * v, c)
     return res
 
 
@@ -483,8 +497,58 @@ def _sqdist(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Cur
 
 
 # Distance from origin implementations for lax.switch
-def _dist_0_default(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
-    """Standard acosh distance from origin with hard clipping."""
+def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    """Geodesic radius read off the *spatial* part: ``d₀ = arcsinh(√c·‖x_s‖)/√c``.
+
+    On the upper sheet ``√c·x₀ = sqrt(1 + c·‖x_s‖²)``, so ``acosh(√c·x₀) = arcsinh(√c·‖x_s‖)``
+    exactly — the same number, obtained from the coordinate that still resolves it near the origin.
+    The ``x₀`` route cannot: ``x₀ = cosh(√c·d)/√c ≈ (1 + c·d²/2)/√c`` stores ``d`` only to
+    ``sqrt(eps)`` resolution (relative error ``eps/(2·c·d²)``), and ``acosh``'s ``1 + 10·eps``
+    domain clamp then flattens every radius below ``sqrt(20·eps)/√c`` — 1.5e-3 in float32 — onto
+    that one value. Measured at ``c = 1``, float32, dim 8 (median relative error, legacy → this):
+    1.5e3 → 2.5e-9 at ``r = 1e-6``, 5.4e-1 → 9.8e-8 at 1e-3, 5.0e-4 → 2.7e-8 at 1e-2, 3.5e-6 →
+    1.8e-8 at 0.1 (the ``eps/(2·c·d²)`` term), and ≤7.1e-8 → ≤5.2e-8 over ``r ∈ [1, 40]``
+    (``logs/2026-09-02_submission-numerics/probe_hyperboloid_origin.py``, A100, jax 0.9.1).
+
+    ``arcsinh`` needs no domain clamp (its argument is a norm, so the whole real half-line is
+    valid) and its derivative ``1/sqrt(1 + u²)`` is bounded by 1 everywhere, so the singularity
+    that motivated :func:`_dist_0_legacy_smoothened`'s soft clamp is gone rather than smoothed.
+    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at the origin, which is
+    what keeps ``jax.grad(dist_0)`` finite there without a ``where``-guard.
+
+    Reads only ``x_s``: an off-sheet input gets the radius of its :func:`_proj` projection, which
+    is the same source of truth ``_proj`` itself uses (it reconstructs ``x₀`` from ``x_s``) and
+    what ``ProperVelocity._dist_0`` already does.
+    """
+    sqrt_c = jnp.sqrt(c)
+    return jnp.arcsinh(sqrt_c * safe_norm(x[1:])) / sqrt_c
+
+
+def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    """:func:`_dist_0_stable` with a strictly-positive floor: the radius becomes ``hypot(u, ε)``.
+
+    ``ε = 20·eps`` puts the floor at ``arcsinh(20·eps)/√c`` ≈ 2.4e-6 (float32) / 4.4e-15
+    (float64) — to first order the pairwise smoothened arm's ``2·arcsinh(10·eps)/√c``, so the two
+    smoothened arms agree on what "never exactly zero" means. Applied in quadrature like
+    :func:`_dist_stable_smoothened`, the perturbation is ``O(ε²/u)`` and invisible above the floor.
+
+    ``smooth_clamp_min`` (the legacy arm's approach) is deliberately not used: its ``log(2)/β``
+    softplus remainder put a **0.16632/√c** floor under every non-origin point in *both* dtypes.
+    """
+    sqrt_c = jnp.sqrt(c)
+    eps = 20.0 * float(jnp.finfo(x.dtype).eps)
+    radius_floored = safe_hypot(sqrt_c * safe_norm(x[1:]), jnp.asarray(eps, dtype=x.dtype))
+    return jnp.arcsinh(radius_floored) / sqrt_c
+
+
+def _dist_0_legacy(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    """Standard acosh distance from origin with hard clipping.
+
+    Kept for reference and comparison only. It reads the radius off ``x₀`` through ``acosh``, whose
+    domain clamp makes every radius below ``sqrt(20·eps)/√c`` (1.5e-3 float32, 6.7e-8 float64)
+    unrepresentable, and the bitwise ``at_origin`` guard makes the gradient there exactly zero.
+    Prefer :func:`_dist_0_stable`.
+    """
     sqrt_c = jnp.sqrt(c)
     x0 = x[0]
     arg = jnp.clip(sqrt_c * x0, min=1.0)
@@ -495,8 +559,13 @@ def _dist_0_default(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array,
     return jnp.where(at_origin, 0.0, res)  # type: ignore[return-value]
 
 
-def _dist_0_smoothened(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
-    """Smoothened distance from origin with soft clamping."""
+def _dist_0_legacy_smoothened(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    """Smoothened distance from origin with soft clamping. Legacy — see :func:`_dist_0_legacy`.
+
+    ``smooth_clamp_min(√c·x₀, 1.0)`` adds ``log(2)/β = 0.0139`` to the ``acosh`` argument, i.e. a
+    floor of ``acosh(1 + log(2)/50)/√c = 0.16632/√c`` on every point that is not bitwise the
+    origin, in both dtypes.
+    """
     sqrt_c = jnp.sqrt(c)
     x0 = x[0]
     arg = smooth_clamp_min(sqrt_c * x0, 1.0)
@@ -510,6 +579,17 @@ def _dist_0_smoothened(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Arr
 def _dist_0(x: Float[Array, "dim_plus_1"], c: Curvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
     """Compute geodesic distance from hyperboloid origin.
 
+    Slots 0/1 read the geodesic radius off the **spatial** part ``x_s`` and ignore ``x₀``; an
+    off-sheet input therefore gets the radius of its :func:`_proj` projection. A raw
+    ``jax.grad(dist_0)`` consequently has its support on ``x_s`` rather than on ``x₀``; the two
+    differ by a multiple of the constraint normal, so after :func:`_egrad2rgrad` /
+    :func:`_tangent_proj` the Riemannian gradient is identical and optimizers are unaffected.
+
+    .. note::
+       **Breaking change.** ``version_idx=2``/``3`` used to duplicate 0/1; they now select the
+       pre-fix ``acosh`` arms (:func:`_dist_0_legacy`, :func:`_dist_0_legacy_smoothened`), matching
+       what those slots already meant for :func:`_dist`.
+
     Args:
         x: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
@@ -521,10 +601,9 @@ def _dist_0(x: Float[Array, "dim_plus_1"], c: Curvature, version_idx: int = VERS
     References:
         Nickel & Kiela. "Poincaré embeddings for learning hierarchical representations." NeurIPS 2017.
     """
-    # Slots 2/3 duplicate 0/1: ``dist_0`` reads the geodesic radius straight off ``x₀`` and has no
-    # cancellation to fix, so it has no legacy/stable split. The duplication keeps ``version_idx``
-    # meaning the same thing here as in :func:`_dist` (same precedent as ``poincare._dist_0``).
-    return lax.switch(version_idx, [_dist_0_default, _dist_0_smoothened, _dist_0_default, _dist_0_smoothened], x, c)
+    return lax.switch(
+        version_idx, [_dist_0_stable, _dist_0_stable_smoothened, _dist_0_legacy, _dist_0_legacy_smoothened], x, c
+    )
 
 
 def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
@@ -690,7 +769,23 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Cur
 
 
 def _logmap_0(y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
-    """Logarithmic map from origin: map point y to tangent space at origin.
+    """Logarithmic map from origin: ``log_0(y) = [0, arcsinh(u)/u · y_s]`` with ``u = √c·‖y_s‖``.
+
+    Built from the spatial part alone, the same source of truth :func:`_dist_0_stable` uses (see
+    its docstring for why ``x₀`` cannot resolve a small radius). The scale ``arcsinh(u)/u`` *is*
+    ``d₀(y)/‖y_s‖``, so ``‖log_0(y)‖ = d₀(y)`` holds by construction rather than by cancelling a
+    floored numerator against an un-floored denominator — the arrangement this replaced, which
+    returned an exactly-zero radial Jacobian entry below float32 radius 1.5e-3 (the ``acosh``
+    clamp) and one ~1500 times too large at 1e-6 (the floored 1.5e-3 divided by 1e-6). Because
+    ``arcsinh(u)/u → 1`` as ``u → 0`` and the
+    ``MIN_NORM`` floor keeps ``u ≥ √c·1e-15``, the ratio is never 0/0.
+
+    ``version_idx`` is intentionally not threaded through: there is nothing to switch on any more.
+
+    The result is **not** passed through :func:`_tangent_proj`. At the origin that projection is
+    the identity on a vector whose time component is already 0 (verified bitwise over magnitudes
+    1e-20…1e10, with an identity VJP), and it routes through :func:`_minkowski_inner`, which turns
+    an ``inf`` spatial input into an all-NaN result instead of leaving the time slot intact.
 
     Args:
         y: Hyperboloid point in ambient representation, shape (dim+1,)
@@ -703,22 +798,24 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
+    sqrt_c = jnp.sqrt(c)
     y_rest = y[1:]
-    # Safe norm: +MIN_NORM² keeps the gradient finite at y = origin (y_rest = 0), where raw
-    # jnp.linalg.norm has a 0/0 derivative. The forward-only jnp.maximum below cannot undo that
-    # NaN (it gets multiplied into the VJP). This matters for the gyro-bias path of the PLFC /
-    # Busemann FC layers, whose bias point is the origin at zero init.
-    y_rest_norm = jnp.sqrt(jnp.sum(y_rest**2) + MIN_NORM**2)
+    # ``safe_norm``, not the file's older ``sqrt(sum(y_s²) + MIN_NORM²)``: the spatial part of a
+    # float32 point at radius 45 is 1.6e19, whose sum of squares overflows to inf while the norm
+    # itself is perfectly representable (the old expression then returned an all-zero tangent
+    # vector there, and the arcsinh form would return NaN). ``safe_norm`` gives an exact 0 with an
+    # exactly-zero VJP at the origin, so the ``MIN_NORM`` floor below is forward-only — it just
+    # stops ``arcsinh(u)/u`` from evaluating 0/0; the Jacobian at y = origin is the identity either
+    # way. That matters for the gyro-bias path of the PLFC / Busemann FC layers, whose bias point
+    # is the origin at zero init.
+    y_rest_norm = jnp.maximum(safe_norm(y_rest), MIN_NORM)
 
-    dist0 = _dist_0(y, c=c)
-    scale = dist0 / jnp.maximum(y_rest_norm, MIN_NORM)
+    u = sqrt_c * y_rest_norm
+    scale = jnp.arcsinh(u) / u  # = d₀(y)/‖y_s‖, → 1 as u → 0
 
     v0 = jnp.zeros(1, dtype=y.dtype)
     v_rest = scale * y_rest
-    res = jnp.concatenate([v0, v_rest])
-    origin = _create_origin(c, y.shape[0] - 1, y.dtype)
-    res = _tangent_proj(res, origin, c)
-    return res
+    return jnp.concatenate([v0, v_rest])
 
 
 def _ptransp(
@@ -1278,7 +1375,16 @@ class Hyperboloid(ManifoldBase):
         return _dist(self._cast(x), self._cast(y), c, version_idx)
 
     def dist_0(self, x: Float[Array, "dim_plus_1"], c: Curvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
-        """Compute geodesic distance from hyperboloid origin."""
+        """Geodesic distance from the origin, ``arcsinh(√c·‖x_s‖)/√c``.
+
+        Read off the **spatial** part; ``x₀`` is ignored, so an off-sheet input gets the radius of
+        its :meth:`proj` projection (the same convention ``proj`` itself follows). A raw
+        ``jax.grad`` of this therefore has its support on ``x_s`` rather than ``x₀``; the two
+        differ by a multiple of the constraint normal, so the Riemannian gradient after
+        :meth:`egrad2rgrad` / :meth:`tangent_proj` is identical and optimizers are unaffected.
+
+        ``version_idx`` 2/3 select the pre-fix ``acosh`` arms — see :func:`_dist_0`.
+        """
         return _dist_0(self._cast(x), c, version_idx)
 
     def sqdist(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
@@ -1315,7 +1421,12 @@ class Hyperboloid(ManifoldBase):
         return _logmap(self._cast(y), self._cast(x), c)
 
     def logmap_0(self, y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
-        """Logarithmic map from origin."""
+        """Logarithmic map from the origin, ``[0, arcsinh(√c‖y_s‖)/(√c‖y_s‖) · y_s]``.
+
+        Like :meth:`dist_0` it reads the radius off the **spatial** part and ignores ``y₀``, so an
+        off-sheet input is treated as its :meth:`proj` projection. ``‖log_0(y)‖ = dist_0(y)`` holds
+        by construction at every radius.
+        """
         return _logmap_0(self._cast(y), c)
 
     def ptransp(

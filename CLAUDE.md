@@ -66,7 +66,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 ### Key patterns
 
 - **Curvature `c`** is passed dynamically at call time (not stored on layers), enabling learnable curvature via the `LearnableCurvature` module from `hyperbolix.utils.curvature`. Manifolds are plain Python classes with static `c`; `LearnableCurvature` lives on the user's `nnx.Module` and is called at runtime to produce the (optionally clamped) curvature value.
-- **`version_idx`** selects distance/operation variants and must be **static** for JIT (use `functools.partial` or `static_argnums`).
+- **`version_idx`** selects distance/operation variants and should be **static** for JIT (compile-size; `lax.switch` also accepts a traced index; use `functools.partial` or `static_argnums`).
 - **`ManifoldParam`** tags params for Riemannian optimization. The optimizer auto-detects these and applies Riemannian gradients + projection; all other `nnx.Param`s get standard Euclidean updates.
 - **Layers accept `manifold_module`** (a manifold class instance) — never raw functions.
 - **NN layer parameter naming** follows Flax NNX conventions: `kernel` (not `weight`), `bias`.
