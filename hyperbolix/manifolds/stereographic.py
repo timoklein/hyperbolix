@@ -69,7 +69,7 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, atanh, tanh
+from ..utils.math_utils import MIN_NORM, atanh, clamp_to, floor_at, tanh
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
@@ -144,7 +144,7 @@ _TAN_ARG_CLAMP = 1e30
 
 def _sqrt_abs_k(k: Curvature) -> Float[Array, ""]:
     """``√|k|`` floored to ``√MIN_NORM`` so ``1/√|k|`` never diverges (NaN-safe unselected branch)."""
-    return jnp.sqrt(jnp.maximum(jnp.abs(jnp.asarray(k)), MIN_NORM))
+    return jnp.sqrt(floor_at(jnp.abs(jnp.asarray(k)), MIN_NORM))
 
 
 def _tan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
@@ -156,7 +156,7 @@ def _tan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..
     ``0·inf = NaN`` — a value NaN in flat space). The clamp keeps even *discarded* evaluations finite
     under ``jnp.where``'s two-sided VJP; it sits far above the ``_TAYLOR_MAX_U`` gate, so selected
     values are never affected."""
-    u = jnp.clip(jnp.asarray(k) * x**2, -_TAYLOR_U_CLIP, _TAYLOR_U_CLIP)
+    u = clamp_to(jnp.asarray(k) * x**2, -_TAYLOR_U_CLIP, _TAYLOR_U_CLIP)
     poly = 1.0 + u * (1.0 / 3.0 + u * (2.0 / 15.0 + u * (17.0 / 315.0 + u * (62.0 / 2835.0 + u * (1382.0 / 155925.0)))))
     return x * poly
 
@@ -164,7 +164,7 @@ def _tan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..
 def _artan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     """Order-5 Maclaurin series of ``artan_k`` in the signed ``u = k·x²`` (Horner form); equals both
     branches as ``k → 0``. Same u-form/clamp rationale as :func:`_tan_k_zero_taylor`."""
-    u = jnp.clip(jnp.asarray(k) * x**2, -_TAYLOR_U_CLIP, _TAYLOR_U_CLIP)
+    u = clamp_to(jnp.asarray(k) * x**2, -_TAYLOR_U_CLIP, _TAYLOR_U_CLIP)
     poly = 1.0 - u * (1.0 / 3.0 - u * (1.0 / 5.0 - u * (1.0 / 7.0 - u * (1.0 / 9.0 - u * (1.0 / 11.0)))))
     return x * poly
 
@@ -183,7 +183,7 @@ def _tan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
     sqrt_abs_k = _sqrt_abs_k(k)
     scaled = sqrt_abs_k * x
     neg = tanh(scaled) / sqrt_abs_k
-    pos = jnp.tan(jnp.clip(scaled, -_TAN_ARG_CLAMP, _TAN_ARG_CLAMP)) / sqrt_abs_k
+    pos = jnp.tan(clamp_to(scaled, -_TAN_ARG_CLAMP, _TAN_ARG_CLAMP)) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
     return jnp.where(_use_taylor(x, k), _tan_k_zero_taylor(x, k), nonzero)
 

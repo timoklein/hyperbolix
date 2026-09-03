@@ -68,7 +68,7 @@ import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, acosh, atanh, cosh, sinh, smooth_clamp, tanh
+from ..utils.math_utils import MIN_NORM, acosh, atanh, cap_at, cosh, floor_at, sinh, smooth_clamp, tanh
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
@@ -129,7 +129,7 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curva
     xy = jnp.dot(x, y)
     # Safe norm: finite gradient at x == y (norm's VJP at 0 is 0/0 = NaN)
     num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
-    denom = jnp.sqrt(jnp.maximum(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
+    denom = jnp.sqrt(floor_at(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
     xysum_norm = num / denom
     dist_c = atanh(sqrt_c * xysum_norm)
     return 2 * dist_c / sqrt_c
@@ -193,7 +193,7 @@ def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvatur
     # terms (Cauchy-Schwarz ⇒ Gram det ≥ 0), so no catastrophic cancellation near the boundary.
     # At x=y the Gram term is exactly 0, so G = 1 - c‖x‖² = denom and δ(x,x)=0 to machine precision.
     gram = x2 * y2 - xy**2  # ‖x‖²‖y‖² - ⟨x,y⟩² ≥ 0 (squared area of the x,y parallelogram)
-    G = jnp.sqrt(jnp.maximum((1.0 - c * xy) ** 2 + c**2 * gram, MIN_NORM))
+    G = jnp.sqrt(floor_at((1.0 - c * xy) ** 2 + c**2 * gram, MIN_NORM))
     num = sqrt_c * jnp.linalg.norm(x - y) + G
     # Denominator 1 - c‖y‖² = 2/λ(y); reuse the already-clamped conformal factor so the
     # near-boundary floor matches the rest of the module (δ → ∞ as y → ∂ball is expected).
@@ -320,7 +320,7 @@ def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     # binds; where it does not (very small c) the wrapper only shrinks t further, which can never
     # break the ‖res‖ ≤ max_norm bound. _max_norm takes c_norm_prod only for its dtype — the dtype
     # the removed _proj would have seen on `res`.
-    t = jnp.minimum(tanh(c_norm_prod), sqrt_c * _max_norm(c_norm_prod, c))
+    t = cap_at(tanh(c_norm_prod), sqrt_c * _max_norm(c_norm_prod, c))
     res = t / c_norm_prod * v
     return res
 
@@ -364,9 +364,9 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     # Safe norm: finite gradient at x == y (raw norm's VJP at 0 is 0/0 = NaN). Identical quantity
     # and form to _dist_mobius_direct's num — keep the two consistent.
     num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
-    denom = jnp.sqrt(jnp.maximum(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
+    denom = jnp.sqrt(floor_at(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
     sub_norm = num / denom
-    c_norm_prod = jnp.maximum(jnp.sqrt(c) * sub_norm, MIN_NORM)
+    c_norm_prod = floor_at(jnp.sqrt(c) * sub_norm, MIN_NORM)
     lambda_x = _conformal_factor(x, c)
     res = 2 * atanh(c_norm_prod) / (c_norm_prod * lambda_x) * sub
     return res
@@ -676,7 +676,7 @@ def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> F
     """
     sqrt_c = jnp.sqrt(c)
     num = jnp.sum((v - sqrt_c * x) ** 2)
-    denom = jnp.maximum(1.0 - c * jnp.dot(x, x), MIN_NORM)
+    denom = floor_at(1.0 - c * jnp.dot(x, x), MIN_NORM)
     return jnp.log(num / denom) / sqrt_c
 
 

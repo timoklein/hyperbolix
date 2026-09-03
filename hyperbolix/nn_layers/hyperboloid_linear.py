@@ -26,7 +26,7 @@ from hyperbolix.manifolds import Manifold
 # has a finite VJP at zero input, unlike linalg.norm, whose 0/0 NaN survives any
 # post-hoc jnp.where masking. Imported (not redefined) so there is one value.
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import MIN_NORM, capped_exp
+from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, floor_at
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import MATMUL_PRECISION, build_spacelike_V, htc, sinh_lift_to_hyperboloid
@@ -157,7 +157,7 @@ def _fhnn_forward(
     # Safe norm: finite gradient at zero spatial input (linalg.norm's VJP at 0
     # is NaN and survives both the maximum() and the jnp.where below).
     z_rem_norm_B1 = jnp.sqrt(jnp.sum(z_rem_BD**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (B, 1)
-    z_rem_norm_safe_B1 = jnp.maximum(z_rem_norm_B1, eps)  # avoid division by zero
+    z_rem_norm_safe_B1 = floor_at(z_rem_norm_B1, eps)  # avoid division by zero
     y_rem_BD = target_norm_B1 / z_rem_norm_safe_B1 * z_rem_BD  # (B, D)
 
     # Concatenate time and spatial

@@ -62,6 +62,7 @@ from ..manifolds.isometry_mappings import hyperboloid_to_poincare, poincare_to_h
 from ..manifolds.poincare import VERSION_MOBIUS_DIRECT, _dist, _egrad2rgrad
 from ..manifolds.protocol import Curvature
 from ..utils.helpers import compute_pairwise_distances
+from ..utils.math_utils import cap_at, floor_at
 
 # Probability floor / sum guard for P and Q — sklearn's MACHINE_EPSILON semantics: always
 # float64 eps, independent of the compute dtype. Flooring at float32 eps (1.19e-7) instead
@@ -115,7 +116,7 @@ def conditional_probabilities(
     def _row_entropy(beta_N: Float[Array, "N"]) -> tuple[Float[Array, "N N"], Float[Array, "N"], Float[Array, "N"]]:
         # Unnormalized similarities exp(-d²·β), diagonal masked to 0.
         p_NN = jnp.where(offdiag_NN, jnp.exp(-d2_NN * beta_N[:, None]), 0.0)
-        sum_p_N = jnp.maximum(jnp.sum(p_NN, axis=1), eps)
+        sum_p_N = floor_at(jnp.sum(p_NN, axis=1), eps)
         # H(Pᵢ) = ln(Σ pᵢ) + βᵢ·Σ(d²·pᵢ)/Σ pᵢ  (Shannon entropy of the normalized row, nats).
         entropy_N = jnp.log(sum_p_N) + beta_N * jnp.sum(d2_NN * p_NN, axis=1) / sum_p_N
         return p_NN, sum_p_N, entropy_N
@@ -130,7 +131,7 @@ def conditional_probabilities(
         # Clamp the doubling: with coincident points the target entropy can be unreachable from
         # above, so β doubles every step — unclamped it overflows to inf and 0·inf = NaN on the
         # zero-distance entries (float32 reaches inf at ~128 doublings).
-        beta_capped_N = jnp.minimum(beta_N * 2.0, jnp.asarray(jnp.finfo(dtype).max / 4.0, dtype=dtype))
+        beta_capped_N = cap_at(beta_N * 2.0, jnp.asarray(jnp.finfo(dtype).max / 4.0, dtype=dtype))
         beta_up_N = jnp.where(jnp.isinf(beta_max_N), beta_capped_N, (beta_N + beta_max_N) / 2.0)
         beta_down_N = jnp.where(jnp.isinf(beta_min_N), beta_N / 2.0, (beta_N + beta_min_N) / 2.0)
         new_beta_N = jnp.where(too_high_N, beta_up_N, beta_down_N)
@@ -163,9 +164,9 @@ def joint_probabilities(
     n_points = dist_NN.shape[0]
     cond_NN = conditional_probabilities(dist_NN, perplexity)
     p_NN = cond_NN + cond_NN.T
-    p_NN = p_NN / jnp.maximum(jnp.sum(p_NN), eps)
+    p_NN = p_NN / floor_at(jnp.sum(p_NN), eps)
     offdiag_NN = ~jnp.eye(n_points, dtype=bool)
-    return jnp.where(offdiag_NN, jnp.maximum(p_NN, eps), 0.0)
+    return jnp.where(offdiag_NN, floor_at(p_NN, eps), 0.0)
 
 
 # -------------------------------------------------------------------------------------
@@ -219,8 +220,8 @@ def low_dim_probabilities(
 
     offdiag_NN = ~jnp.eye(n_points, dtype=bool)
     kernel_NN = jnp.where(offdiag_NN, kernel_NN, 0.0)  # zero diagonal BEFORE normalizing
-    sum_kernel = jnp.maximum(jnp.sum(kernel_NN), eps)
-    return jnp.where(offdiag_NN, jnp.maximum(kernel_NN / sum_kernel, eps), 0.0)
+    sum_kernel = floor_at(jnp.sum(kernel_NN), eps)
+    return jnp.where(offdiag_NN, floor_at(kernel_NN / sum_kernel, eps), 0.0)
 
 
 # -------------------------------------------------------------------------------------
