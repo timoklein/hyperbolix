@@ -1245,20 +1245,26 @@ def _compute_mlr(
     """
     sqrt_c = jnp.sqrt(c)
     sqrt_cr_1P = sqrt_c * r.T  # r:(P,1) → r.T:(1,P)
-    # The floor is a `where` on a comparison against the constant, not `clip`/`jnp.maximum`.
-    # `jnp.maximum(n, eps)` carries the tie-breaking JVP `g * [n == ans] / (1 + [eps == ans])`
-    # (jax's `_balanced_eq`), which tests the *operand* for bit equality with the *result*. That
-    # is safe only while both are the same value in the compiled graph. XLA:GPU emits
-    # `n = sqrt(sum(z*z))` twice here — once as its own fusion, once recomputed inside the
-    # backward fusion — and its per-process fusion autotuner may pick different emitters for the
-    # two (NATIVE_EMITTER vs BLOCK_LEVEL_EMITTER/Triton). The two copies then differ by 1 ulp,
-    # `[n == ans]` is false, and the entire `d‖z‖` branch of the gradient is silently zeroed for
-    # that output row — measured 1.0e-2 relative on `test_gradient_contract[linear_plfc-f32]`,
-    # firing in ~2 of 3 process launches on an A100. `floor_at` compares `n` against `min_enorm`
-    # (0.027 vs 1e-15 here), which no 1-ulp disagreement can flip. Forward values and the CPU
-    # gradient are bit-identical; only NaN input differs from the pre-sweep `.clip(min=...)`
-    # spelling if the comparison direction is flipped — `floor_at` keeps `maximum`'s propagation.
-    z_enorm_P1 = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True)  # (P,1)
+    # `safe_norm`, not `jnp.linalg.norm`: an all-zero hyperplane normal (one dead output channel,
+    # or a class that was pruned to zero) is a perfectly ordinary input here, and `linalg.norm`'s
+    # VJP at the zero vector is `z/‖z‖ = 0/0 = NaN`. The floor below cannot remove that — the NaN
+    # is created inside the norm's own VJP, and the `where`'s zero cotangent meets it as
+    # `0 * NaN = NaN`, poisoning the whole kernel gradient, not just that row. `safe_norm`'s
+    # double-`where` gives an exact 0 value and an exactly-zero VJP there, so the dead row simply
+    # receives no gradient.
+    # The floor itself is `floor_at` — a `where` on a comparison against the constant — not
+    # `clip`/`jnp.maximum`. `jnp.maximum(n, eps)` carries the tie-breaking JVP
+    # `g * [n == ans] / (1 + [eps == ans])` (jax's `_balanced_eq`), which tests the *operand* for
+    # bit equality with the *result*. That is safe only while both are the same value in the
+    # compiled graph. XLA:GPU emits `n = sqrt(sum(z*z))` twice here — once as its own fusion, once
+    # recomputed inside the backward fusion — and its per-process fusion autotuner may pick
+    # different emitters for the two (NATIVE_EMITTER vs BLOCK_LEVEL_EMITTER/Triton). The two copies
+    # then differ by 1 ulp, `[n == ans]` is false, and the entire `d‖z‖` branch of the gradient is
+    # silently zeroed for that output row — measured 1.0e-2 relative on
+    # `test_gradient_contract[linear_plfc-f32]`, firing in ~2 of 3 process launches on an A100.
+    # `floor_at` compares `n` against `min_enorm` (0.027 vs 1e-15 here), which no 1-ulp
+    # disagreement can flip, and keeps `maximum`'s NaN propagation.
+    z_enorm_P1 = safe_norm(z)[:, None]  # (P,1)
     z_norm_1P = floor_at(z_enorm_P1, min_enorm).T  # (1,P)
     x0_B1 = x[:, 0:1]  # time coordinate
     x_rem_BD = x[:, 1:]  # space coordinates, D = in_dim-1

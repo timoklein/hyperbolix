@@ -163,3 +163,72 @@ def test_linear_then_regression_poincare(dtype):
     assert y.shape == (batch_size, out_dim)
     # Check output is finite
     assert jnp.isfinite(y).all()
+
+
+# --------------------------------------------------------------------------- #
+# Zero-row hyperplane normal (a dead output channel)
+#
+# Both MLR helpers divide by the Euclidean norm of the per-class hyperplane
+# normal and floor that norm. The floor makes the *forward* value finite, but a
+# bare ``jnp.linalg.norm`` has VJP ``z/‖z‖ = 0/0 = NaN`` at the zero vector, and
+# the floor cannot remove it: the NaN is created inside the norm's own VJP and
+# the floor's zero cotangent meets it as ``0 * NaN = NaN``, which then poisons
+# the gradient of *every* row, not just the dead one. ``safe_norm``'s
+# double-``where`` gives an exact 0 value and an exactly-zero VJP there.
+# --------------------------------------------------------------------------- #
+_ZERO_ROW = 1
+
+
+@pytest.mark.parametrize("jit", [False, True], ids=["eager", "jit"])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyperboloid_mlr_gradient_finite_with_a_zero_normal_row(dtype, jit):
+    """``compute_mlr``: an exactly-zero row of ``z`` gives a finite gradient, zero on that row."""
+    c, batch, dim, out_dim = 1.0, 6, 4, 3
+    manifold = get_hyperboloid(dtype)
+
+    key_x, key_z, key_r = jax.random.split(jax.random.PRNGKey(0), 3)
+    spatial_BD = jax.random.normal(key_x, (batch, dim), dtype=dtype) * 0.5
+    x_BA = jax.vmap(manifold.proj, in_axes=(0, None))(jnp.concatenate([jnp.zeros((batch, 1), dtype), spatial_BD], axis=-1), c)
+    z_PD = jax.random.normal(key_z, (out_dim, dim), dtype=dtype).at[_ZERO_ROW].set(0.0)
+    r_P1 = jax.random.normal(key_r, (out_dim, 1), dtype=dtype) * 0.3
+
+    def loss(z):
+        return jnp.sum(manifold.compute_mlr(x_BA, z, r_P1, c, 1.0, 50.0) ** 2)
+
+    grad_fn = jax.jit(jax.grad(loss)) if jit else jax.grad(loss)
+    g_PD = grad_fn(z_PD)
+
+    assert jnp.isfinite(g_PD).all(), f"non-finite gradient with a zero normal row: {g_PD}"
+    # The norm branch contributes exactly nothing (``safe_norm``'s VJP at 0 is 0). What is left
+    # for the dead row is the genuine ``d⟨x_s, z⟩`` path, which is real but scaled by the whole
+    # expression's ``min_enorm`` prefactor: measured max |g| 1.8e-15 (f32) / 3.0e-15 (f64) here,
+    # against ~10 for the live rows. So this bound is "the dead row is inert", not a tolerance.
+    assert jnp.max(jnp.abs(g_PD[_ZERO_ROW])) < 1e-12, f"zero row is not inert: {g_PD[_ZERO_ROW]}"
+    # The live rows must still get a real gradient — a finite-but-all-zero result would
+    # pass the two assertions above while being just as broken.
+    assert jnp.max(jnp.abs(jnp.delete(g_PD, _ZERO_ROW, axis=0))) > 1e-3
+
+
+@pytest.mark.parametrize("jit", [False, True], ids=["eager", "jit"])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_poincare_regression_gradient_finite_with_a_zero_normal_row(dtype, jit):
+    """``HypRegressionPoincare``: an exactly-zero row of ``a`` gives a finite gradient."""
+    c, batch, in_dim, out_dim = 1.0, 6, 4, 3
+    manifold = get_poincare(dtype)
+    layer = HypRegressionPoincare(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), param_dtype=dtype)
+
+    x_BD = jax.vmap(manifold.proj, in_axes=(0, None))(
+        jax.random.normal(jax.random.PRNGKey(0), (batch, in_dim), dtype=dtype) * 0.5, c
+    )
+    a_PD = jnp.asarray(layer.kernel[...]).at[_ZERO_ROW].set(0.0)
+    p_PD = jax.vmap(manifold.proj, in_axes=(0, None))(jnp.asarray(layer.bias[...]), c)
+
+    def loss(a):
+        return jnp.sum(layer._compute_mlr(x_BD, a, p_PD, c) ** 2)
+
+    grad_fn = jax.jit(jax.grad(loss)) if jit else jax.grad(loss)
+    g_PD = grad_fn(a_PD)
+
+    assert jnp.isfinite(g_PD).all(), f"non-finite gradient with a zero normal row: {g_PD}"
+    assert jnp.all(g_PD[_ZERO_ROW] == 0.0), f"zero row must receive an exactly-zero gradient: {g_PD[_ZERO_ROW]}"
+    assert jnp.any(jnp.abs(jnp.delete(g_PD, _ZERO_ROW, axis=0)) > 0.0)
