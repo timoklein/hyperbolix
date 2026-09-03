@@ -80,12 +80,14 @@ def _proj_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... d
     Same clamp as :func:`_proj`, applied along the last axis, so
     ``_proj_batch(X, c)[i] == _proj(X[i], c)`` elementwise. Mirrors
     ``Hyperboloid._proj_batch`` and the ``_conformal_factor_batch`` helper below.
+
+    The bound comes from :func:`_max_norm`, which is the expression this used to inline verbatim —
+    it reads only ``x``'s dtype, so it is a scalar either way and the clamp is bit-identical (probed
+    over a (64, 16) batch, both dtypes, ``c`` in {0.3, 1, 2.5}, rows inside and past the boundary).
     """
-    max_norm_eps = _get_max_norm_eps(x)
     # Safe norm: sqrt(||x||² + eps²) avoids NaN gradients at x=0.
     norm = jnp.sqrt(jnp.sum(x**2, axis=-1, keepdims=True) + MIN_NORM**2)  # (..., 1)
-    sqrt_abs_c = jnp.sqrt(floor_at(jnp.abs(jnp.asarray(c)), MIN_NORM))
-    max_norm = jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
+    max_norm = _max_norm(x, c)
     cond = norm > max_norm
     return jnp.where(cond, x * (max_norm / norm), x)
 

@@ -107,7 +107,11 @@ def _scalar_mul(r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, 
     # is 0/0 = NaN, and 0-cotangent · NaN is still NaN.
     x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
     c_norm_prod = jnp.sqrt(c) * x_norm
-    res = jnp.tanh(r * atanh(c_norm_prod)) / c_norm_prod * x
+    # `tanh` is the math_utils wrapper (matching _expmap_0 and _expmap), not XLA's kernel: more
+    # accurate in float32, and its ±(1 - 10·eps) output clip pairs with `atanh`'s own domain guard
+    # so a round trip through the two cannot reach the pole. The trailing _proj still bounds the
+    # result, so the clip is at worst redundant here.
+    res = tanh(r * atanh(c_norm_prod)) / c_norm_prod * x
     res = _proj(res, c)
     return res
 
@@ -316,7 +320,10 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     lambda_x = _conformal_factor(x, c)
     # ||second_term|| = |tanh(·)|/√c < 1/√c, i.e. strictly inside the ball, so an explicit _proj
     # here is a no-op in the valid regime; _addition re-projects its output regardless. Skip it.
-    second_term = jnp.tanh(c_norm_prod * lambda_x / 2) / c_norm_prod * v
+    # `tanh` is the math_utils wrapper, matching _expmap_0 and _scalar_mul: it is more accurate
+    # than XLA's kernel (expm1 form above the dtype seam, odd Maclaurin series below it in float32)
+    # and its ±(1 - 10·eps) output clip only tightens the strict inequality above.
+    second_term = tanh(c_norm_prod * lambda_x / 2) / c_norm_prod * v
     res = _addition(x, second_term, c)
     return res
 
