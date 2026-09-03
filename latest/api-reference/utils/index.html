@@ -2049,7 +2049,17 @@ sign of <code>x</code>. The plain (non-odd) rewrite <code>0.5*log1p(2x/(1-x))</c
 <code>jnp.sign(x)*...</code> spelling is also wrong (its product-rule gradient at <code>x == 0</code> collapses
 to 0 instead of the analytic 1). This form measures at max 2.8 ulps (f64, both signs),
 bit-identical to the builtin at the clip boundary, exact gradients, and ~1.7x faster than
-<code>jnp.atanh</code> (one <code>log1p</code> instead of two).</p>
+<code>jnp.atanh</code> (one <code>log1p</code> instead of two). Upstream fixed the <code>log1p</code> hole in jax 0.11.1
+(openxla/xla#46765, jax-ml/jax#39707), but the rewrite is kept: it costs nothing, and it is
+what protects users still on jax &lt;= 0.11.0.</p>
+<p>Below <code>|x| = 1/8</code> <strong>in float32</strong> the <code>log1p</code> form is replaced by the odd Maclaurin series
+<code>x + x^3/3 + x^5/5 + x^7/7 + x^9/9</code> (Horner in <code>x**2</code>, evaluated on <code>x</code> itself so it is
+odd by construction). The series is exact to float32 rounding there — the first dropped term
+is <code>x^11/11</code>, 1.1e-11 relative at <code>x = 1/8</code> against a float32 eps of 1.2e-7 — and it
+removes the rounding that the division <code>2|x|/(1 - |x|)</code> costs the <code>log1p</code> form near zero.
+Measured on 20k log-uniform float32 inputs in <code>[1e-4, 0.125]</code>: max ulp 3 -&gt; 1 (mean 0.48 -&gt;
+0.33) on XLA GPU, 2 -&gt; 1 (mean 0.28 -&gt; 0.33) on XLA CPU. float64 keeps the <code>log1p</code> form on
+the whole domain: 1.1e-11 relative is ~5e4 float64 ulps, so the series is unusable there.</p>
 <p>Args:
     x: Input array of any shape</p>
 <p>Returns:
@@ -2058,25 +2068,7 @@ bit-identical to the builtin at the clip boundary, exact gradients, and ~1.7x fa
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/utils/math_utils.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-429">429</a></span>
-<span class="normal"><a href="#__codelineno-0-430">430</a></span>
-<span class="normal"><a href="#__codelineno-0-431">431</a></span>
-<span class="normal"><a href="#__codelineno-0-432">432</a></span>
-<span class="normal"><a href="#__codelineno-0-433">433</a></span>
-<span class="normal"><a href="#__codelineno-0-434">434</a></span>
-<span class="normal"><a href="#__codelineno-0-435">435</a></span>
-<span class="normal"><a href="#__codelineno-0-436">436</a></span>
-<span class="normal"><a href="#__codelineno-0-437">437</a></span>
-<span class="normal"><a href="#__codelineno-0-438">438</a></span>
-<span class="normal"><a href="#__codelineno-0-439">439</a></span>
-<span class="normal"><a href="#__codelineno-0-440">440</a></span>
-<span class="normal"><a href="#__codelineno-0-441">441</a></span>
-<span class="normal"><a href="#__codelineno-0-442">442</a></span>
-<span class="normal"><a href="#__codelineno-0-443">443</a></span>
-<span class="normal"><a href="#__codelineno-0-444">444</a></span>
-<span class="normal"><a href="#__codelineno-0-445">445</a></span>
-<span class="normal"><a href="#__codelineno-0-446">446</a></span>
-<span class="normal"><a href="#__codelineno-0-447">447</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-447">447</a></span>
 <span class="normal"><a href="#__codelineno-0-448">448</a></span>
 <span class="normal"><a href="#__codelineno-0-449">449</a></span>
 <span class="normal"><a href="#__codelineno-0-450">450</a></span>
@@ -2097,46 +2089,108 @@ bit-identical to the builtin at the clip boundary, exact gradients, and ~1.7x fa
 <span class="normal"><a href="#__codelineno-0-465">465</a></span>
 <span class="normal"><a href="#__codelineno-0-466">466</a></span>
 <span class="normal"><a href="#__codelineno-0-467">467</a></span>
-<span class="normal"><a href="#__codelineno-0-468">468</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-429"><a id="__codelineno-0-429" name="__codelineno-0-429"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
-</span><span id="__span-0-430"><a id="__codelineno-0-430" name="__codelineno-0-430"></a><span class="k">def</span><span class="w"> </span><span class="nf">atanh</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-431"><a id="__codelineno-0-431" name="__codelineno-0-431"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Inverse hyperbolic tangent with domain clamping. Domain=(-1, 1).</span>
-</span><span id="__span-0-432"><a id="__codelineno-0-432" name="__codelineno-0-432"></a>
-</span><span id="__span-0-433"><a id="__codelineno-0-433" name="__codelineno-0-433"></a><span class="sd">    Clamps input to ``±(1 - 10*machine_eps)``. The factor 10 keeps the</span>
-</span><span id="__span-0-434"><a id="__codelineno-0-434" name="__codelineno-0-434"></a><span class="sd">    clamped value safely representable away from ±1.0 (where the float grid</span>
-</span><span id="__span-0-435"><a id="__codelineno-0-435" name="__codelineno-0-435"></a><span class="sd">    is coarsest) and bounds ``atanh&#39;`` at ~1/(2*margin) instead of letting</span>
-</span><span id="__span-0-436"><a id="__codelineno-0-436" name="__codelineno-0-436"></a><span class="sd">    inputs ride the last representable value before the singularity.</span>
-</span><span id="__span-0-437"><a id="__codelineno-0-437" name="__codelineno-0-437"></a>
-</span><span id="__span-0-438"><a id="__codelineno-0-438" name="__codelineno-0-438"></a><span class="sd">    XLA evaluates ``jnp.atanh`` as ``0.5*(log1p(x) - log1p(-x))``, and XLA&#39;s CPU float64</span>
-</span><span id="__span-0-439"><a id="__codelineno-0-439" name="__codelineno-0-439"></a><span class="sd">    ``log1p`` is up to ~129 ulps off for arguments in ``[-0.53, -0.28]`` (NumPy&#39;s ``log1p`` is &lt;1</span>
-</span><span id="__span-0-440"><a id="__codelineno-0-440" name="__codelineno-0-440"></a><span class="sd">    ulp there) — ``jnp.atanh`` inherits ~129 ulp error for ``x`` in ~``[0.28, 0.53]``, peaking at</span>
-</span><span id="__span-0-441"><a id="__codelineno-0-441" name="__codelineno-0-441"></a><span class="sd">    ``sqrt(2) - 1``. Float32 is unaffected. The single-log1p identity</span>
-</span><span id="__span-0-442"><a id="__codelineno-0-442" name="__codelineno-0-442"></a><span class="sd">    ``atanh(|x|) = 0.5*log1p(2|x|/(1 - |x|))``, computed on ``|x|`` with the sign restored via</span>
-</span><span id="__span-0-443"><a id="__codelineno-0-443" name="__codelineno-0-443"></a><span class="sd">    ``jnp.where``, keeps the ``log1p`` argument non-negative (outside the bad window) for either</span>
-</span><span id="__span-0-444"><a id="__codelineno-0-444" name="__codelineno-0-444"></a><span class="sd">    sign of ``x``. The plain (non-odd) rewrite ``0.5*log1p(2x/(1-x))`` is wrong for negative ``x``</span>
-</span><span id="__span-0-445"><a id="__codelineno-0-445" name="__codelineno-0-445"></a><span class="sd">    — its inner argument re-enters the bad ``log1p`` window and still errs by ~211 ulps; a</span>
-</span><span id="__span-0-446"><a id="__codelineno-0-446" name="__codelineno-0-446"></a><span class="sd">    ``jnp.sign(x)*...`` spelling is also wrong (its product-rule gradient at ``x == 0`` collapses</span>
-</span><span id="__span-0-447"><a id="__codelineno-0-447" name="__codelineno-0-447"></a><span class="sd">    to 0 instead of the analytic 1). This form measures at max 2.8 ulps (f64, both signs),</span>
-</span><span id="__span-0-448"><a id="__codelineno-0-448" name="__codelineno-0-448"></a><span class="sd">    bit-identical to the builtin at the clip boundary, exact gradients, and ~1.7x faster than</span>
-</span><span id="__span-0-449"><a id="__codelineno-0-449" name="__codelineno-0-449"></a><span class="sd">    ``jnp.atanh`` (one ``log1p`` instead of two).</span>
+<span class="normal"><a href="#__codelineno-0-468">468</a></span>
+<span class="normal"><a href="#__codelineno-0-469">469</a></span>
+<span class="normal"><a href="#__codelineno-0-470">470</a></span>
+<span class="normal"><a href="#__codelineno-0-471">471</a></span>
+<span class="normal"><a href="#__codelineno-0-472">472</a></span>
+<span class="normal"><a href="#__codelineno-0-473">473</a></span>
+<span class="normal"><a href="#__codelineno-0-474">474</a></span>
+<span class="normal"><a href="#__codelineno-0-475">475</a></span>
+<span class="normal"><a href="#__codelineno-0-476">476</a></span>
+<span class="normal"><a href="#__codelineno-0-477">477</a></span>
+<span class="normal"><a href="#__codelineno-0-478">478</a></span>
+<span class="normal"><a href="#__codelineno-0-479">479</a></span>
+<span class="normal"><a href="#__codelineno-0-480">480</a></span>
+<span class="normal"><a href="#__codelineno-0-481">481</a></span>
+<span class="normal"><a href="#__codelineno-0-482">482</a></span>
+<span class="normal"><a href="#__codelineno-0-483">483</a></span>
+<span class="normal"><a href="#__codelineno-0-484">484</a></span>
+<span class="normal"><a href="#__codelineno-0-485">485</a></span>
+<span class="normal"><a href="#__codelineno-0-486">486</a></span>
+<span class="normal"><a href="#__codelineno-0-487">487</a></span>
+<span class="normal"><a href="#__codelineno-0-488">488</a></span>
+<span class="normal"><a href="#__codelineno-0-489">489</a></span>
+<span class="normal"><a href="#__codelineno-0-490">490</a></span>
+<span class="normal"><a href="#__codelineno-0-491">491</a></span>
+<span class="normal"><a href="#__codelineno-0-492">492</a></span>
+<span class="normal"><a href="#__codelineno-0-493">493</a></span>
+<span class="normal"><a href="#__codelineno-0-494">494</a></span>
+<span class="normal"><a href="#__codelineno-0-495">495</a></span>
+<span class="normal"><a href="#__codelineno-0-496">496</a></span>
+<span class="normal"><a href="#__codelineno-0-497">497</a></span>
+<span class="normal"><a href="#__codelineno-0-498">498</a></span>
+<span class="normal"><a href="#__codelineno-0-499">499</a></span>
+<span class="normal"><a href="#__codelineno-0-500">500</a></span>
+<span class="normal"><a href="#__codelineno-0-501">501</a></span>
+<span class="normal"><a href="#__codelineno-0-502">502</a></span>
+<span class="normal"><a href="#__codelineno-0-503">503</a></span>
+<span class="normal"><a href="#__codelineno-0-504">504</a></span>
+<span class="normal"><a href="#__codelineno-0-505">505</a></span>
+<span class="normal"><a href="#__codelineno-0-506">506</a></span>
+<span class="normal"><a href="#__codelineno-0-507">507</a></span>
+<span class="normal"><a href="#__codelineno-0-508">508</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-447"><a id="__codelineno-0-447" name="__codelineno-0-447"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
+</span><span id="__span-0-448"><a id="__codelineno-0-448" name="__codelineno-0-448"></a><span class="k">def</span><span class="w"> </span><span class="nf">atanh</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-449"><a id="__codelineno-0-449" name="__codelineno-0-449"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Inverse hyperbolic tangent with domain clamping. Domain=(-1, 1).</span>
 </span><span id="__span-0-450"><a id="__codelineno-0-450" name="__codelineno-0-450"></a>
-</span><span id="__span-0-451"><a id="__codelineno-0-451" name="__codelineno-0-451"></a><span class="sd">    Args:</span>
-</span><span id="__span-0-452"><a id="__codelineno-0-452" name="__codelineno-0-452"></a><span class="sd">        x: Input array of any shape</span>
-</span><span id="__span-0-453"><a id="__codelineno-0-453" name="__codelineno-0-453"></a>
-</span><span id="__span-0-454"><a id="__codelineno-0-454" name="__codelineno-0-454"></a><span class="sd">    Returns:</span>
-</span><span id="__span-0-455"><a id="__codelineno-0-455" name="__codelineno-0-455"></a><span class="sd">        atanh(x) with domain and gradient protection</span>
-</span><span id="__span-0-456"><a id="__codelineno-0-456" name="__codelineno-0-456"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-457"><a id="__codelineno-0-457" name="__codelineno-0-457"></a>    <span class="n">eps</span> <span class="o">=</span> <span class="mf">10.0</span> <span class="o">*</span> <span class="nb">float</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
-</span><span id="__span-0-458"><a id="__codelineno-0-458" name="__codelineno-0-458"></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="o">-</span><span class="mf">1.0</span> <span class="o">+</span> <span class="n">eps</span><span class="p">,</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">eps</span><span class="p">)</span>
-</span><span id="__span-0-459"><a id="__codelineno-0-459" name="__codelineno-0-459"></a>    <span class="c1"># XLA evaluates jnp.atanh as 0.5*(log1p(x) - log1p(-x)), and XLA&#39;s float64 log1p is up to</span>
-</span><span id="__span-0-460"><a id="__codelineno-0-460" name="__codelineno-0-460"></a>    <span class="c1"># ~129 ulps off for arguments in [-0.53, -0.28] (numpy&#39;s: &lt;1 ulp) — jnp.atanh inherits this</span>
-</span><span id="__span-0-461"><a id="__codelineno-0-461" name="__codelineno-0-461"></a>    <span class="c1"># for x in ~[0.28, 0.53], peaking at sqrt(2)-1. The single-log1p identity</span>
-</span><span id="__span-0-462"><a id="__codelineno-0-462" name="__codelineno-0-462"></a>    <span class="c1"># atanh(|x|) = 0.5*log1p(2|x|/(1 - |x|)) keeps the log1p argument non-negative (outside the</span>
-</span><span id="__span-0-463"><a id="__codelineno-0-463" name="__codelineno-0-463"></a>    <span class="c1"># bad window) for either sign of x; restoring the sign via where (not sign(x)*...) keeps</span>
-</span><span id="__span-0-464"><a id="__codelineno-0-464" name="__codelineno-0-464"></a>    <span class="c1"># the gradient at x == 0 exact. Measured: 129 -&gt; 2.8 ulps max (f64), value- and</span>
-</span><span id="__span-0-465"><a id="__codelineno-0-465" name="__codelineno-0-465"></a>    <span class="c1"># gradient-identical at the clip boundary, and ~1.7x faster (one log1p instead of two).</span>
-</span><span id="__span-0-466"><a id="__codelineno-0-466" name="__codelineno-0-466"></a>    <span class="n">abs_x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-</span><span id="__span-0-467"><a id="__codelineno-0-467" name="__codelineno-0-467"></a>    <span class="n">half_log1p</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log1p</span><span class="p">(</span><span class="mf">2.0</span> <span class="o">*</span> <span class="n">abs_x</span> <span class="o">/</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">abs_x</span><span class="p">))</span>
-</span><span id="__span-0-468"><a id="__codelineno-0-468" name="__codelineno-0-468"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">x</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">half_log1p</span><span class="p">,</span> <span class="o">-</span><span class="n">half_log1p</span><span class="p">)</span>
+</span><span id="__span-0-451"><a id="__codelineno-0-451" name="__codelineno-0-451"></a><span class="sd">    Clamps input to ``±(1 - 10*machine_eps)``. The factor 10 keeps the</span>
+</span><span id="__span-0-452"><a id="__codelineno-0-452" name="__codelineno-0-452"></a><span class="sd">    clamped value safely representable away from ±1.0 (where the float grid</span>
+</span><span id="__span-0-453"><a id="__codelineno-0-453" name="__codelineno-0-453"></a><span class="sd">    is coarsest) and bounds ``atanh&#39;`` at ~1/(2*margin) instead of letting</span>
+</span><span id="__span-0-454"><a id="__codelineno-0-454" name="__codelineno-0-454"></a><span class="sd">    inputs ride the last representable value before the singularity.</span>
+</span><span id="__span-0-455"><a id="__codelineno-0-455" name="__codelineno-0-455"></a>
+</span><span id="__span-0-456"><a id="__codelineno-0-456" name="__codelineno-0-456"></a><span class="sd">    XLA evaluates ``jnp.atanh`` as ``0.5*(log1p(x) - log1p(-x))``, and XLA&#39;s CPU float64</span>
+</span><span id="__span-0-457"><a id="__codelineno-0-457" name="__codelineno-0-457"></a><span class="sd">    ``log1p`` is up to ~129 ulps off for arguments in ``[-0.53, -0.28]`` (NumPy&#39;s ``log1p`` is &lt;1</span>
+</span><span id="__span-0-458"><a id="__codelineno-0-458" name="__codelineno-0-458"></a><span class="sd">    ulp there) — ``jnp.atanh`` inherits ~129 ulp error for ``x`` in ~``[0.28, 0.53]``, peaking at</span>
+</span><span id="__span-0-459"><a id="__codelineno-0-459" name="__codelineno-0-459"></a><span class="sd">    ``sqrt(2) - 1``. Float32 is unaffected. The single-log1p identity</span>
+</span><span id="__span-0-460"><a id="__codelineno-0-460" name="__codelineno-0-460"></a><span class="sd">    ``atanh(|x|) = 0.5*log1p(2|x|/(1 - |x|))``, computed on ``|x|`` with the sign restored via</span>
+</span><span id="__span-0-461"><a id="__codelineno-0-461" name="__codelineno-0-461"></a><span class="sd">    ``jnp.where``, keeps the ``log1p`` argument non-negative (outside the bad window) for either</span>
+</span><span id="__span-0-462"><a id="__codelineno-0-462" name="__codelineno-0-462"></a><span class="sd">    sign of ``x``. The plain (non-odd) rewrite ``0.5*log1p(2x/(1-x))`` is wrong for negative ``x``</span>
+</span><span id="__span-0-463"><a id="__codelineno-0-463" name="__codelineno-0-463"></a><span class="sd">    — its inner argument re-enters the bad ``log1p`` window and still errs by ~211 ulps; a</span>
+</span><span id="__span-0-464"><a id="__codelineno-0-464" name="__codelineno-0-464"></a><span class="sd">    ``jnp.sign(x)*...`` spelling is also wrong (its product-rule gradient at ``x == 0`` collapses</span>
+</span><span id="__span-0-465"><a id="__codelineno-0-465" name="__codelineno-0-465"></a><span class="sd">    to 0 instead of the analytic 1). This form measures at max 2.8 ulps (f64, both signs),</span>
+</span><span id="__span-0-466"><a id="__codelineno-0-466" name="__codelineno-0-466"></a><span class="sd">    bit-identical to the builtin at the clip boundary, exact gradients, and ~1.7x faster than</span>
+</span><span id="__span-0-467"><a id="__codelineno-0-467" name="__codelineno-0-467"></a><span class="sd">    ``jnp.atanh`` (one ``log1p`` instead of two). Upstream fixed the ``log1p`` hole in jax 0.11.1</span>
+</span><span id="__span-0-468"><a id="__codelineno-0-468" name="__codelineno-0-468"></a><span class="sd">    (openxla/xla#46765, jax-ml/jax#39707), but the rewrite is kept: it costs nothing, and it is</span>
+</span><span id="__span-0-469"><a id="__codelineno-0-469" name="__codelineno-0-469"></a><span class="sd">    what protects users still on jax &lt;= 0.11.0.</span>
+</span><span id="__span-0-470"><a id="__codelineno-0-470" name="__codelineno-0-470"></a>
+</span><span id="__span-0-471"><a id="__codelineno-0-471" name="__codelineno-0-471"></a><span class="sd">    Below ``|x| = 1/8`` **in float32** the ``log1p`` form is replaced by the odd Maclaurin series</span>
+</span><span id="__span-0-472"><a id="__codelineno-0-472" name="__codelineno-0-472"></a><span class="sd">    ``x + x^3/3 + x^5/5 + x^7/7 + x^9/9`` (Horner in ``x**2``, evaluated on ``x`` itself so it is</span>
+</span><span id="__span-0-473"><a id="__codelineno-0-473" name="__codelineno-0-473"></a><span class="sd">    odd by construction). The series is exact to float32 rounding there — the first dropped term</span>
+</span><span id="__span-0-474"><a id="__codelineno-0-474" name="__codelineno-0-474"></a><span class="sd">    is ``x^11/11``, 1.1e-11 relative at ``x = 1/8`` against a float32 eps of 1.2e-7 — and it</span>
+</span><span id="__span-0-475"><a id="__codelineno-0-475" name="__codelineno-0-475"></a><span class="sd">    removes the rounding that the division ``2|x|/(1 - |x|)`` costs the ``log1p`` form near zero.</span>
+</span><span id="__span-0-476"><a id="__codelineno-0-476" name="__codelineno-0-476"></a><span class="sd">    Measured on 20k log-uniform float32 inputs in ``[1e-4, 0.125]``: max ulp 3 -&gt; 1 (mean 0.48 -&gt;</span>
+</span><span id="__span-0-477"><a id="__codelineno-0-477" name="__codelineno-0-477"></a><span class="sd">    0.33) on XLA GPU, 2 -&gt; 1 (mean 0.28 -&gt; 0.33) on XLA CPU. float64 keeps the ``log1p`` form on</span>
+</span><span id="__span-0-478"><a id="__codelineno-0-478" name="__codelineno-0-478"></a><span class="sd">    the whole domain: 1.1e-11 relative is ~5e4 float64 ulps, so the series is unusable there.</span>
+</span><span id="__span-0-479"><a id="__codelineno-0-479" name="__codelineno-0-479"></a>
+</span><span id="__span-0-480"><a id="__codelineno-0-480" name="__codelineno-0-480"></a><span class="sd">    Args:</span>
+</span><span id="__span-0-481"><a id="__codelineno-0-481" name="__codelineno-0-481"></a><span class="sd">        x: Input array of any shape</span>
+</span><span id="__span-0-482"><a id="__codelineno-0-482" name="__codelineno-0-482"></a>
+</span><span id="__span-0-483"><a id="__codelineno-0-483" name="__codelineno-0-483"></a><span class="sd">    Returns:</span>
+</span><span id="__span-0-484"><a id="__codelineno-0-484" name="__codelineno-0-484"></a><span class="sd">        atanh(x) with domain and gradient protection</span>
+</span><span id="__span-0-485"><a id="__codelineno-0-485" name="__codelineno-0-485"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-486"><a id="__codelineno-0-486" name="__codelineno-0-486"></a>    <span class="n">eps</span> <span class="o">=</span> <span class="mf">10.0</span> <span class="o">*</span> <span class="nb">float</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+</span><span id="__span-0-487"><a id="__codelineno-0-487" name="__codelineno-0-487"></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="o">-</span><span class="mf">1.0</span> <span class="o">+</span> <span class="n">eps</span><span class="p">,</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">eps</span><span class="p">)</span>
+</span><span id="__span-0-488"><a id="__codelineno-0-488" name="__codelineno-0-488"></a>    <span class="c1"># XLA evaluates jnp.atanh as 0.5*(log1p(x) - log1p(-x)), and XLA&#39;s float64 log1p is up to</span>
+</span><span id="__span-0-489"><a id="__codelineno-0-489" name="__codelineno-0-489"></a>    <span class="c1"># ~129 ulps off for arguments in [-0.53, -0.28] (numpy&#39;s: &lt;1 ulp) — jnp.atanh inherits this</span>
+</span><span id="__span-0-490"><a id="__codelineno-0-490" name="__codelineno-0-490"></a>    <span class="c1"># for x in ~[0.28, 0.53], peaking at sqrt(2)-1. The single-log1p identity</span>
+</span><span id="__span-0-491"><a id="__codelineno-0-491" name="__codelineno-0-491"></a>    <span class="c1"># atanh(|x|) = 0.5*log1p(2|x|/(1 - |x|)) keeps the log1p argument non-negative (outside the</span>
+</span><span id="__span-0-492"><a id="__codelineno-0-492" name="__codelineno-0-492"></a>    <span class="c1"># bad window) for either sign of x; restoring the sign via where (not sign(x)*...) keeps</span>
+</span><span id="__span-0-493"><a id="__codelineno-0-493" name="__codelineno-0-493"></a>    <span class="c1"># the gradient at x == 0 exact. Measured: 129 -&gt; 2.8 ulps max (f64), value- and</span>
+</span><span id="__span-0-494"><a id="__codelineno-0-494" name="__codelineno-0-494"></a>    <span class="c1"># gradient-identical at the clip boundary, and ~1.7x faster (one log1p instead of two).</span>
+</span><span id="__span-0-495"><a id="__codelineno-0-495" name="__codelineno-0-495"></a>    <span class="n">abs_x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span><span id="__span-0-496"><a id="__codelineno-0-496" name="__codelineno-0-496"></a>    <span class="c1"># The clip above IS the sanitised argument this branch needs: it leaves 1 - abs_x &gt;= 10*eps</span>
+</span><span id="__span-0-497"><a id="__codelineno-0-497" name="__codelineno-0-497"></a>    <span class="c1"># (1.19e-6 in f32, 2.2e-15 in f64), so the quotient, the log1p and their gradients are finite</span>
+</span><span id="__span-0-498"><a id="__codelineno-0-498" name="__codelineno-0-498"></a>    <span class="c1"># for every real input — required because jnp.where below evaluates BOTH branches and their</span>
+</span><span id="__span-0-499"><a id="__codelineno-0-499" name="__codelineno-0-499"></a>    <span class="c1"># gradients, and a NaN in the unselected one would leak into the selected one&#39;s cotangent.</span>
+</span><span id="__span-0-500"><a id="__codelineno-0-500" name="__codelineno-0-500"></a>    <span class="n">half_log1p</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log1p</span><span class="p">(</span><span class="mf">2.0</span> <span class="o">*</span> <span class="n">abs_x</span> <span class="o">/</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">abs_x</span><span class="p">))</span>
+</span><span id="__span-0-501"><a id="__codelineno-0-501" name="__codelineno-0-501"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">x</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">half_log1p</span><span class="p">,</span> <span class="o">-</span><span class="n">half_log1p</span><span class="p">)</span>
+</span><span id="__span-0-502"><a id="__codelineno-0-502" name="__codelineno-0-502"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">_is_low_precision</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">):</span>
+</span><span id="__span-0-503"><a id="__codelineno-0-503" name="__codelineno-0-503"></a>        <span class="k">return</span> <span class="n">out</span>
+</span><span id="__span-0-504"><a id="__codelineno-0-504" name="__codelineno-0-504"></a>    <span class="c1"># Odd Maclaurin series through x**9, Horner in x**2. Needs no sanitising of its own: a</span>
+</span><span id="__span-0-505"><a id="__codelineno-0-505" name="__codelineno-0-505"></a>    <span class="c1"># degree-9 polynomial on |x| &lt;= 1 is bounded (|series| &lt;= 1.788), as is its derivative.</span>
+</span><span id="__span-0-506"><a id="__codelineno-0-506" name="__codelineno-0-506"></a>    <span class="n">x2</span> <span class="o">=</span> <span class="n">x</span> <span class="o">*</span> <span class="n">x</span>
+</span><span id="__span-0-507"><a id="__codelineno-0-507" name="__codelineno-0-507"></a>    <span class="n">series</span> <span class="o">=</span> <span class="n">x</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">+</span> <span class="n">x2</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="mf">3.0</span> <span class="o">+</span> <span class="n">x2</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="mf">5.0</span> <span class="o">+</span> <span class="n">x2</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="mf">7.0</span> <span class="o">+</span> <span class="n">x2</span> <span class="o">/</span> <span class="mf">9.0</span><span class="p">))))</span>
+</span><span id="__span-0-508"><a id="__codelineno-0-508" name="__codelineno-0-508"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">abs_x</span> <span class="o">&gt;=</span> <span class="n">_ATANH_SERIES_SEAM</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="n">series</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>

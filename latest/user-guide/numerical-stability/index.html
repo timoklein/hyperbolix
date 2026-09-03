@@ -737,6 +737,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#hyperboloid-origin-chart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Hyperboloid Origin Chart
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -803,6 +814,28 @@
     <span class="md-ellipsis">
       
         Mitigation Strategies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poincare-roundtrip-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Round-Trip Ceiling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#float32-accuracy-near-the-origin-depends-on-the-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Float32 Accuracy Near the Origin Depends on the Backend
       
     </span>
   </a>
@@ -2014,6 +2047,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#hyperboloid-origin-chart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Hyperboloid Origin Chart
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2080,6 +2124,28 @@
     <span class="md-ellipsis">
       
         Mitigation Strategies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poincare-roundtrip-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Round-Trip Ceiling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#float32-accuracy-near-the-origin-depends-on-the-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Float32 Accuracy Near the Origin Depends on the Backend
       
     </span>
   </a>
@@ -2672,10 +2738,11 @@
 </div>
 <h3 id="the-hyperboloids-two-point-cancellation-failure-mode">The Hyperboloid's Two-Point Cancellation Failure Mode<a class="headerlink" href="#the-hyperboloids-two-point-cancellation-failure-mode" title="Permanent link">&para;</a></h3>
 <p>The distance-from-origin table above governs single-point operations (<code>dist_0</code>, <code>logmap_0</code>,
-<code>expmap_0</code>), which read the radius straight off the ambient time coordinate and were always
-accurate on the Hyperboloid. Point-to-point operations (<code>dist</code>, <code>logmap</code>, <code>sqdist</code>,
-<code>tangent_norm</code>) are governed by a different, two-point quantity — being far from the origin is
-not itself the problem; two points far from the origin <strong>and close together</strong> is.</p>
+<code>expmap_0</code>), which read the geodesic radius off the <strong>spatial</strong> part of the point and have their
+own near-origin story, described in <a href="#hyperboloid-origin-chart">The Hyperboloid Origin Chart</a>
+below. Point-to-point operations (<code>dist</code>, <code>logmap</code>, <code>sqdist</code>, <code>tangent_norm</code>) are governed by a
+different, two-point quantity — being far from the origin is not itself the problem; two points
+far from the origin <strong>and close together</strong> is.</p>
 <p>Every one of these operations used to go through the Minkowski inner product
 <span class="arithmatex">\(\langle x, y\rangle_L = -x_0y_0 + \langle x_s, y_s\rangle\)</span>, which for two hyperboloid points is a
 subtraction of two positive terms each roughly <span class="arithmatex">\(e^{\sqrt{c}\,(d_0(x) + d_0(y))}\)</span> in size, leaving a
@@ -2719,9 +2786,99 @@ unsafe past the <code>ln(1/eps)</code> threshold above:</p>
 <p><code>tangent_norm</code> is exact to radius ~15 (float32) / ~25 (float64) — one power of <code>cosh</code> better than
 before this fix (was accurate only to radius ~8 float32 / ~20 float64, then floored to ~0 past
 that on exactly-unit tangent vectors), but not unlimited like <code>dist</code>/<code>logmap</code>/<code>sqdist</code>.
-Origin-chart operations (<code>dist_0</code>, <code>logmap_0</code>, <code>expmap_0</code>) read the radius straight off the
-ambient time coordinate, never routed through the Minkowski inner product, and remain exact
-everywhere.</p>
+Origin-chart operations (<code>dist_0</code>, <code>logmap_0</code>, <code>expmap_0</code>) never routed through the Minkowski
+inner product, so the threshold above does not apply to them. They had a different problem at the
+<em>small</em>-radius end, fixed separately and described next.</p>
+<h3 id="hyperboloid-origin-chart">The Hyperboloid Origin Chart<a class="headerlink" href="#hyperboloid-origin-chart" title="Permanent link">&para;</a></h3>
+<p><code>dist_0</code> and <code>logmap_0</code> used to recover the geodesic radius from the ambient <strong>time</strong> coordinate
+<span class="arithmatex">\(x_0\)</span>, and that coordinate cannot resolve a small radius. On the sheet</p>
+<div class="arithmatex">\[
+x_0 = \frac{\cosh(\sqrt{c}\,d)}{\sqrt{c}} \approx \frac{1 + c\,d^2/2}{\sqrt{c}},
+\]</div>
+<p>so <span class="arithmatex">\(d\)</span> is stored only to <span class="arithmatex">\(\sqrt{\varepsilon}\)</span> resolution (relative error <span class="arithmatex">\(\varepsilon/(2cd^2)\)</span>),
+and <code>acosh</code>'s <code>1 + 10·eps</code> domain clamp flattened every float32 radius below
+<span class="arithmatex">\(\sqrt{20\varepsilon}/\sqrt{c} = 1.54\text{e-}3\)</span> onto exactly zero. Both operations now read the
+radius off the <strong>spatial</strong> part instead, where the same number is available exactly:</p>
+<div class="arithmatex">\[
+d_0(x) = \frac{\operatorname{arcsinh}(\sqrt{c}\,\lVert x_s\rVert)}{\sqrt{c}},
+\qquad
+\log_0(y) = \Bigl[0,\; \frac{\operatorname{arcsinh}(u)}{u}\, y_s\Bigr],\quad u = \sqrt{c}\,\lVert y_s\rVert .
+\]</div>
+<p><code>arcsinh</code> needs no domain clamp (its argument is a norm) and its derivative is bounded by 1, so
+<span class="arithmatex">\(\lVert \log_0(y)\rVert = d_0(y)\)</span> now holds by construction at every radius. Median relative
+error at <span class="arithmatex">\(c = 1\)</span>, dim 8, before → after (A100, jax 0.9.1; the CPU backend and jax 0.11.0 agree in
+every floored cell):</p>
+<table>
+<thead>
+<tr>
+<th>radius</th>
+<th>float32 <code>dist_0</code></th>
+<th>float32 <code>log_0(exp_0(v))</code></th>
+<th>float64 <code>dist_0</code></th>
+<th>float64 round trip</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1e-6</td>
+<td>1.5e3 → 2.5e-9</td>
+<td>1.5e3 → 0</td>
+<td>4.4e-5 → 0</td>
+<td>4.4e-5 → 1.3e-16</td>
+</tr>
+<tr>
+<td>1e-3</td>
+<td>5.4e-1 → 9.8e-8</td>
+<td>5.4e-1 → 0</td>
+<td>5.9e-11 → 0</td>
+<td>1.5e-10 → 1.2e-16</td>
+</tr>
+<tr>
+<td>1e-2</td>
+<td>5.0e-4 → 2.7e-8</td>
+<td>5.2e-4 → 0</td>
+<td>1.0e-12 → 1.7e-16</td>
+<td>8.3e-13 → 1.2e-16</td>
+</tr>
+<tr>
+<td>0.1</td>
+<td>3.5e-6 → 1.8e-8</td>
+<td>1.4e-7 → 3.9e-8</td>
+<td>7.6e-15 → 1.4e-16</td>
+<td>9.5e-15 → 1.1e-16</td>
+</tr>
+<tr>
+<td>1 to 40</td>
+<td>≤7.1e-8 → ≤5.2e-8</td>
+<td>≤1.0e-7 → ≤8.8e-8</td>
+<td>≤1.3e-16 → ≤1.9e-16</td>
+<td>≤1.4e-16 → ≤1.4e-16</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">A zero-initialised hyperboloid gyro-bias could not train</p>
+<p>The old <code>dist_0</code> returned a constant <code>0</code> under a bitwise <code>at_origin</code> guard, so
+<span class="arithmatex">\(\partial(x \oplus b)/\partial b\)</span> at $b = $ origin was the exact zero matrix in <strong>both</strong>
+dtypes. Gyro addition inherits that guard through <code>logmap_0</code>, so the bias of any
+<code>HypLinearHyperboloidPLFC</code>, <code>HypConv2DHyperboloidILNN</code>, or <code>HypLinearHyperboloidBusemann</code>
+built with <code>use_gyro_bias=True</code> sat at the origin, received an exactly-zero gradient, and
+never moved. Measured gyro-bias gradient L2 at init (c = 1, dim 8, float32): <code>0.0</code> before,
+<code>1.37</code> / <code>4.24</code> / <code>3.07</code> after. The Poincaré <code>HypLinearPoincareBusemann</code> bias uses Möbius
+addition and was never affected. A model trained with one of the three hyperboloid biases was
+trained with it pinned to the origin.</p>
+</div>
+<p>Operations that inherit the fix without any change of their own: gyro <code>addition</code>, <code>scalar_mul</code>,
+<code>logmap</code>'s origin fallback, and <code>HyperboloidGyroRMSNorm</code>, which divides by <code>dist_0</code> and so
+mis-normalised every float32 sample inside radius 1.5e-3.</p>
+<div class="admonition note">
+<p class="admonition-title"><code>dist_0</code> is the accurate route to the origin, not <code>dist(origin, x)</code></p>
+<p>The pairwise <code>dist</code> is a separate code path, and near the origin it still carries an
+<span class="arithmatex">\(O(\varepsilon/r)\)</span> relative error from the gap term of its polar decomposition: in float32,
+4.6e-2 at radius 1e-6 and ~1e-3 at 1e-4. Closing that is a separate planned change. Until
+then, use <code>dist_0(x, c)</code> rather than <code>dist(origin, x, c)</code> whenever the distance is to the
+origin.</p>
+</div>
 <h2 id="storage-vs-compute-dtype">Storage vs. Compute Dtype<a class="headerlink" href="#storage-vs-compute-dtype" title="Permanent link">&para;</a></h2>
 <p>Hyperbolix separates two dtype concerns that are easy to conflate:</p>
 <ul>
@@ -2845,6 +3002,99 @@ reproducibility studies or numerical debugging.</p>
 </span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">poincare_f64</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
 </span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">dist_precise</span> <span class="o">=</span> <span class="n">poincare_f64</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># returns float64</span>
 </span></code></pre></div>
+<h3 id="poincare-roundtrip-ceiling">The Round-Trip Ceiling<a class="headerlink" href="#poincare-roundtrip-ceiling" title="Permanent link">&para;</a></h3>
+<p><code>proj</code> keeps points inside <span class="arithmatex">\(1/\sqrt{c}\)</span> by a margin of <code>eps**0.75</code>
+(<code>_gyrovector_core._get_max_norm_eps</code>), which caps the largest geodesic radius the ball can
+represent at <span class="arithmatex">\(\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}\)</span>. Past that radius <code>expmap_0</code>
+saturates and <code>logmap_0(expmap_0(v))</code> hands back the ceiling instead of <code>v</code>. Measured ceilings
+(median returned radius on a round trip, in units of <span class="arithmatex">\(1/\sqrt{c}\)</span>):</p>
+<table>
+<thead>
+<tr>
+<th>library</th>
+<th>float32</th>
+<th>float64</th>
+<th>boundary margin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>hyperbolix</td>
+<td>6.32</td>
+<td>13.86</td>
+<td><code>eps**0.75</code></td>
+</tr>
+<tr>
+<td>geoopt, hypLL</td>
+<td>3.11</td>
+<td>6.10</td>
+<td>fixed 4e-3, fixed 1e-5</td>
+</tr>
+<tr>
+<td>unguarded closed form</td>
+<td>8.66</td>
+<td>18.72</td>
+<td>none</td>
+</tr>
+</tbody>
+</table>
+<p>The margin is deliberate. It stops short of the unguarded limit so the conformal factor stays
+under ~3e5 (float32) / ~1e12 (float64), and it still leaves twice the radius the fixed margins
+used elsewhere allow. If your embeddings need larger radii, switch to the hyperboloid or to
+<code>ProperVelocity</code> rather than shrinking the margin.</p>
+<h3 id="float32-accuracy-near-the-origin-depends-on-the-backend">Float32 Accuracy Near the Origin Depends on the Backend<a class="headerlink" href="#float32-accuracy-near-the-origin-depends-on-the-backend" title="Permanent link">&para;</a></h3>
+<p>XLA's float32 transcendental kernels are a few ulps off, and near the origin that is the whole
+error budget of a Poincaré round trip. Exact bit-pattern ulp error against a float64 reference
+(20k inputs in <span class="arithmatex">\([10^{-4}, 0.9]\)</span>, max / mean):</p>
+<table>
+<thead>
+<tr>
+<th>function</th>
+<th>XLA GPU</th>
+<th>XLA CPU</th>
+<th>torch CPU</th>
+<th>torch CUDA</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tanh</code></td>
+<td>4 / 0.85</td>
+<td>4 / 0.90</td>
+<td>1 / 0.01</td>
+<td>2 / 0.17</td>
+</tr>
+<tr>
+<td><code>atanh</code></td>
+<td>3 / 0.45</td>
+<td>2 / 0.25</td>
+<td>1 / 0.00</td>
+<td>3 / 0.45</td>
+</tr>
+<tr>
+<td><code>arcsinh</code></td>
+<td>2</td>
+<td>2</td>
+<td>2</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>expm1</code></td>
+<td>1</td>
+<td>5</td>
+<td>n/a</td>
+<td>n/a</td>
+</tr>
+</tbody>
+</table>
+<p>Consequence: float32 <code>logmap_0(expmap_0(v))</code> at radius <span class="arithmatex">\(10^{-3}\)</span> (dim 32, median relative error)
+was 2.4e-7 on the CPU backend with raw XLA kernels and exactly 0 on GPU; hyperbolix's own <code>tanh</code>
+and <code>atanh</code> wrappers (series below 1/8, <code>expm1</code> form above) bring the CPU backend to exactly 0 as
+well, see the changelog. A torch-based library reaches ~1.5e-8 on CPU with raw kernels,
+because torch's CPU <code>tanh</code>/<code>atanh</code> are correctly rounded; on CUDA it has no such edge (torch's
+CUDA <code>atanh</code> is bit-identical to XLA's). The closed forms are the same in both cases, so this is
+a kernel difference rather than a formula difference, but it does mean that a near-origin float32
+accuracy number is only meaningful with its backend quoted.</p>
 <h2 id="init-scale-vs-depth">Init Scale vs. Depth<a class="headerlink" href="#init-scale-vs-depth" title="Permanent link">&para;</a></h2>
 <p>Weight-init failures on hyperbolic layers come in two flavors, and only one of
 them is loud. A <strong>too-large</strong> init pushes first-layer outputs toward the
@@ -3122,8 +3372,11 @@ subtraction before either formula sees it — neither the old nor the new form i
 trustworthy there, and that regime needs float64.</p>
 <div class="admonition warning">
 <p class="admonition-title">The rest of the hyperboloid is still radius-limited</p>
-<p>This buys accuracy in these two operations only. <code>Hyperboloid.dist</code> goes through
-<code>acosh</code> and still loses digits past hyperbolic distance ~7 in float32 (see the
+<p>This buys accuracy in these two operations only. <code>Hyperboloid.dist</code>'s default and
+smoothened slots (<code>VERSION_DEFAULT</code>/<code>VERSION_SMOOTHENED</code>) use the same cancellation-free
+hyperbolic-haversine form and stay accurate at any representable radius; only the legacy
+slots (<code>VERSION_LEGACY</code>/<code>VERSION_LEGACY_SMOOTHENED</code>) route through the Minkowski inner
+product via <code>acosh</code> and still lose digits past hyperbolic distance ~7 in float32 (see the
 <a href="#precision-requirements-by-distance">precision table</a>), and merely <em>storing</em> a point
 past distance ~11 accumulates more Lorentz residual than the float64 default
 tolerance allows — see <a href="#the-atol-convention">The <code>atol</code> Convention</a>.</p>
@@ -3171,7 +3424,51 @@ tolerance allows — see <a href="#the-atol-convention">The <code>atol</code> Co
 - <strong>Debugging</strong>: Compare all versions — significant differences indicate numerical issues</p>
 <h3 id="hyperboloid-distance-versions">Hyperboloid Distance Versions<a class="headerlink" href="#hyperboloid-distance-versions" title="Permanent link">&para;</a></h3>
 <p>The Hyperboloid manifold has its own four-way <code>version_idx</code>, orthogonal to the Poincaré versions
-above:</p>
+above. The same four slots select an arm of both the pairwise <code>dist</code> and the origin distance
+<code>dist_0</code>, which are different implementations:</p>
+<table>
+<thead>
+<tr>
+<th>slot</th>
+<th><code>dist</code> arm</th>
+<th><code>dist_0</code> arm</th>
+<th>floor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>VERSION_DEFAULT</code> (0)</td>
+<td>cancellation-free hyperbolic haversine</td>
+<td><code>arcsinh(√c·‖x_s‖)/√c</code></td>
+<td>none: exactly 0 at coincidence / at the origin</td>
+</tr>
+<tr>
+<td><code>VERSION_SMOOTHENED</code> (1)</td>
+<td>the same, floored in quadrature</td>
+<td>the same, with <code>‖x_s‖</code> floored in quadrature</td>
+<td><code>2·arcsinh(10·eps)/√c</code> and <code>arcsinh(20·eps)/√c</code>, equal to first order: ≈2.4e-6/√c (float32), ≈4.4e-15/√c (float64)</td>
+</tr>
+<tr>
+<td><code>VERSION_LEGACY</code> (2)</td>
+<td>pre-fix <code>acosh</code> form, hard clip</td>
+<td><code>acosh(clip(√c·x₀, 1))/√c</code></td>
+<td>1.54e-3/√c in float32, 6.7e-8/√c in float64 (the <code>acosh</code> domain clamp)</td>
+</tr>
+<tr>
+<td><code>VERSION_LEGACY_SMOOTHENED</code> (3)</td>
+<td>pre-fix <code>acosh</code> form, soft clamp</td>
+<td><code>acosh(smooth_clamp_min(√c·x₀, 1))/√c</code></td>
+<td>0.16632/√c, in <strong>both</strong> dtypes, on every point that is not bitwise the origin</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">Breaking: slots 2 and 3 of <code>dist_0</code> changed meaning</p>
+<p><code>dist_0(..., version_idx=2)</code> and <code>version_idx=3</code> used to duplicate slots 0 and 1. They now
+select the pre-fix <code>acosh</code> arms, matching what those slots have meant for the pairwise <code>dist</code>
+since 1.1.2. Code that passed 2 or 3 to <code>dist_0</code> and expected the default behavior must pass
+<code>VERSION_DEFAULT</code> (0) or <code>VERSION_SMOOTHENED</code> (1).</p>
+</div>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Hyperboloid</span>
 </span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
 </span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
@@ -3208,22 +3505,29 @@ above:</p>
   past the cancellation threshold described <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>.</li>
 </ul>
 <h3 id="using-versions-with-jit">Using Versions with JIT<a class="headerlink" href="#using-versions-with-jit" title="Permanent link">&para;</a></h3>
+<p>Manifold operations are single-point functions: batch them with <code>jax.vmap</code> and compile the result
+with <code>jax.jit</code> yourself. An uncompiled <code>vmap</code> re-traces dozens of primitives on every call and
+runs 10-100x slower than the compiled path; that is the expected cost of the calling convention,
+not a bug.</p>
+<p><code>version_idx</code> does <strong>not</strong> have to be a static argument. The version switch is a <code>lax.switch</code>,
+which accepts a traced index, so a dynamic <code>version_idx</code> compiles and runs. Making it static
+(baking it into the function body, or <code>static_argnames</code>) is a compile-size optimization: it
+lets XLA drop the branches you do not use.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
 </span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
 </span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
 </span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
 </span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>
-</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="c1"># IMPORTANT: version_idx must be static for JIT</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="c1"># Recommended: bake the version into the function body, then jit the batched call.</span>
 </span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
 </span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_distances</span><span class="p">(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">y_batch</span><span class="p">,</span> <span class="n">c</span><span class="p">):</span>
-</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>    <span class="c1"># Version baked into function body (static)</span>
-</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>    <span class="k">return</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span>
-</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>        <span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a>    <span class="p">)(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">y_batch</span><span class="p">)</span>
-</span><span id="__span-17-13"><a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a>
-</span><span id="__span-17-14"><a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a><span class="c1"># Or use static_argnames</span>
-</span><span id="__span-17-15"><a id="__codelineno-17-15" name="__codelineno-17-15" href="#__codelineno-17-15"></a><span class="n">dist_jit</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">,</span> <span class="n">static_argnames</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;version_idx&#39;</span><span class="p">])</span>
-</span><span id="__span-17-16"><a id="__codelineno-17-16" name="__codelineno-17-16" href="#__codelineno-17-16"></a><span class="n">d</span> <span class="o">=</span> <span class="n">dist_jit</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>    <span class="k">return</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span>
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>        <span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>    <span class="p">)(</span><span class="n">x_batch</span><span class="p">,</span> <span class="n">y_batch</span><span class="p">)</span>
+</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a>
+</span><span id="__span-17-13"><a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a><span class="c1"># Or mark it static explicitly</span>
+</span><span id="__span-17-14"><a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a><span class="n">dist_jit</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">,</span> <span class="n">static_argnames</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;version_idx&#39;</span><span class="p">])</span>
+</span><span id="__span-17-15"><a id="__codelineno-17-15" name="__codelineno-17-15" href="#__codelineno-17-15"></a><span class="n">d</span> <span class="o">=</span> <span class="n">dist_jit</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="projection-strategies">Projection Strategies<a class="headerlink" href="#projection-strategies" title="Permanent link">&para;</a></h2>
 <h3 id="why-project">Why Project?<a class="headerlink" href="#why-project" title="Permanent link">&para;</a></h3>

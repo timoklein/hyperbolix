@@ -826,10 +826,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#3-forgetting-version_idx-is-static" class="md-nav__link">
+  <a href="#3-leaving-version_idx-dynamic-under-jit" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Forgetting version_idx is static
+        3. Leaving version_idx dynamic under JIT
       
     </span>
   </a>
@@ -1865,10 +1865,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#3-forgetting-version_idx-is-static" class="md-nav__link">
+  <a href="#3-leaving-version_idx-dynamic-under-jit" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Forgetting version_idx is static
+        3. Leaving version_idx dynamic under JIT
       
     </span>
   </a>
@@ -2473,13 +2473,15 @@ spatial dim (<code>d</code>) where it wanted ambient (<code>d+1</code>), or vice
 <code>optax.adamw</code> — work for FGG, HNN++, HRC/HTC, and PV layers. Use
 <code>riemannian_adam</code> only when parameters live directly on a manifold (typically a
 hyperbolic embedding table); see the <a href="../optimizers/">Optimizers guide</a> <em>(WIP)</em>.</p>
-<h3 id="3-forgetting-version_idx-is-static">3. Forgetting <code>version_idx</code> is static<a class="headerlink" href="#3-forgetting-version_idx-is-static" title="Permanent link">&para;</a></h3>
+<h3 id="3-leaving-version_idx-dynamic-under-jit">3. Leaving <code>version_idx</code> dynamic under JIT<a class="headerlink" href="#3-leaving-version_idx-dynamic-under-jit" title="Permanent link">&para;</a></h3>
 <p>Several Poincaré ops (<code>dist</code>, <code>expmap</code>, <code>logmap</code>) take a <code>version_idx</code> selecting
-between multiple formulations. Under JIT, this argument must be <strong>static</strong>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># ❌ Traces a new graph on every call</span>
+between multiple formulations. <code>jax.lax.switch</code> accepts a traced index, so this
+argument does not have to be static. Marking it static is still recommended:
+it compiles only the selected variant instead of every arm.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Works, but compiles every variant into one lax.switch</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">jit_fn</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">idx</span><span class="p">))</span>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># ✅ Bind the variant before JIT-ing</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Recommended: bind the variant before JIT-ing, compiles only that arm</span>
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span>
 </span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="n">dist_v0</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 </span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">jit_fn</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">dist_v0</span><span class="p">)</span>
