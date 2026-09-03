@@ -1164,6 +1164,310 @@ def test_poincare_expmap_0_gradients_survive_the_scalar_clamp(dtype: jnp.dtype) 
             assert jnp.allclose(jac_new_DD, jac_old_DD, atol=atol, rtol=0.0)
 
 
+# ---------------------------------------------------------------------------------------------
+# Möbius addition: the boundary clamp moved from the (dim,) result onto an analytic scalar norm
+# ---------------------------------------------------------------------------------------------
+#
+# ``_addition`` used to build ``num = A·x + B·y`` and call ``_proj(num/denom, c)``, which reduces
+# ‖·‖ over the op's own (dim,) output — under ``jit(vmap)`` that costs XLA a whole extra kernel
+# plus a round trip through (B, dim)-sized memory. The current implementation regroups the
+# numerator as ``B·(x+y) + c‖x+y‖²·x`` (identical in exact arithmetic, since ``A - B = c‖x+y‖²``)
+# and expands ‖num‖² in those same two coefficients, so the clamp becomes a scalar comparison
+# computed entirely from reductions over the *inputs*.
+#
+# The regrouping is not cosmetic. Near the ball boundary with ``y ≈ -x`` the two pieces of
+# ``A·x + B·y`` cancel to ``O(ε²)`` from ``O(ε)`` each (``ε := 1 - c‖x‖²``), so any norm derived
+# analytically from ``A`` and ``B`` disagrees with the floating-point vector by ``eps/ε`` and the
+# clamp can scale a row to sit *outside* the ball. ``B·(x+y)`` and ``c‖x+y‖²·x`` are individually
+# the same order as their sum, which is what makes the analytic norm usable at all. Measured on
+# 1.35M adversarial rows per dtype (logs/2026-09-03_b2_mobius_norm/probe_mobius_norm_cpu.json):
+# the ``alpha/beta`` and naive three-dot forms overshoot the ceiling by up to 6.5e9 and 3.5e5 ulps
+# respectively, this one by at most 10.
+#
+# The tests below pin (a) agreement with the old formula on well-conditioned inputs, including
+# rows the old ``_proj`` actually clamped, (b) the postcondition ``‖x ⊕ y‖ ≤ max_norm`` that the
+# removed ``_proj`` provided, held across the adversarial near-boundary antipodal grid, (c) that
+# accuracy against a float64 reference *improved* rather than regressed, (d) the exact-antipode
+# and coincident-point gradient behaviour, and (e) that an unclamped row is left untouched.
+
+_MOBIUS_DIM = 32
+_MOBIUS_CS = (0.3, 1.0, 2.5)
+# ‖n‖/(ε/√c) for y = -x + n. The exact output norm passes through the ball ceiling around 1, so
+# the rows near 1 are the ones where the clamp decision is both hardest and worst conditioned;
+# they are kept in every finiteness/ball assertion and excluded only from the value comparison.
+_MOBIUS_ETA_RATIOS = (0.01, 0.1, 0.5, 0.9, 0.99, 1.0, 1.01, 1.1, 2.0, 10.0)
+_MOBIUS_ILL_CONDITIONED = (0.9, 0.99, 1.0, 1.01, 1.1)
+
+
+def _addition_reference(x_D: jnp.ndarray, y_D: jnp.ndarray, c: float) -> jnp.ndarray:
+    """The pre-change ``_gyrovector_core._addition``, written out verbatim as the reference.
+
+    ``num = A·x + B·y`` followed by the ``_proj`` boundary clamp on the ``(dim,)`` result —
+    deliberately independent of the implementation under test.
+    """
+    x2 = jnp.dot(x_D, x_D)
+    y2 = jnp.dot(y_D, y_D)
+    xy = jnp.dot(x_D, y_D)
+    num_D = (1 + 2 * c * xy + c * y2) * x_D + (1 - c * x2) * y_D
+    denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, poincare_impl.MIN_NORM)
+    return poincare_impl._proj(num_D / denom, c)
+
+
+def _mobius_max_norm(dtype: jnp.dtype, c: float) -> float:
+    """``_proj``'s ceiling, recomputed from the documented formula rather than from the helper."""
+    return 1.0 / np.sqrt(c) - float(jnp.finfo(dtype).eps) ** 0.75
+
+
+def _mobius_unit(rng: np.random.Generator, n: int) -> np.ndarray:
+    v_ND = rng.normal(size=(n, _MOBIUS_DIM))
+    return v_ND / np.linalg.norm(v_ND, axis=1, keepdims=True)
+
+
+def _mobius_random_pairs(dtype: jnp.dtype, c: float, seed: int, n: int = 512):
+    """Independent x, y uniform in radius on [0, ceiling] — the well-conditioned bulk."""
+    rng = np.random.default_rng(seed)
+    mx = _mobius_max_norm(dtype, c)
+    x_ND = _mobius_unit(rng, n) * rng.uniform(0.0, mx, size=(n, 1))
+    y_ND = _mobius_unit(rng, n) * rng.uniform(0.0, mx, size=(n, 1))
+    return jnp.asarray(x_ND, dtype=dtype), jnp.asarray(y_ND, dtype=dtype)
+
+
+def _mobius_boundary_pairs(dtype: jnp.dtype, c: float, seed: int, n: int = 512):
+    """Both points on the ceiling and nearly parallel — every row of this grid gets clamped.
+
+    For ``x = y = m·u`` the exact result has norm ``2m/(1 + c·m²)``, which for ``m`` at the
+    ceiling ``1/√c - eps**0.75`` evaluates to ``1/√c`` — above ``max_norm``. Tilting ``y`` away
+    from ``x`` by up to 0.05 rad keeps the rows on the clamped side while varying the direction.
+    """
+    rng = np.random.default_rng(seed)
+    mx = _mobius_max_norm(dtype, c)
+    u_ND = _mobius_unit(rng, n)
+    w_ND = _mobius_unit(rng, n)
+    tilt_N1 = np.linspace(0.0, 0.05, n)[:, None]
+    v_ND = u_ND + tilt_N1 * (w_ND - np.sum(w_ND * u_ND, axis=1, keepdims=True) * u_ND)
+    v_ND /= np.linalg.norm(v_ND, axis=1, keepdims=True)
+    return jnp.asarray(u_ND * mx, dtype=dtype), jnp.asarray(v_ND * mx, dtype=dtype)
+
+
+def _mobius_antipodal_pairs(dtype: jnp.dtype, c: float, eps_val: float, ratio: float, kind: str, seed: int, n: int = 256):
+    """``x`` at ``1 - c‖x‖² = eps_val``, ``y = -x + n`` with ``‖n‖ = ratio·eps_val/√c``.
+
+    ``kind`` picks the direction of ``n``: random, orthogonal to ``x``, or collinear with ``±x``
+    (collinear is the worst case for this numerator grouping — it is the only configuration in
+    which its two terms can cancel). A ``y`` that lands outside the ceiling is projected back onto
+    it; a point outside the ball is not a legal input to ``⊕``.
+    """
+    rng = np.random.default_rng(seed)
+    mx = _mobius_max_norm(dtype, c)
+    xhat_ND = _mobius_unit(rng, n)
+    x_ND = xhat_ND * np.sqrt((1.0 - eps_val) / c)
+    if kind == "rand":
+        nhat_ND = _mobius_unit(rng, n)
+    elif kind == "orth":
+        g_ND = _mobius_unit(rng, n)
+        g_ND = g_ND - np.sum(g_ND * xhat_ND, axis=1, keepdims=True) * xhat_ND
+        nhat_ND = g_ND / np.linalg.norm(g_ND, axis=1, keepdims=True)
+    else:
+        nhat_ND = rng.choice([-1.0, 1.0], size=(n, 1)) * xhat_ND
+    y_ND = -x_ND + nhat_ND * (ratio * eps_val / np.sqrt(c))
+    ynorm_N1 = np.linalg.norm(y_ND, axis=1, keepdims=True)
+    y_ND = np.where(ynorm_N1 > mx, y_ND * (mx / np.maximum(ynorm_N1, 1e-300)), y_ND)
+    return jnp.asarray(x_ND, dtype=dtype), jnp.asarray(y_ND, dtype=dtype)
+
+
+def _mobius_eps_grid(dtype: jnp.dtype, c: float) -> tuple[float, ...]:
+    """``ε`` values down to the smallest the ceiling admits: ``1 - c·max_norm²``."""
+    e_mach = float(jnp.finfo(dtype).eps)
+    margin = 2.0 * np.sqrt(c) * e_mach**0.75 - c * e_mach**1.5
+    return (1e-2, 1e-3, 1e-4, float(margin))
+
+
+def _mobius_ref_f64(x_ND: jnp.ndarray, y_ND: jnp.ndarray, c: float, max_norm: float) -> np.ndarray:
+    """float64 reference, clamped at the ceiling of the dtype under test."""
+    x = np.asarray(x_ND, dtype=np.float64)
+    y = np.asarray(y_ND, dtype=np.float64)
+    x2 = np.sum(x * x, axis=1, keepdims=True)
+    y2 = np.sum(y * y, axis=1, keepdims=True)
+    xy = np.sum(x * y, axis=1, keepdims=True)
+    s = x + y
+    s2 = np.sum(s * s, axis=1, keepdims=True)
+    denom = np.maximum(1 + 2 * c * xy + c**2 * x2 * y2, poincare_impl.MIN_NORM)
+    out = ((1.0 - c * x2) * s + (c * s2) * x) / denom
+    nrm = np.linalg.norm(out, axis=1, keepdims=True)
+    return np.where(nrm > max_norm, out * (max_norm / np.maximum(nrm, 1e-300)), out)
+
+
+_mobius_add_batch = jax.vmap(poincare_impl._addition, in_axes=(0, 0, None))
+_mobius_ref_batch = jax.vmap(_addition_reference, in_axes=(0, 0, None))
+
+
+@pytest.mark.parametrize("c", _MOBIUS_CS)
+def test_poincare_mobius_add_matches_the_projected_reference(dtype: jnp.dtype, c: float) -> None:
+    """The regrouped numerator + scalar clamp reproduces ``_proj(A·x + B·y)`` to a few ulps.
+
+    Two grids: independent random pairs (no row clamped) and pairs on the ceiling (every row
+    clamped — the second grid is the point of the test, since a rewrite that stopped clamping
+    would otherwise pass trivially). Differences are measured against ``max_norm`` rather than
+    against ‖out‖ because whole input families here have an exact answer of 0.
+
+    Worst measured move on these grids, jax 0.9.1 CPU: 3.4e-7 (float32) / 6.2e-16 (float64) of
+    the ball radius, i.e. ~3 ulps; the bounds below are 12x and 16x that.
+    """
+    bound = 4e-6 if dtype == jnp.float32 else 1e-14
+    max_norm = _mobius_max_norm(dtype, c)
+    clamped_rows = 0
+    for grid in (_mobius_random_pairs, _mobius_boundary_pairs):
+        x_ND, y_ND = grid(dtype, c, seed=4242)
+        new_ND = np.asarray(_mobius_add_batch(x_ND, y_ND, c), dtype=np.float64)
+        old_ND = np.asarray(_mobius_ref_batch(x_ND, y_ND, c), dtype=np.float64)
+        moved = np.linalg.norm(new_ND - old_ND, axis=1) / max_norm
+        assert moved.max() <= bound, f"c={c}: max move {moved.max():.3e} of the ball radius"
+        clamped_rows += int(np.sum(np.linalg.norm(old_ND, axis=1) >= max_norm * (1.0 - 1e-6)))
+
+    assert clamped_rows > 0, "no row reached the boundary — the clamp was never exercised"
+
+
+@pytest.mark.parametrize("c", _MOBIUS_CS)
+def test_poincare_mobius_add_stays_inside_the_projection_boundary(dtype: jnp.dtype, c: float) -> None:
+    """Every row satisfies ``‖x ⊕ y‖ ≤ max_norm``, the postcondition ``_proj`` used to provide.
+
+    This is the assertion the change could plausibly break: the clamp is now decided on an
+    analytic norm and applied to ``num/denom`` as it was really computed, so the two have to agree
+    for the bound to hold. The adversarial near-boundary antipodal grid is included precisely
+    because that is where an analytic norm can drift away from its own vector.
+
+    The ``16·eps`` slack covers the rounding of ``sqrt``, the division by ``denom`` and the final
+    scaling; measured worst overshoot is 10 ulps of ``max_norm`` over 1.35M rows per dtype. Even
+    at 16 ulps the result stays strictly inside the true radius ``1/√c``, since the ceiling sits
+    ``eps**0.75`` below it — a margin of ``eps**-0.25`` = 54 ulps (float32) / 26000 (float64).
+    """
+    max_norm = _mobius_max_norm(dtype, c)
+    bound = max_norm * (1.0 + 16.0 * float(jnp.finfo(dtype).eps))
+
+    grids = [_mobius_random_pairs(dtype, c, seed=4242), _mobius_boundary_pairs(dtype, c, seed=4242)]
+    for eps_val in _mobius_eps_grid(dtype, c):
+        for ratio in _MOBIUS_ETA_RATIOS:
+            for kind in ("rand", "orth", "collin"):
+                grids.append(_mobius_antipodal_pairs(dtype, c, eps_val, ratio, kind, seed=99))
+
+    for x_ND, y_ND in grids:
+        out_ND = np.asarray(_mobius_add_batch(x_ND, y_ND, c), dtype=np.float64)
+        assert np.all(np.isfinite(out_ND))
+        norms = np.linalg.norm(out_ND, axis=1)
+        assert norms.max() <= bound, f"c={c}: {norms.max():.17g} > {bound:.17g}"
+
+
+@pytest.mark.parametrize("c", _MOBIUS_CS)
+def test_poincare_mobius_add_is_more_accurate_near_the_boundary(dtype: jnp.dtype, c: float) -> None:
+    """Against a float64 reference the new grouping is strictly better than the old one.
+
+    An absolute tolerance would say little here: at ``ε = 1e-4`` in float32 *both* forms are off
+    by a whole ball radius, because ``A`` and ``B`` are ``O(ε)`` differences of ``O(1)`` terms and
+    float32 has no bits left. What the change buys is a factor ~2 at every ``ε`` — and, once
+    ``ε`` reaches the ceiling margin in float64, a factor of ~1e7, since there the old form's
+    numerator is pure rounding noise while ``B·(x+y) + c‖x+y‖²·x`` still resolves it.
+
+    The ``‖n‖/(εR) ∈ [0.9, 1.1]`` rows are excluded from this comparison only: that is where the
+    exact result crosses the ball ceiling, so one form may clamp and the other not, and the
+    difference then says nothing about accuracy. They stay in the finiteness and ball assertions.
+    Measured ratio new/old on this grid: 0.48-0.60 everywhere.
+    """
+    max_norm = _mobius_max_norm(dtype, c)
+    for eps_val in _mobius_eps_grid(dtype, c):
+        worst_new, worst_old = 0.0, 0.0
+        for ratio in _MOBIUS_ETA_RATIOS:
+            if ratio in _MOBIUS_ILL_CONDITIONED:
+                continue
+            for kind in ("rand", "orth", "collin"):
+                x_ND, y_ND = _mobius_antipodal_pairs(dtype, c, eps_val, ratio, kind, seed=99)
+                ref_ND = _mobius_ref_f64(x_ND, y_ND, c, max_norm)
+                new_ND = np.asarray(_mobius_add_batch(x_ND, y_ND, c), dtype=np.float64)
+                old_ND = np.asarray(_mobius_ref_batch(x_ND, y_ND, c), dtype=np.float64)
+                worst_new = max(worst_new, float(np.max(np.linalg.norm(new_ND - ref_ND, axis=1))) / max_norm)
+                worst_old = max(worst_old, float(np.max(np.linalg.norm(old_ND - ref_ND, axis=1))) / max_norm)
+        assert worst_new <= 0.75 * worst_old + 1e-15, f"c={c}, eps={eps_val:.2e}: new {worst_new:.3e} vs old {worst_old:.3e}"
+
+    # Absolute bounds where the input is still well enough conditioned for one to mean something.
+    # Measured: 2.6e-2 (float32, eps=1e-2) and 4.9e-7 (float64, eps=1e-4).
+    abs_bound, abs_eps = (5e-2, 1e-2) if dtype == jnp.float32 else (1e-6, 1e-4)
+    worst = 0.0
+    for ratio in _MOBIUS_ETA_RATIOS:
+        if ratio in _MOBIUS_ILL_CONDITIONED:
+            continue
+        for kind in ("rand", "orth", "collin"):
+            x_ND, y_ND = _mobius_antipodal_pairs(dtype, c, abs_eps, ratio, kind, seed=99)
+            ref_ND = _mobius_ref_f64(x_ND, y_ND, c, max_norm)
+            new_ND = np.asarray(_mobius_add_batch(x_ND, y_ND, c), dtype=np.float64)
+            worst = max(worst, float(np.max(np.linalg.norm(new_ND - ref_ND, axis=1))) / max_norm)
+    assert worst <= abs_bound, f"c={c}: {worst:.3e} > {abs_bound:.3e}"
+
+
+@pytest.mark.parametrize("c", _MOBIUS_CS)
+def test_poincare_mobius_add_gradients_survive_the_analytic_norm(dtype: jnp.dtype, c: float) -> None:
+    """``x ⊕ (-x)`` is exactly 0 and no configuration produces a NaN gradient.
+
+    ``‖num‖²`` is now built from an explicit sum of three terms, so ``sqrt`` sees an exact 0
+    whenever ``y = -x`` — and ``sqrt`` has an infinite derivative there. The ``degenerate`` guard
+    is a ``where`` placed *before* the ``sqrt`` for exactly that reason; this test is what would
+    catch it being moved after. The gradients of ``dist`` and ``logmap`` are checked too, since
+    those are the two callers that feed ``(-x) ⊕ y`` with nearby near-boundary points.
+
+    The old form did *not* give an exact zero here — ``A`` and ``B`` are rounded independently, so
+    ``A·x + B·y`` left a residue of up to 1.3e-3 of the ball radius in float32.
+    """
+    x_ND, _ = _mobius_random_pairs(dtype, c, seed=7)
+    zero_D = jnp.zeros((_MOBIUS_DIM,), dtype=dtype)
+
+    assert float(jnp.max(jnp.abs(_mobius_add_batch(x_ND, -x_ND, c)))) == 0.0
+
+    for name, fn in (
+        ("antipode", lambda a: jnp.sum(_mobius_add_batch(a, -a, c))),
+        ("coincident", lambda a: jnp.sum(_mobius_add_batch(a, a, c))),
+        ("dist", lambda a: jnp.sum(jax.vmap(poincare_impl._dist_mobius, in_axes=(0, 0, None))(a, a, c))),
+        ("logmap", lambda a: jnp.sum(jax.vmap(poincare_impl._logmap, in_axes=(0, 0, None))(a, a, c))),
+    ):
+        assert jnp.all(jnp.isfinite(jax.grad(fn)(x_ND))), f"NaN grad: {name}, c={c}, {dtype}"
+
+    # The origin: x = y = 0 makes every reduction, and therefore `terms`, exactly 0.
+    assert jnp.all(jnp.isfinite(jax.grad(lambda a: jnp.sum(poincare_impl._addition(a, -a, c)))(zero_D)))
+    assert jnp.all(jnp.isfinite(jax.grad(lambda a: jnp.sum(poincare_impl._addition(a, zero_D, c)))(zero_D)))
+
+
+@pytest.mark.parametrize("c", _MOBIUS_CS)
+def test_poincare_mobius_add_leaves_unclamped_rows_untouched(dtype: jnp.dtype, c: float) -> None:
+    """A row that is not clamped comes back as exactly ``num / denom`` — the scale factor is 1.0.
+
+    ``scale`` multiplies the whole result, so if the unclamped branch were ``max_norm/norm`` with
+    ``norm`` a hair below ``max_norm`` instead of a literal 1.0, every row in the library would
+    pick up a silent relative shift. Multiplying by an exact 1.0 is exact, so the assertion is
+    bit-equality against the documented numerator.
+
+    CPU only: on GPU the five reductions are free to associate differently between this test's
+    expression and the compiled library kernel, and a 1-ulp difference there is not a defect.
+    """
+    if jax.default_backend() != "cpu":
+        pytest.skip("bit-equality across two separately compiled reduction trees is CPU-only")
+
+    def unclamped(x_D, y_D):
+        """``B·(x+y) + c‖x+y‖²·x`` over ``denom`` — the documented numerator, no clamp."""
+        x2 = jnp.dot(x_D, x_D)
+        y2 = jnp.dot(y_D, y_D)
+        xy = jnp.dot(x_D, y_D)
+        s_D = x_D + y_D
+        s2 = jnp.dot(s_D, s_D)
+        num_D = (1 - c * x2) * s_D + (c * s2) * x_D
+        return num_D / jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, poincare_impl.MIN_NORM)
+
+    max_norm = _mobius_max_norm(dtype, c)
+    x_ND, y_ND = _mobius_random_pairs(dtype, c, seed=4242)
+    out_ND = _mobius_add_batch(x_ND, y_ND, c)
+    raw_ND = jax.vmap(unclamped)(x_ND, y_ND)
+
+    keep = np.linalg.norm(np.asarray(raw_ND, dtype=np.float64), axis=1) < max_norm * (1.0 - 1e-4)
+    assert int(np.sum(keep)) > 0, "no unclamped rows on this grid"
+    assert jnp.array_equal(out_ND[keep], raw_ND[keep])
+
+
 def test_ptransp_is_an_isometry_and_round_trips(
     manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
