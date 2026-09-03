@@ -27,7 +27,7 @@ from flax import nnx
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
-from .hyperboloid_core import lorentz_midpoint, spatial_to_hyperboloid
+from .hyperboloid_core import MATMUL_PRECISION, lorentz_midpoint, spatial_to_hyperboloid
 from .hyperboloid_linear import HTCLinear
 
 # ---------------------------------------------------------------------------
@@ -260,8 +260,11 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         )
         self.power = power
         self.temperature = nnx.Param(jnp.array(1.0, dtype=param_dtype))
-        # Spatial residual projection ψ: D → D (shared across heads)
-        self.residual_proj = nnx.Linear(out_features, out_features, param_dtype=param_dtype, rngs=rngs)
+        # Spatial residual projection ψ: D → D (shared across heads). Its output is added to the
+        # attention aggregate, so it carries MATMUL_PRECISION for the same reason the aggregate does.
+        self.residual_proj = nnx.Linear(
+            out_features, out_features, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs
+        )
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
@@ -294,7 +297,7 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
             def scan_step(carry, inputs):
                 S_BHDE, z_BHD = carry
                 k_BHD, v_BHD = inputs
-                S_BHDE = S_BHDE + jnp.einsum("bhd,bhe->bhde", k_BHD, v_BHD)
+                S_BHDE = S_BHDE + jnp.einsum("bhd,bhe->bhde", k_BHD, v_BHD, precision=MATMUL_PRECISION)
                 z_BHD = z_BHD + k_BHD
                 return (S_BHDE, z_BHD), (S_BHDE, z_BHD)
 
@@ -303,16 +306,22 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
             _, (S_cum_NBHDE, z_cum_NBHD) = jax.lax.scan(scan_step, (init_S, init_z), (fk_NBHD, fv_NBHD))
 
             # output_n = Q_n @ S_n / (Q_n @ z_n + eps)
-            num_NBHD = jnp.einsum("nbhd,nbhde->nbhe", fq_NBHD, S_cum_NBHDE)  # (N, B, H, D)
-            den_NBH1 = jnp.einsum("nbhd,nbhd->nbh", fq_NBHD, z_cum_NBHD)[..., None]  # (N, B, H, 1)
+            num_NBHD = jnp.einsum("nbhd,nbhde->nbhe", fq_NBHD, S_cum_NBHDE, precision=MATMUL_PRECISION)  # (N, B, H, D)
+            den_NBH1 = jnp.einsum("nbhd,nbhd->nbh", fq_NBHD, z_cum_NBHD, precision=MATMUL_PRECISION)[..., None]  # (N, B, H, 1)
             output_spatial_BNHD = jnp.transpose(num_NBHD / (den_NBH1 + eps), (1, 0, 2, 3))  # (B, N, H, D)
         else:
             # 2. Bidirectional linear attention via kernel trick: φ(Q)(φ(K)^T V) / φ(Q)(φ(K)^T 1)
-            key_value_product_BHDE = jnp.einsum("bnhd,bnhe->bhde", focused_key_BNHD, value_spatial_BNHD)  # (B, H, D, D)
-            numerator_BNHD = jnp.einsum("bnhd,bhde->bnhe", focused_query_BNHD, key_value_product_BHDE)  # (B, N, H, D)
+            key_value_product_BHDE = jnp.einsum(
+                "bnhd,bnhe->bhde", focused_key_BNHD, value_spatial_BNHD, precision=MATMUL_PRECISION
+            )  # (B, H, D, D)
+            numerator_BNHD = jnp.einsum(
+                "bnhd,bhde->bnhe", focused_query_BNHD, key_value_product_BHDE, precision=MATMUL_PRECISION
+            )  # (B, N, H, D)
 
             key_sum_BHD = focused_key_BNHD.sum(axis=1)  # (B, H, D)
-            denominator_BNH1 = jnp.einsum("bnhd,bhd->bnh", focused_query_BNHD, key_sum_BHD)[..., None]  # (B, N, H, 1)
+            denominator_BNH1 = jnp.einsum("bnhd,bhd->bnh", focused_query_BNHD, key_sum_BHD, precision=MATMUL_PRECISION)[
+                ..., None
+            ]  # (B, N, H, 1)
 
             output_spatial_BNHD = numerator_BNHD / (denominator_BNH1 + eps)  # (B, N, H, D)
 
@@ -379,8 +388,11 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
             param_dtype=param_dtype,
             rngs=rngs,
         )
-        # Spatial residual projection ψ: D → D (shared across heads)
-        self.residual_proj = nnx.Linear(out_features, out_features, param_dtype=param_dtype, rngs=rngs)
+        # Spatial residual projection ψ: D → D (shared across heads). Its output is added to the
+        # attention aggregate, so it carries MATMUL_PRECISION for the same reason the aggregate does.
+        self.residual_proj = nnx.Linear(
+            out_features, out_features, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs
+        )
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
@@ -392,13 +404,17 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         head_dim = query_spatial_BNHD.shape[-1]
 
         # Scaled dot-product attention: softmax(Q_s K_s^T / √D) V_s
-        scores_BNHM = jnp.einsum("bnhd,bmhd->bnhm", query_spatial_BNHD, key_spatial_BNHD) / jnp.sqrt(float(head_dim))
+        scores_BNHM = jnp.einsum(
+            "bnhd,bmhd->bnhm", query_spatial_BNHD, key_spatial_BNHD, precision=MATMUL_PRECISION
+        ) / jnp.sqrt(float(head_dim))
         if causal:
             N = scores_BNHM.shape[1]
             mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
             scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, -1e9)
         attn_weights_BNHM = jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
-        output_spatial_BNHD = jnp.einsum("bnhm,bmhd->bnhd", attn_weights_BNHM, value_spatial_BNHD)  # (B, N, H, D)
+        output_spatial_BNHD = jnp.einsum(
+            "bnhm,bmhd->bnhd", attn_weights_BNHM, value_spatial_BNHD, precision=MATMUL_PRECISION
+        )  # (B, N, H, D)
 
         # Spatial residual
         output_spatial_BNHD = output_spatial_BNHD + self.residual_proj(value_spatial_BNHD)
@@ -470,9 +486,12 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         B, N, H, _A = value_BNHA.shape
 
         # 1. Pairwise Lorentzian similarity: <Q,K>_L = -Q_0 K_0 + Q_s · K_s
-        lorentz_inner_BNHM = -jnp.einsum("bnha,bmha->bnhm", query_BNHA[..., 0:1], key_BNHA[..., 0:1]) + jnp.einsum(
-            "bnhd,bmhd->bnhm", query_BNHA[..., 1:], key_BNHA[..., 1:]
-        )  # (B, N, H, M)
+        # This is the exact cancellation `_polar_frame` was written to avoid, with both halves
+        # produced by a matmul — under the TF32 default the subtraction amplifies a ~1e-3 relative
+        # input error instead of float32's ~1e-7, so both dots take MATMUL_PRECISION.
+        lorentz_inner_BNHM = -jnp.einsum(
+            "bnha,bmha->bnhm", query_BNHA[..., 0:1], key_BNHA[..., 0:1], precision=MATMUL_PRECISION
+        ) + jnp.einsum("bnhd,bmhd->bnhm", query_BNHA[..., 1:], key_BNHA[..., 1:], precision=MATMUL_PRECISION)  # (B, N, H, M)
         # Cast scalar params to compute dtype: storage (param_dtype) and compute
         # (input/manifold dtype) are decoupled, so the params must not drag the
         # scores to their storage dtype.
