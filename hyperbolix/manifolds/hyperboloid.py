@@ -1206,7 +1206,12 @@ def _compute_mlr(
     z_norm_1P = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True).clip(min=min_enorm).T  # (1,P)
     x0_B1 = x[:, 0:1]  # time coordinate
     x_rem_BD = x[:, 1:]  # space coordinates, D = in_dim-1
-    zx_rem_BP = jnp.einsum("bi,oi->bo", x_rem_BD, z)
+    # TF32 (the XLA:GPU default for float32 matmuls on Ampere/Hopper) feeds the alpha_BP
+    # difference below, so this dot takes the same HIGHEST annotation as the Lorentz dots in
+    # nn_layers/hyperboloid_core.MATMUL_PRECISION — spelled out here rather than imported,
+    # since manifolds/ must not depend on nn_layers/. Measured on an A100: the eager float32
+    # gradient of _compute_mlr goes from 1.5e-4 to 2.7e-7 relative against a float64 reference.
+    zx_rem_BP = jnp.einsum("bi,oi->bo", x_rem_BD, z, precision=lax.Precision.HIGHEST)
     alpha_BP = -x0_B1 * sinh(sqrt_cr_1P) * z_norm_1P + cosh(sqrt_cr_1P) * zx_rem_BP
     asinh_arg_BP = sqrt_c * alpha_BP / z_norm_1P
 
