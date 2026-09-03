@@ -5,12 +5,14 @@ and the κ-stereographic model (signed ``c`` — hyperbolic / Euclidean / spheri
 :mod:`hyperbolix.manifolds.poincare` and :mod:`hyperbolix.manifolds.stereographic` import from here so a
 stability fix lands in exactly one place instead of silently diverging between two hand-mirrored copies.
 
-For ``c > 0`` every function reproduces the historical Poincaré implementation **bit-for-bit**:
-``_addition`` / ``_gyration`` are curvature-generic (identical formula at any ``c``), and
-``_conformal_factor`` / ``_conformal_factor_batch`` / ``_proj`` carry a ``jnp.where(c > 0, …)`` /
-``abs(c)`` generalization whose ``c > 0`` branch is exactly the Poincaré expression. The only theoretical
-departure is a ``√|c|`` floor at ``√MIN_NORM``: for ``0 < c < 1e-15`` (a Poincaré ball of radius
+Every function is curvature-generic (one formula at any sign of ``c``); ``_conformal_factor`` /
+``_conformal_factor_batch`` / ``_proj`` carry a ``jnp.where(c > 0, …)`` / ``abs(c)`` generalization whose
+``c > 0`` branch is exactly the historical Poincaré expression, bit-for-bit. The only theoretical
+departure there is a ``√|c|`` floor at ``√MIN_NORM``: for ``0 < c < 1e-15`` (a Poincaré ball of radius
 ``1/√c > 3e7`` — never used) the boundary floor is marginally more conservative than a bare ``√c``.
+``_addition`` is the one function that is *not* bit-for-bit the historical expression: it regroups the
+numerator and clamps on a scalar (see its implementation notes), which changes the last ulps and is
+strictly more accurate near the ball boundary.
 
 All operations act on a single point of shape ``(dim,)``; batch with :func:`jax.vmap`. The
 ``_conformal_factor_batch`` helper is the exception — it broadcasts over arbitrary leading dims for the NN
@@ -90,7 +92,8 @@ def _proj_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... d
 def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     """Möbius gyrovector addition ``x ⊕ y`` (curvature-generic; non-commutative, non-associative).
 
-    Result is projected back onto the manifold (a no-op for ``c ≤ 0``).
+    Result is kept on the manifold by the same boundary clamp :func:`_proj` applies, but computed
+    from reductions over the *inputs* — see the implementation notes below.
 
     References:
         Ungar. "A gyrovector space approach to hyperbolic geometry." 2022.
@@ -98,9 +101,50 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> F
     x2 = jnp.dot(x, x)
     y2 = jnp.dot(y, y)
     xy = jnp.dot(x, y)
-    num = (1 + 2 * c * xy + c * y2) * x + (1 - c * x2) * y
+    # s = x + y is one extra (dim,)-sized elementwise op; ``s2`` and ``xs`` are the two extra
+    # *input* reductions that make ‖num‖ computable without ever touching the (dim,) output. That
+    # is the whole point: the old `_proj(num/denom, c)` re-reduced the op's own result, which under
+    # jit(vmap) forces XLA to materialise the unprojected (B, dim) array and read it back.
+    s_D = x + y
+    s2 = jnp.dot(s_D, s_D)
+    xs = jnp.dot(x, s_D)
+
+    # A - B = (1 + 2c·xy + c·y2) - (1 - c·x2) = c(x2 + 2xy + y2) = c‖x+y‖² *exactly*, so the
+    # historical numerator A·x + B·y is identically B·s + (c·s2)·x. This grouping is the one that
+    # survives near-boundary antipodal inputs (‖x‖ → 1/√c, y ≈ -x): there A·x and B·y each have
+    # magnitude ε·‖x‖ (ε := 1 - c‖x‖²) but their sum is O(ε²), so fl(A·x) + fl(B·y) loses a factor
+    # eps/ε of accuracy, while B·s and (c·s2)·x are individually of the same order as their sum.
+    coef_b = 1 - c * x2  # B
+    coef_g = c * s2  # A - B
+    num_D = coef_b * s_D + coef_g * x
     denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, MIN_NORM)
-    return _proj(num / denom, c)
+
+    # ‖num‖² expanded in the same two coefficients that built `num_D`, so the clamp decision is
+    # consistent with the vector it is applied to (an independently derived norm, e.g. the equally
+    # valid ‖x⊕y‖ = ‖x+y‖/√denom, is not: near the boundary the two disagree by eps/ε and a row
+    # can then be scaled to sit *outside* the ball).
+    t_ss = coef_b * coef_b * s2
+    t_sx = 2 * coef_b * coef_g * xs
+    t_xx = coef_g * coef_g * x2
+    norm2 = t_ss + t_sx + t_xx
+    # `terms` is both the rounding-error scale of that sum and, since |Σt| ≤ Σ|t|, an upper bound
+    # on ‖num‖². Two guards, in this order:
+    #   `lost`       norm2 has no significant bits left (or went negative). Fall back to `terms`:
+    #                over-clamping is safe, letting a row escape the ball is not.
+    #   `degenerate` terms == 0, i.e. num_D is identically zero (y = -x). The `where` must sit
+    #                *before* the sqrt — sqrt'(0) is infinite and would NaN the whole row's
+    #                gradient, which `_proj`'s `sqrt(‖·‖² + MIN_NORM²)` used to prevent.
+    terms = jnp.abs(t_ss) + jnp.abs(t_sx) + jnp.abs(t_xx)
+    mach_eps = jnp.finfo(num_D.dtype).eps
+    lost = norm2 <= 16 * mach_eps * terms
+    degenerate = terms <= 0
+    norm2_safe = jnp.where(degenerate, jnp.ones_like(norm2), jnp.where(lost, terms, norm2))
+    norm = jnp.sqrt(norm2_safe) / denom
+    max_norm = _max_norm(num_D, c)
+    cond = jnp.logical_not(degenerate) & (norm > max_norm)
+    # Rows that are not clamped are multiplied by an exact 1.0, i.e. they are exactly `num_D/denom`.
+    scale = jnp.where(cond, max_norm / norm, jnp.ones_like(norm))
+    return scale * (num_D / denom)
 
 
 def _gyration(x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
