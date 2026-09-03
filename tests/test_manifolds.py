@@ -681,6 +681,16 @@ def test_hyperboloid_dist_stable_exact_along_radial_geodesic(dtype: jnp.dtype) -
     through the origin (c = 1), so ``d(x, y) = |t1 - t2|`` exactly. VERSION_LEGACY is checked to
     be off by more than 10x the dtype tolerance at the larger pair: a regression guard that fails
     loudly if the switch wiring is ever reverted so VERSION_DEFAULT points at the legacy arm.
+
+    The float32 leg stops at the ``(9, 10)`` pair because float32 cannot resolve collinearity in
+    the ambient chart past radius ~16 on *any* backend, and this is a property of the storage
+    format rather than of the algorithm: ``_polar_frame`` normalizes each spatial part, and a
+    1-ulp perturbation of a unit direction is amplified by ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``
+    in the angular term. On XLA:GPU the float32 divide is only faithfully rounded (<=2 ulp, not
+    correctly rounded), which produces exactly such a perturbation; on CPU the ``(29, 30)`` pair
+    survives only because ``v_hat`` is a one-hot vector whose normalization happens to round
+    exactly — a generic direction fails on CPU too from radius ~20 (measured). float64 keeps the
+    large-radius pairs, where the divide is exact and the margin is seven orders of magnitude.
     """
     c = 1.0
     manifold = hj.manifolds.Hyperboloid(dtype=dtype)
@@ -689,7 +699,7 @@ def test_hyperboloid_dist_stable_exact_along_radial_geodesic(dtype: jnp.dtype) -
 
     if dtype == jnp.float32:
         atol, rtol = 4e-3, 4e-3
-        pairs = [(9.0, 10.0), (29.0, 30.0)]
+        pairs = [(9.0, 10.0)]
     else:
         atol, rtol = 1e-7, 1e-7
         pairs = [(19.0, 20.0), (55.0, 60.0)]
@@ -1470,12 +1480,16 @@ def test_is_in_tangent_space_rejects_non_finite_vectors(manifold_and_c, uniform_
 
 
 def test_poincare_proj_batch_matches_the_vmapped_single_point_proj(poincare_and_c, poincare_points: jnp.ndarray) -> None:
-    """``Poincare.proj_batch`` equals ``vmap(proj)`` exactly, and handles extra leading axes.
+    """``Poincare.proj_batch`` equals ``vmap(proj)``, and handles extra leading axes.
 
     Added to close the sibling gap against ``Hyperboloid.proj_batch``; ``decomposition/`` used
-    to hand-roll the vmap at two sites for want of it. Equality is asserted bit-for-bit
-    (``rtol=0, atol=0``) — an approximate check would not notice a batched rewrite that dropped
-    the ``keepdims`` and clamped by the wrong norm.
+    to hand-roll the vmap at two sites for want of it. Equality is asserted to 2 ulp of the
+    dtype rather than bit-for-bit: the two calls reduce over differently shaped arrays
+    (``(8, 10)`` vs ``(2, 8, 10)``), and XLA:GPU picks its reduce kernel per shape at compile
+    time, so the two sums can differ by 1-2 ulp — non-deterministically, since the choice comes
+    from autotuning and varies across processes. 2 ulp is far tighter than any real defect: a
+    batched rewrite that dropped the ``keepdims`` or clamped by the wrong norm moves the result
+    by orders of magnitude, not by an ulp.
 
     Points outside the ball are included: on already-inside points ``proj`` is the identity, so
     a ``proj_batch`` that returned its input unchanged would pass a test built only from the
@@ -1487,15 +1501,17 @@ def test_poincare_proj_batch_matches_the_vmapped_single_point_proj(poincare_and_
     outside = poincare_points[:4] * jnp.asarray(50.0, dtype=dtype)  # well past the boundary
     points = jnp.concatenate([poincare_points[:4], outside], axis=0)
 
+    two_ulp = 2.0 * float(jnp.finfo(dtype).eps)
+
     batched = manifold.proj_batch(points, c)
     looped = jax.vmap(manifold.proj, in_axes=(0, None))(points, c)
 
     assert batched.shape == points.shape
-    assert jnp.allclose(batched, looped, rtol=0, atol=0)
+    assert jnp.allclose(batched, looped, rtol=two_ulp, atol=0)
     assert _batch_is_in_manifold(manifold, batched, c)
     # The clamp actually fired: the far points moved.
     assert not jnp.allclose(batched[4:], points[4:])
 
     # Arbitrary leading dimensions, matching Hyperboloid.proj_batch's contract.
     stacked = jnp.stack([points, points[::-1]])  # (2, N, dim)
-    assert jnp.allclose(manifold.proj_batch(stacked, c)[0], batched, rtol=0, atol=0)
+    assert jnp.allclose(manifold.proj_batch(stacked, c)[0], batched, rtol=two_ulp, atol=0)

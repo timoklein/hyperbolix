@@ -709,8 +709,13 @@ def _hyperboloid_basis(dim: int) -> tuple[np.ndarray, np.ndarray]:
     That equality is load-bearing for the ``radial`` configurations: ``s1·e1`` and ``s2·e1`` then
     normalize to the *same* float unit vector for any positive scalars ``s1``, ``s2``, so the angle between the two points is
     exactly 0 and the pair is genuinely collinear in the dtype under test. With a generic direction
-    the two normalizations differ by ~eps, which at radius 80 is an angular separation large enough
-    to dominate the true radial one — an artifact of the construction, not of the library.
+    the two normalizations differ by ~eps, which the angular term amplifies by
+    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``; measured on CPU, that overtakes the true radial
+    separation from radius **≈16 in float32** (a generic ray already fails at ``a = 20``), not
+    at the radius 80 this docstring used to claim. The crossover sits at ``ln(1/eps)``, so float64
+    keeps the same construction usable to radius ~36. Either way it is an artifact of the
+    construction, not of the library: the float32 inputs do not contain the angular information
+    the assertion needs.
     """
     e1 = np.ones(dim) / np.sqrt(dim)
     e2 = np.zeros(dim)
@@ -978,7 +983,16 @@ def test_hyperboloid_dist_on_a_shared_ray_is_the_radius_difference(dtype, rtol: 
     Both are one-dimensional facts about the geodesic through the origin, so they need no oracle at
     all — and they are precisely the configurations the cancelling ``acosh`` form gets worst, since
     the Gromov product ``a + b - θ`` equals ``2·min(a, b)`` on a shared ray.
+
+    The float32 legs stop at ``a = 5``: past radius ~16 float32 cannot resolve collinearity in the
+    ambient chart on *any* backend (see :func:`_hyperboloid_basis`), and on XLA:GPU the float32
+    divide is only faithfully rounded (<=2 ulp, not correctly rounded), so ``_polar_frame``'s two
+    unit directions come back 1 ulp apart and the angular term multiplies that by
+    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``. The large-radius legs stay in float64, where the
+    divide is exact.
     """
+    if dtype == jnp.float32 and a > 5.0:
+        pytest.skip("float32 cannot resolve collinearity past radius ~16 in the ambient chart")
     e1, _ = _hyperboloid_basis(4)
     manifold = Hyperboloid(dtype=dtype)
     b = a + 1.5
