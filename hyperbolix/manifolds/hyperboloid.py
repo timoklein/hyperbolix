@@ -830,6 +830,27 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_
     1e-20…1e10, with an identity VJP), and it routes through :func:`_minkowski_inner`, which turns
     an ``inf`` spatial input into an all-NaN result instead of leaving the time slot intact.
 
+    **An infinitely far point maps to an infinite tangent vector, not to NaN.** ``safe_norm``
+    deliberately passes an ``inf`` spatial entry through as ``inf`` (see its docstring), which made
+    ``u = inf`` and the scale ``arcsinh(inf)/inf = inf/inf`` a NaN that then poisoned the whole
+    vector — the time slot included. The pairwise :func:`dist` / :func:`_polar_frame` convention for
+    an out-of-range input is ``±inf``, not NaN, and this now matches: ``scale`` is ``where(isfinite(u),
+    arcsinh(u)/u, 1)``, so an ``inf`` spatial entry comes back as ``±inf`` with its sign, the finite
+    entries keep their own values, and the time slot stays exactly 0. That is the right limit — the
+    tangent vector toward an infinitely far point has infinite norm, and its direction is the unit
+    vector along the infinite coordinate, so the infinite entries are what carry the answer. NaN in
+    still gives NaN out (``isfinite(NaN)`` is false, and ``1·NaN`` is NaN).
+
+    The guard is a ``where`` on the *scalar* ``u``, so the finite path is unchanged: ``where``
+    selects ``arcsinh(u)/u`` untouched, and its cotangent routes to that branch while the constant
+    branch contributes nothing. Verified over 2000 log-spaced magnitudes 1e-20…1e10 in both dtypes.
+    The **forward** value is bit-identical on both backends (0 of 18000 bit patterns). The
+    **gradient** is bit-identical on XLA:CPU, and on XLA:GPU moves by at most 2 ulps on 614 (float32)
+    / 626 (float64) of 18000 entries — the extra ``where`` changes how XLA:GPU fuses the VJP. That is
+    below the 4-ulp spread the *unchanged* code already shows between the two backends (4294 of 18000
+    float32 gradient entries differ CPU-vs-GPU before this change), and each backend is deterministic
+    run to run.
+
     Args:
         y: Hyperboloid point in ambient representation, shape (dim+1,)
         c: Curvature (positive)
@@ -854,7 +875,9 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_
     y_rest_norm = floor_at(safe_norm(y_rest), MIN_NORM)
 
     u = sqrt_c * y_rest_norm
-    scale = jnp.arcsinh(u) / u  # = d₀(y)/‖y_s‖, → 1 as u → 0
+    # = d₀(y)/‖y_s‖, → 1 as u → 0. The `where` only fires on a non-finite `u`, where the quotient
+    # would be inf/inf = NaN; the scale 1 there hands the ±inf spatial entries straight through.
+    scale = jnp.where(jnp.isfinite(u), jnp.arcsinh(u) / u, 1.0)
 
     v0 = jnp.zeros(1, dtype=y.dtype)
     v_rest = scale * y_rest

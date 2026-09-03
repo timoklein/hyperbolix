@@ -780,6 +780,34 @@ def test_hyperboloid_tangent_norm_zero_vector_finite_grad() -> None:
     assert jnp.all(jnp.isfinite(grad))
 
 
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+def test_hyperboloid_logmap_0_of_an_infinite_point_is_infinite_not_nan(dtype) -> None:
+    """An ``inf`` spatial entry must not turn the whole tangent vector into NaN.
+
+    ``safe_norm`` deliberately passes an ``inf`` through as ``inf`` so an out-of-range point stays
+    visibly degenerate; the scale ``arcsinh(u)/u`` then evaluated ``inf/inf`` and NaN-poisoned every
+    entry, the time slot included. The convention for an out-of-range input elsewhere in the module
+    (``dist``/``_polar_frame``'s ``isfinite`` guard) is ``±inf``, so this asserts ``±inf`` on the
+    infinite entries, their sign preserved, and a time slot that is still exactly 0.
+    """
+    manifold, c = hj.manifolds.Hyperboloid(dtype=dtype), 1.0
+    inf = jnp.asarray(jnp.inf, dtype=dtype)
+
+    # x₀ = inf is what the sheet constraint gives for an infinite spatial part; logmap_0 ignores it.
+    y_A = jnp.asarray([inf, inf, -inf, 0.3, -0.5], dtype=dtype)
+    v_A = manifold.logmap_0(y_A, c)
+
+    assert not jnp.any(jnp.isnan(v_A)), f"logmap_0 must not return NaN for an infinite point: {v_A}"
+    assert v_A[0] == 0.0, "log_0 is tangent at the origin, so its time slot stays exactly 0"
+    assert v_A[1] == jnp.inf
+    assert v_A[2] == -jnp.inf
+    assert jnp.all(jnp.isfinite(v_A[3:])), "the finite spatial entries stay finite"
+
+    # A finite point is unaffected: the guard fires only on a non-finite norm.
+    y_finite_A = manifold.expmap_0(jnp.asarray([0.0, 0.4, -0.2, 0.1, 0.3], dtype=dtype), c)
+    assert jnp.all(jnp.isfinite(manifold.logmap_0(y_finite_A, c)))
+
+
 def test_poincare_tangent_norm_zero_vector_finite_grad() -> None:
     """``tangent_norm`` must have a finite gradient at the zero tangent vector (Poincaré).
 

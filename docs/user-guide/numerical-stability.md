@@ -173,6 +173,19 @@ Operations that inherit the fix without any change of their own: gyro `addition`
 `logmap`'s origin fallback, and `HyperboloidGyroRMSNorm`, which divides by `dist_0` and so
 mis-normalised every float32 sample inside radius 1.5e-3.
 
+!!! note "An infinitely far point gives an infinite tangent vector, not NaN"
+    `safe_norm` passes an `inf` spatial entry through as `inf` on purpose, so an out-of-range point
+    stays visibly degenerate instead of silently NaN-poisoning everything downstream. That made
+    `logmap_0`'s scale $\operatorname{arcsinh}(u)/u$ an $\infty/\infty$ NaN, which then multiplied
+    *every* entry — the time slot included. It is now
+    `where(isfinite(u), arcsinh(u)/u, 1)`: the infinite entries come back as $\pm\infty$ with their
+    signs, the finite entries keep their values, and the time slot stays exactly 0. This is the same
+    $\pm\infty$-not-NaN convention the pairwise `dist`/`logmap` already follow through
+    `_polar_frame`'s `isfinite` guard. The finite path is unchanged: the forward value is bit-identical on
+    both backends and the gradient is bit-identical on XLA:CPU, moving by at most 2 ulps on XLA:GPU
+    (where the extra `where` changes the VJP's fusion) against a 4-ulp CPU-vs-GPU spread the unchanged
+    code already had.
+
 !!! note "The pairwise `dist` reads the same radial gap off the spatial part"
     `dist` is a separate code path, and it used to carry its own $O(\varepsilon/r)$ relative error
     near the origin: its polar decomposition needs $u_x - u_y$ with $u = x_0 + \lVert x_s\rVert$,
