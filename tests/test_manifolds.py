@@ -641,53 +641,93 @@ def test_hyperboloid_sqdist(hyperboloid_and_c, tolerance: tuple[float, float], h
 # ---------------------------------------------------------------------------
 
 
+def _stored_radius(spatial: np.ndarray, c: float) -> float:
+    """``√c·d₀`` of the point whose **stored** spatial part is ``spatial``, in float64.
+
+    ``arcsinh(√c·‖x_s‖)`` from the exact stored values, so it is the radius of the point the
+    library is handed rather than of the real-arithmetic point it was meant to be.
+    """
+    s_64 = np.asarray(spatial, dtype=np.float64)
+    return float(np.arcsinh(np.sqrt(c) * np.sqrt(float(np.dot(s_64, s_64)))))
+
+
+def _radial_pair_exact_in_dtype(manifold, t: float, log2_ratio: int, c: float, dim: int, dtype):
+    """Two points on one radial geodesic, collinear **in the dtype** and not merely in the reals.
+
+    ``x = expmap_0(t·v_hat)`` for a one-hot ``v_hat``, and ``y`` carries the spatial part
+    ``ldexp(x_s, log2_ratio)`` — an exact power-of-two rescale, every mantissa unchanged — with
+    ``y₀ = sqrt(1/c + ‖y_s‖²)`` derived in float64.
+
+    Why that is exact rather than lucky: a float divide is *exponent-invariant*
+    (``fl((2^k·p)/(2^k·q)) == fl(p/q)``, the exact quotient being unchanged), and ``safe_norm``
+    divides by ``max|v|``, which also scales by exactly ``2^k``. So ``_polar_frame``'s two unit
+    directions ``x_s/r_x`` and ``y_s/r_y`` come back **bit-identical**, its angular term ``chord``
+    is exactly 0, and the distance reduces to the cancellation-free radial gap term. Building the
+    two points from two independently rounded scalings instead leaves them proportional only to
+    within an ulp, which the angular term amplifies by ``sqrt(r_x·r_y) ~ e^((a+b)/2)/(2·sqrt(c))``.
+
+    Exponent invariance is measured, not assumed — XLA:GPU's float32 divide is only faithfully
+    rounded and ``x/x != 1`` for 15.3 % of float32 values on an A100, yet 0 of 200 000 x 7 exponent
+    shifts disagree there (``logs/2026-09-03_collinearity_tests/divide_invariance_gpu.json``).
+
+    Returns ``(x, y, expected_distance)``, the distance being the difference of the two stored
+    radii: ``(arcsinh(2^k·sinh(√c·t)) - √c·t)/√c``, which tends to ``k·ln 2/√c`` at large radius.
+    """
+    v_hat = jnp.zeros(dim + 1, dtype=dtype).at[1].set(1.0)  # unit spatial tangent at the origin
+    x = manifold.expmap_0(jnp.asarray(t, dtype=dtype) * v_hat, c)
+    x_s = np.asarray(x)[1:]
+    y_s = np.ldexp(x_s, log2_ratio).astype(dtype)
+    assert np.all(np.isfinite(x)) and np.all(np.isfinite(y_s)), f"radial pair not representable at t={t}"
+    y_s_64 = np.asarray(y_s, dtype=np.float64)
+    y_time = np.sqrt(1.0 / c + float(np.dot(y_s_64, y_s_64)))
+    y = jnp.asarray(np.concatenate([[y_time], y_s_64]).astype(dtype))
+    expected = (_stored_radius(y_s, c) - _stored_radius(x_s, c)) / np.sqrt(c)
+    return x, y, expected
+
+
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hyperboloid_dist_stable_exact_along_radial_geodesic(dtype: jnp.dtype) -> None:
-    """dist along a shared radial geodesic is exactly ``|t1 - t2|`` — a closed form the
+    """dist along a shared radial geodesic is exactly the radius difference — a closed form the
     Minkowski-inner cancellation bug corrupted past radius ~10 (f32) / ~20 (f64) under the old
     acosh arm, now VERSION_LEGACY.
 
-    ``x = expmap_0(t1 * v_hat)``, ``y = expmap_0(t2 * v_hat)`` lie on the same geodesic ray
-    through the origin (c = 1), so ``d(x, y) = |t1 - t2|`` exactly. VERSION_LEGACY is checked to
-    be off by more than 10x the dtype tolerance at the larger pair: a regression guard that fails
-    loudly if the switch wiring is ever reverted so VERSION_DEFAULT points at the legacy arm.
+    ``x = expmap_0(t·v_hat)`` and ``y``, its spatial part rescaled by an exact factor 2, lie on the
+    same geodesic ray through the origin, so ``d(x, y)`` is the difference of their radii — see
+    :func:`_radial_pair_exact_in_dtype` for why that rescale makes the pair collinear *in the
+    dtype*. VERSION_LEGACY is checked to be off by more than 10x the dtype tolerance at the largest
+    radius: a regression guard that fails loudly if the switch wiring is ever reverted so
+    VERSION_DEFAULT points at the legacy arm.
 
-    The float32 leg stops at the ``(9, 10)`` pair because float32 cannot resolve collinearity in
-    the ambient chart past radius ~16 on *any* backend, and this is a property of the storage
-    format rather than of the algorithm: ``_polar_frame`` normalizes each spatial part, and a
-    1-ulp perturbation of a unit direction is amplified by ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``
-    in the angular term. On XLA:GPU the float32 divide is only faithfully rounded (<=2 ulp, not
-    correctly rounded), which produces exactly such a perturbation; on CPU the ``(29, 30)`` pair
-    survives only because ``v_hat`` is a one-hot vector whose normalization happens to round
-    exactly — a generic direction fails on CPU too from radius ~20 (measured). float64 keeps the
-    large-radius pairs, where the divide is exact and the margin is seven orders of magnitude.
+    Both dtypes now run their full radius list. The old version built ``y = expmap_0(t2·v_hat)`` as
+    a second independent rounding and so could only assert collinearity where the two normalizations
+    happened to agree: measured over 1300 (radius x curvature x dim) cells, that construction
+    resolves the pair in 87.3 % of cells on an A100 in float32 — the one-hot ``v_hat`` hid the
+    problem on CPU, where ``x_s/‖x_s‖`` is a correctly rounded ``s/s = 1``, but XLA:GPU's float32
+    divide is only faithfully rounded and returns ``s/s != 1`` for 15.3 % of values. With the exact
+    rescale it is 100 % of cells on CPU and on the A100 in both dtypes
+    (``logs/2026-09-03_collinearity_tests/``). The float32 list stops at ``t = 43`` because
+    ``sum(x_s²)`` inside ``expmap_0`` overflows float32 past spatial radius 1.8e19, which is a
+    construction limit of the exponential map, not of ``dist``.
     """
     c = 1.0
     manifold = hj.manifolds.Hyperboloid(dtype=dtype)
     dim = 5
-    v_hat = jnp.zeros(dim + 1, dtype=dtype).at[1].set(1.0)  # unit spatial tangent at the origin
 
     if dtype == jnp.float32:
         atol, rtol = 4e-3, 4e-3
-        pairs = [(9.0, 10.0)]
+        radii = [9.0, 20.0, 30.0, 43.0]
     else:
         atol, rtol = 1e-7, 1e-7
-        pairs = [(19.0, 20.0), (55.0, 60.0)]
+        radii = [19.0, 40.0, 55.0]
 
-    for t1, t2 in pairs:
-        x = manifold.expmap_0(jnp.asarray(t1, dtype=dtype) * v_hat, c)
-        y = manifold.expmap_0(jnp.asarray(t2, dtype=dtype) * v_hat, c)
-        expected = abs(t1 - t2)
-
+    for t in radii:
+        x, y, expected = _radial_pair_exact_in_dtype(manifold, t, 1, c, dim, dtype)
         d_default = manifold.dist(x, y, c)
-        assert jnp.allclose(d_default, expected, atol=atol, rtol=rtol)
+        assert jnp.allclose(d_default, expected, atol=atol, rtol=rtol), f"t={t}: {d_default} vs {expected}"
 
-    # Regression guard at the larger, more cancellation-prone pair: the legacy arm must be
+    # Regression guard at the largest, most cancellation-prone radius: the legacy arm must be
     # visibly wrong, or this test would silently stop catching a reverted switch.
-    t1, t2 = pairs[-1]
-    x = manifold.expmap_0(jnp.asarray(t1, dtype=dtype) * v_hat, c)
-    y = manifold.expmap_0(jnp.asarray(t2, dtype=dtype) * v_hat, c)
-    expected = abs(t1 - t2)
+    x, y, expected = _radial_pair_exact_in_dtype(manifold, radii[-1], 1, c, dim, dtype)
     d_legacy = manifold.dist(x, y, c, version_idx=hj.manifolds.Hyperboloid.VERSION_LEGACY)
     assert abs(float(d_legacy) - expected) > 10.0 * atol
 

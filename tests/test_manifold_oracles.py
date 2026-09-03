@@ -36,6 +36,7 @@ from hyperbolix.manifolds import (
 )
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds._gyrovector_core import _conformal_factor, _conformal_factor_batch, _proj
+from hyperbolix.manifolds.hyperboloid import _polar_frame
 from hyperbolix.nn_layers.hyperboloid_core import sinh_lift_to_hyperboloid
 from hyperbolix.utils.math_utils import MIN_NORM
 
@@ -707,16 +708,24 @@ class _HyperboloidCase(NamedTuple):
 def _hyperboloid_basis(dim: int) -> tuple[np.ndarray, np.ndarray]:
     """Two orthonormal spatial directions; ``e1`` has all components equal.
 
-    That equality is load-bearing for the ``radial`` configurations: ``s1·e1`` and ``s2·e1`` then
-    normalize to the *same* float unit vector for any positive scalars ``s1``, ``s2``, so the angle between the two points is
-    exactly 0 and the pair is genuinely collinear in the dtype under test. With a generic direction
-    the two normalizations differ by ~eps, which the angular term amplifies by
-    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``; measured on CPU, that overtakes the true radial
-    separation from radius **≈16 in float32** (a generic ray already fails at ``a = 20``), not
-    at the radius 80 this docstring used to claim. The crossover sits at ``ln(1/eps)``, so float64
-    keeps the same construction usable to radius ~36. Either way it is an artifact of the
-    construction, not of the library: the float32 inputs do not contain the angular information
-    the assertion needs.
+    **This does not make a scaled pair collinear in the dtype under test**, and an earlier version
+    of this docstring wrongly claimed it did. ``s1·e1`` and ``s2·e1`` are proportional in exact
+    arithmetic, but each is *rounded independently* to the dtype, so the stored vectors are only
+    proportional to within an ulp per component and ``fl(x_s/‖x_s‖)`` and ``fl(y_s/‖y_s‖)`` agree
+    bit-for-bit only by luck. The angular term amplifies a 1-ulp disagreement by
+    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``, so past radius ~10 the coin flip decides whether a
+    shared-ray assertion passes. Measured over radius 1..45 step 0.5 x ``c`` in {0.3, 1.0, 2.5} x
+    ``dim`` in {2, 4, 5, 10, 15} (1335 cells, ``logs/2026-09-03_collinearity_tests/``): this
+    construction resolves the pair in 84.2 % of cells on CPU and 62.6 % on an A100 in float32, and
+    **91.0 % on both backends in float64** — the float64 misses are all past radius 25. It is an
+    artifact of the construction, not of the library: the rounded inputs do not contain the angular
+    information the assertion needs.
+
+    Tests that need an exactly collinear pair must therefore build one, not scale one twice — see
+    :func:`_hyperboloid_ray_pair`. The ``radial`` configurations of the oracle grid keep this
+    construction on purpose: they compare against the Decimal oracle of the *stored* pair with the
+    :func:`_hyperboloid_input_resolution` allowance, so they assert what the inputs contain rather
+    than assuming collinearity.
     """
     e1 = np.ones(dim) / np.sqrt(dim)
     e2 = np.zeros(dim)
@@ -977,6 +986,63 @@ def _hyperboloid_point(a: float, c: float, direction: np.ndarray, dtype) -> jnp.
     return jnp.asarray(np.concatenate([[np.cosh(a) / sqrt_c], (np.sinh(a) / sqrt_c) * direction]).astype(dtype))
 
 
+def _hyperboloid_stored_radius(x_s: np.ndarray, c: float) -> float:
+    """``√c·d₀`` of the point whose **stored** spatial part is ``x_s``, to float64 accuracy.
+
+    ``arcsinh(√c·‖x_s‖)``, evaluated in float64 from the exact stored values, so it is the radius
+    of the point the library is actually handed rather than of the real-arithmetic point it was
+    meant to be. Relative accuracy ~1e-16, seven orders below the tolerances it is compared at.
+    """
+    s64 = np.asarray(x_s, dtype=np.float64)
+    return float(np.arcsinh(np.sqrt(c) * np.sqrt(float(np.dot(s64, s64)))))
+
+
+def _hyperboloid_ray_pair(a: float, log2_ratio: int, c: float, direction: np.ndarray, dtype):
+    """Two points on one ray whose **stored** spatial parts are proportional *in float*, not just
+    in the reals. Returns ``(x_A, y_A, a_stored, b_stored)`` with the two ``√c·d₀`` radii.
+
+    ``x_s`` is the dtype rounding of ``sinh(a)/√c · direction`` — any value at all — and
+    ``y_s = ldexp(x_s, log2_ratio)``, an exact power-of-two rescale: every mantissa is unchanged and
+    only the exponent moves. That is what makes the pair collinear **by construction**:
+
+    * ``safe_norm`` divides by ``max|v|``, and ``max|2^k·x_s| = 2^k·max|x_s|`` exactly, so the two
+      max-scaled vectors that enter the sum of squares are related by the same exact power of two;
+    * a float divide is *exponent-invariant* — ``fl((2^k·p)/(2^k·q)) == fl(p/q)`` — because the
+      exact quotient is unchanged and the exponent is handled separately from the mantissa. So the
+      two max-scaled vectors, hence ``sum(v²)``, hence ``sqrt`` of it, come back **bit-identical**,
+      ``r_y = 2^k·r_x`` exactly, and ``x_hat = x_s/r_x`` and ``y_s/r_y`` are bit-identical again;
+    * therefore ``chord = ‖x_hat - y_hat‖`` is **exactly 0**, ``q_angular`` is exactly 0, and
+      ``dist`` reduces to ``2·arcsinh|P|/√c`` on the radial gap term alone — which is
+      cancellation-free and well conditioned at every radius.
+
+    Exponent invariance is the one step that needs measuring rather than assuming: XLA:GPU's float32
+    divide is only *faithfully* rounded, and ``x/x != 1`` for 15.3 % of float32 values on an A100.
+    Measured anyway (``logs/2026-09-03_collinearity_tests/divide_invariance_*.json``): **0 of
+    200 000 x 7 exponent shifts** disagree, on CPU and on the A100, in both dtypes, and 0 of 12 000
+    draws of the full ``safe_norm``-then-normalize chain. Faithful rounding costs correctness of the
+    quotient, not invariance of it under a power-of-two rescale.
+
+    Consequence for the caller: the radius ratio is fixed at ``2^k``, so the radius *difference* is
+    ``arcsinh(2^k·sinh a) - a`` (→ ``k·ln 2`` as ``a`` grows) rather than a round number. Both radii
+    are returned so the expected distance stays an analytic fact about the stored pair.
+
+    Measured pass rate of ``dist == b_stored - a_stored`` at ``rel = 1e-6`` over the same 1335-cell
+    grid as :func:`_hyperboloid_basis`: **100 % on CPU and on the A100, in both dtypes**, with
+    ``chord == 0.0`` in every cell, against 84.2 % / 62.6 % (float32) and 91.0 % / 91.0 % (float64)
+    for the twice-scaled construction. Worst relative error 3.8e-7 (float32) / 3.0e-15 (float64).
+    """
+    sqrt_c = np.sqrt(c)
+    x_s = np.asarray((np.sinh(a) / sqrt_c) * direction, dtype=dtype)
+    y_s = np.ldexp(x_s, log2_ratio).astype(dtype)  # exact: mantissas unchanged, exponent shifted
+    assert np.all(np.isfinite(y_s)) and np.all(x_s != 0.0), f"ray pair not representable: a={a} c={c}"
+    return (
+        _hyperboloid_point_from_spatial(x_s, c, dtype),
+        _hyperboloid_point_from_spatial(y_s, c, dtype),
+        _hyperboloid_stored_radius(x_s, c),
+        _hyperboloid_stored_radius(y_s, c),
+    )
+
+
 @pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
 @pytest.mark.parametrize("c", CURVATURES)
 @pytest.mark.parametrize("a", [0.5, 5.0, 20.0, 45.0])
@@ -987,23 +1053,44 @@ def test_hyperboloid_dist_on_a_shared_ray_is_the_radius_difference(dtype, rtol: 
     all — and they are precisely the configurations the cancelling ``acosh`` form gets worst, since
     the Gromov product ``a + b - θ`` equals ``2·min(a, b)`` on a shared ray.
 
-    The float32 legs stop at ``a = 5``: past radius ~16 float32 cannot resolve collinearity in the
-    ambient chart on *any* backend (see :func:`_hyperboloid_basis`), and on XLA:GPU the float32
-    divide is only faithfully rounded (<=2 ulp, not correctly rounded), so ``_polar_frame``'s two
-    unit directions come back 1 ulp apart and the angular term multiplies that by
-    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``. The large-radius legs stay in float64, where the
-    divide is exact.
+    **The pair is collinear by construction, not by rounding luck.** Scaling one direction twice
+    (``sinh(a)·e1`` and ``sinh(b)·e1``, each rounded on its own) leaves the two stored spatial parts
+    proportional only to within an ulp, and the angular term amplifies that by
+    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))`` — a coin flip past radius ~10 that this test used to
+    ride, restricting float32 to ``a <= 5`` and passing at ``a = 45`` in float64 only for the
+    particular ``c`` and ``dim`` in the parametrization. Measured over 1335 (radius x ``c`` x
+    ``dim``) cells, that construction resolves the pair in 84.2 % of cells on CPU / 62.6 % on an
+    A100 in float32 and 91.0 % on both in float64. :func:`_hyperboloid_ray_pair` instead makes the
+    far point an exact power-of-two rescale of the near one, which forces ``chord`` to exactly 0
+    through the divide's exponent invariance and leaves only the well-conditioned radial gap term:
+    100 % of the same 1335 cells on CPU and on the A100, in both dtypes, so **both dtypes now run
+    every radius** (``logs/2026-09-03_collinearity_tests/``).
+
+    The price is that the radius ratio is fixed at 2, so the gap is ``arcsinh(2·sinh a) - a`` (0.86
+    at ``a = 0.5``, → ``ln 2`` at large ``a``) rather than a round 1.5; both stored radii come back
+    from the helper so the expected value stays an analytic fact about the pair on the sheet.
     """
-    if dtype == jnp.float32 and a > 5.0:
-        pytest.skip("float32 cannot resolve collinearity past radius ~16 in the ambient chart")
     e1, _ = _hyperboloid_basis(4)
     manifold = Hyperboloid(dtype=dtype)
-    b = a + 1.5
-    same_ray = float(manifold.dist(_hyperboloid_point(a, c, e1, dtype), _hyperboloid_point(b, c, e1, dtype), c))
-    assert same_ray == pytest.approx(1.5 / np.sqrt(c), rel=max(rtol, 1e-6))
+    tol = max(rtol, 1e-6)
 
-    opposite = float(manifold.dist(_hyperboloid_point(a, c, e1, dtype), _hyperboloid_point(b, c, -e1, dtype), c))
-    assert opposite == pytest.approx((a + b) / np.sqrt(c), rel=max(rtol, 1e-6))
+    x_A, y_A, a_stored, b_stored = _hyperboloid_ray_pair(a, 1, c, e1, dtype)
+    # The construction's premise, asserted rather than assumed: with the two stored spatial parts an
+    # exact power of two apart, ``_polar_frame``'s two unit directions are bit-identical, so there is
+    # no fake angle for sqrt(r_x·r_y) to amplify. If this ever fires, the pair is not collinear in
+    # the dtype and the two value assertions below are measuring luck again.
+    assert float(_polar_frame(x_A, y_A, c).chord) == 0.0, "ray pair is not collinear in this dtype"
+
+    same_ray = float(manifold.dist(x_A, y_A, c))
+    assert same_ray == pytest.approx((b_stored - a_stored) / np.sqrt(c), rel=tol)
+
+    # ψ = π: the far point mirrored through the origin. Negation is exact, so the mirrored spatial
+    # part is still an exact power of two times ``-x_s`` and both radii are unchanged. This leg was
+    # never the fragile one — ``chord ≈ 2`` there, so a 1-ulp direction error is not amplified.
+    _, y_opposite_A, _, b_mirrored = _hyperboloid_ray_pair(a, 1, c, -e1, dtype)
+    assert b_mirrored == b_stored
+    opposite = float(manifold.dist(x_A, y_opposite_A, c))
+    assert opposite == pytest.approx((a_stored + b_stored) / np.sqrt(c), rel=tol)
 
 
 @pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
@@ -1070,9 +1157,17 @@ _DIST_0_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-14}
 
 
 def _hyperboloid_point_from_spatial(x_s: np.ndarray, c: float, dtype) -> jnp.ndarray:
-    """Ambient point with the given spatial part; ``x₀`` completed from the constraint."""
-    x0 = np.sqrt(1.0 / c + float(np.dot(x_s, x_s)))
-    return jnp.asarray(np.concatenate([[x0], x_s]).astype(dtype))
+    """Ambient point carrying ``x_s`` **unchanged**, with ``x₀`` completed from the constraint.
+
+    ``x_s`` is expected to be already rounded to ``dtype``; float32 -> float64 -> float32
+    round-trips exactly, so the stored spatial part is bit-identical to the one handed in. The
+    constraint is evaluated in float64 because ``sum(x_s²)`` overflows float32 at spatial radius
+    1.8e19 (geodesic radius ~44 at ``c = 1``) even though ``x₀`` itself is representable out to
+    3.4e38 — the same limit that stops the library's own ``proj``/``expmap_0`` there.
+    """
+    s_64 = np.asarray(x_s, dtype=np.float64)
+    x0 = np.sqrt(1.0 / c + float(np.dot(s_64, s_64)))
+    return jnp.asarray(np.concatenate([[x0], s_64]).astype(dtype))
 
 
 def _hyperboloid_point_at_spatial_radius(r: float, c: float, direction: np.ndarray, dtype) -> jnp.ndarray:
