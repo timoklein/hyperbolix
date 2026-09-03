@@ -37,6 +37,7 @@ from hyperbolix.manifolds import (
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds._gyrovector_core import _conformal_factor, _conformal_factor_batch, _proj
 from hyperbolix.nn_layers.hyperboloid_core import sinh_lift_to_hyperboloid
+from hyperbolix.utils.math_utils import MIN_NORM
 
 jax.config.update("jax_enable_x64", True)
 
@@ -838,8 +839,9 @@ _HYP_DTYPE_IDS = ["f32", "f64"]
 def test_hyperboloid_dist_matches_the_decimal_oracle(dtype, rtol: float, c: float):
     """``dist`` vs a 250-digit reference across radii 0.01 .. 80 and separations 1e-6 .. 2·radius.
 
-    Measured worst case over the grid: 30% of the tolerance below (float64) and 46% (float32), i.e.
-    a factor ~2 of margin. The pre-fix ``acosh(-c⟨x, y⟩_L)`` arm is wrong by 100% on most of this
+    Measured worst case over the grid: 19% of the tolerance below (float64) and 14% (float32), i.e.
+    a factor 5-7 of margin (was 30%/46% before the radial gap term was rewritten to subtract only
+    the spatial radii). The pre-fix ``acosh(-c⟨x, y⟩_L)`` arm is wrong by 100% on most of this
     grid past radius 10 — it returns 0 wherever the clipped argument rounds to exactly 1.
     """
     manifold = Hyperboloid(dtype=dtype)
@@ -903,8 +905,9 @@ def test_hyperboloid_tangent_norm_of_logmap_equals_dist(dtype, rtol: float, c: f
     than ``dist``'s, because a tangent vector's ambient components are ``e^a`` times its Riemannian
     length, so the radial/angular split it needs is destroyed by input rounding first. Cases past
     ``eps·√c·x₀ > 0.05`` (radius ~28 in float64, ~13 in float32) are therefore skipped: they are
-    not representable, not wrong. Within the representable range the measured worst case is 30%
-    (float64) / 45% (float32) of the tolerance.
+    not representable, not wrong. Within the representable range the measured worst case is 12%
+    (float64) / 8.9% (float32) of the tolerance (was 30%/45% before the radial gap term was
+    rewritten to subtract only the spatial radii).
     """
     manifold = Hyperboloid(dtype=dtype)
     eps = float(np.finfo(dtype).eps)
@@ -1013,12 +1016,16 @@ def test_hyperboloid_dist_and_logmap_to_the_origin_match_the_origin_variants(dty
     every radius, so they are an independent reference for the general two-point code path. The log
     map to the origin must be exactly the inward unit radial direction scaled by the distance.
 
-    Below ``a ~ 1e-2`` the limiting arm is the **pairwise** one, not ``dist_0``: ``_polar_frame``
-    forms ``u_x - u_y = (x₀ + r_x) - (y₀ + r_y)``, which loses ``eps·x₀`` and leaves an O(eps/a)
-    relative error (measured 2.5e-4 at ``a = 1e-4`` in float32 and 5.4e-12 in float64, against a
-    ``dist_0`` that is exact to 1.2e-7 / 0 there). Fixing ``_polar_frame`` is separate work, so the
-    pairwise comparison is given the ``20·eps/a`` its own arm supports — a no-op for ``a >~ 1`` —
-    while ``dist_0`` is still held to the full tolerance against the analytic ``a/√c``.
+    The ``20·eps/a`` slack on the pairwise comparison (a no-op for ``a >~ 1``; ``dist_0`` is always
+    held to the full tolerance against the analytic ``a/√c``) dates from when ``_polar_frame``
+    formed ``u_x - u_y = (x₀ + r_x) - (y₀ + r_y)`` directly, losing ``eps·x₀`` and leaving an
+    O(eps/a) relative error — 2.5e-4 at ``a = 1e-4`` in float32 and 5.4e-12 in float64, against a
+    ``dist_0`` exact to 4.1e-8 / 0 there. With the gap read off the spatial radii the same cells
+    measure 7.4e-8 (float32) and 7.9e-12 (float64), and the worst cell on the whole ``a`` grid is
+    2.1e-7 (float32). What is left in float64 is no longer the gap but the ``MIN_NORM`` floor on
+    ``r_y`` at the origin, worth ``½·MIN_NORM/a`` relative — 5e-12 at ``a = 1e-4``, which is why
+    the float64 column does not fall to zero. The slack is kept as it is; it is now several orders
+    wider than what either arm needs.
     """
     e1, _ = _hyperboloid_basis(4)
     manifold = Hyperboloid(dtype=dtype)
@@ -1062,6 +1069,12 @@ _DIST_0_RADII = [1e-8, 1e-6, 1e-4, 1e-3, 1e-2, 0.1, 1.0, 5.0, 20.0, 40.0]
 _DIST_0_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-14}
 
 
+def _hyperboloid_point_from_spatial(x_s: np.ndarray, c: float, dtype) -> jnp.ndarray:
+    """Ambient point with the given spatial part; ``x₀`` completed from the constraint."""
+    x0 = np.sqrt(1.0 / c + float(np.dot(x_s, x_s)))
+    return jnp.asarray(np.concatenate([[x0], x_s]).astype(dtype))
+
+
 def _hyperboloid_point_at_spatial_radius(r: float, c: float, direction: np.ndarray, dtype) -> jnp.ndarray:
     """Point with spatial part ``r·direction``; ``x₀`` completed from the constraint.
 
@@ -1070,9 +1083,7 @@ def _hyperboloid_point_at_spatial_radius(r: float, c: float, direction: np.ndarr
     ``r = 1e-6`` the ``cosh`` time coordinate is 1.0 to the last float32 bit, which is exactly the
     information loss under test.
     """
-    x_s = r * direction
-    x0 = np.sqrt(1.0 / c + float(np.dot(x_s, x_s)))
-    return jnp.asarray(np.concatenate([[x0], x_s]).astype(dtype))
+    return _hyperboloid_point_from_spatial(r * direction, c, dtype)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
@@ -1226,6 +1237,104 @@ def test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian(dtype):
     for version_idx in (0, 1):
         g_A = jax.grad(lambda p, v=version_idx: manifold.dist_0(p, c, version_idx=v))(origin_A)
         assert bool(jnp.all(jnp.isfinite(g_A))), f"non-finite dist_0 gradient at the origin, slot {version_idx}"
+
+
+# ---------------------------------------------------------------------------------------------
+# The pairwise radial gap is built from the spatial radii too (A6 follow-up to the origin chart).
+#
+# ``_polar_frame`` needs ``u_x - u_y`` with ``u = x₀ + ‖x_s‖``. Forming that difference directly
+# throws away ``eps·x₀``, which near the origin is the whole answer; the identity
+# ``x₀ - y₀ = (r_x² - r_y²)/(x₀ + y₀)`` moves the subtraction onto the spatial radii, where it is
+# Sterbenz-exact. The two tests below pin the near-origin regime the fix targets.
+# ---------------------------------------------------------------------------------------------
+
+_PAIRWISE_ORIGIN_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-13}
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("r", [1e-6, 1e-4, 1e-2])
+def test_hyperboloid_pairwise_dist_to_the_origin_matches_dist_0_near_the_origin(dtype, c: float, r: float):
+    """``dist(x, origin) == dist_0(x)`` inside the radius where the ambient chart stops resolving.
+
+    ``dist_0`` reads ``arcsinh(√c‖x_s‖)/√c`` off the spatial part and is exact here, so it is an
+    independent oracle for the two-point path. With ``u_x - u_y`` formed directly this fails in
+    float32 by 4.6e-2 relative at ``r = 1e-6``, 1.4e-4 at 1e-4 and 9.8e-6 at 1e-2 — the ``eps·x₀``
+    that the subtraction discards, divided by a gap of size ``r``. Reading the gap off the spatial
+    radii brings all three to ≤1.9e-7 relative (measured over the three curvatures here; ≤3.1e-7
+    over the wider probe grid).
+
+    The point is built from its spatial part, never from ``cosh(a)``: at ``r = 1e-6`` the time
+    coordinate is 1.0 to the last float32 bit, which is precisely the information the pairwise arm
+    used to depend on.
+
+    The tolerance carries an absolute ``MIN_NORM`` term, and it is the **float32** arm that this
+    test discriminates. At ``y`` exactly at the origin ``r_y`` hits the ``MIN_NORM`` floor that
+    :func:`_polar_frame` needs for its origin gradient, and the resulting angular term
+    ``q = ½√c·√(r_x·MIN_NORM)`` adds ``½·MIN_NORM/r_x`` *relative* — a flat ``MIN_NORM/(2√c)`` ≈
+    5e-16 of absolute distance, independent of the gap term and present before and after this fix.
+    That floor sits above the float64 rtol at these radii but three to seven orders below the
+    float32 one, so only the float32 assertions can fail on the gap term.
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    rng = np.random.default_rng(21)
+    direction = rng.normal(size=8)
+    direction /= np.linalg.norm(direction)
+    x_A = _hyperboloid_point_at_spatial_radius(r, c, direction, dtype)
+    origin_A = manifold.create_origin(c, 8)
+
+    d = float(manifold.dist(x_A, origin_A, c))
+    d_0 = float(manifold.dist_0(x_A, c))
+    analytic = np.arcsinh(np.sqrt(c) * r) / np.sqrt(c)
+    tol = _PAIRWISE_ORIGIN_RTOL[dtype] * d_0 + MIN_NORM
+    assert abs(d - d_0) <= tol, f"dist(x, origin) = {d} vs dist_0 = {d_0} (tol {tol})"
+    # ...and against the analytic value too, so this cannot pass by two matching wrong answers.
+    assert abs(d - analytic) <= tol, f"dist(x, origin) = {d} vs arcsinh form {analytic} (tol {tol})"
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_pairwise_dist_between_two_nearby_near_origin_points_is_float32_exact(c: float):
+    """Two points at spatial radius 1e-3, a separation of ~1e-3 apart: float32 within 1e-6 of float64.
+
+    Neither point is at the origin, so the ``MIN_NORM`` floor of the previous test is absent and the
+    gap term is the only thing under test. The float64 evaluation of the *same* float32 inputs is
+    the reference — it isolates the algorithm from the input rounding, which at this radius is
+    ~1e-4 relative. Directly subtracting ``u_x - u_y`` puts the float32 answer 3.3e-5 off here;
+    from the spatial radii it is 1.5e-7 (worst over the three curvatures).
+
+    The float64 leg builds its own float64 points (so the float32 ``x₀`` cannot leak in) and goes
+    against the 60-digit ``Decimal`` oracle, which is what makes this test non-vacuous in that
+    dtype: the direct subtraction is off by up to 9.4e-14 relative there, against ≤4.4e-16 from the
+    spatial radii.
+    """
+    rng = np.random.default_rng(22)
+    d1 = rng.normal(size=8)
+    d1 /= np.linalg.norm(d1)
+    d2 = rng.normal(size=8)
+    d2 /= np.linalg.norm(d2)
+
+    r, sep = 1e-3, 1e-3
+    x_s = r * d1
+    y_s = x_s + sep * d2
+
+    x_32 = _hyperboloid_point_from_spatial(x_s, c, jnp.float32)
+    y_32 = _hyperboloid_point_from_spatial(y_s, c, jnp.float32)
+    # Same numbers, evaluated in float64: any difference is the float32 arithmetic, not the input.
+    x_64 = jnp.asarray(np.asarray(x_32, dtype=np.float64))
+    y_64 = jnp.asarray(np.asarray(y_32, dtype=np.float64))
+
+    got = float(Hyperboloid(dtype=jnp.float32).dist(x_32, y_32, c))
+    reference = float(Hyperboloid(dtype=jnp.float64).dist(x_64, y_64, c))
+    assert reference > 0.0
+    assert abs(got - reference) / reference < 1e-6
+
+    # And the float64 arm itself, on float64 points, against a reference that shares no arithmetic
+    # with it: the Decimal oracle derives x₀ from the spatial part in 60-digit precision.
+    x_f64 = _hyperboloid_point_from_spatial(x_s, c, jnp.float64)
+    y_f64 = _hyperboloid_point_from_spatial(y_s, c, jnp.float64)
+    got_64 = float(Hyperboloid(dtype=jnp.float64).dist(x_f64, y_f64, c))
+    exact = float(_hyperboloid_decimal_oracle(np.asarray(x_f64[1:]), np.asarray(y_f64[1:]), c, 60)[0])
+    assert abs(got_64 - exact) / exact < 1e-14
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)

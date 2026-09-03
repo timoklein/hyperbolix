@@ -275,7 +275,13 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     roots are then taken through the on-manifold identities ``sinh a = √c·r_x``, ``cosh a = √c·x₀``,
     ``e^a = √c·(x₀ + r_x)``, which involve only additions of positive quantities:
 
-    * ``P := sinh((a - b)/2) = ½·(u_x - u_y)/(√u_x·√u_y)`` with ``u_x = x₀ + r_x``.
+    * ``P := sinh((a - b)/2) = ½·(u_x - u_y)/(√u_x·√u_y)`` with ``u_x = x₀ + r_x``. The numerator
+      is **not** evaluated as written: it is built from the spatial radii alone, through the
+      on-sheet identity ``x₀ - y₀ = (r_x² - r_y²)/(x₀ + y₀)``, as
+
+          ``u_x - u_y = (r_x - r_y)·(1 + (r_x + r_y)/(x₀ + y₀))``.
+
+      Only the ``u_x``/``u_y`` *denominator* still reads ``x₀``. See the load-bearing list below.
     * ``q := ½·√c·√r_x·√r_y·chord``, so that ``q² = (c/4)·r_x·r_y·chord²``.
     * ``S := hypot(P, q) = sinh(θ/2)`` and ``C := hypot(1, S) = cosh(θ/2)``.
 
@@ -290,6 +296,28 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     * ``(u_x - u_y)`` is a difference, not a quotient of exponentials: for ``a ≈ b`` (small
       distances) the subtraction of nearby floats is exact (Sterbenz), whereas the algebraically
       equal ``½·(√(u_x/u_y) - √(u_y/u_x))`` loses all significance there.
+    * that difference is taken between the **spatial radii**, ``(r_x - r_y)·(1 + (r_x + r_y)/(x₀ +
+      y₀))``, never between the ``u``'s directly. ``x₀ = cosh(a)/√c`` is stored with absolute error
+      ``~eps·x₀``, so ``(x₀ + r_x) - (y₀ + r_y)`` throws away ``eps·x₀`` of a difference that is only
+      ``O(r_x - r_y)`` — an ``O(eps/r)`` *relative* error on ``P`` near the origin. Measured float32
+      ``dist(origin, x)``: 4.6e-2 relative at ``r = 1e-6`` and 100% at 1e-8, versus ≤3.1e-7
+      everywhere (spatial radius 1e-8 to 1) with the identity above. The rewritten form subtracts only ``r_x`` and ``r_y``
+      (Sterbenz-exact when they are close) and multiplies by a bracket that is a ratio of sums of
+      positive numbers, running monotonically from 1 at the origin to 2 at large radius — so it can
+      neither cancel nor overflow. It is also *bitwise antisymmetric* under swapping ``x`` and
+      ``y``: ``r_x + r_y`` and ``x₀ + y₀`` are unchanged (float addition is commutative) and
+      ``r_y - r_x`` is the exact negation of ``r_x - r_y``, which is what keeps ``dist`` bitwise
+      symmetric.
+    * this makes the **spatial part the source of truth** for the radial gap, the same convention
+      :func:`_dist_0_stable` and :func:`_proj` already follow. An off-sheet input therefore gets the
+      gap of its :func:`_proj` projection rather than one read off its inconsistent ``x₀``, and a raw
+      ``jax.grad`` moves its radial support from the time slot to the spatial slot. The two differ by
+      a multiple of the constraint normal, so the Riemannian gradient after :func:`_egrad2rgrad` /
+      :func:`_tangent_proj` is unchanged: over 75 (curvature x radius x radius) cells the worst
+      old-vs-new relative disagreement is ≤3.6e-14 (float64) and 4.3e-7 median / 3.7e-5 worst
+      (float32), and in the three float32 cells above 1e-5 it is the *old* arm that moved — measured
+      against the same pair promoted to float64, the new gradient is within 1.1e-6 while the old one
+      carries the full 3.7e-5. Same on CPU and on an A100.
 
     **The MIN_NORM floor on the radii is deliberate and must stay a floor** (``maximum``), not a
     ``where``-style exact-zero guard. At ``x`` exactly at the origin the two floors cancel *exactly*
@@ -324,14 +352,27 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     # turning the quotient into 0/0 = NaN.
     u_x = jnp.maximum(x_time + r_x, MIN_NORM)
     u_y = jnp.maximum(y_time + r_y, MIN_NORM)
+    # The numerator ``u_x - u_y`` is *not* formed from the u's: on the sheet ``c·x₀² = 1 + c·r_x²``,
+    # so ``x₀ - y₀ = (r_x² - r_y²)/(x₀ + y₀)`` and therefore
+    #     u_x - u_y = (r_x - r_y) · (1 + (r_x + r_y)/(x₀ + y₀)).
+    # Only the spatial radii enter the subtraction — exact by Sterbenz when r_x ≈ r_y — while the
+    # bracket is a ratio of sums of positive numbers (1 at the origin, → 2 at large radius).
+    # Subtracting the u's directly would instead discard ``eps·x₀`` of a difference that is only
+    # O(r_x - r_y) near the origin; see the load-bearing list in the docstring for the measurements.
+    # ``x₀ + y₀ ≥ 2/√c > 0`` on the sheet, so this MIN_NORM floor, like the two above, only guards
+    # a fully degenerate all-zero "point".
+    time_sum = jnp.maximum(x_time + y_time, MIN_NORM)
+    u_gap = (r_x - r_y) * (1.0 + (r_x + r_y) / time_sum)
     # A point past the dtype's representable radius has x₀ = inf (the sqrt inside _proj
     # overflowed), where the exact quotient is inf/inf = NaN. Return ±inf instead: the geodesic
     # distance there really is infinite, and an inf stays visible downstream while a NaN silently
     # poisons every parameter it touches. Value- and gradient-identity whenever both are finite.
+    # The sign still comes from ``u_x > u_y`` rather than from ``u_gap``, which is NaN when both
+    # time coordinates have overflowed.
     representable = jnp.isfinite(u_x) & jnp.isfinite(u_y)
     sinh_half_gap = jnp.where(
         representable,
-        0.5 * (u_x - u_y) / (jnp.sqrt(u_x) * jnp.sqrt(u_y)),
+        0.5 * u_gap / (jnp.sqrt(u_x) * jnp.sqrt(u_y)),
         jnp.where(u_x > u_y, jnp.inf, -jnp.inf),
     )
 
