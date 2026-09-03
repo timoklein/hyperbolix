@@ -251,8 +251,12 @@ def test_activation_applies_euclidean_fn_to_spatial(name, hyp_fn, hrc_fn, euclid
     assert jnp.allclose(y_NF[:, 0], expected_time, atol=atol)
     # Identity-substitution guard: f must actually move the spatial components.
     assert not jnp.allclose(y_NF[:, 1:], x_NF[:, 1:], atol=1e-3)
-    # jit fold: compiled output equals eager output bit for bit.
-    assert jnp.array_equal(jax.jit(lambda z: hyp_fn(z, c))(x_NF), y_NF)
+    # jit fold: the compiled output equals the eager output to 1 ulp. Not bit-for-bit: on GPU a
+    # transcendental fused into the compiled kernel and the same op run eagerly are different
+    # kernels, and XLA does not promise them identical — `tanh` in float64 differs by 1 ulp on
+    # one element of ten. The two *value* assertions above stay strict; this one only guards
+    # against jit changing the computation, which would move it far more than an ulp.
+    assert jnp.allclose(jax.jit(lambda z: hyp_fn(z, c))(x_NF), y_NF, rtol=1e-15, atol=0)
 
 
 @pytest.mark.parametrize("name,hyp_fn,hrc_fn,euclidean_fn", SPATIAL_ACTIVATIONS, ids=SPATIAL_ACTIVATION_IDS)

@@ -33,6 +33,20 @@ from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
 from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 
+# Matmul precision for the cancellation-sensitive dots in this module and in the attention
+# layers. On Ampere/Hopper, XLA:GPU defaults float32 matmuls to TF32, whose 10-bit mantissa
+# carries ~1e-3 relative error — far coarser than float32's ~1e-7. The dots this constant
+# annotates feed cancellations whose entire design assumes float32 accuracy: the Lorentz
+# inner product ``<x,y>_L = -x_0 y_0 + <x_s, y_s>`` (a difference of two matmuls) and the
+# ``lorentz_midpoint`` normalizer (whose cancellation-free identity exists precisely to keep
+# the float32 error at O(eps) for any radius). Measured on an A100: the f32-vs-f64 relative
+# error of ``lorentz_midpoint`` is 4.6e-5 … 2.6e-4 at the TF32 default and 2.6e-8 … 1.6e-7
+# with HIGHEST — a ~2000x accuracy loss that HIGHEST removes.
+#
+# HIGHEST is a no-op on CPU (no TF32 path) and for float64 anywhere, so this costs nothing
+# outside float32 GPU matmuls; on tensor-core GPUs it trades GEMM throughput for accuracy.
+MATMUL_PRECISION = jax.lax.Precision.HIGHEST
+
 
 def build_spacelike_V(
     U_IO: Float[Array, "I O"],
@@ -357,7 +371,7 @@ def lorentz_midpoint(
     is as large as that extreme radius and the identity's own terms cancel against each other.
     """
     # h = sum_m w_{n,m} * points_m  →  (..., N, A)
-    h_NA = jnp.einsum("...nm,...ma->...na", weights, points)
+    h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
     # Exact for on-sheet points (reference p = points_0, delta_m = x_m - p, W = sum_m w_m,
     # Delta = sum_m w_m delta_m):
     #     <h,h>_L = -W^2/c - W * sum_m w_m <delta_m, delta_m>_L + <Delta, Delta>_L.
@@ -374,8 +388,8 @@ def lorentz_midpoint(
     delta_MA = points - p_1A  # (..., M, A)
     dd_M = -(delta_MA[..., 0] ** 2) + jnp.sum(delta_MA[..., 1:] ** 2, axis=-1)  # (..., M), >= 0 on-sheet
     w_sum_N1 = jnp.sum(weights, axis=-1, keepdims=True)  # (..., N, 1)
-    w_dd_N1 = jnp.einsum("...nm,...m->...n", weights, dd_M)[..., None]  # (..., N, 1)
-    big_delta_NA = jnp.einsum("...nm,...ma->...na", weights, delta_MA)  # (..., N, A)
+    w_dd_N1 = jnp.einsum("...nm,...m->...n", weights, dd_M, precision=MATMUL_PRECISION)[..., None]  # (..., N, 1)
+    big_delta_NA = jnp.einsum("...nm,...ma->...na", weights, delta_MA, precision=MATMUL_PRECISION)  # (..., N, A)
     big_dd_N1 = -(big_delta_NA[..., 0:1] ** 2) + jnp.sum(big_delta_NA[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., N, 1)
     mink_N1 = -(w_sum_N1**2) / c - w_sum_N1 * w_dd_N1 + big_dd_N1  # (..., N, 1)
     denom_N1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_N1), eps))  # (..., N, 1)

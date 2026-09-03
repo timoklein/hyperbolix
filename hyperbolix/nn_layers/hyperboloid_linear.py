@@ -29,7 +29,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.utils.math_utils import MIN_NORM, capped_exp
 
 from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid
+from .hyperboloid_core import MATMUL_PRECISION, build_spacelike_V, htc, sinh_lift_to_hyperboloid
 
 
 def _fhcnn_forward(
@@ -943,7 +943,7 @@ class HTCLinear(nnx.Module):
         def linear_fn(z):
             # Cast params to the working dtype so float64 weights (from global
             # jax_enable_x64) don't promote a float32 computation to float64.
-            out = z @ self.kernel[...].astype(z.dtype)
+            out = jnp.matmul(z, self.kernel[...].astype(z.dtype), precision=MATMUL_PRECISION)
             if self.bias is not None:
                 out = out + self.bias[...].astype(z.dtype)
             return out
