@@ -28,6 +28,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
+from hyperbolix.utils.precision import MATMUL_PRECISION
 from hyperbolix.manifolds.protocol import Manifold
 
 from ._helpers import validate_poincare_manifold
@@ -125,8 +126,8 @@ def poincare_weighted_midpoint(
     # Eq. 41 numerator / denominator, contracted over the M axis:
     #   numerator_n = Σ_m w_nm · λ(x_m) · x_m   (N, C)
     #   denom_n     = Σ_m w_nm · (λ(x_m) - 1)   (N,)
-    numerator_NC = jnp.einsum("nm,mc->nc", weights_NM, lambda_M[:, None] * points_MC)  # (N, C)
-    denom_N = jnp.einsum("nm,m->n", weights_NM, lambda_M - 1.0)  # (N,)
+    numerator_NC = jnp.einsum("nm,mc->nc", weights_NM, lambda_M[:, None] * points_MC, precision=MATMUL_PRECISION)  # (N, C)
+    denom_N = jnp.einsum("nm,m->n", weights_NM, lambda_M - 1.0, precision=MATMUL_PRECISION)  # (N,)
     # Empty row (all-zero weights) -> denom 0 and numerator 0; map to origin
     # rather than 0/0. λ ≥ 2 keeps denom > 0 for any row with mass.
     denom_safe_N = jnp.where(jnp.abs(denom_N) < eps, 1.0, denom_N)  # (N,)

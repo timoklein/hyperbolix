@@ -24,6 +24,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
+from hyperbolix.utils.precision import MATMUL_PRECISION
 
 from ._helpers import as_pair, validate_poincare_manifold
 from .poincare_linear import _poincare_pp_forward
@@ -211,6 +212,7 @@ class HypConv2DPoincare(nnx.Module):
             window_strides=(stride_h, stride_w),
             padding=self.padding,
             dimension_numbers=("NHWC", "OIHW", "NHWC"),
+            precision=MATMUL_PRECISION,
         )  # (B, H, W, K²·C_in)
 
         batch, out_h, out_w, concat_dim = patches_BHWKC.shape

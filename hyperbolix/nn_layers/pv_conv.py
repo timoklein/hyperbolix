@@ -26,6 +26,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
+from hyperbolix.utils.precision import MATMUL_PRECISION
 
 from ._helpers import as_pair, validate_pv_manifold
 from .pv_linear import _pv_fc_forward
@@ -193,6 +194,7 @@ class HypConv2DPV(nnx.Module):
             window_strides=(stride_h, stride_w),
             padding=self.padding,
             dimension_numbers=("NHWC", "OIHW", "NHWC"),
+            precision=MATMUL_PRECISION,
         )  # (B, H, W, K²·C_in)
 
         batch, out_h, out_w, concat_dim = patches_BHWKC.shape

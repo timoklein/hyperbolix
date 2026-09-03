@@ -65,7 +65,7 @@ def _fhcnn_forward(
     kernel_OI = kernel_OI.astype(x_BI.dtype)
     bias_1O = bias_1O.astype(x_BI.dtype)
     scale_val = jnp.asarray(scale_val, dtype=x_BI.dtype)
-    x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O
+    x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI, precision=MATMUL_PRECISION) + bias_1O
 
     # Split into time and space: x0 is first coord, x_rem is spatial
     x0_B1 = x_BO[:, 0:1]  # (B, 1) -- time coordinate
@@ -138,7 +138,7 @@ def _fhnn_forward(
     kernel_OI = kernel_OI.astype(x_BI.dtype)
     bias_1O = bias_1O.astype(x_BI.dtype)
     scale_val = jnp.asarray(scale_val, dtype=x_BI.dtype)
-    z_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O  # (B, O)
+    z_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI, precision=MATMUL_PRECISION) + bias_1O  # (B, O)
 
     # Split into time logit and spatial components
     z0_B1 = z_BO[:, 0:1]  # (B, 1)
@@ -335,8 +335,10 @@ def _fgg_linear_forward(
     # Cast V to match input dtype (avoids float32/float64 scatter warnings)
     V_AiO = V_AiO.astype(x_BAi.dtype)
 
-    # Minkowski inner products via matmul (metric in V)
-    z_BO = x_BAi @ V_AiO  # (B, O)
+    # Minkowski inner products via matmul (metric in V). The Minkowski metric is absorbed into
+    # V, so the -x0*V0 + <x_s, V_s> cancellation happens *inside* this single accumulation:
+    # TF32 inputs would leave ~1e-3 of the pre-cancellation magnitude in the result.
+    z_BO = jnp.matmul(x_BAi, V_AiO, precision=MATMUL_PRECISION)  # (B, O)
 
     # Apply Euclidean activation (Lorentzian wrapping implicit via cancellation)
     if activation is not None:

@@ -15,7 +15,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 
 from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import build_spacelike_V
+from .hyperboloid_core import MATMUL_PRECISION, build_spacelike_V
 
 
 class HypRegressionHyperboloid(nnx.Module):
@@ -224,8 +224,9 @@ class FGGLorentzMLR(nnx.Module):
         # Cast V to match input dtype (avoids float32/float64 scatter warnings)
         V_AiK = V_AiK.astype(x_BAi.dtype)
 
-        # 2. Minkowski inner products
-        mink_BK = x_BAi @ V_AiK  # (B, K)
+        # 2. Minkowski inner products. Same reason as _fgg_linear_forward: the metric is
+        # absorbed into V, so the Lorentz cancellation happens inside one accumulation.
+        mink_BK = jnp.matmul(x_BAi, V_AiK, precision=MATMUL_PRECISION)  # (B, K)
 
         # 3. Signed scaled distances (matching reference fc_mlr: no norm scaling)
         sqrt_c = jnp.sqrt(c)
