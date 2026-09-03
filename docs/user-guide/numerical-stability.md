@@ -724,6 +724,48 @@ print(f"Version 2: {d2:.6f}")
 # All should be approximately equal
 ```
 
+#### `dist_0` Slot 2 Reads the Radius Through `arcsinh` {#poincare-metric-tensor-dist-0}
+
+`dist_0`'s metric-tensor arm (slot 2) used to have the [hyperboloid origin chart's
+defect](#hyperboloid-origin-chart) in Poincaré coordinates. The metric-tensor integral is
+
+$$
+d_0(x) = \frac{1}{\sqrt{c}}\operatorname{acosh}\!\left(1 + \frac{2c\lVert x\rVert^2}{1 - c\lVert x\rVert^2}\right),
+$$
+
+and the whole radial signal sits in that $2t$ perturbation of a leading 1. `acosh`'s
+$1 + 10\varepsilon$ domain clamp therefore flattened every float32 radius below
+$\sqrt{10\varepsilon/c} \approx 1.1\text{e-}3/\sqrt{c}$ onto exactly zero, and a second
+`arg < 1 + MIN_NORM` short-circuit zeroed the band below
+$\sqrt{\texttt{MIN\_NORM}/2c} \approx 2.2\text{e-}8/\sqrt{c}$ in **both** dtypes. The arm now uses
+the half-angle identity $\operatorname{acosh}(1 + 2t) = 2\operatorname{arcsinh}(\sqrt{t})$, whose
+argument is *linear* in the radius near the origin:
+
+$$
+d_0(x) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x\rVert}{\sqrt{1 - c\lVert x\rVert^2}}\right).
+$$
+
+Same function, so slot 2 still means "metric-tensor distance" — nothing was moved to a new slot,
+and the boundary clamp (via the conformal factor) is unchanged. Median relative error against a
+60-digit `decimal` reference, $c = 1$, dim 8, before → after:
+
+| radius | float32 | float64 |
+| --- | --- | --- |
+| 1e-8 | 7.7e4 → 1.4e-8 | 1.0 → 1.7e-16 |
+| 1e-6 | 7.7e2 → 1.4e-8 | 1.1e-5 → 0 |
+| 1e-4 | 6.7 → 2.9e-8 | 2.5e-9 → 1.4e-16 |
+| 1e-3 | 6.6e-3 → 5.3e-8 | 2.8e-12 → 0 |
+| 1e-2 | 3.3e-5 → 8.6e-8 | 1.4e-13 → 0 |
+| 0.1 | 4.9e-7 → 3.4e-8 | 2.2e-15 → 0 |
+| 0.9/√c | 6.5e-8 → 3.5e-8 | 1.5e-16 → 1.5e-16 |
+
+!!! warning "The floored band had a zero gradient, not just a wrong value"
+    `jax.grad` of slot 2 returned exactly `0` for float32 radii ≤ 1e-6 at every curvature (≤ 1e-3
+    at $c = 0.3$) and float64 radii ≤ 1e-8, instead of the analytic $2/(1 - c r^2) \to 2$. Anything
+    optimised through slot 2 near the origin received no gradient at all. Slots 0 and 1
+    (`VERSION_MOBIUS_DIRECT` / `VERSION_MOBIUS`, both $2\operatorname{atanh}(\sqrt{c}\lVert x\rVert)/\sqrt{c}$)
+    were never affected, and remain the default.
+
 ### Which Version to Use?
 
 **General recommendation**: `VERSION_MOBIUS_DIRECT` (version 0)

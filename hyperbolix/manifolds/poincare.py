@@ -68,7 +68,7 @@ import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, acosh, atanh, cap_at, cosh, floor_at, sinh, smooth_clamp, tanh
+from ..utils.math_utils import MIN_NORM, acosh, atanh, cap_at, cosh, floor_at, safe_norm, sinh, smooth_clamp, tanh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
@@ -236,14 +236,43 @@ def _dist_0_mobius(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
 
 
 def _dist_0_metric_tensor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Metric tensor distance from origin."""
-    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
+    """Metric-tensor distance from origin, in the ``arcsinh`` form: ``2·arcsinh(√t)/√c``.
+
+    The metric-tensor integral gives ``acosh(1 + 2t)/√c`` with ``t = c‖x‖²/(1 - c‖x‖²)``, which is
+    what this arm used to evaluate. That spelling has the same defect as the hyperboloid's old
+    ``acosh(√c·x₀)`` route (see ``hyperboloid._dist_0_stable``): the whole radial signal sits in the
+    ``2t ≈ 2c‖x‖²`` perturbation of a leading 1, so ``r`` is stored to ``sqrt(eps)`` resolution at
+    best, and ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every float32 radius
+    below ``sqrt(20·eps/(2c)) = sqrt(10·eps/c)`` ≈ 1.1e-3/√c onto exactly zero. The extra
+    ``arg < 1 + MIN_NORM`` guard zeroed a second band below ``sqrt(MIN_NORM/(2c))`` ≈ 2.2e-8/√c.
+
+    The half-angle identity ``acosh(1 + 2t) = 2·arcsinh(√t)`` (both sides are ``2θ`` for the ``θ``
+    with ``sinh²θ = t``, since ``cosh 2θ = 1 + 2 sinh²θ``) moves the radius out of the perturbed
+    leading 1 and into an argument that is *linear* in ``r`` near the origin::
+
+        √t = √c‖x‖ / sqrt(1 - c‖x‖²),   d₀(x) = 2·arcsinh(√t)/√c
+
+    ``arcsinh`` needs no domain clamp (its argument is a norm over the whole real half-line) and its
+    derivative is bounded by 1, so the acosh floor and the ``where``-guard are both gone rather than
+    moved, and the arm reproduces slot 0's ``2·atanh(√c‖x‖)/√c`` to rounding at every radius. The
+    two forms are algebraically the same function, so this is **not** a new version slot — slot 2 is
+    the metric-tensor *distance*, and it is now computed accurately.
+
+    The boundary guard is unchanged: ``1 - c‖x‖²`` still comes from the clamped conformal factor
+    (= 2/λ(x)), so a point at or past the ball boundary gets the same floored denominator, and the
+    representable ceiling stays 2·arcsinh(1/sqrt(floor))/√c ≈ 12.1/√c (float32) / 27.8/√c (float64).
+
+    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at the origin (the same
+    reason ``hyperboloid._dist_0_stable`` uses it), so ``jax.grad`` is finite there without the
+    ``where``-guard that used to pin it, and ``d₀(0) = 0`` stays exact.
+    """
+    sqrt_c = jnp.sqrt(c)
+    x_norm = safe_norm(x)
     # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)) so a near-boundary point
     # cannot drive the denominator to 0; consistent with _dist_metric_tensor and _apollonian_dist.
     one_minus_cx = 2.0 / _conformal_factor(x, c)
-    arg = 1 + 2 * c * x_sqnorm / one_minus_cx
-    condition = arg < 1 + MIN_NORM
-    return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
+    sqrt_t = sqrt_c * x_norm / jnp.sqrt(one_minus_cx)
+    return 2.0 * jnp.arcsinh(sqrt_t) / sqrt_c
 
 
 def _dist_0(x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:

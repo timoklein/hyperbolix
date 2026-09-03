@@ -1781,3 +1781,93 @@ def test_hyperboloid_ptransp_matches_the_numpy_oracle(c: float, dim: int):
     # Non-degenerate: the transport genuinely moves the vector, so "matches" is not "is the
     # identity". At these radii the correction term is of order the vector itself.
     assert np.max(np.abs(expected_BA - v_BA)) > 0.1
+
+
+# ---------------------------------------------------------------------------------------------
+# Poincaré dist_0 slot 2 (VERSION_METRIC_TENSOR) at small radius.
+#
+# The arm used to evaluate ``acosh(1 + 2c‖x‖²/(1 - c‖x‖²))/√c``, whose whole radial signal sits in
+# a perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every
+# float32 radius below ``sqrt(10·eps/c)`` ≈ 1.1e-3/√c onto exactly zero, and a second
+# ``arg < 1 + MIN_NORM`` guard zeroed the band below ``sqrt(MIN_NORM/2c)`` ≈ 2.2e-8/√c in *both*
+# dtypes. Measured median relative error against a 60-digit ``decimal`` reference at c = 1, dim 8,
+# before → after: 7.7e4 → 1.4e-8 at r = 1e-8, 7.7e2 → 1.4e-8 at 1e-6, 6.6e-3 → 5.3e-8 at 1e-3
+# (float32); 1.0 → 1.7e-16 at 1e-8, 1.1e-5 → 0 at 1e-6 (float64). The ``jax.grad`` magnitude in the
+# floored band was exactly 0 instead of the analytic 2
+# (``logs/2026-09-03_poincare_origin_numerics/``).
+#
+# It is now the algebraically identical half-angle form ``2·arcsinh(√t)/√c``, ``t = c‖x‖²/(1-c‖x‖²)``,
+# whose argument is linear in r near the origin. Same function, so this is not a new version slot.
+# ---------------------------------------------------------------------------------------------
+
+# Radii spanning the two formerly-zeroed bands (1e-8 … 1e-3) and the working range up to 0.9/√c.
+_POINCARE_DIST_0_RADII = [1e-8, 1e-6, 1e-4, 1e-3, 1e-2, 0.1, 0.5]
+_POINCARE_DIST_0_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-14}
+
+
+def _poincare_dist_0_decimal(r: float, c: float, prec: int = 60) -> float:
+    """``2·atanh(√c·r)/√c`` at ``prec`` decimal digits.
+
+    ``decimal`` has no ``atanh``, so it is built from the definition
+    ``2·atanh(z) = ln((1+z)/(1-z))``; ``Decimal.ln`` and ``Decimal.sqrt`` are correctly rounded at
+    the working precision, so the result is exact to far beyond float64.
+    """
+    with decimal.localcontext() as ctx:
+        ctx.prec = prec
+        sqrt_c = decimal.Decimal(repr(c)).sqrt()
+        z = sqrt_c * decimal.Decimal(repr(r))
+        return float(((1 + z) / (1 - z)).ln() / sqrt_c)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+def test_poincare_metric_tensor_dist_0_matches_the_decimal_oracle_near_the_origin(dtype, c: float):
+    """Slot 2 of ``Poincare.dist_0`` against a 60-digit ``decimal`` reference, r down to 1e-8.
+
+    The reference is evaluated for the radius the *cast* point actually has, so the assertion
+    measures the formula and not the float32 rounding of the input coordinates. Slot 0 rides along
+    as an unchanged control: it was always accurate here, and it is what slot 2 must reproduce.
+    """
+    manifold = Poincare(dtype=dtype)
+    rtol = _POINCARE_DIST_0_RTOL[dtype]
+    rng = np.random.default_rng(23)
+
+    for r in _POINCARE_DIST_0_RADII:
+        direction = rng.normal(size=8)
+        direction /= np.linalg.norm(direction)
+        x_D = jnp.asarray((r * direction).astype(dtype))
+        r_cast = float(np.linalg.norm(np.asarray(x_D, dtype=np.float64)))
+        expected = _poincare_dist_0_decimal(r_cast, c)
+
+        got_slot2 = float(manifold.dist_0(x_D, c, version_idx=2))
+        got_slot0 = float(manifold.dist_0(x_D, c, version_idx=0))
+        assert got_slot2 == pytest.approx(expected, rel=rtol), f"slot 2, r={r}"
+        assert got_slot0 == pytest.approx(expected, rel=rtol), f"slot 0, r={r}"
+        # The two arms are the same function; they must agree to rounding, not merely to tolerance.
+        assert got_slot2 == pytest.approx(got_slot0, rel=10.0 * float(jnp.finfo(dtype).eps)), f"r={r}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+def test_poincare_metric_tensor_dist_0_gradient_is_two_at_the_origin(dtype, c: float):
+    """``∂d₀/∂r → 2`` as r → 0, and the gradient stays finite at the exact origin.
+
+    ``d₀ = 2·atanh(√c·r)/√c`` has ``dd₀/dr = 2/(1 - c·r²)``, i.e. exactly 2 at r = 0, so the
+    gradient's magnitude is a direct read-out of the floor: the old arm returned **0** for every
+    float32 radius ≤ 1e-6 (and ≤ 1e-3 at c = 0.3), because the ``where``-guard and the ``acosh``
+    clamp both flatten the output there. At the exact origin the derivative does not exist; the
+    library's convention (``safe_norm``) is the finite, direction-free 0.
+    """
+    manifold = Poincare(dtype=dtype)
+    grad_fn = jax.grad(lambda z: manifold.dist_0(z, c, version_idx=2))
+
+    direction = np.zeros(8)
+    direction[0] = 1.0
+    for r in [1e-8, 1e-6, 1e-4, 1e-3, 1e-2]:
+        g_D = np.asarray(grad_fn(jnp.asarray((r * direction).astype(dtype))), dtype=np.float64)
+        assert np.all(np.isfinite(g_D)), f"r={r}"
+        assert float(np.linalg.norm(g_D)) == pytest.approx(2.0 / (1.0 - c * r**2), rel=1e-5), f"r={r}"
+
+    g0_D = np.asarray(grad_fn(jnp.zeros(8, dtype=dtype)), dtype=np.float64)
+    assert np.all(np.isfinite(g0_D))
+    assert float(manifold.dist_0(jnp.zeros(8, dtype=dtype), c, version_idx=2)) == 0.0
