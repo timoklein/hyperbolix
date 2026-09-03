@@ -9,9 +9,9 @@ What each contract now checks:
 
 * jit   — the jitted call equals the eager call (exactly for ``dist``, to within a ULP for the
           composite maps — see ULP_TOL), the distance equals an independent closed form, and a
-          second call with the same signature does not recompile
-          (``_cache_size() == 1``); the old tests only called a jitted function twice with
-          different values and asserted the two results differed.
+          second call with the same signature does not retrace (the trace counter of
+          ``_counted``); the old tests only called a jitted function twice with different values
+          and asserted the two results differed.
 * vmap  — the batched call equals a Python loop over the eager call, element for element.
 * grad  — gradients are finite, non-zero, and identical to ``value_and_grad``'s.
 * dtype — explicitly-``float32`` inputs are cast up by a float64 manifold and explicitly-
@@ -185,6 +185,28 @@ def _dist_fn(case: ManifoldCase, manifold):
     return functools.partial(manifold.dist, version_idx=case.version_idx)
 
 
+def _counted(fn: Callable) -> tuple[Callable, list[int]]:
+    """Return ``(wrapper, traces)``; ``traces`` grows by one entry each time the body is traced.
+
+    This is how "the second call did not recompile" is asserted. ``jitted._cache_size()`` cannot
+    express it: jax keeps a single process-global ``PjitFunctionCache(capacity=8192)`` shared by
+    every jitted callable, including the ones it builds internally for eager dispatch. Earlier
+    tests in the same process can fill it, the freshly inserted entry is then evicted between two
+    calls of this function, and ``_cache_size()`` reads 0 for a function that never recompiled —
+    so that assertion measured cache residency and test order, not retracing. Counting how often
+    the wrapped body runs under tracing is order-independent, and it still fails (counter 2) when
+    a genuine retrace happens.
+    """
+    traces: list[int] = []
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        traces.append(1)
+        return fn(*args, **kwargs)
+
+    return wrapper, traces
+
+
 # ---------------------------------------------------------------------------
 # Contracts
 
@@ -198,12 +220,14 @@ def test_jit_matches_eager_and_reuses_cache(case: ManifoldCase) -> None:
     # Absolute anchor: the library distance equals an independently transcribed closed form.
     assert float(dist(x, y, case.c)) == pytest.approx(case.oracle(np.asarray(x), np.asarray(y), case.c or 1.0), rel=1e-9)
 
-    dist_jit = jax.jit(dist)
+    counted_dist, dist_traces = _counted(dist)
+    dist_jit = jax.jit(counted_dist)
     assert jnp.allclose(dist_jit(x, y, case.c), dist(x, y, case.c), rtol=0, atol=0)
+    assert len(dist_traces) == 1
 
-    # Second call, same shapes/dtypes/static arguments: must reuse the existing executable.
+    # Second call, same shapes/dtypes/static arguments: must reuse the existing trace.
     assert jnp.allclose(dist_jit(x2, y2, case.c), dist(x2, y2, case.c), rtol=0, atol=0)
-    assert dist_jit._cache_size() == 1
+    assert len(dist_traces) == 1
 
     expmap_jit = jax.jit(manifold.expmap)
     assert jnp.allclose(expmap_jit(v, x, case.c), manifold.expmap(v, x, case.c), **ULP_TOL)
@@ -294,9 +318,17 @@ def test_dtype_policy_casts_inputs_to_manifold_dtype(case: ManifoldCase) -> None
     assert jnp.allclose(d_up, dist_f64(x64, y64, case.c), rtol=1e-6)
 
     # The same holds under jit, with one compilation per dtype.
-    dist_f64_jit = jax.jit(dist_f64)
-    dist_f32_jit = jax.jit(dist_f32)
+    counted_f64, traces_f64 = _counted(dist_f64)
+    counted_f32, traces_f32 = _counted(dist_f32)
+    dist_f64_jit = jax.jit(counted_f64)
+    dist_f32_jit = jax.jit(counted_f32)
     assert dist_f64_jit(x64, y64, case.c).dtype == jnp.float64
     assert dist_f32_jit(x32, y32, case.c).dtype == jnp.float32
-    assert dist_f64_jit._cache_size() == 1
-    assert dist_f32_jit._cache_size() == 1
+    assert len(traces_f64) == 1
+    assert len(traces_f32) == 1
+
+    # Re-calling each with its own dtype reuses that trace: still one compilation per dtype.
+    assert dist_f64_jit(x64, y64, case.c).dtype == jnp.float64
+    assert dist_f32_jit(x32, y32, case.c).dtype == jnp.float32
+    assert len(traces_f64) == 1
+    assert len(traces_f32) == 1
