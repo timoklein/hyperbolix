@@ -173,12 +173,25 @@ Operations that inherit the fix without any change of their own: gyro `addition`
 `logmap`'s origin fallback, and `HyperboloidGyroRMSNorm`, which divides by `dist_0` and so
 mis-normalised every float32 sample inside radius 1.5e-3.
 
-!!! note "`dist_0` is the accurate route to the origin, not `dist(origin, x)`"
-    The pairwise `dist` is a separate code path, and near the origin it still carries an
-    $O(\varepsilon/r)$ relative error from the gap term of its polar decomposition: in float32,
-    4.6e-2 at radius 1e-6 and ~1e-3 at 1e-4. Closing that is a separate planned change. Until
-    then, use `dist_0(x, c)` rather than `dist(origin, x, c)` whenever the distance is to the
-    origin.
+!!! note "The pairwise `dist` reads the same radial gap off the spatial part"
+    `dist` is a separate code path, and it used to carry its own $O(\varepsilon/r)$ relative error
+    near the origin: its polar decomposition needs $u_x - u_y$ with $u = x_0 + \lVert x_s\rVert$,
+    and forming that difference directly throws away the $\varepsilon\,x_0$ that $x_0$ is stored
+    with. In float32 that was 4.6e-2 relative at radius 1e-6 and 1.4e-4 at 1e-4. It now uses the
+    on-sheet identity $x_0 - y_0 = (\lVert x_s\rVert^2 - \lVert y_s\rVert^2)/(x_0 + y_0)$, i.e.
+
+    $$
+    u_x - u_y = (\lVert x_s\rVert - \lVert y_s\rVert)
+                \Bigl(1 + \frac{\lVert x_s\rVert + \lVert y_s\rVert}{x_0 + y_0}\Bigr),
+    $$
+
+    which subtracts only the spatial radii. Float32 `dist(origin, x)` is now within 3.1e-7 of
+    `dist_0(x)` at every radius from 1e-8 up, and two float32 points at radius 1e-3 separated by
+    1e-3 agree with the float64 answer to 1.5e-7 (was 3.3e-5). `dist_0(x, c)` remains marginally
+    cheaper and marginally tighter than `dist(origin, x, c)` — at $y$ exactly at the origin the
+    `MIN_NORM` floor on $\lVert y_s\rVert$ leaves a $\tfrac12\,$`MIN_NORM`$/\lVert x_s\rVert$
+    relative residual in the pairwise arm — but the two no longer disagree in any digit float32
+    can see.
 
 ## Storage vs. Compute Dtype
 
