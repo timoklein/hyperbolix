@@ -1871,3 +1871,118 @@ def test_poincare_metric_tensor_dist_0_gradient_is_two_at_the_origin(dtype, c: f
     g0_D = np.asarray(grad_fn(jnp.zeros(8, dtype=dtype)), dtype=np.float64)
     assert np.all(np.isfinite(g0_D))
     assert float(manifold.dist_0(jnp.zeros(8, dtype=dtype), c, version_idx=2)) == 0.0
+
+
+# ---------------------------------------------------------------------------------------------
+# Poincaré pairwise dist slot 2 (VERSION_METRIC_TENSOR) at small separation.
+#
+# The pairwise twin of the dist_0 defect above, and the same fix. The arm evaluated
+# ``acosh(1 + 2t)/√c`` with ``t = c‖x - y‖²/((1 - c‖x‖²)(1 - c‖y‖²))``, so ``acosh``'s
+# ``1 + 10·eps`` clamp flattened every pair with ``t < 5·eps`` onto exactly zero and an
+# ``arg < 1 + MIN_NORM`` short-circuit zeroed a second band below ``t = MIN_NORM/2``. For two
+# points at radius r the float32 separation floor is ``sqrt(5·eps/c)·(1 - c·r²)``: 1.2e-3/√c at the
+# origin. Measured median relative error vs a 60-digit ``decimal`` reference at c = 1, dim 8,
+# radius 1e-2, before → after: 7.7e4 → 3.0e-8 at separation 1e-8, 7.7e2 → 2.6e-8 at 1e-6, 6.7 →
+# 2.3e-8 at 1e-4 (float32); 1.0 → 1.7e-16 at 1e-8, 5.4e-8 → 2.1e-16 at 1e-6 (float64). 23 of 60
+# probed gradient cells had an exactly-zero gradient that is now the analytic λ(y)
+# (``logs/2026-09-03_poincare_origin_numerics/``).
+# ---------------------------------------------------------------------------------------------
+
+_POINCARE_DIST_SEPARATIONS = [1e-8, 1e-6, 1e-4, 1e-2]
+_POINCARE_DIST_RADII = [1e-2, 0.5]
+
+
+def _poincare_dist_decimal(x_D: np.ndarray, y_D: np.ndarray, c: float, prec: int = 60) -> float:
+    """``2·atanh(√c‖(-x) ⊕ y‖)/√c`` at ``prec`` decimal digits.
+
+    Deliberately routed through **Möbius addition**, not the metric-tensor integral, so the oracle
+    is independent of the formula under test. With ``u = -x``, ``v = y`` the Möbius numerator is
+    ``A·(-x) + B·y`` and the denominator ``D``::
+
+        A = 1 - 2c⟨x,y⟩ + c‖y‖²,  B = 1 - c‖x‖²,  D = 1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²
+        ‖(-x) ⊕ y‖² = (A²‖x‖² - 2AB⟨x,y⟩ + B²‖y‖²) / D²
+
+    Every input is a dot product of the exact float64 coordinates, and ``Decimal.ln``/``sqrt`` are
+    correctly rounded at the working precision, so the result is exact far beyond float64.
+    """
+    with decimal.localcontext() as ctx:
+        ctx.prec = prec
+        dc = decimal.Decimal(repr(c))
+        xx = sum((decimal.Decimal(float(v)) ** 2 for v in x_D), decimal.Decimal(0))
+        yy = sum((decimal.Decimal(float(v)) ** 2 for v in y_D), decimal.Decimal(0))
+        xy = sum(
+            (decimal.Decimal(float(a)) * decimal.Decimal(float(b)) for a, b in zip(x_D, y_D, strict=True)),
+            decimal.Decimal(0),
+        )
+
+        a_num = 1 - 2 * dc * xy + dc * yy
+        b_num = 1 - dc * xx
+        d_den = 1 - 2 * dc * xy + dc * dc * xx * yy
+        norm = (a_num * a_num * xx - 2 * a_num * b_num * xy + b_num * b_num * yy).sqrt() / d_den
+
+        sqrt_c = dc.sqrt()
+        z = sqrt_c * norm
+        return float(((1 + z) / (1 - z)).ln() / sqrt_c)
+
+
+def _poincare_nearby_pair(r: float, s: float, dtype, seed: int = 41) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Two points at ball radius ``r``, separated by exactly ``s`` along an orthogonal direction."""
+    rng = np.random.default_rng(seed)
+    base_D = rng.normal(size=8)
+    base_D /= np.linalg.norm(base_D)
+    off_D = rng.normal(size=8)
+    off_D -= np.dot(off_D, base_D) * base_D
+    off_D /= np.linalg.norm(off_D)
+    return jnp.asarray((base_D * r).astype(dtype)), jnp.asarray((base_D * r + off_D * s).astype(dtype))
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("r", _POINCARE_DIST_RADII)
+def test_poincare_metric_tensor_dist_matches_the_decimal_oracle_at_small_separation(dtype, c: float, r: float):
+    """Slot 2 of ``Poincare.dist`` against a 60-digit Möbius-route reference, separations to 1e-8.
+
+    Slot 0 rides along as an unchanged control: it was always accurate here, and it is what slot 2
+    must reproduce — the two are the same function.
+    """
+    manifold = Poincare(dtype=dtype)
+    rtol = _POINCARE_DIST_0_RTOL[dtype]
+
+    for s in _POINCARE_DIST_SEPARATIONS:
+        x_D, y_D = _poincare_nearby_pair(r, s, dtype)
+        expected = _poincare_dist_decimal(np.asarray(x_D, dtype=np.float64), np.asarray(y_D, dtype=np.float64), c)
+
+        got_slot2 = float(manifold.dist(x_D, y_D, c, version_idx=2))
+        got_slot0 = float(manifold.dist(x_D, y_D, c, version_idx=0))
+        assert got_slot2 > 0.0, f"r={r} s={s}: the acosh floor used to return exactly 0 here"
+        assert got_slot2 == pytest.approx(expected, rel=rtol), f"slot 2, r={r} s={s}"
+        assert got_slot0 == pytest.approx(expected, rel=rtol), f"slot 0, r={r} s={s}"
+        assert got_slot2 == pytest.approx(got_slot0, rel=10.0 * float(jnp.finfo(dtype).eps)), f"r={r} s={s}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("r", _POINCARE_DIST_RADII)
+def test_poincare_metric_tensor_dist_gradient_is_the_conformal_factor_at_small_separation(dtype, c: float, r: float):
+    """``‖∂d(x,y)/∂y‖ → λ(y) = 2/(1 - c‖y‖²)`` as ``y → x``, and is exactly 0 at ``y == x``.
+
+    The Riemannian unit-speed statement in Euclidean coordinates: the gradient magnitude of the
+    geodesic distance is the conformal factor. It is a direct read-out of the floor — the old arm
+    returned exactly **0** for every separation inside the `acosh` clamp, so a loss pulling two
+    nearby points apart through slot 2 received no gradient at all. At ``y == x`` the derivative
+    does not exist and the library's convention (`safe_norm`) is the finite, direction-free 0.
+    """
+    manifold = Poincare(dtype=dtype)
+    grad_fn = jax.grad(lambda b, a: manifold.dist(a, b, c, version_idx=2))
+
+    for s in _POINCARE_DIST_SEPARATIONS:
+        x_D, y_D = _poincare_nearby_pair(r, s, dtype)
+        g_D = np.asarray(grad_fn(y_D, x_D), dtype=np.float64)
+        assert np.all(np.isfinite(g_D)), f"r={r} s={s}"
+        lambda_y = 2.0 / (1.0 - c * float(np.dot(np.asarray(y_D, dtype=np.float64), np.asarray(y_D, dtype=np.float64))))
+        assert float(np.linalg.norm(g_D)) == pytest.approx(lambda_y, rel=1e-4), f"r={r} s={s}"
+
+    # Coincident: exactly 0 distance, and a finite (zero) gradient rather than a NaN.
+    x_D, _ = _poincare_nearby_pair(r, 0.0, dtype)
+    assert float(manifold.dist(x_D, x_D, c, version_idx=2)) == 0.0
+    assert np.all(np.isfinite(np.asarray(grad_fn(x_D, x_D), dtype=np.float64)))

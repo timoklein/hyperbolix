@@ -68,7 +68,7 @@ import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, acosh, atanh, cap_at, cosh, floor_at, safe_norm, sinh, smooth_clamp, tanh
+from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, sinh, smooth_clamp, tanh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
@@ -151,15 +151,43 @@ def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -
 
 
 def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Metric tensor induced distance."""
-    xy_diff_sqnorm = jnp.dot(x - y, x - y, precision=MATMUL_PRECISION)
+    """Metric-tensor induced distance, in the ``arcsinh`` form: ``2·arcsinh(√t)/√c``.
+
+    The pairwise twin of :func:`_dist_0_metric_tensor`, and it had the same defect. The
+    metric-tensor integral gives ``acosh(1 + 2t)/√c`` with
+    ``t = c‖x - y‖²/((1 - c‖x‖²)(1 - c‖y‖²))``, so the whole separation signal sits in a
+    perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every
+    pair whose ``t`` fell below ``5·eps`` onto exactly zero, and an extra ``arg < 1 + MIN_NORM``
+    short-circuit zeroed a second band below ``t = MIN_NORM/2``. For two points at radius ``r`` the
+    two ``(1 - c·r²)`` factors scale the threshold, so the float32 separation floor is
+    ``sqrt(5·eps/c)·(1 - c·r²)`` — 1.2e-3/√c at the origin, tightening to 9.2e-4/√c at ``r = 0.5``
+    for ``c = 1``.
+
+    The half-angle identity ``acosh(1 + 2t) = 2·arcsinh(√t)`` moves the separation into an argument
+    *linear* in ``‖x - y‖``::
+
+        √t = √c‖x - y‖ / sqrt((1 - c‖x‖²)(1 - c‖y‖²)),   d(x, y) = 2·arcsinh(√t)/√c
+
+    ``arcsinh`` needs no domain clamp (its argument is a scaled norm) and its derivative is bounded
+    by 1, so both floors are gone rather than moved. The two forms are the same function, so slot 2
+    still means "metric-tensor distance" — this is not a new version slot.
+
+    Both boundary guards are unchanged: ``1 - c‖x‖²`` and ``1 - c‖y‖²`` still come from the clamped
+    conformal factors (= 2/λ), so an unprojected near-boundary point cannot drive the denominator to
+    0 and the representable ceiling is untouched.
+
+    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at ``x == y``, so
+    ``dist(x, x) == 0`` exactly and ``jax.grad`` there is finite without the ``where``-guard that
+    used to provide it (``test_precision.py::test_poincare_dist_grad_at_coincident_points``).
+    """
+    sqrt_c = jnp.sqrt(c)
+    diff_norm = safe_norm(x - y)
     # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)). A bare 1 - c||x||² hits 0
     # for an unprojected near-boundary point and blows up the divide; reuse the module-wide floor.
     one_minus_cx = 2.0 / _conformal_factor(x, c)
     one_minus_cy = 2.0 / _conformal_factor(y, c)
-    arg = 1 + 2 * c * xy_diff_sqnorm / (one_minus_cx * one_minus_cy)
-    condition = arg < 1 + MIN_NORM
-    return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
+    sqrt_t = sqrt_c * diff_norm / jnp.sqrt(one_minus_cx * one_minus_cy)
+    return 2.0 * jnp.arcsinh(sqrt_t) / sqrt_c
 
 
 def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:

@@ -737,10 +737,11 @@ print(f"Version 2: {d2:.6f}")
 # All should be approximately equal
 ```
 
-#### `dist_0` Slot 2 Reads the Radius Through `arcsinh` {#poincare-metric-tensor-dist-0}
+#### Slot 2 Reads the Radius Through `arcsinh` {#poincare-metric-tensor-dist-0}
 
-`dist_0`'s metric-tensor arm (slot 2) used to have the [hyperboloid origin chart's
-defect](#hyperboloid-origin-chart) in Poincaré coordinates. The metric-tensor integral is
+Both metric-tensor arms — the origin distance `dist_0` and the pairwise `dist` — used to have the
+[hyperboloid origin chart's defect](#hyperboloid-origin-chart) in Poincaré coordinates. Taking
+`dist_0` first, the metric-tensor integral is
 
 $$
 d_0(x) = \frac{1}{\sqrt{c}}\operatorname{acosh}\!\left(1 + \frac{2c\lVert x\rVert^2}{1 - c\lVert x\rVert^2}\right),
@@ -778,6 +779,40 @@ and the boundary clamp (via the conformal factor) is unchanged. Median relative 
     optimised through slot 2 near the origin received no gradient at all. Slots 0 and 1
     (`VERSION_MOBIUS_DIRECT` / `VERSION_MOBIUS`, both $2\operatorname{atanh}(\sqrt{c}\lVert x\rVert)/\sqrt{c}$)
     were never affected, and remain the default.
+
+The pairwise `dist` slot 2 is the same story with a separation in place of a radius:
+
+$$
+d(x,y) = \frac{1}{\sqrt{c}}\operatorname{acosh}\!\left(1 + 2t\right)
+       = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\sqrt{t}\right),
+\qquad
+t = \frac{c\lVert x - y\rVert^2}{(1 - c\lVert x\rVert^2)(1 - c\lVert y\rVert^2)} .
+$$
+
+The `acosh` clamp zeroed every pair with $t < 5\varepsilon$ and the `MIN_NORM` short-circuit a
+second band below $t = \texttt{MIN\_NORM}/2$. The two $(1 - c r^2)$ factors scale the threshold
+with the pair's radius, so at $c = 1$ the float32 separation floor is 1.2e-3 at the origin and
+9.2e-4 at radius 0.5. Median relative error against a 60-digit `decimal` reference routed through
+Möbius addition (independent of the formula under test), $c = 1$, dim 8, before → after:
+
+| radius | separation | float32 | float64 |
+| --- | --- | --- | --- |
+| 1e-2 | 1e-8 | 7.7e4 → 3.0e-8 | 1.0 → 1.7e-16 |
+| 1e-2 | 1e-6 | 7.7e2 → 2.6e-8 | 5.4e-8 → 2.1e-16 |
+| 1e-2 | 1e-4 | 6.7 → 2.3e-8 | 2.5e-9 → 6.8e-17 |
+| 1e-2 | 1e-2 | 6.7e-5 → 1.0e-7 | 1.9e-13 → 0 |
+| 0.5 | 1e-8 | 3.5e4 → 3.6e-8 | 1.0 → 1.2e-16 |
+| 0.5 | 1e-6 | 5.8e2 → 3.3e-8 | 6.3e-6 → 0 |
+| 0.5 | 1e-4 | 4.8 → 4.5e-8 | 3.6e-10 → 0 |
+| 0.5 | 1e-2 | 2.6e-6 → 6.1e-8 | 5.1e-14 → 1.3e-16 |
+
+!!! warning "Two points inside the floor had no gradient pulling them apart"
+    `‖∂d(x,y)/∂y‖` must equal the conformal factor $\lambda(y) = 2/(1 - c\lVert y\rVert^2)$ — the
+    unit-speed statement in Euclidean coordinates. Inside the floored band the old arm returned
+    exactly `0` instead: 23 of 60 probed gradient cells, across both dtypes, three curvatures and
+    both radii. A loss separating two nearby points through slot 2 received no gradient at all. At
+    $y = x$ the derivative does not exist and the convention is the finite, direction-free 0, which
+    `safe_norm` now supplies (it also keeps `dist(x, x)` exactly 0).
 
 ### Which Version to Use?
 
