@@ -66,7 +66,18 @@ module-root = ""
 lint.select = ["E", "F", "B", "UP", "C90", "RUF"]
 # B028: Ignore explicit stacklevel`
 # RUF013: Too many false positives (implicit optional)
-lint.ignore = ["B028", "RUF013", "F722", "F821"]
+# F722: jaxtyping multi-axis shape strings (`Float[Array, "batch dim"]`) parse as syntax errors
+lint.ignore = ["B028", "RUF013", "F722"]
+
+# F821 (undefined name) is on everywhere except the library tree. ruff reads every jaxtyping
+# shape string as a forward reference, so `Float[Array, "dim"]` becomes "undefined name `dim`":
+# 572 such hits across 16 files in hyperbolix/, and zero true positives. The jaxtyping FAQ's
+# workaround is to rewrite every single-axis annotation as `" dim"` so the hit becomes the
+# already-ignored F722 -- not worth 572 edits. Undefined names in hyperbolix/ are instead
+# caught by pyright's reportUndefinedVariable (see [tool.pyright] below), which resolves
+# jaxtyping properly and reports none of these. tests/ has no jaxtyping annotations, so F821
+# runs there unrestricted. (The per-file-ignore itself lives at the end of this section --
+# a sub-table header would otherwise swallow the plain keys that follow it.)
 
 # Allow unused variables when underscore-prefixed.
 lint.dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
@@ -86,6 +97,10 @@ exclude = [
 ]
 
 line-length = 127
+
+[tool.ruff.lint.per-file-ignores]
+# See the F821 note above: jaxtyping shape strings, 572 false positives, no true ones.
+"hyperbolix/**/*.py" = ["F821"]
 
 #----------------------------
 # DEV
@@ -127,14 +142,24 @@ dev = [
 #----------------------------
 
 [tool.pyright]
+# `exclude` used to list "hyperbolix" alongside `include = ["hyperbolix"]`, so pyright analysed
+# 0 of the 57 modules and reported "0 errors" no matter what was in them -- which is how four
+# modules referencing an undefined name reached main. The tree is analysed again, but with
+# `typeCheckingMode = "off"` plus explicitly-enabled lint-grade rules: the Curvature union
+# (scalar | sequence) that motivated the original exclusion still produces 117 type errors
+# under "basic" (reportOperatorIssue 56, reportArgumentType 46, reportReturnType 5, others 10),
+# and those are a separate piece of work. The rules below are the ones that catch real bugs
+# rather than union-narrowing limitations; explicit settings override the mode's defaults.
+# reportUndefinedVariable is the point of the exercise: pyright resolves jaxtyping shape
+# strings properly and reports none of ruff's 572 F821 false positives.
 include = ["hyperbolix"]
 exclude = [
     "**/node_modules",
     "**/__pycache__",
-    "hyperbolix",  # Manifold Curvature union (scalar | sequence) causes downstream type-check limitations; tests validate runtime correctness
 ]
 pythonVersion = "3.12"
-typeCheckingMode = "basic"
+typeCheckingMode = "off"
+reportUndefinedVariable = "error"
 reportMissingImports = true
 reportMissingTypeStubs = false
 reportUnusedImport = true
