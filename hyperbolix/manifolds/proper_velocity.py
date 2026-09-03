@@ -51,7 +51,7 @@ import math
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, cosh, sinh, smooth_clamp
+from ..utils.math_utils import MIN_NORM, cosh, floor_at, sinh, smooth_clamp
 from ._base import ManifoldBase
 from ._gyrovector_core import _gyration
 from .protocol import Curvature
@@ -227,7 +227,7 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     # g_x(v, v) = ⟨v, v⟩ - c·β_x²·⟨x, v⟩²
     xv = jnp.dot(x, v)
     g_vv = jnp.dot(v, v) - c * beta_x**2 * xv**2
-    g_vv_safe = jnp.maximum(g_vv, 0.0) + MIN_NORM**2
+    g_vv_safe = floor_at(g_vv, 0.0) + MIN_NORM**2
     g_norm = jnp.sqrt(g_vv_safe)
     arg = sqrt_c * g_norm
 
@@ -351,7 +351,7 @@ def _tangent_inner(
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     """Riemannian norm ||v||_x = √g_x(v, v)."""
     inner = _tangent_inner(v, v, x, c)
-    return jnp.sqrt(jnp.maximum(inner, 0.0))
+    return jnp.sqrt(floor_at(inner, 0.0))
 
 
 def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:

@@ -158,15 +158,18 @@ def test_sinh_clip_vjp_through_square_valid_regime(dtype):
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_saturated_tail_gradient_is_degenerate_for_both_clamps(dtype):
+def test_saturated_tail_gradient_is_zero_for_hard_clip_and_degenerate_for_smooth_clamp(dtype):
     """Characterizes the saturated tail (|x| >= clamp) for BOTH dtypes — the only regime where hard
     clip and smooth clamp differ, and a regime unreachable by in-scope layers (sinh inputs are
     pre-bounded to +-v_max << clamp; clamp is ~87.8 for f32, ~702.7 for f64).
 
-    NOTE FOR WHOEVER SEES THIS FAIL: the last two assertions pin a NEGATIVE property — that
-    ``grad((sinh o clamp)**2)`` is non-finite for both clamps. A failure here most likely means the
-    behaviour IMPROVED (someone made the saturated-tail gradient finite), not that something
-    regressed. Re-baseline the assertion rather than reverting the improvement.
+    NOTE FOR WHOEVER SEES THIS FAIL: the last assertion pins a NEGATIVE property — that
+    ``grad((sinh o smooth_clamp)**2)`` is non-finite in the tail. A failure there most likely means
+    the behaviour IMPROVED (someone made the smooth saturated-tail gradient finite), not that
+    something regressed. Re-baseline the assertion rather than reverting the improvement. (The hard
+    clip's tail gradient was re-baselined this way once already: it was NaN while the clip was a
+    ``jnp.clip``, whose ``0/1`` JVP factor multiplies the overflowed ``2·sinh`` cotangent as
+    ``0 * inf = NaN``; the ``where``-based clamp's VJP is a ``select``, so it is exactly ``0``.)
 
     Established facts (identical structure for f32 and f64):
       * forward sinh(clamp) is finite and hard ~= smooth (the only forward gap is the tiny smoothing
@@ -175,9 +178,10 @@ def test_saturated_tail_gradient_is_degenerate_for_both_clamps(dtype):
         reconstruction would too, for EITHER clamp;
       * grad(sinh o clip) ALONE is finite (0) in the tail — the actual gradient the layers propagate
         is always safe, dtype-independently;
-      * grad((sinh o clip)**2) in the tail is non-finite for BOTH clamps, so hard clip is no worse
-        than smooth: f32 -> both NaN (smooth's tiny tail gradient underflows to 0*inf=nan); f64 ->
-        hard NaN, smooth inf. Either way unusable, and only reachable if sinh**2 already overflowed.
+      * grad((sinh o clip)**2) in the tail: hard clip -> exactly 0 (finite) in both dtypes, because
+        the ``where``-based clamp selects the constant and its VJP never meets the overflowed
+        ``2·sinh`` cotangent; smooth clamp -> non-finite (f32: its tiny tail gradient underflows to
+        0*inf=nan; f64: inf). Only reachable if sinh**2 already overflowed.
     """
     clamp = _clamp(dtype)
     x_tail = jnp.array([clamp + 5.0, clamp + 50.0], dtype=dtype)
@@ -193,10 +197,13 @@ def test_saturated_tail_gradient_is_degenerate_for_both_clamps(dtype):
     assert jnp.isfinite(g_alone).all()
     assert jnp.all(g_alone == 0.0)
 
-    # Under a squaring downstream (overflow), hard clip is no worse than smooth: both non-finite.
+    # Under a squaring downstream (overflow), the hard clip's gradient is exactly 0 — the `where`
+    # clamp's VJP is a select, so the overflowed cotangent is never multiplied by a 0 factor — while
+    # the smooth clamp's is non-finite.
     g_hard_sq = jax.vmap(jax.grad(lambda a: hard_sinh(a) ** 2))(x_tail)
     g_smooth_sq = jax.vmap(jax.grad(lambda a: smooth_sinh(a) ** 2))(x_tail)
-    assert not jnp.isfinite(g_hard_sq).any()
+    assert jnp.isfinite(g_hard_sq).all()
+    assert jnp.all(g_hard_sq == 0.0)
     assert not jnp.isfinite(g_smooth_sq).any()
 
 

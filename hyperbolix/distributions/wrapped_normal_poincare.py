@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
-from hyperbolix.utils.math_utils import MIN_NORM
+from hyperbolix.utils.math_utils import MIN_NORM, floor_at
 
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
@@ -217,9 +217,9 @@ def log_prob(
     # Step 4: Compute log det Jacobian
     # Riemannian norm r = λ(0) · ||v||_E = 2 · ||v||_E. The floor mirrors the hyperboloid
     # sibling: sqrt'(0) is infinite, so at z == mu the gradient of the unfloored norm is NaN
-    # (in float64 as much as float32). jnp.maximum's gradient is 0 on the clamped side, which
+    # (in float64 as much as float32). floor_at's gradient is 0 on the clamped side, which
     # is the correct derivative here — log det is stationary at r = 0.
-    r_SB = 2.0 * jnp.sqrt(jnp.maximum(jnp.sum(v_SBD**2, axis=-1), MIN_NORM))
+    r_SB = 2.0 * jnp.sqrt(floor_at(jnp.sum(v_SBD**2, axis=-1), MIN_NORM))
     log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
 
     # Step 5: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)

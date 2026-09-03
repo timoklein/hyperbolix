@@ -44,7 +44,7 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM
+from ..utils.math_utils import MIN_NORM, floor_at
 from .protocol import Curvature
 
 
@@ -88,7 +88,7 @@ def hyperboloid_to_poincare(
 
     # Curvature-aware stereographic projection: y_i = x_i / (√c·t + 1).
     # Since t ≥ 1/√c on the hyperboloid, √c·t ≥ 1 and the denominator ≥ 2 — stable.
-    denominator = jnp.maximum(sqrt_c * t + 1.0, MIN_NORM)
+    denominator = floor_at(sqrt_c * t + 1.0, MIN_NORM)
     return x_spatial / denominator
 
 
@@ -133,7 +133,7 @@ def poincare_to_hyperboloid(
     # Curvature-aware inverse stereographic projection. The spatial part scales
     # by the Poincaré conformal factor 1/(1 - c·||y||²); only the time component
     # carries the extra 1/√c, so the two denominators differ.
-    one_minus = jnp.maximum(1.0 - c * y_sqnorm, MIN_NORM)
+    one_minus = floor_at(1.0 - c * y_sqnorm, MIN_NORM)
 
     t = (1.0 + c * y_sqnorm) / (one_minus * sqrt_c)
     x_spatial = 2.0 * y / one_minus
@@ -220,7 +220,7 @@ def poincare_to_pv(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    denominator = jnp.maximum(1.0 - c * jnp.dot(y, y), MIN_NORM)
+    denominator = floor_at(1.0 - c * jnp.dot(y, y), MIN_NORM)
     return 2.0 * y / denominator
 
 

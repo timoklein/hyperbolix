@@ -32,6 +32,8 @@ import jax.numpy as jnp
 from flax import nnx
 from jax.typing import DTypeLike
 
+from .math_utils import cap_at, floor_at
+
 Parameterization = Literal["softplus", "log", "identity"]
 
 
@@ -210,7 +212,7 @@ class LearnableCurvature(nnx.Module):
             # via inf + (-inf)). Below the cap this is a value/grad identity; above it c is already pinned at
             # c_max by the clamp anyway, so nothing meaningful is lost.
             max_exp = 0.99 * math.log(float(jnp.finfo(raw.dtype).max))
-            capped = jnp.minimum(raw, max_exp)
+            capped = cap_at(raw, max_exp)
             if self._straight_through_clamp:
                 # Honor the straight-through contract at the exponent cap too: forward still uses the
                 # capped exponent (exp cannot overflow), but the backward is identity through the min, so
@@ -222,7 +224,11 @@ class LearnableCurvature(nnx.Module):
             c = raw
 
         if self._c_min is not None or self._c_max is not None:
-            c_clipped = jnp.clip(c, self._c_min, self._c_max)
+            c_clipped = c
+            if self._c_min is not None:
+                c_clipped = floor_at(c_clipped, self._c_min)
+            if self._c_max is not None:
+                c_clipped = cap_at(c_clipped, self._c_max)
             if self._straight_through_clamp:
                 # Forward value stays clamped; backward gradient flows instead of being zeroed, so `raw` can
                 # keep moving and `c` can re-enter the interval once the loss pulls the other way.

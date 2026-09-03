@@ -74,6 +74,7 @@ from ..utils.math_utils import (
     MIN_NORM,
     acosh,
     cosh,
+    floor_at,
     safe_hypot,
     safe_norm,
     safe_normalize,
@@ -149,7 +150,7 @@ def _proj(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus
     """
     x_rest = x[1:]
     x_rest_sqnorm = jnp.dot(x_rest, x_rest)
-    x0_new = jnp.sqrt(jnp.maximum(1.0 / c + x_rest_sqnorm, MIN_NORM))
+    x0_new = jnp.sqrt(floor_at(1.0 / c + x_rest_sqnorm, MIN_NORM))
     return jnp.concatenate([x0_new[None], x_rest])
 
 
@@ -167,7 +168,7 @@ def _proj_batch(x: Float[Array, "... dim_plus_1"], c: Curvature) -> Float[Array,
     """
     x_rest = x[..., 1:]  # Shape: (..., dim)
     x_rest_sqnorm = jnp.sum(x_rest**2, axis=-1, keepdims=True)  # Shape: (..., 1)
-    x0_new = jnp.sqrt(jnp.maximum(1.0 / c + x_rest_sqnorm, MIN_NORM))  # Shape: (..., 1)
+    x0_new = jnp.sqrt(floor_at(1.0 / c + x_rest_sqnorm, MIN_NORM))  # Shape: (..., 1)
     return jnp.concatenate([x0_new, x_rest], axis=-1)
 
 
@@ -341,8 +342,8 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
 
     r_x = safe_norm(x_s_D)
     r_y = safe_norm(y_s_D)
-    r_x_pos = jnp.maximum(r_x, MIN_NORM)
-    r_y_pos = jnp.maximum(r_y, MIN_NORM)
+    r_x_pos = floor_at(r_x, MIN_NORM)
+    r_y_pos = floor_at(r_y, MIN_NORM)
     x_hat_D = x_s_D / r_x_pos
     y_hat_D = y_s_D / r_y_pos
 
@@ -350,8 +351,8 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     # On the upper sheet u = x₀ + r_x >= x₀ >= 1/√c > 0, so the MIN_NORM floor is a no-op for every
     # valid point; it only stops a fully degenerate input (an all-zero "point", x₀ = 0) from
     # turning the quotient into 0/0 = NaN.
-    u_x = jnp.maximum(x_time + r_x, MIN_NORM)
-    u_y = jnp.maximum(y_time + r_y, MIN_NORM)
+    u_x = floor_at(x_time + r_x, MIN_NORM)
+    u_y = floor_at(y_time + r_y, MIN_NORM)
     # The numerator ``u_x - u_y`` is *not* formed from the u's: on the sheet ``c·x₀² = 1 + c·r_x²``,
     # so ``x₀ - y₀ = (r_x² - r_y²)/(x₀ + y₀)`` and therefore
     #     u_x - u_y = (r_x - r_y) · (1 + (r_x + r_y)/(x₀ + y₀)).
@@ -361,7 +362,7 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     # O(r_x - r_y) near the origin; see the load-bearing list in the docstring for the measurements.
     # ``x₀ + y₀ ≥ 2/√c > 0`` on the sheet, so this MIN_NORM floor, like the two above, only guards
     # a fully degenerate all-zero "point".
-    time_sum = jnp.maximum(x_time + y_time, MIN_NORM)
+    time_sum = floor_at(x_time + y_time, MIN_NORM)
     u_gap = (r_x - r_y) * (1.0 + (r_x + r_y) / time_sum)
     # A point past the dtype's representable radius has x₀ = inf (the sqrt inside _proj
     # overflowed), where the exact quotient is inf/inf = NaN. Return ±inf instead: the geodesic
@@ -451,7 +452,7 @@ def _dist_legacy(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     """
     sqrt_c = jnp.sqrt(c)
     lorentz_inner = _minkowski_inner(x, y)
-    arg = jnp.clip(-c * lorentz_inner, min=1.0)
+    arg = floor_at(-c * lorentz_inner, 1.0)
     res = acosh(arg) / sqrt_c
     # Zero out if points are identical
     same = jnp.all(jnp.equal(x, y))
@@ -592,7 +593,7 @@ def _dist_0_legacy(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, 
     """
     sqrt_c = jnp.sqrt(c)
     x0 = x[0]
-    arg = jnp.clip(sqrt_c * x0, min=1.0)
+    arg = floor_at(sqrt_c * x0, 1.0)
     res = acosh(arg) / sqrt_c
     # Zero out if at origin
     origin = _create_origin(c, x.shape[0] - 1, x.dtype)
@@ -662,13 +663,13 @@ def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Cur
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sqrt_c = jnp.sqrt(c)
-    v_sqnorm = jnp.clip(_minkowski_inner(v, v), min=0.0)
+    v_sqnorm = floor_at(_minkowski_inner(v, v), 0.0)
     # Safe norm: +MIN_NORM² keeps sqrt's gradient finite at v=0
     # (sqrt'(0) = inf; the forward-only maximum below can't undo that NaN).
     v_norm = jnp.sqrt(v_sqnorm + MIN_NORM**2)
     c_norm_prod = sqrt_c * v_norm
 
-    denom = jnp.maximum(c_norm_prod, MIN_NORM)
+    denom = floor_at(c_norm_prod, MIN_NORM)
     cosh_term = cosh(c_norm_prod) * x
     sinh_term = sinh(c_norm_prod) / denom * v
 
@@ -692,12 +693,12 @@ def _expmap_0(v: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sqrt_c = jnp.sqrt(c)
-    v_sqnorm = jnp.clip(_minkowski_inner(v, v), min=0.0)
+    v_sqnorm = floor_at(_minkowski_inner(v, v), 0.0)
     # Safe norm: +MIN_NORM² keeps sqrt's gradient finite at v=0 (see _expmap)
     v_norm = jnp.sqrt(v_sqnorm + MIN_NORM**2)
     c_norm_prod = sqrt_c * v_norm
 
-    denom = jnp.maximum(c_norm_prod, MIN_NORM)
+    denom = floor_at(c_norm_prod, MIN_NORM)
     sinh_scale = sinh(c_norm_prod) / denom
 
     v0 = v[0]
@@ -787,7 +788,7 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Cur
 
     # S = 0 exactly at x == y, where the direction is arbitrary; floor the denominator so the
     # discarded ratios stay finite (they are multiplied by dist_xy = 0 anyway).
-    sinh_half_pos = jnp.maximum(frame.sinh_half, MIN_NORM)
+    sinh_half_pos = floor_at(frame.sinh_half, MIN_NORM)
     cos_phi = (frame.sinh_half_gap / sinh_half_pos) * (
         safe_hypot(jnp.ones_like(frame.sinh_half_gap), frame.sinh_half_gap) / frame.cosh_half
     ) + (frame.q_angular / sinh_half_pos) * (frame.q_angular / frame.cosh_half) * (frame.x_time / frame.r_x_pos)
@@ -849,7 +850,7 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_
     # stops ``arcsinh(u)/u`` from evaluating 0/0; the Jacobian at y = origin is the identity either
     # way. That matters for the gyro-bias path of the PLFC / Busemann FC layers, whose bias point
     # is the origin at zero init.
-    y_rest_norm = jnp.maximum(safe_norm(y_rest), MIN_NORM)
+    y_rest_norm = floor_at(safe_norm(y_rest), MIN_NORM)
 
     u = sqrt_c * y_rest_norm
     scale = jnp.arcsinh(u) / u  # = d₀(y)/‖y_s‖, → 1 as u → 0
@@ -886,7 +887,7 @@ def _ptransp(
 
     # denom = 1/c - ⟨x, y⟩_L
     denom = 1.0 / c - xy
-    denom = jnp.maximum(denom, MIN_NORM)  # Numerical stability
+    denom = floor_at(denom, MIN_NORM)  # Numerical stability
 
     # scale = ⟨v, y⟩_L / denom
     scale = vy / denom
@@ -924,7 +925,7 @@ def _ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: 
 
     # denom = 1/c + y0/√c (from ⟨origin, y⟩_L = -y0/√c and denom = 1/c - ⟨origin, y⟩_L)
     denom = 1.0 / c + y0 / sqrt_c
-    denom = jnp.maximum(denom, MIN_NORM)  # Numerical stability
+    denom = floor_at(denom, MIN_NORM)  # Numerical stability
 
     # scale = ⟨v, y⟩_L / denom
     scale = vy / denom
@@ -991,13 +992,13 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     sqrt_c = jnp.sqrt(c)
     x_s_D = x[1:]
     v_s_D = v[1:]
-    x_hat_D = x_s_D / jnp.maximum(safe_norm(x_s_D), MIN_NORM)
+    x_hat_D = x_s_D / floor_at(safe_norm(x_s_D), MIN_NORM)
 
     radial = jnp.dot(v_s_D, x_hat_D)
     perp_norm = safe_norm(v_s_D - radial * x_hat_D)
     # √c·x₀ = cosh a >= 1 on the upper sheet, so the floor is a no-op for every valid base point;
     # it only keeps a degenerate x (x₀ = 0) from dividing by zero.
-    return safe_hypot(perp_norm, radial / jnp.maximum(sqrt_c * x[0], MIN_NORM))
+    return safe_hypot(perp_norm, radial / floor_at(sqrt_c * x[0], MIN_NORM))
 
 
 def _egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
@@ -1022,7 +1023,7 @@ def _egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"]
 
     # Orthogonally project the Lorentzian gradient onto the tangent space.
     inner_xx = _minkowski_inner(x, x)
-    scale = jnp.sqrt(jnp.maximum(-c * inner_xx, MIN_NORM))
+    scale = jnp.sqrt(floor_at(-c * inner_xx, MIN_NORM))
     x_normed = x / scale
 
     denom = _minkowski_inner(x_normed, x_normed)
@@ -1043,7 +1044,7 @@ def _tangent_proj(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     """
     # Normalize x w.r.t. measured Lorentz norm (robust in float32)
     inner_xx = _minkowski_inner(x, x)
-    scale = jnp.sqrt(jnp.maximum(-c * inner_xx, MIN_NORM))
+    scale = jnp.sqrt(floor_at(-c * inner_xx, MIN_NORM))
     x_normed = x / scale
 
     denom = _minkowski_inner(x_normed, x_normed)
@@ -1136,7 +1137,7 @@ def _hcat(
 
     # New time: sqrt(sum(x_i[0]^2) - (N-1)/c)
     time_sq_sum = jnp.sum(time_N**2) - (N - 1) / c
-    time_new = jnp.sqrt(jnp.maximum(time_sq_sum, MIN_NORM))  # scalar
+    time_new = jnp.sqrt(floor_at(time_sq_sum, MIN_NORM))  # scalar
 
     space_flat_ND = space_ND.reshape(-1)  # (N*d,)
 
@@ -1204,7 +1205,7 @@ def _log_radius_concat(
 
     # Recompute the time coordinate so the scaled point lies on the (dN)-dim hyperboloid.
     time_sq = 1.0 / c + scale**2 * jnp.sum(time_N**2 - 1.0 / c)  # scalar
-    time_new = jnp.sqrt(jnp.maximum(time_sq, MIN_NORM))  # scalar
+    time_new = jnp.sqrt(floor_at(time_sq, MIN_NORM))  # scalar
 
     result_A = jnp.concatenate([time_new[None], space_scaled_flat])  # (1 + N*d,) = (dN+1,)
     return result_A
@@ -1244,21 +1245,27 @@ def _compute_mlr(
     """
     sqrt_c = jnp.sqrt(c)
     sqrt_cr_1P = sqrt_c * r.T  # r:(P,1) → r.T:(1,P)
-    # The floor is a `where` on a comparison against the constant, not `clip`/`jnp.maximum`.
-    # `jnp.maximum(n, eps)` carries the tie-breaking JVP `g * [n == ans] / (1 + [eps == ans])`
-    # (jax's `_balanced_eq`), which tests the *operand* for bit equality with the *result*. That
-    # is safe only while both are the same value in the compiled graph. XLA:GPU emits
-    # `n = sqrt(sum(z*z))` twice here — once as its own fusion, once recomputed inside the
-    # backward fusion — and its per-process fusion autotuner may pick different emitters for the
-    # two (NATIVE_EMITTER vs BLOCK_LEVEL_EMITTER/Triton). The two copies then differ by 1 ulp,
-    # `[n == ans]` is false, and the entire `d‖z‖` branch of the gradient is silently zeroed for
-    # that output row — measured 1.0e-2 relative on `test_gradient_contract[linear_plfc-f32]`,
-    # firing in ~2 of 3 process launches on an A100. The `where` compares `n` against `min_enorm`
-    # (0.027 vs 1e-15 here), which no 1-ulp disagreement can flip. Forward values and the CPU
-    # gradient are bit-identical; only NaN input differs (`maximum` propagates it, `where` floors
-    # it), and a NaN `z` is already outside this function's contract.
-    z_enorm_P1 = jnp.linalg.norm(z, ord=2, axis=-1, keepdims=True)  # (P,1)
-    z_norm_1P = jnp.where(z_enorm_P1 > min_enorm, z_enorm_P1, min_enorm).T  # (1,P)
+    # `safe_norm`, not `jnp.linalg.norm`: an all-zero hyperplane normal (one dead output channel,
+    # or a class that was pruned to zero) is a perfectly ordinary input here, and `linalg.norm`'s
+    # VJP at the zero vector is `z/‖z‖ = 0/0 = NaN`. The floor below cannot remove that — the NaN
+    # is created inside the norm's own VJP, and the `where`'s zero cotangent meets it as
+    # `0 * NaN = NaN`, poisoning the whole kernel gradient, not just that row. `safe_norm`'s
+    # double-`where` gives an exact 0 value and an exactly-zero VJP there, so the dead row simply
+    # receives no gradient.
+    # The floor itself is `floor_at` — a `where` on a comparison against the constant — not
+    # `clip`/`jnp.maximum`. `jnp.maximum(n, eps)` carries the tie-breaking JVP
+    # `g * [n == ans] / (1 + [eps == ans])` (jax's `_balanced_eq`), which tests the *operand* for
+    # bit equality with the *result*. That is safe only while both are the same value in the
+    # compiled graph. XLA:GPU emits `n = sqrt(sum(z*z))` twice here — once as its own fusion, once
+    # recomputed inside the backward fusion — and its per-process fusion autotuner may pick
+    # different emitters for the two (NATIVE_EMITTER vs BLOCK_LEVEL_EMITTER/Triton). The two copies
+    # then differ by 1 ulp, `[n == ans]` is false, and the entire `d‖z‖` branch of the gradient is
+    # silently zeroed for that output row — measured 1.0e-2 relative on
+    # `test_gradient_contract[linear_plfc-f32]`, firing in ~2 of 3 process launches on an A100.
+    # `floor_at` compares `n` against `min_enorm` (0.027 vs 1e-15 here), which no 1-ulp
+    # disagreement can flip, and keeps `maximum`'s NaN propagation.
+    z_enorm_P1 = safe_norm(z)[:, None]  # (P,1)
+    z_norm_1P = floor_at(z_enorm_P1, min_enorm).T  # (1,P)
     x0_B1 = x[:, 0:1]  # time coordinate
     x_rem_BD = x[:, 1:]  # space coordinates, D = in_dim-1
     # TF32 (the XLA:GPU default for float32 matmuls on Ampere/Hopper) feeds the alpha_BP
@@ -1309,7 +1316,7 @@ def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: Curvatur
     """
     sqrt_c = jnp.sqrt(c)
     arg = sqrt_c * (x[0] - jnp.dot(x[1:], v))  # = -sqrt_c * minkowski_inner(x, [1, v]); > 0 on the upper sheet
-    return jnp.log(jnp.maximum(arg, MIN_NORM)) / sqrt_c
+    return jnp.log(floor_at(arg, MIN_NORM)) / sqrt_c
 
 
 def _lorentz_boost(mu: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:

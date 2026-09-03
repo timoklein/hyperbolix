@@ -47,7 +47,7 @@ from ..manifolds.hyperboloid import (
 from ..manifolds.isometry_mappings import hyperboloid_to_poincare, poincare_to_hyperboloid
 from ..manifolds.protocol import Curvature
 from ..utils.helpers import compute_pairwise_distances
-from ..utils.math_utils import MIN_NORM
+from ..utils.math_utils import MIN_NORM, floor_at
 from .frechet import frechet_mean
 
 # -------------------------------------------------------------------------------------
@@ -144,7 +144,7 @@ def horo_projection(
     coeffs_K = _span_coeffs(x_A)
     mp_A = coeffs_K @ p_KA  # (A,) projection of x onto the ideal span
     mp_inner = _minkowski_inner(mp_A, mp_A)  # < 0 (timelike) for a valid spine
-    spine_A = mp_A / jnp.sqrt(jnp.maximum(-c * mp_inner, MIN_NORM))
+    spine_A = mp_A / jnp.sqrt(floor_at(-c * mp_inner, MIN_NORM))
     # Sheet hygiene BEFORE _proj: _proj rebuilds a positive time from the spatial part and
     # cannot itself flip a lower-sheet point back up, so reflect first (spine_0 != 0).
     spine_A = spine_A * jnp.sign(spine_A[0])
@@ -156,7 +156,7 @@ def horo_projection(
     proj_span_o_A = origin_coeffs_K @ p_KA  # projection of the origin onto the ideal span
     tangent_A = origin_A - proj_span_o_A  # spacelike, ⊥ span(P)
     tangent_inner = _minkowski_inner(tangent_A, tangent_A)  # > 0 (spacelike)
-    unit_tangent_A = tangent_A / jnp.sqrt(jnp.maximum(tangent_inner, MIN_NORM))
+    unit_tangent_A = tangent_A / jnp.sqrt(floor_at(tangent_inner, MIN_NORM))
 
     # (3) Geodesic walk of length d(x, spine) along the unit tangent.
     step = _dist(x_A, spine_A, c, version_idx)
@@ -417,7 +417,7 @@ class HoroPCA:
         self.losses_ = losses_S
         self.total_variance_ = total_variance
         self.explained_variance_ = explained_variance
-        self.explained_variance_ratio_ = explained_variance / jnp.maximum(total_variance, MIN_NORM)
+        self.explained_variance_ratio_ = explained_variance / floor_at(total_variance, MIN_NORM)
         return self
 
     def transform(self, x_ND: Float[Array, "N R"]) -> Float[Array, "N out"]:

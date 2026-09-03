@@ -15,11 +15,77 @@ from jaxtyping import Array, Float
 # Two uses, both about derivatives rather than values:
 #   * `sqrt(sum(x**2) + MIN_NORM**2)` has a finite VJP at x = 0, unlike `linalg.norm`, whose
 #     VJP there is 0/0 = NaN.
-#   * `maximum(denom, MIN_NORM)` keeps a division finite when the denominator collapses.
+#   * `floor_at(denom, MIN_NORM)` keeps a division finite when the denominator collapses.
 # 1e-15 is small enough to be invisible next to any float32 or float64 quantity the library
 # works with (float64 eps is 2.2e-16), and `MIN_NORM**2 = 1e-30` is still normal in both
 # dtypes (float32's smallest normal is 1.2e-38), so squaring it does not flush to zero.
 MIN_NORM = 1e-15
+
+
+def floor_at(x: Float[Array, "..."], min_value) -> Float[Array, "..."]:
+    """``max(x, min_value)`` written as a ``where``, for floors on differentiated paths.
+
+    Same value as ``jnp.maximum(x, min_value)`` / ``jnp.clip(x, min_value, None)`` for **every**
+    input, NaN and ±inf included: ``NaN < min_value`` is false, so a NaN ``x`` is selected and
+    propagates exactly as ``maximum`` propagates it. The comparison direction is deliberately
+    ``<`` for that reason — ``where(x > min_value, x, min_value)`` would silently replace a NaN
+    with the floor.
+
+    What changes is the **gradient**. ``jnp.maximum``'s JVP is jax's tie-breaking ``_balanced_eq``,
+    ``g * [x == ans] / (1 + [min_value == ans])``: it tests the *operand* ``x`` for **bit**
+    equality with the *result* ``ans``. That is sound only while the two are the same value in the
+    compiled graph, and on XLA:GPU they need not be — the backward fusion may **recompute** ``x``
+    (typically a reduction such as a norm) with a different emitter than the forward copy, chosen
+    per process by the fusion autotuner. The two copies then differ by 1 ulp, ``[x == ans]`` is
+    false, and the *whole* gradient branch through ``x`` is silently zeroed — no NaN, no warning,
+    bit-identical within a process, different across launches. Measured on an A100 at
+    ``manifolds/hyperboloid._compute_mlr``: 1.0e-2 relative gradient error, firing in ~2 of 3
+    launches (see ``logs/2026-09-03_plfc_jit_grad/``).
+
+    ``where`` compares against the *constant* instead, which no 1-ulp disagreement can flip. The
+    only gradient difference is exactly at a tie ``x == min_value``, where ``maximum`` splits
+    0.5/0.5 and this routes the full cotangent to ``x``.
+
+    Args:
+        x: Input array of any shape
+        min_value: Lower bound (a Python/NumPy constant, or an array broadcastable against ``x``)
+
+    Returns:
+        ``x`` where it exceeds ``min_value``, ``min_value`` elsewhere
+    """
+    return jnp.where(x < min_value, min_value, x)
+
+
+def cap_at(x: Float[Array, "..."], max_value) -> Float[Array, "..."]:
+    """``min(x, max_value)`` written as a ``where``. Mirror of :func:`floor_at`; same rationale.
+
+    NaN-preserving for the same reason (``NaN > max_value`` is false, so ``x`` is selected).
+
+    Args:
+        x: Input array of any shape
+        max_value: Upper bound (a Python/NumPy constant, or an array broadcastable against ``x``)
+
+    Returns:
+        ``x`` where it is below ``max_value``, ``max_value`` elsewhere
+    """
+    return jnp.where(x > max_value, max_value, x)
+
+
+def clamp_to(x: Float[Array, "..."], min_value, max_value) -> Float[Array, "..."]:
+    """``jnp.clip(x, min_value, max_value)`` written as two ``where``s. See :func:`floor_at`.
+
+    Composed in ``clip``'s own order, ``min(max(x, lo), hi)``, so the two agree bit-for-bit even
+    for the degenerate ``lo > hi`` (both return ``hi``).
+
+    Args:
+        x: Input array of any shape
+        min_value: Lower bound
+        max_value: Upper bound
+
+    Returns:
+        ``x`` clamped into ``[min_value, max_value]``
+    """
+    return cap_at(floor_at(x, min_value), max_value)
 
 
 def _softplus_tail(u: Float[Array, "..."], smoothing_factor: float) -> Float[Array, "..."]:
@@ -305,7 +371,7 @@ def capped_exp(x: Float[Array, "..."]) -> Float[Array, "..."]:
         exp(x) with the argument capped so the result is always finite
     """
     clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
-    return jnp.exp(jnp.minimum(x, clamp))
+    return jnp.exp(cap_at(x, clamp))
 
 
 @jax.custom_jvp
@@ -353,7 +419,7 @@ def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """
     # cosh(x) ≈ exp(x)/2 for large x, so the overflow boundary is x = log(max).
     clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
-    x = jnp.clip(x, -clamp, clamp)
+    x = clamp_to(x, -clamp, clamp)
     # exp-form value (≤1.8 ulps f64 / ≤1.4 ulps f32 vs XLA CPU cosh's 17-496 / 24.5 ulps); the
     # custom_jvp above keeps the gradient on the accurate expm1-form sinh instead of the naive
     # cancelling exp-form derivative.
@@ -396,7 +462,7 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """
     # sinh(x) ≈ exp(x)/2 for large x, so the overflow boundary is x = log(max).
     clamp = jnp.log(jnp.finfo(x.dtype).max) * 0.99
-    x = jnp.clip(x, -clamp, clamp)
+    x = clamp_to(x, -clamp, clamp)
     # expm1-form: cancellation-free everywhere (opposite-signed terms), ≤3.9 ulps f64 vs XLA CPU
     # sinh's 17-496 ulps, and faster than the builtin. Autodiff of this expression is already the
     # accurate exp-form cosh, so no custom_jvp is needed here (contrast cosh above).
@@ -422,7 +488,7 @@ def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
         acosh(x) with domain and gradient protection
     """
     eps = 10.0 * float(jnp.finfo(x.dtype).eps)
-    x = jnp.clip(x, 1.0 + eps, None)
+    x = floor_at(x, 1.0 + eps)
     return jnp.acosh(x)
 
 
@@ -484,7 +550,7 @@ def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
         atanh(x) with domain and gradient protection
     """
     eps = 10.0 * float(jnp.finfo(x.dtype).eps)
-    x = jnp.clip(x, -1.0 + eps, 1.0 - eps)
+    x = clamp_to(x, -1.0 + eps, 1.0 - eps)
     # XLA evaluates jnp.atanh as 0.5*(log1p(x) - log1p(-x)), and XLA's float64 log1p is up to
     # ~129 ulps off for arguments in [-0.53, -0.28] (numpy's: <1 ulp) — jnp.atanh inherits this
     # for x in ~[0.28, 0.53], peaking at sqrt(2)-1. The single-log1p identity
@@ -582,7 +648,7 @@ def tanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     # where inf/inf = NaN would leak into the *selected* branch's cotangent. Clipping first bounds
     # the branch argument at ±8.32 (f32) / ±18.4 (f64), so expm1(2x) tops out at 1.7e7 / 9.5e15 —
     # finite in both dtypes, for every real input including ±inf.
-    x_safe = jnp.clip(x, -clamp, clamp)
+    x_safe = clamp_to(x, -clamp, clamp)
     seam = _TANH_EXPM1_SEAM_LOW_PRECISION if _is_low_precision(x.dtype) else _TANH_EXPM1_SEAM_FLOAT64
     # Evaluated on |x| with the sign restored via `where`, exactly as `atanh` above: `expm1(2x)`
     # and `expm1(-2x)` are not negatives of each other, so the raw quotient is not an odd function
@@ -605,4 +671,4 @@ def tanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     out = jnp.where(x_safe >= 0, magnitude, -magnitude)
     # Also clamp the output: XLA's float32 tanh reaches exactly 1.0 before the input bound bites.
     max_out = 1.0 - 10.0 * float(jnp.finfo(x.dtype).eps)
-    return jnp.clip(out, -max_out, max_out)
+    return clamp_to(out, -max_out, max_out)
