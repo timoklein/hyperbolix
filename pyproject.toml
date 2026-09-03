@@ -93,9 +93,15 @@ line-length = 127
 
 
 [tool.pytest.ini_options]
-addopts = "-ra -q" # --log-cli-level=DEBUG
+# --import-mode=importlib: keeps pytest from prepending the repo root (and, with the old
+# `pythonpath = "hyperbolix"` entry, <root>/hyperbolix) to sys.path ahead of PYTHONPATH.
+# That prepending silently shadowed a checkout named on PYTHONPATH, so a "does this fail on
+# the parent commit?" run executed the branch's own code. `tests/conftest.py` additionally
+# guards the case at import time. The dropped `pythonpath = "hyperbolix"` entry dates back to
+# the PyTorch removal (bc6a0ef) and is unused: no module imports `manifolds`/`utils`/... as
+# top-level names.
+addopts = "-ra -q --import-mode=importlib" # --log-cli-level=DEBUG
 testpaths = ["tests"]
-pythonpath = "hyperbolix"
 python_files = ["test_*.py", "*_test.py"]
 
 [dependency-groups]
