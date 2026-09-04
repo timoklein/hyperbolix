@@ -33,8 +33,9 @@ from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
-from hyperbolix.utils.math_utils import clamp_to, floor_at, safe_hypot_norm
+from hyperbolix.utils.math_utils import clamp_to
 from hyperbolix.utils.math_utils import cosh as safe_cosh
+from hyperbolix.utils.math_utils import floor_at, safe_hypot_norm
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 from hyperbolix.utils.precision import MATMUL_PRECISION
 
@@ -151,6 +152,11 @@ def extract_patches(
     -------
     Array, shape (B, out_height, out_width, kernel_h, kernel_w, in_channels)
         Receptive-field patches in point-major order.
+
+    Raises
+    ------
+    ValueError
+        If ``pad_mode="origin"`` is used without an explicit curvature ``c``.
     """
     batch, height, width, in_channels = x.shape
     kernel_h, kernel_w = kernel_size

@@ -2,7 +2,7 @@
 
 ## Hyperbolic Deep Learning in JAX
 
-[![Tests](https://img.shields.io/badge/tests-3550%2B%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-4000%2B%20passing-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue)]()
 [![JAX](https://img.shields.io/badge/JAX-compatible-orange)]()
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
