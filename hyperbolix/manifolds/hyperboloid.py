@@ -71,7 +71,7 @@ from ..utils.math_utils import (
     sinh,
     smooth_clamp,
 )
-from ..utils.precision import MATMUL_PRECISION
+from ..utils.precision import MATMUL_PRECISION, gemm_precision
 from ._base import ManifoldBase, default_atol
 from .protocol import ScalarCurvature
 
@@ -1289,12 +1289,12 @@ def _compute_mlr(
     z_norm_1P = floor_at(z_enorm_P1, min_enorm).T  # (1,P)
     x0_B1 = x[:, 0:1]  # time coordinate
     x_rem_BD = x[:, 1:]  # space coordinates, D = in_dim-1
-    # TF32 (the XLA:GPU default for float32 matmuls on Ampere/Hopper) feeds the alpha_BP
-    # difference below, so this dot carries the library-wide MATMUL_PRECISION from
-    # hyperbolix.utils.precision (a neutral home both manifolds/ and nn_layers/ import from;
-    # nn_layers.hyperboloid_core.MATMUL_PRECISION re-exports it). Measured on an A100: the eager
-    # float32 gradient of _compute_mlr goes from 1.5e-4 to 2.7e-7 relative vs a float64 reference.
-    zx_rem_BP = jnp.einsum("bi,oi->bo", x_rem_BD, z, precision=MATMUL_PRECISION)
+    # A batched training-path GEMM, so it follows the user's JAX matmul precision via
+    # gemm_precision() (hyperbolix.utils.precision). It feeds the alpha_BP difference below, so it
+    # is one of the sites that most rewards overriding it: measured on an A100, the eager float32
+    # gradient of _compute_mlr goes from 1.5e-4 (TF32, the XLA:GPU default on Ampere/Hopper) to
+    # 2.7e-7 relative vs a float64 reference under HIGHEST.
+    zx_rem_BP = jnp.einsum("bi,oi->bo", x_rem_BD, z, precision=gemm_precision())
     alpha_BP = -x0_B1 * sinh(sqrt_cr_1P) * z_norm_1P + cosh(sqrt_cr_1P) * zx_rem_BP
     asinh_arg_BP = sqrt_c * alpha_BP / z_norm_1P
 

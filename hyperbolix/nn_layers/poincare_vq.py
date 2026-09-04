@@ -35,7 +35,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
-from hyperbolix.utils.precision import MATMUL_PRECISION
+from hyperbolix.utils.precision import gemm_precision
 
 from ._helpers import validate_poincare_manifold
 from .poincare_batchnorm import poincare_weighted_midpoint
@@ -420,7 +420,8 @@ class HypVQMLRPoincare(nnx.Module):
         # Implicit codebook = bias · kernel; (K,1)·(K,C) → (K,C). The matmul keeps
         # the op differentiable w.r.t. the MLR parameters.
         codes_KC = self.mlr.bias[...] * self.mlr.kernel[...]  # (K, C)
-        z_q_NC = jnp.matmul(st_weights_NK, codes_KC, precision=MATMUL_PRECISION)  # (N, C) — gradient flows to the MLR
+        # Training-path GEMM: follows the user's JAX matmul precision (GEMM_PRECISION overrides).
+        z_q_NC = jnp.matmul(st_weights_NK, codes_KC, precision=gemm_precision())  # (N, C) — gradient flows to the MLR
 
         perplexity = _codebook_perplexity(indices_N, self.num_codes)
         return PoincareVQOutput(

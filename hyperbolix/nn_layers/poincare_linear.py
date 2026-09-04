@@ -19,7 +19,7 @@ from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import ManifoldParam
 from ..utils.math_utils import sinh
-from ..utils.precision import MATMUL_PRECISION
+from ..utils.precision import gemm_precision
 from ._helpers import validate_poincare_manifold
 
 
@@ -143,7 +143,9 @@ class HypLinearPoincare(nnx.Module):
         # kernel to the input dtype so float64 weights (from global
         # jax_enable_x64) don't promote a float32 computation to float64.
         kernel_OI = self.kernel[...].astype(x_BI.dtype)
-        x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI, precision=MATMUL_PRECISION)  # (B, I) @ (I, O) -> (B, O)
+        # Training-path GEMM: follows the user's JAX matmul precision (GEMM_PRECISION overrides;
+        # see hyperbolix.utils.precision).
+        x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI, precision=gemm_precision())  # (B, I) @ (I, O) -> (B, O)
 
         # Map back to manifold
         x_BO = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BO, c)

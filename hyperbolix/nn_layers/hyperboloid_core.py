@@ -36,12 +36,16 @@ from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
 from hyperbolix.utils.math_utils import clamp_to, floor_at, safe_hypot_norm
 from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
-from hyperbolix.utils.precision import MATMUL_PRECISION
+from hyperbolix.utils.precision import MATMUL_PRECISION as MATMUL_PRECISION  # re-export
+from hyperbolix.utils.precision import gemm_precision as gemm_precision  # re-export
 
 # MATMUL_PRECISION used to be defined here; its home is now hyperbolix.utils.precision, a
 # neutral module both manifolds/ and nn_layers/ import from (manifolds/ must not depend on
-# nn_layers/). The import above keeps `hyperboloid_core.MATMUL_PRECISION` working for existing
-# importers; see hyperbolix/utils/precision.py for the TF32 rationale and the measurements.
+# nn_layers/). The imports above keep `hyperboloid_core.MATMUL_PRECISION` and
+# `hyperboloid_core.gemm_precision` working for existing importers; see
+# hyperbolix/utils/precision.py for the TF32 rationale and the measurements. The GEMM_PRECISION
+# *value* is deliberately not re-exported: it must be rebound on hyperbolix.utils.precision
+# itself, which is where gemm_precision() reads it from at call time.
 
 
 def build_spacelike_V(
@@ -196,7 +200,9 @@ def extract_patches(
         window_strides=(stride_h, stride_w),
         padding="VALID",
         dimension_numbers=("NHWC", "OIHW", "NHWC"),
-        precision=MATMUL_PRECISION,
+        # A GEMM-shaped op on the training path (XLA implements the patch extraction as a
+        # convolution against a 0/1 filter), so it follows the user's JAX precision setting.
+        precision=gemm_precision(),
     )
 
     # 3. Reshape to separate channels and kernel dims, then transpose to point-major.
@@ -391,7 +397,9 @@ def lorentz_midpoint(
     is as large as that extreme radius and the identity's own terms cancel against each other.
     """
     # h = sum_m w_{n,m} * points_m  →  (..., N, A)
-    h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
+    # Training-path GEMM: follows the user's JAX matmul precision (see hyperbolix.utils.precision;
+    # set GEMM_PRECISION = HIGHEST there to recover the accuracy figures quoted below).
+    h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=gemm_precision())
     # Exact for on-sheet points (reference p = points_0, delta_m = x_m - p, W = sum_m w_m,
     # Delta = sum_m w_m delta_m):
     #     <h,h>_L = -W^2/c - W * sum_m w_m <delta_m, delta_m>_L + <Delta, Delta>_L.
@@ -408,8 +416,9 @@ def lorentz_midpoint(
     delta_MA = points - p_1A  # (..., M, A)
     dd_M = -(delta_MA[..., 0] ** 2) + jnp.sum(delta_MA[..., 1:] ** 2, axis=-1)  # (..., M), >= 0 on-sheet
     w_sum_N1 = jnp.sum(weights, axis=-1, keepdims=True)  # (..., N, 1)
-    w_dd_N1 = jnp.einsum("...nm,...m->...n", weights, dd_M, precision=MATMUL_PRECISION)[..., None]  # (..., N, 1)
-    big_delta_NA = jnp.einsum("...nm,...ma->...na", weights, delta_MA, precision=MATMUL_PRECISION)  # (..., N, A)
+    # The two remaining contractions are training-path GEMMs; same precision policy as `h_NA`.
+    w_dd_N1 = jnp.einsum("...nm,...m->...n", weights, dd_M, precision=gemm_precision())[..., None]  # (..., N, 1)
+    big_delta_NA = jnp.einsum("...nm,...ma->...na", weights, delta_MA, precision=gemm_precision())  # (..., N, A)
     big_dd_N1 = -(big_delta_NA[..., 0:1] ** 2) + jnp.sum(big_delta_NA[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., N, 1)
     mink_N1 = -(w_sum_N1**2) / c - w_sum_N1 * w_dd_N1 + big_dd_N1  # (..., N, 1)
     denom_N1 = jnp.sqrt(floor_at(c * jnp.abs(mink_N1), eps))  # (..., N, 1)

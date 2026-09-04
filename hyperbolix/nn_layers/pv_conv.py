@@ -26,7 +26,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
-from hyperbolix.utils.precision import MATMUL_PRECISION
+from hyperbolix.utils.precision import gemm_precision
 
 from ._helpers import as_pair, validate_pv_manifold
 from .pv_linear import _pv_fc_forward
@@ -194,7 +194,9 @@ class HypConv2DPV(nnx.Module):
             window_strides=(stride_h, stride_w),
             padding=self.padding,
             dimension_numbers=("NHWC", "OIHW", "NHWC"),
-            precision=MATMUL_PRECISION,
+            # A GEMM-shaped op on the training path (XLA implements the patch extraction as a
+            # convolution against a 0/1 filter), so it follows the user's JAX precision setting.
+            precision=gemm_precision(),
         )  # (B, H, W, K²·C_in)
 
         batch, out_h, out_w, concat_dim = patches_BHWKC.shape

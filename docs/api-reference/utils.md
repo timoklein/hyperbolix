@@ -65,7 +65,22 @@ capped_exp(log_scale)  # finite, saturates at exp(0.99*log(finfo.max))
 
 ## Matmul Precision
 
-`MATMUL_PRECISION` pins float32 dot products touching manifold data (points, tangent vectors, hyperplane normals) to `jax.lax.Precision.HIGHEST`, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on.
+Two settings, because the library's float32 matmuls fall into two groups.
+
+`MATMUL_PRECISION` pins the **geometry dots** — the vector-vector reductions inside `manifolds/` and the `decomposition/` (HoroPCA) contractions — to `jax.lax.Precision.HIGHEST`, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on. It is not user-configurable: these lower to reductions rather than tensor-core GEMMs, so `HIGHEST` is close to free there.
+
+`gemm_precision()` supplies the precision for the **training-path GEMMs** — the layer matmuls, einsums, convolutions and `nnx.Linear`s in `nn_layers/`, plus the three batched MLR einsums in `manifolds/`. It returns `GEMM_PRECISION`, which defaults to `None`: JAX's own setting governs, so on Ampere+ a float32 GEMM runs in TF32 unless you say otherwise. Either knob works:
+
+```python
+# JAX-wide (jit-cache aware — changing it re-traces)
+jax.config.update("jax_default_matmul_precision", "highest")
+
+# hyperbolix-wide: restores the forced-HIGHEST GEMMs of 1.2.0
+import hyperbolix.utils.precision
+hyperbolix.utils.precision.GEMM_PRECISION = jax.lax.Precision.HIGHEST
+```
+
+`gemm_precision()` reads the module attribute at call time, so rebinding it on `hyperbolix.utils.precision` is enough — no need to patch the importing modules. **Set it before you construct the model and before the first trace**: `nnx.Linear` captures its `precision` at construction, and every other site captures it when the enclosing function is traced.
 
 ::: hyperbolix.utils.precision
     options:
