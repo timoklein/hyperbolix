@@ -2792,9 +2792,7 @@ case in practice.</p>
 haversine" decomposition and are accurate at any representable radius — see
 <a href="#hyperboloid-distance-versions">Hyperboloid Distance Versions</a> below for the version constants,
 and <a href="#hyperboloid-known-limitations">Known Limitations</a> for the operations that still route
-through the Minkowski inner product and remain unsafe past the threshold above. <code>VERSION_LEGACY</code> /
-<code>VERSION_LEGACY_SMOOTHENED</code> reproduce the old acosh-based arms bit-for-bit, for reproducing results
-computed before this fix.</p>
+through the Minkowski inner product and remain unsafe past the threshold above.</p>
 <h4 id="hyperboloid-known-limitations">Known Limitations<a class="headerlink" href="#hyperboloid-known-limitations" title="Permanent link">&para;</a></h4>
 <p>The two-point cancellation fix covers <code>dist</code>, <code>logmap</code>, <code>sqdist</code>, and <code>tangent_norm</code>. The
 following Hyperboloid operations still route through the Minkowski inner product and remain
@@ -3466,11 +3464,11 @@ subtraction before either formula sees it — neither the old nor the new form i
 trustworthy there, and that regime needs float64.</p>
 <div class="admonition warning">
 <p class="admonition-title">The rest of the hyperboloid is still radius-limited</p>
-<p>This buys accuracy in these two operations only. <code>Hyperboloid.dist</code>'s default and
-smoothened slots (<code>VERSION_DEFAULT</code>/<code>VERSION_SMOOTHENED</code>) use the same cancellation-free
-hyperbolic-haversine form and stay accurate at any representable radius; only the legacy
-slots (<code>VERSION_LEGACY</code>/<code>VERSION_LEGACY_SMOOTHENED</code>) route through the Minkowski inner
-product via <code>acosh</code> and still lose digits past hyperbolic distance ~7 in float32 (see the
+<p>This buys accuracy in these two operations only. <code>Hyperboloid.dist</code>'s two slots
+(<code>VERSION_DEFAULT</code>/<code>VERSION_SMOOTHENED</code>) use the same cancellation-free hyperbolic-haversine
+form and stay accurate at any representable radius, but the operations listed under
+<a href="#hyperboloid-known-limitations">Known Limitations</a> still route through the Minkowski inner
+product and lose digits past hyperbolic distance ~7 in float32 (see the
 <a href="#precision-requirements-by-distance">precision table</a>), and merely <em>storing</em> a point
 past distance ~11 accumulates more Lorentz residual than the float64 default
 tolerance allows — see <a href="#the-atol-convention">The <code>atol</code> Convention</a>.</p>
@@ -3672,9 +3670,9 @@ both radii. A loss separating two nearby points through slot 2 received no gradi
 - <strong>Very high dimensions</strong> (&gt; 1000): <code>VERSION_METRIC_TENSOR</code> (version 2) may be more stable
 - <strong>Debugging</strong>: Compare all versions — significant differences indicate numerical issues</p>
 <h3 id="hyperboloid-distance-versions">Hyperboloid Distance Versions<a class="headerlink" href="#hyperboloid-distance-versions" title="Permanent link">&para;</a></h3>
-<p>The Hyperboloid manifold has its own four-way <code>version_idx</code>, orthogonal to the Poincaré versions
-above. The same four slots select an arm of both the pairwise <code>dist</code> and the origin distance
-<code>dist_0</code>, which are different implementations:</p>
+<p>The Hyperboloid manifold has its own two-way <code>version_idx</code>, orthogonal to the Poincaré versions
+above. The same two slots select an arm of both the pairwise <code>dist</code> and the origin distance
+<code>dist_0</code>, which are different implementations. A <code>version_idx</code> outside {0, 1} raises <code>ValueError</code>:</p>
 <table>
 <thead>
 <tr>
@@ -3697,27 +3695,8 @@ above. The same four slots select an arm of both the pairwise <code>dist</code> 
 <td>the same, with <code>‖x_s‖</code> floored in quadrature</td>
 <td><code>2·arcsinh(10·eps)/√c</code> and <code>arcsinh(20·eps)/√c</code>, equal to first order: ≈2.4e-6/√c (float32), ≈4.4e-15/√c (float64)</td>
 </tr>
-<tr>
-<td><code>VERSION_LEGACY</code> (2)</td>
-<td>pre-fix <code>acosh</code> form, hard clip</td>
-<td><code>acosh(clip(√c·x₀, 1))/√c</code></td>
-<td>1.54e-3/√c in float32, 6.7e-8/√c in float64 (the <code>acosh</code> domain clamp)</td>
-</tr>
-<tr>
-<td><code>VERSION_LEGACY_SMOOTHENED</code> (3)</td>
-<td>pre-fix <code>acosh</code> form, soft clamp</td>
-<td><code>acosh(smooth_clamp_min(√c·x₀, 1))/√c</code></td>
-<td>0.16632/√c, in <strong>both</strong> dtypes, on every point that is not bitwise the origin</td>
-</tr>
 </tbody>
 </table>
-<div class="admonition warning">
-<p class="admonition-title">Breaking: slots 2 and 3 of <code>dist_0</code> changed meaning</p>
-<p><code>dist_0(..., version_idx=2)</code> and <code>version_idx=3</code> used to duplicate slots 0 and 1. They now
-select the pre-fix <code>acosh</code> arms, matching what those slots have meant for the pairwise <code>dist</code>
-since 1.1.2. Code that passed 2 or 3 to <code>dist_0</code> and expected the default behavior must pass
-<code>VERSION_DEFAULT</code> (0) or <code>VERSION_SMOOTHENED</code> (1).</p>
-</div>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Hyperboloid</span>
 </span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
 </span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
@@ -3731,12 +3710,6 @@ since 1.1.2. Code that passed 2 or 3 to <code>dist_0</code> and expected the def
 </span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>
 </span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="c1"># VERSION_SMOOTHENED (1): same evaluation, with a strictly-positive floor at coincidence.</span>
 </span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="n">d1</span> <span class="o">=</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">hyperboloid</span><span class="o">.</span><span class="n">VERSION_SMOOTHENED</span><span class="p">)</span>
-</span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a>
-</span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a><span class="c1"># VERSION_LEGACY (2): pre-fix acosh-based distance, reproduced bit-for-bit.</span>
-</span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a><span class="n">d2</span> <span class="o">=</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">hyperboloid</span><span class="o">.</span><span class="n">VERSION_LEGACY</span><span class="p">)</span>
-</span><span id="__span-16-17"><a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a>
-</span><span id="__span-16-18"><a id="__codelineno-16-18" name="__codelineno-16-18" href="#__codelineno-16-18"></a><span class="c1"># VERSION_LEGACY_SMOOTHENED (3): VERSION_LEGACY with soft clamping.</span>
-</span><span id="__span-16-19"><a id="__codelineno-16-19" name="__codelineno-16-19" href="#__codelineno-16-19"></a><span class="n">d3</span> <span class="o">=</span> <span class="n">hyperboloid</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">hyperboloid</span><span class="o">.</span><span class="n">VERSION_LEGACY_SMOOTHENED</span><span class="p">)</span>
 </span></code></pre></div>
 <p><strong>When to use which</strong>:</p>
 <ul>
@@ -3746,12 +3719,9 @@ since 1.1.2. Code that passed 2 or 3 to <code>dist_0</code> and expected the def
   with a well-defined gradient instead of exactly 0. Useful when a downstream <code>1/dist</code> or <code>log
   dist</code> would otherwise divide by zero. The floor is tiny: <span class="arithmatex">\(2\,\mathrm{arcsinh}(10\epsilon)/\sqrt{c}
   \approx 2.4\text{e-}6/\sqrt{c}\)</span> in float32 (vs. float64's <span class="arithmatex">\(\approx 4.4\text{e-}15/\sqrt{c}\)</span>) — a
-  large drop from the legacy smoothened floor of <span class="arithmatex">\(\mathrm{acosh}(1 + \ln 2/\beta)/\sqrt{c}
+  large drop from the old softplus floor of <span class="arithmatex">\(\mathrm{acosh}(1 + \ln 2/\beta)/\sqrt{c}
   \approx 0.166/\sqrt{c}\)</span>, which shifted <em>every</em> distance in the working range, not just
   coincident ones.</li>
-<li><code>VERSION_LEGACY</code> / <code>VERSION_LEGACY_SMOOTHENED</code> — reproduce the pre-fix acosh-based arms
-  bit-for-bit. Use these only to match results computed before this fix; they lose all precision
-  past the cancellation threshold described <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>.</li>
 </ul>
 <h3 id="using-versions-with-jit">Using Versions with JIT<a class="headerlink" href="#using-versions-with-jit" title="Permanent link">&para;</a></h3>
 <p>Manifold operations are single-point functions: batch them with <code>jax.vmap</code> and compile the result

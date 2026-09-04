@@ -1318,6 +1318,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Unreleased">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2053,7 +2070,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#removed" class="md-nav__link">
+  <a href="#removed_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Removed
@@ -2351,6 +2368,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Unreleased">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3086,7 +3120,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#removed" class="md-nav__link">
+  <a href="#removed_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Removed
@@ -3366,6 +3400,10 @@
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 <h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.2.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h3 id="removed">Removed<a class="headerlink" href="#removed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>Hyperboloid.dist</code>/<code>dist_0</code> slots 2 and 3 (<code>VERSION_LEGACY</code>, <code>VERSION_LEGACY_SMOOTHENED</code>) are gone; a <code>version_idx</code> outside <code>{0, 1}</code> now raises <code>ValueError</code>.</strong> The explicit check is needed because <code>lax.switch</code> silently clamps an out-of-range index into range, so a stale <code>version_idx=2</code> would have quietly run the smoothened arm instead of failing. The two slots were added in 1.1.2 / 1.2.0 by the very fixes that made them obsolete (the cancellation-free <code>dist</code> rewrite and the origin-chart <code>dist_0</code> rewrite); at 1.1.1 the switch had only two slots, so no pre-fix code ever passed 2 or 3, and pre-fix numbers remain reproducible by installing <code>hyperbolix==1.1.1</code> from PyPI. For the record, the four golden values the deleted regression test pinned — on-sheet point at spatial radius <code>1e-3</code>, <code>c = 1</code>, dim 8, direction <code>e1</code>, true geodesic radius <code>9.99999833e-4</code> — were: slot 2 float32 <code>0.0015440807910636067</code>, slot 2 float64 <code>0.0009999998333921221</code>, slot 3 float64 <code>0.16632065504083338</code>, slot 3 float32 <code>0.16632071137428284</code> (CPU; ±1 ulp on an A100)</li>
+</ul>
 <h2 id="120-2026-09-04"><a href="https://github.com/timoklein/hyperbolix/compare/v1.1.2...v1.2.0">1.2.0</a> - 2026-09-04<a class="headerlink" href="#120-2026-09-04" title="Permanent link">&para;</a></h2>
 <h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
 <ul>
@@ -3693,7 +3731,7 @@ versioning.</p>
 <li><strong><code>PoincareBatchNorm2D</code></strong> — Poincaré ball BatchNorm between conv layers (van Spengler et al. 2023)</li>
 </ul>
 <h2 id="050-2026-03-26"><a href="https://github.com/timoklein/hyperbolix/compare/v0.4.2...v0.5.0">0.5.0</a> - 2026-03-26<a class="headerlink" href="#050-2026-03-26" title="Permanent link">&para;</a></h2>
-<h3 id="removed">Removed<a class="headerlink" href="#removed" title="Permanent link">&para;</a></h3>
+<h3 id="removed_1">Removed<a class="headerlink" href="#removed_1" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>HypRegressionPoincareHDRL</code> layer and its tests</li>
 </ul>

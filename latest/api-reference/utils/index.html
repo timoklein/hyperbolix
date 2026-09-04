@@ -3953,7 +3953,7 @@ distance matrix is computed in a single pass using nested vmap operations.</p>
     c: Curvature parameter (positive scalar; a per-factor sequence for <code>ProductManifold</code>)
     version_idx: Distance version index (manifold-specific, default: 0)
         For Hyperboloid:
-            0 = VERSION_DEFAULT (standard acosh with hard clipping)
+            0 = VERSION_DEFAULT (cancellation-free hyperbolic haversine)
             1 = VERSION_SMOOTHENED (smoothened distance)
         For PoincareBall:
             0 = VERSION_MOBIUS_DIRECT (direct Möbius formula)
@@ -4094,7 +4094,7 @@ distance matrix is computed in a single pass using nested vmap operations.</p>
 </span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="sd">        c: Curvature parameter (positive scalar; a per-factor sequence for ``ProductManifold``)</span>
 </span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a><span class="sd">        version_idx: Distance version index (manifold-specific, default: 0)</span>
 </span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="sd">            For Hyperboloid:</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="sd">                0 = VERSION_DEFAULT (standard acosh with hard clipping)</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="sd">                0 = VERSION_DEFAULT (cancellation-free hyperbolic haversine)</span>
 </span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="sd">                1 = VERSION_SMOOTHENED (smoothened distance)</span>
 </span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a><span class="sd">            For PoincareBall:</span>
 </span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44"></a><span class="sd">                0 = VERSION_MOBIUS_DIRECT (direct Möbius formula)</span>
