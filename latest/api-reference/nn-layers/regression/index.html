@@ -3990,7 +3990,8 @@ input array's dtype (the parameters are cast to it).</p>
 <span class="normal"><a href="#__codelineno-0-231">231</a></span>
 <span class="normal"><a href="#__codelineno-0-232">232</a></span>
 <span class="normal"><a href="#__codelineno-0-233">233</a></span>
-<span class="normal"><a href="#__codelineno-0-234">234</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-203"><a id="__codelineno-0-203" name="__codelineno-0-203"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-0-234">234</a></span>
+<span class="normal"><a href="#__codelineno-0-235">235</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-203"><a id="__codelineno-0-203" name="__codelineno-0-203"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
 </span><span id="__span-0-204"><a id="__codelineno-0-204" name="__codelineno-0-204"></a>    <span class="bp">self</span><span class="p">,</span>
 </span><span id="__span-0-205"><a id="__codelineno-0-205" name="__codelineno-0-205"></a>    <span class="n">x_BAi</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_features&quot;</span><span class="p">],</span>
 </span><span id="__span-0-206"><a id="__codelineno-0-206" name="__codelineno-0-206"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
@@ -4014,14 +4015,15 @@ input array's dtype (the parameters are cast to it).</p>
 </span><span id="__span-0-224"><a id="__codelineno-0-224" name="__codelineno-0-224"></a>    <span class="c1"># Cast V to match input dtype (avoids float32/float64 scatter warnings)</span>
 </span><span id="__span-0-225"><a id="__codelineno-0-225" name="__codelineno-0-225"></a>    <span class="n">V_AiK</span> <span class="o">=</span> <span class="n">V_AiK</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">x_BAi</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
 </span><span id="__span-0-226"><a id="__codelineno-0-226" name="__codelineno-0-226"></a>
-</span><span id="__span-0-227"><a id="__codelineno-0-227" name="__codelineno-0-227"></a>    <span class="c1"># 2. Minkowski inner products</span>
-</span><span id="__span-0-228"><a id="__codelineno-0-228" name="__codelineno-0-228"></a>    <span class="n">mink_BK</span> <span class="o">=</span> <span class="n">x_BAi</span> <span class="o">@</span> <span class="n">V_AiK</span>  <span class="c1"># (B, K)</span>
-</span><span id="__span-0-229"><a id="__codelineno-0-229" name="__codelineno-0-229"></a>
-</span><span id="__span-0-230"><a id="__codelineno-0-230" name="__codelineno-0-230"></a>    <span class="c1"># 3. Signed scaled distances (matching reference fc_mlr: no norm scaling)</span>
-</span><span id="__span-0-231"><a id="__codelineno-0-231" name="__codelineno-0-231"></a>    <span class="n">sqrt_c</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
-</span><span id="__span-0-232"><a id="__codelineno-0-232" name="__codelineno-0-232"></a>    <span class="n">logits_BK</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asinh</span><span class="p">(</span><span class="n">sqrt_c</span> <span class="o">*</span> <span class="n">mink_BK</span><span class="p">)</span> <span class="o">/</span> <span class="n">sqrt_c</span>  <span class="c1"># (B, K)</span>
-</span><span id="__span-0-233"><a id="__codelineno-0-233" name="__codelineno-0-233"></a>
-</span><span id="__span-0-234"><a id="__codelineno-0-234" name="__codelineno-0-234"></a>    <span class="k">return</span> <span class="n">logits_BK</span>
+</span><span id="__span-0-227"><a id="__codelineno-0-227" name="__codelineno-0-227"></a>    <span class="c1"># 2. Minkowski inner products. Same reason as _fgg_linear_forward: the metric is</span>
+</span><span id="__span-0-228"><a id="__codelineno-0-228" name="__codelineno-0-228"></a>    <span class="c1"># absorbed into V, so the Lorentz cancellation happens inside one accumulation.</span>
+</span><span id="__span-0-229"><a id="__codelineno-0-229" name="__codelineno-0-229"></a>    <span class="n">mink_BK</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">x_BAi</span><span class="p">,</span> <span class="n">V_AiK</span><span class="p">,</span> <span class="n">precision</span><span class="o">=</span><span class="n">MATMUL_PRECISION</span><span class="p">)</span>  <span class="c1"># (B, K)</span>
+</span><span id="__span-0-230"><a id="__codelineno-0-230" name="__codelineno-0-230"></a>
+</span><span id="__span-0-231"><a id="__codelineno-0-231" name="__codelineno-0-231"></a>    <span class="c1"># 3. Signed scaled distances (matching reference fc_mlr: no norm scaling)</span>
+</span><span id="__span-0-232"><a id="__codelineno-0-232" name="__codelineno-0-232"></a>    <span class="n">sqrt_c</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
+</span><span id="__span-0-233"><a id="__codelineno-0-233" name="__codelineno-0-233"></a>    <span class="n">logits_BK</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asinh</span><span class="p">(</span><span class="n">sqrt_c</span> <span class="o">*</span> <span class="n">mink_BK</span><span class="p">)</span> <span class="o">/</span> <span class="n">sqrt_c</span>  <span class="c1"># (B, K)</span>
+</span><span id="__span-0-234"><a id="__codelineno-0-234" name="__codelineno-0-234"></a>
+</span><span id="__span-0-235"><a id="__codelineno-0-235" name="__codelineno-0-235"></a>    <span class="k">return</span> <span class="n">logits_BK</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>

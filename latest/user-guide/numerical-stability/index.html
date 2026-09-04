@@ -748,6 +748,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#safe-norms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No Norm Is an Additive Epsilon Any More
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2058,6 +2069,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#safe-norms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No Norm Is an Additive Epsilon Any More
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2872,6 +2894,65 @@ trained with it pinned to the origin.</p>
 <code>logmap</code>'s origin fallback, and <code>HyperboloidGyroRMSNorm</code>, which divides by <code>dist_0</code> and so
 mis-normalised every float32 sample inside radius 1.5e-3.</p>
 <div class="admonition note">
+<p class="admonition-title">An infinitely far point gives an infinite tangent vector, not NaN</p>
+<p><code>safe_norm</code> passes an <code>inf</code> spatial entry through as <code>inf</code> on purpose, so an out-of-range point
+stays visibly degenerate instead of silently NaN-poisoning everything downstream. That made
+<code>logmap_0</code>'s scale <span class="arithmatex">\(\operatorname{arcsinh}(u)/u\)</span> an <span class="arithmatex">\(\infty/\infty\)</span> NaN, which then multiplied
+<em>every</em> entry — the time slot included. It is now
+<code>where(isfinite(u), arcsinh(u)/u, 1)</code>: the infinite entries come back as <span class="arithmatex">\(\pm\infty\)</span> with their
+signs, the finite entries keep their values, and the time slot stays exactly 0. This is the same
+<span class="arithmatex">\(\pm\infty\)</span>-not-NaN convention the pairwise <code>dist</code>/<code>logmap</code> already follow through
+<code>_polar_frame</code>'s <code>isfinite</code> guard. The finite path is unchanged: the forward value is bit-identical on
+both backends and the gradient is bit-identical on XLA:CPU, moving by at most 2 ulps on XLA:GPU
+(where the extra <code>where</code> changes the VJP's fusion) against a 4-ulp CPU-vs-GPU spread the unchanged
+code already had.</p>
+</div>
+<h3 id="safe-norms">No Norm Is an Additive Epsilon Any More<a class="headerlink" href="#safe-norms" title="Permanent link">&para;</a></h3>
+<p>Anywhere the library needs a Euclidean norm on a differentiated path it calls one of four
+<code>math_utils</code> primitives instead of the old <code>sqrt(sum(x**2) + MIN_NORM**2)</code> idiom: <code>safe_norm</code>
+(rescaled, for an input whose magnitude is unbounded), <code>safe_hypot</code> (the two-leg
+<span class="arithmatex">\(\sqrt{p^2+q^2}\)</span>), <code>safe_hypot_norm</code> (the mixed <span class="arithmatex">\(\sqrt{\lVert v\rVert^2 + q^2}\)</span>), or <code>safe_sqrt</code>
+(for a quantity that arrives already squared — a Minkowski or Riemannian form, or a sum of squares
+that provably cannot overflow).</p>
+<p>The old idiom was a <em>gradient</em> guard: it gives <code>sqrt</code> a finite derivative at <span class="arithmatex">\(x = 0\)</span>, which
+<code>jnp.linalg.norm</code> does not (its VJP there is <span class="arithmatex">\(0/0 =\)</span> NaN). It paid for that at both ends of the
+exponent range. <strong>At the top</strong>, <span class="arithmatex">\(\sum_i x_i^2\)</span> overflows float32 as soon as any coordinate passes
+<span class="arithmatex">\(1.8\times10^{19}\)</span>, even though the norm itself is representable — this is the hyperboloid radius
+ceiling, where <code>proj</code> returned an infinite time slot for a point whose time slot is a perfectly
+ordinary float (and, one radius earlier, an <span class="arithmatex">\(x_0\)</span> whose Minkowski residual was <span class="arithmatex">\(0\)</span> rather than
+<span class="arithmatex">\(-1/c\)</span>). The Poincaré ball's boundary clamp failed the same way but louder: with
+<span class="arithmatex">\(\lVert x\rVert = \infty\)</span> the clamp <span class="arithmatex">\(x \cdot (r_{\max} / \lVert x \rVert)\)</span> evaluates to the
+<strong>zero vector</strong>, so the farthest representable point was projected onto the origin. <strong>At the
+bottom</strong>, the additive <span class="arithmatex">\(\texttt{MIN\_NORM}^2 = 10^{-30}\)</span> dominates any genuinely small vector,
+with relative residual <span class="arithmatex">\(\texttt{MIN\_NORM}^2/(2r^2)\)</span>: <span class="arithmatex">\(5.0\times10^{-15}\)</span> for a float64 point at
+radius <span class="arithmatex">\(10^{-8}\)</span>, and 41 % for a float32 point at radius <span class="arithmatex">\(10^{-15}\)</span>, where <code>dist_0</code> returned
+<span class="arithmatex">\(2.83\times10^{-15}\)</span> for a true <span class="arithmatex">\(2.00\times10^{-15}\)</span>.</p>
+<p>Which primitive goes where is a cost decision, not a taste one. Max-scaling costs a second
+reduction over the input, and on <code>Poincare.dist</code> — whose argument is a <em>ball</em> point, so
+<span class="arithmatex">\(\sum_i x_i^2 \le 4/c\)</span> and overflow is unreachable — that reduction is 2 extra XLA kernels at
+batch <span class="arithmatex">\(10^7\)</span> for a failure mode that cannot occur. Those sites use <code>safe_sqrt(sum(x**2))</code>, which
+is the same double-<code>where</code> construction on the scalar and compiles to exactly the kernel count the
+old idiom did. Tangent vectors, unprojected inputs, hyperboloid and proper-velocity coordinates,
+and layer weights are all unbounded, and those use <code>safe_norm</code>.</p>
+<p>The rescaling divides by an exact <strong>power of two</strong> — the one just below <span class="arithmatex">\(\max_i|x_i|\)</span>, via
+<code>jnp.frexp</code>/<code>jnp.ldexp</code> — rather than by <span class="arithmatex">\(\max_i|x_i|\)</span> itself. Dividing and multiplying by a power
+of two only shifts the exponent, so the rescale contributes <strong>no rounding of its own</strong>: the result
+tracks the plain <span class="arithmatex">\(\sqrt{\sum_i x_i^2}\)</span> to 0 ulp at most dimensions and at most 2 ulp at the rest
+(where XLA associates the two reductions differently), while still never forming a quantity that
+can overflow. Dividing by the maximum is inexact and leaves 1–2 ulp behind,
+which is invisible until a caller recomputes the same sum of squares: the hyperboloid's
+<span class="arithmatex">\(x_0 = \sqrt{\lVert x_s\rVert^2 + 1/c}\)</span> is checked against <span class="arithmatex">\(-x_0^2 + \lVert x_s\rVert^2 = -1/c\)</span>,
+and at <span class="arithmatex">\(x_0 \approx 34\)</span> one float32 ulp of <span class="arithmatex">\(x_0^2\)</span> is <span class="arithmatex">\(1.2\times10^{-4}\)</span>. For the same reason the
+time slot is built with <code>safe_hypot_norm(x_s, 1/\sqrt{c})</code>, one reduction, and <strong>not</strong> with
+<code>safe_hypot(safe_norm(x_s), ...)</code>, which rounds <span class="arithmatex">\(\lVert x_s\rVert\)</span> and then squares it again.</p>
+<p>All four return an exact <code>0</code> with an <strong>exactly zero</strong> VJP at the zero vector — the finite,
+direction-free choice at a point where the derivative does not exist — and pass a non-finite input
+through as <code>inf</code> rather than turning it into NaN. Where a norm is a <em>divisor</em> the floor is still
+there, but as <code>floor_at(safe_norm(x), MIN_NORM)</code>: a multiplicative floor, exact everywhere above
+itself, instead of an additive one that perturbs every value. One subtlety when the floored norm
+feeds a <span class="arithmatex">\(\sinh(t)/t\)</span>: the floor has to be applied to <span class="arithmatex">\(t\)</span> itself and not only to the denominator,
+or the ratio is <span class="arithmatex">\(0\)</span> at <span class="arithmatex">\(t = 0\)</span> instead of <span class="arithmatex">\(1\)</span>.</p>
+<div class="admonition note">
 <p class="admonition-title">The pairwise <code>dist</code> reads the same radial gap off the spatial part</p>
 <p><code>dist</code> is a separate code path, and it used to carry its own <span class="arithmatex">\(O(\varepsilon/r)\)</span> relative error
 near the origin: its polar decomposition needs <span class="arithmatex">\(u_x - u_y\)</span> with <span class="arithmatex">\(u = x_0 + \lVert x_s\rVert\)</span>,
@@ -3418,6 +3499,161 @@ tolerance allows — see <a href="#the-atol-convention">The <code>atol</code> Co
 </span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Version 2: </span><span class="si">{</span><span class="n">d2</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </span><span id="__span-15-21"><a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a><span class="c1"># All should be approximately equal</span>
 </span></code></pre></div>
+<h4 id="poincare-metric-tensor-dist-0">Slot 2 Reads the Radius Through <code>arcsinh</code><a class="headerlink" href="#poincare-metric-tensor-dist-0" title="Permanent link">&para;</a></h4>
+<p>Both metric-tensor arms — the origin distance <code>dist_0</code> and the pairwise <code>dist</code> — used to have the
+<a href="#hyperboloid-origin-chart">hyperboloid origin chart's defect</a> in Poincaré coordinates. Taking
+<code>dist_0</code> first, the metric-tensor integral is</p>
+<div class="arithmatex">\[
+d_0(x) = \frac{1}{\sqrt{c}}\operatorname{acosh}\!\left(1 + \frac{2c\lVert x\rVert^2}{1 - c\lVert x\rVert^2}\right),
+\]</div>
+<p>and the whole radial signal sits in that <span class="arithmatex">\(2t\)</span> perturbation of a leading 1. <code>acosh</code>'s
+<span class="arithmatex">\(1 + 10\varepsilon\)</span> domain clamp therefore flattened every float32 radius below
+<span class="arithmatex">\(\sqrt{10\varepsilon/c} \approx 1.1\text{e-}3/\sqrt{c}\)</span> onto exactly zero, and a second
+<code>arg &lt; 1 + MIN_NORM</code> short-circuit zeroed the band below
+<span class="arithmatex">\(\sqrt{\texttt{MIN\_NORM}/2c} \approx 2.2\text{e-}8/\sqrt{c}\)</span> in <strong>both</strong> dtypes. The arm now uses
+the half-angle identity <span class="arithmatex">\(\operatorname{acosh}(1 + 2t) = 2\operatorname{arcsinh}(\sqrt{t})\)</span>, whose
+argument is <em>linear</em> in the radius near the origin:</p>
+<div class="arithmatex">\[
+d_0(x) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x\rVert}{\sqrt{1 - c\lVert x\rVert^2}}\right).
+\]</div>
+<p>Same function, so slot 2 still means "metric-tensor distance" — nothing was moved to a new slot,
+and the boundary clamp (via the conformal factor) is unchanged. Median relative error against a
+60-digit <code>decimal</code> reference, <span class="arithmatex">\(c = 1\)</span>, dim 8, before → after:</p>
+<table>
+<thead>
+<tr>
+<th>radius</th>
+<th>float32</th>
+<th>float64</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1e-8</td>
+<td>7.7e4 → 1.4e-8</td>
+<td>1.0 → 1.7e-16</td>
+</tr>
+<tr>
+<td>1e-6</td>
+<td>7.7e2 → 1.4e-8</td>
+<td>1.1e-5 → 0</td>
+</tr>
+<tr>
+<td>1e-4</td>
+<td>6.7 → 2.9e-8</td>
+<td>2.5e-9 → 1.4e-16</td>
+</tr>
+<tr>
+<td>1e-3</td>
+<td>6.6e-3 → 5.3e-8</td>
+<td>2.8e-12 → 0</td>
+</tr>
+<tr>
+<td>1e-2</td>
+<td>3.3e-5 → 8.6e-8</td>
+<td>1.4e-13 → 0</td>
+</tr>
+<tr>
+<td>0.1</td>
+<td>4.9e-7 → 3.4e-8</td>
+<td>2.2e-15 → 0</td>
+</tr>
+<tr>
+<td>0.9/√c</td>
+<td>6.5e-8 → 3.5e-8</td>
+<td>1.5e-16 → 1.5e-16</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">The floored band had a zero gradient, not just a wrong value</p>
+<p><code>jax.grad</code> of slot 2 returned exactly <code>0</code> for float32 radii ≤ 1e-6 at every curvature (≤ 1e-3
+at <span class="arithmatex">\(c = 0.3\)</span>) and float64 radii ≤ 1e-8, instead of the analytic <span class="arithmatex">\(2/(1 - c r^2) \to 2\)</span>. Anything
+optimised through slot 2 near the origin received no gradient at all. Slots 0 and 1
+(<code>VERSION_MOBIUS_DIRECT</code> / <code>VERSION_MOBIUS</code>, both <span class="arithmatex">\(2\operatorname{atanh}(\sqrt{c}\lVert x\rVert)/\sqrt{c}\)</span>)
+were never affected, and remain the default.</p>
+</div>
+<p>The pairwise <code>dist</code> slot 2 is the same story with a separation in place of a radius:</p>
+<div class="arithmatex">\[
+d(x,y) = \frac{1}{\sqrt{c}}\operatorname{acosh}\!\left(1 + 2t\right)
+       = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\sqrt{t}\right),
+\qquad
+t = \frac{c\lVert x - y\rVert^2}{(1 - c\lVert x\rVert^2)(1 - c\lVert y\rVert^2)} .
+\]</div>
+<p>The <code>acosh</code> clamp zeroed every pair with <span class="arithmatex">\(t &lt; 5\varepsilon\)</span> and the <code>MIN_NORM</code> short-circuit a
+second band below <span class="arithmatex">\(t = \texttt{MIN\_NORM}/2\)</span>. The two <span class="arithmatex">\((1 - c r^2)\)</span> factors scale the threshold
+with the pair's radius, so at <span class="arithmatex">\(c = 1\)</span> the float32 separation floor is 1.2e-3 at the origin and
+9.2e-4 at radius 0.5. Median relative error against a 60-digit <code>decimal</code> reference routed through
+Möbius addition (independent of the formula under test), <span class="arithmatex">\(c = 1\)</span>, dim 8, before → after:</p>
+<table>
+<thead>
+<tr>
+<th>radius</th>
+<th>separation</th>
+<th>float32</th>
+<th>float64</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1e-2</td>
+<td>1e-8</td>
+<td>7.7e4 → 3.0e-8</td>
+<td>1.0 → 1.7e-16</td>
+</tr>
+<tr>
+<td>1e-2</td>
+<td>1e-6</td>
+<td>7.7e2 → 2.6e-8</td>
+<td>5.4e-8 → 2.1e-16</td>
+</tr>
+<tr>
+<td>1e-2</td>
+<td>1e-4</td>
+<td>6.7 → 2.3e-8</td>
+<td>2.5e-9 → 6.8e-17</td>
+</tr>
+<tr>
+<td>1e-2</td>
+<td>1e-2</td>
+<td>6.7e-5 → 1.0e-7</td>
+<td>1.9e-13 → 0</td>
+</tr>
+<tr>
+<td>0.5</td>
+<td>1e-8</td>
+<td>3.5e4 → 3.6e-8</td>
+<td>1.0 → 1.2e-16</td>
+</tr>
+<tr>
+<td>0.5</td>
+<td>1e-6</td>
+<td>5.8e2 → 3.3e-8</td>
+<td>6.3e-6 → 0</td>
+</tr>
+<tr>
+<td>0.5</td>
+<td>1e-4</td>
+<td>4.8 → 4.5e-8</td>
+<td>3.6e-10 → 0</td>
+</tr>
+<tr>
+<td>0.5</td>
+<td>1e-2</td>
+<td>2.6e-6 → 6.1e-8</td>
+<td>5.1e-14 → 1.3e-16</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">Two points inside the floor had no gradient pulling them apart</p>
+<p><code>‖∂d(x,y)/∂y‖</code> must equal the conformal factor <span class="arithmatex">\(\lambda(y) = 2/(1 - c\lVert y\rVert^2)\)</span> — the
+unit-speed statement in Euclidean coordinates. Inside the floored band the old arm returned
+exactly <code>0</code> instead: 23 of 60 probed gradient cells, across both dtypes, three curvatures and
+both radii. A loss separating two nearby points through slot 2 received no gradient at all. At
+<span class="arithmatex">\(y = x\)</span> the derivative does not exist and the convention is the finite, direction-free 0, which
+<code>safe_norm</code> now supplies (it also keeps <code>dist(x, x)</code> exactly 0).</p>
+</div>
 <h3 id="which-version-to-use">Which Version to Use?<a class="headerlink" href="#which-version-to-use" title="Permanent link">&para;</a></h3>
 <p><strong>General recommendation</strong>: <code>VERSION_MOBIUS_DIRECT</code> (version 0)
 - Fastest
@@ -3612,12 +3848,14 @@ lets XLA drop the branches you do not use.</p>
 <h3 id="edge-case-2-zero-or-near-zero-vectors">Edge Case 2: Zero or Near-Zero Vectors<a class="headerlink" href="#edge-case-2-zero-or-near-zero-vectors" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: Division by zero warnings, NaN in tangent operations</p>
 <p><strong>Solution</strong>:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Manifold functions handle this internally with MIN_NORM</span>
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1"># But you can add explicit checks:</span>
-</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>
-</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_normalize</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-8</span><span class="p">):</span>
-</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>    <span class="n">norm</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
-</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">norm</span> <span class="o">&gt;</span> <span class="n">eps</span><span class="p">,</span> <span class="n">v</span> <span class="o">/</span> <span class="n">norm</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">v</span><span class="p">))</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Manifold functions handle this internally: every norm on a differentiated path goes</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="c1"># through math_utils.safe_norm, which returns an exact 0 with an exactly-zero gradient</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="c1"># at v = 0 (see &quot;Every Norm Is Max-Scaled&quot; above). If you need the same in your own code,</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1"># use the library&#39;s primitives rather than rolling a floor:</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">safe_norm</span><span class="p">,</span> <span class="n">safe_normalize</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="n">norm</span> <span class="o">=</span> <span class="n">safe_norm</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>            <span class="c1"># 0 at v = 0, gradient 0, no sum of squares to overflow</span>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="n">unit</span> <span class="o">=</span> <span class="n">safe_normalize</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>       <span class="c1"># exact zero vector at v = 0, unit vector everywhere else</span>
 </span></code></pre></div></p>
 <h3 id="edge-case-3-large-learning-rates">Edge Case 3: Large Learning Rates<a class="headerlink" href="#edge-case-3-large-learning-rates" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: Points shoot to boundary, training collapse</p>
