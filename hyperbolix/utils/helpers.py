@@ -38,7 +38,7 @@ def compute_pairwise_distances(
         c: Curvature parameter (positive scalar; a per-factor sequence for ``ProductManifold``)
         version_idx: Distance version index (manifold-specific, default: 0)
             For Hyperboloid:
-                0 = VERSION_DEFAULT (standard acosh with hard clipping)
+                0 = VERSION_DEFAULT (cancellation-free hyperbolic haversine)
                 1 = VERSION_SMOOTHENED (smoothened distance)
             For PoincareBall:
                 0 = VERSION_MOBIUS_DIRECT (direct Möbius formula)

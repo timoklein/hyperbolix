@@ -2,9 +2,9 @@
 
 ## Hyperbolic Deep Learning in JAX
 
-[![Tests](https://img.shields.io/badge/tests-4000%2B%20passing-brightgreen)]()
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue)]()
-[![JAX](https://img.shields.io/badge/JAX-compatible-orange)]()
+[![Tests](https://github.com/timoklein/hyperbolix/actions/workflows/ci.yaml/badge.svg)](https://github.com/timoklein/hyperbolix/actions/workflows/ci.yaml)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
+[![JAX](https://img.shields.io/badge/JAX-compatible-orange)](https://jax.dev)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Pure JAX implementation of hyperbolic deep learning with manifold operations, neural network layers, and Riemannian optimizers. Built with Flax NNX and Optax.

@@ -206,7 +206,7 @@ def test_version_idx_is_accepted_and_ignored_by_the_single_implementation_manifo
         assert jnp.allclose(compute_pairwise_distances(points, manifold, c, version_idx), base, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("version_idx", [0, 1, 2, 3])
+@pytest.mark.parametrize("version_idx", [0, 1])
 def test_hyperboloid_versions(hyperboloid, version_idx: int):
     """Test that different distance versions work."""
     key = jax.random.PRNGKey(42)

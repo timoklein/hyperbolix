@@ -35,8 +35,6 @@ class TestPoincareClassConstants:
         """Verify hyperboloid constants are available from module."""
         assert hasattr(hyperboloid_module, "VERSION_DEFAULT")
         assert hasattr(hyperboloid_module, "VERSION_SMOOTHENED")
-        assert hasattr(hyperboloid_module, "VERSION_LEGACY")
-        assert hasattr(hyperboloid_module, "VERSION_LEGACY_SMOOTHENED")
         assert hasattr(hyperboloid_module, "MIN_NORM")
 
     def test_proper_velocity_module_constants(self):
@@ -81,7 +79,7 @@ class TestSingularPointGradients:
             manifold = Hyperboloid(dtype=dtype)
             x = manifold.proj(jnp.array([1.5, 0.3, -0.4], dtype=dtype), 1.0)
             origin = jnp.array([1.0, 0.0, 0.0], dtype=dtype)
-            for version_idx in (0, 1, 2, 3):
+            for version_idx in (0, 1):
                 g = jax.grad(lambda a, m=manifold, y=x, v=version_idx: m.dist(a, y, 1.0, version_idx=v))(x)
                 assert jnp.all(jnp.isfinite(g)), f"NaN grad: dist v{version_idx} {dtype}"
             g0 = jax.grad(lambda a, m=manifold: m.dist_0(a, 1.0))(origin)

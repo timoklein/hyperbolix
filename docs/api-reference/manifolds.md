@@ -128,26 +128,20 @@ A single constant-curvature manifold spanning **hyperbolic, Euclidean, and spher
 The hyperboloid (Lorentz) model with Minkowski geometry.
 
 !!! note "Distance Versions"
-    The Hyperboloid `dist` method has a `version_idx` parameter selecting between 4 formulations:
+    The Hyperboloid `dist` method has a `version_idx` parameter selecting between 2 formulations:
 
     - `VERSION_DEFAULT` (0): cancellation-free hyperbolic-haversine distance (default, accurate at
       any representable radius)
     - `VERSION_SMOOTHENED` (1): same evaluation, with a strictly-positive floor at coincidence
-    - `VERSION_LEGACY` (2): pre-fix acosh-based distance, reproduced bit-for-bit
-    - `VERSION_LEGACY_SMOOTHENED` (3): `VERSION_LEGACY` with soft clamping
 
-    The same four slots select an arm of `dist_0`, which is a separate implementation:
+    The same two slots select an arm of `dist_0`, which is a separate implementation:
 
     - `VERSION_DEFAULT` (0): `arcsinh(√c·‖x_s‖)/√c`, read off the spatial part (default, exact at
       every radius, no domain clamp)
     - `VERSION_SMOOTHENED` (1): the same with `‖x_s‖` floored in quadrature, giving a floor of
       `arcsinh(20·eps)/√c` (≈2.4e-6/√c float32, ≈4.4e-15/√c float64)
-    - `VERSION_LEGACY` (2) / `VERSION_LEGACY_SMOOTHENED` (3): the pre-fix `acosh(√c·x₀)` arms,
-      whose clamps floor the returned radius at 1.54e-3/√c (float32, hard clip) and 0.16632/√c
-      (both dtypes, soft clamp)
 
-    **Breaking**: slots 2 and 3 of `dist_0` used to duplicate slots 0 and 1; they now select the
-    legacy arms, matching what those slots already meant for `dist`.
+    A `version_idx` outside {0, 1} raises `ValueError`.
 
     Constants are available as `hyperboloid.VERSION_DEFAULT` etc., or from
     `hyperbolix.manifolds.hyperboloid`. See the [numerical-stability guide](

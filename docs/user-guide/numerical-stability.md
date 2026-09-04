@@ -105,9 +105,7 @@ As of this fix, `dist`, `logmap`, `sqdist`, and `tangent_norm` under the default
 haversine" decomposition and are accurate at any representable radius — see
 [Hyperboloid Distance Versions](#hyperboloid-distance-versions) below for the version constants,
 and [Known Limitations](#hyperboloid-known-limitations) for the operations that still route
-through the Minkowski inner product and remain unsafe past the threshold above. `VERSION_LEGACY` /
-`VERSION_LEGACY_SMOOTHENED` reproduce the old acosh-based arms bit-for-bit, for reproducing results
-computed before this fix.
+through the Minkowski inner product and remain unsafe past the threshold above.
 
 #### Known Limitations {#hyperboloid-known-limitations}
 
@@ -751,11 +749,11 @@ subtraction before either formula sees it — neither the old nor the new form i
 trustworthy there, and that regime needs float64.
 
 !!! warning "The rest of the hyperboloid is still radius-limited"
-    This buys accuracy in these two operations only. `Hyperboloid.dist`'s default and
-    smoothened slots (`VERSION_DEFAULT`/`VERSION_SMOOTHENED`) use the same cancellation-free
-    hyperbolic-haversine form and stay accurate at any representable radius; only the legacy
-    slots (`VERSION_LEGACY`/`VERSION_LEGACY_SMOOTHENED`) route through the Minkowski inner
-    product via `acosh` and still lose digits past hyperbolic distance ~7 in float32 (see the
+    This buys accuracy in these two operations only. `Hyperboloid.dist`'s two slots
+    (`VERSION_DEFAULT`/`VERSION_SMOOTHENED`) use the same cancellation-free hyperbolic-haversine
+    form and stay accurate at any representable radius, but the operations listed under
+    [Known Limitations](#hyperboloid-known-limitations) still route through the Minkowski inner
+    product and lose digits past hyperbolic distance ~7 in float32 (see the
     [precision table](#precision-requirements-by-distance)), and merely *storing* a point
     past distance ~11 accumulates more Lorentz residual than the float64 default
     tolerance allows — see [The `atol` Convention](#the-atol-convention).
@@ -890,22 +888,14 @@ Möbius addition (independent of the formula under test), $c = 1$, dim 8, before
 
 ### Hyperboloid Distance Versions {#hyperboloid-distance-versions}
 
-The Hyperboloid manifold has its own four-way `version_idx`, orthogonal to the Poincaré versions
-above. The same four slots select an arm of both the pairwise `dist` and the origin distance
-`dist_0`, which are different implementations:
+The Hyperboloid manifold has its own two-way `version_idx`, orthogonal to the Poincaré versions
+above. The same two slots select an arm of both the pairwise `dist` and the origin distance
+`dist_0`, which are different implementations. A `version_idx` outside {0, 1} raises `ValueError`:
 
 | slot | `dist` arm | `dist_0` arm | floor |
 | --- | --- | --- | --- |
 | `VERSION_DEFAULT` (0) | cancellation-free hyperbolic haversine | `arcsinh(√c·‖x_s‖)/√c` | none: exactly 0 at coincidence / at the origin |
 | `VERSION_SMOOTHENED` (1) | the same, floored in quadrature | the same, with `‖x_s‖` floored in quadrature | `2·arcsinh(10·eps)/√c` and `arcsinh(20·eps)/√c`, equal to first order: ≈2.4e-6/√c (float32), ≈4.4e-15/√c (float64) |
-| `VERSION_LEGACY` (2) | pre-fix `acosh` form, hard clip | `acosh(clip(√c·x₀, 1))/√c` | 1.54e-3/√c in float32, 6.7e-8/√c in float64 (the `acosh` domain clamp) |
-| `VERSION_LEGACY_SMOOTHENED` (3) | pre-fix `acosh` form, soft clamp | `acosh(smooth_clamp_min(√c·x₀, 1))/√c` | 0.16632/√c, in **both** dtypes, on every point that is not bitwise the origin |
-
-!!! warning "Breaking: slots 2 and 3 of `dist_0` changed meaning"
-    `dist_0(..., version_idx=2)` and `version_idx=3` used to duplicate slots 0 and 1. They now
-    select the pre-fix `acosh` arms, matching what those slots have meant for the pairwise `dist`
-    since 1.1.2. Code that passed 2 or 3 to `dist_0` and expected the default behavior must pass
-    `VERSION_DEFAULT` (0) or `VERSION_SMOOTHENED` (1).
 
 ```python
 from hyperbolix.manifolds import Hyperboloid
@@ -921,12 +911,6 @@ d0 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_DEFAULT)
 
 # VERSION_SMOOTHENED (1): same evaluation, with a strictly-positive floor at coincidence.
 d1 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_SMOOTHENED)
-
-# VERSION_LEGACY (2): pre-fix acosh-based distance, reproduced bit-for-bit.
-d2 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_LEGACY)
-
-# VERSION_LEGACY_SMOOTHENED (3): VERSION_LEGACY with soft clamping.
-d3 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_LEGACY_SMOOTHENED)
 ```
 
 **When to use which**:
@@ -937,13 +921,9 @@ d3 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_LEGACY_SMOOTHENED
   with a well-defined gradient instead of exactly 0. Useful when a downstream `1/dist` or `log
   dist` would otherwise divide by zero. The floor is tiny: $2\,\mathrm{arcsinh}(10\epsilon)/\sqrt{c}
   \approx 2.4\text{e-}6/\sqrt{c}$ in float32 (vs. float64's $\approx 4.4\text{e-}15/\sqrt{c}$) — a
-  large drop from the legacy smoothened floor of $\mathrm{acosh}(1 + \ln 2/\beta)/\sqrt{c}
+  large drop from the old softplus floor of $\mathrm{acosh}(1 + \ln 2/\beta)/\sqrt{c}
   \approx 0.166/\sqrt{c}$, which shifted *every* distance in the working range, not just
   coincident ones.
-- `VERSION_LEGACY` / `VERSION_LEGACY_SMOOTHENED` — reproduce the pre-fix acosh-based arms
-  bit-for-bit. Use these only to match results computed before this fix; they lose all precision
-  past the cancellation threshold described [above](
-  #the-hyperboloids-two-point-cancellation-failure-mode).
 
 ### Using Versions with JIT
 
