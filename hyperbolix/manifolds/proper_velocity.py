@@ -51,7 +51,7 @@ import math
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_hypot, safe_norm, safe_sqrt, sinh, smooth_clamp
+from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt, sinh, smooth_clamp
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from ._gyrovector_core import _gyration
@@ -81,14 +81,24 @@ def _beta(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
 def _beta_inv(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Reciprocal of the PV beta factor: 1/β_x = √(1 + c·||x||²).
 
-    Evaluated as the two-leg ``safe_hypot(1, √c·‖x‖)`` rather than
-    ``sqrt(1 + c·dot(x, x))``. Proper-velocity coordinates are unconstrained -- that is the point
-    of the model -- so ``dot(x, x)`` genuinely reaches the float32 overflow at ``‖x‖ = 1.8e19``
-    (geodesic radius ``arcsinh(1.8e19) ≈ 44``), where the old form returned ``inf`` and ``_beta``
-    collapsed to 0, silently zeroing every coefficient built from it.
+    Evaluated as ``safe_hypot_norm(√c·x, 1)`` rather than ``sqrt(1 + c·dot(x, x))``.
+    Proper-velocity coordinates are unconstrained -- that is the point of the model -- so
+    ``dot(x, x)`` genuinely reaches the float32 overflow at ``‖x‖ = 1.8e19`` (geodesic radius
+    ``arcsinh(1.8e19) ≈ 44``), where the old form returned ``inf`` and ``_beta`` collapsed to 0,
+    silently zeroing every coefficient built from it. ``safe_hypot_norm`` never materialises the
+    square either, and unlike the two-leg ``safe_hypot(1, √c·safe_norm(x))`` it does not round
+    ``‖x‖`` to the dtype and then square it again. Measured against an 80-bit reference over
+    ``c ∈ {0.3, 1, 2.5}``, dims 2/8/16, both dtypes, radii 1e-3…1e3: mean 0.25 ulp and max 2,
+    against 0.32 and max 3 for the two-leg form
+    (``logs/2026-09-04_ci_regressions/probe_beta_inv_spellings.py``).
+
+    ``√c·x``, not ``√c·‖x‖``: scaling the components cannot overflow where the result does not,
+    because ``1/β_x ≥ √c·‖x‖ ≥ √c·max|xᵢ|``. The alternative that scales the scalar leg instead,
+    ``√c·safe_hypot_norm(x, 1/√c)``, is exact at ``c = 1`` but loses to this one at ``c = 2.5``
+    (mean 0.45 ulp in float64), where ``1/√c`` is itself inexact.
     """
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
-    return safe_hypot(jnp.asarray(1.0, dtype=x.dtype), sqrt_c * safe_norm(x))
+    return safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))
 
 
 def _safe_norm(x: Float[Array, "dim"]) -> Float[Array, ""]:
@@ -491,9 +501,11 @@ def _compute_mlr(
     # `min_enorm` floor on genuinely small direction rows.
     z_norm_P1 = floor_at(safe_norm(z)[:, None], min_enorm)  # (P, 1)
 
-    # sqrt(1 + c*||x||^2) as a two-leg hypot: no `sum(x**2)` to overflow float32 at
-    # ||x|| > 1.8e19/sqrt(c), where the old spelling returned inf and drove the score to inf.
-    beta_inv_x_B1 = safe_hypot(jnp.ones_like(x[..., :1]), sqrt_c * safe_norm(x)[:, None])  # (B, 1)
+    # sqrt(1 + c*||x||^2) via `safe_hypot_norm`: no `sum(x**2)` to overflow float32 at
+    # ||x|| > 1.8e19/sqrt(c), where the old spelling returned inf and drove the score to inf, and
+    # one reduction rather than a rounded `safe_norm(x)` that is squared again. Same form and same
+    # measurement as `_beta_inv`; see there.
+    beta_inv_x_B1 = safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))[:, None]  # (B, 1)
 
     xz_BP = jnp.einsum("bi,oi->bo", x, z, precision=MATMUL_PRECISION)  # (B, P)
 
