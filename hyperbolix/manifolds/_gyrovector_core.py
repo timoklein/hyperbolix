@@ -74,7 +74,13 @@ def _proj(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     # the clamp `x * (max_norm / inf)` is the ZERO VECTOR, so the farthest representable point was
     # projected onto the origin instead of onto the boundary (measured: ||proj(x)|| = 0.0 at
     # float32 radius 1e20, now 0.99999).
-    norm = floor_at(safe_norm(x), MIN_NORM)
+    # The trailing `[..., None]` is what makes the clamp broadcast against `x`: `safe_norm`
+    # reduces the last axis, so it must be re-added before the result multiplies a `(..., dim)`
+    # operand -- exactly as :func:`_proj_batch` does. For the single point this function is
+    # contracted for it is a shape-(1,) scalar and the result is bit-identical either way; it is
+    # the (B, dim) inputs that several call sites and tests pass anyway that need it, and they
+    # now get the per-row clamp instead of the pre-sweep whole-array Frobenius one.
+    norm = floor_at(safe_norm(x)[..., None], MIN_NORM)
     max_norm = _max_norm(x, c)
     cond = norm > max_norm
     return jnp.where(cond, x * (max_norm / norm), x)

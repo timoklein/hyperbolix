@@ -101,6 +101,10 @@ def _safe_norm(x: Float[Array, "dim"]) -> Float[Array, ""]:
     float32 above coordinate 1.8e19, and the additive ``1e-30`` perturbed every value between
     ``MIN_NORM`` and ``10·MIN_NORM``. ``_dist``/``_dist_0`` do not divide by the norm and use the
     unfloored ``safe_norm`` directly.
+
+    Returns the norm with the last axis **reduced away**. The callers that divide a ``(..., dim)``
+    vector by it re-add the axis with ``[..., None]``, which is a no-op in value for the single
+    point this module is contracted for and keeps a ``(B, dim)`` input on its per-row scale.
     """
     return floor_at(safe_norm(x), MIN_NORM)
 
@@ -144,7 +148,7 @@ def _scalar_mul(t: Float[Array, ""] | float, x: Float[Array, "dim"], c: ScalarCu
     t ⊗ x = sinh(t · asinh(√c·||x||)) · x / (√c·||x||),     t ⊗ 0 = 0
     """
     sqrt_c = jnp.sqrt(c)
-    x_norm = _safe_norm(x)
+    x_norm = _safe_norm(x)[..., None]
     arg = sqrt_c * x_norm  # √c·||x||, never exactly zero
     # sinh is the overflow-protected variant; jnp.asinh is stable on all of R.
     scale = sinh(t * jnp.asinh(arg)) / arg
@@ -207,7 +211,7 @@ def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     Written via sinh/arg with a safe-norm substitution so the v=0 case gives 0.
     """
     sqrt_c = jnp.sqrt(c)
-    v_norm = _safe_norm(v)
+    v_norm = _safe_norm(v)[..., None]
     arg = sqrt_c * v_norm
     # sinh(arg)/arg has limit 1 as arg → 0, which the safe_norm preserves.
     scale = sinh(arg) / arg
@@ -220,7 +224,7 @@ def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     log_0(y) = asinh(√c·||y||) · y / (√c·||y||)
     """
     sqrt_c = jnp.sqrt(c)
-    y_norm = _safe_norm(y)
+    y_norm = _safe_norm(y)[..., None]
     arg = sqrt_c * y_norm
     # asinh(arg)/arg has limit 1 as arg → 0.
     scale = jnp.asinh(arg) / arg
@@ -280,7 +284,7 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
 
     z = _addition(-x, y, c)
     xz = jnp.dot(x, z, precision=MATMUL_PRECISION)
-    z_norm = _safe_norm(z)
+    z_norm = _safe_norm(z)[..., None]
     arg = sqrt_c * z_norm
 
     # asinhc(arg) = asinh(arg)/arg, limit 1 as arg → 0.

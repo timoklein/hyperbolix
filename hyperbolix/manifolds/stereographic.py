@@ -214,7 +214,7 @@ def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCu
     # `safe_norm` + `floor_at`: the floor is deliberate (`x_norm` divides on the next line), the
     # max-scaling replaces `sqrt(sum(x**2) + MIN_NORM**2)`, which overflows float32 past
     # coordinate 1.8e19 and floors every radius below 1e-15.
-    x_norm = floor_at(safe_norm(x), MIN_NORM)
+    x_norm = floor_at(safe_norm(x)[..., None], MIN_NORM)
     res = _tan_k(r * _artan_k(x_norm, k), k) * (x / x_norm)
     return _proj(res, c)
 
@@ -243,7 +243,7 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     """Exponential map ``exp^κ_x(v) = x ⊕_κ (tan_κ(λ^κ_x‖v‖/2)·v/‖v‖)`` (paper Eq. 6, ``κ = -c``)."""
     k = -c
     # `safe_norm` + `floor_at`: `v_norm` divides below, so the floor stays; see _scalar_mul.
-    v_norm = floor_at(safe_norm(v), MIN_NORM)
+    v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
     lam = _conformal_factor(x, c)
     second_term = _tan_k(lam * v_norm / 2.0, k) * (v / v_norm)
     return _addition(x, second_term, c)
@@ -256,7 +256,7 @@ def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     # same line, so both halves are needed. Unlike Poincare this module takes a *signed* curvature
     # -- for c < 0 the chart is the sphere minus a point, whose radius diverges near the antipode,
     # so no site here can assume a bounded input.
-    v_norm = floor_at(safe_norm(v), MIN_NORM)
+    v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
     return _proj(_tan_k(v_norm, k) * (v / v_norm), c)
 
 
@@ -270,7 +270,7 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     k = -c
     sub = _addition(-x, y, c)
     # `safe_norm` + `floor_at`: `sub_norm` divides below, so the floor stays; see _scalar_mul.
-    sub_norm = floor_at(safe_norm(sub), MIN_NORM)
+    sub_norm = floor_at(safe_norm(sub)[..., None], MIN_NORM)
     lam = _conformal_factor(x, c)
     return 2.0 * _artan_k(sub_norm, k) * (sub / (lam * sub_norm))
 
@@ -280,7 +280,7 @@ def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     k = -c
     # `safe_norm` + `floor_at`: divisor on the same line, and the chart radius is unbounded for
     # c < 0 (see _expmap_0).
-    y_norm = floor_at(safe_norm(y), MIN_NORM)
+    y_norm = floor_at(safe_norm(y)[..., None], MIN_NORM)
     return _artan_k(y_norm, k) * (y / y_norm)
 
 
@@ -366,7 +366,7 @@ def _geodesic_unit(
     """Unit-speed geodesic ``gamma(t) = x ⊕_κ (tan_κ(t/2)·u/‖u‖)`` from ``x`` in direction ``u``."""
     k = -c
     # `safe_norm` + `floor_at`: `u_norm` divides on the next line, so the floor stays.
-    u_norm = floor_at(safe_norm(u), MIN_NORM)
+    u_norm = floor_at(safe_norm(u)[..., None], MIN_NORM)
     second_term = _tan_k(t / 2.0, k) * (u / u_norm)
     return _addition(x, second_term, c)
 
@@ -391,7 +391,7 @@ def _antipode(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     # `sum(x**2) + MIN_NORM**2` returned inf past coordinate 1.8e19, i.e. antipode = 0). The
     # MIN_NORM floor is deliberate and unchanged: r is a divisor, and the chart antipode of the
     # ORIGIN is the point at infinity, which the floor renders as 0 (see the docstring).
-    r = floor_at(safe_norm(x), MIN_NORM)
+    r = floor_at(safe_norm(x)[..., None], MIN_NORM)
     # Substitute a benign curvature in the DISCARDED inversion for c ≥ 0 so 1/(c·r²) cannot divide by
     # zero at c = 0 and leak a NaN gradient through the jnp.where into the selected -x branch.
     safe_c = jnp.where(is_spherical, c_arr, -jnp.ones_like(c_arr))

@@ -346,3 +346,69 @@ def test_dtype_policy_casts_inputs_to_manifold_dtype(case: ManifoldCase) -> None
     assert dist_f32_jit(x32, y32, case.c).dtype == jnp.float32
     assert len(traces_f64) == 1
     assert len(traces_f32) == 1
+
+
+# ---------------------------------------------------------------------------
+# Implicit batching
+#
+# The documented contract is single-point + explicit ``jax.vmap``, but a number of call sites hand
+# these ops a ``(B, dim)`` array directly and rely on the last-axis reductions broadcasting --
+# ``tests/nn_layers/test_regression_layers.py::test_linear_then_regression_poincare`` is one, via
+# ``Poincare.proj``. Nothing pinned that, so the ``safe_norm`` sweep could turn a whole-array
+# reduction (a scalar, which broadcasts against anything) into a last-axis one (shape ``(B,)``,
+# which does not) and the breakage surfaced only in an unrelated layer test.
+#
+# Every op listed here takes exactly one ``(..., dim)`` argument and returns one, so a row of the
+# batched call is well defined. The assertion is exact equality with the per-row call, at zero
+# tolerance: the batched and single-point traces run the same reductions on the same values.
+#
+# ``Hyperboloid`` is deliberately absent from ``_BATCHED_OPS``. Its ``proj``/``expmap_0``/
+# ``logmap_0`` index the time slot as ``x[1:]``, which on a ``(B, dim+1)`` input slices *rows*;
+# they have never accepted an implicitly batched input (on this branch or before it) and the
+# batched entry point is the separate ``proj_batch``, which is checked below.
+
+_BATCHED_OPS: dict[str, list[str]] = {
+    "Euclidean": ["proj", "expmap_0", "logmap_0", "scalar_mul"],
+    "PoincareBall": ["proj", "expmap_0", "logmap_0", "scalar_mul"],
+    "ProperVelocity": ["proj", "expmap_0", "logmap_0", "scalar_mul"],
+}
+
+
+def _apply(manifold, op: str, batch, c: float):
+    """Call ``op`` on ``batch`` (a point for proj/logmap_0/scalar_mul, a tangent for expmap_0)."""
+    if op == "scalar_mul":
+        return manifold.scalar_mul(2.0, batch, c)
+    return getattr(manifold, op)(batch, c)
+
+
+_BATCHED_CASES = [case for case in CASES if case.name in _BATCHED_OPS]
+
+
+@pytest.mark.parametrize("case", _BATCHED_CASES, ids=[case.name for case in _BATCHED_CASES])
+def test_implicitly_batched_call_equals_the_per_row_call(case: ManifoldCase) -> None:
+    """A ``(B, dim)`` input to a single-point op must give exactly the per-row single-point result."""
+    manifold, x, y, x2, y2, v = _prepare(case, jnp.float64)
+    rows = {
+        "proj": [x, y, x2, y2],
+        "logmap_0": [x, y, x2, y2],
+        "scalar_mul": [x, y, x2, y2],
+        "expmap_0": [v, v * 2.0, v * 0.5, -v],
+    }
+
+    for op in _BATCHED_OPS[case.name]:
+        batch = jnp.stack(rows[op])
+        got = _apply(manifold, op, batch, case.c)
+        expected = jnp.stack([_apply(manifold, op, row, case.c) for row in rows[op]])
+        assert got.shape == expected.shape, f"{case.name}.{op}: {got.shape} != {expected.shape}"
+        assert jnp.array_equal(got, expected), f"{case.name}.{op} is not row-wise"
+
+
+def test_hyperboloid_proj_batch_equals_the_per_row_proj() -> None:
+    """``Hyperboloid``'s batched projection entry point must equal ``proj`` row by row."""
+    case = next(c for c in CASES if c.name == "Hyperboloid")
+    manifold, x, y, x2, y2, _ = _prepare(case, jnp.float64)
+    batch = jnp.stack([x, y, x2, y2])
+    got = manifold.proj_batch(batch, case.c)
+    expected = jnp.stack([manifold.proj(row, case.c) for row in batch])
+    assert got.shape == expected.shape
+    assert jnp.array_equal(got, expected)

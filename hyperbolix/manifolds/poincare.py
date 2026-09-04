@@ -108,7 +108,11 @@ def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCu
     # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
     # The `floor_at` is the deliberate part -- `x_norm` is a *divisor* two lines down, so it must
     # stay bounded away from 0; above ~1e-14 the two forms agree to rounding.
-    x_norm = floor_at(safe_sqrt(jnp.sum(x**2)), MIN_NORM)
+    # `axis=-1, keepdims=True` rather than the whole-array reduction: for the single point this
+    # function is contracted for it is the same value in a shape-(1,) box (bit-identical, same
+    # kernel), but it makes the `/ c_norm_prod * x` below a *per-row* scale for the (B, dim)
+    # inputs callers pass anyway, instead of one whole-array Frobenius norm.
+    x_norm = floor_at(safe_sqrt(jnp.sum(x**2, axis=-1, keepdims=True)), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * x_norm
     # `tanh` is the math_utils wrapper (matching _expmap_0 and _expmap), not XLA's kernel: more
     # accurate in float32, and its ±(1 - 10·eps) output clip pairs with `atanh`'s own domain guard
@@ -362,8 +366,9 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     """
     # `safe_norm` + explicit `floor_at`: the floor is deliberate (`c_norm_prod` divides two lines
     # below, and `tanh(t)/t → 1` needs t > 0), the max-scaling is the fix for the old spelling's
-    # float32 overflow past coordinate 1.8e19. Matches _expmap_0.
-    v_norm = floor_at(safe_norm(v), MIN_NORM)
+    # float32 overflow past coordinate 1.8e19. Matches _expmap_0. `[..., None]` keeps the norm
+    # broadcastable against the `(..., dim)` operand it divides below (see _gyrovector_core._proj).
+    v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * v_norm
     lambda_x = _conformal_factor(x, c)
     # ||second_term|| = |tanh(·)|/√c < 1/√c, i.e. strictly inside the ball, so an explicit _proj
@@ -393,8 +398,9 @@ def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     # module its magnitude is unbounded and the max-scaling earns its second reduction: the old
     # `sum(v**2)` overflowed float32 above coordinate 1.8e19. The floor is deliberate --
     # `c_norm_prod` divides three lines down, and `tanh(t)/t -> 1` needs numerator and denominator
-    # to be the same floored quantity.
-    v_norm = floor_at(safe_norm(v), MIN_NORM)
+    # to be the same floored quantity. `[..., None]` keeps the norm broadcastable against the
+    # `(..., dim)` operand it divides below (see _gyrovector_core._proj).
+    v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
     sqrt_c = jnp.sqrt(c)
     c_norm_prod = sqrt_c * v_norm
     # Boundary clamp applied to the *scalar* instead of via _proj on the (dim,) result. The result
@@ -476,8 +482,9 @@ def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     # `safe_sqrt` + `floor_at`: `y` is a ball point (`sum(y**2) <= 1/c`), so the max-scaling
     # `safe_norm` would pay a second reduction for an overflow that cannot happen. The floor is
     # deliberate -- `c_norm_prod` divides on the next line, and `atanh(t)/t -> 1` needs numerator
-    # and denominator to be the same floored quantity.
-    y_norm = floor_at(safe_sqrt(jnp.sum(y**2)), MIN_NORM)
+    # and denominator to be the same floored quantity. `axis=-1, keepdims=True` keeps the norm
+    # per-row and broadcastable against `y`; see _scalar_mul.
+    y_norm = floor_at(safe_sqrt(jnp.sum(y**2, axis=-1, keepdims=True)), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * y_norm
     res = atanh(c_norm_prod) / c_norm_prod * y
     return res
