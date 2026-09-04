@@ -170,6 +170,79 @@ def test_fhnn_fhcnn_gradients_at_zero_spatial_norm(dtype):
 
 
 # --------------------------------------------------------------------------- #
+# Target spatial norm: sqrt(y0 - 1/sqrt(c)) * sqrt(y0 + 1/sqrt(c)), not the
+# algebraically equal sqrt(y0**2 - 1/c). `y0**2` overflows float32 to inf past
+# y0 = sqrt(FLT_MAX) ~ 1.844e19, which `capped_exp` explicitly allows y0 to
+# reach: it caps a runaway `scale` at exp(0.99*log(FLT_MAX)) ~ 6.1e37 to keep
+# the value finite, and the squaring then threw that finiteness away.
+# --------------------------------------------------------------------------- #
+def _fhnn_layer_with_scale(c, scale, out_dim=4, in_dim=4, spatial_bias=(1.0, -2.0, 3.0)):
+    """FHNN layer wired so that z0 == 0 exactly and the spatial logits are a fixed constant.
+
+    Zero kernel + zero time bias => sigmoid(z0) == 0.5, so y0 == 0.5*exp(scale) + 1/sqrt(c) + eps
+    is set purely by `scale`. That is the only handle that reaches the y0 >= 1e19 regime without
+    hand-calling the private forward.
+    """
+    dtype = jnp.float32
+    layer = HypLinearHyperboloidFHNN(get_hyperboloid(dtype), in_dim, out_dim, rngs=nnx.Rngs(0), param_dtype=dtype)
+    layer.kernel[...] = jnp.zeros((out_dim, in_dim), dtype=dtype)
+    bias = jnp.asarray([0.0, *spatial_bias], dtype=dtype)[None, :]
+    layer.bias[...] = bias
+    layer.scale[...] = jnp.asarray(scale, dtype=dtype)
+    return layer
+
+
+@pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
+def test_fhnn_huge_time_coordinate_stays_finite(c):
+    """y0 ~ 1e20 in float32: output finite, where `sqrt(y0**2 - 1/c)` gave inf.
+
+    Gate for the factored target-norm form. `capped_exp` guarantees y0 itself is finite here, so
+    an inf in the output can only come from the squaring.
+    """
+    dtype = jnp.float32
+    # y0 = 0.5*exp(scale) + 1/sqrt(c) + eps ~ 1e20 -- past sqrt(FLT_MAX) = 1.844e19.
+    layer = _fhnn_layer_with_scale(c, float(np.log(2e20)))
+    x = jnp.zeros((3, 4), dtype=dtype)
+
+    y = layer(x, c=c)
+
+    y0 = np.asarray(y[:, 0], dtype=np.float32)
+    assert np.all(np.isfinite(y0)) and np.all(y0 > 1e19), y0
+    # The pre-fix expression, evaluated on exactly this y0, is where the inf came from.
+    with np.errstate(over="ignore"):
+        assert not np.all(np.isfinite(np.sqrt(y0**2 - np.float32(1.0 / c))))
+    # ... and the layer no longer inherits it.
+    assert np.all(np.isfinite(np.asarray(y))), np.asarray(y)
+    # At y0 >> 1/sqrt(c) the constraint forces ||y_s|| -> y0.
+    ys_norm = np.linalg.norm(np.asarray(y[:, 1:], dtype=np.float64), axis=-1)
+    np.testing.assert_allclose(ys_norm, np.asarray(y0, dtype=np.float64), rtol=1e-6)
+    # Gradients through the huge-y0 branch stay finite too.
+    grad = nnx.grad(lambda m: jnp.sum(m(x, c=c)))(layer)
+    assert np.all(np.isfinite(np.asarray(grad["kernel"][...])))
+    assert np.all(np.isfinite(np.asarray(grad["bias"][...])))
+
+
+@pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
+@pytest.mark.parametrize("scale", [-3.0, 0.0, 2.0, 8.0, 20.0])
+def test_fhnn_target_norm_matches_old_expression_in_range(c, scale):
+    """Ordinary range: the factored form equals `sqrt(y0**2 - 1/c)` to float32 rounding.
+
+    The float32 spread between the two forms peaks at ~3e-6 relative where the margin
+    ``y0 - 1/sqrt(c)`` is smallest (~1e-2); everywhere above that it is at the 1-ulp level.
+    """
+    layer = _fhnn_layer_with_scale(c, scale)
+    x = jnp.zeros((2, 4), dtype=jnp.float32)
+
+    y = layer(x, c=c)
+
+    y0 = np.asarray(y[:, 0], dtype=np.float32)
+    old_norm = np.sqrt(y0**2 - np.float32(1.0 / c))  # the pre-fix expression, in float32
+    new_norm = np.linalg.norm(np.asarray(y[:, 1:], dtype=np.float64), axis=-1)
+    assert np.all(np.isfinite(old_norm))
+    np.testing.assert_allclose(new_norm, np.asarray(old_norm, dtype=np.float64), rtol=1e-5)
+
+
+# --------------------------------------------------------------------------- #
 # Forward value oracles (audit A6-02): independent NumPy transcriptions of the
 # published formulas, so a sign flip or a collapsed spatial output fails here.
 # float64 only — these are exact-agreement assertions.

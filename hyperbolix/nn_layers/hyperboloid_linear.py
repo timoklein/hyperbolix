@@ -155,9 +155,17 @@ def _fhnn_forward(
     # capped_exp: scale_val is unconstrained — see _fhcnn_forward above.
     y0_B1 = capped_exp(scale_val) * jax.nn.sigmoid(z0_B1) + 1.0 / jnp.sqrt(c) + eps  # (B, 1)
 
-    # Target spatial norm from hyperboloid constraint: ||y_s||^2 = y0^2 - 1/c
-    # Always real since y0 > 1/sqrt(c) + eps => y0^2 > 1/c
-    target_norm_B1 = jnp.sqrt(y0_B1**2 - 1.0 / c)  # (B, 1)
+    # Target spatial norm from hyperboloid constraint: ||y_s||^2 = y0^2 - 1/c, factored as the
+    # difference of squares sqrt(y0 - 1/sqrt(c)) * sqrt(y0 + 1/sqrt(c)). Both factors are strictly
+    # positive because y0 > 1/sqrt(c) + eps by construction (additive floor above), so the result
+    # is real and the two forms agree to rounding. The factored form avoids the two failure modes
+    # of the direct one: `y0**2` overflows float32 to inf past y0 ~ 1.8e19, turning a point whose
+    # time slot is an ordinary float into an all-NaN row; and as y0 -> 1/sqrt(c) the subtraction
+    # y0^2 - 1/c cancels catastrophically, losing most of the significand of a quantity the
+    # rescaling below divides by. Same reasoning as `Hyperboloid.proj`'s two-leg `safe_hypot`,
+    # which is the sum-of-squares counterpart.
+    inv_sqrt_c = jnp.asarray(1.0, dtype=y0_B1.dtype) / jnp.sqrt(jnp.asarray(c, dtype=y0_B1.dtype))
+    target_norm_B1 = jnp.sqrt(y0_B1 - inv_sqrt_c) * jnp.sqrt(y0_B1 + inv_sqrt_c)  # (B, 1)
 
     # Rescale spatial to satisfy hyperboloid constraint.
     # `safe_norm`: exact 0 with an exactly-zero VJP at zero spatial input (linalg.norm's VJP at 0
