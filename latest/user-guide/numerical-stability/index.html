@@ -2688,6 +2688,7 @@
 <li><strong>Hyperbolic function overflow</strong>: cosh/sinh overflow for large arguments</li>
 <li><strong>Division by near-zero</strong>: Operations involving 1 - c||x||² near the boundary</li>
 </ul>
+<p>These challenges are specific to the Poincaré ball; see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">Hyperboloid</a> below for operations that are accurate at any representable radius in float32.</p>
 </div>
 <h2 id="float-precision-float32-vs-float64">Float Precision: Float32 vs Float64<a class="headerlink" href="#float-precision-float32-vs-float64" title="Permanent link">&para;</a></h2>
 <h3 id="when-to-use-each">When to Use Each<a class="headerlink" href="#when-to-use-each" title="Permanent link">&para;</a></h3>
@@ -2746,6 +2747,7 @@
 </tr>
 </tbody>
 </table>
+<p><em>Table scoped to the Poincaré ball. <code>Hyperboloid.dist</code>/<code>logmap</code>/<code>sqdist</code>/<code>tangent_norm</code> under <code>VERSION_DEFAULT</code> are accurate at any radius in float32 — see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">Hyperboloid</a> below.</em></p>
 <div class="admonition tip">
 <p class="admonition-title">Quick Check</p>
 <p>If your embeddings have distances from the origin &gt; 7, switch to float64:</p>
@@ -3890,7 +3892,7 @@ lets XLA drop the branches you do not use.</p>
 </span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">0.1</span>  <span class="c1"># Lower curvature = larger hyperbolic space = more stable</span>
 </span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>
 </span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a><span class="c1"># If learning curvature, clip it</span>
-</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">clip_curvature</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">min_c</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">max_c</span><span class="o">=</span><span class="mf">10.0</span><span class="p">):</span>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">clip_curvature</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">min_c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">max_c</span><span class="o">=</span><span class="mf">10.0</span><span class="p">):</span>
 </span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">min_c</span><span class="p">,</span> <span class="n">max_c</span><span class="p">)</span>
 </span></code></pre></div></p>
 <h2 id="checking-manifold-constraints">Checking Manifold Constraints<a class="headerlink" href="#checking-manifold-constraints" title="Permanent link">&para;</a></h2>
@@ -3957,7 +3959,7 @@ with an explicit <code>atol</code> rather than assuming the default is a bug.</p
 <li>✅ <strong>Monitor conformal factors</strong> during training</li>
 <li>✅ <strong>Validate manifold constraints</strong> in debugging</li>
 <li>✅ <strong>Use <code>VERSION_MOBIUS_DIRECT</code> for Poincaré distance</strong> unless issues arise</li>
-<li>✅ <strong>Clip curvature</strong> if learnable (0.01 &lt; c &lt; 10.0)</li>
+<li>✅ <strong>Clip curvature</strong> if learnable (0.1 &lt; c &lt; 10.0)</li>
 <li>✅ <strong>Initialize embeddings conservatively</strong> (small norms)</li>
 <li>✅ <strong>Prefer <code>ProperVelocity</code> for large-radius features</strong> — unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> avoids the boundary entirely and trains with plain <code>optax.adam</code></li>
 </ul>

@@ -1295,6 +1295,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#matmul-precision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Matmul Precision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Matmul Precision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hyperbolix.utils.precision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        precision
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#learnable-curvature" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1530,6 +1558,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#matmul-precision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Matmul Precision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Matmul Precision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hyperbolix.utils.precision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        precision
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#learnable-curvature" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1704,7 +1760,7 @@
     <div class="doc doc-contents ">
 
         <p>Hyperbolic cosine with overflow protection. Domain=(-inf, inf).</p>
-<p>Hard-clips the input to <code>±0.99*log(finfo.max)</code> (≈±87.8 for f32, ±709 for f64) before
+<p>Hard-clips the input to <code>±0.99*log(finfo.max)</code> (≈±87.8 for f32, ±702.7 for f64) before
 computing the value so the result cannot overflow the dtype. This is a <em>pure overflow guard</em>:
 for any input that is not about to overflow the clip is a value- and gradient-identity, so the
 forward pass and the VJP match an unguarded <code>cosh</code> throughout the entire valid regime.</p>
@@ -1773,7 +1829,7 @@ of differentiating the exp-form value expression.</p>
 </span><span id="__span-0-529"><a id="__codelineno-0-529" name="__codelineno-0-529"></a><span class="k">def</span><span class="w"> </span><span class="nf">cosh</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
 </span><span id="__span-0-530"><a id="__codelineno-0-530" name="__codelineno-0-530"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Hyperbolic cosine with overflow protection. Domain=(-inf, inf).</span>
 </span><span id="__span-0-531"><a id="__codelineno-0-531" name="__codelineno-0-531"></a>
-</span><span id="__span-0-532"><a id="__codelineno-0-532" name="__codelineno-0-532"></a><span class="sd">    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±709 for f64) before</span>
+</span><span id="__span-0-532"><a id="__codelineno-0-532" name="__codelineno-0-532"></a><span class="sd">    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±702.7 for f64) before</span>
 </span><span id="__span-0-533"><a id="__codelineno-0-533" name="__codelineno-0-533"></a><span class="sd">    computing the value so the result cannot overflow the dtype. This is a *pure overflow guard*:</span>
 </span><span id="__span-0-534"><a id="__codelineno-0-534" name="__codelineno-0-534"></a><span class="sd">    for any input that is not about to overflow the clip is a value- and gradient-identity, so the</span>
 </span><span id="__span-0-535"><a id="__codelineno-0-535" name="__codelineno-0-535"></a><span class="sd">    forward pass and the VJP match an unguarded ``cosh`` throughout the entire valid regime.</span>
@@ -1828,7 +1884,7 @@ of differentiating the exp-form value expression.</p>
     <div class="doc doc-contents ">
 
         <p>Hyperbolic sine with overflow protection. Domain=(-inf, inf).</p>
-<p>Hard-clips the input to <code>±0.99*log(finfo.max)</code> (≈±87.8 for f32, ±709 for f64) before
+<p>Hard-clips the input to <code>±0.99*log(finfo.max)</code> (≈±87.8 for f32, ±702.7 for f64) before
 computing the value so the result cannot overflow the dtype. This is a <em>pure overflow guard</em>:
 for any input that is not about to overflow the clip is a value- and gradient-identity, so the
 forward pass and the VJP match an unguarded <code>sinh</code> throughout the entire valid regime.</p>
@@ -1901,7 +1957,7 @@ begin with.</p>
 </span><span id="__span-0-570"><a id="__codelineno-0-570" name="__codelineno-0-570"></a><span class="k">def</span><span class="w"> </span><span class="nf">sinh</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
 </span><span id="__span-0-571"><a id="__codelineno-0-571" name="__codelineno-0-571"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Hyperbolic sine with overflow protection. Domain=(-inf, inf).</span>
 </span><span id="__span-0-572"><a id="__codelineno-0-572" name="__codelineno-0-572"></a>
-</span><span id="__span-0-573"><a id="__codelineno-0-573" name="__codelineno-0-573"></a><span class="sd">    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±709 for f64) before</span>
+</span><span id="__span-0-573"><a id="__codelineno-0-573" name="__codelineno-0-573"></a><span class="sd">    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±702.7 for f64) before</span>
 </span><span id="__span-0-574"><a id="__codelineno-0-574" name="__codelineno-0-574"></a><span class="sd">    computing the value so the result cannot overflow the dtype. This is a *pure overflow guard*:</span>
 </span><span id="__span-0-575"><a id="__codelineno-0-575" name="__codelineno-0-575"></a><span class="sd">    for any input that is not about to overflow the clip is a value- and gradient-identity, so the</span>
 </span><span id="__span-0-576"><a id="__codelineno-0-576" name="__codelineno-0-576"></a><span class="sd">    forward pass and the VJP match an unguarded ``sinh`` throughout the entire valid regime.</span>
@@ -1938,6 +1994,214 @@ begin with.</p>
 </span><span id="__span-0-607"><a id="__codelineno-0-607" name="__codelineno-0-607"></a>    <span class="c1"># sinh&#39;s 17-496 ulps, and faster than the builtin. Autodiff of this expression is already the</span>
 </span><span id="__span-0-608"><a id="__codelineno-0-608" name="__codelineno-0-608"></a>    <span class="c1"># accurate exp-form cosh, so no custom_jvp is needed here (contrast cosh above).</span>
 </span><span id="__span-0-609"><a id="__codelineno-0-609" name="__codelineno-0-609"></a>    <span class="k">return</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">expm1</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">-</span> <span class="n">jnp</span><span class="o">.</span><span class="n">expm1</span><span class="p">(</span><span class="o">-</span><span class="n">x</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hyperbolix.utils.math_utils.tanh" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">tanh</span>
+
+
+<a href="#hyperbolix.utils.math_utils.tanh" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">tanh</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Hyperbolic tangent clamped so the output stays strictly inside (-1, 1). Domain=(-inf, inf).</p>
+<p>Clips the input to <code>±0.5*log(2/machine_eps)</code> (≈±8.3 for f32, ≈±18.4 for f64) AND clips the output to
+<code>±(1 - 10*machine_eps)</code>. The input clip is the analytic point where <code>1 - tanh</code> reaches <code>eps</code>; the
+output clip is required <em>in addition</em> because XLA's float32 <code>tanh</code> saturates to <strong>exactly</strong> <code>1.0</code>
+slightly earlier (≈ x = 8), which the input clip alone does not prevent — and an exact <code>1.0</code> would make
+a downstream <code>atanh</code> singular. The output bound matches <code>atanh</code>'s own <code>±(1 - 10*eps)</code> domain guard,
+so <code>atanh(tanh(x))</code> can never reach the pole. Outside the saturated tail the guards are a value- and
+gradient-identity (the tail's gradient is 0, as for <code>cosh</code>/<code>sinh</code>). Mirrors the domain-guard
+philosophy of <code>acosh</code>/<code>atanh</code> above and the <code>tanh(clamp)</code> guard in the geoopt κ-stereographic
+reference.</p>
+<p>Away from zero the value comes from the algebraic identity <code>tanh(x) = expm1(2x)/(expm1(2x) +
+2)</code> rather than XLA's rational approximation to <code>tanh</code>. Evaluated on <code>|x|</code> (sign restored
+by <code>jnp.where</code>, so the result is odd to the last bit), the form is cancellation-free —
+numerator and denominator are both positive and the denominator never drops below 2 — and it
+keeps the saturating tail accurate, where the whole signal lives in
+<code>1 - tanh(x) = 2/(expm1(2|x|) + 2)</code>. It is <em>worse</em> than the builtin near zero (where
+<code>expm1(2x) ≈ 2x</code> and the division adds roundings the builtin does not pay), so it is used
+only above a measured, precision-dependent seam: 1/8 in float32, 1/2 in float64 (see the
+<code>_TANH_EXPM1_SEAM_*</code> comment above for the ulp table behind both). Measured on 20k
+log-uniform float32 inputs, max ulp: <code>[0.9, 7]</code> 4 -&gt; 2 on XLA GPU and 4 -&gt; 1 on XLA CPU.</p>
+<p>Below <code>|x| = 1/8</code> <strong>in float32</strong> neither kernel is used: the value comes from the odd
+Maclaurin series <code>x - x^3/3 + 2x^5/15 - 17x^7/315</code> (Horner in <code>x**2</code>, evaluated on
+<code>|x|</code> so the sign restoration below keeps it odd to the last bit), mirroring <code>atanh</code>'s
+series branch above. The series is exact to float32 rounding on that range — the first
+dropped term is <code>62 x^9/2835</code>, 1.6e-10 absolute (1.3e-9 relative) at <code>x = 1/8</code> against a
+float32 eps of 1.2e-7 — so it replaces XLA's 4 ulp rational approximation with a polynomial
+whose only error is its own rounding, and unlike the <code>expm1</code> form it does not pay a
+division near zero. Measured on 20k log-uniform float32 inputs in <code>[1e-4, 0.125]</code>, max /
+mean ulp: 4 / 0.96 -&gt; 1 / 0.16 on XLA CPU and 4 / 0.87 -&gt; 1 / 0.16 on XLA GPU (the
+<code>expm1</code> form on that same range is 3 on GPU but <strong>6</strong> on CPU, which is why the seam does
+not simply move down). float64 keeps XLA's <code>tanh</code> below its own 1/2 seam: 1.3e-9 relative
+is ~6e6 float64 ulps, so the series is unusable there.</p>
+<p>Args:
+    x: Input array of any shape</p>
+<p>Returns:
+    tanh(x) clamped strictly inside (-1, 1)</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>hyperbolix/utils/math_utils.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-740">740</a></span>
+<span class="normal"><a href="#__codelineno-0-741">741</a></span>
+<span class="normal"><a href="#__codelineno-0-742">742</a></span>
+<span class="normal"><a href="#__codelineno-0-743">743</a></span>
+<span class="normal"><a href="#__codelineno-0-744">744</a></span>
+<span class="normal"><a href="#__codelineno-0-745">745</a></span>
+<span class="normal"><a href="#__codelineno-0-746">746</a></span>
+<span class="normal"><a href="#__codelineno-0-747">747</a></span>
+<span class="normal"><a href="#__codelineno-0-748">748</a></span>
+<span class="normal"><a href="#__codelineno-0-749">749</a></span>
+<span class="normal"><a href="#__codelineno-0-750">750</a></span>
+<span class="normal"><a href="#__codelineno-0-751">751</a></span>
+<span class="normal"><a href="#__codelineno-0-752">752</a></span>
+<span class="normal"><a href="#__codelineno-0-753">753</a></span>
+<span class="normal"><a href="#__codelineno-0-754">754</a></span>
+<span class="normal"><a href="#__codelineno-0-755">755</a></span>
+<span class="normal"><a href="#__codelineno-0-756">756</a></span>
+<span class="normal"><a href="#__codelineno-0-757">757</a></span>
+<span class="normal"><a href="#__codelineno-0-758">758</a></span>
+<span class="normal"><a href="#__codelineno-0-759">759</a></span>
+<span class="normal"><a href="#__codelineno-0-760">760</a></span>
+<span class="normal"><a href="#__codelineno-0-761">761</a></span>
+<span class="normal"><a href="#__codelineno-0-762">762</a></span>
+<span class="normal"><a href="#__codelineno-0-763">763</a></span>
+<span class="normal"><a href="#__codelineno-0-764">764</a></span>
+<span class="normal"><a href="#__codelineno-0-765">765</a></span>
+<span class="normal"><a href="#__codelineno-0-766">766</a></span>
+<span class="normal"><a href="#__codelineno-0-767">767</a></span>
+<span class="normal"><a href="#__codelineno-0-768">768</a></span>
+<span class="normal"><a href="#__codelineno-0-769">769</a></span>
+<span class="normal"><a href="#__codelineno-0-770">770</a></span>
+<span class="normal"><a href="#__codelineno-0-771">771</a></span>
+<span class="normal"><a href="#__codelineno-0-772">772</a></span>
+<span class="normal"><a href="#__codelineno-0-773">773</a></span>
+<span class="normal"><a href="#__codelineno-0-774">774</a></span>
+<span class="normal"><a href="#__codelineno-0-775">775</a></span>
+<span class="normal"><a href="#__codelineno-0-776">776</a></span>
+<span class="normal"><a href="#__codelineno-0-777">777</a></span>
+<span class="normal"><a href="#__codelineno-0-778">778</a></span>
+<span class="normal"><a href="#__codelineno-0-779">779</a></span>
+<span class="normal"><a href="#__codelineno-0-780">780</a></span>
+<span class="normal"><a href="#__codelineno-0-781">781</a></span>
+<span class="normal"><a href="#__codelineno-0-782">782</a></span>
+<span class="normal"><a href="#__codelineno-0-783">783</a></span>
+<span class="normal"><a href="#__codelineno-0-784">784</a></span>
+<span class="normal"><a href="#__codelineno-0-785">785</a></span>
+<span class="normal"><a href="#__codelineno-0-786">786</a></span>
+<span class="normal"><a href="#__codelineno-0-787">787</a></span>
+<span class="normal"><a href="#__codelineno-0-788">788</a></span>
+<span class="normal"><a href="#__codelineno-0-789">789</a></span>
+<span class="normal"><a href="#__codelineno-0-790">790</a></span>
+<span class="normal"><a href="#__codelineno-0-791">791</a></span>
+<span class="normal"><a href="#__codelineno-0-792">792</a></span>
+<span class="normal"><a href="#__codelineno-0-793">793</a></span>
+<span class="normal"><a href="#__codelineno-0-794">794</a></span>
+<span class="normal"><a href="#__codelineno-0-795">795</a></span>
+<span class="normal"><a href="#__codelineno-0-796">796</a></span>
+<span class="normal"><a href="#__codelineno-0-797">797</a></span>
+<span class="normal"><a href="#__codelineno-0-798">798</a></span>
+<span class="normal"><a href="#__codelineno-0-799">799</a></span>
+<span class="normal"><a href="#__codelineno-0-800">800</a></span>
+<span class="normal"><a href="#__codelineno-0-801">801</a></span>
+<span class="normal"><a href="#__codelineno-0-802">802</a></span>
+<span class="normal"><a href="#__codelineno-0-803">803</a></span>
+<span class="normal"><a href="#__codelineno-0-804">804</a></span>
+<span class="normal"><a href="#__codelineno-0-805">805</a></span>
+<span class="normal"><a href="#__codelineno-0-806">806</a></span>
+<span class="normal"><a href="#__codelineno-0-807">807</a></span>
+<span class="normal"><a href="#__codelineno-0-808">808</a></span>
+<span class="normal"><a href="#__codelineno-0-809">809</a></span>
+<span class="normal"><a href="#__codelineno-0-810">810</a></span>
+<span class="normal"><a href="#__codelineno-0-811">811</a></span>
+<span class="normal"><a href="#__codelineno-0-812">812</a></span>
+<span class="normal"><a href="#__codelineno-0-813">813</a></span>
+<span class="normal"><a href="#__codelineno-0-814">814</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-740"><a id="__codelineno-0-740" name="__codelineno-0-740"></a><span class="nd">@_jit</span>
+</span><span id="__span-0-741"><a id="__codelineno-0-741" name="__codelineno-0-741"></a><span class="k">def</span><span class="w"> </span><span class="nf">tanh</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-742"><a id="__codelineno-0-742" name="__codelineno-0-742"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Hyperbolic tangent clamped so the output stays strictly inside (-1, 1). Domain=(-inf, inf).</span>
+</span><span id="__span-0-743"><a id="__codelineno-0-743" name="__codelineno-0-743"></a>
+</span><span id="__span-0-744"><a id="__codelineno-0-744" name="__codelineno-0-744"></a><span class="sd">    Clips the input to ``±0.5*log(2/machine_eps)`` (≈±8.3 for f32, ≈±18.4 for f64) AND clips the output to</span>
+</span><span id="__span-0-745"><a id="__codelineno-0-745" name="__codelineno-0-745"></a><span class="sd">    ``±(1 - 10*machine_eps)``. The input clip is the analytic point where ``1 - tanh`` reaches ``eps``; the</span>
+</span><span id="__span-0-746"><a id="__codelineno-0-746" name="__codelineno-0-746"></a><span class="sd">    output clip is required *in addition* because XLA&#39;s float32 ``tanh`` saturates to **exactly** ``1.0``</span>
+</span><span id="__span-0-747"><a id="__codelineno-0-747" name="__codelineno-0-747"></a><span class="sd">    slightly earlier (≈ x = 8), which the input clip alone does not prevent — and an exact ``1.0`` would make</span>
+</span><span id="__span-0-748"><a id="__codelineno-0-748" name="__codelineno-0-748"></a><span class="sd">    a downstream ``atanh`` singular. The output bound matches ``atanh``&#39;s own ``±(1 - 10*eps)`` domain guard,</span>
+</span><span id="__span-0-749"><a id="__codelineno-0-749" name="__codelineno-0-749"></a><span class="sd">    so ``atanh(tanh(x))`` can never reach the pole. Outside the saturated tail the guards are a value- and</span>
+</span><span id="__span-0-750"><a id="__codelineno-0-750" name="__codelineno-0-750"></a><span class="sd">    gradient-identity (the tail&#39;s gradient is 0, as for ``cosh``/``sinh``). Mirrors the domain-guard</span>
+</span><span id="__span-0-751"><a id="__codelineno-0-751" name="__codelineno-0-751"></a><span class="sd">    philosophy of ``acosh``/``atanh`` above and the ``tanh(clamp)`` guard in the geoopt κ-stereographic</span>
+</span><span id="__span-0-752"><a id="__codelineno-0-752" name="__codelineno-0-752"></a><span class="sd">    reference.</span>
+</span><span id="__span-0-753"><a id="__codelineno-0-753" name="__codelineno-0-753"></a>
+</span><span id="__span-0-754"><a id="__codelineno-0-754" name="__codelineno-0-754"></a><span class="sd">    Away from zero the value comes from the algebraic identity ``tanh(x) = expm1(2x)/(expm1(2x) +</span>
+</span><span id="__span-0-755"><a id="__codelineno-0-755" name="__codelineno-0-755"></a><span class="sd">    2)`` rather than XLA&#39;s rational approximation to ``tanh``. Evaluated on ``|x|`` (sign restored</span>
+</span><span id="__span-0-756"><a id="__codelineno-0-756" name="__codelineno-0-756"></a><span class="sd">    by ``jnp.where``, so the result is odd to the last bit), the form is cancellation-free —</span>
+</span><span id="__span-0-757"><a id="__codelineno-0-757" name="__codelineno-0-757"></a><span class="sd">    numerator and denominator are both positive and the denominator never drops below 2 — and it</span>
+</span><span id="__span-0-758"><a id="__codelineno-0-758" name="__codelineno-0-758"></a><span class="sd">    keeps the saturating tail accurate, where the whole signal lives in</span>
+</span><span id="__span-0-759"><a id="__codelineno-0-759" name="__codelineno-0-759"></a><span class="sd">    ``1 - tanh(x) = 2/(expm1(2|x|) + 2)``. It is *worse* than the builtin near zero (where</span>
+</span><span id="__span-0-760"><a id="__codelineno-0-760" name="__codelineno-0-760"></a><span class="sd">    ``expm1(2x) ≈ 2x`` and the division adds roundings the builtin does not pay), so it is used</span>
+</span><span id="__span-0-761"><a id="__codelineno-0-761" name="__codelineno-0-761"></a><span class="sd">    only above a measured, precision-dependent seam: 1/8 in float32, 1/2 in float64 (see the</span>
+</span><span id="__span-0-762"><a id="__codelineno-0-762" name="__codelineno-0-762"></a><span class="sd">    ``_TANH_EXPM1_SEAM_*`` comment above for the ulp table behind both). Measured on 20k</span>
+</span><span id="__span-0-763"><a id="__codelineno-0-763" name="__codelineno-0-763"></a><span class="sd">    log-uniform float32 inputs, max ulp: ``[0.9, 7]`` 4 -&gt; 2 on XLA GPU and 4 -&gt; 1 on XLA CPU.</span>
+</span><span id="__span-0-764"><a id="__codelineno-0-764" name="__codelineno-0-764"></a>
+</span><span id="__span-0-765"><a id="__codelineno-0-765" name="__codelineno-0-765"></a><span class="sd">    Below ``|x| = 1/8`` **in float32** neither kernel is used: the value comes from the odd</span>
+</span><span id="__span-0-766"><a id="__codelineno-0-766" name="__codelineno-0-766"></a><span class="sd">    Maclaurin series ``x - x^3/3 + 2x^5/15 - 17x^7/315`` (Horner in ``x**2``, evaluated on</span>
+</span><span id="__span-0-767"><a id="__codelineno-0-767" name="__codelineno-0-767"></a><span class="sd">    ``|x|`` so the sign restoration below keeps it odd to the last bit), mirroring ``atanh``&#39;s</span>
+</span><span id="__span-0-768"><a id="__codelineno-0-768" name="__codelineno-0-768"></a><span class="sd">    series branch above. The series is exact to float32 rounding on that range — the first</span>
+</span><span id="__span-0-769"><a id="__codelineno-0-769" name="__codelineno-0-769"></a><span class="sd">    dropped term is ``62 x^9/2835``, 1.6e-10 absolute (1.3e-9 relative) at ``x = 1/8`` against a</span>
+</span><span id="__span-0-770"><a id="__codelineno-0-770" name="__codelineno-0-770"></a><span class="sd">    float32 eps of 1.2e-7 — so it replaces XLA&#39;s 4 ulp rational approximation with a polynomial</span>
+</span><span id="__span-0-771"><a id="__codelineno-0-771" name="__codelineno-0-771"></a><span class="sd">    whose only error is its own rounding, and unlike the ``expm1`` form it does not pay a</span>
+</span><span id="__span-0-772"><a id="__codelineno-0-772" name="__codelineno-0-772"></a><span class="sd">    division near zero. Measured on 20k log-uniform float32 inputs in ``[1e-4, 0.125]``, max /</span>
+</span><span id="__span-0-773"><a id="__codelineno-0-773" name="__codelineno-0-773"></a><span class="sd">    mean ulp: 4 / 0.96 -&gt; 1 / 0.16 on XLA CPU and 4 / 0.87 -&gt; 1 / 0.16 on XLA GPU (the</span>
+</span><span id="__span-0-774"><a id="__codelineno-0-774" name="__codelineno-0-774"></a><span class="sd">    ``expm1`` form on that same range is 3 on GPU but **6** on CPU, which is why the seam does</span>
+</span><span id="__span-0-775"><a id="__codelineno-0-775" name="__codelineno-0-775"></a><span class="sd">    not simply move down). float64 keeps XLA&#39;s ``tanh`` below its own 1/2 seam: 1.3e-9 relative</span>
+</span><span id="__span-0-776"><a id="__codelineno-0-776" name="__codelineno-0-776"></a><span class="sd">    is ~6e6 float64 ulps, so the series is unusable there.</span>
+</span><span id="__span-0-777"><a id="__codelineno-0-777" name="__codelineno-0-777"></a>
+</span><span id="__span-0-778"><a id="__codelineno-0-778" name="__codelineno-0-778"></a><span class="sd">    Args:</span>
+</span><span id="__span-0-779"><a id="__codelineno-0-779" name="__codelineno-0-779"></a><span class="sd">        x: Input array of any shape</span>
+</span><span id="__span-0-780"><a id="__codelineno-0-780" name="__codelineno-0-780"></a>
+</span><span id="__span-0-781"><a id="__codelineno-0-781" name="__codelineno-0-781"></a><span class="sd">    Returns:</span>
+</span><span id="__span-0-782"><a id="__codelineno-0-782" name="__codelineno-0-782"></a><span class="sd">        tanh(x) clamped strictly inside (-1, 1)</span>
+</span><span id="__span-0-783"><a id="__codelineno-0-783" name="__codelineno-0-783"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-784"><a id="__codelineno-0-784" name="__codelineno-0-784"></a>    <span class="c1"># 1 - tanh(x) ≈ 2*exp(-2x); require it ≥ eps ⇒ x ≤ 0.5*log(2/eps) is the analytic bound.</span>
+</span><span id="__span-0-785"><a id="__codelineno-0-785" name="__codelineno-0-785"></a>    <span class="n">clamp</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="mf">2.0</span> <span class="o">/</span> <span class="n">jnp</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+</span><span id="__span-0-786"><a id="__codelineno-0-786" name="__codelineno-0-786"></a>    <span class="c1"># This clip is also the sanitised argument the expm1 branch needs. jnp.where evaluates BOTH</span>
+</span><span id="__span-0-787"><a id="__codelineno-0-787" name="__codelineno-0-787"></a>    <span class="c1"># branches and their gradients, and expm1(2x) overflows to inf for x &gt; 44 (f32) / 355 (f64),</span>
+</span><span id="__span-0-788"><a id="__codelineno-0-788" name="__codelineno-0-788"></a>    <span class="c1"># where inf/inf = NaN would leak into the *selected* branch&#39;s cotangent. Clipping first bounds</span>
+</span><span id="__span-0-789"><a id="__codelineno-0-789" name="__codelineno-0-789"></a>    <span class="c1"># the branch argument at ±8.32 (f32) / ±18.4 (f64), so expm1(2x) tops out at 1.7e7 / 9.5e15 —</span>
+</span><span id="__span-0-790"><a id="__codelineno-0-790" name="__codelineno-0-790"></a>    <span class="c1"># finite in both dtypes, for every real input including ±inf.</span>
+</span><span id="__span-0-791"><a id="__codelineno-0-791" name="__codelineno-0-791"></a>    <span class="n">x_safe</span> <span class="o">=</span> <span class="n">clamp_to</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="o">-</span><span class="n">clamp</span><span class="p">,</span> <span class="n">clamp</span><span class="p">)</span>
+</span><span id="__span-0-792"><a id="__codelineno-0-792" name="__codelineno-0-792"></a>    <span class="n">seam</span> <span class="o">=</span> <span class="n">_TANH_EXPM1_SEAM_LOW_PRECISION</span> <span class="k">if</span> <span class="n">_is_low_precision</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span> <span class="k">else</span> <span class="n">_TANH_EXPM1_SEAM_FLOAT64</span>
+</span><span id="__span-0-793"><a id="__codelineno-0-793" name="__codelineno-0-793"></a>    <span class="c1"># Evaluated on |x| with the sign restored via `where`, exactly as `atanh` above: `expm1(2x)`</span>
+</span><span id="__span-0-794"><a id="__codelineno-0-794" name="__codelineno-0-794"></a>    <span class="c1"># and `expm1(-2x)` are not negatives of each other, so the raw quotient is not an odd function</span>
+</span><span id="__span-0-795"><a id="__codelineno-0-795" name="__codelineno-0-795"></a>    <span class="c1"># to the last bit. Restoring the sign this way (rather than with `sign(x)*...`, whose</span>
+</span><span id="__span-0-796"><a id="__codelineno-0-796" name="__codelineno-0-796"></a>    <span class="c1"># product-rule gradient at x == 0 would collapse to 0) makes tanh(-x) == -tanh(x) bitwise for</span>
+</span><span id="__span-0-797"><a id="__codelineno-0-797" name="__codelineno-0-797"></a>    <span class="c1"># every input, and keeps the gradient at 0 exactly 1 (jnp.abs&#39; VJP at 0 is +1). The two</span>
+</span><span id="__span-0-798"><a id="__codelineno-0-798" name="__codelineno-0-798"></a>    <span class="c1"># below-the-seam branches are odd on |x| for the same reason: XLA&#39;s own tanh is already</span>
+</span><span id="__span-0-799"><a id="__codelineno-0-799" name="__codelineno-0-799"></a>    <span class="c1"># bitwise odd, and the series&#39; leading factor is abs_x.</span>
+</span><span id="__span-0-800"><a id="__codelineno-0-800" name="__codelineno-0-800"></a>    <span class="n">abs_x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">x_safe</span><span class="p">)</span>
+</span><span id="__span-0-801"><a id="__codelineno-0-801" name="__codelineno-0-801"></a>    <span class="n">t</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">expm1</span><span class="p">(</span><span class="mf">2.0</span> <span class="o">*</span> <span class="n">abs_x</span><span class="p">)</span>
+</span><span id="__span-0-802"><a id="__codelineno-0-802" name="__codelineno-0-802"></a>    <span class="k">if</span> <span class="n">_is_low_precision</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">):</span>
+</span><span id="__span-0-803"><a id="__codelineno-0-803" name="__codelineno-0-803"></a>        <span class="c1"># Degree-7 odd Maclaurin series, Horner in abs_x**2. Needs no sanitising of its own: on</span>
+</span><span id="__span-0-804"><a id="__codelineno-0-804" name="__codelineno-0-804"></a>        <span class="c1"># the clipped |x| &lt;= 8.32 the polynomial and its derivative are bounded (~1.5e5 and</span>
+</span><span id="__span-0-805"><a id="__codelineno-0-805" name="__codelineno-0-805"></a>        <span class="c1"># ~1.3e5), so the branch jnp.where does not select is still finite in value and cotangent.</span>
+</span><span id="__span-0-806"><a id="__codelineno-0-806" name="__codelineno-0-806"></a>        <span class="n">x2</span> <span class="o">=</span> <span class="n">abs_x</span> <span class="o">*</span> <span class="n">abs_x</span>
+</span><span id="__span-0-807"><a id="__codelineno-0-807" name="__codelineno-0-807"></a>        <span class="n">below_seam</span> <span class="o">=</span> <span class="n">abs_x</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">+</span> <span class="n">x2</span> <span class="o">*</span> <span class="p">(</span><span class="o">-</span><span class="mf">1.0</span> <span class="o">/</span> <span class="mf">3.0</span> <span class="o">+</span> <span class="n">x2</span> <span class="o">*</span> <span class="p">(</span><span class="mf">2.0</span> <span class="o">/</span> <span class="mf">15.0</span> <span class="o">-</span> <span class="n">x2</span> <span class="o">*</span> <span class="p">(</span><span class="mf">17.0</span> <span class="o">/</span> <span class="mf">315.0</span><span class="p">))))</span>
+</span><span id="__span-0-808"><a id="__codelineno-0-808" name="__codelineno-0-808"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-0-809"><a id="__codelineno-0-809" name="__codelineno-0-809"></a>        <span class="n">below_seam</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">tanh</span><span class="p">(</span><span class="n">abs_x</span><span class="p">)</span>
+</span><span id="__span-0-810"><a id="__codelineno-0-810" name="__codelineno-0-810"></a>    <span class="n">magnitude</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">abs_x</span> <span class="o">&gt;=</span> <span class="n">seam</span><span class="p">,</span> <span class="n">t</span> <span class="o">/</span> <span class="p">(</span><span class="n">t</span> <span class="o">+</span> <span class="mf">2.0</span><span class="p">),</span> <span class="n">below_seam</span><span class="p">)</span>
+</span><span id="__span-0-811"><a id="__codelineno-0-811" name="__codelineno-0-811"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">x_safe</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">magnitude</span><span class="p">,</span> <span class="o">-</span><span class="n">magnitude</span><span class="p">)</span>
+</span><span id="__span-0-812"><a id="__codelineno-0-812" name="__codelineno-0-812"></a>    <span class="c1"># Also clamp the output: XLA&#39;s float32 tanh reaches exactly 1.0 before the input bound bites.</span>
+</span><span id="__span-0-813"><a id="__codelineno-0-813" name="__codelineno-0-813"></a>    <span class="n">max_out</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="mf">10.0</span> <span class="o">*</span> <span class="nb">float</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+</span><span id="__span-0-814"><a id="__codelineno-0-814" name="__codelineno-0-814"></a>    <span class="k">return</span> <span class="n">clamp_to</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="o">-</span><span class="n">max_out</span><span class="p">,</span> <span class="n">max_out</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -2200,6 +2464,560 @@ the whole domain: 1.1e-11 relative is ~5e4 float64 ulps, so the series is unusab
 <div class="doc doc-object doc-function">
 
 
+<h4 id="hyperbolix.utils.math_utils.safe_norm" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">safe_norm</span>
+
+
+<a href="#hyperbolix.utils.math_utils.safe_norm" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">safe_norm</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s1">&#39;... n&#39;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Euclidean norm over the last axis, computed on a rescaled vector. Domain=R^n, Range=[0, inf).</p>
+<p>Divides by the power of two just below <code>max|v|</code> (:func:<code>_pow2_divisor</code>) before squaring, so
+the sum of squares always sits in <code>[1, 4n)</code> no matter how large or small <code>v</code> is. The
+divisor being a power of two is what keeps this <strong>bit-identical to</strong> <code>sqrt(sum(v**2))</code>
+wherever that neither overflows nor underflows -- see :func:<code>_pow2_divisor</code>. That is what the library's older
+<code>sqrt(sum(v**2) + MIN_NORM**2)</code> idiom cannot do, in <em>both</em> directions:</p>
+<ul>
+<li><strong>Overflow</strong>: <code>sum(v**2)</code> overflows float32 once <code>|v| &gt; 1.8e19</code> — reached by the spatial
+  part of a hyperboloid point at radius 44 (<code>sinh(44) = 1.6e18</code> … radius 45 already squares
+  past <code>3.4e38</code>), while the norm itself, <code>1.6e18</code>, is perfectly representable.</li>
+<li><strong>Underflow</strong>: the <code>+ MIN_NORM**2 = 1e-30</code> floor <em>dominates</em> any genuinely small vector.
+  A float32 chord of <code>1e-34</code> (a legitimate angular separation between two nearly parallel
+  unit vectors) comes back as <code>1e-15</code>, i.e. 19 orders of magnitude too large.</li>
+</ul>
+<p>The scale is wrapped in <code>stop_gradient</code>, which makes the VJP exactly <code>v/‖v‖</code> — the analytic
+derivative, with no contribution from differentiating the scaling itself.</p>
+<p>At <code>v == 0</code> the result is exactly <code>0</code> and the VJP is exactly <code>0</code> (the derivative does not
+exist there; zero is the finite, direction-free choice). Both need the <strong>double</strong> <code>where</code>
+below: sanitizing only the output leaves <code>sqrt(0)</code>'s infinite derivative inside the VJP,
+where it meets the outer <code>where</code>'s zero cotangent as <code>0 * inf = NaN</code>. The first <code>where</code>
+replaces the <em>argument</em> of the <code>sqrt</code> so the infinite derivative is never created.</p>
+<p>Non-finite inputs are passed through rather than turned into NaN: a vector holding an <code>inf</code>
+returns <code>inf</code>. Callers use that to keep an out-of-range point visibly degenerate instead of
+silently NaN-poisoning everything downstream.</p>
+<p>Args:
+    v: Input array, norm taken over the last axis</p>
+<p>Returns:
+    <code>‖v‖₂</code> over the last axis, shape <code>v.shape[:-1]</code></p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>hyperbolix/utils/math_utils.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-304">304</a></span>
+<span class="normal"><a href="#__codelineno-0-305">305</a></span>
+<span class="normal"><a href="#__codelineno-0-306">306</a></span>
+<span class="normal"><a href="#__codelineno-0-307">307</a></span>
+<span class="normal"><a href="#__codelineno-0-308">308</a></span>
+<span class="normal"><a href="#__codelineno-0-309">309</a></span>
+<span class="normal"><a href="#__codelineno-0-310">310</a></span>
+<span class="normal"><a href="#__codelineno-0-311">311</a></span>
+<span class="normal"><a href="#__codelineno-0-312">312</a></span>
+<span class="normal"><a href="#__codelineno-0-313">313</a></span>
+<span class="normal"><a href="#__codelineno-0-314">314</a></span>
+<span class="normal"><a href="#__codelineno-0-315">315</a></span>
+<span class="normal"><a href="#__codelineno-0-316">316</a></span>
+<span class="normal"><a href="#__codelineno-0-317">317</a></span>
+<span class="normal"><a href="#__codelineno-0-318">318</a></span>
+<span class="normal"><a href="#__codelineno-0-319">319</a></span>
+<span class="normal"><a href="#__codelineno-0-320">320</a></span>
+<span class="normal"><a href="#__codelineno-0-321">321</a></span>
+<span class="normal"><a href="#__codelineno-0-322">322</a></span>
+<span class="normal"><a href="#__codelineno-0-323">323</a></span>
+<span class="normal"><a href="#__codelineno-0-324">324</a></span>
+<span class="normal"><a href="#__codelineno-0-325">325</a></span>
+<span class="normal"><a href="#__codelineno-0-326">326</a></span>
+<span class="normal"><a href="#__codelineno-0-327">327</a></span>
+<span class="normal"><a href="#__codelineno-0-328">328</a></span>
+<span class="normal"><a href="#__codelineno-0-329">329</a></span>
+<span class="normal"><a href="#__codelineno-0-330">330</a></span>
+<span class="normal"><a href="#__codelineno-0-331">331</a></span>
+<span class="normal"><a href="#__codelineno-0-332">332</a></span>
+<span class="normal"><a href="#__codelineno-0-333">333</a></span>
+<span class="normal"><a href="#__codelineno-0-334">334</a></span>
+<span class="normal"><a href="#__codelineno-0-335">335</a></span>
+<span class="normal"><a href="#__codelineno-0-336">336</a></span>
+<span class="normal"><a href="#__codelineno-0-337">337</a></span>
+<span class="normal"><a href="#__codelineno-0-338">338</a></span>
+<span class="normal"><a href="#__codelineno-0-339">339</a></span>
+<span class="normal"><a href="#__codelineno-0-340">340</a></span>
+<span class="normal"><a href="#__codelineno-0-341">341</a></span>
+<span class="normal"><a href="#__codelineno-0-342">342</a></span>
+<span class="normal"><a href="#__codelineno-0-343">343</a></span>
+<span class="normal"><a href="#__codelineno-0-344">344</a></span>
+<span class="normal"><a href="#__codelineno-0-345">345</a></span>
+<span class="normal"><a href="#__codelineno-0-346">346</a></span>
+<span class="normal"><a href="#__codelineno-0-347">347</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-304"><a id="__codelineno-0-304" name="__codelineno-0-304"></a><span class="nd">@_jit</span>
+</span><span id="__span-0-305"><a id="__codelineno-0-305" name="__codelineno-0-305"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_norm</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-306"><a id="__codelineno-0-306" name="__codelineno-0-306"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Euclidean norm over the last axis, computed on a rescaled vector. Domain=R^n, Range=[0, inf).</span>
+</span><span id="__span-0-307"><a id="__codelineno-0-307" name="__codelineno-0-307"></a>
+</span><span id="__span-0-308"><a id="__codelineno-0-308" name="__codelineno-0-308"></a><span class="sd">    Divides by the power of two just below ``max|v|`` (:func:`_pow2_divisor`) before squaring, so</span>
+</span><span id="__span-0-309"><a id="__codelineno-0-309" name="__codelineno-0-309"></a><span class="sd">    the sum of squares always sits in ``[1, 4n)`` no matter how large or small ``v`` is. The</span>
+</span><span id="__span-0-310"><a id="__codelineno-0-310" name="__codelineno-0-310"></a><span class="sd">    divisor being a power of two is what keeps this **bit-identical to** ``sqrt(sum(v**2))``</span>
+</span><span id="__span-0-311"><a id="__codelineno-0-311" name="__codelineno-0-311"></a><span class="sd">    wherever that neither overflows nor underflows -- see :func:`_pow2_divisor`. That is what the library&#39;s older</span>
+</span><span id="__span-0-312"><a id="__codelineno-0-312" name="__codelineno-0-312"></a><span class="sd">    ``sqrt(sum(v**2) + MIN_NORM**2)`` idiom cannot do, in *both* directions:</span>
+</span><span id="__span-0-313"><a id="__codelineno-0-313" name="__codelineno-0-313"></a>
+</span><span id="__span-0-314"><a id="__codelineno-0-314" name="__codelineno-0-314"></a><span class="sd">    * **Overflow**: ``sum(v**2)`` overflows float32 once ``|v| &gt; 1.8e19`` — reached by the spatial</span>
+</span><span id="__span-0-315"><a id="__codelineno-0-315" name="__codelineno-0-315"></a><span class="sd">      part of a hyperboloid point at radius 44 (``sinh(44) = 1.6e18`` … radius 45 already squares</span>
+</span><span id="__span-0-316"><a id="__codelineno-0-316" name="__codelineno-0-316"></a><span class="sd">      past ``3.4e38``), while the norm itself, ``1.6e18``, is perfectly representable.</span>
+</span><span id="__span-0-317"><a id="__codelineno-0-317" name="__codelineno-0-317"></a><span class="sd">    * **Underflow**: the ``+ MIN_NORM**2 = 1e-30`` floor *dominates* any genuinely small vector.</span>
+</span><span id="__span-0-318"><a id="__codelineno-0-318" name="__codelineno-0-318"></a><span class="sd">      A float32 chord of ``1e-34`` (a legitimate angular separation between two nearly parallel</span>
+</span><span id="__span-0-319"><a id="__codelineno-0-319" name="__codelineno-0-319"></a><span class="sd">      unit vectors) comes back as ``1e-15``, i.e. 19 orders of magnitude too large.</span>
+</span><span id="__span-0-320"><a id="__codelineno-0-320" name="__codelineno-0-320"></a>
+</span><span id="__span-0-321"><a id="__codelineno-0-321" name="__codelineno-0-321"></a><span class="sd">    The scale is wrapped in ``stop_gradient``, which makes the VJP exactly ``v/‖v‖`` — the analytic</span>
+</span><span id="__span-0-322"><a id="__codelineno-0-322" name="__codelineno-0-322"></a><span class="sd">    derivative, with no contribution from differentiating the scaling itself.</span>
+</span><span id="__span-0-323"><a id="__codelineno-0-323" name="__codelineno-0-323"></a>
+</span><span id="__span-0-324"><a id="__codelineno-0-324" name="__codelineno-0-324"></a><span class="sd">    At ``v == 0`` the result is exactly ``0`` and the VJP is exactly ``0`` (the derivative does not</span>
+</span><span id="__span-0-325"><a id="__codelineno-0-325" name="__codelineno-0-325"></a><span class="sd">    exist there; zero is the finite, direction-free choice). Both need the **double** ``where``</span>
+</span><span id="__span-0-326"><a id="__codelineno-0-326" name="__codelineno-0-326"></a><span class="sd">    below: sanitizing only the output leaves ``sqrt(0)``&#39;s infinite derivative inside the VJP,</span>
+</span><span id="__span-0-327"><a id="__codelineno-0-327" name="__codelineno-0-327"></a><span class="sd">    where it meets the outer ``where``&#39;s zero cotangent as ``0 * inf = NaN``. The first ``where``</span>
+</span><span id="__span-0-328"><a id="__codelineno-0-328" name="__codelineno-0-328"></a><span class="sd">    replaces the *argument* of the ``sqrt`` so the infinite derivative is never created.</span>
+</span><span id="__span-0-329"><a id="__codelineno-0-329" name="__codelineno-0-329"></a>
+</span><span id="__span-0-330"><a id="__codelineno-0-330" name="__codelineno-0-330"></a><span class="sd">    Non-finite inputs are passed through rather than turned into NaN: a vector holding an ``inf``</span>
+</span><span id="__span-0-331"><a id="__codelineno-0-331" name="__codelineno-0-331"></a><span class="sd">    returns ``inf``. Callers use that to keep an out-of-range point visibly degenerate instead of</span>
+</span><span id="__span-0-332"><a id="__codelineno-0-332" name="__codelineno-0-332"></a><span class="sd">    silently NaN-poisoning everything downstream.</span>
+</span><span id="__span-0-333"><a id="__codelineno-0-333" name="__codelineno-0-333"></a>
+</span><span id="__span-0-334"><a id="__codelineno-0-334" name="__codelineno-0-334"></a><span class="sd">    Args:</span>
+</span><span id="__span-0-335"><a id="__codelineno-0-335" name="__codelineno-0-335"></a><span class="sd">        v: Input array, norm taken over the last axis</span>
+</span><span id="__span-0-336"><a id="__codelineno-0-336" name="__codelineno-0-336"></a>
+</span><span id="__span-0-337"><a id="__codelineno-0-337" name="__codelineno-0-337"></a><span class="sd">    Returns:</span>
+</span><span id="__span-0-338"><a id="__codelineno-0-338" name="__codelineno-0-338"></a><span class="sd">        ``‖v‖₂`` over the last axis, shape ``v.shape[:-1]``</span>
+</span><span id="__span-0-339"><a id="__codelineno-0-339" name="__codelineno-0-339"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-340"><a id="__codelineno-0-340" name="__codelineno-0-340"></a>    <span class="n">scale</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">))</span>
+</span><span id="__span-0-341"><a id="__codelineno-0-341" name="__codelineno-0-341"></a>    <span class="n">is_zero</span> <span class="o">=</span> <span class="n">scale</span> <span class="o">==</span> <span class="mf">0.0</span>
+</span><span id="__span-0-342"><a id="__codelineno-0-342" name="__codelineno-0-342"></a>    <span class="n">divisor</span> <span class="o">=</span> <span class="n">_pow2_divisor</span><span class="p">(</span><span class="n">scale</span><span class="p">)</span>
+</span><span id="__span-0-343"><a id="__codelineno-0-343" name="__codelineno-0-343"></a>    <span class="n">sq</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">v</span> <span class="o">/</span> <span class="n">divisor</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">])</span> <span class="o">**</span> <span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-0-344"><a id="__codelineno-0-344" name="__codelineno-0-344"></a>    <span class="c1"># Double-where, first half: sqrt&#39;(0) = inf would become 0*inf = NaN in the VJP below.</span>
+</span><span id="__span-0-345"><a id="__codelineno-0-345" name="__codelineno-0-345"></a>    <span class="n">sq_safe</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">ones_like</span><span class="p">(</span><span class="n">sq</span><span class="p">),</span> <span class="n">sq</span><span class="p">)</span>
+</span><span id="__span-0-346"><a id="__codelineno-0-346" name="__codelineno-0-346"></a>    <span class="c1"># Double-where, second half: exact 0 forward, exactly-zero VJP at v = 0.</span>
+</span><span id="__span-0-347"><a id="__codelineno-0-347" name="__codelineno-0-347"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">sq</span><span class="p">),</span> <span class="n">divisor</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">sq_safe</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hyperbolix.utils.math_utils.safe_normalize" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">safe_normalize</span>
+
+
+<a href="#hyperbolix.utils.math_utils.safe_normalize" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">safe_normalize</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n&quot;</span><span class="p">],</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n&quot;</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>v/‖v‖</code> over the last axis, returning the <strong>exact zero vector</strong> at <code>v == 0</code>.</p>
+<p>Same power-of-two-rescaled, double-<code>where</code> construction as :func:<code>safe_norm</code>, so the result is a unit
+vector for every non-zero <code>v</code> (including magnitudes that would overflow or flush a
+sum-of-squares) and exactly <code>0</code> with a finite (zero) gradient at <code>v == 0</code>.</p>
+<p>There is deliberately <strong>no</strong> <code>maximum(‖v‖, MIN_NORM)</code> floor on the denominator. This is used
+to build the <em>angular</em> unit vector of a geodesic frame, whose pre-normalization length is
+<code>sin(ψ)</code> for the angle <code>ψ</code> between two points; a <code>1e-15</code> floor against a genuine
+<code>sin(ψ) = 1e-19</code> would shrink the resulting direction by a factor of <code>1e4</code> instead of
+returning a unit vector. The exact-zero return at <code>v == 0</code> is the well-defined case
+(<code>ψ = 0</code>: no angular direction exists, and the frame's angular coefficient is zero there),
+which is why the floor is not needed.</p>
+<p>Args:
+    v: Input array, normalized over the last axis</p>
+<p>Returns:
+    <code>v/‖v‖₂</code>, or the zero vector where <code>v</code> is zero</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>hyperbolix/utils/math_utils.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-453">453</a></span>
+<span class="normal"><a href="#__codelineno-0-454">454</a></span>
+<span class="normal"><a href="#__codelineno-0-455">455</a></span>
+<span class="normal"><a href="#__codelineno-0-456">456</a></span>
+<span class="normal"><a href="#__codelineno-0-457">457</a></span>
+<span class="normal"><a href="#__codelineno-0-458">458</a></span>
+<span class="normal"><a href="#__codelineno-0-459">459</a></span>
+<span class="normal"><a href="#__codelineno-0-460">460</a></span>
+<span class="normal"><a href="#__codelineno-0-461">461</a></span>
+<span class="normal"><a href="#__codelineno-0-462">462</a></span>
+<span class="normal"><a href="#__codelineno-0-463">463</a></span>
+<span class="normal"><a href="#__codelineno-0-464">464</a></span>
+<span class="normal"><a href="#__codelineno-0-465">465</a></span>
+<span class="normal"><a href="#__codelineno-0-466">466</a></span>
+<span class="normal"><a href="#__codelineno-0-467">467</a></span>
+<span class="normal"><a href="#__codelineno-0-468">468</a></span>
+<span class="normal"><a href="#__codelineno-0-469">469</a></span>
+<span class="normal"><a href="#__codelineno-0-470">470</a></span>
+<span class="normal"><a href="#__codelineno-0-471">471</a></span>
+<span class="normal"><a href="#__codelineno-0-472">472</a></span>
+<span class="normal"><a href="#__codelineno-0-473">473</a></span>
+<span class="normal"><a href="#__codelineno-0-474">474</a></span>
+<span class="normal"><a href="#__codelineno-0-475">475</a></span>
+<span class="normal"><a href="#__codelineno-0-476">476</a></span>
+<span class="normal"><a href="#__codelineno-0-477">477</a></span>
+<span class="normal"><a href="#__codelineno-0-478">478</a></span>
+<span class="normal"><a href="#__codelineno-0-479">479</a></span>
+<span class="normal"><a href="#__codelineno-0-480">480</a></span>
+<span class="normal"><a href="#__codelineno-0-481">481</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-453"><a id="__codelineno-0-453" name="__codelineno-0-453"></a><span class="nd">@_jit</span>
+</span><span id="__span-0-454"><a id="__codelineno-0-454" name="__codelineno-0-454"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_normalize</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-455"><a id="__codelineno-0-455" name="__codelineno-0-455"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;``v/‖v‖`` over the last axis, returning the **exact zero vector** at ``v == 0``.</span>
+</span><span id="__span-0-456"><a id="__codelineno-0-456" name="__codelineno-0-456"></a>
+</span><span id="__span-0-457"><a id="__codelineno-0-457" name="__codelineno-0-457"></a><span class="sd">    Same power-of-two-rescaled, double-``where`` construction as :func:`safe_norm`, so the result is a unit</span>
+</span><span id="__span-0-458"><a id="__codelineno-0-458" name="__codelineno-0-458"></a><span class="sd">    vector for every non-zero ``v`` (including magnitudes that would overflow or flush a</span>
+</span><span id="__span-0-459"><a id="__codelineno-0-459" name="__codelineno-0-459"></a><span class="sd">    sum-of-squares) and exactly ``0`` with a finite (zero) gradient at ``v == 0``.</span>
+</span><span id="__span-0-460"><a id="__codelineno-0-460" name="__codelineno-0-460"></a>
+</span><span id="__span-0-461"><a id="__codelineno-0-461" name="__codelineno-0-461"></a><span class="sd">    There is deliberately **no** ``maximum(‖v‖, MIN_NORM)`` floor on the denominator. This is used</span>
+</span><span id="__span-0-462"><a id="__codelineno-0-462" name="__codelineno-0-462"></a><span class="sd">    to build the *angular* unit vector of a geodesic frame, whose pre-normalization length is</span>
+</span><span id="__span-0-463"><a id="__codelineno-0-463" name="__codelineno-0-463"></a><span class="sd">    ``sin(ψ)`` for the angle ``ψ`` between two points; a ``1e-15`` floor against a genuine</span>
+</span><span id="__span-0-464"><a id="__codelineno-0-464" name="__codelineno-0-464"></a><span class="sd">    ``sin(ψ) = 1e-19`` would shrink the resulting direction by a factor of ``1e4`` instead of</span>
+</span><span id="__span-0-465"><a id="__codelineno-0-465" name="__codelineno-0-465"></a><span class="sd">    returning a unit vector. The exact-zero return at ``v == 0`` is the well-defined case</span>
+</span><span id="__span-0-466"><a id="__codelineno-0-466" name="__codelineno-0-466"></a><span class="sd">    (``ψ = 0``: no angular direction exists, and the frame&#39;s angular coefficient is zero there),</span>
+</span><span id="__span-0-467"><a id="__codelineno-0-467" name="__codelineno-0-467"></a><span class="sd">    which is why the floor is not needed.</span>
+</span><span id="__span-0-468"><a id="__codelineno-0-468" name="__codelineno-0-468"></a>
+</span><span id="__span-0-469"><a id="__codelineno-0-469" name="__codelineno-0-469"></a><span class="sd">    Args:</span>
+</span><span id="__span-0-470"><a id="__codelineno-0-470" name="__codelineno-0-470"></a><span class="sd">        v: Input array, normalized over the last axis</span>
+</span><span id="__span-0-471"><a id="__codelineno-0-471" name="__codelineno-0-471"></a>
+</span><span id="__span-0-472"><a id="__codelineno-0-472" name="__codelineno-0-472"></a><span class="sd">    Returns:</span>
+</span><span id="__span-0-473"><a id="__codelineno-0-473" name="__codelineno-0-473"></a><span class="sd">        ``v/‖v‖₂``, or the zero vector where ``v`` is zero</span>
+</span><span id="__span-0-474"><a id="__codelineno-0-474" name="__codelineno-0-474"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-475"><a id="__codelineno-0-475" name="__codelineno-0-475"></a>    <span class="n">scale</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+</span><span id="__span-0-476"><a id="__codelineno-0-476" name="__codelineno-0-476"></a>    <span class="n">is_zero</span> <span class="o">=</span> <span class="n">scale</span> <span class="o">==</span> <span class="mf">0.0</span>
+</span><span id="__span-0-477"><a id="__codelineno-0-477" name="__codelineno-0-477"></a>    <span class="n">divisor</span> <span class="o">=</span> <span class="n">_pow2_divisor</span><span class="p">(</span><span class="n">scale</span><span class="p">)</span>
+</span><span id="__span-0-478"><a id="__codelineno-0-478" name="__codelineno-0-478"></a>    <span class="n">scaled</span> <span class="o">=</span> <span class="n">v</span> <span class="o">/</span> <span class="n">divisor</span>
+</span><span id="__span-0-479"><a id="__codelineno-0-479" name="__codelineno-0-479"></a>    <span class="n">sq</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">scaled</span><span class="o">**</span><span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-480"><a id="__codelineno-0-480" name="__codelineno-0-480"></a>    <span class="n">sq_safe</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">ones_like</span><span class="p">(</span><span class="n">sq</span><span class="p">),</span> <span class="n">sq</span><span class="p">)</span>
+</span><span id="__span-0-481"><a id="__codelineno-0-481" name="__codelineno-0-481"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="n">scaled</span> <span class="o">/</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">sq_safe</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hyperbolix.utils.math_utils.safe_sqrt" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">safe_sqrt</span>
+
+
+<a href="#hyperbolix.utils.math_utils.safe_sqrt" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">safe_sqrt</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>sqrt(x)</code> with an exactly-zero derivative at <code>x == 0</code> instead of <code>inf</code>. Range=[0, inf).</p>
+<p>The scalar counterpart of :func:<code>safe_norm</code>, for the quantities that are already a squared
+magnitude when they arrive: a Minkowski or Riemannian quadratic form <code>g_x(v, v)</code>, a sum of
+per-factor squared distances. Those cannot be routed through <code>safe_norm</code> (its input is the
+<em>vector</em>, and a Minkowski form is not a Euclidean norm), yet they hit the same wall: at
+<code>x = 0</code> the true derivative <code>1/(2*sqrt(x))</code> is infinite, and reverse-mode AD multiplies it
+by the incoming cotangent — which for the usual <code>v = 0</code> case is exactly <code>0</code>, giving
+<code>0 * inf = NaN</code> for the whole row.</p>
+<p>The library's older answer was to add <code>MIN_NORM**2</code> under the <code>sqrt</code>, which has the same
+two defects :func:<code>safe_norm</code> documents: the <code>1e-30</code> floor dominates a genuinely small <code>x</code>
+(a form of <code>1e-40</code> comes back as <code>1e-15</code>), and it does nothing about a large one.</p>
+<p>Same <strong>double</strong> <code>where</code> as :func:<code>safe_norm</code>: the first replaces the <em>argument</em> so the
+infinite derivative is never created, the second restores the exact <code>0</code> forward value. A
+negative <code>x</code> still yields NaN (as <code>jnp.sqrt</code> does) — callers that can produce a slightly
+negative form from rounding wrap the argument in <code>floor_at(x, 0.0)</code> first, which is the
+honest place for that decision. <code>inf</code> passes through as <code>inf</code>.</p>
+<p>Args:
+    x: Non-negative input array of any shape</p>
+<p>Returns:
+    <code>sqrt(x)</code>, with derivative <code>0</code> (not <code>inf</code>) wherever <code>x == 0</code></p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>hyperbolix/utils/math_utils.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-418">418</a></span>
+<span class="normal"><a href="#__codelineno-0-419">419</a></span>
+<span class="normal"><a href="#__codelineno-0-420">420</a></span>
+<span class="normal"><a href="#__codelineno-0-421">421</a></span>
+<span class="normal"><a href="#__codelineno-0-422">422</a></span>
+<span class="normal"><a href="#__codelineno-0-423">423</a></span>
+<span class="normal"><a href="#__codelineno-0-424">424</a></span>
+<span class="normal"><a href="#__codelineno-0-425">425</a></span>
+<span class="normal"><a href="#__codelineno-0-426">426</a></span>
+<span class="normal"><a href="#__codelineno-0-427">427</a></span>
+<span class="normal"><a href="#__codelineno-0-428">428</a></span>
+<span class="normal"><a href="#__codelineno-0-429">429</a></span>
+<span class="normal"><a href="#__codelineno-0-430">430</a></span>
+<span class="normal"><a href="#__codelineno-0-431">431</a></span>
+<span class="normal"><a href="#__codelineno-0-432">432</a></span>
+<span class="normal"><a href="#__codelineno-0-433">433</a></span>
+<span class="normal"><a href="#__codelineno-0-434">434</a></span>
+<span class="normal"><a href="#__codelineno-0-435">435</a></span>
+<span class="normal"><a href="#__codelineno-0-436">436</a></span>
+<span class="normal"><a href="#__codelineno-0-437">437</a></span>
+<span class="normal"><a href="#__codelineno-0-438">438</a></span>
+<span class="normal"><a href="#__codelineno-0-439">439</a></span>
+<span class="normal"><a href="#__codelineno-0-440">440</a></span>
+<span class="normal"><a href="#__codelineno-0-441">441</a></span>
+<span class="normal"><a href="#__codelineno-0-442">442</a></span>
+<span class="normal"><a href="#__codelineno-0-443">443</a></span>
+<span class="normal"><a href="#__codelineno-0-444">444</a></span>
+<span class="normal"><a href="#__codelineno-0-445">445</a></span>
+<span class="normal"><a href="#__codelineno-0-446">446</a></span>
+<span class="normal"><a href="#__codelineno-0-447">447</a></span>
+<span class="normal"><a href="#__codelineno-0-448">448</a></span>
+<span class="normal"><a href="#__codelineno-0-449">449</a></span>
+<span class="normal"><a href="#__codelineno-0-450">450</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-418"><a id="__codelineno-0-418" name="__codelineno-0-418"></a><span class="nd">@_jit</span>
+</span><span id="__span-0-419"><a id="__codelineno-0-419" name="__codelineno-0-419"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_sqrt</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-420"><a id="__codelineno-0-420" name="__codelineno-0-420"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;``sqrt(x)`` with an exactly-zero derivative at ``x == 0`` instead of ``inf``. Range=[0, inf).</span>
+</span><span id="__span-0-421"><a id="__codelineno-0-421" name="__codelineno-0-421"></a>
+</span><span id="__span-0-422"><a id="__codelineno-0-422" name="__codelineno-0-422"></a><span class="sd">    The scalar counterpart of :func:`safe_norm`, for the quantities that are already a squared</span>
+</span><span id="__span-0-423"><a id="__codelineno-0-423" name="__codelineno-0-423"></a><span class="sd">    magnitude when they arrive: a Minkowski or Riemannian quadratic form ``g_x(v, v)``, a sum of</span>
+</span><span id="__span-0-424"><a id="__codelineno-0-424" name="__codelineno-0-424"></a><span class="sd">    per-factor squared distances. Those cannot be routed through ``safe_norm`` (its input is the</span>
+</span><span id="__span-0-425"><a id="__codelineno-0-425" name="__codelineno-0-425"></a><span class="sd">    *vector*, and a Minkowski form is not a Euclidean norm), yet they hit the same wall: at</span>
+</span><span id="__span-0-426"><a id="__codelineno-0-426" name="__codelineno-0-426"></a><span class="sd">    ``x = 0`` the true derivative ``1/(2*sqrt(x))`` is infinite, and reverse-mode AD multiplies it</span>
+</span><span id="__span-0-427"><a id="__codelineno-0-427" name="__codelineno-0-427"></a><span class="sd">    by the incoming cotangent — which for the usual ``v = 0`` case is exactly ``0``, giving</span>
+</span><span id="__span-0-428"><a id="__codelineno-0-428" name="__codelineno-0-428"></a><span class="sd">    ``0 * inf = NaN`` for the whole row.</span>
+</span><span id="__span-0-429"><a id="__codelineno-0-429" name="__codelineno-0-429"></a>
+</span><span id="__span-0-430"><a id="__codelineno-0-430" name="__codelineno-0-430"></a><span class="sd">    The library&#39;s older answer was to add ``MIN_NORM**2`` under the ``sqrt``, which has the same</span>
+</span><span id="__span-0-431"><a id="__codelineno-0-431" name="__codelineno-0-431"></a><span class="sd">    two defects :func:`safe_norm` documents: the ``1e-30`` floor dominates a genuinely small ``x``</span>
+</span><span id="__span-0-432"><a id="__codelineno-0-432" name="__codelineno-0-432"></a><span class="sd">    (a form of ``1e-40`` comes back as ``1e-15``), and it does nothing about a large one.</span>
+</span><span id="__span-0-433"><a id="__codelineno-0-433" name="__codelineno-0-433"></a>
+</span><span id="__span-0-434"><a id="__codelineno-0-434" name="__codelineno-0-434"></a><span class="sd">    Same **double** ``where`` as :func:`safe_norm`: the first replaces the *argument* so the</span>
+</span><span id="__span-0-435"><a id="__codelineno-0-435" name="__codelineno-0-435"></a><span class="sd">    infinite derivative is never created, the second restores the exact ``0`` forward value. A</span>
+</span><span id="__span-0-436"><a id="__codelineno-0-436" name="__codelineno-0-436"></a><span class="sd">    negative ``x`` still yields NaN (as ``jnp.sqrt`` does) — callers that can produce a slightly</span>
+</span><span id="__span-0-437"><a id="__codelineno-0-437" name="__codelineno-0-437"></a><span class="sd">    negative form from rounding wrap the argument in ``floor_at(x, 0.0)`` first, which is the</span>
+</span><span id="__span-0-438"><a id="__codelineno-0-438" name="__codelineno-0-438"></a><span class="sd">    honest place for that decision. ``inf`` passes through as ``inf``.</span>
+</span><span id="__span-0-439"><a id="__codelineno-0-439" name="__codelineno-0-439"></a>
+</span><span id="__span-0-440"><a id="__codelineno-0-440" name="__codelineno-0-440"></a><span class="sd">    Args:</span>
+</span><span id="__span-0-441"><a id="__codelineno-0-441" name="__codelineno-0-441"></a><span class="sd">        x: Non-negative input array of any shape</span>
+</span><span id="__span-0-442"><a id="__codelineno-0-442" name="__codelineno-0-442"></a>
+</span><span id="__span-0-443"><a id="__codelineno-0-443" name="__codelineno-0-443"></a><span class="sd">    Returns:</span>
+</span><span id="__span-0-444"><a id="__codelineno-0-444" name="__codelineno-0-444"></a><span class="sd">        ``sqrt(x)``, with derivative ``0`` (not ``inf``) wherever ``x == 0``</span>
+</span><span id="__span-0-445"><a id="__codelineno-0-445" name="__codelineno-0-445"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-446"><a id="__codelineno-0-446" name="__codelineno-0-446"></a>    <span class="n">is_zero</span> <span class="o">=</span> <span class="n">x</span> <span class="o">==</span> <span class="mf">0.0</span>
+</span><span id="__span-0-447"><a id="__codelineno-0-447" name="__codelineno-0-447"></a>    <span class="c1"># Double-where, first half: sqrt&#39;(0) = inf would become 0*inf = NaN in the VJP below.</span>
+</span><span id="__span-0-448"><a id="__codelineno-0-448" name="__codelineno-0-448"></a>    <span class="n">x_safe</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">ones_like</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">x</span><span class="p">)</span>
+</span><span id="__span-0-449"><a id="__codelineno-0-449" name="__codelineno-0-449"></a>    <span class="c1"># Double-where, second half: exact 0 forward, exactly-zero VJP at x = 0.</span>
+</span><span id="__span-0-450"><a id="__codelineno-0-450" name="__codelineno-0-450"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">x_safe</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hyperbolix.utils.math_utils.safe_hypot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">safe_hypot</span>
+
+
+<a href="#hyperbolix.utils.math_utils.safe_hypot" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">safe_hypot</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">p</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">q</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>sqrt(p² + q²)</code> without intermediate overflow or underflow. Range=[0, inf).</p>
+<p>The two-argument form of :func:<code>safe_norm</code>, with the same power-of-two rescaling and the same double
+<code>where</code>: exact <code>0</code> and exactly-zero gradient at <code>p == q == 0</code>, no <code>p**2</code> materialized
+(so <code>safe_hypot(1e30, 1.0)</code> is finite in float32 even though <code>1e30**2</code> is not), and
+non-finite inputs pass through as <code>inf</code> rather than NaN.</p>
+<p>Used to build a hyperbolic <code>sinh(θ/2)</code> out of two non-negative contributions whose squares
+routinely straddle the dtype's whole exponent range.</p>
+<p>Args:
+    p: First leg (any shape, broadcast against <code>q</code>)
+    q: Second leg</p>
+<p>Returns:
+    <code>sqrt(p² + q²)</code></p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>hyperbolix/utils/math_utils.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-350">350</a></span>
+<span class="normal"><a href="#__codelineno-0-351">351</a></span>
+<span class="normal"><a href="#__codelineno-0-352">352</a></span>
+<span class="normal"><a href="#__codelineno-0-353">353</a></span>
+<span class="normal"><a href="#__codelineno-0-354">354</a></span>
+<span class="normal"><a href="#__codelineno-0-355">355</a></span>
+<span class="normal"><a href="#__codelineno-0-356">356</a></span>
+<span class="normal"><a href="#__codelineno-0-357">357</a></span>
+<span class="normal"><a href="#__codelineno-0-358">358</a></span>
+<span class="normal"><a href="#__codelineno-0-359">359</a></span>
+<span class="normal"><a href="#__codelineno-0-360">360</a></span>
+<span class="normal"><a href="#__codelineno-0-361">361</a></span>
+<span class="normal"><a href="#__codelineno-0-362">362</a></span>
+<span class="normal"><a href="#__codelineno-0-363">363</a></span>
+<span class="normal"><a href="#__codelineno-0-364">364</a></span>
+<span class="normal"><a href="#__codelineno-0-365">365</a></span>
+<span class="normal"><a href="#__codelineno-0-366">366</a></span>
+<span class="normal"><a href="#__codelineno-0-367">367</a></span>
+<span class="normal"><a href="#__codelineno-0-368">368</a></span>
+<span class="normal"><a href="#__codelineno-0-369">369</a></span>
+<span class="normal"><a href="#__codelineno-0-370">370</a></span>
+<span class="normal"><a href="#__codelineno-0-371">371</a></span>
+<span class="normal"><a href="#__codelineno-0-372">372</a></span>
+<span class="normal"><a href="#__codelineno-0-373">373</a></span>
+<span class="normal"><a href="#__codelineno-0-374">374</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-350"><a id="__codelineno-0-350" name="__codelineno-0-350"></a><span class="nd">@_jit</span>
+</span><span id="__span-0-351"><a id="__codelineno-0-351" name="__codelineno-0-351"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_hypot</span><span class="p">(</span><span class="n">p</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">],</span> <span class="n">q</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-352"><a id="__codelineno-0-352" name="__codelineno-0-352"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;``sqrt(p² + q²)`` without intermediate overflow or underflow. Range=[0, inf).</span>
+</span><span id="__span-0-353"><a id="__codelineno-0-353" name="__codelineno-0-353"></a>
+</span><span id="__span-0-354"><a id="__codelineno-0-354" name="__codelineno-0-354"></a><span class="sd">    The two-argument form of :func:`safe_norm`, with the same power-of-two rescaling and the same double</span>
+</span><span id="__span-0-355"><a id="__codelineno-0-355" name="__codelineno-0-355"></a><span class="sd">    ``where``: exact ``0`` and exactly-zero gradient at ``p == q == 0``, no ``p**2`` materialized</span>
+</span><span id="__span-0-356"><a id="__codelineno-0-356" name="__codelineno-0-356"></a><span class="sd">    (so ``safe_hypot(1e30, 1.0)`` is finite in float32 even though ``1e30**2`` is not), and</span>
+</span><span id="__span-0-357"><a id="__codelineno-0-357" name="__codelineno-0-357"></a><span class="sd">    non-finite inputs pass through as ``inf`` rather than NaN.</span>
+</span><span id="__span-0-358"><a id="__codelineno-0-358" name="__codelineno-0-358"></a>
+</span><span id="__span-0-359"><a id="__codelineno-0-359" name="__codelineno-0-359"></a><span class="sd">    Used to build a hyperbolic ``sinh(θ/2)`` out of two non-negative contributions whose squares</span>
+</span><span id="__span-0-360"><a id="__codelineno-0-360" name="__codelineno-0-360"></a><span class="sd">    routinely straddle the dtype&#39;s whole exponent range.</span>
+</span><span id="__span-0-361"><a id="__codelineno-0-361" name="__codelineno-0-361"></a>
+</span><span id="__span-0-362"><a id="__codelineno-0-362" name="__codelineno-0-362"></a><span class="sd">    Args:</span>
+</span><span id="__span-0-363"><a id="__codelineno-0-363" name="__codelineno-0-363"></a><span class="sd">        p: First leg (any shape, broadcast against ``q``)</span>
+</span><span id="__span-0-364"><a id="__codelineno-0-364" name="__codelineno-0-364"></a><span class="sd">        q: Second leg</span>
+</span><span id="__span-0-365"><a id="__codelineno-0-365" name="__codelineno-0-365"></a>
+</span><span id="__span-0-366"><a id="__codelineno-0-366" name="__codelineno-0-366"></a><span class="sd">    Returns:</span>
+</span><span id="__span-0-367"><a id="__codelineno-0-367" name="__codelineno-0-367"></a><span class="sd">        ``sqrt(p² + q²)``</span>
+</span><span id="__span-0-368"><a id="__codelineno-0-368" name="__codelineno-0-368"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-369"><a id="__codelineno-0-369" name="__codelineno-0-369"></a>    <span class="n">scale</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">p</span><span class="p">),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">q</span><span class="p">)))</span>
+</span><span id="__span-0-370"><a id="__codelineno-0-370" name="__codelineno-0-370"></a>    <span class="n">is_zero</span> <span class="o">=</span> <span class="n">scale</span> <span class="o">==</span> <span class="mf">0.0</span>
+</span><span id="__span-0-371"><a id="__codelineno-0-371" name="__codelineno-0-371"></a>    <span class="n">divisor</span> <span class="o">=</span> <span class="n">_pow2_divisor</span><span class="p">(</span><span class="n">scale</span><span class="p">)</span>
+</span><span id="__span-0-372"><a id="__codelineno-0-372" name="__codelineno-0-372"></a>    <span class="n">sq</span> <span class="o">=</span> <span class="p">(</span><span class="n">p</span> <span class="o">/</span> <span class="n">divisor</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">+</span> <span class="p">(</span><span class="n">q</span> <span class="o">/</span> <span class="n">divisor</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span>
+</span><span id="__span-0-373"><a id="__codelineno-0-373" name="__codelineno-0-373"></a>    <span class="n">sq_safe</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">ones_like</span><span class="p">(</span><span class="n">sq</span><span class="p">),</span> <span class="n">sq</span><span class="p">)</span>
+</span><span id="__span-0-374"><a id="__codelineno-0-374" name="__codelineno-0-374"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">sq</span><span class="p">),</span> <span class="n">divisor</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">sq_safe</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hyperbolix.utils.math_utils.safe_hypot_norm" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">safe_hypot_norm</span>
+
+
+<a href="#hyperbolix.utils.math_utils.safe_hypot_norm" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">safe_hypot_norm</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n&quot;</span><span class="p">],</span> <span class="n">q</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>sqrt(‖v‖² + q²)</code> over the last axis, in <strong>one</strong> reduction. Range=[0, inf).</p>
+<p>Not <code>safe_hypot(safe_norm(v), q)</code>. That spelling rounds <code>‖v‖</code> to the dtype and then squares
+it again, so the <code>sum(v**2)</code> it started from is not recoverable: <code>r = round(sqrt(S))</code> gives
+<code>r² = S(1 + 2δ)</code>, an error of up to one ulp <em>of S</em>. This form keeps the sum of squares intact
+and appends <code>q²</code> to it, exactly as the pre-<code>safe_norm</code> idiom <code>sqrt(sum(v**2) + q**2)</code> did,
+so it is bit-identical to that idiom wherever it neither overflows nor underflows — the same
+guarantee :func:<code>_pow2_divisor</code> gives :func:<code>safe_norm</code>, and for the same reason.</p>
+<p>That matters because the library's callers <strong>recompute the same sum of squares</strong> right after.
+The hyperboloid time slot is <code>x₀ = sqrt(‖x_s‖² + 1/c)</code> and its own constraint is
+<code>-x₀² + ‖x_s‖² = -1/c</code>: when <code>x₀</code> is built from the same <code>sum(x_s**2)</code> the check forms,
+the rounding cancels and the residual is one rounding of <code>x₀</code>; when it is built from a
+re-squared <code>‖x_s‖</code> the two no longer cancel. At <code>x₀ ≈ 34</code> in float32 one ulp of <code>x₀²</code> is
+1.2e-4, which is larger than the 1e-4 tolerance the manifold checks use
+(<code>tests/nn_layers/test_hypformer.py::test_hrc_*_extreme_curvatures</code>).</p>
+<p>Overflow-free in the same way as :func:<code>safe_norm</code>: nothing is squared before the exact
+power-of-two rescale, so a spatial part at float32 radius 1e20 still returns a finite <code>x₀</code>.
+Same double <code>where</code>: exact <code>0</code> and an exactly-zero VJP where <code>v</code> and <code>q</code> are both zero,
+and a non-finite input passes through as <code>inf</code> rather than becoming NaN.</p>
+<p>Args:
+    v: Vector leg, norm taken over the last axis
+    q: Scalar leg, broadcast against <code>v.shape[:-1]</code></p>
+<p>Returns:
+    <code>sqrt(‖v‖₂² + q²)</code>, shape <code>broadcast(v.shape[:-1], q.shape)</code></p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>hyperbolix/utils/math_utils.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-377">377</a></span>
+<span class="normal"><a href="#__codelineno-0-378">378</a></span>
+<span class="normal"><a href="#__codelineno-0-379">379</a></span>
+<span class="normal"><a href="#__codelineno-0-380">380</a></span>
+<span class="normal"><a href="#__codelineno-0-381">381</a></span>
+<span class="normal"><a href="#__codelineno-0-382">382</a></span>
+<span class="normal"><a href="#__codelineno-0-383">383</a></span>
+<span class="normal"><a href="#__codelineno-0-384">384</a></span>
+<span class="normal"><a href="#__codelineno-0-385">385</a></span>
+<span class="normal"><a href="#__codelineno-0-386">386</a></span>
+<span class="normal"><a href="#__codelineno-0-387">387</a></span>
+<span class="normal"><a href="#__codelineno-0-388">388</a></span>
+<span class="normal"><a href="#__codelineno-0-389">389</a></span>
+<span class="normal"><a href="#__codelineno-0-390">390</a></span>
+<span class="normal"><a href="#__codelineno-0-391">391</a></span>
+<span class="normal"><a href="#__codelineno-0-392">392</a></span>
+<span class="normal"><a href="#__codelineno-0-393">393</a></span>
+<span class="normal"><a href="#__codelineno-0-394">394</a></span>
+<span class="normal"><a href="#__codelineno-0-395">395</a></span>
+<span class="normal"><a href="#__codelineno-0-396">396</a></span>
+<span class="normal"><a href="#__codelineno-0-397">397</a></span>
+<span class="normal"><a href="#__codelineno-0-398">398</a></span>
+<span class="normal"><a href="#__codelineno-0-399">399</a></span>
+<span class="normal"><a href="#__codelineno-0-400">400</a></span>
+<span class="normal"><a href="#__codelineno-0-401">401</a></span>
+<span class="normal"><a href="#__codelineno-0-402">402</a></span>
+<span class="normal"><a href="#__codelineno-0-403">403</a></span>
+<span class="normal"><a href="#__codelineno-0-404">404</a></span>
+<span class="normal"><a href="#__codelineno-0-405">405</a></span>
+<span class="normal"><a href="#__codelineno-0-406">406</a></span>
+<span class="normal"><a href="#__codelineno-0-407">407</a></span>
+<span class="normal"><a href="#__codelineno-0-408">408</a></span>
+<span class="normal"><a href="#__codelineno-0-409">409</a></span>
+<span class="normal"><a href="#__codelineno-0-410">410</a></span>
+<span class="normal"><a href="#__codelineno-0-411">411</a></span>
+<span class="normal"><a href="#__codelineno-0-412">412</a></span>
+<span class="normal"><a href="#__codelineno-0-413">413</a></span>
+<span class="normal"><a href="#__codelineno-0-414">414</a></span>
+<span class="normal"><a href="#__codelineno-0-415">415</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-377"><a id="__codelineno-0-377" name="__codelineno-0-377"></a><span class="nd">@_jit</span>
+</span><span id="__span-0-378"><a id="__codelineno-0-378" name="__codelineno-0-378"></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_hypot_norm</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... n&quot;</span><span class="p">],</span> <span class="n">q</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-379"><a id="__codelineno-0-379" name="__codelineno-0-379"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;``sqrt(‖v‖² + q²)`` over the last axis, in **one** reduction. Range=[0, inf).</span>
+</span><span id="__span-0-380"><a id="__codelineno-0-380" name="__codelineno-0-380"></a>
+</span><span id="__span-0-381"><a id="__codelineno-0-381" name="__codelineno-0-381"></a><span class="sd">    Not ``safe_hypot(safe_norm(v), q)``. That spelling rounds ``‖v‖`` to the dtype and then squares</span>
+</span><span id="__span-0-382"><a id="__codelineno-0-382" name="__codelineno-0-382"></a><span class="sd">    it again, so the ``sum(v**2)`` it started from is not recoverable: ``r = round(sqrt(S))`` gives</span>
+</span><span id="__span-0-383"><a id="__codelineno-0-383" name="__codelineno-0-383"></a><span class="sd">    ``r² = S(1 + 2δ)``, an error of up to one ulp *of S*. This form keeps the sum of squares intact</span>
+</span><span id="__span-0-384"><a id="__codelineno-0-384" name="__codelineno-0-384"></a><span class="sd">    and appends ``q²`` to it, exactly as the pre-``safe_norm`` idiom ``sqrt(sum(v**2) + q**2)`` did,</span>
+</span><span id="__span-0-385"><a id="__codelineno-0-385" name="__codelineno-0-385"></a><span class="sd">    so it is bit-identical to that idiom wherever it neither overflows nor underflows — the same</span>
+</span><span id="__span-0-386"><a id="__codelineno-0-386" name="__codelineno-0-386"></a><span class="sd">    guarantee :func:`_pow2_divisor` gives :func:`safe_norm`, and for the same reason.</span>
+</span><span id="__span-0-387"><a id="__codelineno-0-387" name="__codelineno-0-387"></a>
+</span><span id="__span-0-388"><a id="__codelineno-0-388" name="__codelineno-0-388"></a><span class="sd">    That matters because the library&#39;s callers **recompute the same sum of squares** right after.</span>
+</span><span id="__span-0-389"><a id="__codelineno-0-389" name="__codelineno-0-389"></a><span class="sd">    The hyperboloid time slot is ``x₀ = sqrt(‖x_s‖² + 1/c)`` and its own constraint is</span>
+</span><span id="__span-0-390"><a id="__codelineno-0-390" name="__codelineno-0-390"></a><span class="sd">    ``-x₀² + ‖x_s‖² = -1/c``: when ``x₀`` is built from the same ``sum(x_s**2)`` the check forms,</span>
+</span><span id="__span-0-391"><a id="__codelineno-0-391" name="__codelineno-0-391"></a><span class="sd">    the rounding cancels and the residual is one rounding of ``x₀``; when it is built from a</span>
+</span><span id="__span-0-392"><a id="__codelineno-0-392" name="__codelineno-0-392"></a><span class="sd">    re-squared ``‖x_s‖`` the two no longer cancel. At ``x₀ ≈ 34`` in float32 one ulp of ``x₀²`` is</span>
+</span><span id="__span-0-393"><a id="__codelineno-0-393" name="__codelineno-0-393"></a><span class="sd">    1.2e-4, which is larger than the 1e-4 tolerance the manifold checks use</span>
+</span><span id="__span-0-394"><a id="__codelineno-0-394" name="__codelineno-0-394"></a><span class="sd">    (``tests/nn_layers/test_hypformer.py::test_hrc_*_extreme_curvatures``).</span>
+</span><span id="__span-0-395"><a id="__codelineno-0-395" name="__codelineno-0-395"></a>
+</span><span id="__span-0-396"><a id="__codelineno-0-396" name="__codelineno-0-396"></a><span class="sd">    Overflow-free in the same way as :func:`safe_norm`: nothing is squared before the exact</span>
+</span><span id="__span-0-397"><a id="__codelineno-0-397" name="__codelineno-0-397"></a><span class="sd">    power-of-two rescale, so a spatial part at float32 radius 1e20 still returns a finite ``x₀``.</span>
+</span><span id="__span-0-398"><a id="__codelineno-0-398" name="__codelineno-0-398"></a><span class="sd">    Same double ``where``: exact ``0`` and an exactly-zero VJP where ``v`` and ``q`` are both zero,</span>
+</span><span id="__span-0-399"><a id="__codelineno-0-399" name="__codelineno-0-399"></a><span class="sd">    and a non-finite input passes through as ``inf`` rather than becoming NaN.</span>
+</span><span id="__span-0-400"><a id="__codelineno-0-400" name="__codelineno-0-400"></a>
+</span><span id="__span-0-401"><a id="__codelineno-0-401" name="__codelineno-0-401"></a><span class="sd">    Args:</span>
+</span><span id="__span-0-402"><a id="__codelineno-0-402" name="__codelineno-0-402"></a><span class="sd">        v: Vector leg, norm taken over the last axis</span>
+</span><span id="__span-0-403"><a id="__codelineno-0-403" name="__codelineno-0-403"></a><span class="sd">        q: Scalar leg, broadcast against ``v.shape[:-1]``</span>
+</span><span id="__span-0-404"><a id="__codelineno-0-404" name="__codelineno-0-404"></a>
+</span><span id="__span-0-405"><a id="__codelineno-0-405" name="__codelineno-0-405"></a><span class="sd">    Returns:</span>
+</span><span id="__span-0-406"><a id="__codelineno-0-406" name="__codelineno-0-406"></a><span class="sd">        ``sqrt(‖v‖₂² + q²)``, shape ``broadcast(v.shape[:-1], q.shape)``</span>
+</span><span id="__span-0-407"><a id="__codelineno-0-407" name="__codelineno-0-407"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-408"><a id="__codelineno-0-408" name="__codelineno-0-408"></a>    <span class="n">scale</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">q</span><span class="p">)))</span>
+</span><span id="__span-0-409"><a id="__codelineno-0-409" name="__codelineno-0-409"></a>    <span class="n">is_zero</span> <span class="o">=</span> <span class="n">scale</span> <span class="o">==</span> <span class="mf">0.0</span>
+</span><span id="__span-0-410"><a id="__codelineno-0-410" name="__codelineno-0-410"></a>    <span class="n">divisor</span> <span class="o">=</span> <span class="n">_pow2_divisor</span><span class="p">(</span><span class="n">scale</span><span class="p">)</span>
+</span><span id="__span-0-411"><a id="__codelineno-0-411" name="__codelineno-0-411"></a>    <span class="c1"># `sum(...) + (q/divisor)**2`, not one reduction over the concatenation: this reproduces the</span>
+</span><span id="__span-0-412"><a id="__codelineno-0-412" name="__codelineno-0-412"></a>    <span class="c1"># association of the idiom it replaces, `sum(v**2) + q**2`, which is what makes it bit-identical.</span>
+</span><span id="__span-0-413"><a id="__codelineno-0-413" name="__codelineno-0-413"></a>    <span class="n">sq</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">v</span> <span class="o">/</span> <span class="n">divisor</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">])</span> <span class="o">**</span> <span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">q</span> <span class="o">/</span> <span class="n">divisor</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span>
+</span><span id="__span-0-414"><a id="__codelineno-0-414" name="__codelineno-0-414"></a>    <span class="n">sq_safe</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">ones_like</span><span class="p">(</span><span class="n">sq</span><span class="p">),</span> <span class="n">sq</span><span class="p">)</span>
+</span><span id="__span-0-415"><a id="__codelineno-0-415" name="__codelineno-0-415"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_zero</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">sq</span><span class="p">),</span> <span class="n">divisor</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">sq_safe</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h4 id="hyperbolix.utils.math_utils.smooth_clamp" class="doc doc-heading">
             <span class="doc doc-object-name doc-function-name">smooth_clamp</span>
 
@@ -2375,6 +3193,211 @@ float32, ~745 in float64). Inclusion in <code>[min_value, max_value]</code> alwa
 <div class="doc doc-object doc-function">
 
 
+<h4 id="hyperbolix.utils.math_utils.smooth_clamp_min" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">smooth_clamp_min</span>
+
+
+<a href="#hyperbolix.utils.math_utils.smooth_clamp_min" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">smooth_clamp_min</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">min_value</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">smoothing_factor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">50.0</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Smoothly clamp array values to a minimum using softplus. Range=(min_value, inf).</p>
+<p>Implements the gate-free lower clamp (<code>beta = smoothing_factor</code>)::</p>
+<div class="language-text highlight"><pre><span></span><code>smooth_clamp_min(x) = min_value + sp(x - min_value),   sp(u) = log(1 + exp(beta*u)) / beta
+</code></pre></div>
+<p>evaluated in the numerically stable hinge + remainder form (see <code>_softplus_tail</code>). Properties,
+for every <code>beta &gt; 0</code>:</p>
+<ul>
+<li><strong>Bounded</strong>: <code>sp &gt; 0</code> everywhere, so the output is strictly above <code>min_value</code>.</li>
+<li><strong>Smooth and monotone</strong>: <code>C^inf</code> with derivative <code>sigmoid(beta*(x - min_value))</code> in
+  <code>(0, 1)</code> — including <em>at</em> <code>min_value</code>, where it is exactly 1/2.</li>
+<li><strong>Identity away from the bound</strong>: above the bound the output exceeds <code>x</code> by
+  <code>log(1 + exp(-beta*d))/beta ~ exp(-beta*d)/beta</code> with <code>d = x - min_value</code>; at <code>beta=50</code>
+  that is below the float32 noise floor for <code>d &gt;~ 0.3</code>.</li>
+</ul>
+<p>This replaces a <code>jnp.where(x &lt; min_value + eps, softplus_branch, x)</code> gate. That gate was
+discontinuous: <code>sp(0) = log(2)/beta</code>, not 0, so the softplus branch did not glue onto the
+identity branch at the switch point but jumped by <code>log(2)/beta</code> (0.0139 at the default
+<code>beta=50</code>). Composing the two gated one-sided clamps is what let the old <code>smooth_clamp</code>
+leave its own window.</p>
+<p>Args:
+    x: Input array of any shape
+    min_value: Minimum value to clamp to
+    smoothing_factor: Beta parameter for softplus (higher = sharper transition)</p>
+<p>Returns:
+    Array with values smoothly clamped above min_value</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>hyperbolix/utils/math_utils.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-143">143</a></span>
+<span class="normal"><a href="#__codelineno-0-144">144</a></span>
+<span class="normal"><a href="#__codelineno-0-145">145</a></span>
+<span class="normal"><a href="#__codelineno-0-146">146</a></span>
+<span class="normal"><a href="#__codelineno-0-147">147</a></span>
+<span class="normal"><a href="#__codelineno-0-148">148</a></span>
+<span class="normal"><a href="#__codelineno-0-149">149</a></span>
+<span class="normal"><a href="#__codelineno-0-150">150</a></span>
+<span class="normal"><a href="#__codelineno-0-151">151</a></span>
+<span class="normal"><a href="#__codelineno-0-152">152</a></span>
+<span class="normal"><a href="#__codelineno-0-153">153</a></span>
+<span class="normal"><a href="#__codelineno-0-154">154</a></span>
+<span class="normal"><a href="#__codelineno-0-155">155</a></span>
+<span class="normal"><a href="#__codelineno-0-156">156</a></span>
+<span class="normal"><a href="#__codelineno-0-157">157</a></span>
+<span class="normal"><a href="#__codelineno-0-158">158</a></span>
+<span class="normal"><a href="#__codelineno-0-159">159</a></span>
+<span class="normal"><a href="#__codelineno-0-160">160</a></span>
+<span class="normal"><a href="#__codelineno-0-161">161</a></span>
+<span class="normal"><a href="#__codelineno-0-162">162</a></span>
+<span class="normal"><a href="#__codelineno-0-163">163</a></span>
+<span class="normal"><a href="#__codelineno-0-164">164</a></span>
+<span class="normal"><a href="#__codelineno-0-165">165</a></span>
+<span class="normal"><a href="#__codelineno-0-166">166</a></span>
+<span class="normal"><a href="#__codelineno-0-167">167</a></span>
+<span class="normal"><a href="#__codelineno-0-168">168</a></span>
+<span class="normal"><a href="#__codelineno-0-169">169</a></span>
+<span class="normal"><a href="#__codelineno-0-170">170</a></span>
+<span class="normal"><a href="#__codelineno-0-171">171</a></span>
+<span class="normal"><a href="#__codelineno-0-172">172</a></span>
+<span class="normal"><a href="#__codelineno-0-173">173</a></span>
+<span class="normal"><a href="#__codelineno-0-174">174</a></span>
+<span class="normal"><a href="#__codelineno-0-175">175</a></span>
+<span class="normal"><a href="#__codelineno-0-176">176</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-143"><a id="__codelineno-0-143" name="__codelineno-0-143"></a><span class="nd">@functools</span><span class="o">.</span><span class="n">partial</span><span class="p">(</span><span class="n">_jit</span><span class="p">,</span> <span class="n">static_argnames</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;smoothing_factor&quot;</span><span class="p">])</span>
+</span><span id="__span-0-144"><a id="__codelineno-0-144" name="__codelineno-0-144"></a><span class="k">def</span><span class="w"> </span><span class="nf">smooth_clamp_min</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">],</span> <span class="n">min_value</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">smoothing_factor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">50.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-145"><a id="__codelineno-0-145" name="__codelineno-0-145"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Smoothly clamp array values to a minimum using softplus. Range=(min_value, inf).</span>
+</span><span id="__span-0-146"><a id="__codelineno-0-146" name="__codelineno-0-146"></a>
+</span><span id="__span-0-147"><a id="__codelineno-0-147" name="__codelineno-0-147"></a><span class="sd">    Implements the gate-free lower clamp (``beta = smoothing_factor``)::</span>
+</span><span id="__span-0-148"><a id="__codelineno-0-148" name="__codelineno-0-148"></a>
+</span><span id="__span-0-149"><a id="__codelineno-0-149" name="__codelineno-0-149"></a><span class="sd">        smooth_clamp_min(x) = min_value + sp(x - min_value),   sp(u) = log(1 + exp(beta*u)) / beta</span>
+</span><span id="__span-0-150"><a id="__codelineno-0-150" name="__codelineno-0-150"></a>
+</span><span id="__span-0-151"><a id="__codelineno-0-151" name="__codelineno-0-151"></a><span class="sd">    evaluated in the numerically stable hinge + remainder form (see ``_softplus_tail``). Properties,</span>
+</span><span id="__span-0-152"><a id="__codelineno-0-152" name="__codelineno-0-152"></a><span class="sd">    for every ``beta &gt; 0``:</span>
+</span><span id="__span-0-153"><a id="__codelineno-0-153" name="__codelineno-0-153"></a>
+</span><span id="__span-0-154"><a id="__codelineno-0-154" name="__codelineno-0-154"></a><span class="sd">    * **Bounded**: ``sp &gt; 0`` everywhere, so the output is strictly above ``min_value``.</span>
+</span><span id="__span-0-155"><a id="__codelineno-0-155" name="__codelineno-0-155"></a><span class="sd">    * **Smooth and monotone**: ``C^inf`` with derivative ``sigmoid(beta*(x - min_value))`` in</span>
+</span><span id="__span-0-156"><a id="__codelineno-0-156" name="__codelineno-0-156"></a><span class="sd">      ``(0, 1)`` — including *at* ``min_value``, where it is exactly 1/2.</span>
+</span><span id="__span-0-157"><a id="__codelineno-0-157" name="__codelineno-0-157"></a><span class="sd">    * **Identity away from the bound**: above the bound the output exceeds ``x`` by</span>
+</span><span id="__span-0-158"><a id="__codelineno-0-158" name="__codelineno-0-158"></a><span class="sd">      ``log(1 + exp(-beta*d))/beta ~ exp(-beta*d)/beta`` with ``d = x - min_value``; at ``beta=50``</span>
+</span><span id="__span-0-159"><a id="__codelineno-0-159" name="__codelineno-0-159"></a><span class="sd">      that is below the float32 noise floor for ``d &gt;~ 0.3``.</span>
+</span><span id="__span-0-160"><a id="__codelineno-0-160" name="__codelineno-0-160"></a>
+</span><span id="__span-0-161"><a id="__codelineno-0-161" name="__codelineno-0-161"></a><span class="sd">    This replaces a ``jnp.where(x &lt; min_value + eps, softplus_branch, x)`` gate. That gate was</span>
+</span><span id="__span-0-162"><a id="__codelineno-0-162" name="__codelineno-0-162"></a><span class="sd">    discontinuous: ``sp(0) = log(2)/beta``, not 0, so the softplus branch did not glue onto the</span>
+</span><span id="__span-0-163"><a id="__codelineno-0-163" name="__codelineno-0-163"></a><span class="sd">    identity branch at the switch point but jumped by ``log(2)/beta`` (0.0139 at the default</span>
+</span><span id="__span-0-164"><a id="__codelineno-0-164" name="__codelineno-0-164"></a><span class="sd">    ``beta=50``). Composing the two gated one-sided clamps is what let the old ``smooth_clamp``</span>
+</span><span id="__span-0-165"><a id="__codelineno-0-165" name="__codelineno-0-165"></a><span class="sd">    leave its own window.</span>
+</span><span id="__span-0-166"><a id="__codelineno-0-166" name="__codelineno-0-166"></a>
+</span><span id="__span-0-167"><a id="__codelineno-0-167" name="__codelineno-0-167"></a><span class="sd">    Args:</span>
+</span><span id="__span-0-168"><a id="__codelineno-0-168" name="__codelineno-0-168"></a><span class="sd">        x: Input array of any shape</span>
+</span><span id="__span-0-169"><a id="__codelineno-0-169" name="__codelineno-0-169"></a><span class="sd">        min_value: Minimum value to clamp to</span>
+</span><span id="__span-0-170"><a id="__codelineno-0-170" name="__codelineno-0-170"></a><span class="sd">        smoothing_factor: Beta parameter for softplus (higher = sharper transition)</span>
+</span><span id="__span-0-171"><a id="__codelineno-0-171" name="__codelineno-0-171"></a>
+</span><span id="__span-0-172"><a id="__codelineno-0-172" name="__codelineno-0-172"></a><span class="sd">    Returns:</span>
+</span><span id="__span-0-173"><a id="__codelineno-0-173" name="__codelineno-0-173"></a><span class="sd">        Array with values smoothly clamped above min_value</span>
+</span><span id="__span-0-174"><a id="__codelineno-0-174" name="__codelineno-0-174"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-175"><a id="__codelineno-0-175" name="__codelineno-0-175"></a>    <span class="c1"># max(x, min) + tail(x - min) == min + sp(x - min), without evaluating sp directly.</span>
+</span><span id="__span-0-176"><a id="__codelineno-0-176" name="__codelineno-0-176"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">min_value</span><span class="p">)</span> <span class="o">+</span> <span class="n">_softplus_tail</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">min_value</span><span class="p">,</span> <span class="n">smoothing_factor</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hyperbolix.utils.math_utils.smooth_clamp_max" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">smooth_clamp_max</span>
+
+
+<a href="#hyperbolix.utils.math_utils.smooth_clamp_max" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">smooth_clamp_max</span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">max_value</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">smoothing_factor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">50.0</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Smoothly clamp array values to a maximum using softplus. Range=(-inf, max_value).</p>
+<p>The mirror image of :func:<code>smooth_clamp_min</code> (<code>beta = smoothing_factor</code>)::</p>
+<div class="language-text highlight"><pre><span></span><code>smooth_clamp_max(x) = max_value - sp(max_value - x),  sp(u) = log(1 + exp(beta*u)) / beta
+</code></pre></div>
+<p>so the output is strictly below <code>max_value</code>, <code>C^inf</code>, monotone increasing with derivative
+<code>sigmoid(beta*(max_value - x))</code> in <code>(0, 1)</code>, and falls short of <code>x</code> below the bound by
+<code>log(1 + exp(-beta*d))/beta</code> with <code>d = max_value - x</code>. Gate-free for the same reason as the
+min-side clamp — see :func:<code>smooth_clamp_min</code>.</p>
+<p>Args:
+    x: Input array of any shape
+    max_value: Maximum value to clamp to
+    smoothing_factor: Beta parameter for softplus (higher = sharper transition)</p>
+<p>Returns:
+    Array with values smoothly clamped below max_value</p>
+
+
+            <details class="mkdocstrings-source">
+              <summary>Source code in <code>hyperbolix/utils/math_utils.py</code></summary>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-179">179</a></span>
+<span class="normal"><a href="#__codelineno-0-180">180</a></span>
+<span class="normal"><a href="#__codelineno-0-181">181</a></span>
+<span class="normal"><a href="#__codelineno-0-182">182</a></span>
+<span class="normal"><a href="#__codelineno-0-183">183</a></span>
+<span class="normal"><a href="#__codelineno-0-184">184</a></span>
+<span class="normal"><a href="#__codelineno-0-185">185</a></span>
+<span class="normal"><a href="#__codelineno-0-186">186</a></span>
+<span class="normal"><a href="#__codelineno-0-187">187</a></span>
+<span class="normal"><a href="#__codelineno-0-188">188</a></span>
+<span class="normal"><a href="#__codelineno-0-189">189</a></span>
+<span class="normal"><a href="#__codelineno-0-190">190</a></span>
+<span class="normal"><a href="#__codelineno-0-191">191</a></span>
+<span class="normal"><a href="#__codelineno-0-192">192</a></span>
+<span class="normal"><a href="#__codelineno-0-193">193</a></span>
+<span class="normal"><a href="#__codelineno-0-194">194</a></span>
+<span class="normal"><a href="#__codelineno-0-195">195</a></span>
+<span class="normal"><a href="#__codelineno-0-196">196</a></span>
+<span class="normal"><a href="#__codelineno-0-197">197</a></span>
+<span class="normal"><a href="#__codelineno-0-198">198</a></span>
+<span class="normal"><a href="#__codelineno-0-199">199</a></span>
+<span class="normal"><a href="#__codelineno-0-200">200</a></span>
+<span class="normal"><a href="#__codelineno-0-201">201</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-179"><a id="__codelineno-0-179" name="__codelineno-0-179"></a><span class="nd">@functools</span><span class="o">.</span><span class="n">partial</span><span class="p">(</span><span class="n">_jit</span><span class="p">,</span> <span class="n">static_argnames</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;smoothing_factor&quot;</span><span class="p">])</span>
+</span><span id="__span-0-180"><a id="__codelineno-0-180" name="__codelineno-0-180"></a><span class="k">def</span><span class="w"> </span><span class="nf">smooth_clamp_max</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">],</span> <span class="n">max_value</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">smoothing_factor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">50.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-181"><a id="__codelineno-0-181" name="__codelineno-0-181"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Smoothly clamp array values to a maximum using softplus. Range=(-inf, max_value).</span>
+</span><span id="__span-0-182"><a id="__codelineno-0-182" name="__codelineno-0-182"></a>
+</span><span id="__span-0-183"><a id="__codelineno-0-183" name="__codelineno-0-183"></a><span class="sd">    The mirror image of :func:`smooth_clamp_min` (``beta = smoothing_factor``)::</span>
+</span><span id="__span-0-184"><a id="__codelineno-0-184" name="__codelineno-0-184"></a>
+</span><span id="__span-0-185"><a id="__codelineno-0-185" name="__codelineno-0-185"></a><span class="sd">        smooth_clamp_max(x) = max_value - sp(max_value - x),  sp(u) = log(1 + exp(beta*u)) / beta</span>
+</span><span id="__span-0-186"><a id="__codelineno-0-186" name="__codelineno-0-186"></a>
+</span><span id="__span-0-187"><a id="__codelineno-0-187" name="__codelineno-0-187"></a><span class="sd">    so the output is strictly below ``max_value``, ``C^inf``, monotone increasing with derivative</span>
+</span><span id="__span-0-188"><a id="__codelineno-0-188" name="__codelineno-0-188"></a><span class="sd">    ``sigmoid(beta*(max_value - x))`` in ``(0, 1)``, and falls short of ``x`` below the bound by</span>
+</span><span id="__span-0-189"><a id="__codelineno-0-189" name="__codelineno-0-189"></a><span class="sd">    ``log(1 + exp(-beta*d))/beta`` with ``d = max_value - x``. Gate-free for the same reason as the</span>
+</span><span id="__span-0-190"><a id="__codelineno-0-190" name="__codelineno-0-190"></a><span class="sd">    min-side clamp — see :func:`smooth_clamp_min`.</span>
+</span><span id="__span-0-191"><a id="__codelineno-0-191" name="__codelineno-0-191"></a>
+</span><span id="__span-0-192"><a id="__codelineno-0-192" name="__codelineno-0-192"></a><span class="sd">    Args:</span>
+</span><span id="__span-0-193"><a id="__codelineno-0-193" name="__codelineno-0-193"></a><span class="sd">        x: Input array of any shape</span>
+</span><span id="__span-0-194"><a id="__codelineno-0-194" name="__codelineno-0-194"></a><span class="sd">        max_value: Maximum value to clamp to</span>
+</span><span id="__span-0-195"><a id="__codelineno-0-195" name="__codelineno-0-195"></a><span class="sd">        smoothing_factor: Beta parameter for softplus (higher = sharper transition)</span>
+</span><span id="__span-0-196"><a id="__codelineno-0-196" name="__codelineno-0-196"></a>
+</span><span id="__span-0-197"><a id="__codelineno-0-197" name="__codelineno-0-197"></a><span class="sd">    Returns:</span>
+</span><span id="__span-0-198"><a id="__codelineno-0-198" name="__codelineno-0-198"></a><span class="sd">        Array with values smoothly clamped below max_value</span>
+</span><span id="__span-0-199"><a id="__codelineno-0-199" name="__codelineno-0-199"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-200"><a id="__codelineno-0-200" name="__codelineno-0-200"></a>    <span class="c1"># min(x, max) - tail(x - max) == max - sp(max - x); tail is even, so the same helper serves.</span>
+</span><span id="__span-0-201"><a id="__codelineno-0-201" name="__codelineno-0-201"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">max_value</span><span class="p">)</span> <span class="o">-</span> <span class="n">_softplus_tail</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">max_value</span><span class="p">,</span> <span class="n">smoothing_factor</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h4 id="hyperbolix.utils.math_utils.capped_exp" class="doc doc-heading">
             <span class="doc doc-object-name doc-function-name">capped_exp</span>
 
@@ -2386,7 +3409,7 @@ float32, ~745 in float64). Inclusion in <code>[min_value, max_value]</code> alwa
     <div class="doc doc-contents ">
 
         <p>Exponential with an overflow cap on the argument. Domain=(-inf, inf).</p>
-<p>Computes <code>exp(minimum(x, 0.99*log(finfo.max)))</code> (cap ≈ 87.8 for f32, ≈ 701.8 for f64), so the
+<p>Computes <code>exp(minimum(x, 0.99*log(finfo.max)))</code> (cap ≈ 87.8 for f32, ≈ 702.7 for f64), so the
 result cannot overflow to <code>+inf</code>. Intended for <code>exp</code> of <em>unconstrained trainable parameters</em>
 (e.g. log-scale reparameterizations): a runaway parameter would otherwise produce an <code>inf</code>
 that turns into NaN downstream (<code>inf - inf</code>, <code>inf * 0</code>) and poisons every parameter within
@@ -2444,7 +3467,7 @@ parameter past ~88 means training has already diverged — the guard's job is co
 </span><span id="__span-0-485"><a id="__codelineno-0-485" name="__codelineno-0-485"></a><span class="k">def</span><span class="w"> </span><span class="nf">capped_exp</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]:</span>
 </span><span id="__span-0-486"><a id="__codelineno-0-486" name="__codelineno-0-486"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Exponential with an overflow cap on the argument. Domain=(-inf, inf).</span>
 </span><span id="__span-0-487"><a id="__codelineno-0-487" name="__codelineno-0-487"></a>
-</span><span id="__span-0-488"><a id="__codelineno-0-488" name="__codelineno-0-488"></a><span class="sd">    Computes ``exp(minimum(x, 0.99*log(finfo.max)))`` (cap ≈ 87.8 for f32, ≈ 701.8 for f64), so the</span>
+</span><span id="__span-0-488"><a id="__codelineno-0-488" name="__codelineno-0-488"></a><span class="sd">    Computes ``exp(minimum(x, 0.99*log(finfo.max)))`` (cap ≈ 87.8 for f32, ≈ 702.7 for f64), so the</span>
 </span><span id="__span-0-489"><a id="__codelineno-0-489" name="__codelineno-0-489"></a><span class="sd">    result cannot overflow to ``+inf``. Intended for ``exp`` of *unconstrained trainable parameters*</span>
 </span><span id="__span-0-490"><a id="__codelineno-0-490" name="__codelineno-0-490"></a><span class="sd">    (e.g. log-scale reparameterizations): a runaway parameter would otherwise produce an ``inf``</span>
 </span><span id="__span-0-491"><a id="__codelineno-0-491" name="__codelineno-0-491"></a><span class="sd">    that turns into NaN downstream (``inf - inf``, ``inf * 0``) and poisons every parameter within</span>
@@ -2504,7 +3527,86 @@ value instead of overflowing to <code>inf</code> and NaN-ing the rest of the mod
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">jnp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">log_scale</span><span class="p">)</span>  <span class="c1"># inf -- would NaN downstream</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">capped_exp</span><span class="p">(</span><span class="n">log_scale</span><span class="p">)</span>  <span class="c1"># finite, saturates at exp(0.99*log(finfo.max))</span>
 </span></code></pre></div>
-<h2 id="learnable-curvature">Learnable Curvature<a class="headerlink" href="#learnable-curvature" title="Permanent link">&para;</a></h2>
+<h2 id="matmul-precision">Matmul Precision<a class="headerlink" href="#matmul-precision" title="Permanent link">&para;</a></h2>
+<p><code>MATMUL_PRECISION</code> pins float32 dot products touching manifold data (points, tangent vectors, hyperplane normals) to <code>jax.lax.Precision.HIGHEST</code>, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h3 id="hyperbolix.utils.precision" class="doc doc-heading">
+            <span class="doc doc-object-name doc-module-name">hyperbolix.utils.precision</span>
+
+
+<a href="#hyperbolix.utils.precision" class="headerlink" title="Permanent link">&para;</a></h3>
+
+    <div class="doc doc-contents first">
+
+        <p>Matmul precision for the float32 dot products that touch manifold data.</p>
+<p>The library pins one setting, :data:<code>MATMUL_PRECISION</code>, on every float32 dot-product
+primitive (<code>jnp.dot</code> / <code>jnp.einsum</code> / <code>jnp.matmul</code> / <code>lax.conv_general_dilated*</code> /
+<code>nnx.Linear</code>) that consumes or produces points, tangent vectors or hyperplane normals.
+It lives in <code>utils/</code> — a neutral home both <code>manifolds/</code> and <code>nn_layers/</code> can import
+from, since <code>manifolds/</code> must not depend on <code>nn_layers/</code>. It was originally defined in
+<code>hyperbolix.nn_layers.hyperboloid_core</code>, which now re-exports it, so
+<code>hyperboloid_core.MATMUL_PRECISION</code> keeps working.</p>
+
+
+<details class="why" open>
+  <summary>Why</summary>
+  <p>On Ampere/Hopper, XLA:GPU defaults float32 matmuls to TF32, whose 10-bit mantissa carries
+~1e-3 relative error — far coarser than float32's ~1e-7. Hyperbolic geometry spends that
+budget on cancellations whose entire design assumes float32 accuracy:</p>
+<ul>
+<li>the Lorentz inner product <code>&lt;x,y&gt;_L = -x_0 y_0 + &lt;x_s, y_s&gt;</code>, formed as a difference of
+  two dots (hyperboloid <code>dist</code>/<code>expmap</code>/<code>ptransp</code>, the attention scores, the Busemann
+  coordinate, the HoroPCA ideal-span projections) or, with the Minkowski metric absorbed
+  into the weight matrix, <em>inside a single accumulation</em> (<code>FGGLinear</code>,
+  <code>FGGLorentzMLR</code>, <code>HypRegressionHyperboloid</code>);</li>
+<li>the <code>lorentz_midpoint</code> normalizer, a cancellation-free identity that exists precisely to
+  keep the float32 error at <code>O(eps)</code> at any radius;</li>
+<li>the Poincaré/stereographic boundary factors <code>1 - c*||x||^2</code> and
+  <code>1 - 2c&lt;x,y&gt; + c^2||x||^2||y||^2</code>, which cancel to <code>O(eps)</code> for a near-boundary point;</li>
+<li>the MLR <code>asinh</code> arguments on both models, a difference of a radial and an angular term.</li>
+</ul>
+<p>Measured on an A100 (jax 0.9.1): the f32-vs-f64 relative error of <code>lorentz_midpoint</code> is
+4.6e-5 … 2.6e-4 at the TF32 default and 2.6e-8 … 1.6e-7 with <code>HIGHEST</code> — a ~2000x accuracy
+loss that <code>HIGHEST</code> removes. The eager float32 gradient of the hyperboloid MLR improves
+from 1.5e-4 to 2.7e-7 relative over the same switch.</p>
+<p><code>HIGHEST</code> is a no-op on CPU (no TF32 path) and for float64 anywhere, so this costs nothing
+outside float32 GPU matmuls; on tensor-core GPUs it trades GEMM throughput for accuracy
+(<code>HIGHEST</code> replaces one TF32 pass with a three-pass float32 emulation — measured +5.5 % on
+a jitted hyperbolic attention forward). The setting is deliberately <em>not</em> a per-call keyword
+on the manifold or layer signatures: accuracy here is a property of the geometry, not a knob.</p>
+</details>
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="learnable-curvature">Learnable Curvature<a class="headerlink" href="#learnable-curvature" title="Permanent link">&para;</a></h2>
 <p><code>LearnableCurvature</code> is an <code>nnx.Module</code> that bundles a Euclidean raw parameter, a curvature reparameterization (positive <code>softplus</code>/<code>log</code>, or the <strong>signed</strong> <code>identity</code> — <code>c = raw</code> — for the <code>Stereographic</code> manifold), and an optional <code>[c_min, c_max]</code> clamp into one object. Assign one instance per distinct curvature on your model and call it in the forward pass to obtain the (optionally clamped) curvature.</p>
 
 

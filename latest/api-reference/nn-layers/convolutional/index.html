@@ -6365,13 +6365,7 @@ lorentz_midpoint : Weighted Lorentzian midpoint (geometrically exact aggregation
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_core.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-581">581</a></span>
-<span class="normal"><a href="#__codelineno-0-582">582</a></span>
-<span class="normal"><a href="#__codelineno-0-583">583</a></span>
-<span class="normal"><a href="#__codelineno-0-584">584</a></span>
-<span class="normal"><a href="#__codelineno-0-585">585</a></span>
-<span class="normal"><a href="#__codelineno-0-586">586</a></span>
-<span class="normal"><a href="#__codelineno-0-587">587</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-587">587</a></span>
 <span class="normal"><a href="#__codelineno-0-588">588</a></span>
 <span class="normal"><a href="#__codelineno-0-589">589</a></span>
 <span class="normal"><a href="#__codelineno-0-590">590</a></span>
@@ -6440,82 +6434,88 @@ lorentz_midpoint : Weighted Lorentzian midpoint (geometrically exact aggregation
 <span class="normal"><a href="#__codelineno-0-653">653</a></span>
 <span class="normal"><a href="#__codelineno-0-654">654</a></span>
 <span class="normal"><a href="#__codelineno-0-655">655</a></span>
-<span class="normal"><a href="#__codelineno-0-656">656</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-581"><a id="__codelineno-0-581" name="__codelineno-0-581"></a><span class="k">def</span><span class="w"> </span><span class="nf">hyp_avg_pool2d</span><span class="p">(</span>
-</span><span id="__span-0-582"><a id="__codelineno-0-582" name="__codelineno-0-582"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... H W dim_plus_1&quot;</span><span class="p">],</span>
-</span><span id="__span-0-583"><a id="__codelineno-0-583" name="__codelineno-0-583"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="__span-0-584"><a id="__codelineno-0-584" name="__codelineno-0-584"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
-</span><span id="__span-0-585"><a id="__codelineno-0-585" name="__codelineno-0-585"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-586"><a id="__codelineno-0-586" name="__codelineno-0-586"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Global average pooling over 2D spatial dimensions on the hyperboloid.</span>
-</span><span id="__span-0-587"><a id="__codelineno-0-587" name="__codelineno-0-587"></a>
-</span><span id="__span-0-588"><a id="__codelineno-0-588" name="__codelineno-0-588"></a><span class="sd">    Averages the spatial components over the height and width dimensions,</span>
-</span><span id="__span-0-589"><a id="__codelineno-0-589" name="__codelineno-0-589"></a><span class="sd">    then reconstructs the time component via the hyperboloid constraint.</span>
-</span><span id="__span-0-590"><a id="__codelineno-0-590" name="__codelineno-0-590"></a><span class="sd">    This is the HRC pattern with ``f_r = mean_over_spatial``:</span>
-</span><span id="__span-0-591"><a id="__codelineno-0-591" name="__codelineno-0-591"></a>
-</span><span id="__span-0-592"><a id="__codelineno-0-592" name="__codelineno-0-592"></a><span class="sd">    .. math::</span>
+<span class="normal"><a href="#__codelineno-0-656">656</a></span>
+<span class="normal"><a href="#__codelineno-0-657">657</a></span>
+<span class="normal"><a href="#__codelineno-0-658">658</a></span>
+<span class="normal"><a href="#__codelineno-0-659">659</a></span>
+<span class="normal"><a href="#__codelineno-0-660">660</a></span>
+<span class="normal"><a href="#__codelineno-0-661">661</a></span>
+<span class="normal"><a href="#__codelineno-0-662">662</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-587"><a id="__codelineno-0-587" name="__codelineno-0-587"></a><span class="k">def</span><span class="w"> </span><span class="nf">hyp_avg_pool2d</span><span class="p">(</span>
+</span><span id="__span-0-588"><a id="__codelineno-0-588" name="__codelineno-0-588"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... H W dim_plus_1&quot;</span><span class="p">],</span>
+</span><span id="__span-0-589"><a id="__codelineno-0-589" name="__codelineno-0-589"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-590"><a id="__codelineno-0-590" name="__codelineno-0-590"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
+</span><span id="__span-0-591"><a id="__codelineno-0-591" name="__codelineno-0-591"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-592"><a id="__codelineno-0-592" name="__codelineno-0-592"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Global average pooling over 2D spatial dimensions on the hyperboloid.</span>
 </span><span id="__span-0-593"><a id="__codelineno-0-593" name="__codelineno-0-593"></a>
-</span><span id="__span-0-594"><a id="__codelineno-0-594" name="__codelineno-0-594"></a><span class="sd">        \\text{space} = \\text{mean}_{H,W}(x[..., 1:])</span>
-</span><span id="__span-0-595"><a id="__codelineno-0-595" name="__codelineno-0-595"></a>
-</span><span id="__span-0-596"><a id="__codelineno-0-596" name="__codelineno-0-596"></a><span class="sd">        x_0 = \\sqrt{\\|\\text{space}\\|^2 + 1/c}</span>
+</span><span id="__span-0-594"><a id="__codelineno-0-594" name="__codelineno-0-594"></a><span class="sd">    Averages the spatial components over the height and width dimensions,</span>
+</span><span id="__span-0-595"><a id="__codelineno-0-595" name="__codelineno-0-595"></a><span class="sd">    then reconstructs the time component via the hyperboloid constraint.</span>
+</span><span id="__span-0-596"><a id="__codelineno-0-596" name="__codelineno-0-596"></a><span class="sd">    This is the HRC pattern with ``f_r = mean_over_spatial``:</span>
 </span><span id="__span-0-597"><a id="__codelineno-0-597" name="__codelineno-0-597"></a>
-</span><span id="__span-0-598"><a id="__codelineno-0-598" name="__codelineno-0-598"></a><span class="sd">        \\text{output} = [x_0, \\text{space}]</span>
+</span><span id="__span-0-598"><a id="__codelineno-0-598" name="__codelineno-0-598"></a><span class="sd">    .. math::</span>
 </span><span id="__span-0-599"><a id="__codelineno-0-599" name="__codelineno-0-599"></a>
-</span><span id="__span-0-600"><a id="__codelineno-0-600" name="__codelineno-0-600"></a><span class="sd">    The function expects the **NHWC** layout used throughout hyperbolix:</span>
-</span><span id="__span-0-601"><a id="__codelineno-0-601" name="__codelineno-0-601"></a><span class="sd">    ``(..., H, W, ambient_dim)`` where ``ambient_dim = spatial_dim + 1``.</span>
-</span><span id="__span-0-602"><a id="__codelineno-0-602" name="__codelineno-0-602"></a>
-</span><span id="__span-0-603"><a id="__codelineno-0-603" name="__codelineno-0-603"></a><span class="sd">    This operation is **hyperboloid-only** because it relies on the time/spatial</span>
-</span><span id="__span-0-604"><a id="__codelineno-0-604" name="__codelineno-0-604"></a><span class="sd">    decomposition ``x[..., 0]`` (time) and ``x[..., 1:]`` (spatial). Poincaré</span>
-</span><span id="__span-0-605"><a id="__codelineno-0-605" name="__codelineno-0-605"></a><span class="sd">    ball points do not have a time component. To pool Poincaré features, first</span>
-</span><span id="__span-0-606"><a id="__codelineno-0-606" name="__codelineno-0-606"></a><span class="sd">    convert to hyperboloid via</span>
-</span><span id="__span-0-607"><a id="__codelineno-0-607" name="__codelineno-0-607"></a><span class="sd">    :func:`~hyperbolix.manifolds.isometry_mappings.poincare_to_hyperboloid`,</span>
-</span><span id="__span-0-608"><a id="__codelineno-0-608" name="__codelineno-0-608"></a><span class="sd">    pool, then convert back.</span>
-</span><span id="__span-0-609"><a id="__codelineno-0-609" name="__codelineno-0-609"></a>
-</span><span id="__span-0-610"><a id="__codelineno-0-610" name="__codelineno-0-610"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-611"><a id="__codelineno-0-611" name="__codelineno-0-611"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-612"><a id="__codelineno-0-612" name="__codelineno-0-612"></a><span class="sd">    x : Array, shape (..., H, W, dim+1)</span>
-</span><span id="__span-0-613"><a id="__codelineno-0-613" name="__codelineno-0-613"></a><span class="sd">        Hyperboloid feature map with curvature ``c``.  The last axis is</span>
-</span><span id="__span-0-614"><a id="__codelineno-0-614" name="__codelineno-0-614"></a><span class="sd">        the ambient dimension (time + spatial).  The two axes before it</span>
-</span><span id="__span-0-615"><a id="__codelineno-0-615" name="__codelineno-0-615"></a><span class="sd">        are the spatial height ``H`` and width ``W``.</span>
-</span><span id="__span-0-616"><a id="__codelineno-0-616" name="__codelineno-0-616"></a><span class="sd">    c : float</span>
-</span><span id="__span-0-617"><a id="__codelineno-0-617" name="__codelineno-0-617"></a><span class="sd">        Curvature parameter (positive, c &gt; 0).</span>
-</span><span id="__span-0-618"><a id="__codelineno-0-618" name="__codelineno-0-618"></a><span class="sd">    eps : float, optional</span>
-</span><span id="__span-0-619"><a id="__codelineno-0-619" name="__codelineno-0-619"></a><span class="sd">        Numerical stability floor for the time reconstruction</span>
-</span><span id="__span-0-620"><a id="__codelineno-0-620" name="__codelineno-0-620"></a><span class="sd">        (default: 1e-7).</span>
-</span><span id="__span-0-621"><a id="__codelineno-0-621" name="__codelineno-0-621"></a>
-</span><span id="__span-0-622"><a id="__codelineno-0-622" name="__codelineno-0-622"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-623"><a id="__codelineno-0-623" name="__codelineno-0-623"></a><span class="sd">    -------</span>
-</span><span id="__span-0-624"><a id="__codelineno-0-624" name="__codelineno-0-624"></a><span class="sd">    Array, shape (..., dim+1)</span>
-</span><span id="__span-0-625"><a id="__codelineno-0-625" name="__codelineno-0-625"></a><span class="sd">        Pooled hyperboloid points with curvature ``c``.</span>
-</span><span id="__span-0-626"><a id="__codelineno-0-626" name="__codelineno-0-626"></a>
-</span><span id="__span-0-627"><a id="__codelineno-0-627" name="__codelineno-0-627"></a><span class="sd">    See Also</span>
-</span><span id="__span-0-628"><a id="__codelineno-0-628" name="__codelineno-0-628"></a><span class="sd">    --------</span>
-</span><span id="__span-0-629"><a id="__codelineno-0-629" name="__codelineno-0-629"></a><span class="sd">    spatial_to_hyperboloid : Low-level curvature scaling + time reconstruction.</span>
-</span><span id="__span-0-630"><a id="__codelineno-0-630" name="__codelineno-0-630"></a><span class="sd">    hrc : General HRC wrapper for arbitrary Euclidean functions.</span>
-</span><span id="__span-0-631"><a id="__codelineno-0-631" name="__codelineno-0-631"></a><span class="sd">    lorentz_midpoint : Weighted Lorentzian midpoint (geometrically exact aggregation).</span>
+</span><span id="__span-0-600"><a id="__codelineno-0-600" name="__codelineno-0-600"></a><span class="sd">        \\text{space} = \\text{mean}_{H,W}(x[..., 1:])</span>
+</span><span id="__span-0-601"><a id="__codelineno-0-601" name="__codelineno-0-601"></a>
+</span><span id="__span-0-602"><a id="__codelineno-0-602" name="__codelineno-0-602"></a><span class="sd">        x_0 = \\sqrt{\\|\\text{space}\\|^2 + 1/c}</span>
+</span><span id="__span-0-603"><a id="__codelineno-0-603" name="__codelineno-0-603"></a>
+</span><span id="__span-0-604"><a id="__codelineno-0-604" name="__codelineno-0-604"></a><span class="sd">        \\text{output} = [x_0, \\text{space}]</span>
+</span><span id="__span-0-605"><a id="__codelineno-0-605" name="__codelineno-0-605"></a>
+</span><span id="__span-0-606"><a id="__codelineno-0-606" name="__codelineno-0-606"></a><span class="sd">    The function expects the **NHWC** layout used throughout hyperbolix:</span>
+</span><span id="__span-0-607"><a id="__codelineno-0-607" name="__codelineno-0-607"></a><span class="sd">    ``(..., H, W, ambient_dim)`` where ``ambient_dim = spatial_dim + 1``.</span>
+</span><span id="__span-0-608"><a id="__codelineno-0-608" name="__codelineno-0-608"></a>
+</span><span id="__span-0-609"><a id="__codelineno-0-609" name="__codelineno-0-609"></a><span class="sd">    This operation is **hyperboloid-only** because it relies on the time/spatial</span>
+</span><span id="__span-0-610"><a id="__codelineno-0-610" name="__codelineno-0-610"></a><span class="sd">    decomposition ``x[..., 0]`` (time) and ``x[..., 1:]`` (spatial). Poincaré</span>
+</span><span id="__span-0-611"><a id="__codelineno-0-611" name="__codelineno-0-611"></a><span class="sd">    ball points do not have a time component. To pool Poincaré features, first</span>
+</span><span id="__span-0-612"><a id="__codelineno-0-612" name="__codelineno-0-612"></a><span class="sd">    convert to hyperboloid via</span>
+</span><span id="__span-0-613"><a id="__codelineno-0-613" name="__codelineno-0-613"></a><span class="sd">    :func:`~hyperbolix.manifolds.isometry_mappings.poincare_to_hyperboloid`,</span>
+</span><span id="__span-0-614"><a id="__codelineno-0-614" name="__codelineno-0-614"></a><span class="sd">    pool, then convert back.</span>
+</span><span id="__span-0-615"><a id="__codelineno-0-615" name="__codelineno-0-615"></a>
+</span><span id="__span-0-616"><a id="__codelineno-0-616" name="__codelineno-0-616"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-617"><a id="__codelineno-0-617" name="__codelineno-0-617"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-618"><a id="__codelineno-0-618" name="__codelineno-0-618"></a><span class="sd">    x : Array, shape (..., H, W, dim+1)</span>
+</span><span id="__span-0-619"><a id="__codelineno-0-619" name="__codelineno-0-619"></a><span class="sd">        Hyperboloid feature map with curvature ``c``.  The last axis is</span>
+</span><span id="__span-0-620"><a id="__codelineno-0-620" name="__codelineno-0-620"></a><span class="sd">        the ambient dimension (time + spatial).  The two axes before it</span>
+</span><span id="__span-0-621"><a id="__codelineno-0-621" name="__codelineno-0-621"></a><span class="sd">        are the spatial height ``H`` and width ``W``.</span>
+</span><span id="__span-0-622"><a id="__codelineno-0-622" name="__codelineno-0-622"></a><span class="sd">    c : float</span>
+</span><span id="__span-0-623"><a id="__codelineno-0-623" name="__codelineno-0-623"></a><span class="sd">        Curvature parameter (positive, c &gt; 0).</span>
+</span><span id="__span-0-624"><a id="__codelineno-0-624" name="__codelineno-0-624"></a><span class="sd">    eps : float, optional</span>
+</span><span id="__span-0-625"><a id="__codelineno-0-625" name="__codelineno-0-625"></a><span class="sd">        Numerical stability floor for the time reconstruction</span>
+</span><span id="__span-0-626"><a id="__codelineno-0-626" name="__codelineno-0-626"></a><span class="sd">        (default: 1e-7).</span>
+</span><span id="__span-0-627"><a id="__codelineno-0-627" name="__codelineno-0-627"></a>
+</span><span id="__span-0-628"><a id="__codelineno-0-628" name="__codelineno-0-628"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-629"><a id="__codelineno-0-629" name="__codelineno-0-629"></a><span class="sd">    -------</span>
+</span><span id="__span-0-630"><a id="__codelineno-0-630" name="__codelineno-0-630"></a><span class="sd">    Array, shape (..., dim+1)</span>
+</span><span id="__span-0-631"><a id="__codelineno-0-631" name="__codelineno-0-631"></a><span class="sd">        Pooled hyperboloid points with curvature ``c``.</span>
 </span><span id="__span-0-632"><a id="__codelineno-0-632" name="__codelineno-0-632"></a>
-</span><span id="__span-0-633"><a id="__codelineno-0-633" name="__codelineno-0-633"></a><span class="sd">    Examples</span>
+</span><span id="__span-0-633"><a id="__codelineno-0-633" name="__codelineno-0-633"></a><span class="sd">    See Also</span>
 </span><span id="__span-0-634"><a id="__codelineno-0-634" name="__codelineno-0-634"></a><span class="sd">    --------</span>
-</span><span id="__span-0-635"><a id="__codelineno-0-635" name="__codelineno-0-635"></a><span class="sd">    &gt;&gt;&gt; import jax</span>
-</span><span id="__span-0-636"><a id="__codelineno-0-636" name="__codelineno-0-636"></a><span class="sd">    &gt;&gt;&gt; import jax.numpy as jnp</span>
-</span><span id="__span-0-637"><a id="__codelineno-0-637" name="__codelineno-0-637"></a><span class="sd">    &gt;&gt;&gt; from hyperbolix.manifolds import Hyperboloid</span>
-</span><span id="__span-0-638"><a id="__codelineno-0-638" name="__codelineno-0-638"></a><span class="sd">    &gt;&gt;&gt; from hyperbolix.nn_layers.hyperboloid_core import hyp_avg_pool2d</span>
-</span><span id="__span-0-639"><a id="__codelineno-0-639" name="__codelineno-0-639"></a><span class="sd">    &gt;&gt;&gt;</span>
-</span><span id="__span-0-640"><a id="__codelineno-0-640" name="__codelineno-0-640"></a><span class="sd">    &gt;&gt;&gt; hyperboloid = Hyperboloid(dtype=jnp.float32)</span>
-</span><span id="__span-0-641"><a id="__codelineno-0-641" name="__codelineno-0-641"></a><span class="sd">    &gt;&gt;&gt; key = jax.random.PRNGKey(0)</span>
-</span><span id="__span-0-642"><a id="__codelineno-0-642" name="__codelineno-0-642"></a><span class="sd">    &gt;&gt;&gt; v = jax.random.normal(key, (4, 7, 7, 64), dtype=jnp.float32) * 0.1</span>
-</span><span id="__span-0-643"><a id="__codelineno-0-643" name="__codelineno-0-643"></a><span class="sd">    &gt;&gt;&gt; x = jax.vmap(jax.vmap(jax.vmap(</span>
-</span><span id="__span-0-644"><a id="__codelineno-0-644" name="__codelineno-0-644"></a><span class="sd">    ...     hyperboloid.expmap_0, in_axes=(0, None)</span>
-</span><span id="__span-0-645"><a id="__codelineno-0-645" name="__codelineno-0-645"></a><span class="sd">    ... ), in_axes=(0, None)), in_axes=(0, None))(v, 1.0)</span>
-</span><span id="__span-0-646"><a id="__codelineno-0-646" name="__codelineno-0-646"></a><span class="sd">    &gt;&gt;&gt; x.shape</span>
-</span><span id="__span-0-647"><a id="__codelineno-0-647" name="__codelineno-0-647"></a><span class="sd">    (4, 7, 7, 65)</span>
-</span><span id="__span-0-648"><a id="__codelineno-0-648" name="__codelineno-0-648"></a><span class="sd">    &gt;&gt;&gt; y = hyp_avg_pool2d(x, c=1.0)</span>
-</span><span id="__span-0-649"><a id="__codelineno-0-649" name="__codelineno-0-649"></a><span class="sd">    &gt;&gt;&gt; y.shape</span>
-</span><span id="__span-0-650"><a id="__codelineno-0-650" name="__codelineno-0-650"></a><span class="sd">    (4, 65)</span>
-</span><span id="__span-0-651"><a id="__codelineno-0-651" name="__codelineno-0-651"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-652"><a id="__codelineno-0-652" name="__codelineno-0-652"></a>    <span class="c1"># Dimension key: H=height, W=width, D=spatial_dim, A=ambient_dim (D+1)</span>
-</span><span id="__span-0-653"><a id="__codelineno-0-653" name="__codelineno-0-653"></a>
-</span><span id="__span-0-654"><a id="__codelineno-0-654" name="__codelineno-0-654"></a>    <span class="n">x_space_HWD</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">:]</span>  <span class="c1"># (..., H, W, D) — drop time coordinate</span>
-</span><span id="__span-0-655"><a id="__codelineno-0-655" name="__codelineno-0-655"></a>    <span class="n">x_pooled_D</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">x_space_HWD</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="p">(</span><span class="o">-</span><span class="mi">3</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">))</span>  <span class="c1"># (..., D)</span>
-</span><span id="__span-0-656"><a id="__codelineno-0-656" name="__codelineno-0-656"></a>    <span class="k">return</span> <span class="n">spatial_to_hyperboloid</span><span class="p">(</span><span class="n">x_pooled_D</span><span class="p">,</span> <span class="n">c_in</span><span class="o">=</span><span class="n">c</span><span class="p">,</span> <span class="n">c_out</span><span class="o">=</span><span class="n">c</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (..., D+1)</span>
+</span><span id="__span-0-635"><a id="__codelineno-0-635" name="__codelineno-0-635"></a><span class="sd">    spatial_to_hyperboloid : Low-level curvature scaling + time reconstruction.</span>
+</span><span id="__span-0-636"><a id="__codelineno-0-636" name="__codelineno-0-636"></a><span class="sd">    hrc : General HRC wrapper for arbitrary Euclidean functions.</span>
+</span><span id="__span-0-637"><a id="__codelineno-0-637" name="__codelineno-0-637"></a><span class="sd">    lorentz_midpoint : Weighted Lorentzian midpoint (geometrically exact aggregation).</span>
+</span><span id="__span-0-638"><a id="__codelineno-0-638" name="__codelineno-0-638"></a>
+</span><span id="__span-0-639"><a id="__codelineno-0-639" name="__codelineno-0-639"></a><span class="sd">    Examples</span>
+</span><span id="__span-0-640"><a id="__codelineno-0-640" name="__codelineno-0-640"></a><span class="sd">    --------</span>
+</span><span id="__span-0-641"><a id="__codelineno-0-641" name="__codelineno-0-641"></a><span class="sd">    &gt;&gt;&gt; import jax</span>
+</span><span id="__span-0-642"><a id="__codelineno-0-642" name="__codelineno-0-642"></a><span class="sd">    &gt;&gt;&gt; import jax.numpy as jnp</span>
+</span><span id="__span-0-643"><a id="__codelineno-0-643" name="__codelineno-0-643"></a><span class="sd">    &gt;&gt;&gt; from hyperbolix.manifolds import Hyperboloid</span>
+</span><span id="__span-0-644"><a id="__codelineno-0-644" name="__codelineno-0-644"></a><span class="sd">    &gt;&gt;&gt; from hyperbolix.nn_layers.hyperboloid_core import hyp_avg_pool2d</span>
+</span><span id="__span-0-645"><a id="__codelineno-0-645" name="__codelineno-0-645"></a><span class="sd">    &gt;&gt;&gt;</span>
+</span><span id="__span-0-646"><a id="__codelineno-0-646" name="__codelineno-0-646"></a><span class="sd">    &gt;&gt;&gt; hyperboloid = Hyperboloid(dtype=jnp.float32)</span>
+</span><span id="__span-0-647"><a id="__codelineno-0-647" name="__codelineno-0-647"></a><span class="sd">    &gt;&gt;&gt; key = jax.random.PRNGKey(0)</span>
+</span><span id="__span-0-648"><a id="__codelineno-0-648" name="__codelineno-0-648"></a><span class="sd">    &gt;&gt;&gt; v = jax.random.normal(key, (4, 7, 7, 64), dtype=jnp.float32) * 0.1</span>
+</span><span id="__span-0-649"><a id="__codelineno-0-649" name="__codelineno-0-649"></a><span class="sd">    &gt;&gt;&gt; x = jax.vmap(jax.vmap(jax.vmap(</span>
+</span><span id="__span-0-650"><a id="__codelineno-0-650" name="__codelineno-0-650"></a><span class="sd">    ...     hyperboloid.expmap_0, in_axes=(0, None)</span>
+</span><span id="__span-0-651"><a id="__codelineno-0-651" name="__codelineno-0-651"></a><span class="sd">    ... ), in_axes=(0, None)), in_axes=(0, None))(v, 1.0)</span>
+</span><span id="__span-0-652"><a id="__codelineno-0-652" name="__codelineno-0-652"></a><span class="sd">    &gt;&gt;&gt; x.shape</span>
+</span><span id="__span-0-653"><a id="__codelineno-0-653" name="__codelineno-0-653"></a><span class="sd">    (4, 7, 7, 65)</span>
+</span><span id="__span-0-654"><a id="__codelineno-0-654" name="__codelineno-0-654"></a><span class="sd">    &gt;&gt;&gt; y = hyp_avg_pool2d(x, c=1.0)</span>
+</span><span id="__span-0-655"><a id="__codelineno-0-655" name="__codelineno-0-655"></a><span class="sd">    &gt;&gt;&gt; y.shape</span>
+</span><span id="__span-0-656"><a id="__codelineno-0-656" name="__codelineno-0-656"></a><span class="sd">    (4, 65)</span>
+</span><span id="__span-0-657"><a id="__codelineno-0-657" name="__codelineno-0-657"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-658"><a id="__codelineno-0-658" name="__codelineno-0-658"></a>    <span class="c1"># Dimension key: H=height, W=width, D=spatial_dim, A=ambient_dim (D+1)</span>
+</span><span id="__span-0-659"><a id="__codelineno-0-659" name="__codelineno-0-659"></a>
+</span><span id="__span-0-660"><a id="__codelineno-0-660" name="__codelineno-0-660"></a>    <span class="n">x_space_HWD</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">:]</span>  <span class="c1"># (..., H, W, D) — drop time coordinate</span>
+</span><span id="__span-0-661"><a id="__codelineno-0-661" name="__codelineno-0-661"></a>    <span class="n">x_pooled_D</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">x_space_HWD</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="p">(</span><span class="o">-</span><span class="mi">3</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">))</span>  <span class="c1"># (..., D)</span>
+</span><span id="__span-0-662"><a id="__codelineno-0-662" name="__codelineno-0-662"></a>    <span class="k">return</span> <span class="n">spatial_to_hyperboloid</span><span class="p">(</span><span class="n">x_pooled_D</span><span class="p">,</span> <span class="n">c_in</span><span class="o">=</span><span class="n">c</span><span class="p">,</span> <span class="n">c_out</span><span class="o">=</span><span class="n">c</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (..., D+1)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -6721,13 +6721,7 @@ hyp_avg_pool2d : Dimension-preserving global pool — the alternative conv → F
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_core.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-659">659</a></span>
-<span class="normal"><a href="#__codelineno-0-660">660</a></span>
-<span class="normal"><a href="#__codelineno-0-661">661</a></span>
-<span class="normal"><a href="#__codelineno-0-662">662</a></span>
-<span class="normal"><a href="#__codelineno-0-663">663</a></span>
-<span class="normal"><a href="#__codelineno-0-664">664</a></span>
-<span class="normal"><a href="#__codelineno-0-665">665</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-665">665</a></span>
 <span class="normal"><a href="#__codelineno-0-666">666</a></span>
 <span class="normal"><a href="#__codelineno-0-667">667</a></span>
 <span class="normal"><a href="#__codelineno-0-668">668</a></span>
@@ -6827,113 +6821,119 @@ hyp_avg_pool2d : Dimension-preserving global pool — the alternative conv → F
 <span class="normal"><a href="#__codelineno-0-762">762</a></span>
 <span class="normal"><a href="#__codelineno-0-763">763</a></span>
 <span class="normal"><a href="#__codelineno-0-764">764</a></span>
-<span class="normal"><a href="#__codelineno-0-765">765</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-659"><a id="__codelineno-0-659" name="__codelineno-0-659"></a><span class="k">def</span><span class="w"> </span><span class="nf">hyp_flatten2d</span><span class="p">(</span>
-</span><span id="__span-0-660"><a id="__codelineno-0-660" name="__codelineno-0-660"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... H W dim_plus_1&quot;</span><span class="p">],</span>
-</span><span id="__span-0-661"><a id="__codelineno-0-661" name="__codelineno-0-661"></a>    <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Manifold</span><span class="p">,</span>
-</span><span id="__span-0-662"><a id="__codelineno-0-662" name="__codelineno-0-662"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="__span-0-663"><a id="__codelineno-0-663" name="__codelineno-0-663"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... flat_dim_plus_1&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-664"><a id="__codelineno-0-664" name="__codelineno-0-664"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;LogCat-flatten a hyperboloid feature map into one point per sample (conv → FC boundary).</span>
-</span><span id="__span-0-665"><a id="__codelineno-0-665" name="__codelineno-0-665"></a>
-</span><span id="__span-0-666"><a id="__codelineno-0-666" name="__codelineno-0-666"></a><span class="sd">    Concatenates the ``H·W`` per-pixel hyperboloid points of a feature map into a single</span>
-</span><span id="__span-0-667"><a id="__codelineno-0-667" name="__codelineno-0-667"></a><span class="sd">    hyperboloid point, using the log-radius-preserving concatenation</span>
-</span><span id="__span-0-668"><a id="__codelineno-0-668" name="__codelineno-0-668"></a><span class="sd">    :meth:`~hyperbolix.manifolds.hyperboloid.Hyperboloid.log_radius_concat` (LogCat, Shi</span>
-</span><span id="__span-0-669"><a id="__codelineno-0-669" name="__codelineno-0-669"></a><span class="sd">    et al. 2026, Sec. 4.3) rather than a plain ``reshape``/``hcat``. This is the flatten</span>
-</span><span id="__span-0-670"><a id="__codelineno-0-670" name="__codelineno-0-670"></a><span class="sd">    step between a hyperboloid convolutional trunk and an FC / MLR head.</span>
+<span class="normal"><a href="#__codelineno-0-765">765</a></span>
+<span class="normal"><a href="#__codelineno-0-766">766</a></span>
+<span class="normal"><a href="#__codelineno-0-767">767</a></span>
+<span class="normal"><a href="#__codelineno-0-768">768</a></span>
+<span class="normal"><a href="#__codelineno-0-769">769</a></span>
+<span class="normal"><a href="#__codelineno-0-770">770</a></span>
+<span class="normal"><a href="#__codelineno-0-771">771</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-665"><a id="__codelineno-0-665" name="__codelineno-0-665"></a><span class="k">def</span><span class="w"> </span><span class="nf">hyp_flatten2d</span><span class="p">(</span>
+</span><span id="__span-0-666"><a id="__codelineno-0-666" name="__codelineno-0-666"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... H W dim_plus_1&quot;</span><span class="p">],</span>
+</span><span id="__span-0-667"><a id="__codelineno-0-667" name="__codelineno-0-667"></a>    <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Manifold</span><span class="p">,</span>
+</span><span id="__span-0-668"><a id="__codelineno-0-668" name="__codelineno-0-668"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-669"><a id="__codelineno-0-669" name="__codelineno-0-669"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... flat_dim_plus_1&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-670"><a id="__codelineno-0-670" name="__codelineno-0-670"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;LogCat-flatten a hyperboloid feature map into one point per sample (conv → FC boundary).</span>
 </span><span id="__span-0-671"><a id="__codelineno-0-671" name="__codelineno-0-671"></a>
-</span><span id="__span-0-672"><a id="__codelineno-0-672" name="__codelineno-0-672"></a><span class="sd">    **Why not a plain reshape.** Stacking the ``N = H·W`` spatial blocks without a</span>
-</span><span id="__span-0-673"><a id="__codelineno-0-673" name="__codelineno-0-673"></a><span class="sd">    correction widens the spatial dimension from ``D`` to ``N·D`` while leaving each</span>
-</span><span id="__span-0-674"><a id="__codelineno-0-674" name="__codelineno-0-674"></a><span class="sd">    block&#39;s entries untouched. For Gaussian-ish spatial parts ``‖v‖² ~ χ²_k``, so</span>
-</span><span id="__span-0-675"><a id="__codelineno-0-675" name="__codelineno-0-675"></a><span class="sd">    ``E[log‖v‖] = ½·(ψ(k/2) + log 2)`` grows with the dimension ``k``: the flattened</span>
-</span><span id="__span-0-676"><a id="__codelineno-0-676" name="__codelineno-0-676"></a><span class="sd">    point&#39;s spatial radius (and hence its geodesic radius from the origin) inflates by</span>
-</span><span id="__span-0-677"><a id="__codelineno-0-677" name="__codelineno-0-677"></a><span class="sd">    ``≈ √(H·W)``. At a conv → FC boundary ``N`` is the whole feature map — tens to low</span>
-</span><span id="__span-0-678"><a id="__codelineno-0-678" name="__codelineno-0-678"></a><span class="sd">    hundreds — so the inflation is far larger than the ``√9`` of a single 3x3 receptive</span>
-</span><span id="__span-0-679"><a id="__codelineno-0-679" name="__codelineno-0-679"></a><span class="sd">    field, and an MLR head fed such a point sits pinned at its saturation cap at init.</span>
-</span><span id="__span-0-680"><a id="__codelineno-0-680" name="__codelineno-0-680"></a><span class="sd">    LogCat rescales every block by the digamma ratio</span>
-</span><span id="__span-0-681"><a id="__codelineno-0-681" name="__codelineno-0-681"></a><span class="sd">    ``s = exp(½·(ψ(D/2) - ψ(N·D/2))) ≈ 1/√N`` before concatenating and then recomputes</span>
-</span><span id="__span-0-682"><a id="__codelineno-0-682" name="__codelineno-0-682"></a><span class="sd">    the time coordinate, so the expected log spatial radius of the flattened point</span>
-</span><span id="__span-0-683"><a id="__codelineno-0-683" name="__codelineno-0-683"></a><span class="sd">    matches that of one pixel.</span>
-</span><span id="__span-0-684"><a id="__codelineno-0-684" name="__codelineno-0-684"></a>
-</span><span id="__span-0-685"><a id="__codelineno-0-685" name="__codelineno-0-685"></a><span class="sd">    Dimension bookkeeping (all hyperboloid channel counts are **ambient**, time first):</span>
-</span><span id="__span-0-686"><a id="__codelineno-0-686" name="__codelineno-0-686"></a><span class="sd">    ``H·W`` blocks of ``D = A - 1`` spatial dims each become one point with ``H·W·D``</span>
-</span><span id="__span-0-687"><a id="__codelineno-0-687" name="__codelineno-0-687"></a><span class="sd">    spatial dims plus a single time coordinate, i.e. ``A&#39; = H·W·(A - 1) + 1``. Note this</span>
-</span><span id="__span-0-688"><a id="__codelineno-0-688" name="__codelineno-0-688"></a><span class="sd">    grows the width — pair it with a dimensionality-reducing head, or pool with</span>
-</span><span id="__span-0-689"><a id="__codelineno-0-689" name="__codelineno-0-689"></a><span class="sd">    :func:`hyp_avg_pool2d` instead when a fixed-width global summary is what you want.</span>
+</span><span id="__span-0-672"><a id="__codelineno-0-672" name="__codelineno-0-672"></a><span class="sd">    Concatenates the ``H·W`` per-pixel hyperboloid points of a feature map into a single</span>
+</span><span id="__span-0-673"><a id="__codelineno-0-673" name="__codelineno-0-673"></a><span class="sd">    hyperboloid point, using the log-radius-preserving concatenation</span>
+</span><span id="__span-0-674"><a id="__codelineno-0-674" name="__codelineno-0-674"></a><span class="sd">    :meth:`~hyperbolix.manifolds.hyperboloid.Hyperboloid.log_radius_concat` (LogCat, Shi</span>
+</span><span id="__span-0-675"><a id="__codelineno-0-675" name="__codelineno-0-675"></a><span class="sd">    et al. 2026, Sec. 4.3) rather than a plain ``reshape``/``hcat``. This is the flatten</span>
+</span><span id="__span-0-676"><a id="__codelineno-0-676" name="__codelineno-0-676"></a><span class="sd">    step between a hyperboloid convolutional trunk and an FC / MLR head.</span>
+</span><span id="__span-0-677"><a id="__codelineno-0-677" name="__codelineno-0-677"></a>
+</span><span id="__span-0-678"><a id="__codelineno-0-678" name="__codelineno-0-678"></a><span class="sd">    **Why not a plain reshape.** Stacking the ``N = H·W`` spatial blocks without a</span>
+</span><span id="__span-0-679"><a id="__codelineno-0-679" name="__codelineno-0-679"></a><span class="sd">    correction widens the spatial dimension from ``D`` to ``N·D`` while leaving each</span>
+</span><span id="__span-0-680"><a id="__codelineno-0-680" name="__codelineno-0-680"></a><span class="sd">    block&#39;s entries untouched. For Gaussian-ish spatial parts ``‖v‖² ~ χ²_k``, so</span>
+</span><span id="__span-0-681"><a id="__codelineno-0-681" name="__codelineno-0-681"></a><span class="sd">    ``E[log‖v‖] = ½·(ψ(k/2) + log 2)`` grows with the dimension ``k``: the flattened</span>
+</span><span id="__span-0-682"><a id="__codelineno-0-682" name="__codelineno-0-682"></a><span class="sd">    point&#39;s spatial radius (and hence its geodesic radius from the origin) inflates by</span>
+</span><span id="__span-0-683"><a id="__codelineno-0-683" name="__codelineno-0-683"></a><span class="sd">    ``≈ √(H·W)``. At a conv → FC boundary ``N`` is the whole feature map — tens to low</span>
+</span><span id="__span-0-684"><a id="__codelineno-0-684" name="__codelineno-0-684"></a><span class="sd">    hundreds — so the inflation is far larger than the ``√9`` of a single 3x3 receptive</span>
+</span><span id="__span-0-685"><a id="__codelineno-0-685" name="__codelineno-0-685"></a><span class="sd">    field, and an MLR head fed such a point sits pinned at its saturation cap at init.</span>
+</span><span id="__span-0-686"><a id="__codelineno-0-686" name="__codelineno-0-686"></a><span class="sd">    LogCat rescales every block by the digamma ratio</span>
+</span><span id="__span-0-687"><a id="__codelineno-0-687" name="__codelineno-0-687"></a><span class="sd">    ``s = exp(½·(ψ(D/2) - ψ(N·D/2))) ≈ 1/√N`` before concatenating and then recomputes</span>
+</span><span id="__span-0-688"><a id="__codelineno-0-688" name="__codelineno-0-688"></a><span class="sd">    the time coordinate, so the expected log spatial radius of the flattened point</span>
+</span><span id="__span-0-689"><a id="__codelineno-0-689" name="__codelineno-0-689"></a><span class="sd">    matches that of one pixel.</span>
 </span><span id="__span-0-690"><a id="__codelineno-0-690" name="__codelineno-0-690"></a>
-</span><span id="__span-0-691"><a id="__codelineno-0-691" name="__codelineno-0-691"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-692"><a id="__codelineno-0-692" name="__codelineno-0-692"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-693"><a id="__codelineno-0-693" name="__codelineno-0-693"></a><span class="sd">    x : Array, shape (..., H, W, A)</span>
-</span><span id="__span-0-694"><a id="__codelineno-0-694" name="__codelineno-0-694"></a><span class="sd">        Hyperboloid feature map with curvature ``c`` in **NHWC** layout. The last axis is</span>
-</span><span id="__span-0-695"><a id="__codelineno-0-695" name="__codelineno-0-695"></a><span class="sd">        the ambient per-pixel dimension ``A = D + 1`` (time + spatial); the two axes</span>
-</span><span id="__span-0-696"><a id="__codelineno-0-696" name="__codelineno-0-696"></a><span class="sd">        before it are height ``H`` and width ``W``. Leading axes are treated as batch.</span>
-</span><span id="__span-0-697"><a id="__codelineno-0-697" name="__codelineno-0-697"></a><span class="sd">    manifold_module : Manifold</span>
-</span><span id="__span-0-698"><a id="__codelineno-0-698" name="__codelineno-0-698"></a><span class="sd">        Hyperboloid manifold instance (e.g. ``hyperbolix.manifolds.Hyperboloid()``);</span>
-</span><span id="__span-0-699"><a id="__codelineno-0-699" name="__codelineno-0-699"></a><span class="sd">        must provide ``log_radius_concat``.</span>
-</span><span id="__span-0-700"><a id="__codelineno-0-700" name="__codelineno-0-700"></a><span class="sd">    c : float</span>
-</span><span id="__span-0-701"><a id="__codelineno-0-701" name="__codelineno-0-701"></a><span class="sd">        Curvature parameter (positive, c &gt; 0).</span>
-</span><span id="__span-0-702"><a id="__codelineno-0-702" name="__codelineno-0-702"></a>
-</span><span id="__span-0-703"><a id="__codelineno-0-703" name="__codelineno-0-703"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-704"><a id="__codelineno-0-704" name="__codelineno-0-704"></a><span class="sd">    -------</span>
-</span><span id="__span-0-705"><a id="__codelineno-0-705" name="__codelineno-0-705"></a><span class="sd">    Array, shape (..., H*W*(A-1)+1)</span>
-</span><span id="__span-0-706"><a id="__codelineno-0-706" name="__codelineno-0-706"></a><span class="sd">        One hyperboloid point per sample, on the widened hyperboloid with curvature ``c``.</span>
-</span><span id="__span-0-707"><a id="__codelineno-0-707" name="__codelineno-0-707"></a>
-</span><span id="__span-0-708"><a id="__codelineno-0-708" name="__codelineno-0-708"></a><span class="sd">    Raises</span>
-</span><span id="__span-0-709"><a id="__codelineno-0-709" name="__codelineno-0-709"></a><span class="sd">    ------</span>
-</span><span id="__span-0-710"><a id="__codelineno-0-710" name="__codelineno-0-710"></a><span class="sd">    ValueError</span>
-</span><span id="__span-0-711"><a id="__codelineno-0-711" name="__codelineno-0-711"></a><span class="sd">        If ``x`` has fewer than 3 axes (no ``(H, W, A)`` tail to flatten).</span>
-</span><span id="__span-0-712"><a id="__codelineno-0-712" name="__codelineno-0-712"></a><span class="sd">    TypeError</span>
-</span><span id="__span-0-713"><a id="__codelineno-0-713" name="__codelineno-0-713"></a><span class="sd">        If ``manifold_module`` is not a Hyperboloid-like manifold.</span>
-</span><span id="__span-0-714"><a id="__codelineno-0-714" name="__codelineno-0-714"></a>
-</span><span id="__span-0-715"><a id="__codelineno-0-715" name="__codelineno-0-715"></a><span class="sd">    See Also</span>
-</span><span id="__span-0-716"><a id="__codelineno-0-716" name="__codelineno-0-716"></a><span class="sd">    --------</span>
-</span><span id="__span-0-717"><a id="__codelineno-0-717" name="__codelineno-0-717"></a><span class="sd">    hyperbolix.manifolds.hyperboloid.Hyperboloid.log_radius_concat : The LogCat operation.</span>
-</span><span id="__span-0-718"><a id="__codelineno-0-718" name="__codelineno-0-718"></a><span class="sd">    hyperbolix.manifolds.hyperboloid.Hyperboloid.hcat : Unscaled concatenation (inflates the radius).</span>
-</span><span id="__span-0-719"><a id="__codelineno-0-719" name="__codelineno-0-719"></a><span class="sd">    hyp_avg_pool2d : Dimension-preserving global pool — the alternative conv → FC bridge.</span>
+</span><span id="__span-0-691"><a id="__codelineno-0-691" name="__codelineno-0-691"></a><span class="sd">    Dimension bookkeeping (all hyperboloid channel counts are **ambient**, time first):</span>
+</span><span id="__span-0-692"><a id="__codelineno-0-692" name="__codelineno-0-692"></a><span class="sd">    ``H·W`` blocks of ``D = A - 1`` spatial dims each become one point with ``H·W·D``</span>
+</span><span id="__span-0-693"><a id="__codelineno-0-693" name="__codelineno-0-693"></a><span class="sd">    spatial dims plus a single time coordinate, i.e. ``A&#39; = H·W·(A - 1) + 1``. Note this</span>
+</span><span id="__span-0-694"><a id="__codelineno-0-694" name="__codelineno-0-694"></a><span class="sd">    grows the width — pair it with a dimensionality-reducing head, or pool with</span>
+</span><span id="__span-0-695"><a id="__codelineno-0-695" name="__codelineno-0-695"></a><span class="sd">    :func:`hyp_avg_pool2d` instead when a fixed-width global summary is what you want.</span>
+</span><span id="__span-0-696"><a id="__codelineno-0-696" name="__codelineno-0-696"></a>
+</span><span id="__span-0-697"><a id="__codelineno-0-697" name="__codelineno-0-697"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-698"><a id="__codelineno-0-698" name="__codelineno-0-698"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-699"><a id="__codelineno-0-699" name="__codelineno-0-699"></a><span class="sd">    x : Array, shape (..., H, W, A)</span>
+</span><span id="__span-0-700"><a id="__codelineno-0-700" name="__codelineno-0-700"></a><span class="sd">        Hyperboloid feature map with curvature ``c`` in **NHWC** layout. The last axis is</span>
+</span><span id="__span-0-701"><a id="__codelineno-0-701" name="__codelineno-0-701"></a><span class="sd">        the ambient per-pixel dimension ``A = D + 1`` (time + spatial); the two axes</span>
+</span><span id="__span-0-702"><a id="__codelineno-0-702" name="__codelineno-0-702"></a><span class="sd">        before it are height ``H`` and width ``W``. Leading axes are treated as batch.</span>
+</span><span id="__span-0-703"><a id="__codelineno-0-703" name="__codelineno-0-703"></a><span class="sd">    manifold_module : Manifold</span>
+</span><span id="__span-0-704"><a id="__codelineno-0-704" name="__codelineno-0-704"></a><span class="sd">        Hyperboloid manifold instance (e.g. ``hyperbolix.manifolds.Hyperboloid()``);</span>
+</span><span id="__span-0-705"><a id="__codelineno-0-705" name="__codelineno-0-705"></a><span class="sd">        must provide ``log_radius_concat``.</span>
+</span><span id="__span-0-706"><a id="__codelineno-0-706" name="__codelineno-0-706"></a><span class="sd">    c : float</span>
+</span><span id="__span-0-707"><a id="__codelineno-0-707" name="__codelineno-0-707"></a><span class="sd">        Curvature parameter (positive, c &gt; 0).</span>
+</span><span id="__span-0-708"><a id="__codelineno-0-708" name="__codelineno-0-708"></a>
+</span><span id="__span-0-709"><a id="__codelineno-0-709" name="__codelineno-0-709"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-710"><a id="__codelineno-0-710" name="__codelineno-0-710"></a><span class="sd">    -------</span>
+</span><span id="__span-0-711"><a id="__codelineno-0-711" name="__codelineno-0-711"></a><span class="sd">    Array, shape (..., H*W*(A-1)+1)</span>
+</span><span id="__span-0-712"><a id="__codelineno-0-712" name="__codelineno-0-712"></a><span class="sd">        One hyperboloid point per sample, on the widened hyperboloid with curvature ``c``.</span>
+</span><span id="__span-0-713"><a id="__codelineno-0-713" name="__codelineno-0-713"></a>
+</span><span id="__span-0-714"><a id="__codelineno-0-714" name="__codelineno-0-714"></a><span class="sd">    Raises</span>
+</span><span id="__span-0-715"><a id="__codelineno-0-715" name="__codelineno-0-715"></a><span class="sd">    ------</span>
+</span><span id="__span-0-716"><a id="__codelineno-0-716" name="__codelineno-0-716"></a><span class="sd">    ValueError</span>
+</span><span id="__span-0-717"><a id="__codelineno-0-717" name="__codelineno-0-717"></a><span class="sd">        If ``x`` has fewer than 3 axes (no ``(H, W, A)`` tail to flatten).</span>
+</span><span id="__span-0-718"><a id="__codelineno-0-718" name="__codelineno-0-718"></a><span class="sd">    TypeError</span>
+</span><span id="__span-0-719"><a id="__codelineno-0-719" name="__codelineno-0-719"></a><span class="sd">        If ``manifold_module`` is not a Hyperboloid-like manifold.</span>
 </span><span id="__span-0-720"><a id="__codelineno-0-720" name="__codelineno-0-720"></a>
-</span><span id="__span-0-721"><a id="__codelineno-0-721" name="__codelineno-0-721"></a><span class="sd">    References</span>
-</span><span id="__span-0-722"><a id="__codelineno-0-722" name="__codelineno-0-722"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-723"><a id="__codelineno-0-723" name="__codelineno-0-723"></a><span class="sd">    Shi et al. &quot;Intrinsic Lorentz Neural Network.&quot; ICLR 2026, Sec. 4.3 (LogCat).</span>
-</span><span id="__span-0-724"><a id="__codelineno-0-724" name="__codelineno-0-724"></a>
-</span><span id="__span-0-725"><a id="__codelineno-0-725" name="__codelineno-0-725"></a><span class="sd">    Examples</span>
-</span><span id="__span-0-726"><a id="__codelineno-0-726" name="__codelineno-0-726"></a><span class="sd">    --------</span>
-</span><span id="__span-0-727"><a id="__codelineno-0-727" name="__codelineno-0-727"></a><span class="sd">    &gt;&gt;&gt; import jax</span>
-</span><span id="__span-0-728"><a id="__codelineno-0-728" name="__codelineno-0-728"></a><span class="sd">    &gt;&gt;&gt; import jax.numpy as jnp</span>
-</span><span id="__span-0-729"><a id="__codelineno-0-729" name="__codelineno-0-729"></a><span class="sd">    &gt;&gt;&gt; from hyperbolix.manifolds import Hyperboloid</span>
-</span><span id="__span-0-730"><a id="__codelineno-0-730" name="__codelineno-0-730"></a><span class="sd">    &gt;&gt;&gt; from hyperbolix.nn_layers.hyperboloid_core import hyp_flatten2d</span>
-</span><span id="__span-0-731"><a id="__codelineno-0-731" name="__codelineno-0-731"></a><span class="sd">    &gt;&gt;&gt;</span>
-</span><span id="__span-0-732"><a id="__codelineno-0-732" name="__codelineno-0-732"></a><span class="sd">    &gt;&gt;&gt; hyperboloid = Hyperboloid(dtype=jnp.float32)</span>
-</span><span id="__span-0-733"><a id="__codelineno-0-733" name="__codelineno-0-733"></a><span class="sd">    &gt;&gt;&gt; key = jax.random.PRNGKey(0)</span>
-</span><span id="__span-0-734"><a id="__codelineno-0-734" name="__codelineno-0-734"></a><span class="sd">    &gt;&gt;&gt; v = jax.random.normal(key, (4, 4, 4, 17), dtype=jnp.float32) * 0.1</span>
-</span><span id="__span-0-735"><a id="__codelineno-0-735" name="__codelineno-0-735"></a><span class="sd">    &gt;&gt;&gt; v = v.at[..., 0].set(0.0)  # tangent vectors at the origin</span>
-</span><span id="__span-0-736"><a id="__codelineno-0-736" name="__codelineno-0-736"></a><span class="sd">    &gt;&gt;&gt; x = jax.vmap(jax.vmap(jax.vmap(</span>
-</span><span id="__span-0-737"><a id="__codelineno-0-737" name="__codelineno-0-737"></a><span class="sd">    ...     hyperboloid.expmap_0, in_axes=(0, None)</span>
-</span><span id="__span-0-738"><a id="__codelineno-0-738" name="__codelineno-0-738"></a><span class="sd">    ... ), in_axes=(0, None)), in_axes=(0, None))(v, 1.0)</span>
-</span><span id="__span-0-739"><a id="__codelineno-0-739" name="__codelineno-0-739"></a><span class="sd">    &gt;&gt;&gt; x.shape</span>
-</span><span id="__span-0-740"><a id="__codelineno-0-740" name="__codelineno-0-740"></a><span class="sd">    (4, 4, 4, 17)</span>
-</span><span id="__span-0-741"><a id="__codelineno-0-741" name="__codelineno-0-741"></a><span class="sd">    &gt;&gt;&gt; y = hyp_flatten2d(x, hyperboloid, c=1.0)</span>
-</span><span id="__span-0-742"><a id="__codelineno-0-742" name="__codelineno-0-742"></a><span class="sd">    &gt;&gt;&gt; y.shape  # 4*4 blocks of 16 spatial dims + 1 time coordinate</span>
-</span><span id="__span-0-743"><a id="__codelineno-0-743" name="__codelineno-0-743"></a><span class="sd">    (4, 257)</span>
-</span><span id="__span-0-744"><a id="__codelineno-0-744" name="__codelineno-0-744"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-745"><a id="__codelineno-0-745" name="__codelineno-0-745"></a>    <span class="c1"># Dimension key: H=height, W=width, N=H*W (blocks), D=per-pixel spatial dim,</span>
-</span><span id="__span-0-746"><a id="__codelineno-0-746" name="__codelineno-0-746"></a>    <span class="c1">#                A=per-pixel ambient dim (D+1), B=flattened batch, Af=H*W*D+1</span>
-</span><span id="__span-0-747"><a id="__codelineno-0-747" name="__codelineno-0-747"></a>
-</span><span id="__span-0-748"><a id="__codelineno-0-748" name="__codelineno-0-748"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;log_radius_concat&quot;</span><span class="p">,))</span>
-</span><span id="__span-0-749"><a id="__codelineno-0-749" name="__codelineno-0-749"></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">:</span>
-</span><span id="__span-0-750"><a id="__codelineno-0-750" name="__codelineno-0-750"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="__span-0-751"><a id="__codelineno-0-751" name="__codelineno-0-751"></a>            <span class="sa">f</span><span class="s2">&quot;hyp_flatten2d expects an NHWC-style array with at least 3 axes (H, W, ambient), got shape </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">.&quot;</span>
-</span><span id="__span-0-752"><a id="__codelineno-0-752" name="__codelineno-0-752"></a>        <span class="p">)</span>
+</span><span id="__span-0-721"><a id="__codelineno-0-721" name="__codelineno-0-721"></a><span class="sd">    See Also</span>
+</span><span id="__span-0-722"><a id="__codelineno-0-722" name="__codelineno-0-722"></a><span class="sd">    --------</span>
+</span><span id="__span-0-723"><a id="__codelineno-0-723" name="__codelineno-0-723"></a><span class="sd">    hyperbolix.manifolds.hyperboloid.Hyperboloid.log_radius_concat : The LogCat operation.</span>
+</span><span id="__span-0-724"><a id="__codelineno-0-724" name="__codelineno-0-724"></a><span class="sd">    hyperbolix.manifolds.hyperboloid.Hyperboloid.hcat : Unscaled concatenation (inflates the radius).</span>
+</span><span id="__span-0-725"><a id="__codelineno-0-725" name="__codelineno-0-725"></a><span class="sd">    hyp_avg_pool2d : Dimension-preserving global pool — the alternative conv → FC bridge.</span>
+</span><span id="__span-0-726"><a id="__codelineno-0-726" name="__codelineno-0-726"></a>
+</span><span id="__span-0-727"><a id="__codelineno-0-727" name="__codelineno-0-727"></a><span class="sd">    References</span>
+</span><span id="__span-0-728"><a id="__codelineno-0-728" name="__codelineno-0-728"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-729"><a id="__codelineno-0-729" name="__codelineno-0-729"></a><span class="sd">    Shi et al. &quot;Intrinsic Lorentz Neural Network.&quot; ICLR 2026, Sec. 4.3 (LogCat).</span>
+</span><span id="__span-0-730"><a id="__codelineno-0-730" name="__codelineno-0-730"></a>
+</span><span id="__span-0-731"><a id="__codelineno-0-731" name="__codelineno-0-731"></a><span class="sd">    Examples</span>
+</span><span id="__span-0-732"><a id="__codelineno-0-732" name="__codelineno-0-732"></a><span class="sd">    --------</span>
+</span><span id="__span-0-733"><a id="__codelineno-0-733" name="__codelineno-0-733"></a><span class="sd">    &gt;&gt;&gt; import jax</span>
+</span><span id="__span-0-734"><a id="__codelineno-0-734" name="__codelineno-0-734"></a><span class="sd">    &gt;&gt;&gt; import jax.numpy as jnp</span>
+</span><span id="__span-0-735"><a id="__codelineno-0-735" name="__codelineno-0-735"></a><span class="sd">    &gt;&gt;&gt; from hyperbolix.manifolds import Hyperboloid</span>
+</span><span id="__span-0-736"><a id="__codelineno-0-736" name="__codelineno-0-736"></a><span class="sd">    &gt;&gt;&gt; from hyperbolix.nn_layers.hyperboloid_core import hyp_flatten2d</span>
+</span><span id="__span-0-737"><a id="__codelineno-0-737" name="__codelineno-0-737"></a><span class="sd">    &gt;&gt;&gt;</span>
+</span><span id="__span-0-738"><a id="__codelineno-0-738" name="__codelineno-0-738"></a><span class="sd">    &gt;&gt;&gt; hyperboloid = Hyperboloid(dtype=jnp.float32)</span>
+</span><span id="__span-0-739"><a id="__codelineno-0-739" name="__codelineno-0-739"></a><span class="sd">    &gt;&gt;&gt; key = jax.random.PRNGKey(0)</span>
+</span><span id="__span-0-740"><a id="__codelineno-0-740" name="__codelineno-0-740"></a><span class="sd">    &gt;&gt;&gt; v = jax.random.normal(key, (4, 4, 4, 17), dtype=jnp.float32) * 0.1</span>
+</span><span id="__span-0-741"><a id="__codelineno-0-741" name="__codelineno-0-741"></a><span class="sd">    &gt;&gt;&gt; v = v.at[..., 0].set(0.0)  # tangent vectors at the origin</span>
+</span><span id="__span-0-742"><a id="__codelineno-0-742" name="__codelineno-0-742"></a><span class="sd">    &gt;&gt;&gt; x = jax.vmap(jax.vmap(jax.vmap(</span>
+</span><span id="__span-0-743"><a id="__codelineno-0-743" name="__codelineno-0-743"></a><span class="sd">    ...     hyperboloid.expmap_0, in_axes=(0, None)</span>
+</span><span id="__span-0-744"><a id="__codelineno-0-744" name="__codelineno-0-744"></a><span class="sd">    ... ), in_axes=(0, None)), in_axes=(0, None))(v, 1.0)</span>
+</span><span id="__span-0-745"><a id="__codelineno-0-745" name="__codelineno-0-745"></a><span class="sd">    &gt;&gt;&gt; x.shape</span>
+</span><span id="__span-0-746"><a id="__codelineno-0-746" name="__codelineno-0-746"></a><span class="sd">    (4, 4, 4, 17)</span>
+</span><span id="__span-0-747"><a id="__codelineno-0-747" name="__codelineno-0-747"></a><span class="sd">    &gt;&gt;&gt; y = hyp_flatten2d(x, hyperboloid, c=1.0)</span>
+</span><span id="__span-0-748"><a id="__codelineno-0-748" name="__codelineno-0-748"></a><span class="sd">    &gt;&gt;&gt; y.shape  # 4*4 blocks of 16 spatial dims + 1 time coordinate</span>
+</span><span id="__span-0-749"><a id="__codelineno-0-749" name="__codelineno-0-749"></a><span class="sd">    (4, 257)</span>
+</span><span id="__span-0-750"><a id="__codelineno-0-750" name="__codelineno-0-750"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-751"><a id="__codelineno-0-751" name="__codelineno-0-751"></a>    <span class="c1"># Dimension key: H=height, W=width, N=H*W (blocks), D=per-pixel spatial dim,</span>
+</span><span id="__span-0-752"><a id="__codelineno-0-752" name="__codelineno-0-752"></a>    <span class="c1">#                A=per-pixel ambient dim (D+1), B=flattened batch, Af=H*W*D+1</span>
 </span><span id="__span-0-753"><a id="__codelineno-0-753" name="__codelineno-0-753"></a>
-</span><span id="__span-0-754"><a id="__codelineno-0-754" name="__codelineno-0-754"></a>    <span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">ambient</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
-</span><span id="__span-0-755"><a id="__codelineno-0-755" name="__codelineno-0-755"></a>
-</span><span id="__span-0-756"><a id="__codelineno-0-756" name="__codelineno-0-756"></a>    <span class="c1"># Collapse leading (batch) axes and the H/W grid: one (N, A) point sequence per sample.</span>
-</span><span id="__span-0-757"><a id="__codelineno-0-757" name="__codelineno-0-757"></a>    <span class="n">points_BNA</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">height</span> <span class="o">*</span> <span class="n">width</span><span class="p">,</span> <span class="n">ambient</span><span class="p">)</span>  <span class="c1"># (B, N, A)</span>
-</span><span id="__span-0-758"><a id="__codelineno-0-758" name="__codelineno-0-758"></a>
-</span><span id="__span-0-759"><a id="__codelineno-0-759" name="__codelineno-0-759"></a>    <span class="c1"># LogCat per sample: (N, A) -&gt; (N*D+1,). vmap because manifold ops are single-point.</span>
-</span><span id="__span-0-760"><a id="__codelineno-0-760" name="__codelineno-0-760"></a>    <span class="c1"># `log_radius_concat` is Hyperboloid-only and therefore not on the `Manifold` protocol;</span>
-</span><span id="__span-0-761"><a id="__codelineno-0-761" name="__codelineno-0-761"></a>    <span class="c1"># the `validate_hyperboloid_manifold` call above is what guarantees it is present.</span>
-</span><span id="__span-0-762"><a id="__codelineno-0-762" name="__codelineno-0-762"></a>    <span class="n">log_radius_concat</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="n">Hyperboloid</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">)</span><span class="o">.</span><span class="n">log_radius_concat</span>
-</span><span id="__span-0-763"><a id="__codelineno-0-763" name="__codelineno-0-763"></a>    <span class="n">flat_BAf</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">log_radius_concat</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">))(</span><span class="n">points_BNA</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># (B, Af)</span>
+</span><span id="__span-0-754"><a id="__codelineno-0-754" name="__codelineno-0-754"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;log_radius_concat&quot;</span><span class="p">,))</span>
+</span><span id="__span-0-755"><a id="__codelineno-0-755" name="__codelineno-0-755"></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">:</span>
+</span><span id="__span-0-756"><a id="__codelineno-0-756" name="__codelineno-0-756"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="__span-0-757"><a id="__codelineno-0-757" name="__codelineno-0-757"></a>            <span class="sa">f</span><span class="s2">&quot;hyp_flatten2d expects an NHWC-style array with at least 3 axes (H, W, ambient), got shape </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">.&quot;</span>
+</span><span id="__span-0-758"><a id="__codelineno-0-758" name="__codelineno-0-758"></a>        <span class="p">)</span>
+</span><span id="__span-0-759"><a id="__codelineno-0-759" name="__codelineno-0-759"></a>
+</span><span id="__span-0-760"><a id="__codelineno-0-760" name="__codelineno-0-760"></a>    <span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">ambient</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+</span><span id="__span-0-761"><a id="__codelineno-0-761" name="__codelineno-0-761"></a>
+</span><span id="__span-0-762"><a id="__codelineno-0-762" name="__codelineno-0-762"></a>    <span class="c1"># Collapse leading (batch) axes and the H/W grid: one (N, A) point sequence per sample.</span>
+</span><span id="__span-0-763"><a id="__codelineno-0-763" name="__codelineno-0-763"></a>    <span class="n">points_BNA</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">height</span> <span class="o">*</span> <span class="n">width</span><span class="p">,</span> <span class="n">ambient</span><span class="p">)</span>  <span class="c1"># (B, N, A)</span>
 </span><span id="__span-0-764"><a id="__codelineno-0-764" name="__codelineno-0-764"></a>
-</span><span id="__span-0-765"><a id="__codelineno-0-765" name="__codelineno-0-765"></a>    <span class="k">return</span> <span class="n">flat_BAf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="n">flat_BAf</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>  <span class="c1"># (..., Af)</span>
+</span><span id="__span-0-765"><a id="__codelineno-0-765" name="__codelineno-0-765"></a>    <span class="c1"># LogCat per sample: (N, A) -&gt; (N*D+1,). vmap because manifold ops are single-point.</span>
+</span><span id="__span-0-766"><a id="__codelineno-0-766" name="__codelineno-0-766"></a>    <span class="c1"># `log_radius_concat` is Hyperboloid-only and therefore not on the `Manifold` protocol;</span>
+</span><span id="__span-0-767"><a id="__codelineno-0-767" name="__codelineno-0-767"></a>    <span class="c1"># the `validate_hyperboloid_manifold` call above is what guarantees it is present.</span>
+</span><span id="__span-0-768"><a id="__codelineno-0-768" name="__codelineno-0-768"></a>    <span class="n">log_radius_concat</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="n">Hyperboloid</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">)</span><span class="o">.</span><span class="n">log_radius_concat</span>
+</span><span id="__span-0-769"><a id="__codelineno-0-769" name="__codelineno-0-769"></a>    <span class="n">flat_BAf</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">log_radius_concat</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">))(</span><span class="n">points_BNA</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># (B, Af)</span>
+</span><span id="__span-0-770"><a id="__codelineno-0-770" name="__codelineno-0-770"></a>
+</span><span id="__span-0-771"><a id="__codelineno-0-771" name="__codelineno-0-771"></a>    <span class="k">return</span> <span class="n">flat_BAf</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="n">flat_BAf</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>  <span class="c1"># (..., Af)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>

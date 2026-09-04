@@ -1510,6 +1510,23 @@
   
 </li>
         
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0111-2026-07-21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.11.1 - 2026-07-21
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.11.1 - 2026-07-21">
+      <ul class="md-nav__list">
+        
           <li class="md-nav__item">
   <a href="#changed_2" class="md-nav__link">
     <span class="md-ellipsis">
@@ -2515,6 +2532,23 @@
   
 </li>
         
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0111-2026-07-21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0.11.1 - 2026-07-21
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0.11.1 - 2026-07-21">
+      <ul class="md-nav__list">
+        
           <li class="md-nav__item">
   <a href="#changed_2" class="md-nav__link">
     <span class="md-ellipsis">
@@ -3409,6 +3443,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong><code>_gyrovector_core._proj_batch</code> takes its boundary bound from the <code>_max_norm</code> helper instead of re-inlining the expression.</strong> <code>_max_norm</code> reads only the array's dtype, so the bound is a scalar either way and the clamp is bit-identical: 0 of 3072 bit patterns move in either dtype over a (64, 16) batch at <code>c</code> in {0.3, 1, 2.5} with rows inside, exactly at, and up to 1e8 past the boundary plus an exact-zero row, and <code>_proj_batch(X, c)</code> still equals row-wise <code>_proj</code> bit for bit</li>
 <li><strong>Developer tooling: undefined names are checked again.</strong> <code>[tool.pyright]</code> listed <code>"hyperbolix"</code> in both <code>include</code> and <code>exclude</code>, so pyright analysed 0 of 57 modules and always reported "0 errors"; the tree is analysed again under <code>typeCheckingMode = "off"</code> with <code>reportUndefinedVariable</code> (plus the existing unused/duplicate-import rules) enabled explicitly. Ruff's <code>F821</code> is now on for <code>tests/</code> and ignored only under <code>hyperbolix/**</code>, where jaxtyping shape strings produce 572 false positives and no true ones. New <code>tests/test_imports.py</code> imports every module in the package, one test per module.</li>
 <li><strong>Developer tooling: pyright runs in <code>typeCheckingMode = "basic"</code> and the package is clean — 0 errors, with no rule disabled and no <code># type: ignore</code> added to get there.</strong> Basic mode reported 110 errors when it was first switched on (<code>reportOperatorIssue</code> 49, <code>reportArgumentType</code> 46, <code>reportReturnType</code> 5, 10 others). 93 of them were one thing: the <code>Curvature</code> union <code>ScalarCurvature | Sequence[ScalarCurvature]</code> was the annotation on every manifold's <code>c</code>, so <code>jnp.sqrt(c)</code>, <code>c * x</code> and <code>1/c</code> were all checked against a sequence that supports none of them. <strong>Every single manifold and the <code>Manifold</code> protocol itself now declare <code>c: ScalarCurvature</code></strong> — 286 annotations across 19 modules — and only <code>ProductManifold</code> keeps the union, which still satisfies the protocol because an implementation's parameter may be wider than the one it implements. <code>ScalarCurvature</code> is exported from <code>hyperbolix.manifolds</code> alongside <code>Curvature</code>, and no runtime behaviour changes: this is the annotation catching up with what the code always required. Three real defects came out with it: the <code>Manifold</code> protocol was missing the trailing <code>version_idx</code> on <code>dist</code>/<code>dist_0</code> and <code>atol</code> on <code>is_in_manifold</code>/<code>is_in_tangent_space</code> that its own docstring promised (so <code>compute_pairwise_distances</code>, which forwards <code>version_idx</code>, did not type-check against it); <code>hyperbolix.utils.__all__</code> listed <code>MATMUL_PRECISION</code>, which moved to <code>hyperbolix.utils.precision</code> and was never re-imported, so <code>from hyperbolix.utils import *</code> raised <code>AttributeError</code>; and <code>hyp_pad2d(pad_mode="origin")</code> documents <code>c</code> as required but never checked it, failing with an opaque <code>TypeError: unsupported operand type(s) for /</code> — it now raises a <code>ValueError</code> naming the argument. <code>scalar_mul</code>'s <code>r</code> is widened from <code>float</code> to <code>float | Float[Array, ""]</code>, which is what <code>GyroBatchNorm</code>/<code>GyroRMSNorm</code> already pass and what <code>ProperVelocity._scalar_mul</code> already declared. The remaining handful were values whose type <code>@jax.jit</code> erases: jax annotates the decorator as returning <code>jax.stages.Wrapped</code>, whose <code>__call__</code> returns <code>Any</code>, so <code>safe_norm(x)</code> and every other jitted helper in <code>hyperbolix.utils.math_utils</code> handed its callers an untyped value, which pyright then widened into <code>Array | tuple[Array, ...]</code> at the next <code>jnp.where</code> and reported against whatever declared type that union eventually reached. The 13 decorators in that module now go through a one-line <code>_jit</code> wrapper typed <code>Callable[P, R] -&gt; Callable[P, R]</code>, so the declared return type survives; it returns exactly the object <code>jax.jit</code> returns, so tracing, the compilation cache, <code>__name__</code>, <code>__doc__</code> and <code>static_argnames</code> are all unchanged.</li>
+<li><strong>API reference now covers the full <code>hyperbolix.utils</code> export surface and <code>hyperbolix.utils.precision</code></strong>, with several stale version/count claims and numeric docstring constants corrected.</li>
 </ul>
 <h3 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h3>
 <ul>
@@ -3494,6 +3529,7 @@ versioning.</p>
 <li><strong><code>hyperbolix.decomposition.frechet_mean</code></strong> — manifold-generic Karcher (Fréchet) mean via fixed-point iteration in a <code>lax.while_loop</code> (Lorentz-centroid init on the hyperboloid, projected-mean init on the Poincaré ball). The data-centering primitive HoroPCA builds on; configurable <code>step_size</code> / <code>tol</code> / <code>max_iters</code></li>
 <li><strong><code>Hyperboloid.lorentz_boost(mu, c)</code></strong> — the exact Lorentz boost matrix <code>B</code> with <code>B @ mu = origin</code> (symmetric, proper, orthochronous), used to Fréchet-mean-center data before fitting. Closes a docs–code gap (the method was already advertised in the manifolds API reference)</li>
 </ul>
+<h2 id="0111-2026-07-21"><a href="https://github.com/timoklein/hyperbolix/compare/v0.11.0...v0.11.1">0.11.1</a> - 2026-07-21<a class="headerlink" href="#0111-2026-07-21" title="Permanent link">&para;</a></h2>
 <h3 id="changed_2">Changed<a class="headerlink" href="#changed_2" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong><code>HTCLinear</code> default init is now fan-in-aware and norm-preserving.</strong> <code>init_bound</code> accepts <code>None</code> (the new default), which resolves to <code>sqrt(3 / in_features)</code> — per-layer input-Jacobian gain ≈ 1, since <code>htc</code> applies no nonlinearity to the matmul output. The previous fixed <code>U(-0.02, 0.02)</code> was width-dependent <strong>contractive</strong> (gain <code>0.02/sqrt(3)·sqrt(in_features)</code> ≈ 0.09 at fan-in 65): stacks of ≥ 2 layers collapsed input variation below the float32 noise floor, becoming a constant map with ≈0 gradients — training silently frozen from step 0 (observed in goal-conditioned RL: depth-2 HTC head, c=0.5, frozen through 3.1M steps; escape time monotone in the bound). The <code>0.02</code> was an in-house convention inherited from the FHNN/FHCNN family, <strong>not</strong> the Hypformer reference — the official Hypformer code initializes with Xavier-uniform gain <code>sqrt(2)</code> (<code>bound = 2·sqrt(3/(in+out))</code>, ~15× larger than 0.02 at fan-in 65), intended for its ReLU + LayerNorm regime; recover it by passing that bound explicitly. The attention layers (<code>HyperbolicLinearAttention</code>, <code>HyperbolicSoftmaxAttention</code>, <code>HyperbolicFullAttention</code>) and <code>HypformerPositionalEncoding</code> now default <code>init_bound=None</code> and inherit the fan-in-aware init for their HTC projections (matching the reference, whose Wq/Wk/Wv and positional encoding use the same Xavier init). FHNN/FHCNN/PLFC layers are unchanged — their <code>0.02</code> matches their references (verified against the official Chen 2021, Bdeir 2023, and Shi 2026 code). <strong>Behavior change</strong> — existing HTC models pick up the new init unless they pass <code>init_bound=0.02</code> explicitly (bit-for-bit reproduction of the old init)</li>
