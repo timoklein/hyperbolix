@@ -360,10 +360,8 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     x_time, y_time = x[0], y[0]
     x_s_D, y_s_D = x[1:], y[1:]
 
-    # `safe_norm` is `@jax.jit`-wrapped and `jax.jit` is typed as returning an untyped
-    # callable, so these annotations restore the shape the helper's own signature declares.
-    r_x: Array = safe_norm(x_s_D)  # scalar
-    r_y: Array = safe_norm(y_s_D)  # scalar
+    r_x = safe_norm(x_s_D)
+    r_y = safe_norm(y_s_D)
     r_x_pos = floor_at(r_x, MIN_NORM)
     r_y_pos = floor_at(r_y, MIN_NORM)
     x_hat_D = x_s_D / r_x_pos
@@ -825,8 +823,7 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Sca
     # S = 0 exactly at x == y, where the direction is arbitrary; floor the denominator so the
     # discarded ratios stay finite (they are multiplied by dist_xy = 0 anyway).
     sinh_half_pos = floor_at(frame.sinh_half, MIN_NORM)
-    # `safe_hypot` is `@jax.jit`-wrapped (see `_polar_frame`); annotate so `res` below stays typed.
-    cos_phi: Array = (frame.sinh_half_gap / sinh_half_pos) * (
+    cos_phi = (frame.sinh_half_gap / sinh_half_pos) * (
         safe_hypot(jnp.ones_like(frame.sinh_half_gap), frame.sinh_half_gap) / frame.cosh_half
     ) + (frame.q_angular / sinh_half_pos) * (frame.q_angular / frame.cosh_half) * (frame.x_time / frame.r_x_pos)
     sin_phi = (
@@ -840,16 +837,11 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Sca
     e_rad_A = -frame.sqrt_c * jnp.concatenate([frame.r_x[None], frame.x_time * frame.x_hat_D])
     # Unit angular direction: the component of ŷ_s orthogonal to x̂_s. Exactly the zero vector when
     # the two points share a ray (ψ = 0 or π), which is also where sin φ = 0.
-    # Annotated for the same reason as `_polar_frame`'s radii: `safe_normalize` is `@jax.jit`-wrapped.
-    n_hat_D: Array = safe_normalize(  # (dim,)
-        frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D, precision=MATMUL_PRECISION) * frame.x_hat_D
-    )
+    n_hat_D = safe_normalize(frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D, precision=MATMUL_PRECISION) * frame.x_hat_D)
     e_ang_A = jnp.concatenate([jnp.zeros(1, dtype=x.dtype), n_hat_D])
 
     res = dist_xy * (cos_phi * e_rad_A + sin_phi * e_ang_A)
-    # Same `@jax.jit` type erasure as above: annotate so the `where` sees two Arrays.
-    origin_fallback_A: Array = _logmap_0(y, c)  # (dim+1,)
-    return jnp.where(frame.r_x > 0, res, origin_fallback_A)
+    return jnp.where(frame.r_x > 0, res, _logmap_0(y, c))
 
 
 def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:

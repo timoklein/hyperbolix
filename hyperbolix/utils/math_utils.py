@@ -4,12 +4,32 @@ Direct JAX port of PyTorch math_utils.py with type annotations using jaxtyping.
 """
 
 import functools
+from collections.abc import Callable
 
 import jax
 import jax.nn as nn
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 from jaxtyping import Array, Float
+
+
+def _jit[**P, R](fun: Callable[P, R], **jit_kwargs) -> Callable[P, R]:
+    """``jax.jit`` with the wrapped function's declared return type kept intact.
+
+    ``jax.jit`` is annotated as returning ``jax.stages.Wrapped``, whose ``__call__`` returns
+    ``Any``, so every ``@jax.jit``-decorated helper in this module used to hand its callers an
+    untyped value. That is invisible where it happens and surfaces somewhere else: a
+    ``jnp.where(cond, a, safe_norm(x))`` three modules away widens to
+    ``Array | tuple[Array, ...]`` (pyright unions every overload when an argument is ``Any``)
+    and the error lands on whatever declared type that union eventually reaches.
+
+    This is a re-annotation and nothing else: it returns exactly the object ``jax.jit``
+    returns, so tracing, the compilation cache, ``__name__``, ``__doc__`` and
+    ``lower``/``trace`` are all untouched. ``**jit_kwargs`` is forwarded verbatim, which is
+    what the ``static_argnames`` decorators below need.
+    """
+    return jax.jit(fun, **jit_kwargs)
+
 
 # Canonical gradient-safety floor for norms and denominators, shared library-wide
 # (`manifolds/`, `nn_layers/`, `distributions/`, `decomposition/` all import this name).
@@ -120,7 +140,7 @@ def _softplus_tail(u: Float[Array, "..."], smoothing_factor: float) -> Float[Arr
     return nn.softplus(smoothing_factor * jnp.minimum(u, -u)) / smoothing_factor
 
 
-@functools.partial(jax.jit, static_argnames=["smoothing_factor"])
+@functools.partial(_jit, static_argnames=["smoothing_factor"])
 def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
     """Smoothly clamp array values to a minimum using softplus. Range=(min_value, inf).
 
@@ -156,7 +176,7 @@ def smooth_clamp_min(x: Float[Array, "..."], min_value: float, smoothing_factor:
     return jnp.maximum(x, min_value) + _softplus_tail(x - min_value, smoothing_factor)
 
 
-@functools.partial(jax.jit, static_argnames=["smoothing_factor"])
+@functools.partial(_jit, static_argnames=["smoothing_factor"])
 def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor: float = 50.0) -> Float[Array, "..."]:
     """Smoothly clamp array values to a maximum using softplus. Range=(-inf, max_value).
 
@@ -181,7 +201,7 @@ def smooth_clamp_max(x: Float[Array, "..."], max_value: float, smoothing_factor:
     return jnp.minimum(x, max_value) - _softplus_tail(x - max_value, smoothing_factor)
 
 
-@functools.partial(jax.jit, static_argnames=["smoothing_factor"])
+@functools.partial(_jit, static_argnames=["smoothing_factor"])
 def smooth_clamp(
     x: Float[Array, "..."], min_value: float, max_value: float, smoothing_factor: float = 50.0
 ) -> Float[Array, "..."]:
@@ -238,7 +258,7 @@ def smooth_clamp(
     )
 
 
-@jax.jit
+@_jit
 def safe_norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
     """Euclidean norm over the last axis, computed max-scaled. Domain=R^n, Range=[0, inf).
 
@@ -284,7 +304,7 @@ def safe_norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
     return jnp.where(is_zero, jnp.zeros_like(sq), divisor * jnp.sqrt(sq_safe))
 
 
-@jax.jit
+@_jit
 def safe_hypot(p: Float[Array, "..."], q: Float[Array, "..."]) -> Float[Array, "..."]:
     """``sqrt(p² + q²)`` without intermediate overflow or underflow. Range=[0, inf).
 
@@ -311,7 +331,7 @@ def safe_hypot(p: Float[Array, "..."], q: Float[Array, "..."]) -> Float[Array, "
     return jnp.where(is_zero, jnp.zeros_like(sq), divisor * jnp.sqrt(sq_safe))
 
 
-@jax.jit
+@_jit
 def safe_sqrt(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """``sqrt(x)`` with an exactly-zero derivative at ``x == 0`` instead of ``inf``. Range=[0, inf).
 
@@ -346,7 +366,7 @@ def safe_sqrt(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return jnp.where(is_zero, jnp.zeros_like(x), jnp.sqrt(x_safe))
 
 
-@jax.jit
+@_jit
 def safe_normalize(v: Float[Array, "... n"]) -> Float[Array, "... n"]:
     """``v/‖v‖`` over the last axis, returning the **exact zero vector** at ``v == 0``.
 
@@ -377,7 +397,7 @@ def safe_normalize(v: Float[Array, "... n"]) -> Float[Array, "... n"]:
     return jnp.where(is_zero, jnp.zeros_like(v), scaled / jnp.sqrt(sq_safe))
 
 
-@jax.jit
+@_jit
 def capped_exp(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Exponential with an overflow cap on the argument. Domain=(-inf, inf).
 
@@ -421,7 +441,7 @@ def _cosh_stable_jvp(primals, tangents):
     return _cosh_stable(x), (0.5 * (jnp.expm1(x) - jnp.expm1(-x))) * t
 
 
-@jax.jit
+@_jit
 def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic cosine with overflow protection. Domain=(-inf, inf).
 
@@ -462,7 +482,7 @@ def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return _cosh_stable(x)
 
 
-@jax.jit
+@_jit
 def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic sine with overflow protection. Domain=(-inf, inf).
 
@@ -505,7 +525,7 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return 0.5 * (jnp.expm1(x) - jnp.expm1(-x))
 
 
-@jax.jit
+@_jit
 def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic cosine with domain clamping. Domain=[1, inf).
 
@@ -546,7 +566,7 @@ def _is_low_precision(dtype) -> bool:
 _ATANH_SERIES_SEAM = 0.125
 
 
-@jax.jit
+@_jit
 def atanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic tangent with domain clamping. Domain=(-1, 1).
 
@@ -633,7 +653,7 @@ _TANH_EXPM1_SEAM_FLOAT64 = 0.5
 # ulps), hence the `_is_low_precision` gate, exactly as for `atanh`'s series above.
 
 
-@jax.jit
+@_jit
 def tanh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic tangent clamped so the output stays strictly inside (-1, 1). Domain=(-inf, inf).
 

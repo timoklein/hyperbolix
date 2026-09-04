@@ -183,8 +183,7 @@ def _tan_k(x: Float[Array, "..."], k: ScalarCurvature) -> Float[Array, "..."]:
     """κ-tangent: ``tanh(√|k|·x)/√|k|`` (k<0), ``tan(√k·x)/√k`` (k>0), Taylor (k→0). Paper ``tan_κ``."""
     sqrt_abs_k = _sqrt_abs_k(k)
     scaled = sqrt_abs_k * x
-    # `tanh` / `atanh` are `@jax.jit`-wrapped; annotate so `jnp.where` below sees an Array.
-    neg: Array = tanh(scaled) / sqrt_abs_k
+    neg = tanh(scaled) / sqrt_abs_k
     pos = jnp.tan(clamp_to(scaled, -_TAN_ARG_CLAMP, _TAN_ARG_CLAMP)) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
     return jnp.where(_use_taylor(x, k), _tan_k_zero_taylor(x, k), nonzero)
@@ -194,8 +193,7 @@ def _artan_k(x: Float[Array, "..."], k: ScalarCurvature) -> Float[Array, "..."]:
     """κ-arctangent: ``atanh(√|k|·x)/√|k|`` (k<0), ``arctan(√k·x)/√k`` (k>0), Taylor (k→0). Paper ``tan_κ⁻¹``."""
     sqrt_abs_k = _sqrt_abs_k(k)
     scaled = sqrt_abs_k * x
-    # See `_tan_k`: `@jax.jit` erases the wrapper's declared return type.
-    neg: Array = atanh(scaled) / sqrt_abs_k
+    neg = atanh(scaled) / sqrt_abs_k
     pos = jnp.arctan(scaled) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
     return jnp.where(_use_taylor(x, k), _artan_k_zero_taylor(x, k), nonzero)
