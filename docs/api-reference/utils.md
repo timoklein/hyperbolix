@@ -6,6 +6,16 @@ Utility functions for hyperbolic deep learning.
 
 Numerically stable implementations of hyperbolic functions.
 
+Note which norm primitive goes where. On the **hot path** — every per-sample norm inside `proj`,
+`expmap`, `logmap`, the distances and the layer forwards — the library takes a single reduction:
+`safe_sqrt(sum(v**2))` when the input can be exactly zero, a plain `sqrt(const + sum(v**2))` when a
+strictly positive constant is added, and `floor_at(..., MIN_NORM)` around either when the norm is a
+divisor. `safe_norm`, `safe_hypot_norm` and `safe_normalize` are max-scaled and read the input
+twice; they are used for the **weight** norms, computed once per forward over a kernel rather than
+once per sample, and they are the right choice in user code that needs the full float32 exponent
+range. See
+[Norms: one reduction, gradient-safe at zero](../user-guide/numerical-stability.md#safe-norms).
+
 ::: hyperbolix.utils.math_utils
     options:
       show_source: true
