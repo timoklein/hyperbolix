@@ -12,6 +12,8 @@ Hyperbolic geometry presents unique numerical challenges due to the exponential 
     - **Hyperbolic function overflow**: cosh/sinh overflow for large arguments
     - **Division by near-zero**: Operations involving 1 - c||x||² near the boundary
 
+    These challenges are specific to the Poincaré ball; see [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode) below for operations that are accurate at any representable radius in float32.
+
 ## Float Precision: Float32 vs Float64
 
 ### When to Use Each
@@ -51,6 +53,8 @@ dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
 | 3 ≤ d < 5 | Good (< 0.1% error) | float32 |
 | 5 ≤ d < 10 | Moderate (< 3% error) | float64 for critical ops |
 | d ≥ 10 | Poor (> 3% error) | **float64 required** |
+
+*Table scoped to the Poincaré ball. `Hyperboloid.dist`/`logmap`/`sqdist`/`tangent_norm` under `VERSION_DEFAULT` are accurate at any radius in float32 — see [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode) below.*
 
 !!! tip "Quick Check"
     If your embeddings have distances from the origin > 7, switch to float64:
@@ -1113,7 +1117,7 @@ c = 1.0  # Good default
 c = 0.1  # Lower curvature = larger hyperbolic space = more stable
 
 # If learning curvature, clip it
-def clip_curvature(c, min_c=0.01, max_c=10.0):
+def clip_curvature(c, min_c=0.1, max_c=10.0):
     return jnp.clip(c, min_c, max_c)
 ```
 
@@ -1191,7 +1195,7 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
     - ✅ **Monitor conformal factors** during training
     - ✅ **Validate manifold constraints** in debugging
     - ✅ **Use `VERSION_MOBIUS_DIRECT` for Poincaré distance** unless issues arise
-    - ✅ **Clip curvature** if learnable (0.01 < c < 10.0)
+    - ✅ **Clip curvature** if learnable (0.1 < c < 10.0)
     - ✅ **Initialize embeddings conservatively** (small norms)
     - ✅ **Prefer `ProperVelocity` for large-radius features** — unconstrained $\mathbb{R}^n$ avoids the boundary entirely and trains with plain `optax.adam`
 

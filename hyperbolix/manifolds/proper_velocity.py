@@ -488,7 +488,7 @@ def _compute_mlr(
         c: Curvature (positive).
         clamping_factor: Scales the dtype-dependent clamp bound.
         smoothing_factor: Softness of the smooth clamp transition.
-        min_enorm: Lower bound added under the sqrt when normalizing z.
+        min_enorm: Multiplicative floor on ‖z‖ when normalizing z.
 
     Returns:
         MLR scores, shape (batch, out_dim).

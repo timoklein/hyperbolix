@@ -172,12 +172,12 @@ def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Scala
     The pairwise twin of :func:`_dist_0_metric_tensor`, and it had the same defect. The
     metric-tensor integral gives ``acosh(1 + 2t)/√c`` with
     ``t = c‖x - y‖²/((1 - c‖x‖²)(1 - c‖y‖²))``, so the whole separation signal sits in a
-    perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every
-    pair whose ``t`` fell below ``5·eps`` onto exactly zero, and an extra ``arg < 1 + MIN_NORM``
-    short-circuit zeroed a second band below ``t = MIN_NORM/2``. For two points at radius ``r`` the
-    two ``(1 - c·r²)`` factors scale the threshold, so the float32 separation floor is
-    ``sqrt(5·eps/c)·(1 - c·r²)`` — 1.2e-3/√c at the origin, tightening to 9.2e-4/√c at ``r = 0.5``
-    for ``c = 1``.
+    perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp pinned every
+    pair whose ``t`` fell below ``5·eps`` to a constant floor (killing the gradient), and an extra
+    ``arg < 1 + MIN_NORM`` short-circuit zeroed a second, smaller band below ``t = MIN_NORM/2``. For
+    two points at radius ``r`` the two ``(1 - c·r²)`` factors scale the threshold, so the float32
+    separation floor is ``sqrt(5·eps/c)·(1 - c·r²)`` — 7.7e-4/√c at the origin, tightening to
+    5.8e-4/√c at ``r = 0.5`` for ``c = 1``.
 
     The half-angle identity ``acosh(1 + 2t) = 2·arcsinh(√t)`` moves the separation into an argument
     *linear* in ``‖x - y‖``::
@@ -298,9 +298,10 @@ def _dist_0_metric_tensor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[A
     what this arm used to evaluate. That spelling has the same defect as the hyperboloid's old
     ``acosh(√c·x₀)`` route (see ``hyperboloid._dist_0_stable``): the whole radial signal sits in the
     ``2t ≈ 2c‖x‖²`` perturbation of a leading 1, so ``r`` is stored to ``sqrt(eps)`` resolution at
-    best, and ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every float32 radius
-    below ``sqrt(20·eps/(2c)) = sqrt(10·eps/c)`` ≈ 1.1e-3/√c onto exactly zero. The extra
-    ``arg < 1 + MIN_NORM`` guard zeroed a second band below ``sqrt(MIN_NORM/(2c))`` ≈ 2.2e-8/√c.
+    best, and ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp pinned every float32 radius
+    below ``sqrt(20·eps/(2c)) = sqrt(10·eps/c)`` ≈ 1.1e-3/√c to a constant floor (killing the
+    gradient). The extra ``arg < 1 + MIN_NORM`` guard zeroed a second, smaller band below
+    ``sqrt(MIN_NORM/(2c))`` ≈ 2.2e-8/√c.
 
     The half-angle identity ``acosh(1 + 2t) = 2·arcsinh(√t)`` (both sides are ``2θ`` for the ``θ``
     with ``sinh²θ = t``, since ``cosh 2θ = 1 + 2 sinh²θ``) moves the radius out of the perturbed

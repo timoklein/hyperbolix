@@ -86,7 +86,7 @@ output = model(input_data, c=1.0)
 
 ## Project Status
 
-**Stable — current release: v1.1.0.** The public API is complete and stable, reaching functional parity with the broader hyperbolic deep learning ecosystem; changes follow semantic versioning and new layers and manifolds continue to be added. See the [Changelog](changelog.md) for the full release history.
+**Stable — current release: v1.1.2.** The public API is complete and stable, reaching functional parity with the broader hyperbolic deep learning ecosystem; changes follow semantic versioning and new layers and manifolds continue to be added. See the [Changelog](changelog.md) for the full release history.
 
 | Capability | Status | Shipped in |
 |---|---|---|

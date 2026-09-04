@@ -13,9 +13,17 @@ Numerically stable implementations of hyperbolic functions.
       members:
         - cosh
         - sinh
+        - tanh
         - acosh
         - atanh
+        - safe_norm
+        - safe_normalize
+        - safe_sqrt
+        - safe_hypot
+        - safe_hypot_norm
         - smooth_clamp
+        - smooth_clamp_min
+        - smooth_clamp_max
         - capped_exp
 
 ### Usage Example
@@ -44,6 +52,15 @@ log_scale = jnp.array(1e6)  # a runaway trainable parameter
 jnp.exp(log_scale)  # inf -- would NaN downstream
 capped_exp(log_scale)  # finite, saturates at exp(0.99*log(finfo.max))
 ```
+
+## Matmul Precision
+
+`MATMUL_PRECISION` pins float32 dot products touching manifold data (points, tangent vectors, hyperplane normals) to `jax.lax.Precision.HIGHEST`, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on.
+
+::: hyperbolix.utils.precision
+    options:
+      show_source: true
+      heading_level: 3
 
 ## Learnable Curvature
 

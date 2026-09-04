@@ -485,7 +485,7 @@ def safe_normalize(v: Float[Array, "... n"]) -> Float[Array, "... n"]:
 def capped_exp(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Exponential with an overflow cap on the argument. Domain=(-inf, inf).
 
-    Computes ``exp(minimum(x, 0.99*log(finfo.max)))`` (cap ≈ 87.8 for f32, ≈ 701.8 for f64), so the
+    Computes ``exp(minimum(x, 0.99*log(finfo.max)))`` (cap ≈ 87.8 for f32, ≈ 702.7 for f64), so the
     result cannot overflow to ``+inf``. Intended for ``exp`` of *unconstrained trainable parameters*
     (e.g. log-scale reparameterizations): a runaway parameter would otherwise produce an ``inf``
     that turns into NaN downstream (``inf - inf``, ``inf * 0``) and poisons every parameter within
@@ -529,7 +529,7 @@ def _cosh_stable_jvp(primals, tangents):
 def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic cosine with overflow protection. Domain=(-inf, inf).
 
-    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±709 for f64) before
+    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±702.7 for f64) before
     computing the value so the result cannot overflow the dtype. This is a *pure overflow guard*:
     for any input that is not about to overflow the clip is a value- and gradient-identity, so the
     forward pass and the VJP match an unguarded ``cosh`` throughout the entire valid regime.
@@ -570,7 +570,7 @@ def cosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
 def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Hyperbolic sine with overflow protection. Domain=(-inf, inf).
 
-    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±709 for f64) before
+    Hard-clips the input to ``±0.99*log(finfo.max)`` (≈±87.8 for f32, ±702.7 for f64) before
     computing the value so the result cannot overflow the dtype. This is a *pure overflow guard*:
     for any input that is not about to overflow the clip is a value- and gradient-identity, so the
     forward pass and the VJP match an unguarded ``sinh`` throughout the entire valid regime.
