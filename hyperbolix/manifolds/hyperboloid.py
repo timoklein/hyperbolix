@@ -85,7 +85,7 @@ from ..utils.math_utils import (
 )
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
-from .protocol import Curvature
+from .protocol import ScalarCurvature
 
 # Version selection constants for _dist() and _dist_0()
 VERSION_DEFAULT = 0
@@ -94,7 +94,7 @@ VERSION_LEGACY = 2
 VERSION_LEGACY_SMOOTHENED = 3
 
 
-def _create_origin(c: Curvature, dim: int, dtype=jnp.float32) -> Float[Array, "dim_plus_1"]:
+def _create_origin(c: ScalarCurvature, dim: int, dtype=jnp.float32) -> Float[Array, "dim_plus_1"]:
     """Create hyperboloid origin [1/√c, 0, ..., 0]."""
     sqrt_c = jnp.sqrt(c)
     origin = jnp.zeros(dim + 1, dtype=dtype)
@@ -140,7 +140,7 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_pl
     return jnp.concatenate([zeros, v_spatial], axis=-1)
 
 
-def _proj(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Project point onto hyperboloid by adjusting temporal component.
 
     Args:
@@ -170,7 +170,7 @@ def _proj(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus
     return jnp.concatenate([x0_new[None], x_rest])
 
 
-def _proj_batch(x: Float[Array, "... dim_plus_1"], c: Curvature) -> Float[Array, "... dim_plus_1"]:
+def _proj_batch(x: Float[Array, "... dim_plus_1"], c: ScalarCurvature) -> Float[Array, "... dim_plus_1"]:
     """Project batched points onto hyperboloid by adjusting temporal component.
 
     Batch-compatible version of _proj() that handles arbitrary leading dimensions.
@@ -192,7 +192,7 @@ def _proj_batch(x: Float[Array, "... dim_plus_1"], c: Curvature) -> Float[Array,
     return jnp.concatenate([x0_new, x_rest], axis=-1)
 
 
-def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Lorentz gyrovector addition ``x ⊕ y`` on the Hyperboloid.
 
     Implements the gyroaddition of Chen et al. (2025b), adopted as the intrinsic Lorentz
@@ -224,7 +224,7 @@ def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: C
     return res
 
 
-def _scalar_mul(r: float, x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Scalar multiplication r ⊗ x on hyperboloid.
 
     Args:
@@ -276,7 +276,7 @@ class _PolarFrame(NamedTuple):
     csum: Float[Array, ""]  # ‖x̂ + ŷ‖ = 2·cos(ψ/2)
 
 
-def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> _PolarFrame:
+def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> _PolarFrame:
     """Hyperbolic haversine decomposition of the pair ``(x, y)``, free of catastrophic cancellation.
 
     **The problem.** Every ambient-chart formula built on ``⟨x, y⟩_L = -x₀y₀ + ⟨x_s, y_s⟩``
@@ -360,8 +360,10 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     x_time, y_time = x[0], y[0]
     x_s_D, y_s_D = x[1:], y[1:]
 
-    r_x = safe_norm(x_s_D)
-    r_y = safe_norm(y_s_D)
+    # `safe_norm` is `@jax.jit`-wrapped and `jax.jit` is typed as returning an untyped
+    # callable, so these annotations restore the shape the helper's own signature declares.
+    r_x: Array = safe_norm(x_s_D)  # scalar
+    r_y: Array = safe_norm(y_s_D)  # scalar
     r_x_pos = floor_at(r_x, MIN_NORM)
     r_y_pos = floor_at(r_y, MIN_NORM)
     x_hat_D = x_s_D / r_x_pos
@@ -426,7 +428,7 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
 
 
 # Distance implementations for lax.switch
-def _dist_stable(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _dist_stable(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
     """Cancellation-free geodesic distance, ``d = 2·arcsinh(sinh(θ/2))/√c`` (hyperbolic haversine).
 
     Reads ``S = sinh(θ/2)`` off the :func:`_polar_frame` decomposition, which builds it as a sum of
@@ -445,7 +447,9 @@ def _dist_stable(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     return 2.0 * jnp.arcsinh(frame.sinh_half) / frame.sqrt_c
 
 
-def _dist_stable_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _dist_stable_smoothened(
+    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
+) -> Float[Array, ""]:
     """:func:`_dist_stable` with a strictly-positive floor: ``S`` is replaced by ``hypot(S, ε)``.
 
     ``ε = 10·eps`` puts the floor at ``2·arcsinh(ε)/√c`` ≈ 2.4e-6 (float32) / 4.4e-15 (float64),
@@ -463,7 +467,7 @@ def _dist_stable_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_
     return 2.0 * jnp.arcsinh(sinh_half_floored) / frame.sqrt_c
 
 
-def _dist_legacy(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _dist_legacy(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
     """Standard acosh distance with hard clipping.
 
     Kept for reference and comparison only. It routes through :func:`_minkowski_inner` and so loses
@@ -479,7 +483,9 @@ def _dist_legacy(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     return jnp.where(same, 0.0, res)  # type: ignore[return-value]
 
 
-def _dist_legacy_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _dist_legacy_smoothened(
+    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
+) -> Float[Array, ""]:
     """Smoothened distance with soft clamping. Legacy — see :func:`_dist_legacy`."""
     sqrt_c = jnp.sqrt(c)
     lorentz_inner = _minkowski_inner(x, y)
@@ -493,7 +499,7 @@ def _dist_legacy_smoothened(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_
 def _dist(
     x: Float[Array, "dim_plus_1"],
     y: Float[Array, "dim_plus_1"],
-    c: Curvature,
+    c: ScalarCurvature,
     version_idx: int = VERSION_DEFAULT,
 ) -> Float[Array, ""]:
     """Compute geodesic distance between hyperboloid points.
@@ -513,7 +519,7 @@ def _dist(
     return lax.switch(version_idx, [_dist_stable, _dist_stable_smoothened, _dist_legacy, _dist_legacy_smoothened], x, y, c)
 
 
-def _sqdist(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _sqdist(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
     """Squared Lorentzian distance between hyperboloid points.
 
     Computes the squared Lorentzian distance of Law et al. (2019):
@@ -559,7 +565,7 @@ def _sqdist(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Cur
 
 
 # Distance from origin implementations for lax.switch
-def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
     """Geodesic radius read off the *spatial* part: ``d₀ = arcsinh(√c·‖x_s‖)/√c``.
 
     On the upper sheet ``√c·x₀ = sqrt(1 + c·‖x_s‖²)``, so ``acosh(√c·x₀) = arcsinh(√c·‖x_s‖)``
@@ -586,7 +592,7 @@ def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, 
     return jnp.arcsinh(sqrt_c * safe_norm(x[1:])) / sqrt_c
 
 
-def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
     """:func:`_dist_0_stable` with a strictly-positive floor: the radius becomes ``hypot(u, ε)``.
 
     ``ε = 20·eps`` puts the floor at ``arcsinh(20·eps)/√c`` ≈ 2.4e-6 (float32) / 4.4e-15
@@ -603,7 +609,7 @@ def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: Curvature) -> Fl
     return jnp.arcsinh(radius_floored) / sqrt_c
 
 
-def _dist_0_legacy(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _dist_0_legacy(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
     """Standard acosh distance from origin with hard clipping.
 
     Kept for reference and comparison only. It reads the radius off ``x₀`` through ``acosh``, whose
@@ -621,7 +627,7 @@ def _dist_0_legacy(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, 
     return jnp.where(at_origin, 0.0, res)  # type: ignore[return-value]
 
 
-def _dist_0_legacy_smoothened(x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _dist_0_legacy_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
     """Smoothened distance from origin with soft clamping. Legacy — see :func:`_dist_0_legacy`.
 
     ``smooth_clamp_min(√c·x₀, 1.0)`` adds ``log(2)/β = 0.0139`` to the ``acosh`` argument, i.e. a
@@ -638,7 +644,7 @@ def _dist_0_legacy_smoothened(x: Float[Array, "dim_plus_1"], c: Curvature) -> Fl
     return jnp.where(at_origin, 0.0, res)  # type: ignore[return-value]
 
 
-def _dist_0(x: Float[Array, "dim_plus_1"], c: Curvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
+def _dist_0(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
     """Compute geodesic distance from hyperboloid origin.
 
     Slots 0/1 read the geodesic radius off the **spatial** part ``x_s`` and ignore ``x₀``; an
@@ -668,7 +674,7 @@ def _dist_0(x: Float[Array, "dim_plus_1"], c: Curvature, version_idx: int = VERS
     )
 
 
-def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
     Args:
@@ -704,7 +710,7 @@ def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Cur
     return res
 
 
-def _expmap_0(v: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _expmap_0(v: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     Args:
@@ -740,7 +746,9 @@ def _expmap_0(v: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_
     return res
 
 
-def _retraction(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _retraction(
+    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
+) -> Float[Array, "dim_plus_1"]:
     """Retraction: first-order approximation of exponential map.
 
     Args:
@@ -759,7 +767,7 @@ def _retraction(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c:
     return res
 
 
-def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map: map point y to tangent space at **x** (the second argument is the base point).
 
     Built in an orthonormal geodesic frame at ``x`` instead of from ``y + c·⟨x, y⟩_L·x``. The
@@ -817,7 +825,8 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Cur
     # S = 0 exactly at x == y, where the direction is arbitrary; floor the denominator so the
     # discarded ratios stay finite (they are multiplied by dist_xy = 0 anyway).
     sinh_half_pos = floor_at(frame.sinh_half, MIN_NORM)
-    cos_phi = (frame.sinh_half_gap / sinh_half_pos) * (
+    # `safe_hypot` is `@jax.jit`-wrapped (see `_polar_frame`); annotate so `res` below stays typed.
+    cos_phi: Array = (frame.sinh_half_gap / sinh_half_pos) * (
         safe_hypot(jnp.ones_like(frame.sinh_half_gap), frame.sinh_half_gap) / frame.cosh_half
     ) + (frame.q_angular / sinh_half_pos) * (frame.q_angular / frame.cosh_half) * (frame.x_time / frame.r_x_pos)
     sin_phi = (
@@ -831,14 +840,19 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Cur
     e_rad_A = -frame.sqrt_c * jnp.concatenate([frame.r_x[None], frame.x_time * frame.x_hat_D])
     # Unit angular direction: the component of ŷ_s orthogonal to x̂_s. Exactly the zero vector when
     # the two points share a ray (ψ = 0 or π), which is also where sin φ = 0.
-    n_hat_D = safe_normalize(frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D, precision=MATMUL_PRECISION) * frame.x_hat_D)
+    # Annotated for the same reason as `_polar_frame`'s radii: `safe_normalize` is `@jax.jit`-wrapped.
+    n_hat_D: Array = safe_normalize(  # (dim,)
+        frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D, precision=MATMUL_PRECISION) * frame.x_hat_D
+    )
     e_ang_A = jnp.concatenate([jnp.zeros(1, dtype=x.dtype), n_hat_D])
 
     res = dist_xy * (cos_phi * e_rad_A + sin_phi * e_ang_A)
-    return jnp.where(frame.r_x > 0, res, _logmap_0(y, c))
+    # Same `@jax.jit` type erasure as above: annotate so the `where` sees two Arrays.
+    origin_fallback_A: Array = _logmap_0(y, c)  # (dim+1,)
+    return jnp.where(frame.r_x > 0, res, origin_fallback_A)
 
 
-def _logmap_0(y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map from origin: ``log_0(y) = [0, arcsinh(u)/u · y_s]`` with ``u = √c·‖y_s‖``.
 
     Built from the spatial part alone, the same source of truth :func:`_dist_0_stable` uses (see
@@ -915,7 +929,7 @@ def _ptransp(
     v: Float[Array, "dim_plus_1"],
     x: Float[Array, "dim_plus_1"],
     y: Float[Array, "dim_plus_1"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim_plus_1"]:
     """Parallel transport tangent vector v from point x to point y.
 
@@ -949,7 +963,7 @@ def _ptransp(
     return res
 
 
-def _ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Parallel transport tangent vector v from origin to point y.
 
     Args:
@@ -988,7 +1002,7 @@ def _ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: 
 
 
 def _tangent_inner(
-    u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature
+    u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, ""]:
     """Compute inner product of tangent vectors u and v at point x.
 
@@ -1006,7 +1020,7 @@ def _tangent_inner(
     return _minkowski_inner(u, v)
 
 
-def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
     """Riemannian norm ``‖v‖_x`` of a vector **assumed tangent at x**, computed without cancellation.
 
     ``v`` is required to satisfy ``⟨v, x⟩_L = 0``; the base point ``x`` is what makes that
@@ -1052,7 +1066,9 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     return safe_hypot(perp_norm, radial / floor_at(sqrt_c * x[0], MIN_NORM))
 
 
-def _egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _egrad2rgrad(
+    grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
+) -> Float[Array, "dim_plus_1"]:
     """Convert Euclidean gradient to Riemannian gradient.
 
     Projects Euclidean gradient onto tangent space.
@@ -1082,7 +1098,9 @@ def _egrad2rgrad(grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"]
     return grad_lorentz - coeff * x_normed
 
 
-def _tangent_proj(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+def _tangent_proj(
+    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
+) -> Float[Array, "dim_plus_1"]:
     """Project vector v onto tangent space at point x.
 
     Args:
@@ -1103,7 +1121,7 @@ def _tangent_proj(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     return v - coeff * x_normed
 
 
-def _is_in_manifold(x: Float[Array, "dim_plus_1"], c: Curvature, atol: float | None = None) -> Array:
+def _is_in_manifold(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: float | None = None) -> Array:
     """Check if point x lies on hyperboloid.
 
     Args:
@@ -1126,7 +1144,7 @@ def _is_in_manifold(x: Float[Array, "dim_plus_1"], c: Curvature, atol: float | N
 
 
 def _is_in_tangent_space(
-    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature, atol: float | None = None
+    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: float | None = None
 ) -> Array:
     """Check if vector v lies in tangent space at point x.
 
@@ -1149,7 +1167,7 @@ def _is_in_tangent_space(
 
 def _hcat(
     points: Float[Array, "N n"],
-    c: Curvature = 1.0,
+    c: ScalarCurvature = 1.0,
 ) -> Float[Array, "dN_plus_1"]:
     """Lorentz direct concatenation for Hyperboloid points.
 
@@ -1199,7 +1217,7 @@ def _hcat(
 
 def _log_radius_concat(
     points: Float[Array, "N n"],
-    c: Curvature = 1.0,
+    c: ScalarCurvature = 1.0,
 ) -> Float[Array, "dN_plus_1"]:
     """Log-radius-preserving concatenation of N Hyperboloid points.
 
@@ -1271,7 +1289,7 @@ def _compute_mlr(
     x: Float[Array, "batch in_dim"],
     z: Float[Array, "out_dim in_dim_minus_1"],
     r: Float[Array, "out_dim 1"],
-    c: Curvature,
+    c: ScalarCurvature,
     clamping_factor: float,
     smoothing_factor: float,
     min_enorm: float = 1e-15,
@@ -1336,7 +1354,7 @@ def _compute_mlr(
     return res_BP
 
 
-def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Closed-form Lorentz Busemann function ``B^v(x)`` (point-to-horosphere coordinate).
 
     For a unit ideal direction ``v ∈ S^{n-1}`` (a *spatial* unit vector, dim ``d``) and a
@@ -1371,7 +1389,7 @@ def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: Curvatur
     return jnp.log(floor_at(arg, MIN_NORM)) / sqrt_c
 
 
-def _lorentz_boost(mu: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
+def _lorentz_boost(mu: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
     """Lorentz boost matrix ``B`` that sends ``mu`` to the origin (``B @ mu = origin``).
 
     Builds the pure Lorentz boost — a symmetric, proper, orthochronous Lorentz
@@ -1449,7 +1467,7 @@ class Hyperboloid(ManifoldBase):
     VERSION_LEGACY = VERSION_LEGACY
     VERSION_LEGACY_SMOOTHENED = VERSION_LEGACY_SMOOTHENED
 
-    def create_origin(self, c: Curvature, dim: int) -> Float[Array, "dim_plus_1"]:
+    def create_origin(self, c: ScalarCurvature, dim: int) -> Float[Array, "dim_plus_1"]:
         """Create hyperboloid origin [1/√c, 0, ..., 0]."""
         return _create_origin(c, dim, self.dtype)
 
@@ -1457,16 +1475,16 @@ class Hyperboloid(ManifoldBase):
         """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩."""
         return _minkowski_inner(self._cast(x), self._cast(y))
 
-    def proj(self, x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+    def proj(self, x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
         """Project point onto hyperboloid."""
         return _proj(self._cast(x), c)
 
-    def proj_batch(self, x: Float[Array, "... dim_plus_1"], c: Curvature) -> Float[Array, "... dim_plus_1"]:
+    def proj_batch(self, x: Float[Array, "... dim_plus_1"], c: ScalarCurvature) -> Float[Array, "... dim_plus_1"]:
         """Project batched points onto hyperboloid (handles arbitrary leading dimensions)."""
         return _proj_batch(self._cast(x), c)
 
     def addition(
-        self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature
+        self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Lorentz gyrovector addition ``x ⊕ y = Exp_x(PT_{0→x}(Log_0(y)))``.
 
@@ -1477,7 +1495,9 @@ class Hyperboloid(ManifoldBase):
         """
         return _addition(self._cast(x), self._cast(y), c)
 
-    def scalar_mul(self, r: float, x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+    def scalar_mul(
+        self, r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
+    ) -> Float[Array, "dim_plus_1"]:
         """Scalar multiplication on hyperboloid."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
@@ -1487,13 +1507,15 @@ class Hyperboloid(ManifoldBase):
         self,
         x: Float[Array, "dim_plus_1"],
         y: Float[Array, "dim_plus_1"],
-        c: Curvature,
+        c: ScalarCurvature,
         version_idx: int = VERSION_DEFAULT,
     ) -> Float[Array, ""]:
         """Compute geodesic distance between hyperboloid points."""
         return _dist(self._cast(x), self._cast(y), c, version_idx)
 
-    def dist_0(self, x: Float[Array, "dim_plus_1"], c: Curvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
+    def dist_0(
+        self, x: Float[Array, "dim_plus_1"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT
+    ) -> Float[Array, ""]:
         """Geodesic distance from the origin, ``arcsinh(√c·‖x_s‖)/√c``.
 
         Read off the **spatial** part; ``x₀`` is ignored, so an off-sheet input gets the radius of
@@ -1506,7 +1528,7 @@ class Hyperboloid(ManifoldBase):
         """
         return _dist_0(self._cast(x), c, version_idx)
 
-    def sqdist(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    def sqdist(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
         """Squared Lorentzian distance ``d_L²(x, y) = -2/c - 2⟨x,y⟩_L`` (Law et al. 2019).
 
         That is the mathematical definition; it is now evaluated cancellation-free as
@@ -1521,25 +1543,29 @@ class Hyperboloid(ManifoldBase):
         """
         return _sqdist(self._cast(x), self._cast(y), c)
 
-    def expmap(self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+    def expmap(
+        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
+    ) -> Float[Array, "dim_plus_1"]:
         """Exponential map: map tangent vector v at point x to manifold."""
         return _expmap(self._cast(v), self._cast(x), c)
 
-    def expmap_0(self, v: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+    def expmap_0(self, v: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
         """Exponential map from origin."""
         return _expmap_0(self._cast(v), c)
 
     def retraction(
-        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature
+        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Retraction: first-order approximation of exponential map."""
         return _retraction(self._cast(v), self._cast(x), c)
 
-    def logmap(self, y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+    def logmap(
+        self, y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
+    ) -> Float[Array, "dim_plus_1"]:
         """Logarithmic map: map point y to tangent space at point x."""
         return _logmap(self._cast(y), self._cast(x), c)
 
-    def logmap_0(self, y: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1"]:
+    def logmap_0(self, y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
         """Logarithmic map from the origin, ``[0, arcsinh(√c‖y_s‖)/(√c‖y_s‖) · y_s]``.
 
         Like :meth:`dist_0` it reads the radius off the **spatial** part and ignores ``y₀``, so an
@@ -1549,45 +1575,47 @@ class Hyperboloid(ManifoldBase):
         return _logmap_0(self._cast(y), c)
 
     def ptransp(
-        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature
+        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Parallel transport tangent vector v from point x to point y."""
         return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
 
     def ptransp_0(
-        self, v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: Curvature
+        self, v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Parallel transport tangent vector v from origin to point y."""
         return _ptransp_0(self._cast(v), self._cast(y), c)
 
     def tangent_inner(
-        self, u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature
+        self, u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, ""]:
         """Compute inner product of tangent vectors u and v at point x."""
         return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
 
-    def tangent_norm(self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, ""]:
+    def tangent_norm(
+        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
+    ) -> Float[Array, ""]:
         """Compute norm of tangent vector v at point x."""
         return _tangent_norm(self._cast(v), self._cast(x), c)
 
     def egrad2rgrad(
-        self, grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature
+        self, grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Convert Euclidean gradient to Riemannian gradient."""
         return _egrad2rgrad(self._cast(grad), self._cast(x), c)
 
     def tangent_proj(
-        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature
+        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Project vector v onto tangent space at point x."""
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
-    def is_in_manifold(self, x: Float[Array, "dim_plus_1"], c: Curvature, atol: float | None = None) -> Array:
+    def is_in_manifold(self, x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: float | None = None) -> Array:
         """Check if point x lies on hyperboloid (``atol`` default: :func:`default_atol`)."""
         return _is_in_manifold(self._cast(x), c, atol)
 
     def is_in_tangent_space(
-        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Curvature, atol: float | None = None
+        self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: float | None = None
     ) -> Array:
         """Check if vector v lies in tangent space at point x (``atol`` default: :func:`default_atol`)."""
         return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
@@ -1595,7 +1623,7 @@ class Hyperboloid(ManifoldBase):
     def hcat(
         self,
         points: Float[Array, "N n"],
-        c: Curvature = 1.0,
+        c: ScalarCurvature = 1.0,
     ) -> Float[Array, "dN_plus_1"]:
         """Hyperbolic concatenation of N points into one point."""
         return _hcat(self._cast(points), c)
@@ -1603,7 +1631,7 @@ class Hyperboloid(ManifoldBase):
     def log_radius_concat(
         self,
         points: Float[Array, "N n"],
-        c: Curvature = 1.0,
+        c: ScalarCurvature = 1.0,
     ) -> Float[Array, "dN_plus_1"]:
         """Log-radius-preserving concatenation of N points (Shi et al. 2026, Sec. 4.3).
 
@@ -1623,7 +1651,7 @@ class Hyperboloid(ManifoldBase):
         x: Float[Array, "batch in_dim"],
         z: Float[Array, "out_dim in_dim_minus_1"],
         r: Float[Array, "out_dim 1"],
-        c: Curvature,
+        c: ScalarCurvature,
         clamping_factor: float,
         smoothing_factor: float,
         min_enorm: float = 1e-15,
@@ -1631,7 +1659,7 @@ class Hyperboloid(ManifoldBase):
         """Compute multinomial linear regression on hyperboloid."""
         return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)
 
-    def busemann(self, x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+    def busemann(self, x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Closed-form Lorentz Busemann function ``B^v(x) = (1/√c)·log(√c·(x_t - ⟨x_s, v⟩))``.
 
         Point-to-horosphere coordinate (Chen et al. 2026, Eq. 4). ``v`` must be a *unit*
@@ -1648,7 +1676,7 @@ class Hyperboloid(ManifoldBase):
         """
         return _busemann(self._cast(x), self._cast(v), c)
 
-    def lorentz_boost(self, mu: Float[Array, "dim_plus_1"], c: Curvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
+    def lorentz_boost(self, mu: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
         """Lorentz boost matrix ``B`` with ``B @ mu = origin`` (sends ``mu`` to the origin).
 
         Symmetric, proper, orthochronous Lorentz transformation. Boost a batch of

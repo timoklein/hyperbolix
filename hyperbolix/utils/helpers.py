@@ -8,13 +8,13 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Key
 
-from ..manifolds.protocol import Curvature, Manifold
+from ..manifolds.protocol import Manifold, ScalarCurvature
 
 
 def compute_pairwise_distances(
     points: Float[Array, "n_points dim"],
     manifold_module: Manifold,
-    c: Curvature,
+    c: ScalarCurvature,
     version_idx: int = 0,
 ) -> Float[Array, "n_points n_points"]:
     """Compute pairwise geodesic distances between points on a manifold.
@@ -194,7 +194,7 @@ def compute_hyperbolic_delta(distmat: Float[Array, "n_points n_points"], version
 def get_delta(
     points: Float[Array, "n_points dim"],
     manifold_module: Manifold,
-    c: Curvature,
+    c: ScalarCurvature,
     version_idx: int = 0,
     sample_size: int = 1500,
     version: str = "average",

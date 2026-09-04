@@ -50,6 +50,7 @@ References:
 """
 
 import functools
+from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -60,7 +61,7 @@ from ..manifolds._gyrovector_core import _proj
 from ..manifolds.hyperboloid import _proj_batch
 from ..manifolds.isometry_mappings import hyperboloid_to_poincare, poincare_to_hyperboloid
 from ..manifolds.poincare import VERSION_MOBIUS_DIRECT, _dist, _egrad2rgrad
-from ..manifolds.protocol import Curvature
+from ..manifolds.protocol import ScalarCurvature
 from ..utils.helpers import compute_pairwise_distances
 from ..utils.math_utils import cap_at, floor_at
 
@@ -121,7 +122,7 @@ def conditional_probabilities(
         entropy_N = jnp.log(sum_p_N) + beta_N * jnp.sum(d2_NN * p_NN, axis=1) / sum_p_N
         return p_NN, sum_p_N, entropy_N
 
-    def _body(_: int, carry: tuple[Array, Array, Array]) -> tuple[Array, Array, Array]:
+    def _body(_step: int, carry: tuple[Array, Array, Array]) -> tuple[Array, Array, Array]:
         beta_N, beta_min_N, beta_max_N = carry
         _, _, entropy_N = _row_entropy(beta_N)
         # Entropy too high ⇒ row too diffuse ⇒ sharpen by increasing β.
@@ -177,7 +178,7 @@ def joint_probabilities(
 def low_dim_probabilities(
     y_NK: Float[Array, "N K"],
     gamma: Float[Array, ""] | float,
-    c: Curvature,
+    c: ScalarCurvature,
     *,
     exact_cauchy: bool = False,
 ) -> Float[Array, "N N"]:
@@ -233,7 +234,7 @@ def kl_divergence_loss(
     y_NK: Float[Array, "N K"],
     p_NN: Float[Array, "N N"],
     gamma: Float[Array, ""] | float,
-    c: Curvature,
+    c: ScalarCurvature,
     *,
     exact_cauchy: bool = False,
 ) -> Float[Array, ""]:
@@ -297,7 +298,7 @@ def magnitude_loss(
 def fit_cosne(
     dist_NN: Float[Array, "N N"],
     x_sqnorms_N: Float[Array, "N"],
-    c: Curvature,
+    c: ScalarCurvature,
     key: PRNGKeyArray,
     *,
     n_components: int,
@@ -497,9 +498,9 @@ class CoSNE:
         self.kl_divergence_: Array | None = None
         self.losses_kl_: Array | None = None
         self.losses_h_: Array | None = None
-        self.c_: Curvature | None = None
+        self.c_: ScalarCurvature | None = None
 
-    def _to_ball(self, x_ND: Float[Array, "N R"], c: Curvature) -> Float[Array, "N D"]:
+    def _to_ball(self, x_ND: Float[Array, "N R"], c: ScalarCurvature) -> Float[Array, "N D"]:
         """Convert/clean input into Poincaré ball coordinates (N, D)."""
         x_cast = self._poincare._cast(x_ND)
         if self._is_hyperboloid:
@@ -507,7 +508,7 @@ class CoSNE:
             return jax.vmap(hyperboloid_to_poincare, in_axes=(0, None))(x_hyp, c)
         return self._poincare.proj_batch(x_cast, c)  # ball hygiene
 
-    def fit(self, x_ND: Float[Array, "N R"], c: Curvature, key: PRNGKeyArray) -> "CoSNE":
+    def fit(self, x_ND: Float[Array, "N R"], c: ScalarCurvature, key: PRNGKeyArray) -> "CoSNE":
         """Fit the embedding on ``x_ND`` at curvature ``c``.
 
         Args:
@@ -560,6 +561,8 @@ class CoSNE:
         self.c_ = c
         return self
 
-    def fit_transform(self, x_ND: Float[Array, "N R"], c: Curvature, key: PRNGKeyArray) -> Float[Array, "N out"]:
+    def fit_transform(self, x_ND: Float[Array, "N R"], c: ScalarCurvature, key: PRNGKeyArray) -> Float[Array, "N out"]:
         """Fit on ``x_ND`` then return its embedding (equivalent to ``fit(...).embedding_``)."""
-        return self.fit(x_ND, c, key).embedding_
+        # `fit` assigns `embedding_` unconditionally on its last line, so the Optional is
+        # only there for the not-yet-fitted state, which cannot be observed here.
+        return cast(Float[Array, "N out"], self.fit(x_ND, c, key).embedding_)

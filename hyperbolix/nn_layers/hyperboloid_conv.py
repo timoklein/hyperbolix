@@ -851,7 +851,9 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         out_spatial = out_channels - 1
         logcat_spatial = logcat_out_ambient_dim - 1
         if kernel_init_std is None:
-            kernel_init_std = (1.0 / out_spatial) ** 0.5
+            # float(): `float.__pow__` is typed as returning Any, which would leave
+            # `kernel_init_std` at its declared `float | None` for the type checker.
+            kernel_init_std = float((1.0 / out_spatial) ** 0.5)
         kernel_init = kernel_init_std * jax.random.normal(rngs.params(), (out_spatial, logcat_spatial), dtype=param_dtype)
         self.kernel = nnx.Param(kernel_init)
         self.bias = nnx.Param(jnp.zeros((out_spatial, 1), dtype=param_dtype))

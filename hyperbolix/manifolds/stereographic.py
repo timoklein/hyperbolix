@@ -79,7 +79,7 @@ from ._gyrovector_core import (
     _gyration,
     _proj,
 )
-from .protocol import Curvature
+from .protocol import ScalarCurvature
 
 # Version selection constant. The κ-stereographic distance has a single implementation; the
 # constant and the ``version_idx`` arguments on ``dist`` / ``dist_0`` exist so manifold-generic
@@ -143,12 +143,12 @@ _TAN_ARG_CLAMP = 1e30
 # ---------------------------------------------------------------------------
 
 
-def _sqrt_abs_k(k: Curvature) -> Float[Array, ""]:
+def _sqrt_abs_k(k: ScalarCurvature) -> Float[Array, ""]:
     """``√|k|`` floored to ``√MIN_NORM`` so ``1/√|k|`` never diverges (NaN-safe unselected branch)."""
     return jnp.sqrt(floor_at(jnp.abs(jnp.asarray(k)), MIN_NORM))
 
 
-def _tan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
+def _tan_k_zero_taylor(x: Float[Array, "..."], k: ScalarCurvature) -> Float[Array, "..."]:
     """Order-5 Maclaurin series of ``tan_k`` in the signed ``u = k·x²`` (Horner form); equals both
     branches as ``k → 0``.
 
@@ -162,7 +162,7 @@ def _tan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..
     return x * poly
 
 
-def _artan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
+def _artan_k_zero_taylor(x: Float[Array, "..."], k: ScalarCurvature) -> Float[Array, "..."]:
     """Order-5 Maclaurin series of ``artan_k`` in the signed ``u = k·x²`` (Horner form); equals both
     branches as ``k → 0``. Same u-form/clamp rationale as :func:`_tan_k_zero_taylor`."""
     u = clamp_to(jnp.asarray(k) * x**2, -_TAYLOR_U_CLIP, _TAYLOR_U_CLIP)
@@ -170,7 +170,7 @@ def _artan_k_zero_taylor(x: Float[Array, "..."], k: Curvature) -> Float[Array, "
     return x * poly
 
 
-def _use_taylor(x: Float[Array, "..."], k: Curvature) -> Array:
+def _use_taylor(x: Float[Array, "..."], k: ScalarCurvature) -> Array:
     """Gate for the κ→0 Taylor branch: ``|k|`` below the dtype cutover AND inside the series'
     convergence region ``|u| = |k|·x² < _TAYLOR_MAX_U`` (see the constants above for why the |k|
     condition alone is insufficient). Elementwise in ``x``."""
@@ -179,21 +179,23 @@ def _use_taylor(x: Float[Array, "..."], k: Curvature) -> Array:
     return small_k & (jnp.abs(k_arr * x**2) < _TAYLOR_MAX_U)
 
 
-def _tan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
+def _tan_k(x: Float[Array, "..."], k: ScalarCurvature) -> Float[Array, "..."]:
     """κ-tangent: ``tanh(√|k|·x)/√|k|`` (k<0), ``tan(√k·x)/√k`` (k>0), Taylor (k→0). Paper ``tan_κ``."""
     sqrt_abs_k = _sqrt_abs_k(k)
     scaled = sqrt_abs_k * x
-    neg = tanh(scaled) / sqrt_abs_k
+    # `tanh` / `atanh` are `@jax.jit`-wrapped; annotate so `jnp.where` below sees an Array.
+    neg: Array = tanh(scaled) / sqrt_abs_k
     pos = jnp.tan(clamp_to(scaled, -_TAN_ARG_CLAMP, _TAN_ARG_CLAMP)) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
     return jnp.where(_use_taylor(x, k), _tan_k_zero_taylor(x, k), nonzero)
 
 
-def _artan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
+def _artan_k(x: Float[Array, "..."], k: ScalarCurvature) -> Float[Array, "..."]:
     """κ-arctangent: ``atanh(√|k|·x)/√|k|`` (k<0), ``arctan(√k·x)/√k`` (k>0), Taylor (k→0). Paper ``tan_κ⁻¹``."""
     sqrt_abs_k = _sqrt_abs_k(k)
     scaled = sqrt_abs_k * x
-    neg = atanh(scaled) / sqrt_abs_k
+    # See `_tan_k`: `@jax.jit` erases the wrapper's declared return type.
+    neg: Array = atanh(scaled) / sqrt_abs_k
     pos = jnp.arctan(scaled) / sqrt_abs_k
     nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
     return jnp.where(_use_taylor(x, k), _artan_k_zero_taylor(x, k), nonzero)
@@ -208,7 +210,7 @@ def _artan_k(x: Float[Array, "..."], k: Curvature) -> Float[Array, "..."]:
 # ---------------------------------------------------------------------------
 
 
-def _scalar_mul(r: Float[Array, ""], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """κ-scalar multiplication ``r ⊗_κ x = tan_κ(r·tan_κ⁻¹(‖x‖))·x/‖x‖`` (paper Eq. 3, ``κ = -c``)."""
     k = -c
     # `safe_norm` + `floor_at`: the floor is deliberate (`x_norm` divides on the next line), the
@@ -219,7 +221,7 @@ def _scalar_mul(r: Float[Array, ""], x: Float[Array, "dim"], c: Curvature) -> Fl
     return _proj(res, c)
 
 
-def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Geodesic distance ``d_κ(x, y) = 2·tan_κ⁻¹(‖(-x) ⊕_κ y‖)`` (paper Eq. 4, ``κ = -c``).
 
     Reduces to ``2‖x - y‖`` as ``c → 0`` (the metric is ``4·I`` at the origin — see module docstring).
@@ -231,7 +233,7 @@ def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float
     return 2.0 * _artan_k(diff_norm, k)
 
 
-def _dist_0(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Geodesic distance to the origin ``d_κ(0, x) = 2·tan_κ⁻¹(‖x‖)``. Reduces to ``2‖x‖`` as ``c → 0``."""
     k = -c
     # `safe_norm`: exact 0 at the origin, and no 1e-15 floor on a genuinely small radius.
@@ -239,7 +241,7 @@ def _dist_0(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     return 2.0 * _artan_k(x_norm, k)
 
 
-def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Exponential map ``exp^κ_x(v) = x ⊕_κ (tan_κ(λ^κ_x‖v‖/2)·v/‖v‖)`` (paper Eq. 6, ``κ = -c``)."""
     k = -c
     # `safe_norm` + `floor_at`: `v_norm` divides below, so the floor stays; see _scalar_mul.
@@ -249,7 +251,7 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     return _addition(x, second_term, c)
 
 
-def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Exponential map at the origin ``exp^κ_0(v) = tan_κ(‖v‖)·v/‖v‖``. Reduces to ``v`` as ``c → 0``."""
     k = -c
     # `safe_norm` + `floor_at`: `v` is a tangent vector (unbounded), and `v_norm` divides on the
@@ -260,12 +262,12 @@ def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     return _proj(_tan_k(v_norm, k) * (v / v_norm), c)
 
 
-def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """First-order retraction ``retr_x(v) = proj(x + v)`` (used by Euclidean-parameter optimizers)."""
     return _proj(x + v, c)
 
 
-def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Logarithmic map ``log^κ_x(y) = (2/λ^κ_x)·tan_κ⁻¹(‖s‖)·s/‖s‖`` with ``s = (-x) ⊕_κ y`` (paper Eq. 7)."""
     k = -c
     sub = _addition(-x, y, c)
@@ -275,7 +277,7 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     return 2.0 * _artan_k(sub_norm, k) * (sub / (lam * sub_norm))
 
 
-def _logmap_0(y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Logarithmic map at the origin ``log^κ_0(y) = tan_κ⁻¹(‖y‖)·y/‖y‖``. Reduces to ``y`` as ``c → 0``."""
     k = -c
     # `safe_norm` + `floor_at`: divisor on the same line, and the chart radius is unbounded for
@@ -284,44 +286,48 @@ def _logmap_0(y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     return _artan_k(y_norm, k) * (y / y_norm)
 
 
-def _ptransp(v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _ptransp(
+    v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
+) -> Float[Array, "dim"]:
     """Parallel transport of ``v`` from ``x`` to ``y``: ``gyr[y, -x]v · λ^κ_x/λ^κ_y``."""
     lambda_x = _conformal_factor(x, c)
     lambda_y = _conformal_factor(y, c)
     return _gyration(y, -x, v, c) * (lambda_x / lambda_y)
 
 
-def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Parallel transport of ``v`` from the origin to ``y``: ``(2/λ^κ_y)·v = (1 - c‖y‖²)·v``."""
     lambda_y = _conformal_factor(y, c)
     return (2.0 / lambda_y) * v
 
 
-def _tangent_inner(u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _tangent_inner(
+    u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature
+) -> Float[Array, ""]:
     """Riemannian inner product ``⟨u, v⟩_x = (λ^κ_x)²·⟨u, v⟩``."""
     lambda_x = _conformal_factor(x, c)
     return lambda_x**2 * jnp.dot(u, v, precision=MATMUL_PRECISION)
 
 
-def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Riemannian norm ``‖v‖_x = λ^κ_x·‖v‖``."""
     lambda_x = _conformal_factor(x, c)
     # `safe_norm`: exact 0 with an exactly-zero VJP at v = 0; returned, not divided by.
     return lambda_x * safe_norm(v)
 
 
-def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Euclidean → Riemannian gradient ``∇_x = ∇^E_x / (λ^κ_x)²``."""
     lambda_x = _conformal_factor(x, c)
     return grad / (lambda_x**2)
 
 
-def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Project ``v`` onto the tangent space at ``x`` (identity: tangent space = ambient space)."""
     return v
 
 
-def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+def _is_in_manifold(x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
     """Membership test: ``c‖x‖² < 1 + atol`` for ``c > 0`` (ball); finiteness for ``c ≤ 0`` (all of R^d).
 
     Written in the dimensionless form ``c‖x‖² < 1`` (like ``Poincare._is_in_manifold``) so a
@@ -337,7 +343,9 @@ def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float | None = N
     return jnp.where(c_arr > 0, inside_ball, finite)
 
 
-def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+def _is_in_tangent_space(
+    v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None
+) -> Array:
     """Every finite vector is a valid tangent vector (tangent space = ambient space = R^d).
 
     ``atol`` is accepted for signature uniformity; a finiteness test has no tolerance to
@@ -347,14 +355,16 @@ def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curv
     return jnp.all(jnp.isfinite(v))
 
 
-def _geodesic(t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _geodesic(t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Point at time ``t`` on the geodesic ``x → y``: ``gamma(t) = x ⊕_κ (t ⊗_κ ((-x) ⊕_κ y))`` (paper Eq. 5)."""
     v = _addition(-x, y, c)
     tv = _scalar_mul(t, v, c)
     return _addition(x, tv, c)
 
 
-def _geodesic_unit(t: Float[Array, ""], x: Float[Array, "dim"], u: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _geodesic_unit(
+    t: Float[Array, ""], x: Float[Array, "dim"], u: Float[Array, "dim"], c: ScalarCurvature
+) -> Float[Array, "dim"]:
     """Unit-speed geodesic ``gamma(t) = x ⊕_κ (tan_κ(t/2)·u/‖u‖)`` from ``x`` in direction ``u``."""
     k = -c
     # `safe_norm` + `floor_at`: `u_norm` divides on the next line, so the floor stays.
@@ -363,7 +373,7 @@ def _geodesic_unit(t: Float[Array, ""], x: Float[Array, "dim"], u: Float[Array, 
     return _addition(x, second_term, c)
 
 
-def _antipode(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _antipode(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Antipode. Spherical (``c < 0``): the point diametrically opposite ``x`` (distance ``π/√|κ|`` away).
     In the stereographic chart this is the closed-form inversion ``x/(c·‖x‖²) = -x/(κ‖x‖²)`` through the
     circle of radius ``R = 1/√|κ|`` — an exact involution whose sphere lift is the negated lift of ``x``.
@@ -424,32 +434,32 @@ class Stereographic(ManifoldBase):
     def __init__(self, dtype: jnp.dtype = jnp.float32, *, c: float = 1.0) -> None:
         super().__init__(dtype, c=c)
 
-    def proj(self, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def proj(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project point onto the manifold (identity for ``c ≤ 0``)."""
         return _proj(self._cast(x), c)
 
-    def conformal_factor(self, x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... 1"]:
+    def conformal_factor(self, x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... 1"]:
         """Conformal factor ``λ^κ_x = 2/(1 - c‖x‖²)``, batch-compatible over arbitrary leading dims."""
         return _conformal_factor_batch(self._cast(x), c)
 
     def gyration(
-        self, x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: Curvature
+        self, x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Gyration ``gyr[x, y]z``."""
         return _gyration(self._cast(x), self._cast(y), self._cast(z), c)
 
-    def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """κ-Möbius gyrovector addition ``x ⊕_κ y`` (paper Eq. 2)."""
         return _addition(self._cast(x), self._cast(y), c)
 
-    def scalar_mul(self, r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def scalar_mul(self, r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """κ-scalar multiplication ``r ⊗_κ x`` (paper Eq. 3)."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
         return _scalar_mul(r_cast, x, c)
 
     def dist(
-        self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_DEFAULT
+        self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT
     ) -> Float[Array, ""]:
         """Geodesic distance ``d_κ(x, y)`` (paper Eq. 4). Note ``→ 2‖x - y‖`` as ``c → 0``.
 
@@ -460,7 +470,7 @@ class Stereographic(ManifoldBase):
         del version_idx
         return _dist(self._cast(x), self._cast(y), c)
 
-    def dist_0(self, x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
+    def dist_0(self, x: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
         """Geodesic distance to the origin ``d_κ(0, x)`` (``version_idx`` accepted and ignored).
 
         Note ``→ 2‖x‖`` as ``c → 0``.
@@ -468,66 +478,66 @@ class Stereographic(ManifoldBase):
         del version_idx
         return _dist_0(self._cast(x), c)
 
-    def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map ``exp^κ_x(v)`` (paper Eq. 6)."""
         return _expmap(self._cast(v), self._cast(x), c)
 
-    def expmap_0(self, v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def expmap_0(self, v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map at the origin ``exp^κ_0(v)``."""
         return _expmap_0(self._cast(v), c)
 
-    def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """First-order retraction ``proj(x + v)``."""
         return _retraction(self._cast(v), self._cast(x), c)
 
-    def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map ``log^κ_x(y)`` (paper Eq. 7)."""
         return _logmap(self._cast(y), self._cast(x), c)
 
-    def logmap_0(self, y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map at the origin ``log^κ_0(y)``."""
         return _logmap_0(self._cast(y), c)
 
     def ptransp(
-        self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature
+        self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Parallel transport ``v`` from ``x`` to ``y``."""
         return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
 
-    def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Parallel transport ``v`` from the origin to ``y``."""
         return _ptransp_0(self._cast(v), self._cast(y), c)
 
     def tangent_inner(
-        self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature
+        self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, ""]:
         """Riemannian inner product ``⟨u, v⟩_x``."""
         return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
 
-    def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+    def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Riemannian norm ``‖v‖_x``."""
         return _tangent_norm(self._cast(v), self._cast(x), c)
 
-    def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Euclidean → Riemannian gradient."""
         return _egrad2rgrad(self._cast(grad), self._cast(x), c)
 
-    def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project ``v`` onto the tangent space at ``x`` (identity)."""
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
-    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+    def is_in_manifold(self, x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
         """Check whether ``x`` lies on the manifold (``atol`` default: :func:`default_atol`)."""
         return _is_in_manifold(self._cast(x), c, atol)
 
     def is_in_tangent_space(
-        self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature, atol: float | None = None
+        self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None
     ) -> Array:
         """Check that ``v`` has finite entries (the tangent space is all of R^d)."""
         return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
 
     def geodesic(
-        self, t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature
+        self, t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Point at time ``t`` on the geodesic through ``x`` and ``y`` (paper Eq. 5)."""
         x = self._cast(x)
@@ -535,13 +545,13 @@ class Stereographic(ManifoldBase):
         return _geodesic(t_cast, x, self._cast(y), c)
 
     def geodesic_unit(
-        self, t: Float[Array, ""], x: Float[Array, "dim"], u: Float[Array, "dim"], c: Curvature
+        self, t: Float[Array, ""], x: Float[Array, "dim"], u: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Point at time ``t`` on the unit-speed geodesic from ``x`` in direction ``u``."""
         x = self._cast(x)
         t_cast = jnp.asarray(t, dtype=x.dtype)
         return _geodesic_unit(t_cast, x, self._cast(u), c)
 
-    def antipode(self, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def antipode(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Antipode of ``x`` (diametrically-opposite point for ``c < 0``; ``-x`` otherwise)."""
         return _antipode(self._cast(x), c)

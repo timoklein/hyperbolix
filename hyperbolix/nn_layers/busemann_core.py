@@ -18,6 +18,8 @@ The BMLR logit (Chen et al. 2026, Eq. 8) is ``u_k(x) = -alpha_k·B^{v_k}(x) + b_
 (the Salimans-Kingma weight-normalization split, matching the reference ``weight_v``/``weight_g``).
 """
 
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -25,6 +27,8 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.manifolds.poincare import Poincare
 
 # MIN_NORM is the library-wide floor for the init-time log-magnitude; the row normalization
 # itself uses ``safe_normalize``. Imported (not redefined) so there is one value library-wide.
@@ -130,8 +134,11 @@ def _busemann_score(
     bias_K = bias_K.astype(work_dtype)
 
     # B^{v_k}(x_b): single-point manifold.busemann vmapped over classes (inner) and batch (outer).
+    # `busemann` is defined on Hyperboloid and Poincare but is not part of the `Manifold`
+    # protocol (Euclidean, ProperVelocity and Stereographic have no horosphere).
+    busemann = cast("Hyperboloid | Poincare", manifold).busemann
     busemann_BK = jax.vmap(
-        jax.vmap(manifold.busemann, in_axes=(None, 0, None)),
+        jax.vmap(busemann, in_axes=(None, 0, None)),
         in_axes=(0, None, None),
     )(x_BI, v_unit_KI, c)  # (B, K)
 

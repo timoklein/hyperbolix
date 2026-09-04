@@ -8,6 +8,7 @@ import functools
 import jax
 import jax.nn as nn
 import jax.numpy as jnp
+from jax.typing import ArrayLike
 from jaxtyping import Array, Float
 
 # Canonical gradient-safety floor for norms and denominators, shared library-wide
@@ -22,7 +23,7 @@ from jaxtyping import Array, Float
 MIN_NORM = 1e-15
 
 
-def floor_at(x: Float[Array, "..."], min_value) -> Float[Array, "..."]:
+def floor_at(x: Float[Array, "..."], min_value: ArrayLike) -> Float[Array, "..."]:
     """``max(x, min_value)`` written as a ``where``, for floors on differentiated paths.
 
     Same value as ``jnp.maximum(x, min_value)`` / ``jnp.clip(x, min_value, None)`` for **every**
@@ -56,7 +57,7 @@ def floor_at(x: Float[Array, "..."], min_value) -> Float[Array, "..."]:
     return jnp.where(x < min_value, min_value, x)
 
 
-def cap_at(x: Float[Array, "..."], max_value) -> Float[Array, "..."]:
+def cap_at(x: Float[Array, "..."], max_value: ArrayLike) -> Float[Array, "..."]:
     """``min(x, max_value)`` written as a ``where``. Mirror of :func:`floor_at`; same rationale.
 
     NaN-preserving for the same reason (``NaN > max_value`` is false, so ``x`` is selected).
@@ -71,7 +72,7 @@ def cap_at(x: Float[Array, "..."], max_value) -> Float[Array, "..."]:
     return jnp.where(x > max_value, max_value, x)
 
 
-def clamp_to(x: Float[Array, "..."], min_value, max_value) -> Float[Array, "..."]:
+def clamp_to(x: Float[Array, "..."], min_value: ArrayLike, max_value: ArrayLike) -> Float[Array, "..."]:
     """``jnp.clip(x, min_value, max_value)`` written as two ``where``s. See :func:`floor_at`.
 
     Composed in ``clip``'s own order, ``min(max(x, lo), hi)``, so the two agree bit-for-bit even

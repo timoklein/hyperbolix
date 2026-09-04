@@ -46,12 +46,12 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, floor_at, safe_hypot, safe_norm
 from ..utils.precision import MATMUL_PRECISION
-from .protocol import Curvature
+from .protocol import ScalarCurvature
 
 
 def hyperboloid_to_poincare(
     x: Float[Array, "dim_plus_1"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim"]:
     """Convert hyperboloid point to Poincaré ball via stereographic projection.
 
@@ -95,7 +95,7 @@ def hyperboloid_to_poincare(
 
 def poincare_to_hyperboloid(
     y: Float[Array, "dim"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim_plus_1"]:
     """Convert Poincaré ball point to hyperboloid via inverse stereographic projection.
 
@@ -145,7 +145,7 @@ def poincare_to_hyperboloid(
 
 def pv_to_poincare(
     x: Float[Array, "dim"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim"]:
     """Convert a Proper Velocity point to the Poincaré ball.
 
@@ -191,7 +191,7 @@ def pv_to_poincare(
 
 def poincare_to_pv(
     y: Float[Array, "dim"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim"]:
     """Convert a Poincaré ball point to Proper Velocity space.
 
@@ -231,7 +231,7 @@ def poincare_to_pv(
 
 def pv_to_hyperboloid(
     x: Float[Array, "dim"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim_plus_1"]:
     """Convert a Proper Velocity point to the hyperboloid model.
 
@@ -277,7 +277,7 @@ def pv_to_hyperboloid(
 
 def hyperboloid_to_pv(
     x: Float[Array, "dim_plus_1"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim"]:
     """Convert a hyperboloid point to Proper Velocity space.
 

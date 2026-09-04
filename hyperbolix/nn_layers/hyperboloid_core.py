@@ -23,12 +23,15 @@ Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026)
 """
 
 from collections.abc import Callable
+from typing import cast
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
 from hyperbolix.utils.math_utils import clamp_to, floor_at, safe_hypot, safe_norm
 from hyperbolix.utils.math_utils import cosh as safe_cosh
@@ -165,6 +168,8 @@ def extract_patches(
         pad_right = pad_w - pad_left
 
         if pad_mode == "origin":
+            if c is None:
+                raise ValueError('hyp_pad2d: pad_mode="origin" needs an explicit curvature `c`.')
             # Pad with manifold origin: (√(1/c), 0, ..., 0).
             # Buffer dtype follows x to avoid silent float64 promotion under x64.
             padded_h = height + pad_h
@@ -212,8 +217,8 @@ def hcat_ambient_dim(in_channels: int, kernel_size: tuple[int, int]) -> int:
 
 def spatial_to_hyperboloid(
     spatial: Float[Array, "... D"],
-    c_in: float,
-    c_out: float,
+    c_in: ScalarCurvature,
+    c_out: ScalarCurvature,
     eps: float = 1e-7,
 ) -> Float[Array, "... D_plus_1"]:
     """Scale spatial components and reconstruct time to produce a hyperboloid point.
@@ -302,7 +307,7 @@ def sinh_lift_to_hyperboloid(
 def lorentz_midpoint(
     points: Float[Array, "... M A"],
     weights: Float[Array, "... N M"],
-    c: float,
+    c: ScalarCurvature,
     eps: float = 1e-7,
 ) -> Float[Array, "... N A"]:
     """Weighted Lorentzian midpoint over M points.
@@ -748,7 +753,10 @@ def hyp_flatten2d(
     points_BNA = x.reshape(-1, height * width, ambient)  # (B, N, A)
 
     # LogCat per sample: (N, A) -> (N*D+1,). vmap because manifold ops are single-point.
-    flat_BAf = jax.vmap(manifold_module.log_radius_concat, in_axes=(0, None))(points_BNA, c)  # (B, Af)
+    # `log_radius_concat` is Hyperboloid-only and therefore not on the `Manifold` protocol;
+    # the `validate_hyperboloid_manifold` call above is what guarantees it is present.
+    log_radius_concat = cast(Hyperboloid, manifold_module).log_radius_concat
+    flat_BAf = jax.vmap(log_radius_concat, in_axes=(0, None))(points_BNA, c)  # (B, Af)
 
     return flat_BAf.reshape(*lead_shape, flat_BAf.shape[-1])  # (..., Af)
 

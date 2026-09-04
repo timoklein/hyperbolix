@@ -27,7 +27,7 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, floor_at, safe_norm
 from ..utils.precision import MATMUL_PRECISION
-from .protocol import Curvature
+from .protocol import ScalarCurvature
 
 
 def _get_max_norm_eps(x: Float[Array, "dim"]) -> float:
@@ -35,7 +35,7 @@ def _get_max_norm_eps(x: Float[Array, "dim"]) -> float:
     return float(jnp.finfo(x.dtype).eps ** 0.75)
 
 
-def _max_norm(x: Float[Array, "..."], c: Curvature) -> Float[Array, ""]:
+def _max_norm(x: Float[Array, "..."], c: ScalarCurvature) -> Float[Array, ""]:
     """Largest row norm :func:`_proj` admits: ``1/√|c| - eps**0.75`` for ``c > 0``, else unbounded.
 
     Factored out of :func:`_proj` so a caller that already knows the norm it is about to produce can
@@ -49,7 +49,7 @@ def _max_norm(x: Float[Array, "..."], c: Curvature) -> Float[Array, ""]:
     return jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
 
 
-def _conformal_factor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _conformal_factor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)``.
 
     For ``c > 0`` the denominator → 0 at the ball boundary and is floored with a dtype-eps margin (the
@@ -64,7 +64,7 @@ def _conformal_factor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
     return 2.0 / denom
 
 
-def _proj(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _proj(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Project onto the manifold. A boundary exists only for ``c > 0`` (``‖x‖ < 1/√c``); for ``c ≤ 0``
     (Euclidean / spherical) the space is all of R^d and this is the identity."""
     # `safe_norm` + `floor_at`. The floor is deliberate: `norm` divides in the *untaken* branch
@@ -80,7 +80,7 @@ def _proj(x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     return jnp.where(cond, x * (max_norm / norm), x)
 
 
-def _proj_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... dim"]:
+def _proj_batch(x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... dim"]:
     """Project onto the manifold over arbitrary leading dims (batched :func:`_proj`).
 
     Same clamp as :func:`_proj`, applied along the last axis, so
@@ -98,7 +98,7 @@ def _proj_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... d
     return jnp.where(cond, x * (max_norm / norm), x)
 
 
-def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Möbius gyrovector addition ``x ⊕ y`` (curvature-generic; non-commutative, non-associative).
 
     Result is kept on the manifold by the same boundary clamp :func:`_proj` applies, but computed
@@ -156,7 +156,9 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> F
     return scale * (num_D / denom)
 
 
-def _gyration(x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _gyration(
+    x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: ScalarCurvature
+) -> Float[Array, "dim"]:
     """Gyration ``gyr[x, y]z`` — restores the (broken) commutativity/associativity of ``⊕``.
 
     Curvature-generic simplified closed form; underlies parallel transport.
@@ -179,7 +181,7 @@ def _gyration(x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "d
     return z + num_D / denom
 
 
-def _conformal_factor_batch(x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... 1"]:
+def _conformal_factor_batch(x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... 1"]:
     """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)`` over arbitrary leading dims (for the NN layers)."""
     dtype = x.dtype
     c_arr = jnp.asarray(c, dtype=dtype)

@@ -26,14 +26,14 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ..manifolds import Hyperboloid, Manifold, Poincare
-from ..manifolds.protocol import Curvature
+from ..manifolds.protocol import ScalarCurvature
 from ..nn_layers.hyperboloid_core import lorentz_midpoint
 
 
 def frechet_mean(
     x_NR: Float[Array, "N R"],
     manifold: Manifold,
-    c: Curvature,
+    c: ScalarCurvature,
     *,
     step_size: float = 1.0,
     tol: float = 1e-8,

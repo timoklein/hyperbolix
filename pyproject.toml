@@ -144,21 +144,23 @@ dev = [
 [tool.pyright]
 # `exclude` used to list "hyperbolix" alongside `include = ["hyperbolix"]`, so pyright analysed
 # 0 of the 57 modules and reported "0 errors" no matter what was in them -- which is how four
-# modules referencing an undefined name reached main. The tree is analysed again, but with
-# `typeCheckingMode = "off"` plus explicitly-enabled lint-grade rules: the Curvature union
-# (scalar | sequence) that motivated the original exclusion still produces 117 type errors
-# under "basic" (reportOperatorIssue 56, reportArgumentType 46, reportReturnType 5, others 10),
-# and those are a separate piece of work. The rules below are the ones that catch real bugs
-# rather than union-narrowing limitations; explicit settings override the mode's defaults.
-# reportUndefinedVariable is the point of the exercise: pyright resolves jaxtyping shape
-# strings properly and reports none of ruff's 572 F821 false positives.
+# modules referencing an undefined name reached main. The tree is analysed under
+# `typeCheckingMode = "basic"` and is clean: 0 errors, no rule disabled and no `# type: ignore`
+# added to get there. The 110 errors basic mode reported when it was first switched on were
+# almost all the `Curvature` union (scalar | sequence) reaching arithmetic that only the scalar
+# arm supports; every single manifold, and the `Manifold` protocol itself, is now annotated with
+# `ScalarCurvature`, and only `ProductManifold` keeps the union.
+# The explicit rules below are kept on top of the mode: they are error-grade here regardless of
+# what a future mode change would make them. reportUndefinedVariable in particular is the one
+# ruff cannot do -- pyright resolves jaxtyping shape strings properly and reports none of ruff's
+# 572 F821 false positives.
 include = ["hyperbolix"]
 exclude = [
     "**/node_modules",
     "**/__pycache__",
 ]
 pythonVersion = "3.12"
-typeCheckingMode = "off"
+typeCheckingMode = "basic"
 reportUndefinedVariable = "error"
 reportMissingImports = true
 reportMissingTypeStubs = false

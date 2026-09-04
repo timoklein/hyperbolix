@@ -927,7 +927,9 @@ class HTCLinear(nnx.Module):
         # the float32 noise floor (constant map, zero gradients, frozen training).
         # in_features counts the near-constant time column -- slightly conservative.
         if init_bound is None:
-            init_bound = (3.0 / in_features) ** 0.5
+            # float(): see the note in HypConv2DHyperboloidILNN -- `float.__pow__` returns Any,
+            # so without it the narrowing from `float | None` to `float` does not happen.
+            init_bound = float((3.0 / in_features) ** 0.5)
         self.kernel = nnx.Param(
             jax.random.uniform(
                 rngs.params(), (in_features, out_features), dtype=param_dtype, minval=-init_bound, maxval=init_bound

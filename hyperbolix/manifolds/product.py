@@ -237,7 +237,7 @@ class ProductManifold:
 
     def scalar_mul(
         self,
-        r: float,
+        r: float | Float[Array, ""],
         x: Float[Array, "total_dim"],
         c: Curvature,
     ) -> Float[Array, "total_dim"]:
