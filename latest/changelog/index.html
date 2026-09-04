@@ -1318,7 +1318,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#120-2026-09-04" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.2.0 - 2026-09-04
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.2.0 - 2026-09-04">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2340,7 +2351,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#120-2026-09-04" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.2.0 - 2026-09-04
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.2.0 - 2026-09-04">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -3343,7 +3365,8 @@
 <p>All notable changes to Hyperbolix will be documented in this file.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
-<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.1.2...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.2.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="120-2026-09-04"><a href="https://github.com/timoklein/hyperbolix/compare/v1.1.2...v1.2.0">1.2.0</a> - 2026-09-04<a class="headerlink" href="#120-2026-09-04" title="Permanent link">&para;</a></h2>
 <h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Every zero-initialised hyperboloid gyro-bias was frozen at its init value: <code>∂(x ⊕ b)/∂b</code> at <code>b = origin</code> was exactly the zero matrix, in both dtypes.</strong> <code>dist_0</code> short-circuited on a bitwise <code>at_origin</code> guard (<code>jnp.where(at_origin, 0.0, res)</code>); <code>logmap_0</code> scales the spatial part by <code>dist_0(y)/‖y_s‖</code> and inherited it; Lorentz gyro addition <code>x ⊕ y = Exp_x(PT_{0→x}(Log_0(y)))</code> inherited it in turn. A bias parameter that starts at the origin, which is what <code>use_gyro_bias=True</code> does, therefore received an exactly-zero gradient at step 0 and never left. Affected layers: <code>HypLinearHyperboloidPLFC</code>, <code>HypConv2DHyperboloidILNN</code>, <code>HypLinearHyperboloidBusemann</code>. Measured gyro-bias gradient L2 at init (c = 1, dim 8, batch 4, <code>dist_0</code> loss, before → after): float32 <code>0.0 → 1.37</code> (PLFC), <code>0.0 → 4.24</code> (ILNN conv), <code>0.0 → 3.07</code> (Busemann FC); float64 <code>0.0 → 1.48</code>, <code>0.0 → 5.37</code>, <code>0.0 → 1.83</code>. In float32 the gradient was additionally ~1400x over-scaled the moment the bias left the origin, because the <code>acosh</code> floor below was divided by the true radius: the PLFC gradient at bias radius <code>1e-6</code> was 1535x its value at <code>1e-2</code>, a ratio that is now 1.06x. The Poincaré <code>HypLinearPoincareBusemann</code> gyro-bias goes through Möbius addition and was never affected (7.64 before and after). <strong>A model trained with a gyro-bias on any of the three hyperboloid layers was trained with that bias pinned to the origin; retraining under this fix changes results.</strong></li>
