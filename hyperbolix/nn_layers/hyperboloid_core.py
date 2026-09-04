@@ -33,7 +33,7 @@ from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
-from hyperbolix.utils.math_utils import clamp_to, floor_at, safe_hypot, safe_norm
+from hyperbolix.utils.math_utils import clamp_to, floor_at, safe_hypot_norm
 from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 from hyperbolix.utils.precision import MATMUL_PRECISION
@@ -80,12 +80,12 @@ def build_spacelike_V(
     """
     # Dimension key: I=in_spatial, O=out_spatial, Ai=in_ambient (I+1)
 
-    # Column norms of U: ||w^(i)||_E. `safe_hypot(||w||, sqrt(eps))` equals the old
-    # `sqrt(sum(w**2) + eps)` to rounding but never materialises the square, so a large-magnitude
+    # Column norms of U: ||w^(i)||_E. `safe_hypot_norm(w, sqrt(eps))` **is** the old
+    # `sqrt(sum(w**2) + eps)`, bit for bit, but never materialises the square, so a large-magnitude
     # column cannot overflow the reduction. The `eps` floor stays: `norm_O` is a divisor below and
     # the smooth gate on the next line is tied to the same `eps`.
     norm_sq_O = jnp.sum(U_IO**2, axis=0)  # (O,) -- gate only, never square-rooted
-    norm_O = safe_hypot(safe_norm(U_IO.T), jnp.sqrt(jnp.asarray(eps, dtype=U_IO.dtype)))  # (O,)
+    norm_O = safe_hypot_norm(U_IO.T, jnp.sqrt(jnp.asarray(eps, dtype=U_IO.dtype)))  # (O,)
 
     # Smooth gate: 0 for zero-norm columns, ~1 for normal columns.
     # Ensures arg→0 smoothly when U column→0 (no weight → no bias transport).
@@ -245,12 +245,16 @@ def spatial_to_hyperboloid(
     scale = jnp.sqrt(c_in / c_out)
     scaled_D = scale * spatial  # (..., D)
 
-    # x0 = sqrt(||s||^2 + 1/c_out) as a two-leg hypot: same value, but `sum(s**2)` is never
-    # formed, so a point at float32 spatial radius > 1.8e19 gets a finite time slot instead of
-    # inf. `sqrt(floor_at(a, eps)) == floor_at(sqrt(a), sqrt(eps))` for a >= 0, so the outer
-    # floor is preserved exactly (it only bites when 1/c_out itself is below eps).
+    # x0 = sqrt(||s||^2 + 1/c_out) via `safe_hypot_norm`: bit-identical to that expression, but
+    # `sum(s**2)` is never squared unscaled, so a point at float32 spatial radius > 1.8e19 gets a
+    # finite time slot instead of inf. It must NOT be spelled `safe_hypot(safe_norm(s), .)` --
+    # that rounds ||s|| and squares it again, and the caller's constraint check
+    # `-x0**2 + sum(s**2) = -1/c_out` then no longer cancels (at c_out = 0.1 the residual grew from
+    # 6.1e-5 to 2.4e-4 against a 1e-4 tolerance). `sqrt(floor_at(a, eps)) == floor_at(sqrt(a),
+    # sqrt(eps))` for a >= 0, so the outer floor is preserved exactly (it only bites when 1/c_out
+    # itself is below eps).
     inv_sqrt_c_out = jnp.asarray(1.0, dtype=scaled_D.dtype) / jnp.sqrt(jnp.asarray(c_out, dtype=scaled_D.dtype))
-    x0 = floor_at(safe_hypot(safe_norm(scaled_D), inv_sqrt_c_out), jnp.sqrt(jnp.asarray(eps, dtype=scaled_D.dtype)))
+    x0 = floor_at(safe_hypot_norm(scaled_D, inv_sqrt_c_out), jnp.sqrt(jnp.asarray(eps, dtype=scaled_D.dtype)))
 
     return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D+1)
 

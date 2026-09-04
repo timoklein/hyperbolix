@@ -76,6 +76,7 @@ from ..utils.math_utils import (
     cosh,
     floor_at,
     safe_hypot,
+    safe_hypot_norm,
     safe_norm,
     safe_normalize,
     safe_sqrt,
@@ -151,8 +152,11 @@ def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "di
         Projected point with -x₀² + ||x_rest||² = -1/c, x₀ > 0, shape (dim+1,)
 
     Notes:
-        ``x₀ = sqrt(1/c + ‖x_s‖²)`` is evaluated as the two-leg ``safe_hypot(1/√c, ‖x_s‖)``, which
-        never materialises ``‖x_s‖²``. The old ``sqrt(floor_at(1/c + dot(x_s, x_s), MIN_NORM))``
+        ``x₀ = sqrt(1/c + ‖x_s‖²)`` is evaluated as ``safe_hypot_norm(x_s, 1/√c)``, which never
+        materialises ``‖x_s‖²`` and keeps the ``sum(x_s**2)`` intact rather than rounding ``‖x_s‖``
+        and re-squaring it (see the primitive's docstring for why the difference is visible: it is
+        exactly the term the constraint check ``-x₀² + ‖x_s‖² = -1/c`` cancels). The old
+        ``sqrt(floor_at(1/c + dot(x_s, x_s), MIN_NORM))``
         overflowed float32 as soon as any spatial coordinate passed 1.8e19 and returned
         ``x₀ = inf`` for a point whose time slot is a perfectly ordinary float; one radius earlier
         (1e19) the sum of squares was still finite but ``sqrt`` of it lost the ``1/c`` entirely, so
@@ -166,7 +170,7 @@ def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "di
     """
     x_rest = x[1:]
     inv_sqrt_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
-    x0_new = safe_hypot(inv_sqrt_c, safe_norm(x_rest))
+    x0_new = safe_hypot_norm(x_rest, inv_sqrt_c)
     return jnp.concatenate([x0_new[None], x_rest])
 
 
@@ -183,12 +187,12 @@ def _proj_batch(x: Float[Array, "... dim_plus_1"], c: ScalarCurvature) -> Float[
         Projected points with -x₀² + ||x_rest||² = -1/c, x₀ > 0, shape (..., dim+1)
 
     Notes:
-        Same ``safe_hypot(1/√c, ‖x_s‖)`` reconstruction as :func:`_proj`, over the last axis; see
+        Same ``safe_hypot_norm(x_s, 1/√c)`` reconstruction as :func:`_proj`, over the last axis; see
         there for the overflow it removes and for why the ``MIN_NORM`` floor was inactive.
     """
     x_rest = x[..., 1:]  # Shape: (..., dim)
     inv_sqrt_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
-    x0_new = safe_hypot(inv_sqrt_c, safe_norm(x_rest))[..., None]  # Shape: (..., 1)
+    x0_new = safe_hypot_norm(x_rest, inv_sqrt_c)[..., None]  # Shape: (..., 1)
     return jnp.concatenate([x0_new, x_rest], axis=-1)
 
 

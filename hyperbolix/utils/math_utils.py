@@ -258,12 +258,57 @@ def smooth_clamp(
     )
 
 
+def _pow2_divisor(m: Float[Array, "..."]) -> Float[Array, "..."]:
+    """The rescaling divisor the safe-norm family shares: ``2**(e-1)`` for ``m = mantissa·2**e``.
+
+    A **power of two**, not ``m`` itself. That is the whole point: dividing and multiplying by a
+    power of two only shifts the exponent, so both operations are exact and the rescale contributes
+    **no rounding of its own** — while still never forming a quantity that can overflow. (It is not
+    an unconditional bit-identity to ``sqrt(sum(v**2))``: XLA picks the association of a last-axis
+    reduction per fusion, so the two programs agree exactly at most dimensions and differ by 1 to 2
+    ulp at the rest. Measured mean ulp distance: 0.000 at dim 2/4/16/64 and 0.13-0.17 at dim 8,
+    against 0.34-0.62 at *every* dim for the divide-by-max scaler.)
+
+    Dividing by ``m`` is inexact, and the 1 to 2 ulp it puts into the result is visible where the
+    caller's next step recomputes the same sum of squares: the
+    hyperboloid time slot ``x₀ = sqrt(‖s‖² + 1/c)`` is checked against ``-x₀² + ‖s‖² = -1/c``, where
+    at ``x₀ ≈ 34`` one ulp of ``x₀²`` is 1.2e-4 and the rounding no longer cancels.
+
+    ``2**(e-1)``, not ``2**e``: ``jnp.frexp`` returns ``mantissa ∈ [0.5, 1)``, so ``2**e`` is
+    ``+inf`` for an ``m`` in the top binade (float32 ``e = 128``) while ``2**(e-1) ≤ 2**127`` is
+    always representable. Scaled magnitudes then land in ``[1, 2)`` rather than ``[0.5, 1)``, so the
+    sum of squares sits in ``[1, 4n)`` — as overflow-free as before.
+
+    The divisor is floored at the smallest **normal** power of two (``2**minexp``, i.e.
+    ``finfo.tiny``): a subnormal ``m`` has ``e - 1 < minexp``, where ``ldexp`` returns 0 and the
+    division would be ``0/0``. Below that floor the scaled values are simply ``< 1``, which
+    overflows nothing.
+
+    ``m`` is sanitized to ``1.0`` where it is zero or non-finite, which reproduces the previous
+    ``jnp.where((scale > 0) & isfinite(scale), scale, 1)`` guard exactly: 0 would give ``0/0`` and
+    ``inf`` would give ``inf/inf``, whereas with divisor 1 the ``inf`` case flows through as
+    ``sum(v**2) = inf -> inf``, the library's convention for keeping a degenerate point visible.
+
+    Args:
+        m: Largest magnitude of the operands, any shape. Callers pass it already
+            ``stop_gradient``-ed; nothing here is differentiated.
+
+    Returns:
+        An exact power of two in ``[finfo.tiny, 2**(finfo.maxexp - 1)]``, same shape as ``m``
+    """
+    m_safe = jnp.where((m > 0.0) & jnp.isfinite(m), m, jnp.ones_like(m))
+    _, exponent = jnp.frexp(m_safe)
+    return jnp.ldexp(jnp.ones_like(m), jnp.maximum(exponent - 1, jnp.finfo(m.dtype).minexp))
+
+
 @_jit
 def safe_norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
-    """Euclidean norm over the last axis, computed max-scaled. Domain=R^n, Range=[0, inf).
+    """Euclidean norm over the last axis, computed on a rescaled vector. Domain=R^n, Range=[0, inf).
 
-    Divides by ``max|v|`` before squaring, so the sum of squares always sits in ``[1, n]`` no
-    matter how large or small ``v`` is. That is what the library's older
+    Divides by the power of two just below ``max|v|`` (:func:`_pow2_divisor`) before squaring, so
+    the sum of squares always sits in ``[1, 4n)`` no matter how large or small ``v`` is. The
+    divisor being a power of two is what keeps this **bit-identical to** ``sqrt(sum(v**2))``
+    wherever that neither overflows nor underflows -- see :func:`_pow2_divisor`. That is what the library's older
     ``sqrt(sum(v**2) + MIN_NORM**2)`` idiom cannot do, in *both* directions:
 
     * **Overflow**: ``sum(v**2)`` overflows float32 once ``|v| > 1.8e19`` — reached by the spatial
@@ -294,9 +339,7 @@ def safe_norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
     """
     scale = jax.lax.stop_gradient(jnp.max(jnp.abs(v), axis=-1))
     is_zero = scale == 0.0
-    # Divide by 1 (not by the scale) in the degenerate cases: 0 would give 0/0, inf would give
-    # inf/inf. With divisor 1 the inf case flows through as sum(v**2) = inf -> inf.
-    divisor = jnp.where((scale > 0.0) & jnp.isfinite(scale), scale, jnp.ones_like(scale))
+    divisor = _pow2_divisor(scale)
     sq = jnp.sum((v / divisor[..., None]) ** 2, axis=-1)
     # Double-where, first half: sqrt'(0) = inf would become 0*inf = NaN in the VJP below.
     sq_safe = jnp.where(is_zero, jnp.ones_like(sq), sq)
@@ -308,7 +351,7 @@ def safe_norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
 def safe_hypot(p: Float[Array, "..."], q: Float[Array, "..."]) -> Float[Array, "..."]:
     """``sqrt(p² + q²)`` without intermediate overflow or underflow. Range=[0, inf).
 
-    The two-argument form of :func:`safe_norm`, with the same max-scaling and the same double
+    The two-argument form of :func:`safe_norm`, with the same power-of-two rescaling and the same double
     ``where``: exact ``0`` and exactly-zero gradient at ``p == q == 0``, no ``p**2`` materialized
     (so ``safe_hypot(1e30, 1.0)`` is finite in float32 even though ``1e30**2`` is not), and
     non-finite inputs pass through as ``inf`` rather than NaN.
@@ -325,8 +368,49 @@ def safe_hypot(p: Float[Array, "..."], q: Float[Array, "..."]) -> Float[Array, "
     """
     scale = jax.lax.stop_gradient(jnp.maximum(jnp.abs(p), jnp.abs(q)))
     is_zero = scale == 0.0
-    divisor = jnp.where((scale > 0.0) & jnp.isfinite(scale), scale, jnp.ones_like(scale))
+    divisor = _pow2_divisor(scale)
     sq = (p / divisor) ** 2 + (q / divisor) ** 2
+    sq_safe = jnp.where(is_zero, jnp.ones_like(sq), sq)
+    return jnp.where(is_zero, jnp.zeros_like(sq), divisor * jnp.sqrt(sq_safe))
+
+
+@_jit
+def safe_hypot_norm(v: Float[Array, "... n"], q: Float[Array, "..."]) -> Float[Array, "..."]:
+    """``sqrt(‖v‖² + q²)`` over the last axis, in **one** reduction. Range=[0, inf).
+
+    Not ``safe_hypot(safe_norm(v), q)``. That spelling rounds ``‖v‖`` to the dtype and then squares
+    it again, so the ``sum(v**2)`` it started from is not recoverable: ``r = round(sqrt(S))`` gives
+    ``r² = S(1 + 2δ)``, an error of up to one ulp *of S*. This form keeps the sum of squares intact
+    and appends ``q²`` to it, exactly as the pre-``safe_norm`` idiom ``sqrt(sum(v**2) + q**2)`` did,
+    so it is bit-identical to that idiom wherever it neither overflows nor underflows — the same
+    guarantee :func:`_pow2_divisor` gives :func:`safe_norm`, and for the same reason.
+
+    That matters because the library's callers **recompute the same sum of squares** right after.
+    The hyperboloid time slot is ``x₀ = sqrt(‖x_s‖² + 1/c)`` and its own constraint is
+    ``-x₀² + ‖x_s‖² = -1/c``: when ``x₀`` is built from the same ``sum(x_s**2)`` the check forms,
+    the rounding cancels and the residual is one rounding of ``x₀``; when it is built from a
+    re-squared ``‖x_s‖`` the two no longer cancel. At ``x₀ ≈ 34`` in float32 one ulp of ``x₀²`` is
+    1.2e-4, which is larger than the 1e-4 tolerance the manifold checks use
+    (``tests/nn_layers/test_hypformer.py::test_hrc_*_extreme_curvatures``).
+
+    Overflow-free in the same way as :func:`safe_norm`: nothing is squared before the exact
+    power-of-two rescale, so a spatial part at float32 radius 1e20 still returns a finite ``x₀``.
+    Same double ``where``: exact ``0`` and an exactly-zero VJP where ``v`` and ``q`` are both zero,
+    and a non-finite input passes through as ``inf`` rather than becoming NaN.
+
+    Args:
+        v: Vector leg, norm taken over the last axis
+        q: Scalar leg, broadcast against ``v.shape[:-1]``
+
+    Returns:
+        ``sqrt(‖v‖₂² + q²)``, shape ``broadcast(v.shape[:-1], q.shape)``
+    """
+    scale = jax.lax.stop_gradient(jnp.maximum(jnp.max(jnp.abs(v), axis=-1), jnp.abs(q)))
+    is_zero = scale == 0.0
+    divisor = _pow2_divisor(scale)
+    # `sum(...) + (q/divisor)**2`, not one reduction over the concatenation: this reproduces the
+    # association of the idiom it replaces, `sum(v**2) + q**2`, which is what makes it bit-identical.
+    sq = jnp.sum((v / divisor[..., None]) ** 2, axis=-1) + (q / divisor) ** 2
     sq_safe = jnp.where(is_zero, jnp.ones_like(sq), sq)
     return jnp.where(is_zero, jnp.zeros_like(sq), divisor * jnp.sqrt(sq_safe))
 
@@ -370,7 +454,7 @@ def safe_sqrt(x: Float[Array, "..."]) -> Float[Array, "..."]:
 def safe_normalize(v: Float[Array, "... n"]) -> Float[Array, "... n"]:
     """``v/‖v‖`` over the last axis, returning the **exact zero vector** at ``v == 0``.
 
-    Same max-scaled, double-``where`` construction as :func:`safe_norm`, so the result is a unit
+    Same power-of-two-rescaled, double-``where`` construction as :func:`safe_norm`, so the result is a unit
     vector for every non-zero ``v`` (including magnitudes that would overflow or flush a
     sum-of-squares) and exactly ``0`` with a finite (zero) gradient at ``v == 0``.
 
@@ -390,7 +474,7 @@ def safe_normalize(v: Float[Array, "... n"]) -> Float[Array, "... n"]:
     """
     scale = jax.lax.stop_gradient(jnp.max(jnp.abs(v), axis=-1, keepdims=True))
     is_zero = scale == 0.0
-    divisor = jnp.where((scale > 0.0) & jnp.isfinite(scale), scale, jnp.ones_like(scale))
+    divisor = _pow2_divisor(scale)
     scaled = v / divisor
     sq = jnp.sum(scaled**2, axis=-1, keepdims=True)
     sq_safe = jnp.where(is_zero, jnp.ones_like(sq), sq)

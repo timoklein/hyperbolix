@@ -26,7 +26,7 @@ from hyperbolix.manifolds import Manifold
 # max-scaled primitives that compute them without materialising a sum of squares. Imported (not
 # redefined) so there is one value.
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, floor_at, safe_hypot, safe_norm
+from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, floor_at, safe_hypot, safe_hypot_norm, safe_norm
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import MATMUL_PRECISION, build_spacelike_V, htc, sinh_lift_to_hyperboloid
@@ -96,11 +96,13 @@ def _fhcnn_forward(
         mask_B1 = x_rem_norm_B1 <= 1e-5
         res_BA = jnp.where(mask_B1, origin_BA, res_BA)
     else:
-        # Reconstruct time from space: x0 = sqrt(||x_rem||^2 + 1/c), as a two-leg hypot. Same
+        # Reconstruct time from space: x0 = sqrt(||x_rem||^2 + 1/c), via `safe_hypot_norm`. Same
         # shape (and same fix) as Hyperboloid._proj: `sum(x_rem**2)` overflows float32 past
-        # spatial radius 1.8e19 and returns an infinite time slot for a representable point.
+        # spatial radius 1.8e19 and returns an infinite time slot for a representable point, while
+        # the round-then-re-square `safe_hypot(safe_norm(.), .)` spelling costs the cancellation
+        # the Minkowski constraint check relies on.
         inv_sqrt_c = jnp.asarray(1.0, dtype=x_BO.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x_BO.dtype))
-        res0_B1 = safe_hypot(safe_norm(x_rem_BD)[..., None], inv_sqrt_c)  # (B, 1)
+        res0_B1 = safe_hypot_norm(x_rem_BD, inv_sqrt_c)[..., None]  # (B, 1)
         res_BA = jnp.concatenate([res0_B1, x_rem_BD], axis=-1)  # (B, A)
 
     return res_BA
@@ -362,10 +364,10 @@ def _fgg_linear_forward(
     if activation is not None:
         z_BO = activation(z_BO)
 
-    # Reconstruct hyperboloid point: spatial = z, time from constraint, as a two-leg hypot.
-    # Same shape (and same overflow fix) as Hyperboloid._proj.
+    # Reconstruct hyperboloid point: spatial = z, time from constraint, via `safe_hypot_norm`.
+    # Same shape (and same overflow fix and same cancellation argument) as Hyperboloid._proj.
     inv_sqrt_c = jnp.asarray(1.0, dtype=z_BO.dtype) / jnp.sqrt(jnp.asarray(c, dtype=z_BO.dtype))
-    y_0_B1 = safe_hypot(safe_norm(z_BO)[..., None], inv_sqrt_c)  # (B, 1)
+    y_0_B1 = safe_hypot_norm(z_BO, inv_sqrt_c)[..., None]  # (B, 1)
 
     return jnp.concatenate([y_0_B1, z_BO], axis=-1)  # (B, Ao)
 

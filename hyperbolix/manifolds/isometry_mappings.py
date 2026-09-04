@@ -44,7 +44,7 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, floor_at, safe_hypot, safe_norm
+from ..utils.math_utils import MIN_NORM, floor_at, safe_hypot, safe_hypot_norm, safe_norm
 from ..utils.precision import MATMUL_PRECISION
 from .protocol import ScalarCurvature
 
@@ -268,10 +268,12 @@ def pv_to_hyperboloid(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026.
     """
-    # √(1/c + ||x||²) as a two-leg hypot — the same shape as `Hyperboloid._proj`, and the same
+    # √(1/c + ||x||²) via `safe_hypot_norm` — the same shape as `Hyperboloid._proj`, and the same
     # fix: `dot(x, x)` overflows float32 past ||x|| = 1.8e19, returning an infinite time slot for
-    # a point whose time slot is perfectly representable.
-    time = safe_hypot(safe_norm(x), jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype)))
+    # a point whose time slot is perfectly representable. `safe_hypot_norm`, not
+    # `safe_hypot(safe_norm(x), .)`: it keeps `sum(x**2)` intact instead of rounding the norm and
+    # squaring it again, which is what the hyperboloid constraint check cancels against.
+    time = safe_hypot_norm(x, jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype)))
     return jnp.concatenate([time[None], x])
 
 

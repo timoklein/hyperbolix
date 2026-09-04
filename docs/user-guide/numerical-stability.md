@@ -188,11 +188,12 @@ mis-normalised every float32 sample inside radius 1.5e-3.
 
 ### No Norm Is an Additive Epsilon Any More {#safe-norms}
 
-Anywhere the library needs a Euclidean norm on a differentiated path it calls one of three
+Anywhere the library needs a Euclidean norm on a differentiated path it calls one of four
 `math_utils` primitives instead of the old `sqrt(sum(x**2) + MIN_NORM**2)` idiom: `safe_norm`
-(max-scaled, for an input whose magnitude is unbounded), `safe_hypot` (the two-leg
-$\sqrt{p^2+q^2}$), or `safe_sqrt` (for a quantity that arrives already squared — a Minkowski or
-Riemannian form, or a sum of squares that provably cannot overflow).
+(rescaled, for an input whose magnitude is unbounded), `safe_hypot` (the two-leg
+$\sqrt{p^2+q^2}$), `safe_hypot_norm` (the mixed $\sqrt{\lVert v\rVert^2 + q^2}$), or `safe_sqrt`
+(for a quantity that arrives already squared — a Minkowski or Riemannian form, or a sum of squares
+that provably cannot overflow).
 
 The old idiom was a *gradient* guard: it gives `sqrt` a finite derivative at $x = 0$, which
 `jnp.linalg.norm` does not (its VJP there is $0/0 =$ NaN). It paid for that at both ends of the
@@ -216,7 +217,19 @@ is the same double-`where` construction on the scalar and compiles to exactly th
 old idiom did. Tangent vectors, unprojected inputs, hyperboloid and proper-velocity coordinates,
 and layer weights are all unbounded, and those use `safe_norm`.
 
-All three return an exact `0` with an **exactly zero** VJP at the zero vector — the finite,
+The rescaling divides by an exact **power of two** — the one just below $\max_i|x_i|$, via
+`jnp.frexp`/`jnp.ldexp` — rather than by $\max_i|x_i|$ itself. Dividing and multiplying by a power
+of two only shifts the exponent, so the rescale contributes **no rounding of its own**: the result
+tracks the plain $\sqrt{\sum_i x_i^2}$ to 0 ulp at most dimensions and at most 2 ulp at the rest
+(where XLA associates the two reductions differently), while still never forming a quantity that
+can overflow. Dividing by the maximum is inexact and leaves 1–2 ulp behind,
+which is invisible until a caller recomputes the same sum of squares: the hyperboloid's
+$x_0 = \sqrt{\lVert x_s\rVert^2 + 1/c}$ is checked against $-x_0^2 + \lVert x_s\rVert^2 = -1/c$,
+and at $x_0 \approx 34$ one float32 ulp of $x_0^2$ is $1.2\times10^{-4}$. For the same reason the
+time slot is built with `safe_hypot_norm(x_s, 1/\sqrt{c})`, one reduction, and **not** with
+`safe_hypot(safe_norm(x_s), ...)`, which rounds $\lVert x_s\rVert$ and then squares it again.
+
+All four return an exact `0` with an **exactly zero** VJP at the zero vector — the finite,
 direction-free choice at a point where the derivative does not exist — and pass a non-finite input
 through as `inf` rather than turning it into NaN. Where a norm is a *divisor* the floor is still
 there, but as `floor_at(safe_norm(x), MIN_NORM)`: a multiplicative floor, exact everywhere above
