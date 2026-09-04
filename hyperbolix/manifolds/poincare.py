@@ -399,16 +399,16 @@ def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # One reduction: `safe_sqrt(sum(v**2))` inside the `floor_at`. `v` is a *tangent* vector, so it
-    # can be exactly zero -- `safe_sqrt`, not a plain `sqrt` whose infinite derivative at 0 meets a
-    # zero cotangent as NaN. The floor is deliberate and stays *around* the sqrt: `c_norm_prod`
-    # divides three lines down, and `tanh(t)/t -> 1` needs numerator and denominator to be the same
-    # floored quantity. Its magnitude is unbounded, so `sum(v**2)` can in principle overflow
-    # float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1) -- unreachable by a training
-    # run; there the norm is `inf` and the clamped result is the origin, the pre-1.2.0 behaviour.
-    # `axis=-1, keepdims=True` keeps the norm broadcastable against the `(..., dim)` operand it
-    # divides below (see _gyrovector_core._proj).
-    v_norm = floor_at(safe_sqrt(jnp.sum(v**2, axis=-1, keepdims=True)), MIN_NORM)
+    # `safe_norm` + `floor_at`. `v` is a *tangent* vector, so unlike the ball-point sites in this
+    # module its magnitude is unbounded and the max-scaling earns its second reduction: the old
+    # `sum(v**2)` overflowed float32 above coordinate 1.8e19. The floor is deliberate --
+    # `c_norm_prod` divides three lines down, and `tanh(t)/t -> 1` needs numerator and denominator
+    # to be the same floored quantity. `[..., None]` keeps the norm broadcastable against the
+    # `(..., dim)` operand it divides below (see _gyrovector_core._proj). Kept on the two-pass form
+    # because `expmap_0` measured no change between 1.1.2 and 1.2.0 (5/2 kernels either way), so
+    # there is no cost to trade the full-range guarantee against. `_expmap` is the one that
+    # regressed and is converted.
+    v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
     sqrt_c = jnp.sqrt(c)
     c_norm_prod = sqrt_c * v_norm
     # Boundary clamp applied to the *scalar* instead of via _proj on the (dim,) result. The result
@@ -575,11 +575,10 @@ def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurva
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_x = _conformal_factor(x, c)
-    # One reduction: `safe_sqrt(sum(v**2))`. `safe_sqrt` gives an exact 0 with an exactly-zero VJP
-    # at v = 0 (a bare jnp.linalg.norm has VJP 0/0 = NaN there). Returned, not divided by, so no
-    # floor — ‖0‖_x is exactly 0. `sum(v**2)` overflows float32 past coordinate 1.8e19 (geodesic
-    # radius ~44 at c = 1), unreachable by a training run, and propagates as `inf`.
-    return lambda_x * safe_sqrt(jnp.sum(v**2, axis=-1))
+    # `safe_norm`: exact 0 with an exactly-zero VJP at v = 0 (a bare jnp.linalg.norm has VJP
+    # 0/0 = NaN there). Returned, not divided by, so no floor — ‖0‖_x is exactly 0. Kept on the
+    # two-pass form: nothing measured slower here, so the full-range guarantee costs nothing.
+    return lambda_x * safe_norm(v)
 
 
 def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:

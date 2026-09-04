@@ -51,7 +51,7 @@ import math
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_norm, safe_sqrt, sinh, smooth_clamp
+from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt, sinh, smooth_clamp
 from ..utils.precision import MATMUL_PRECISION, gemm_precision
 from ._base import ManifoldBase
 from ._gyrovector_core import _gyration
@@ -81,44 +81,42 @@ def _beta(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
 def _beta_inv(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Reciprocal of the PV beta factor: 1/β_x = √(1 + c·||x||²).
 
-    Evaluated as ``sqrt(1 + sum((√c·x)**2))``: one reduction over ``x``, on the hot path (``_beta``
-    runs on every sample of every PV forward). The additive constant is strictly positive, so a
-    plain ``jnp.sqrt`` suffices — there is no zero argument and hence no infinite derivative to
-    guard, and the sum of squares is kept intact rather than being rounded to ``‖x‖`` and squared
-    again.
+    Evaluated as ``safe_hypot_norm(√c·x, 1)`` rather than ``sqrt(1 + c·dot(x, x))``.
+    Proper-velocity coordinates are unconstrained -- that is the point of the model -- so
+    ``dot(x, x)`` genuinely reaches the float32 overflow at ``‖x‖ = 1.8e19`` (geodesic radius
+    ``arcsinh(1.8e19) ≈ 44``), where the old form returned ``inf`` and ``_beta`` collapsed to 0,
+    silently zeroing every coefficient built from it. ``safe_hypot_norm`` never materialises the
+    square either, and unlike the two-leg ``safe_hypot(1, √c·safe_norm(x))`` it does not round
+    ``‖x‖`` to the dtype and then square it again. Measured against an 80-bit reference over
+    ``c ∈ {0.3, 1, 2.5}``, dims 2/8/16, both dtypes, radii 1e-3…1e3: mean 0.25 ulp and max 2,
+    against 0.32 and max 3 for the two-leg form
+    (``logs/2026-09-04_ci_regressions/probe_beta_inv_spellings.py``).
 
     ``√c·x``, not ``√c·‖x‖``: scaling the components cannot overflow where the result does not,
-    because ``1/β_x ≥ √c·‖x‖ ≥ √c·max|xᵢ|``. That association is also the more accurate one — it
-    beat ``√c·sqrt(1/c + sum(x**2))`` at ``c = 2.5`` (mean 0.45 ulp in float64), where ``1/√c`` is
-    itself inexact (``logs/2026-09-04_ci_regressions/probe_beta_inv_spellings.py``).
-
-    Proper-velocity coordinates are unconstrained -- that is the point of the model -- so the sum
-    of squares can in principle reach the float32 overflow at ``‖x‖ = 1.8e19`` (geodesic radius
-    ``arcsinh(1.8e19) ≈ 44``), which no training run does. There it is ``inf`` and ``_beta``
-    collapses to 0, the pre-1.2.0 behaviour.
+    because ``1/β_x ≥ √c·‖x‖ ≥ √c·max|xᵢ|``. The alternative that scales the scalar leg instead,
+    ``√c·safe_hypot_norm(x, 1/√c)``, is exact at ``c = 1`` but loses to this one at ``c = 2.5``
+    (mean 0.45 ulp in float64), where ``1/√c`` is itself inexact.
     """
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
-    return jnp.sqrt(jnp.sum((sqrt_c * x) ** 2, axis=-1) + jnp.asarray(1.0, dtype=x.dtype))
+    return safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))
 
 
 def _safe_norm(x: Float[Array, "dim"]) -> Float[Array, ""]:
     """Euclidean norm floored at ``MIN_NORM``, for the sites that divide by it.
 
-    ``floor_at(safe_sqrt(sum(x**2)), MIN_NORM)``: one reduction over ``x``, and a *multiplicative*
-    floor rather than the old ``sqrt(sum(x**2) + MIN_NORM**2)``, whose additive ``1e-30`` perturbed
-    every value between ``MIN_NORM`` and ``10·MIN_NORM``. The floor is what the callers need --
-    ``_scalar_mul``, ``_expmap_0``, ``_logmap_0`` and ``_logmap`` all form an ``f(arg)/arg`` whose
-    limit is 1 only while the two are the same floored quantity -- and it must sit *around* the
-    ``sqrt``: ``safe_sqrt`` is what keeps ``sqrt'(0) = inf`` out of the VJP at ``x = 0``, and a
-    floor under the ``sqrt`` would not. ``sum(x**2)`` overflows float32 past coordinate 1.8e19
-    (geodesic radius ~44 at ``c = 1``), unreachable by a training run, and propagates as ``inf``.
-    ``_dist``/``_dist_0`` do not divide by the norm and take the unfloored form directly.
+    ``floor_at(safe_norm(x), MIN_NORM)``, not the old ``sqrt(sum(x**2) + MIN_NORM**2)``. The floor
+    is what the callers need -- ``_scalar_mul``, ``_expmap_0``, ``_logmap_0`` and ``_logmap`` all
+    form an ``f(arg)/arg`` whose limit is 1 only while the two are the same floored quantity --
+    but making it multiplicative removes the old spelling's two defects: ``sum(x**2)`` overflowed
+    float32 above coordinate 1.8e19, and the additive ``1e-30`` perturbed every value between
+    ``MIN_NORM`` and ``10·MIN_NORM``. ``_dist``/``_dist_0`` do not divide by the norm and use the
+    unfloored ``safe_norm`` directly.
 
     Returns the norm with the last axis **reduced away**. The callers that divide a ``(..., dim)``
     vector by it re-add the axis with ``[..., None]``, which is a no-op in value for the single
     point this module is contracted for and keeps a ``(B, dim)`` input on its per-row scale.
     """
-    return floor_at(safe_sqrt(jnp.sum(x**2, axis=-1)), MIN_NORM)
+    return floor_at(safe_norm(x), MIN_NORM)
 
 
 def _dpi_x(x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -180,18 +178,17 @@ def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) ->
     identities). We use the asinh form because jnp.asinh is stable over all
     of R while atanh requires boundary clamping.
 
-    The norm is ``safe_sqrt(sum(z**2))`` — one reduction — not ``jnp.linalg.norm``: at
+    The norm is :func:`~hyperbolix.utils.math_utils.safe_norm`, not ``jnp.linalg.norm``: at
     ``x == y == 0`` the gyro-difference ``-x ⊕ y`` is exactly the zero vector, where
-    ``linalg.norm``'s VJP is ``0/0 = NaN``. ``safe_sqrt``'s double-``where`` returns an exact ``0``
-    there with an exactly-zero gradient — the correct subgradient choice at the distance's
-    non-smooth point. Unfloored, unlike the module's ``_safe_norm``, because the norm is not a
-    divisor here: ``d(x, y) == 0`` is exact rather than ``MIN_NORM``-floored, and a genuinely small
-    separation is not rounded up to ``1e-15``. ``sum(z**2)`` overflows float32 past coordinate
-    1.8e19, unreachable by a training run, and propagates as ``inf``.
+    ``linalg.norm``'s VJP is ``0/0 = NaN``. ``safe_norm`` returns an exact ``0`` there with an
+    exactly-zero gradient — the correct subgradient choice at the distance's non-smooth point.
+    It is used in preference to the module's floored ``_safe_norm`` because the norm is not a
+    divisor here, so ``d(x, y) == 0`` is now exact instead of ``MIN_NORM``-floored, and a
+    genuinely small separation is no longer rounded up to ``1e-15``.
     """
     sqrt_c = jnp.sqrt(c)
     z = _addition(-x, y, c)
-    z_norm = safe_sqrt(jnp.sum(z**2, axis=-1))
+    z_norm = safe_norm(z)
     return jnp.asinh(sqrt_c * z_norm) / sqrt_c
 
 
@@ -200,15 +197,14 @@ def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
 
     d(0, x) = (1/√c) · asinh(√c · ||x||)
 
-    Uses the same one-reduction ``safe_sqrt(sum(x**2))`` as :func:`_dist`, for the same reason:
-    ``jnp.linalg.norm``'s VJP at ``x = 0`` is ``0/0 = NaN``, and the origin is exactly where this
-    function is most often differentiated (it is the PV analogue of the wrapped-normal
-    NaN-at-the-mean bug). Not the floored ``_safe_norm``: the norm is not a divisor here, so
-    ``d(0, 0)`` is exactly 0 and a small radius is reported exactly rather than floored at
-    ``1e-15``.
+    Uses ``safe_norm`` for the same reason as :func:`_dist`: ``jnp.linalg.norm``'s VJP at
+    ``x = 0`` is ``0/0 = NaN``, and the origin is exactly where this function is most often
+    differentiated (it is the PV analogue of the wrapped-normal NaN-at-the-mean bug). Not the
+    floored ``_safe_norm``: the norm is not a divisor here, so ``d(0, 0)`` is exactly 0 and a
+    small radius is reported exactly rather than floored at ``1e-15``.
     """
     sqrt_c = jnp.sqrt(c)
-    x_norm = safe_sqrt(jnp.sum(x**2, axis=-1))
+    x_norm = safe_norm(x)
     return jnp.asinh(sqrt_c * x_norm) / sqrt_c
 
 
@@ -227,7 +223,7 @@ def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     sqrt_c = jnp.sqrt(c)
     v_norm = _safe_norm(v)[..., None]
     arg = sqrt_c * v_norm
-    # sinh(arg)/arg has limit 1 as arg → 0, which the floored `_safe_norm` preserves.
+    # sinh(arg)/arg has limit 1 as arg → 0, which the safe_norm preserves.
     scale = sinh(arg) / arg
     return scale * v
 
@@ -505,11 +501,11 @@ def _compute_mlr(
     # `min_enorm` floor on genuinely small direction rows.
     z_norm_P1 = floor_at(safe_norm(z)[:, None], min_enorm)  # (P, 1)
 
-    # sqrt(1 + c*||x||^2) in one reduction over the last axis. Plain `jnp.sqrt`: the additive 1 is
-    # strictly positive, so the argument is never 0 and the derivative is never infinite. The
-    # `sqrt_c * x` association and the float32 overflow past coordinate 1.8e19 (unreachable by a
-    # training run; `inf` there) are the same as `_beta_inv`; see there.
-    beta_inv_x_B1 = jnp.sqrt(jnp.sum((sqrt_c * x) ** 2, axis=-1, keepdims=True) + 1.0)  # (B, 1)
+    # sqrt(1 + c*||x||^2) via `safe_hypot_norm`: no `sum(x**2)` to overflow float32 at
+    # ||x|| > 1.8e19/sqrt(c), where the old spelling returned inf and drove the score to inf, and
+    # one reduction rather than a rounded `safe_norm(x)` that is squared again. Same form and same
+    # measurement as `_beta_inv`; see there.
+    beta_inv_x_B1 = safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))[:, None]  # (B, 1)
 
     # Batched training-path GEMM: follows the user's JAX matmul precision (set
     # hyperbolix.utils.precision.GEMM_PRECISION = HIGHEST to force it, as 1.2.0 did).

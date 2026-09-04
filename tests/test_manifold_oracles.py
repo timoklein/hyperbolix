@@ -2113,7 +2113,7 @@ def test_hyperboloid_proj_time_slot_is_exact_at_an_enormous_radius(c: float, r: 
     x0 = float(np.asarray(manifold.proj(x_A, c), dtype=np.float64)[0])
     reference = float(np.sqrt(1.0 / c + np.float64(r) ** 2))
     assert np.isfinite(x0), f"c={c} r={r}: x0={x0}"
-    assert x0 == reference, f"c={c} r={r}: x0={x0:.6e} != float32(sqrt(1/c + r^2))={reference:.6e}"
+    assert x0 == reference, f"c={c} r={r}: x0={x0:.6e} != sqrt(1/c + r^2)={reference:.6e}"
 
     # proj_batch must agree with proj row for row.
     batch = jnp.stack([x_A, x_A])
@@ -2208,12 +2208,15 @@ def _zero_gradient_cases() -> list[tuple[str, object, object]]:
 
 @pytest.mark.parametrize("name,fn,x0", _zero_gradient_cases(), ids=[c[0] for c in _zero_gradient_cases()])
 def test_converted_norms_have_an_exactly_zero_gradient_at_the_zero_vector(name, fn, x0):
-    """Every converted norm site gives ``grad == 0`` at the zero vector — not NaN, not inf.
+    """Every norm site below gives ``grad == 0`` at the zero vector — not NaN, not inf.
 
-    Zero is the finite, direction-free choice at a point where the derivative does not exist, and
-    it is what ``safe_norm``/``safe_sqrt``'s double-``where`` construction produces. Measured on
-    the parent, the Euclidean, Proper-Velocity ``tangent_norm`` and every ``ProductManifold``
-    entry returned NaN (bare ``jnp.linalg.norm``, or ``sqrt'(0) = inf`` meeting a zero cotangent).
+    The 14 paths deliberately span both spellings the library uses, because the guarantee has to
+    hold either way: the one-pass ``safe_sqrt(sum(v**2))`` at the sites that were converted, and
+    the max-scaled two-pass ``safe_norm``/``safe_hypot_norm`` at the sites that kept it. Both are
+    the same double-``where`` construction, and both produce zero — the finite, direction-free
+    choice at a point where the derivative does not exist. Measured on the parent, the Euclidean,
+    Proper-Velocity ``tangent_norm`` and every ``ProductManifold`` entry returned NaN (bare
+    ``jnp.linalg.norm``, or ``sqrt'(0) = inf`` meeting a zero cotangent).
     """
     g = np.asarray(jax.grad(fn)(x0), dtype=np.float64)
     assert np.all(np.isfinite(g)), f"{name}: {g}"

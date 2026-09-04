@@ -198,21 +198,23 @@ sample of every step, so the norm they use is judged by what it costs an SGD run
 read of the same `(B, dim)` array is a real cost, while the failure it guards against is not one
 training reaches.
 
-The converted set is exactly the sites 1.2.0 regressed, and nothing else:
+A site is converted only where 1.2.0 measured **slower** (hyperboloid `expmap_0` 1.28x, `HTCLinear`
+forward+backward 1.12x, on both A100 and H100) or where PR #75 raised the compiled kernel /
+reduction count. That is the whole list:
 
 | Where | Operations |
 |---|---|
-| `Hyperboloid` | `proj`, `proj_batch`, `dist_0` (both version slots), `logmap_0` |
-| `Poincare` / `Stereographic` | `proj`, `proj_batch` (shared gyrovector core), `expmap`, `expmap_0`, `tangent_norm` |
-| `ProperVelocity` | the $\beta_x$ factor, the internal floored norm, `dist`, `dist_0`, `compute_mlr` |
-| `isometry_mappings` | the two proper-velocity maps |
-| Layers | `spatial_to_hyperboloid` (so `HTCLinear`), the FHCNN / FHNN / FGG linear forwards, the linear-attention `focus_transform` |
+| `Hyperboloid` | `proj`, `proj_batch`, `dist_0` (both version slots) |
+| `Poincare` / `Stereographic` | `proj`, `proj_batch` (the shared gyrovector core), and `Poincare.expmap` |
+| Layers | `spatial_to_hyperboloid` (so `HTCLinear`), the FHCNN and FGG linear forwards, the linear-attention `focus_transform` |
 
-Everything else keeps the max-scaled two-pass form, which is full-range safe: the pairwise
-hyperboloid `dist`/`logmap` polar frame, hyperboloid `tangent_norm`, the Poincaré metric-tensor
-distances, the remaining `Stereographic`, `Euclidean` and `ProductManifold` operations, the
-wrapped-normal `log_prob`, and every weight norm. Those sites were already two-pass before 1.2.0,
-so converting them would buy nothing and cost their full-range guarantee.
+Every other per-sample norm keeps the max-scaled two-pass form, which is full-range safe:
+hyperboloid `logmap_0` (which measured *faster* in 1.2.0), the pairwise `dist`/`logmap` polar
+frame, hyperboloid and Poincaré `tangent_norm`, `Poincare.expmap_0` (no measured change either
+way), the FHNN linear forward, every `ProperVelocity` operation and the proper-velocity isometry
+maps, the Poincaré metric-tensor distances, the rest of `Stereographic`, `Euclidean` and
+`ProductManifold`, the wrapped-normal `log_prob`, and every weight norm. Where nothing was
+measured slower there is no cost to trade the full-range guarantee against.
 
 Neither of the two older idioms is used on that path any more. The **additive**
 `sqrt(sum(x**2) + MIN_NORM**2)` was a gradient guard: it gives `sqrt` a finite derivative at
@@ -226,24 +228,32 @@ same finite (in fact exactly zero) derivative with no floor on the value at all.
 The **max-scaled** `safe_norm`/`safe_hypot_norm` reads the input twice — once for
 $\max_i |x_i|$, once for the sum — to keep $\sum_i x_i^2$ from overflowing float32, which happens
 once a coordinate passes $1.8\times10^{19}$. That is geodesic radius $\approx 44$ at $c = 1$: a
-regime no training run visits, and one where a saturated answer is not obviously better than a
-loud one. So the converted sites take the single reduction, and past that coordinate their answer
-is deliberately loud rather than quietly finite:
+regime no training run visits. So the converted sites take the single reduction and give up their
+answer past that coordinate. What they give instead was measured, float32 at $c = 1$, rather than
+argued — and it is **not** uniform:
 
-| Operation | Past coordinate $1.8\times10^{19}$ (float32) |
+| Converted operation | Past coordinate $1.8\times10^{19}$ (measured, float32, $c = 1$) |
 |---|---|
-| `proj`, `proj_batch`, `dist_0`, `logmap_0`, the ProperVelocity operations, the isometry maps | `inf` |
-| Poincaré and $\kappa$-stereographic `proj` (the boundary clamp) | the origin |
-| pairwise `dist`, `logmap`, and everything else on the two-pass form | unchanged from 1.2.0 |
+| `Hyperboloid.proj`, `proj_batch` | $x_0 = \infty$, spatial part unchanged, no NaN |
+| `Hyperboloid.dist_0` (both version slots) | $\infty$ |
+| `spatial_to_hyperboloid` (`HTCLinear`), FHCNN linear forward | $x_0 = \infty$, no NaN |
+| FGG linear forward, linear-attention `focus_transform` | NaN throughout the output |
+| Poincaré and $\kappa$-stereographic `proj` (the boundary clamp) | the **origin** — a finite point, with a finite (exactly zero) gradient |
+| `Poincare.expmap` | the **base point** — a finite point (the origin, when the base is the origin) |
+| everything on the two-pass form | unchanged from 1.2.0 |
 
-The boundary clamp gives the origin because $x \cdot (r_{\max}/\infty)$ *is* the zero vector —
-the pre-1.2.0 behaviour, restored on purpose. No guard is added for a regime SGD cannot reach.
+So two of the converted sites do saturate to a finite point, and that is the clamp's documented
+behaviour rather than an accident: with $\lVert x\rVert = \infty$ the boundary clamp
+$x \cdot (r_{\max}/\lVert x\rVert)$ *is* the zero vector, which is the pre-1.2.0 behaviour, and
+`expmap` inherits it through the same clamp. Nothing is added to guard a regime SGD cannot reach.
+(`Poincare.expmap_0`, which kept the two-pass norm, still returns the correct boundary point
+there.)
 
 One consequence worth stating plainly: for the converted origin-chart operations the largest
 representable geodesic radius drops. It used to be set by $x_0 = \cosh(a)$ fitting the dtype —
-radius $\approx 88$ in float32, $\approx 709$ in float64. For `proj`, `dist_0` and `logmap_0` it
-is now set by the **coordinate**, $\sinh(a)/\sqrt{c} < \sqrt{\texttt{finfo.max}}$ — radius
-$\approx 44$ in float32 and $\approx 355$ in float64. The pairwise `dist` and `logmap` keep the
+radius $\approx 88$ in float32, $\approx 709$ in float64. For `proj` and `dist_0` it is now set by
+the **coordinate**, $\sinh(a)/\sqrt{c} < \sqrt{\texttt{finfo.max}}$ — radius $\approx 44$ in
+float32 and $\approx 355$ in float64. `logmap_0` and the pairwise `dist`/`logmap` keep the
 two-pass norm and therefore keep both their finite result and the old $\approx 88$ / $\approx 709$
 ceiling. Every hyperbolic model in the literature lives four to five orders of magnitude inside
 either limit.
@@ -258,11 +268,14 @@ $x_0$; when $x_0$ is built from a re-squared norm the two no longer cancel, and 
 $x_0 \approx 34$ one float32 ulp of $x_0^2$ is $1.2\times10^{-4}$. The constant is spelled `1/c`
 rather than `(1/√c)**2`, which is one rounding fewer.
 
-All four primitives stay public in `hyperbolix.utils.math_utils`. `safe_norm`, `safe_hypot`,
-`safe_hypot_norm` and `safe_normalize` are still what the library uses for the **weight** norms —
-computed once per forward over an `(in, out)` kernel, where a second reduction is not on the
-per-sample path — and they remain the right choice in user code that genuinely needs the full
-float32 exponent range. `safe_sqrt` is the scalar counterpart used everywhere on the hot path.
+All the primitives stay public in `hyperbolix.utils.math_utils`, and each has its own job.
+`safe_norm`, `safe_hypot_norm` and `safe_normalize` are the max-scaled, full-range ones: they hold
+every per-sample site that was not converted, and the **weight** norms — computed once per forward
+over an `(in, out)` kernel, where a second reduction is not on the per-sample path. They also
+remain the right choice in user code that genuinely needs the full float32 exponent range.
+`safe_hypot` is different: it is a two-leg *scalar* composer $\sqrt{p^2+q^2}$, and it is on the hot
+path — the hyperboloid `_polar_frame` builds its radial and angular legs with it. `safe_sqrt` is
+the scalar counterpart used at the converted sites.
 
 All of them return an exact `0` with an **exactly zero** VJP at the zero vector — the finite,
 direction-free choice at a point where the derivative does not exist — and pass a non-finite input

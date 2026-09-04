@@ -178,13 +178,13 @@ def _fhnn_forward(
     inv_sqrt_c = jnp.asarray(1.0, dtype=y0_B1.dtype) / jnp.sqrt(jnp.asarray(c, dtype=y0_B1.dtype))
     target_norm_B1 = jnp.sqrt(y0_B1 - inv_sqrt_c) * jnp.sqrt(y0_B1 + inv_sqrt_c)  # (B, 1)
 
-    # Rescale spatial to satisfy hyperboloid constraint. One reduction:
-    # `safe_sqrt(sum(z_rem**2))`. `safe_sqrt`, not a plain `sqrt`: it gives an exact 0 with an
-    # exactly-zero VJP at zero spatial input (a bare `sqrt`/`linalg.norm` has an infinite/NaN VJP
-    # there, and it survives both the floor and the `jnp.where` below). No floor on this line --
-    # `floor_at(., eps)` on the next one is the divisor guard, applied around the sqrt.
-    # `sum(z_rem**2)` overflows float32 past coordinate 1.8e19, unreachable by a training run.
-    z_rem_norm_B1 = safe_sqrt(jnp.sum(z_rem_BD**2, axis=-1, keepdims=True))  # (B, 1)
+    # Rescale spatial to satisfy hyperboloid constraint.
+    # `safe_norm`: exact 0 with an exactly-zero VJP at zero spatial input (linalg.norm's VJP at 0
+    # is NaN and survives both the floor and the jnp.where below), and no sum of squares to
+    # overflow. No floor here -- `floor_at(., eps)` on the next line is the divisor guard. Kept on
+    # the two-pass form: nothing in the FHNN forward measured slower in 1.2.0. `_fhcnn_forward`
+    # and `_fgg_linear_forward` did regress and are converted.
+    z_rem_norm_B1 = safe_norm(z_rem_BD)[..., None]  # (B, 1)
     z_rem_norm_safe_B1 = floor_at(z_rem_norm_B1, eps)  # avoid division by zero
     y_rem_BD = target_norm_B1 / z_rem_norm_safe_B1 * z_rem_BD  # (B, D)
 

@@ -323,9 +323,8 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
       ``a + b > 88``, while the quotient itself is perfectly representable.
     * ``√r_x·√r_y·chord``, never ``√(r_x·r_y)`` and never ``chord²·r_x·r_y``: both alternatives
       square a spatial radius, which leaves float32 at radius 44.
-    * no norm here carries an additive ``MIN_NORM²`` under its ``sqrt``; that floor is what used to
-      flush a legitimate ``1e-34`` chord up to ``1e-15``. The floors that remain are multiplicative
-      ``floor_at`` on the quantities that are divided by, and only those.
+    * every norm goes through :func:`~hyperbolix.utils.math_utils.safe_norm`, whose max-scaling is
+      what keeps a legitimate ``1e-34`` chord from being flushed to the ``MIN_NORM`` floor.
     * ``(u_x - u_y)`` is a difference, not a quotient of exponentials: for ``a ≈ b`` (small
       distances) the subtraction of nearby floats is exact (Sterbenz), whereas the algebraically
       equal ``½·(√(u_x/u_y) - √(u_y/u_x))`` loses all significance there.
@@ -822,8 +821,8 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
     1e-20…1e10, with an identity VJP), and it routes through :func:`_minkowski_inner`, which turns
     an ``inf`` spatial input into an all-NaN result instead of leaving the time slot intact.
 
-    **An infinitely far point maps to an infinite tangent vector, not to NaN.** The radius
-    deliberately passes an ``inf`` spatial entry through as ``inf``, which made
+    **An infinitely far point maps to an infinite tangent vector, not to NaN.** ``safe_norm``
+    deliberately passes an ``inf`` spatial entry through as ``inf`` (see its docstring), which made
     ``u = inf`` and the scale ``arcsinh(inf)/inf = inf/inf`` a NaN that then poisoned the whole
     vector — the time slot included. The pairwise :func:`dist` / :func:`_polar_frame` convention for
     an out-of-range input is ``±inf``, not NaN, and this now matches: ``scale`` is ``where(isfinite(u),
@@ -856,16 +855,16 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
     """
     sqrt_c = jnp.sqrt(c)
     y_rest = y[1:]
-    # One reduction (:func:`_norm`), which is also the sum `_dist_0`/`_polar_frame` form, so XLA
-    # can CSE it when they are traced together. `safe_sqrt` inside `_norm`, not a plain `sqrt`:
-    # `y_s` is exactly zero at the origin, where `sqrt'(0) = inf` would meet a zero cotangent as
-    # 0*inf = NaN. The `MIN_NORM` floor around it is the divisor guard and is forward-only — it
-    # just stops `arcsinh(u)/u` from evaluating 0/0; the Jacobian at y = origin is the identity
-    # either way. That matters for the gyro-bias path of the PLFC / Busemann FC layers, whose bias
-    # point is the origin at zero init. `sum(y_s**2)` overflows float32 past coordinate 1.8e19
-    # (geodesic radius ~44 at c = 1), unreachable by a training run; there it propagates as `inf`
-    # and the `where(isfinite(u))` below turns that into ±inf entries rather than NaN.
-    y_rest_norm = floor_at(_norm(y_rest), MIN_NORM)
+    # ``safe_norm``, not the file's older ``sqrt(sum(y_s²) + MIN_NORM²)``: the spatial part of a
+    # float32 point at radius 45 is 1.6e19, whose sum of squares overflows to inf while the norm
+    # itself is perfectly representable (the old expression then returned an all-zero tangent
+    # vector there, and the arcsinh form would return NaN). ``safe_norm`` gives an exact 0 with an
+    # exactly-zero VJP at the origin, so the ``MIN_NORM`` floor below is forward-only — it just
+    # stops ``arcsinh(u)/u`` from evaluating 0/0; the Jacobian at y = origin is the identity either
+    # way. That matters for the gyro-bias path of the PLFC / Busemann FC layers, whose bias point
+    # is the origin at zero init. This site keeps the max-scaled two-pass norm: `logmap_0` measured
+    # *faster* in 1.2.0 than in 1.1.2, so there is nothing here to win back.
+    y_rest_norm = floor_at(safe_norm(y_rest), MIN_NORM)
 
     u = sqrt_c * y_rest_norm
     # = d₀(y)/‖y_s‖, → 1 as u → 0. The `where` only fires on a non-finite `u`, where the quotient
