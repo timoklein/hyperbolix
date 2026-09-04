@@ -173,6 +173,70 @@ Operations that inherit the fix without any change of their own: gyro `addition`
 `logmap`'s origin fallback, and `HyperboloidGyroRMSNorm`, which divides by `dist_0` and so
 mis-normalised every float32 sample inside radius 1.5e-3.
 
+!!! note "An infinitely far point gives an infinite tangent vector, not NaN"
+    `safe_norm` passes an `inf` spatial entry through as `inf` on purpose, so an out-of-range point
+    stays visibly degenerate instead of silently NaN-poisoning everything downstream. That made
+    `logmap_0`'s scale $\operatorname{arcsinh}(u)/u$ an $\infty/\infty$ NaN, which then multiplied
+    *every* entry — the time slot included. It is now
+    `where(isfinite(u), arcsinh(u)/u, 1)`: the infinite entries come back as $\pm\infty$ with their
+    signs, the finite entries keep their values, and the time slot stays exactly 0. This is the same
+    $\pm\infty$-not-NaN convention the pairwise `dist`/`logmap` already follow through
+    `_polar_frame`'s `isfinite` guard. The finite path is unchanged: the forward value is bit-identical on
+    both backends and the gradient is bit-identical on XLA:CPU, moving by at most 2 ulps on XLA:GPU
+    (where the extra `where` changes the VJP's fusion) against a 4-ulp CPU-vs-GPU spread the unchanged
+    code already had.
+
+### No Norm Is an Additive Epsilon Any More {#safe-norms}
+
+Anywhere the library needs a Euclidean norm on a differentiated path it calls one of four
+`math_utils` primitives instead of the old `sqrt(sum(x**2) + MIN_NORM**2)` idiom: `safe_norm`
+(rescaled, for an input whose magnitude is unbounded), `safe_hypot` (the two-leg
+$\sqrt{p^2+q^2}$), `safe_hypot_norm` (the mixed $\sqrt{\lVert v\rVert^2 + q^2}$), or `safe_sqrt`
+(for a quantity that arrives already squared — a Minkowski or Riemannian form, or a sum of squares
+that provably cannot overflow).
+
+The old idiom was a *gradient* guard: it gives `sqrt` a finite derivative at $x = 0$, which
+`jnp.linalg.norm` does not (its VJP there is $0/0 =$ NaN). It paid for that at both ends of the
+exponent range. **At the top**, $\sum_i x_i^2$ overflows float32 as soon as any coordinate passes
+$1.8\times10^{19}$, even though the norm itself is representable — this is the hyperboloid radius
+ceiling, where `proj` returned an infinite time slot for a point whose time slot is a perfectly
+ordinary float (and, one radius earlier, an $x_0$ whose Minkowski residual was $0$ rather than
+$-1/c$). The Poincaré ball's boundary clamp failed the same way but louder: with
+$\lVert x\rVert = \infty$ the clamp $x \cdot (r_{\max} / \lVert x \rVert)$ evaluates to the
+**zero vector**, so the farthest representable point was projected onto the origin. **At the
+bottom**, the additive $\texttt{MIN\_NORM}^2 = 10^{-30}$ dominates any genuinely small vector,
+with relative residual $\texttt{MIN\_NORM}^2/(2r^2)$: $5.0\times10^{-15}$ for a float64 point at
+radius $10^{-8}$, and 41 % for a float32 point at radius $10^{-15}$, where `dist_0` returned
+$2.83\times10^{-15}$ for a true $2.00\times10^{-15}$.
+
+Which primitive goes where is a cost decision, not a taste one. Max-scaling costs a second
+reduction over the input, and on `Poincare.dist` — whose argument is a *ball* point, so
+$\sum_i x_i^2 \le 4/c$ and overflow is unreachable — that reduction is 2 extra XLA kernels at
+batch $10^7$ for a failure mode that cannot occur. Those sites use `safe_sqrt(sum(x**2))`, which
+is the same double-`where` construction on the scalar and compiles to exactly the kernel count the
+old idiom did. Tangent vectors, unprojected inputs, hyperboloid and proper-velocity coordinates,
+and layer weights are all unbounded, and those use `safe_norm`.
+
+The rescaling divides by an exact **power of two** — the one just below $\max_i|x_i|$, via
+`jnp.frexp`/`jnp.ldexp` — rather than by $\max_i|x_i|$ itself. Dividing and multiplying by a power
+of two only shifts the exponent, so the rescale contributes **no rounding of its own**: the result
+tracks the plain $\sqrt{\sum_i x_i^2}$ to 0 ulp at most dimensions and at most 2 ulp at the rest
+(where XLA associates the two reductions differently), while still never forming a quantity that
+can overflow. Dividing by the maximum is inexact and leaves 1–2 ulp behind,
+which is invisible until a caller recomputes the same sum of squares: the hyperboloid's
+$x_0 = \sqrt{\lVert x_s\rVert^2 + 1/c}$ is checked against $-x_0^2 + \lVert x_s\rVert^2 = -1/c$,
+and at $x_0 \approx 34$ one float32 ulp of $x_0^2$ is $1.2\times10^{-4}$. For the same reason the
+time slot is built with `safe_hypot_norm(x_s, 1/\sqrt{c})`, one reduction, and **not** with
+`safe_hypot(safe_norm(x_s), ...)`, which rounds $\lVert x_s\rVert$ and then squares it again.
+
+All four return an exact `0` with an **exactly zero** VJP at the zero vector — the finite,
+direction-free choice at a point where the derivative does not exist — and pass a non-finite input
+through as `inf` rather than turning it into NaN. Where a norm is a *divisor* the floor is still
+there, but as `floor_at(safe_norm(x), MIN_NORM)`: a multiplicative floor, exact everywhere above
+itself, instead of an additive one that perturbs every value. One subtlety when the floored norm
+feeds a $\sinh(t)/t$: the floor has to be applied to $t$ itself and not only to the denominator,
+or the ratio is $0$ at $t = 0$ instead of $1$.
+
 !!! note "The pairwise `dist` reads the same radial gap off the spatial part"
     `dist` is a separate code path, and it used to carry its own $O(\varepsilon/r)$ relative error
     near the origin: its polar decomposition needs $u_x - u_y$ with $u = x_0 + \lVert x_s\rVert$,
@@ -724,6 +788,83 @@ print(f"Version 2: {d2:.6f}")
 # All should be approximately equal
 ```
 
+#### Slot 2 Reads the Radius Through `arcsinh` {#poincare-metric-tensor-dist-0}
+
+Both metric-tensor arms — the origin distance `dist_0` and the pairwise `dist` — used to have the
+[hyperboloid origin chart's defect](#hyperboloid-origin-chart) in Poincaré coordinates. Taking
+`dist_0` first, the metric-tensor integral is
+
+$$
+d_0(x) = \frac{1}{\sqrt{c}}\operatorname{acosh}\!\left(1 + \frac{2c\lVert x\rVert^2}{1 - c\lVert x\rVert^2}\right),
+$$
+
+and the whole radial signal sits in that $2t$ perturbation of a leading 1. `acosh`'s
+$1 + 10\varepsilon$ domain clamp therefore flattened every float32 radius below
+$\sqrt{10\varepsilon/c} \approx 1.1\text{e-}3/\sqrt{c}$ onto exactly zero, and a second
+`arg < 1 + MIN_NORM` short-circuit zeroed the band below
+$\sqrt{\texttt{MIN\_NORM}/2c} \approx 2.2\text{e-}8/\sqrt{c}$ in **both** dtypes. The arm now uses
+the half-angle identity $\operatorname{acosh}(1 + 2t) = 2\operatorname{arcsinh}(\sqrt{t})$, whose
+argument is *linear* in the radius near the origin:
+
+$$
+d_0(x) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x\rVert}{\sqrt{1 - c\lVert x\rVert^2}}\right).
+$$
+
+Same function, so slot 2 still means "metric-tensor distance" — nothing was moved to a new slot,
+and the boundary clamp (via the conformal factor) is unchanged. Median relative error against a
+60-digit `decimal` reference, $c = 1$, dim 8, before → after:
+
+| radius | float32 | float64 |
+| --- | --- | --- |
+| 1e-8 | 7.7e4 → 1.4e-8 | 1.0 → 1.7e-16 |
+| 1e-6 | 7.7e2 → 1.4e-8 | 1.1e-5 → 0 |
+| 1e-4 | 6.7 → 2.9e-8 | 2.5e-9 → 1.4e-16 |
+| 1e-3 | 6.6e-3 → 5.3e-8 | 2.8e-12 → 0 |
+| 1e-2 | 3.3e-5 → 8.6e-8 | 1.4e-13 → 0 |
+| 0.1 | 4.9e-7 → 3.4e-8 | 2.2e-15 → 0 |
+| 0.9/√c | 6.5e-8 → 3.5e-8 | 1.5e-16 → 1.5e-16 |
+
+!!! warning "The floored band had a zero gradient, not just a wrong value"
+    `jax.grad` of slot 2 returned exactly `0` for float32 radii ≤ 1e-6 at every curvature (≤ 1e-3
+    at $c = 0.3$) and float64 radii ≤ 1e-8, instead of the analytic $2/(1 - c r^2) \to 2$. Anything
+    optimised through slot 2 near the origin received no gradient at all. Slots 0 and 1
+    (`VERSION_MOBIUS_DIRECT` / `VERSION_MOBIUS`, both $2\operatorname{atanh}(\sqrt{c}\lVert x\rVert)/\sqrt{c}$)
+    were never affected, and remain the default.
+
+The pairwise `dist` slot 2 is the same story with a separation in place of a radius:
+
+$$
+d(x,y) = \frac{1}{\sqrt{c}}\operatorname{acosh}\!\left(1 + 2t\right)
+       = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\sqrt{t}\right),
+\qquad
+t = \frac{c\lVert x - y\rVert^2}{(1 - c\lVert x\rVert^2)(1 - c\lVert y\rVert^2)} .
+$$
+
+The `acosh` clamp zeroed every pair with $t < 5\varepsilon$ and the `MIN_NORM` short-circuit a
+second band below $t = \texttt{MIN\_NORM}/2$. The two $(1 - c r^2)$ factors scale the threshold
+with the pair's radius, so at $c = 1$ the float32 separation floor is 1.2e-3 at the origin and
+9.2e-4 at radius 0.5. Median relative error against a 60-digit `decimal` reference routed through
+Möbius addition (independent of the formula under test), $c = 1$, dim 8, before → after:
+
+| radius | separation | float32 | float64 |
+| --- | --- | --- | --- |
+| 1e-2 | 1e-8 | 7.7e4 → 3.0e-8 | 1.0 → 1.7e-16 |
+| 1e-2 | 1e-6 | 7.7e2 → 2.6e-8 | 5.4e-8 → 2.1e-16 |
+| 1e-2 | 1e-4 | 6.7 → 2.3e-8 | 2.5e-9 → 6.8e-17 |
+| 1e-2 | 1e-2 | 6.7e-5 → 1.0e-7 | 1.9e-13 → 0 |
+| 0.5 | 1e-8 | 3.5e4 → 3.6e-8 | 1.0 → 1.2e-16 |
+| 0.5 | 1e-6 | 5.8e2 → 3.3e-8 | 6.3e-6 → 0 |
+| 0.5 | 1e-4 | 4.8 → 4.5e-8 | 3.6e-10 → 0 |
+| 0.5 | 1e-2 | 2.6e-6 → 6.1e-8 | 5.1e-14 → 1.3e-16 |
+
+!!! warning "Two points inside the floor had no gradient pulling them apart"
+    `‖∂d(x,y)/∂y‖` must equal the conformal factor $\lambda(y) = 2/(1 - c\lVert y\rVert^2)$ — the
+    unit-speed statement in Euclidean coordinates. Inside the floored band the old arm returned
+    exactly `0` instead: 23 of 60 probed gradient cells, across both dtypes, three curvatures and
+    both radii. A loss separating two nearby points through slot 2 received no gradient at all. At
+    $y = x$ the derivative does not exist and the convention is the finite, direction-free 0, which
+    `safe_norm` now supplies (it also keeps `dist(x, x)` exactly 0).
+
 ### Which Version to Use?
 
 **General recommendation**: `VERSION_MOBIUS_DIRECT` (version 0)
@@ -922,12 +1063,14 @@ def safe_clip_to_interior(x_batch, c=1.0, safety_factor=0.9):
 
 **Solution**:
 ```python
-# Manifold functions handle this internally with MIN_NORM
-# But you can add explicit checks:
+# Manifold functions handle this internally: every norm on a differentiated path goes
+# through math_utils.safe_norm, which returns an exact 0 with an exactly-zero gradient
+# at v = 0 (see "Every Norm Is Max-Scaled" above). If you need the same in your own code,
+# use the library's primitives rather than rolling a floor:
+from hyperbolix.utils import safe_norm, safe_normalize
 
-def safe_normalize(v, eps=1e-8):
-    norm = jnp.linalg.norm(v)
-    return jnp.where(norm > eps, v / norm, jnp.zeros_like(v))
+norm = safe_norm(v)            # 0 at v = 0, gradient 0, no sum of squares to overflow
+unit = safe_normalize(v)       # exact zero vector at v = 0, unit vector everywhere else
 ```
 
 ### Edge Case 3: Large Learning Rates

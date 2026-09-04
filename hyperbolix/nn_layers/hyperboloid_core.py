@@ -23,30 +23,25 @@ Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026)
 """
 
 from collections.abc import Callable
+from typing import cast
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
-from hyperbolix.utils.math_utils import clamp_to, floor_at
+from hyperbolix.utils.math_utils import clamp_to, floor_at, safe_hypot_norm
 from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
+from hyperbolix.utils.precision import MATMUL_PRECISION
 
-# Matmul precision for the cancellation-sensitive dots in this module and in the attention
-# layers. On Ampere/Hopper, XLA:GPU defaults float32 matmuls to TF32, whose 10-bit mantissa
-# carries ~1e-3 relative error — far coarser than float32's ~1e-7. The dots this constant
-# annotates feed cancellations whose entire design assumes float32 accuracy: the Lorentz
-# inner product ``<x,y>_L = -x_0 y_0 + <x_s, y_s>`` (a difference of two matmuls) and the
-# ``lorentz_midpoint`` normalizer (whose cancellation-free identity exists precisely to keep
-# the float32 error at O(eps) for any radius). Measured on an A100: the f32-vs-f64 relative
-# error of ``lorentz_midpoint`` is 4.6e-5 … 2.6e-4 at the TF32 default and 2.6e-8 … 1.6e-7
-# with HIGHEST — a ~2000x accuracy loss that HIGHEST removes.
-#
-# HIGHEST is a no-op on CPU (no TF32 path) and for float64 anywhere, so this costs nothing
-# outside float32 GPU matmuls; on tensor-core GPUs it trades GEMM throughput for accuracy.
-MATMUL_PRECISION = jax.lax.Precision.HIGHEST
+# MATMUL_PRECISION used to be defined here; its home is now hyperbolix.utils.precision, a
+# neutral module both manifolds/ and nn_layers/ import from (manifolds/ must not depend on
+# nn_layers/). The import above keeps `hyperboloid_core.MATMUL_PRECISION` working for existing
+# importers; see hyperbolix/utils/precision.py for the TF32 rationale and the measurements.
 
 
 def build_spacelike_V(
@@ -85,9 +80,12 @@ def build_spacelike_V(
     """
     # Dimension key: I=in_spatial, O=out_spatial, Ai=in_ambient (I+1)
 
-    # Column norms of U: ||w^(i)||_E
-    norm_sq_O = jnp.sum(U_IO**2, axis=0)  # (O,)
-    norm_O = jnp.sqrt(norm_sq_O + eps)  # (O,) gradient-safe (never 0)
+    # Column norms of U: ||w^(i)||_E. `safe_hypot_norm(w, sqrt(eps))` **is** the old
+    # `sqrt(sum(w**2) + eps)`, bit for bit, but never materialises the square, so a large-magnitude
+    # column cannot overflow the reduction. The `eps` floor stays: `norm_O` is a divisor below and
+    # the smooth gate on the next line is tied to the same `eps`.
+    norm_sq_O = jnp.sum(U_IO**2, axis=0)  # (O,) -- gate only, never square-rooted
+    norm_O = safe_hypot_norm(U_IO.T, jnp.sqrt(jnp.asarray(eps, dtype=U_IO.dtype)))  # (O,)
 
     # Smooth gate: 0 for zero-norm columns, ~1 for normal columns.
     # Ensures arg→0 smoothly when U column→0 (no weight → no bias transport).
@@ -170,6 +168,8 @@ def extract_patches(
         pad_right = pad_w - pad_left
 
         if pad_mode == "origin":
+            if c is None:
+                raise ValueError('hyp_pad2d: pad_mode="origin" needs an explicit curvature `c`.')
             # Pad with manifold origin: (√(1/c), 0, ..., 0).
             # Buffer dtype follows x to avoid silent float64 promotion under x64.
             padded_h = height + pad_h
@@ -191,6 +191,7 @@ def extract_patches(
         window_strides=(stride_h, stride_w),
         padding="VALID",
         dimension_numbers=("NHWC", "OIHW", "NHWC"),
+        precision=MATMUL_PRECISION,
     )
 
     # 3. Reshape to separate channels and kernel dims, then transpose to point-major.
@@ -216,8 +217,8 @@ def hcat_ambient_dim(in_channels: int, kernel_size: tuple[int, int]) -> int:
 
 def spatial_to_hyperboloid(
     spatial: Float[Array, "... D"],
-    c_in: float,
-    c_out: float,
+    c_in: ScalarCurvature,
+    c_out: ScalarCurvature,
     eps: float = 1e-7,
 ) -> Float[Array, "... D_plus_1"]:
     """Scale spatial components and reconstruct time to produce a hyperboloid point.
@@ -244,8 +245,16 @@ def spatial_to_hyperboloid(
     scale = jnp.sqrt(c_in / c_out)
     scaled_D = scale * spatial  # (..., D)
 
-    norm_sq = jnp.sum(scaled_D**2, axis=-1)  # (...)
-    x0 = jnp.sqrt(floor_at(norm_sq + 1.0 / c_out, eps))  # (...)
+    # x0 = sqrt(||s||^2 + 1/c_out) via `safe_hypot_norm`: bit-identical to that expression, but
+    # `sum(s**2)` is never squared unscaled, so a point at float32 spatial radius > 1.8e19 gets a
+    # finite time slot instead of inf. It must NOT be spelled `safe_hypot(safe_norm(s), .)` --
+    # that rounds ||s|| and squares it again, and the caller's constraint check
+    # `-x0**2 + sum(s**2) = -1/c_out` then no longer cancels (at c_out = 0.1 the residual grew from
+    # 6.1e-5 to 2.4e-4 against a 1e-4 tolerance). `sqrt(floor_at(a, eps)) == floor_at(sqrt(a),
+    # sqrt(eps))` for a >= 0, so the outer floor is preserved exactly (it only bites when 1/c_out
+    # itself is below eps).
+    inv_sqrt_c_out = jnp.asarray(1.0, dtype=scaled_D.dtype) / jnp.sqrt(jnp.asarray(c_out, dtype=scaled_D.dtype))
+    x0 = floor_at(safe_hypot_norm(scaled_D, inv_sqrt_c_out), jnp.sqrt(jnp.asarray(eps, dtype=scaled_D.dtype)))
 
     return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D+1)
 
@@ -302,7 +311,7 @@ def sinh_lift_to_hyperboloid(
 def lorentz_midpoint(
     points: Float[Array, "... M A"],
     weights: Float[Array, "... N M"],
-    c: float,
+    c: ScalarCurvature,
     eps: float = 1e-7,
 ) -> Float[Array, "... N A"]:
     """Weighted Lorentzian midpoint over M points.
@@ -748,7 +757,10 @@ def hyp_flatten2d(
     points_BNA = x.reshape(-1, height * width, ambient)  # (B, N, A)
 
     # LogCat per sample: (N, A) -> (N*D+1,). vmap because manifold ops are single-point.
-    flat_BAf = jax.vmap(manifold_module.log_radius_concat, in_axes=(0, None))(points_BNA, c)  # (B, Af)
+    # `log_radius_concat` is Hyperboloid-only and therefore not on the `Manifold` protocol;
+    # the `validate_hyperboloid_manifold` call above is what guarantees it is present.
+    log_radius_concat = cast(Hyperboloid, manifold_module).log_radius_concat
+    flat_BAf = jax.vmap(log_radius_concat, in_axes=(0, None))(points_BNA, c)  # (B, Af)
 
     return flat_BAf.reshape(*lead_shape, flat_BAf.shape[-1])  # (..., Af)
 

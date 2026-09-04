@@ -68,7 +68,8 @@ import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, acosh, atanh, cap_at, cosh, floor_at, sinh, smooth_clamp, tanh
+from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, smooth_clamp, tanh
+from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
@@ -79,7 +80,7 @@ from ._gyrovector_core import (
     _proj,
     _proj_batch,
 )
-from .protocol import Curvature
+from .protocol import ScalarCurvature
 
 # Version selection constants for dist() and dist_0()
 VERSION_MOBIUS_DIRECT = 0
@@ -87,7 +88,7 @@ VERSION_MOBIUS = 1
 VERSION_METRIC_TENSOR = 2
 
 
-def _scalar_mul(r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Scalar multiplication r ⊗ x on Poincaré ball.
 
     Args:
@@ -101,12 +102,23 @@ def _scalar_mul(r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, 
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Safe norm: sqrt(||x||² + eps²) has finite gradients at x=0. The previous
-    # maximum(norm, MIN_NORM) only guarded the forward — linalg.norm's VJP at 0
-    # is 0/0 = NaN, and 0-cotangent · NaN is still NaN.
-    x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
+    # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
+    # unreachable here. `safe_sqrt`'s double-`where` supplies the same finite (zero) derivative
+    # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
+    # The `floor_at` is the deliberate part -- `x_norm` is a *divisor* two lines down, so it must
+    # stay bounded away from 0; above ~1e-14 the two forms agree to rounding.
+    # `axis=-1, keepdims=True` rather than the whole-array reduction: for the single point this
+    # function is contracted for it is the same value in a shape-(1,) box (bit-identical, same
+    # kernel), but it makes the `/ c_norm_prod * x` below a *per-row* scale for the (B, dim)
+    # inputs callers pass anyway, instead of one whole-array Frobenius norm.
+    x_norm = floor_at(safe_sqrt(jnp.sum(x**2, axis=-1, keepdims=True)), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * x_norm
-    res = jnp.tanh(r * atanh(c_norm_prod)) / c_norm_prod * x
+    # `tanh` is the math_utils wrapper (matching _expmap_0 and _expmap), not XLA's kernel: more
+    # accurate in float32, and its ±(1 - 10·eps) output clip pairs with `atanh`'s own domain guard
+    # so a round trip through the two cannot reach the pole. The trailing _proj still bounds the
+    # result, so the clip is at worst redundant here.
+    res = tanh(r * atanh(c_norm_prod)) / c_norm_prod * x
     res = _proj(res, c)
     return res
 
@@ -122,42 +134,79 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
 
 
 # Distance implementations for lax.switch
-def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Direct Möbius distance formula (fastest)."""
     sqrt_c = jnp.sqrt(c)
-    x2y2 = jnp.dot(x, x) * jnp.dot(y, y)
-    xy = jnp.dot(x, y)
-    # Safe norm: finite gradient at x == y (norm's VJP at 0 is 0/0 = NaN)
-    num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
+    x2y2 = jnp.dot(x, x, precision=MATMUL_PRECISION) * jnp.dot(y, y, precision=MATMUL_PRECISION)
+    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
+    # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
+    # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
+    # unreachable here. `safe_sqrt`'s double-`where` supplies the same finite (zero) derivative
+    # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
+    # This is a numerator, not a divisor, so no floor is needed: the old `+ MIN_NORM**2` was purely
+    # the sqrt-gradient guard and it cost a 1e-15 floor on every genuinely small separation.
+    num = safe_sqrt(jnp.sum((y - x) ** 2))
     denom = jnp.sqrt(floor_at(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
     xysum_norm = num / denom
     dist_c = atanh(sqrt_c * xysum_norm)
     return 2 * dist_c / sqrt_c
 
 
-def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Möbius distance via addition."""
     sqrt_c = jnp.sqrt(c)
     diff = _addition(-x, y, c)
-    # Safe norm: finite gradient at x == y (diff = 0)
-    diff_norm = jnp.sqrt(jnp.sum(diff**2) + MIN_NORM**2)
+    # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
+    # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
+    # unreachable here. `safe_sqrt`'s double-`where` supplies the same finite (zero) derivative
+    # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
+    # `diff` is `_addition`'s projected output, so it is a ball point. Not a divisor, so no floor.
+    diff_norm = safe_sqrt(jnp.sum(diff**2))
     dist_c = atanh(sqrt_c * diff_norm)
     return 2 * dist_c / sqrt_c
 
 
-def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Metric tensor induced distance."""
-    xy_diff_sqnorm = jnp.dot(x - y, x - y)
+def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """Metric-tensor induced distance, in the ``arcsinh`` form: ``2·arcsinh(√t)/√c``.
+
+    The pairwise twin of :func:`_dist_0_metric_tensor`, and it had the same defect. The
+    metric-tensor integral gives ``acosh(1 + 2t)/√c`` with
+    ``t = c‖x - y‖²/((1 - c‖x‖²)(1 - c‖y‖²))``, so the whole separation signal sits in a
+    perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every
+    pair whose ``t`` fell below ``5·eps`` onto exactly zero, and an extra ``arg < 1 + MIN_NORM``
+    short-circuit zeroed a second band below ``t = MIN_NORM/2``. For two points at radius ``r`` the
+    two ``(1 - c·r²)`` factors scale the threshold, so the float32 separation floor is
+    ``sqrt(5·eps/c)·(1 - c·r²)`` — 1.2e-3/√c at the origin, tightening to 9.2e-4/√c at ``r = 0.5``
+    for ``c = 1``.
+
+    The half-angle identity ``acosh(1 + 2t) = 2·arcsinh(√t)`` moves the separation into an argument
+    *linear* in ``‖x - y‖``::
+
+        √t = √c‖x - y‖ / sqrt((1 - c‖x‖²)(1 - c‖y‖²)),   d(x, y) = 2·arcsinh(√t)/√c
+
+    ``arcsinh`` needs no domain clamp (its argument is a scaled norm) and its derivative is bounded
+    by 1, so both floors are gone rather than moved. The two forms are the same function, so slot 2
+    still means "metric-tensor distance" — this is not a new version slot.
+
+    Both boundary guards are unchanged: ``1 - c‖x‖²`` and ``1 - c‖y‖²`` still come from the clamped
+    conformal factors (= 2/λ), so an unprojected near-boundary point cannot drive the denominator to
+    0 and the representable ceiling is untouched.
+
+    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at ``x == y``, so
+    ``dist(x, x) == 0`` exactly and ``jax.grad`` there is finite without the ``where``-guard that
+    used to provide it (``test_precision.py::test_poincare_dist_grad_at_coincident_points``).
+    """
+    sqrt_c = jnp.sqrt(c)
+    diff_norm = safe_norm(x - y)
     # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)). A bare 1 - c||x||² hits 0
     # for an unprojected near-boundary point and blows up the divide; reuse the module-wide floor.
     one_minus_cx = 2.0 / _conformal_factor(x, c)
     one_minus_cy = 2.0 / _conformal_factor(y, c)
-    arg = 1 + 2 * c * xy_diff_sqnorm / (one_minus_cx * one_minus_cy)
-    condition = arg < 1 + MIN_NORM
-    return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
+    sqrt_t = sqrt_c * diff_norm / jnp.sqrt(one_minus_cx * one_minus_cy)
+    return 2.0 * jnp.arcsinh(sqrt_t) / sqrt_c
 
 
-def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Apollonian weak metric δ(x, y) on the Poincaré ball.
 
     A *weak metric*: δ(x, y) ≥ 0, δ(x, x) = 0 and the triangle inequality hold, but δ is
@@ -185,16 +234,19 @@ def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvatur
         Papadopoulos & Troyanov. "Weak metrics on Euclidean domains." (Theorem 2.)
     """
     sqrt_c = jnp.sqrt(c)
-    x2 = jnp.dot(x, x)
-    y2 = jnp.dot(y, y)
-    xy = jnp.dot(x, y)
+    x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
+    y2 = jnp.dot(y, y, precision=MATMUL_PRECISION)
+    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
     # G = |c·x·ȳ - 1| generalized to ℝⁿ, i.e. G² = c²‖x‖²‖y‖² - 2c⟨x,y⟩ + 1. We use the
     # Gram-determinant form (1 - c⟨x,y⟩)² + c²(‖x‖²‖y‖² - ⟨x,y⟩²): a sum of two non-negative
     # terms (Cauchy-Schwarz ⇒ Gram det ≥ 0), so no catastrophic cancellation near the boundary.
     # At x=y the Gram term is exactly 0, so G = 1 - c‖x‖² = denom and δ(x,x)=0 to machine precision.
     gram = x2 * y2 - xy**2  # ‖x‖²‖y‖² - ⟨x,y⟩² ≥ 0 (squared area of the x,y parallelogram)
     G = jnp.sqrt(floor_at((1.0 - c * xy) ** 2 + c**2 * gram, MIN_NORM))
-    num = sqrt_c * jnp.linalg.norm(x - y) + G
+    # `safe_sqrt`, not `jnp.linalg.norm`: at x == y the latter's VJP is 0/0 = NaN, and 0*NaN
+    # survives every downstream operation, so grad(delta)(x, x) was NaN. Both arguments are ball
+    # points, so the sum of squares cannot overflow and no max-scaling is needed.
+    num = sqrt_c * safe_sqrt(jnp.sum((x - y) ** 2)) + G
     # Denominator 1 - c‖y‖² = 2/λ(y); reuse the already-clamped conformal factor so the
     # near-boundary floor matches the rest of the module (δ → ∞ as y → ∂ball is expected).
     denom = 2.0 / _conformal_factor(y, c)
@@ -204,7 +256,7 @@ def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvatur
 def _dist(
     x: Float[Array, "dim"],
     y: Float[Array, "dim"],
-    c: Curvature,
+    c: ScalarCurvature,
     version_idx: int = VERSION_MOBIUS_DIRECT,
 ) -> Float[Array, ""]:
     """Compute geodesic distance between Poincaré ball points.
@@ -225,27 +277,61 @@ def _dist(
 
 
 # Distance from origin implementations for lax.switch
-def _dist_0_mobius(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _dist_0_mobius(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Möbius distance from origin (mobius_direct and mobius use same formula)."""
     sqrt_c = jnp.sqrt(c)
-    # Safe norm: finite gradient at the origin
-    x_norm = jnp.sqrt(jnp.sum(x**2) + MIN_NORM**2)
+    # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
+    # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
+    # unreachable here. `safe_sqrt`'s double-`where` supplies the same finite (zero) derivative
+    # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
+    # The old `+ MIN_NORM**2` put a hard floor of 1e-15 on the radius, so d_0 of a float32 point at
+    # radius 1e-15 came back 40 % too large and every radius below that collapsed onto one value.
+    x_norm = safe_sqrt(jnp.sum(x**2))
     dist_c = atanh(sqrt_c * x_norm)
     return 2 * dist_c / sqrt_c
 
 
-def _dist_0_metric_tensor(x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
-    """Metric tensor distance from origin."""
-    x_sqnorm = jnp.dot(x, x)
+def _dist_0_metric_tensor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """Metric-tensor distance from origin, in the ``arcsinh`` form: ``2·arcsinh(√t)/√c``.
+
+    The metric-tensor integral gives ``acosh(1 + 2t)/√c`` with ``t = c‖x‖²/(1 - c‖x‖²)``, which is
+    what this arm used to evaluate. That spelling has the same defect as the hyperboloid's old
+    ``acosh(√c·x₀)`` route (see ``hyperboloid._dist_0_stable``): the whole radial signal sits in the
+    ``2t ≈ 2c‖x‖²`` perturbation of a leading 1, so ``r`` is stored to ``sqrt(eps)`` resolution at
+    best, and ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every float32 radius
+    below ``sqrt(20·eps/(2c)) = sqrt(10·eps/c)`` ≈ 1.1e-3/√c onto exactly zero. The extra
+    ``arg < 1 + MIN_NORM`` guard zeroed a second band below ``sqrt(MIN_NORM/(2c))`` ≈ 2.2e-8/√c.
+
+    The half-angle identity ``acosh(1 + 2t) = 2·arcsinh(√t)`` (both sides are ``2θ`` for the ``θ``
+    with ``sinh²θ = t``, since ``cosh 2θ = 1 + 2 sinh²θ``) moves the radius out of the perturbed
+    leading 1 and into an argument that is *linear* in ``r`` near the origin::
+
+        √t = √c‖x‖ / sqrt(1 - c‖x‖²),   d₀(x) = 2·arcsinh(√t)/√c
+
+    ``arcsinh`` needs no domain clamp (its argument is a norm over the whole real half-line) and its
+    derivative is bounded by 1, so the acosh floor and the ``where``-guard are both gone rather than
+    moved, and the arm reproduces slot 0's ``2·atanh(√c‖x‖)/√c`` to rounding at every radius. The
+    two forms are algebraically the same function, so this is **not** a new version slot — slot 2 is
+    the metric-tensor *distance*, and it is now computed accurately.
+
+    The boundary guard is unchanged: ``1 - c‖x‖²`` still comes from the clamped conformal factor
+    (= 2/λ(x)), so a point at or past the ball boundary gets the same floored denominator, and the
+    representable ceiling stays 2·arcsinh(1/sqrt(floor))/√c ≈ 12.1/√c (float32) / 27.8/√c (float64).
+
+    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at the origin (the same
+    reason ``hyperboloid._dist_0_stable`` uses it), so ``jax.grad`` is finite there without the
+    ``where``-guard that used to pin it, and ``d₀(0) = 0`` stays exact.
+    """
+    sqrt_c = jnp.sqrt(c)
+    x_norm = safe_norm(x)
     # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)) so a near-boundary point
     # cannot drive the denominator to 0; consistent with _dist_metric_tensor and _apollonian_dist.
     one_minus_cx = 2.0 / _conformal_factor(x, c)
-    arg = 1 + 2 * c * x_sqnorm / one_minus_cx
-    condition = arg < 1 + MIN_NORM
-    return jnp.where(condition, 0.0, acosh(arg) / jnp.sqrt(c))  # type: ignore[return-value]
+    sqrt_t = sqrt_c * x_norm / jnp.sqrt(one_minus_cx)
+    return 2.0 * jnp.arcsinh(sqrt_t) / sqrt_c
 
 
-def _dist_0(x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
+def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
     """Compute geodesic distance from Poincaré ball origin.
 
     Args:
@@ -264,7 +350,7 @@ def _dist_0(x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_MOB
     return lax.switch(version_idx, [_dist_0_mobius, _dist_0_mobius, _dist_0_metric_tensor], x, c)
 
 
-def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
     Args:
@@ -278,20 +364,24 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Safe norm: sqrt(||v||² + eps²) has well-defined gradients at v=0,
-    # matching _expmap_0. The previous maximum(·, MIN_NORM) only guarded the
-    # forward — linalg.norm's VJP at 0 is 0/0 = NaN, and 0·NaN is still NaN.
-    v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    # `safe_norm` + explicit `floor_at`: the floor is deliberate (`c_norm_prod` divides two lines
+    # below, and `tanh(t)/t → 1` needs t > 0), the max-scaling is the fix for the old spelling's
+    # float32 overflow past coordinate 1.8e19. Matches _expmap_0. `[..., None]` keeps the norm
+    # broadcastable against the `(..., dim)` operand it divides below (see _gyrovector_core._proj).
+    v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * v_norm
     lambda_x = _conformal_factor(x, c)
     # ||second_term|| = |tanh(·)|/√c < 1/√c, i.e. strictly inside the ball, so an explicit _proj
     # here is a no-op in the valid regime; _addition re-projects its output regardless. Skip it.
-    second_term = jnp.tanh(c_norm_prod * lambda_x / 2) / c_norm_prod * v
+    # `tanh` is the math_utils wrapper, matching _expmap_0 and _scalar_mul: it is more accurate
+    # than XLA's kernel (expm1 form above the dtype seam, odd Maclaurin series below it in float32)
+    # and its ±(1 - 10·eps) output clip only tightens the strict inequality above.
+    second_term = tanh(c_norm_prod * lambda_x / 2) / c_norm_prod * v
     res = _addition(x, second_term, c)
     return res
 
 
-def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Exponential map from origin: map tangent vector v at origin to manifold.
 
     Args:
@@ -304,10 +394,13 @@ def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Safe norm: sqrt(||v||² + eps²) has well-defined gradients at v=0,
-    # unlike jnp.linalg.norm(v) which produces NaN gradients (0/0).
-    # This matters when zero tangent vectors arise (e.g., all-black pixel patches).
-    v_norm = jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    # `safe_norm` + `floor_at`. `v` is a *tangent* vector, so unlike the ball-point sites in this
+    # module its magnitude is unbounded and the max-scaling earns its second reduction: the old
+    # `sum(v**2)` overflowed float32 above coordinate 1.8e19. The floor is deliberate --
+    # `c_norm_prod` divides three lines down, and `tanh(t)/t -> 1` needs numerator and denominator
+    # to be the same floored quantity. `[..., None]` keeps the norm broadcastable against the
+    # `(..., dim)` operand it divides below (see _gyrovector_core._proj).
+    v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
     sqrt_c = jnp.sqrt(c)
     c_norm_prod = sqrt_c * v_norm
     # Boundary clamp applied to the *scalar* instead of via _proj on the (dim,) result. The result
@@ -325,7 +418,7 @@ def _expmap_0(v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     return res
 
 
-def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Retraction: first-order approximation of exponential map.
 
     Args:
@@ -344,7 +437,7 @@ def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) ->
     return res
 
 
-def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Logarithmic map: map point y to tangent space at point x.
 
     Args:
@@ -359,11 +452,12 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sub = _addition(-x, y, c)
-    x2y2 = jnp.dot(x, x) * jnp.dot(y, y)
-    xy = jnp.dot(x, y)
-    # Safe norm: finite gradient at x == y (raw norm's VJP at 0 is 0/0 = NaN). Identical quantity
-    # and form to _dist_mobius_direct's num — keep the two consistent.
-    num = jnp.sqrt(jnp.sum((y - x) ** 2) + MIN_NORM**2)
+    x2y2 = jnp.dot(x, x, precision=MATMUL_PRECISION) * jnp.dot(y, y, precision=MATMUL_PRECISION)
+    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
+    # `safe_sqrt`: exact 0 and exactly-zero VJP at x == y. Identical quantity and form to
+    # _dist_mobius_direct's num -- keep the two consistent. No floor here: `c_norm_prod` below
+    # already carries the explicit divisor floor.
+    num = safe_sqrt(jnp.sum((y - x) ** 2))
     denom = jnp.sqrt(floor_at(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
     sub_norm = num / denom
     c_norm_prod = floor_at(jnp.sqrt(c) * sub_norm, MIN_NORM)
@@ -372,7 +466,7 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Flo
     return res
 
 
-def _logmap_0(y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Logarithmic map from origin: map point y to tangent space at origin.
 
     Args:
@@ -385,14 +479,20 @@ def _logmap_0(y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # Safe norm: sqrt(||y||² + eps²) has well-defined gradients at y=0.
-    y_norm = jnp.sqrt(jnp.sum(y**2) + MIN_NORM**2)
+    # `safe_sqrt` + `floor_at`: `y` is a ball point (`sum(y**2) <= 1/c`), so the max-scaling
+    # `safe_norm` would pay a second reduction for an overflow that cannot happen. The floor is
+    # deliberate -- `c_norm_prod` divides on the next line, and `atanh(t)/t -> 1` needs numerator
+    # and denominator to be the same floored quantity. `axis=-1, keepdims=True` keeps the norm
+    # per-row and broadcastable against `y`; see _scalar_mul.
+    y_norm = floor_at(safe_sqrt(jnp.sum(y**2, axis=-1, keepdims=True)), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * y_norm
     res = atanh(c_norm_prod) / c_norm_prod * y
     return res
 
 
-def _ptransp(v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _ptransp(
+    v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
+) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from point x to point y.
 
     Args:
@@ -412,7 +512,7 @@ def _ptransp(v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "di
     return _gyration(y, -x, v, c) * (lambda_x / lambda_y)
 
 
-def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Parallel transport tangent vector v from origin to point y.
 
     Args:
@@ -431,7 +531,9 @@ def _ptransp_0(v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> 
     return conformal_frac * v
 
 
-def _tangent_inner(u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _tangent_inner(
+    u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature
+) -> Float[Array, ""]:
     """Compute inner product of tangent vectors u and v at point x.
 
     Args:
@@ -447,10 +549,10 @@ def _tangent_inner(u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Arra
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_x = _conformal_factor(x, c)
-    return lambda_x**2 * jnp.dot(u, v)
+    return lambda_x**2 * jnp.dot(u, v, precision=MATMUL_PRECISION)
 
 
-def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Compute norm of tangent vector v at point x.
 
     Args:
@@ -465,12 +567,12 @@ def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) 
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     lambda_x = _conformal_factor(x, c)
-    # Safe norm: sqrt(||v||² + eps²) keeps the gradient finite at v=0. A bare jnp.linalg.norm
-    # has VJP 0/0 = NaN there (and 0-cotangent · NaN stays NaN), matching the _expmap/_proj idiom.
-    return lambda_x * jnp.sqrt(jnp.sum(v**2) + MIN_NORM**2)
+    # `safe_norm`: exact 0 with an exactly-zero VJP at v = 0 (a bare jnp.linalg.norm has VJP
+    # 0/0 = NaN there). Returned, not divided by, so no floor — ‖0‖_x is exactly 0.
+    return lambda_x * safe_norm(v)
 
 
-def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Convert Euclidean gradient to Riemannian gradient.
 
     Args:
@@ -488,7 +590,7 @@ def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature
     return grad / (lambda_x**2)
 
 
-def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Project vector v onto tangent space at point x.
 
     In Poincaré ball, tangent space equals ambient space (identity).
@@ -504,7 +606,7 @@ def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) 
     return v
 
 
-def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+def _is_in_manifold(x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
     """Check if point x lies in Poincaré ball.
 
     The constraint is tested in its dimensionless form ``c‖x‖² < 1`` rather than as
@@ -525,12 +627,14 @@ def _is_in_manifold(x: Float[Array, "dim"], c: Curvature, atol: float | None = N
         ``1/√c - eps**0.75``, and re-squaring that in float32 can land a hair above ``1/c``.
         A point genuinely outside the ball misses by far more than ``atol``.
     """
-    x_sqnorm = jnp.dot(x, x)
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
     tol = default_atol(x.dtype) if atol is None else atol
     return c * x_sqnorm < 1.0 + tol
 
 
-def _is_in_tangent_space(v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+def _is_in_tangent_space(
+    v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None
+) -> Array:
     """Check if vector v lies in tangent space at point x.
 
     The ball is an open subset of R^d, so its tangent space at every point is all of R^d and
@@ -560,7 +664,7 @@ def _compute_mlr_pp(
     x: Float[Array, "batch in_dim"],
     z: Float[Array, "out_dim in_dim"],
     r: Float[Array, "out_dim 1"],
-    c: Curvature,
+    c: ScalarCurvature,
     clamping_factor: float,
     smoothing_factor: float,
     min_enorm: float = 1e-15,
@@ -585,15 +689,18 @@ def _compute_mlr_pp(
     sqrt_c = jnp.sqrt(c)
     sqrt_c2r_1P = 2 * sqrt_c * r.T  # (1, P) — r is (P, 1), .T broadcasts
 
-    # Safe norm: sqrt(sum(z²) + eps²) avoids NaN gradients at z=0
-    z_norm_P1 = jnp.sqrt(jnp.sum(z**2, axis=-1, keepdims=True) + min_enorm**2)  # (P, 1)
+    # `safe_norm` + `floor_at`: `z_norm_P1` is a divisor below (`z / z_norm_P1`), so the floor at
+    # `min_enorm` is the deliberate part; the max-scaling removes the old spelling's float32
+    # overflow and its 1e-15 floor on small hyperplane normals. Mirrors
+    # `poincare_regression._compute_mlr`'s `floor_at(safe_norm(a)[:, None], min_enorm)`.
+    z_norm_P1 = floor_at(safe_norm(z)[:, None], min_enorm)  # (P, 1)
 
     # Conformal factor lam(x) = 2 / (1 - c||x||²) per HNN++ Eq. 26 (boundary-clamped).
     # NOTE: van Spengler's poincare-resnet repo has 2*(1 - c||x||²) here — a
     # transcription bug the same author fixed in hypll. Do not "restore" it.
     lam_B1 = _conformal_factor_batch(x, c)  # (B, 1)
 
-    z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1)  # (B, P)
+    z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1, precision=MATMUL_PRECISION)  # (B, P)
     asinh_arg_BP = sqrt_c * lam_B1 * z_unitx_BP * cosh(sqrt_c2r_1P) - (lam_B1 - 1) * sinh(sqrt_c2r_1P)  # (B, P)
 
     eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
@@ -609,7 +716,7 @@ def _compute_mlr_pp(
 # ---------------------------------------------------------------------------
 
 
-def _beta_concat(points: Float[Array, "M n_i"], c: Curvature) -> Float[Array, "n"]:
+def _beta_concat(points: Float[Array, "M n_i"], c: ScalarCurvature) -> Float[Array, "n"]:
     """Beta-concatenation of M equal-dimensional Poincaré ball points.
 
     Concatenates M points in the tangent space at the origin with a scaling
@@ -647,7 +754,7 @@ def _beta_concat(points: Float[Array, "M n_i"], c: Curvature) -> Float[Array, "n
     return _expmap_0(v_N, c)  # (M*n_i,)
 
 
-def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Closed-form Poincaré Busemann function ``B^v(x)`` (point-to-horosphere coordinate).
 
     For a unit ideal direction ``v ∈ S^{n-1}`` and a ball point ``x`` (``‖x‖ < 1/√c``), with
@@ -676,7 +783,7 @@ def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> F
     """
     sqrt_c = jnp.sqrt(c)
     num = jnp.sum((v - sqrt_c * x) ** 2)
-    denom = floor_at(1.0 - c * jnp.dot(x, x), MIN_NORM)
+    denom = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), MIN_NORM)
     return jnp.log(num / denom) / sqrt_c
 
 
@@ -712,11 +819,11 @@ class Poincare(ManifoldBase):
     VERSION_MOBIUS = VERSION_MOBIUS
     VERSION_METRIC_TENSOR = VERSION_METRIC_TENSOR
 
-    def proj(self, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def proj(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project point onto Poincaré ball by clipping norm."""
         return _proj(self._cast(x), c)
 
-    def proj_batch(self, x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... dim"]:
+    def proj_batch(self, x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... dim"]:
         """Project batched points onto the ball (handles arbitrary leading dimensions).
 
         Batched sibling of :meth:`proj`, matching ``Hyperboloid.proj_batch``. Equivalent to
@@ -725,16 +832,16 @@ class Poincare(ManifoldBase):
         return _proj_batch(self._cast(x), c)
 
     def gyration(
-        self, x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: Curvature
+        self, x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Compute gyration gyr[x,y]z to restore commutativity."""
         return _gyration(self._cast(x), self._cast(y), self._cast(z), c)
 
-    def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Möbius gyrovector addition x ⊕ y."""
         return _addition(self._cast(x), self._cast(y), c)
 
-    def scalar_mul(self, r: float, x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def scalar_mul(self, r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Scalar multiplication r ⊗ x on Poincaré ball."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
@@ -744,17 +851,17 @@ class Poincare(ManifoldBase):
         self,
         x: Float[Array, "dim"],
         y: Float[Array, "dim"],
-        c: Curvature,
+        c: ScalarCurvature,
         version_idx: int = VERSION_MOBIUS_DIRECT,
     ) -> Float[Array, ""]:
         """Compute geodesic distance between Poincaré ball points."""
         return _dist(self._cast(x), self._cast(y), c, version_idx)
 
-    def dist_0(self, x: Float[Array, "dim"], c: Curvature, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
+    def dist_0(self, x: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
         """Compute geodesic distance from Poincaré ball origin."""
         return _dist_0(self._cast(x), c, version_idx)
 
-    def apollonian_dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+    def apollonian_dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Apollonian weak metric δ(x, y) — non-symmetric; symmetrizes to √c·dist(x, y).
 
         .. warning::
@@ -766,65 +873,65 @@ class Poincare(ManifoldBase):
         """
         return _apollonian_dist(self._cast(x), self._cast(y), c)
 
-    def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map: map tangent vector v at point x to manifold."""
         return _expmap(self._cast(v), self._cast(x), c)
 
-    def expmap_0(self, v: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def expmap_0(self, v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map from origin: map tangent vector v at origin to manifold."""
         return _expmap_0(self._cast(v), c)
 
-    def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Retraction: first-order approximation of exponential map."""
         return _retraction(self._cast(v), self._cast(x), c)
 
-    def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map: map point y to tangent space at point x."""
         return _logmap(self._cast(y), self._cast(x), c)
 
-    def logmap_0(self, y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map from origin: map point y to tangent space at origin."""
         return _logmap_0(self._cast(y), c)
 
     def ptransp(
-        self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature
+        self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Parallel transport tangent vector v from point x to point y."""
         return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
 
-    def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Parallel transport tangent vector v from origin to point y."""
         return _ptransp_0(self._cast(v), self._cast(y), c)
 
     def tangent_inner(
-        self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature
+        self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, ""]:
         """Compute inner product of tangent vectors u and v at point x."""
         return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
 
-    def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+    def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Compute norm of tangent vector v at point x."""
         return _tangent_norm(self._cast(v), self._cast(x), c)
 
-    def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Convert Euclidean gradient to Riemannian gradient."""
         return _egrad2rgrad(self._cast(grad), self._cast(x), c)
 
-    def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature) -> Float[Array, "dim"]:
+    def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project vector v onto tangent space at point x."""
         return _tangent_proj(self._cast(v), self._cast(x), c)
 
-    def is_in_manifold(self, x: Float[Array, "dim"], c: Curvature, atol: float | None = None) -> Array:
+    def is_in_manifold(self, x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
         """Check if point x lies in Poincaré ball (``atol`` default: :func:`default_atol`)."""
         return _is_in_manifold(self._cast(x), c, atol)
 
     def is_in_tangent_space(
-        self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: Curvature, atol: float | None = None
+        self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None
     ) -> Array:
         """Check that v has finite entries (T_x B = R^d, so there is no other constraint)."""
         return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
 
-    def conformal_factor(self, x: Float[Array, "... dim"], c: Curvature) -> Float[Array, "... 1"]:
+    def conformal_factor(self, x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... 1"]:
         """Numerically stable conformal factor lambda(x) = 2 / (1 - c||x||^2).
 
         Batch-compatible version that handles arbitrary leading dimensions.
@@ -840,7 +947,7 @@ class Poincare(ManifoldBase):
         x: Float[Array, "batch in_dim"],
         z: Float[Array, "out_dim in_dim"],
         r: Float[Array, "out_dim 1"],
-        c: Curvature,
+        c: ScalarCurvature,
         clamping_factor: float,
         smoothing_factor: float,
         min_enorm: float = 1e-15,
@@ -848,11 +955,11 @@ class Poincare(ManifoldBase):
         """Compute HNN++ multinomial linear regression on the Poincare ball."""
         return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)
 
-    def beta_concat(self, points: Float[Array, "M n_i"], c: Curvature) -> Float[Array, "n"]:
+    def beta_concat(self, points: Float[Array, "M n_i"], c: ScalarCurvature) -> Float[Array, "n"]:
         """Beta-concatenation of M equal-dimensional Poincaré ball points."""
         return _beta_concat(self._cast(points), c)
 
-    def busemann(self, x: Float[Array, "dim"], v: Float[Array, "dim"], c: Curvature) -> Float[Array, ""]:
+    def busemann(self, x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Closed-form Poincaré Busemann function ``B^v(x) = (1/√c)·log(‖v - √c·x‖²/(1 - c‖x‖²))``.
 
         Point-to-horosphere coordinate (Chen et al. 2026, Eq. 3). ``v`` must be a *unit*

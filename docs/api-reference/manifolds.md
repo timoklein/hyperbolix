@@ -59,6 +59,13 @@ The Poincaré ball model with Möbius operations.
     Constants are available as `poincare.VERSION_MOBIUS_DIRECT` etc., or from
     `hyperbolix.manifolds.poincare`.
 
+    Slot 2 of **both** `dist` and `dist_0` evaluates the metric-tensor distance through the
+    half-angle identity $\operatorname{acosh}(1 + 2t) = 2\operatorname{arcsinh}(\sqrt{t})$ rather
+    than the `acosh` form directly — the same function, without the `acosh` domain clamp that used
+    to floor every small radius (`dist_0`) and every small separation (`dist`). See
+    [slot 2 reads the radius through `arcsinh`](
+    ../user-guide/numerical-stability.md#poincare-metric-tensor-dist-0).
+
 !!! note "Apollonian weak metric"
     `apollonian_dist(x, y, c)` is the **non-symmetric** Apollonian weak metric $\delta$
     (Papadopoulos & Troyanov, *Weak metrics on Euclidean domains*, Thm 2) — a *weak metric*,

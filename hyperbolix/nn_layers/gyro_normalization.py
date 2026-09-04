@@ -63,6 +63,8 @@ Chen et al. "Riemannian Batch Normalization: A Gyro Approach." 2025.
 Shi et al. "Intrinsic Lorentz Neural Network." 2026 (Lorentz gyro addition / scaling).
 """
 
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -167,7 +169,9 @@ class _GyroBatchNormBase(nnx.Module):
 
     def _lift(self, v_D: Float[Array, "D"]) -> Float[Array, "F"]:
         """Spatial vector -> ambient tangent-at-origin (prepends time 0 on Hyperboloid)."""
-        return self.manifold.embed_spatial_0(v_D)
+        # `embed_spatial_0` exists on the three manifolds these layers validate against but
+        # not on the `Manifold` protocol (Euclidean and Stereographic do not define it).
+        return cast("Hyperboloid | ProperVelocity | Poincare", self.manifold).embed_spatial_0(v_D)
 
     def _lower(self, v_F: Float[Array, "F"]) -> Float[Array, "D"]:
         """Ambient tangent-at-origin -> spatial vector (drops the time coordinate)."""
@@ -316,7 +320,9 @@ class _GyroRMSNormBase(nnx.Module):
 
     def _lift(self, v_D: Float[Array, "D"]) -> Float[Array, "F"]:
         """Spatial vector -> ambient tangent-at-origin (prepends time 0 on Hyperboloid)."""
-        return self.manifold.embed_spatial_0(v_D)
+        # `embed_spatial_0` exists on the three manifolds these layers validate against but
+        # not on the `Manifold` protocol (Euclidean and Stereographic do not define it).
+        return cast("Hyperboloid | ProperVelocity | Poincare", self.manifold).embed_spatial_0(v_D)
 
     def __call__(self, x: Float[Array, "... F"], c: float = 1.0) -> Float[Array, "... F"]:
         """Apply gyro radial RMS normalization to on-manifold points.

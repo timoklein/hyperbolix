@@ -12,6 +12,7 @@ from hyperbolix.utils.math_utils import (
     capped_exp,
     cosh,
     safe_hypot,
+    safe_hypot_norm,
     safe_norm,
     safe_normalize,
     sinh,
@@ -859,3 +860,112 @@ def test_dtype_consistency():
         assert sinh(x).dtype == dtype
         assert acosh(x).dtype == dtype
         assert atanh(x * 0.5).dtype == dtype  # Scale to valid domain
+
+
+# ---------------------------------------------------------------------------------------------
+# safe_hypot_norm and the power-of-two rescale
+#
+# The rescale the safe-norm family shares divides by the power of two just below ``max|v|``, not
+# by ``max|v|``. Both are overflow-free; only the power of two is *exact*, so it adds no rounding
+# of its own and the rescaled computation keeps the rounding of the plain ``sqrt(sum(v**2))``.
+#
+# That matters because callers recompute the same sum of squares. The hyperboloid time slot
+# ``x0 = sqrt(||x_s||**2 + 1/c)`` is checked against ``-x0**2 + ||x_s||**2 = -1/c``, and at
+# ``x0 ~ 34`` one float32 ulp of ``x0**2`` is 1.2e-4 -- larger than the 1e-4 tolerance the HRC
+# norm layers are asserted at (``tests/nn_layers/test_hypformer.py``). The same argument forbids
+# the two-leg spelling ``safe_hypot(safe_norm(v), q)``: it rounds ``||v||`` and squares it again,
+# which is up to one ulp *of* ``sum(v**2)`` and cannot cancel. ``safe_hypot_norm`` is the
+# one-reduction form.
+# ---------------------------------------------------------------------------------------------
+
+
+def _divide_by_max_norm_reference(v):
+    """The scaler ``safe_norm`` used before: divide by ``max|v|`` itself, which is inexact."""
+    scale = jax.lax.stop_gradient(jnp.max(jnp.abs(v), axis=-1))
+    is_zero = scale == 0.0
+    divisor = jnp.where((scale > 0.0) & jnp.isfinite(scale), scale, jnp.ones_like(scale))
+    sq = jnp.sum((v / divisor[..., None]) ** 2, axis=-1)
+    sq_safe = jnp.where(is_zero, jnp.ones_like(sq), sq)
+    return jnp.where(is_zero, jnp.zeros_like(sq), divisor * jnp.sqrt(sq_safe))
+
+
+def _ulp_distance(a, b, int_bits):
+    """Distance in representable floats between two same-dtype arrays (both non-negative here)."""
+    ia = np.asarray(a.view(int_bits)).astype(np.int64)
+    ib = np.asarray(b.view(int_bits)).astype(np.int64)
+    return np.abs(ia - ib)
+
+
+def test_the_norm_rescale_adds_no_rounding_of_its_own():
+    """``safe_norm`` tracks ``sqrt(sum(v**2))`` far more closely than the divide-by-max scaler did.
+
+    The reference is jitted, like ``safe_norm`` itself: eager and jitted ``sqrt(sum(v**2))`` are
+    not bit-identical to each other, so an eager reference would measure XLA's fusion rather than
+    the scaler.
+
+    Bit-identity is *not* asserted, because it is not XLA's to give: which association a reduction
+    over the last axis gets depends on the surrounding fusion, and at D = 8 the two programs happen
+    to differ (1-2 ulp) while at D in {2, 4, 16, 64} they agree exactly. The bound below separates
+    that residue from the scaler's own error. Measured on this machine, mean ulp distance from the
+    reference: power-of-two 0.000 at D in {2, 4, 16, 64} and 0.13-0.17 at D = 8, max 2; the
+    divide-by-max form 0.34-0.62 at every D, max 3.
+    """
+    naive = jax.jit(lambda v: jnp.sqrt(jnp.sum(v**2, axis=-1)))
+    for dt, int_bits in ((jnp.float32, jnp.uint32), (jnp.float64, jnp.uint64)):
+        for dim in (2, 4, 8, 16, 64):
+            for exponent in (-10, 0, 10):
+                key = jax.random.PRNGKey(exponent + dim)
+                v = (jax.random.normal(key, (500, dim), dtype=jnp.float64) * 10.0**exponent).astype(dt)
+                reference = naive(v)
+                d_pow2 = _ulp_distance(safe_norm(v), reference, int_bits)
+                d_max = _ulp_distance(jax.jit(_divide_by_max_norm_reference)(v), reference, int_bits)
+                where = f"{dt.__name__} D={dim} 1e{exponent}"
+                assert d_pow2.max() <= 2, f"{where}: max ulp {d_pow2.max()}"
+                assert d_pow2.mean() <= 0.25, f"{where}: mean ulp {d_pow2.mean()}"
+                assert d_pow2.mean() <= d_max.mean(), f"{where}: {d_pow2.mean()} vs divide-by-max {d_max.mean()}"
+
+
+def test_safe_hypot_norm_keeps_the_hyperboloid_constraint_residual_near_one_rounding():
+    """The whole point of the one-reduction form: ``-x0**2 + ||s||**2 + 1/c`` still nearly cancels.
+
+    ``x0`` is built three ways from the same spatial part, at the radius the HRC extreme-curvature
+    tests reach (``c = 0.1``, ``x0`` up to ~89), and each is checked against the residual the
+    manifold's own ``is_in_manifold`` forms. The two-leg ``safe_hypot(safe_norm(s), 1/sqrt(c))``
+    re-squares an already-rounded norm, which is up to one ulp *of* ``sum(s**2)``; the
+    one-reduction form stays within a small factor of the plain ``sqrt(sum(s**2) + 1/c)`` it
+    replaces (it is not identical to it -- the float32 ``(1/sqrt(c))**2`` is not the float32
+    ``1/c``, and XLA associates the two reductions independently). Measured here, mean residual:
+    plain 4.8e-5, safe_hypot_norm 6.1e-5, two-leg 8.1e-5.
+    """
+    c = 0.1
+    s = (17.0 * jax.random.normal(jax.random.PRNGKey(11), (5000, 4), dtype=jnp.float64)).astype(jnp.float32)
+    sum_sq = jnp.sum(s**2, axis=-1)  # exactly what the constraint check recomputes
+    inv_sqrt_c = jnp.asarray(1.0 / np.sqrt(c), dtype=jnp.float32)
+
+    def residual(x0):
+        return jnp.abs(-(x0.astype(jnp.float32) ** 2) + sum_sq + jnp.asarray(1.0 / c, dtype=jnp.float32))
+
+    mean_plain = float(jnp.mean(residual(jnp.sqrt(sum_sq + jnp.asarray(1.0 / c, dtype=jnp.float32)))))
+    mean_single = float(jnp.mean(residual(safe_hypot_norm(s, inv_sqrt_c))))
+    mean_two_leg = float(jnp.mean(residual(safe_hypot(safe_norm(s), inv_sqrt_c))))
+
+    assert mean_single <= 1.5 * mean_plain, f"{mean_single} vs plain {mean_plain}"
+    assert mean_two_leg >= 1.2 * mean_single, f"two-leg {mean_two_leg} vs one-reduction {mean_single}"
+
+
+def test_safe_hypot_norm_is_overflow_free_and_zero_gradient_safe():
+    """Finite past the float32 ``sum(v**2)`` ceiling; exact 0 with an exactly-zero VJP at the origin."""
+    big = jnp.full((8,), 1e20, dtype=jnp.float32)
+    assert np.isfinite(float(safe_hypot_norm(big, jnp.float32(1e20))))
+    assert float(safe_hypot_norm(big, jnp.float32(1e20))) == pytest.approx(3e20, rel=1e-6)
+
+    for dt in (jnp.float32, jnp.float64):
+        zero = jnp.zeros(4, dtype=dt)
+        zero_q = jnp.asarray(0.0, dtype=dt)
+        assert float(safe_hypot_norm(zero, zero_q)) == 0.0
+        g = np.asarray(jax.grad(safe_hypot_norm)(zero, zero_q))
+        assert np.all(g == 0.0)
+        assert safe_hypot_norm(jnp.ones(4, dtype=dt), jnp.asarray(1.0, dtype=dt)).dtype == dt
+
+    # Non-finite entries propagate as inf rather than becoming NaN (the family's convention).
+    assert np.isinf(float(safe_hypot_norm(jnp.asarray([1.0, jnp.inf, 0.0], jnp.float32), jnp.float32(1.0))))

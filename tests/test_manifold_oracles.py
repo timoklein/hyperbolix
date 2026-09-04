@@ -36,6 +36,7 @@ from hyperbolix.manifolds import (
 )
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds._gyrovector_core import _conformal_factor, _conformal_factor_batch, _proj
+from hyperbolix.manifolds.hyperboloid import _polar_frame
 from hyperbolix.nn_layers.hyperboloid_core import sinh_lift_to_hyperboloid
 from hyperbolix.utils.math_utils import MIN_NORM
 
@@ -707,16 +708,24 @@ class _HyperboloidCase(NamedTuple):
 def _hyperboloid_basis(dim: int) -> tuple[np.ndarray, np.ndarray]:
     """Two orthonormal spatial directions; ``e1`` has all components equal.
 
-    That equality is load-bearing for the ``radial`` configurations: ``s1·e1`` and ``s2·e1`` then
-    normalize to the *same* float unit vector for any positive scalars ``s1``, ``s2``, so the angle between the two points is
-    exactly 0 and the pair is genuinely collinear in the dtype under test. With a generic direction
-    the two normalizations differ by ~eps, which the angular term amplifies by
-    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``; measured on CPU, that overtakes the true radial
-    separation from radius **≈16 in float32** (a generic ray already fails at ``a = 20``), not
-    at the radius 80 this docstring used to claim. The crossover sits at ``ln(1/eps)``, so float64
-    keeps the same construction usable to radius ~36. Either way it is an artifact of the
-    construction, not of the library: the float32 inputs do not contain the angular information
-    the assertion needs.
+    **This does not make a scaled pair collinear in the dtype under test**, and an earlier version
+    of this docstring wrongly claimed it did. ``s1·e1`` and ``s2·e1`` are proportional in exact
+    arithmetic, but each is *rounded independently* to the dtype, so the stored vectors are only
+    proportional to within an ulp per component and ``fl(x_s/‖x_s‖)`` and ``fl(y_s/‖y_s‖)`` agree
+    bit-for-bit only by luck. The angular term amplifies a 1-ulp disagreement by
+    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``, so past radius ~10 the coin flip decides whether a
+    shared-ray assertion passes. Measured over radius 1..45 step 0.5 x ``c`` in {0.3, 1.0, 2.5} x
+    ``dim`` in {2, 4, 5, 10, 15} (1335 cells, ``logs/2026-09-03_collinearity_tests/``): this
+    construction resolves the pair in 84.2 % of cells on CPU and 62.6 % on an A100 in float32, and
+    **91.0 % on both backends in float64** — the float64 misses are all past radius 25. It is an
+    artifact of the construction, not of the library: the rounded inputs do not contain the angular
+    information the assertion needs.
+
+    Tests that need an exactly collinear pair must therefore build one, not scale one twice — see
+    :func:`_hyperboloid_ray_pair`. The ``radial`` configurations of the oracle grid keep this
+    construction on purpose: they compare against the Decimal oracle of the *stored* pair with the
+    :func:`_hyperboloid_input_resolution` allowance, so they assert what the inputs contain rather
+    than assuming collinearity.
     """
     e1 = np.ones(dim) / np.sqrt(dim)
     e2 = np.zeros(dim)
@@ -977,6 +986,63 @@ def _hyperboloid_point(a: float, c: float, direction: np.ndarray, dtype) -> jnp.
     return jnp.asarray(np.concatenate([[np.cosh(a) / sqrt_c], (np.sinh(a) / sqrt_c) * direction]).astype(dtype))
 
 
+def _hyperboloid_stored_radius(x_s: np.ndarray, c: float) -> float:
+    """``√c·d₀`` of the point whose **stored** spatial part is ``x_s``, to float64 accuracy.
+
+    ``arcsinh(√c·‖x_s‖)``, evaluated in float64 from the exact stored values, so it is the radius
+    of the point the library is actually handed rather than of the real-arithmetic point it was
+    meant to be. Relative accuracy ~1e-16, seven orders below the tolerances it is compared at.
+    """
+    s64 = np.asarray(x_s, dtype=np.float64)
+    return float(np.arcsinh(np.sqrt(c) * np.sqrt(float(np.dot(s64, s64)))))
+
+
+def _hyperboloid_ray_pair(a: float, log2_ratio: int, c: float, direction: np.ndarray, dtype):
+    """Two points on one ray whose **stored** spatial parts are proportional *in float*, not just
+    in the reals. Returns ``(x_A, y_A, a_stored, b_stored)`` with the two ``√c·d₀`` radii.
+
+    ``x_s`` is the dtype rounding of ``sinh(a)/√c · direction`` — any value at all — and
+    ``y_s = ldexp(x_s, log2_ratio)``, an exact power-of-two rescale: every mantissa is unchanged and
+    only the exponent moves. That is what makes the pair collinear **by construction**:
+
+    * ``safe_norm`` divides by ``max|v|``, and ``max|2^k·x_s| = 2^k·max|x_s|`` exactly, so the two
+      max-scaled vectors that enter the sum of squares are related by the same exact power of two;
+    * a float divide is *exponent-invariant* — ``fl((2^k·p)/(2^k·q)) == fl(p/q)`` — because the
+      exact quotient is unchanged and the exponent is handled separately from the mantissa. So the
+      two max-scaled vectors, hence ``sum(v²)``, hence ``sqrt`` of it, come back **bit-identical**,
+      ``r_y = 2^k·r_x`` exactly, and ``x_hat = x_s/r_x`` and ``y_s/r_y`` are bit-identical again;
+    * therefore ``chord = ‖x_hat - y_hat‖`` is **exactly 0**, ``q_angular`` is exactly 0, and
+      ``dist`` reduces to ``2·arcsinh|P|/√c`` on the radial gap term alone — which is
+      cancellation-free and well conditioned at every radius.
+
+    Exponent invariance is the one step that needs measuring rather than assuming: XLA:GPU's float32
+    divide is only *faithfully* rounded, and ``x/x != 1`` for 15.3 % of float32 values on an A100.
+    Measured anyway (``logs/2026-09-03_collinearity_tests/divide_invariance_*.json``): **0 of
+    200 000 x 7 exponent shifts** disagree, on CPU and on the A100, in both dtypes, and 0 of 12 000
+    draws of the full ``safe_norm``-then-normalize chain. Faithful rounding costs correctness of the
+    quotient, not invariance of it under a power-of-two rescale.
+
+    Consequence for the caller: the radius ratio is fixed at ``2^k``, so the radius *difference* is
+    ``arcsinh(2^k·sinh a) - a`` (→ ``k·ln 2`` as ``a`` grows) rather than a round number. Both radii
+    are returned so the expected distance stays an analytic fact about the stored pair.
+
+    Measured pass rate of ``dist == b_stored - a_stored`` at ``rel = 1e-6`` over the same 1335-cell
+    grid as :func:`_hyperboloid_basis`: **100 % on CPU and on the A100, in both dtypes**, with
+    ``chord == 0.0`` in every cell, against 84.2 % / 62.6 % (float32) and 91.0 % / 91.0 % (float64)
+    for the twice-scaled construction. Worst relative error 3.8e-7 (float32) / 3.0e-15 (float64).
+    """
+    sqrt_c = np.sqrt(c)
+    x_s = np.asarray((np.sinh(a) / sqrt_c) * direction, dtype=dtype)
+    y_s = np.ldexp(x_s, log2_ratio).astype(dtype)  # exact: mantissas unchanged, exponent shifted
+    assert np.all(np.isfinite(y_s)) and np.all(x_s != 0.0), f"ray pair not representable: a={a} c={c}"
+    return (
+        _hyperboloid_point_from_spatial(x_s, c, dtype),
+        _hyperboloid_point_from_spatial(y_s, c, dtype),
+        _hyperboloid_stored_radius(x_s, c),
+        _hyperboloid_stored_radius(y_s, c),
+    )
+
+
 @pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
 @pytest.mark.parametrize("c", CURVATURES)
 @pytest.mark.parametrize("a", [0.5, 5.0, 20.0, 45.0])
@@ -987,23 +1053,44 @@ def test_hyperboloid_dist_on_a_shared_ray_is_the_radius_difference(dtype, rtol: 
     all — and they are precisely the configurations the cancelling ``acosh`` form gets worst, since
     the Gromov product ``a + b - θ`` equals ``2·min(a, b)`` on a shared ray.
 
-    The float32 legs stop at ``a = 5``: past radius ~16 float32 cannot resolve collinearity in the
-    ambient chart on *any* backend (see :func:`_hyperboloid_basis`), and on XLA:GPU the float32
-    divide is only faithfully rounded (<=2 ulp, not correctly rounded), so ``_polar_frame``'s two
-    unit directions come back 1 ulp apart and the angular term multiplies that by
-    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))``. The large-radius legs stay in float64, where the
-    divide is exact.
+    **The pair is collinear by construction, not by rounding luck.** Scaling one direction twice
+    (``sinh(a)·e1`` and ``sinh(b)·e1``, each rounded on its own) leaves the two stored spatial parts
+    proportional only to within an ulp, and the angular term amplifies that by
+    ``sqrt(r_x r_y) ~ e^((a+b)/2)/(2 sqrt(c))`` — a coin flip past radius ~10 that this test used to
+    ride, restricting float32 to ``a <= 5`` and passing at ``a = 45`` in float64 only for the
+    particular ``c`` and ``dim`` in the parametrization. Measured over 1335 (radius x ``c`` x
+    ``dim``) cells, that construction resolves the pair in 84.2 % of cells on CPU / 62.6 % on an
+    A100 in float32 and 91.0 % on both in float64. :func:`_hyperboloid_ray_pair` instead makes the
+    far point an exact power-of-two rescale of the near one, which forces ``chord`` to exactly 0
+    through the divide's exponent invariance and leaves only the well-conditioned radial gap term:
+    100 % of the same 1335 cells on CPU and on the A100, in both dtypes, so **both dtypes now run
+    every radius** (``logs/2026-09-03_collinearity_tests/``).
+
+    The price is that the radius ratio is fixed at 2, so the gap is ``arcsinh(2·sinh a) - a`` (0.86
+    at ``a = 0.5``, → ``ln 2`` at large ``a``) rather than a round 1.5; both stored radii come back
+    from the helper so the expected value stays an analytic fact about the pair on the sheet.
     """
-    if dtype == jnp.float32 and a > 5.0:
-        pytest.skip("float32 cannot resolve collinearity past radius ~16 in the ambient chart")
     e1, _ = _hyperboloid_basis(4)
     manifold = Hyperboloid(dtype=dtype)
-    b = a + 1.5
-    same_ray = float(manifold.dist(_hyperboloid_point(a, c, e1, dtype), _hyperboloid_point(b, c, e1, dtype), c))
-    assert same_ray == pytest.approx(1.5 / np.sqrt(c), rel=max(rtol, 1e-6))
+    tol = max(rtol, 1e-6)
 
-    opposite = float(manifold.dist(_hyperboloid_point(a, c, e1, dtype), _hyperboloid_point(b, c, -e1, dtype), c))
-    assert opposite == pytest.approx((a + b) / np.sqrt(c), rel=max(rtol, 1e-6))
+    x_A, y_A, a_stored, b_stored = _hyperboloid_ray_pair(a, 1, c, e1, dtype)
+    # The construction's premise, asserted rather than assumed: with the two stored spatial parts an
+    # exact power of two apart, ``_polar_frame``'s two unit directions are bit-identical, so there is
+    # no fake angle for sqrt(r_x·r_y) to amplify. If this ever fires, the pair is not collinear in
+    # the dtype and the two value assertions below are measuring luck again.
+    assert float(_polar_frame(x_A, y_A, c).chord) == 0.0, "ray pair is not collinear in this dtype"
+
+    same_ray = float(manifold.dist(x_A, y_A, c))
+    assert same_ray == pytest.approx((b_stored - a_stored) / np.sqrt(c), rel=tol)
+
+    # ψ = π: the far point mirrored through the origin. Negation is exact, so the mirrored spatial
+    # part is still an exact power of two times ``-x_s`` and both radii are unchanged. This leg was
+    # never the fragile one — ``chord ≈ 2`` there, so a 1-ulp direction error is not amplified.
+    _, y_opposite_A, _, b_mirrored = _hyperboloid_ray_pair(a, 1, c, -e1, dtype)
+    assert b_mirrored == b_stored
+    opposite = float(manifold.dist(x_A, y_opposite_A, c))
+    assert opposite == pytest.approx((a_stored + b_stored) / np.sqrt(c), rel=tol)
 
 
 @pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
@@ -1070,9 +1157,17 @@ _DIST_0_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-14}
 
 
 def _hyperboloid_point_from_spatial(x_s: np.ndarray, c: float, dtype) -> jnp.ndarray:
-    """Ambient point with the given spatial part; ``x₀`` completed from the constraint."""
-    x0 = np.sqrt(1.0 / c + float(np.dot(x_s, x_s)))
-    return jnp.asarray(np.concatenate([[x0], x_s]).astype(dtype))
+    """Ambient point carrying ``x_s`` **unchanged**, with ``x₀`` completed from the constraint.
+
+    ``x_s`` is expected to be already rounded to ``dtype``; float32 -> float64 -> float32
+    round-trips exactly, so the stored spatial part is bit-identical to the one handed in. The
+    constraint is evaluated in float64 because ``sum(x_s²)`` overflows float32 at spatial radius
+    1.8e19 (geodesic radius ~44 at ``c = 1``) even though ``x₀`` itself is representable out to
+    3.4e38 — the same limit that stops the library's own ``proj``/``expmap_0`` there.
+    """
+    s_64 = np.asarray(x_s, dtype=np.float64)
+    x0 = np.sqrt(1.0 / c + float(np.dot(s_64, s_64)))
+    return jnp.asarray(np.concatenate([[x0], s_64]).astype(dtype))
 
 
 def _hyperboloid_point_at_spatial_radius(r: float, c: float, direction: np.ndarray, dtype) -> jnp.ndarray:
@@ -1781,3 +1876,401 @@ def test_hyperboloid_ptransp_matches_the_numpy_oracle(c: float, dim: int):
     # Non-degenerate: the transport genuinely moves the vector, so "matches" is not "is the
     # identity". At these radii the correction term is of order the vector itself.
     assert np.max(np.abs(expected_BA - v_BA)) > 0.1
+
+
+# ---------------------------------------------------------------------------------------------
+# Poincaré dist_0 slot 2 (VERSION_METRIC_TENSOR) at small radius.
+#
+# The arm used to evaluate ``acosh(1 + 2c‖x‖²/(1 - c‖x‖²))/√c``, whose whole radial signal sits in
+# a perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every
+# float32 radius below ``sqrt(10·eps/c)`` ≈ 1.1e-3/√c onto exactly zero, and a second
+# ``arg < 1 + MIN_NORM`` guard zeroed the band below ``sqrt(MIN_NORM/2c)`` ≈ 2.2e-8/√c in *both*
+# dtypes. Measured median relative error against a 60-digit ``decimal`` reference at c = 1, dim 8,
+# before → after: 7.7e4 → 1.4e-8 at r = 1e-8, 7.7e2 → 1.4e-8 at 1e-6, 6.6e-3 → 5.3e-8 at 1e-3
+# (float32); 1.0 → 1.7e-16 at 1e-8, 1.1e-5 → 0 at 1e-6 (float64). The ``jax.grad`` magnitude in the
+# floored band was exactly 0 instead of the analytic 2
+# (``logs/2026-09-03_poincare_origin_numerics/``).
+#
+# It is now the algebraically identical half-angle form ``2·arcsinh(√t)/√c``, ``t = c‖x‖²/(1-c‖x‖²)``,
+# whose argument is linear in r near the origin. Same function, so this is not a new version slot.
+# ---------------------------------------------------------------------------------------------
+
+# Radii spanning the two formerly-zeroed bands (1e-8 … 1e-3) and the working range up to 0.9/√c.
+_POINCARE_DIST_0_RADII = [1e-8, 1e-6, 1e-4, 1e-3, 1e-2, 0.1, 0.5]
+_POINCARE_DIST_0_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-14}
+
+
+def _poincare_dist_0_decimal(r: float, c: float, prec: int = 60) -> float:
+    """``2·atanh(√c·r)/√c`` at ``prec`` decimal digits.
+
+    ``decimal`` has no ``atanh``, so it is built from the definition
+    ``2·atanh(z) = ln((1+z)/(1-z))``; ``Decimal.ln`` and ``Decimal.sqrt`` are correctly rounded at
+    the working precision, so the result is exact to far beyond float64.
+    """
+    with decimal.localcontext() as ctx:
+        ctx.prec = prec
+        sqrt_c = decimal.Decimal(repr(c)).sqrt()
+        z = sqrt_c * decimal.Decimal(repr(r))
+        return float(((1 + z) / (1 - z)).ln() / sqrt_c)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+def test_poincare_metric_tensor_dist_0_matches_the_decimal_oracle_near_the_origin(dtype, c: float):
+    """Slot 2 of ``Poincare.dist_0`` against a 60-digit ``decimal`` reference, r down to 1e-8.
+
+    The reference is evaluated for the radius the *cast* point actually has, so the assertion
+    measures the formula and not the float32 rounding of the input coordinates. Slot 0 rides along
+    as an unchanged control: it was always accurate here, and it is what slot 2 must reproduce.
+    """
+    manifold = Poincare(dtype=dtype)
+    rtol = _POINCARE_DIST_0_RTOL[dtype]
+    rng = np.random.default_rng(23)
+
+    for r in _POINCARE_DIST_0_RADII:
+        direction = rng.normal(size=8)
+        direction /= np.linalg.norm(direction)
+        x_D = jnp.asarray((r * direction).astype(dtype))
+        r_cast = float(np.linalg.norm(np.asarray(x_D, dtype=np.float64)))
+        expected = _poincare_dist_0_decimal(r_cast, c)
+
+        got_slot2 = float(manifold.dist_0(x_D, c, version_idx=2))
+        got_slot0 = float(manifold.dist_0(x_D, c, version_idx=0))
+        assert got_slot2 == pytest.approx(expected, rel=rtol), f"slot 2, r={r}"
+        assert got_slot0 == pytest.approx(expected, rel=rtol), f"slot 0, r={r}"
+        # The two arms are the same function; they must agree to rounding, not merely to tolerance.
+        assert got_slot2 == pytest.approx(got_slot0, rel=10.0 * float(jnp.finfo(dtype).eps)), f"r={r}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+def test_poincare_metric_tensor_dist_0_gradient_is_two_at_the_origin(dtype, c: float):
+    """``∂d₀/∂r → 2`` as r → 0, and the gradient stays finite at the exact origin.
+
+    ``d₀ = 2·atanh(√c·r)/√c`` has ``dd₀/dr = 2/(1 - c·r²)``, i.e. exactly 2 at r = 0, so the
+    gradient's magnitude is a direct read-out of the floor: the old arm returned **0** for every
+    float32 radius ≤ 1e-6 (and ≤ 1e-3 at c = 0.3), because the ``where``-guard and the ``acosh``
+    clamp both flatten the output there. At the exact origin the derivative does not exist; the
+    library's convention (``safe_norm``) is the finite, direction-free 0.
+    """
+    manifold = Poincare(dtype=dtype)
+    grad_fn = jax.grad(lambda z: manifold.dist_0(z, c, version_idx=2))
+
+    direction = np.zeros(8)
+    direction[0] = 1.0
+    for r in [1e-8, 1e-6, 1e-4, 1e-3, 1e-2]:
+        g_D = np.asarray(grad_fn(jnp.asarray((r * direction).astype(dtype))), dtype=np.float64)
+        assert np.all(np.isfinite(g_D)), f"r={r}"
+        assert float(np.linalg.norm(g_D)) == pytest.approx(2.0 / (1.0 - c * r**2), rel=1e-5), f"r={r}"
+
+    g0_D = np.asarray(grad_fn(jnp.zeros(8, dtype=dtype)), dtype=np.float64)
+    assert np.all(np.isfinite(g0_D))
+    assert float(manifold.dist_0(jnp.zeros(8, dtype=dtype), c, version_idx=2)) == 0.0
+
+
+# ---------------------------------------------------------------------------------------------
+# Poincaré pairwise dist slot 2 (VERSION_METRIC_TENSOR) at small separation.
+#
+# The pairwise twin of the dist_0 defect above, and the same fix. The arm evaluated
+# ``acosh(1 + 2t)/√c`` with ``t = c‖x - y‖²/((1 - c‖x‖²)(1 - c‖y‖²))``, so ``acosh``'s
+# ``1 + 10·eps`` clamp flattened every pair with ``t < 5·eps`` onto exactly zero and an
+# ``arg < 1 + MIN_NORM`` short-circuit zeroed a second band below ``t = MIN_NORM/2``. For two
+# points at radius r the float32 separation floor is ``sqrt(5·eps/c)·(1 - c·r²)``: 1.2e-3/√c at the
+# origin. Measured median relative error vs a 60-digit ``decimal`` reference at c = 1, dim 8,
+# radius 1e-2, before → after: 7.7e4 → 3.0e-8 at separation 1e-8, 7.7e2 → 2.6e-8 at 1e-6, 6.7 →
+# 2.3e-8 at 1e-4 (float32); 1.0 → 1.7e-16 at 1e-8, 5.4e-8 → 2.1e-16 at 1e-6 (float64). 23 of 60
+# probed gradient cells had an exactly-zero gradient that is now the analytic λ(y)
+# (``logs/2026-09-03_poincare_origin_numerics/``).
+# ---------------------------------------------------------------------------------------------
+
+_POINCARE_DIST_SEPARATIONS = [1e-8, 1e-6, 1e-4, 1e-2]
+_POINCARE_DIST_RADII = [1e-2, 0.5]
+
+
+def _poincare_dist_decimal(x_D: np.ndarray, y_D: np.ndarray, c: float, prec: int = 60) -> float:
+    """``2·atanh(√c‖(-x) ⊕ y‖)/√c`` at ``prec`` decimal digits.
+
+    Deliberately routed through **Möbius addition**, not the metric-tensor integral, so the oracle
+    is independent of the formula under test. With ``u = -x``, ``v = y`` the Möbius numerator is
+    ``A·(-x) + B·y`` and the denominator ``D``::
+
+        A = 1 - 2c⟨x,y⟩ + c‖y‖²,  B = 1 - c‖x‖²,  D = 1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²
+        ‖(-x) ⊕ y‖² = (A²‖x‖² - 2AB⟨x,y⟩ + B²‖y‖²) / D²
+
+    Every input is a dot product of the exact float64 coordinates, and ``Decimal.ln``/``sqrt`` are
+    correctly rounded at the working precision, so the result is exact far beyond float64.
+    """
+    with decimal.localcontext() as ctx:
+        ctx.prec = prec
+        dc = decimal.Decimal(repr(c))
+        xx = sum((decimal.Decimal(float(v)) ** 2 for v in x_D), decimal.Decimal(0))
+        yy = sum((decimal.Decimal(float(v)) ** 2 for v in y_D), decimal.Decimal(0))
+        xy = sum(
+            (decimal.Decimal(float(a)) * decimal.Decimal(float(b)) for a, b in zip(x_D, y_D, strict=True)),
+            decimal.Decimal(0),
+        )
+
+        a_num = 1 - 2 * dc * xy + dc * yy
+        b_num = 1 - dc * xx
+        d_den = 1 - 2 * dc * xy + dc * dc * xx * yy
+        norm = (a_num * a_num * xx - 2 * a_num * b_num * xy + b_num * b_num * yy).sqrt() / d_den
+
+        sqrt_c = dc.sqrt()
+        z = sqrt_c * norm
+        return float(((1 + z) / (1 - z)).ln() / sqrt_c)
+
+
+def _poincare_nearby_pair(r: float, s: float, dtype, seed: int = 41) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Two points at ball radius ``r``, separated by exactly ``s`` along an orthogonal direction."""
+    rng = np.random.default_rng(seed)
+    base_D = rng.normal(size=8)
+    base_D /= np.linalg.norm(base_D)
+    off_D = rng.normal(size=8)
+    off_D -= np.dot(off_D, base_D) * base_D
+    off_D /= np.linalg.norm(off_D)
+    return jnp.asarray((base_D * r).astype(dtype)), jnp.asarray((base_D * r + off_D * s).astype(dtype))
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("r", _POINCARE_DIST_RADII)
+def test_poincare_metric_tensor_dist_matches_the_decimal_oracle_at_small_separation(dtype, c: float, r: float):
+    """Slot 2 of ``Poincare.dist`` against a 60-digit Möbius-route reference, separations to 1e-8.
+
+    Slot 0 rides along as an unchanged control: it was always accurate here, and it is what slot 2
+    must reproduce — the two are the same function.
+    """
+    manifold = Poincare(dtype=dtype)
+    rtol = _POINCARE_DIST_0_RTOL[dtype]
+
+    for s in _POINCARE_DIST_SEPARATIONS:
+        x_D, y_D = _poincare_nearby_pair(r, s, dtype)
+        expected = _poincare_dist_decimal(np.asarray(x_D, dtype=np.float64), np.asarray(y_D, dtype=np.float64), c)
+
+        got_slot2 = float(manifold.dist(x_D, y_D, c, version_idx=2))
+        got_slot0 = float(manifold.dist(x_D, y_D, c, version_idx=0))
+        assert got_slot2 > 0.0, f"r={r} s={s}: the acosh floor used to return exactly 0 here"
+        assert got_slot2 == pytest.approx(expected, rel=rtol), f"slot 2, r={r} s={s}"
+        assert got_slot0 == pytest.approx(expected, rel=rtol), f"slot 0, r={r} s={s}"
+        assert got_slot2 == pytest.approx(got_slot0, rel=10.0 * float(jnp.finfo(dtype).eps)), f"r={r} s={s}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("r", _POINCARE_DIST_RADII)
+def test_poincare_metric_tensor_dist_gradient_is_the_conformal_factor_at_small_separation(dtype, c: float, r: float):
+    """``‖∂d(x,y)/∂y‖ → λ(y) = 2/(1 - c‖y‖²)`` as ``y → x``, and is exactly 0 at ``y == x``.
+
+    The Riemannian unit-speed statement in Euclidean coordinates: the gradient magnitude of the
+    geodesic distance is the conformal factor. It is a direct read-out of the floor — the old arm
+    returned exactly **0** for every separation inside the `acosh` clamp, so a loss pulling two
+    nearby points apart through slot 2 received no gradient at all. At ``y == x`` the derivative
+    does not exist and the library's convention (`safe_norm`) is the finite, direction-free 0.
+    """
+    manifold = Poincare(dtype=dtype)
+    grad_fn = jax.grad(lambda b, a: manifold.dist(a, b, c, version_idx=2))
+
+    for s in _POINCARE_DIST_SEPARATIONS:
+        x_D, y_D = _poincare_nearby_pair(r, s, dtype)
+        g_D = np.asarray(grad_fn(y_D, x_D), dtype=np.float64)
+        assert np.all(np.isfinite(g_D)), f"r={r} s={s}"
+        lambda_y = 2.0 / (1.0 - c * float(np.dot(np.asarray(y_D, dtype=np.float64), np.asarray(y_D, dtype=np.float64))))
+        assert float(np.linalg.norm(g_D)) == pytest.approx(lambda_y, rel=1e-4), f"r={r} s={s}"
+
+    # Coincident: exactly 0 distance, and a finite (zero) gradient rather than a NaN.
+    x_D, _ = _poincare_nearby_pair(r, 0.0, dtype)
+    assert float(manifold.dist(x_D, x_D, c, version_idx=2)) == 0.0
+    assert np.all(np.isfinite(np.asarray(grad_fn(x_D, x_D), dtype=np.float64)))
+
+
+# ---------------------------------------------------------------------------------------------
+# Safe-norm sweep — the additive-epsilon norm idiom, replaced library-wide.
+#
+# The old idiom ``sqrt(sum(x**2) + MIN_NORM**2)`` gave ``sqrt`` a finite derivative at ``x = 0``,
+# which ``jnp.linalg.norm`` does not (its VJP there is ``0/0 = NaN``). It bought that with two
+# defects, both documented on ``math_utils.safe_norm``:
+#
+#   * **Overflow** — ``sum(x**2)`` overflows float32 once any coordinate passes 1.8e19, even
+#     though the norm is representable. Measured on the parent (``parent_gate/gate.py``):
+#     ``Hyperboloid.proj`` at float32 spatial radius 5e19 returns ``x0 = inf``, and already at
+#     1e19 the constraint ``-x0² + ‖x_s‖²`` evaluates to exactly ``0`` instead of ``-1/c``
+#     (the sum of squares is exact, but ``sqrt`` of it loses the ``1/c``). The Poincaré
+#     ``_gyrovector_core._proj`` fails worse: at radius 1e20 the clamp ``x·(max_norm/inf)``
+#     collapses the point onto the **origin** rather than onto the ball boundary.
+#   * **Underflow** — the ``1e-30`` floor dominates a genuinely small vector, with relative
+#     residual ``MIN_NORM²/(2r²)``: 5.0e-15 at float64 radius 1e-8 (measured on the parent), and
+#     41 % at float32 radius 1e-15 (2.83e-15 returned where 2.00e-15 is correct).
+#
+# ``safe_norm`` / ``safe_hypot`` / ``safe_sqrt`` are max-scaled, so neither happens, and all
+# three give an exact ``0`` with an exactly-zero VJP at the zero vector. See
+# ``logs/2026-09-03_safe_norm_sweep/inventory.md`` for the full site list.
+# ---------------------------------------------------------------------------------------------
+
+# Radii chosen so the residual is the *only* error term: at these radii atanh(z) == z to well
+# beyond float64, so the analytic form is exact in both dtypes.
+_TINY_RADIUS = {jnp.float32: 1e-15, jnp.float64: 1e-8}
+# float32: the parent returns 2.83e-15 for 2.00e-15 (41 % off). float64: the parent's residual is
+# MIN_NORM²/(2r²) = 5.0e-15, so 1e-14 would not gate it — 1e-15 does, and the sweep lands at ~1e-16.
+_TINY_RADIUS_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-15}
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", CURVATURES)
+def test_poincare_dist_0_matches_the_analytic_form_at_a_tiny_radius(dtype, c: float):
+    """``dist_0(x) == 2·atanh(√c‖x‖)/√c`` at a radius where the old ``+ MIN_NORM²`` dominated.
+
+    The additive floor made ``‖x‖`` come back as ``sqrt(r² + 1e-30)``. At float32 ``r = 1e-15``
+    that is ``1.41e-15``, i.e. a 41 % overestimate of the radius and of the distance; at float64
+    ``r = 1e-8`` it is a 5e-15 relative overestimate. ``safe_norm`` returns ``r`` exactly.
+    """
+    manifold = Poincare(dtype=dtype)
+    r = _TINY_RADIUS[dtype]
+    x_D = jnp.zeros(4, dtype=dtype).at[0].set(dtype(r))
+
+    expected = 2.0 * np.arctanh(np.sqrt(c) * r) / np.sqrt(c)
+    got = float(manifold.dist_0(x_D, c))
+    assert got == pytest.approx(expected, rel=_TINY_RADIUS_RTOL[dtype]), f"c={c} r={r}"
+
+    # The same statement for the pairwise arm, whose numerator is the same norm.
+    y_D = jnp.zeros(4, dtype=dtype)
+    assert float(manifold.dist(y_D, x_D, c)) == pytest.approx(expected, rel=_TINY_RADIUS_RTOL[dtype])
+
+
+# Above spatial radius sqrt(1/(2*c*eps32)) -- 3.7e3 at c = 0.3, 2.0e3 at c = 1, 1.3e3 at c = 2.5 --
+# NO float32 x0 satisfies -x0² + ‖x_s‖² = -1/c: consecutive float32 near x0 are 2·x0²·eps apart in
+# the squared domain, and 1/c is smaller than that gap. (`nn_layers/hyperboloid_core.py` documents
+# the same limit.) So the overflow band is checked against the *time slot*, x0 = sqrt(1/c + ‖x_s‖²)
+# rounded to float32, and the constraint itself is checked at a radius float32 can represent.
+_OVERFLOW_RADII = [5e19, 1e20]  # 1.8e19 is where sum(x_s**2) overflows float32
+_REPRESENTABLE_RADII = [1.0, 10.0, 100.0]
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("r", _OVERFLOW_RADII)
+def test_hyperboloid_proj_time_slot_survives_the_float32_overflow(c: float, r: float):
+    """``proj`` past float32 spatial radius 1.8e19: ``x0`` finite and correct to float32 rounding.
+
+    The old ``sqrt(floor_at(1/c + dot(x_s, x_s), MIN_NORM))`` forms the sum of squares, which
+    overflows while ``‖x_s‖`` — and therefore ``x0`` — is a perfectly ordinary float. Measured on
+    the parent: ``x0 = inf`` at both radii, at every curvature.
+    """
+    manifold = Hyperboloid(dtype=jnp.float32)
+    x_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(r))
+
+    x0 = float(np.asarray(manifold.proj(x_A, c), dtype=np.float64)[0])
+    reference = float(np.float32(np.sqrt(1.0 / c + np.float64(r) ** 2)))
+    assert np.isfinite(x0), f"c={c} r={r}: x0={x0}"
+    assert x0 == reference, f"c={c} r={r}: x0={x0:.6e} != float32(sqrt(1/c + r^2))={reference:.6e}"
+
+    # proj_batch must agree with proj row for row.
+    batch = jnp.stack([x_A, x_A])
+    x0_batch = np.asarray(manifold.proj_batch(batch, c), dtype=np.float64)[:, 0]
+    assert np.all(x0_batch == reference), f"c={c} r={r}: {x0_batch}"
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("r", _REPRESENTABLE_RADII)
+def test_hyperboloid_proj_still_satisfies_the_constraint_in_the_ordinary_band(c: float, r: float):
+    """The control: where float32 *can* represent ``-x0² + ‖x_s‖² = -1/c``, it still holds.
+
+    Guards the overflow fix against having traded the ordinary regime for the extreme one.
+    """
+    manifold = Hyperboloid(dtype=jnp.float32)
+    x_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(r))
+
+    p64 = np.asarray(manifold.proj(x_A, c), dtype=np.float64)
+    assert p64[0] > 0.0, "the time slot must stay on the upper sheet"
+    minkowski = -(p64[0] ** 2) + float(np.dot(p64[1:], p64[1:]))
+    assert minkowski == pytest.approx(-1.0 / c, rel=1e-3), f"c={c} r={r}"
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+def test_hyperboloid_expmap_0_saturates_to_a_consistent_point_not_an_infinite_time_slot(c: float):
+    """``expmap_0`` of a length-1e19 tangent vector saturates; it must saturate *on the sheet*.
+
+    A tangent vector that long is past the ``sinh`` clamp, so the result is the clamp's saturation
+    value — that part is expected. What was wrong is that ``proj`` then gave it an **infinite**
+    time slot beside a finite spatial part: measured on the parent, ``[inf, 7.0e37, 0, 0]``. At
+    saturation the on-sheet asymptote is ``x0 = ‖x_s‖`` (the ``1/c`` is 38 orders below), and that
+    is what it returns now.
+    """
+    manifold = Hyperboloid(dtype=jnp.float32)
+    v_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(1e19))
+
+    y64 = np.asarray(manifold.expmap_0(v_A, c), dtype=np.float64)
+    assert np.all(np.isfinite(y64)), f"c={c}: {y64}"
+    spatial = float(np.linalg.norm(y64[1:]))
+    assert spatial > 0.0, f"c={c}: {y64}"
+    assert y64[0] == pytest.approx(spatial, rel=1e-6), f"c={c}: x0={y64[0]:.6e} ||y_s||={spatial:.6e}"
+
+
+@pytest.mark.parametrize("r", [1e19, 1e20])
+def test_poincare_proj_clamps_a_far_point_to_the_boundary_not_to_the_origin(r: float):
+    """``_proj`` past the float32 overflow radius must land on the ball boundary.
+
+    With the overflowing norm the clamp is ``x · (max_norm / inf) = 0``: the farthest possible
+    input produced the *origin*, the point that is farthest from where it belongs. Measured on
+    the parent at ``r = 1e20``: ``‖proj(x)‖ = 0.0``.
+    """
+    c = 1.0
+    x_D = jnp.zeros(4, dtype=jnp.float32).at[0].set(jnp.float32(r))
+    p_D = np.asarray(_proj(x_D, c), dtype=np.float64)
+
+    max_norm = 1.0 / np.sqrt(c) - float(np.finfo(np.float32).eps) ** 0.75
+    assert float(np.linalg.norm(p_D)) == pytest.approx(max_norm, rel=1e-5), f"r={r}"
+
+
+def _zero_gradient_cases() -> list[tuple[str, object, object]]:
+    """``(name, fn, x0)`` triples whose gradient at ``x0`` must be exactly zero, not NaN."""
+    c = 1.0
+    zeros_D = jnp.zeros(4, dtype=F64)
+    zeros_6 = jnp.zeros(6, dtype=F64)
+    euc, poi, pv = Euclidean(dtype=F64), Poincare(dtype=F64), ProperVelocity(dtype=F64)
+    hyp, ster = Hyperboloid(dtype=F64), Stereographic(dtype=F64)
+    prod = ProductManifold((Poincare(dtype=F64), 3), (Euclidean(dtype=F64), 3), dtype=F64)
+    origin_A = hyp.create_origin(c, 3)
+    return [
+        ("euclidean.dist_0", lambda v: euc.dist_0(v, c), zeros_D),
+        ("euclidean.dist(x, x)", lambda v: euc.dist(v, v, c), zeros_D),
+        ("euclidean.tangent_norm", lambda v: euc.tangent_norm(v, zeros_D, c), zeros_D),
+        ("poincare.dist_0", lambda v: poi.dist_0(v, c), zeros_D),
+        ("poincare.dist(x, x)", lambda v: poi.dist(v, v, c), zeros_D),
+        ("poincare.tangent_norm", lambda v: poi.tangent_norm(v, zeros_D, c), zeros_D),
+        ("stereographic.dist_0", lambda v: ster.dist_0(v, c), zeros_D),
+        ("stereographic.tangent_norm", lambda v: ster.tangent_norm(v, zeros_D, c), zeros_D),
+        ("pv.dist_0", lambda v: pv.dist_0(v, c), zeros_D),
+        ("pv.tangent_norm", lambda v: pv.tangent_norm(v, zeros_D, c), zeros_D),
+        ("hyperboloid.tangent_norm", lambda v: hyp.tangent_norm(v, origin_A, c), jnp.zeros(4, dtype=F64)),
+        ("product.dist_0", lambda v: prod.dist_0(v, [c, 0.0]), zeros_6),
+        ("product.dist(x, x)", lambda v: prod.dist(v, v, [c, 0.0]), zeros_6),
+        ("product.tangent_norm", lambda v: prod.tangent_norm(v, zeros_6, [c, 0.0]), zeros_6),
+    ]
+
+
+@pytest.mark.parametrize("name,fn,x0", _zero_gradient_cases(), ids=[c[0] for c in _zero_gradient_cases()])
+def test_converted_norms_have_an_exactly_zero_gradient_at_the_zero_vector(name, fn, x0):
+    """Every converted norm site gives ``grad == 0`` at the zero vector — not NaN, not inf.
+
+    Zero is the finite, direction-free choice at a point where the derivative does not exist, and
+    it is what ``safe_norm``/``safe_sqrt``'s double-``where`` construction produces. Measured on
+    the parent, the Euclidean, Proper-Velocity ``tangent_norm`` and every ``ProductManifold``
+    entry returned NaN (bare ``jnp.linalg.norm``, or ``sqrt'(0) = inf`` meeting a zero cotangent).
+    """
+    g = np.asarray(jax.grad(fn)(x0), dtype=np.float64)
+    assert np.all(np.isfinite(g)), f"{name}: {g}"
+    assert np.all(g == 0.0), f"{name}: {g}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+def test_safe_sqrt_is_exact_and_zero_gradient_at_zero(dtype):
+    """The new ``math_utils.safe_sqrt``: value of ``jnp.sqrt``, derivative 0 (not inf) at 0."""
+    from hyperbolix.utils.math_utils import safe_sqrt
+
+    x = jnp.asarray([0.0, 1e-30, 1e-8, 1.0, 4.0, 1e30], dtype=dtype)
+    np.testing.assert_array_equal(np.asarray(safe_sqrt(x)), np.asarray(jnp.sqrt(x)))
+
+    g = np.asarray(jax.grad(lambda v: safe_sqrt(v))(jnp.asarray(0.0, dtype=dtype)))
+    assert g == 0.0
+    # Away from zero it is the ordinary derivative.
+    g1 = float(jax.grad(lambda v: safe_sqrt(v))(jnp.asarray(4.0, dtype=dtype)))
+    assert g1 == pytest.approx(0.25, rel=1e-6)

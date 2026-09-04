@@ -55,8 +55,10 @@ uv run pytest tests/test_manifolds.py
 uv run pytest tests/nn_layers/                          # all NN layer tests
 uv run pytest tests/nn_layers/test_hyperboloid_fgg.py   # one file
 
-# Fast tests only (skip slow parametrizations)
-uv run pytest -k "dim2"
+# Fast slice of the dim-parametrized suites: dimension 2, float32 only
+# (the ids spell the dimension as a bare number, e.g. [PoincareBall-c1-2-float32-10],
+#  so "2-float32" is the selector; 78 of the 386 tests in tests/test_manifolds.py)
+uv run pytest -k "2-float32"
 
 # Verbose output
 uv run pytest -v
@@ -340,8 +342,8 @@ cat .python-version
 # Run tests sequentially (no parallel)
 uv run pytest --maxprocesses=1
 
-# Run smaller test subset
-uv run pytest -k "dim2"
+# Run smaller test subset (dimension 2, float32)
+uv run pytest -k "2-float32"
 
 # Reduce batch sizes in conftest.py
 ```

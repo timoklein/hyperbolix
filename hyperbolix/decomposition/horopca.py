@@ -23,6 +23,7 @@ References:
 """
 
 import functools
+from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -45,9 +46,10 @@ from ..manifolds.hyperboloid import (
     _proj_batch,
 )
 from ..manifolds.isometry_mappings import hyperboloid_to_poincare, poincare_to_hyperboloid
-from ..manifolds.protocol import Curvature
+from ..manifolds.protocol import ScalarCurvature
 from ..utils.helpers import compute_pairwise_distances
 from ..utils.math_utils import MIN_NORM, floor_at
+from ..utils.precision import MATMUL_PRECISION
 from .frechet import frechet_mean
 
 # -------------------------------------------------------------------------------------
@@ -93,7 +95,7 @@ def orthonormalize_rows(q_KD: Float[Array, "K D"]) -> Float[Array, "K D"]:
 def horo_projection(
     x_A: Float[Array, "A"],
     q_ortho_KD: Float[Array, "K D"],
-    c: Curvature,
+    c: ScalarCurvature,
     version_idx: int = VERSION_DEFAULT,
 ) -> Float[Array, "A"]:
     """Horospherical projection of a single hyperboloid point onto the K ideal directions.
@@ -137,12 +139,12 @@ def horo_projection(
     def _span_coeffs(y_A: Float[Array, "A"]) -> Float[Array, "K"]:
         # Minkowski inner products ⟨y, p_k⟩_L = -y_0 + q_k · y_s, then apply the closed-form
         # inverse of the null-lift Gram G = I - 𝟙𝟙ᵀ: G⁻¹ = I + 𝟙𝟙ᵀ/(1-K) (Sherman-Morrison).
-        by_K = -y_A[0] + q_ortho_KD @ y_A[1:]  # (K,)
+        by_K = -y_A[0] + jnp.matmul(q_ortho_KD, y_A[1:], precision=MATMUL_PRECISION)  # (K,)
         return by_K + (jnp.sum(by_K) / (1.0 - num_components)) * jnp.ones(num_components, dtype=dtype)
 
     # (1) Minkowski projection of x onto span(p_k), normalized onto the manifold (the spine).
     coeffs_K = _span_coeffs(x_A)
-    mp_A = coeffs_K @ p_KA  # (A,) projection of x onto the ideal span
+    mp_A = jnp.matmul(coeffs_K, p_KA, precision=MATMUL_PRECISION)  # (A,) projection of x onto the ideal span
     mp_inner = _minkowski_inner(mp_A, mp_A)  # < 0 (timelike) for a valid spine
     spine_A = mp_A / jnp.sqrt(floor_at(-c * mp_inner, MIN_NORM))
     # Sheet hygiene BEFORE _proj: _proj rebuilds a positive time from the spatial part and
@@ -153,7 +155,8 @@ def horo_projection(
     # (2) Unit tangent at the spine pointing toward the origin (⊥ span(P) ⇒ tangent at spine).
     origin_A = _create_origin(c, dim, dtype)
     origin_coeffs_K = _span_coeffs(origin_A)
-    proj_span_o_A = origin_coeffs_K @ p_KA  # projection of the origin onto the ideal span
+    # projection of the origin onto the ideal span
+    proj_span_o_A = jnp.matmul(origin_coeffs_K, p_KA, precision=MATMUL_PRECISION)
     tangent_A = origin_A - proj_span_o_A  # spacelike, ⊥ span(P)
     tangent_inner = _minkowski_inner(tangent_A, tangent_A)  # > 0 (spacelike)
     unit_tangent_A = tangent_A / jnp.sqrt(floor_at(tangent_inner, MIN_NORM))
@@ -163,7 +166,7 @@ def horo_projection(
     return _proj(_expmap(step * unit_tangent_A, spine_A, c), c)
 
 
-def horopca_loss(q_KD: Float[Array, "K D"], x_NA: Float[Array, "N A"], c: Curvature) -> Float[Array, ""]:
+def horopca_loss(q_KD: Float[Array, "K D"], x_NA: Float[Array, "N A"], c: ScalarCurvature) -> Float[Array, ""]:
     """Negative mean squared pairwise (smoothened) distance of the projected points.
 
     Orthonormalizes ``q_KD`` internally, horospherically projects every point (with the
@@ -190,7 +193,7 @@ def horopca_loss(q_KD: Float[Array, "K D"], x_NA: Float[Array, "N A"], c: Curvat
 
 def fit_horopca(
     x_NA: Float[Array, "N A"],
-    c: Curvature,
+    c: ScalarCurvature,
     key: PRNGKeyArray,
     *,
     n_components: int,
@@ -225,7 +228,9 @@ def fit_horopca(
         q, state = carry
         loss, grad = jax.value_and_grad(horopca_loss)(q, x_NA, c)
         updates, new_state = tx.update(grad, state, q)
-        new_q = optax.apply_updates(q, updates)
+        # `optax.apply_updates` is typed over the whole `Params` pytree; here the pytree is
+        # the single (K, D) component array, so the result is an Array.
+        new_q = cast(Array, optax.apply_updates(q, updates))
         return (new_q, new_state), loss
 
     (q_final_KD, _), losses_S = jax.lax.scan(step_fn, (q_KD, opt_state), None, length=max_steps)
@@ -235,7 +240,7 @@ def fit_horopca(
 def transform_horopca(
     x_NA: Float[Array, "N A"],
     q_ortho_KD: Float[Array, "K D"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> tuple[Float[Array, "N A"], Float[Array, "N K"]]:
     """Project data and read off the K-dimensional Poincaré ball coordinates.
 
@@ -255,7 +260,7 @@ def transform_horopca(
     """
     proj_NA = jax.vmap(horo_projection, in_axes=(0, None, None, None))(x_NA, q_ortho_KD, c, VERSION_DEFAULT)
     ball_ND = jax.vmap(hyperboloid_to_poincare, in_axes=(0, None))(proj_NA, c)  # (N, D) full ball coords
-    ball_NK = ball_ND @ q_ortho_KD.T  # (N, K) coordinates in the component frame
+    ball_NK = jnp.matmul(ball_ND, q_ortho_KD.T, precision=MATMUL_PRECISION)  # (N, K) coordinates in the component frame
     return proj_NA, ball_NK
 
 
@@ -342,7 +347,7 @@ class HoroPCA:
         self.components_: Array | None = None
         self.mean_: Array | None = None
         self.boost_: Array | None = None
-        self.c_: Curvature | None = None
+        self.c_: ScalarCurvature | None = None
         self.losses_: Array | None = None
         self.total_variance_: Array | None = None
         self.explained_variance_: Array | None = None
@@ -352,7 +357,7 @@ class HoroPCA:
         """Spatial dim D from an input array (ambient - 1 for hyperboloid, as-is for ball)."""
         return x_ND.shape[1] - 1 if self._is_hyperboloid else x_ND.shape[1]
 
-    def _to_hyperboloid(self, x_ND: Float[Array, "N R"], c: Curvature) -> Float[Array, "N A"]:
+    def _to_hyperboloid(self, x_ND: Float[Array, "N R"], c: ScalarCurvature) -> Float[Array, "N A"]:
         """Convert/clean input into on-manifold hyperboloid points (N, A)."""
         x_cast = self._hyperboloid._cast(x_ND)
         if self._is_hyperboloid:
@@ -363,7 +368,7 @@ class HoroPCA:
         x_ball = _proj_batch_ball(x_cast, c)
         return jax.vmap(poincare_to_hyperboloid, in_axes=(0, None))(x_ball, c)
 
-    def fit(self, x_ND: Float[Array, "N R"], c: Curvature, key: PRNGKeyArray) -> "HoroPCA":
+    def fit(self, x_ND: Float[Array, "N R"], c: ScalarCurvature, key: PRNGKeyArray) -> "HoroPCA":
         """Fit the components on ``x_ND`` at curvature ``c``.
 
         Args:
@@ -392,7 +397,7 @@ class HoroPCA:
                 max_iters=self.frechet_max_iters,
             )
             boost_AA = self._hyperboloid.lorentz_boost(mean_A, c)
-            x_work_NA = _proj_batch(x_hyp_NA @ boost_AA.T, c)
+            x_work_NA = _proj_batch(jnp.matmul(x_hyp_NA, boost_AA.T, precision=MATMUL_PRECISION), c)
         else:
             ambient = x_hyp_NA.shape[1]
             mean_A = _create_origin(c, ambient - 1, self.manifold.dtype)
@@ -438,13 +443,13 @@ class HoroPCA:
 
         c = self.c_
         x_hyp_NA = self._to_hyperboloid(x_ND, c)
-        x_work_NA = _proj_batch(x_hyp_NA @ self.boost_.T, c)
+        x_work_NA = _proj_batch(jnp.matmul(x_hyp_NA, self.boost_.T, precision=MATMUL_PRECISION), c)
         _, ball_NK = _transform_jit(x_work_NA, self.components_, c)
 
         if self._is_hyperboloid:
             return jax.vmap(poincare_to_hyperboloid, in_axes=(0, None))(ball_NK, c)  # (N, K+1)
         return ball_NK  # (N, K)
 
-    def fit_transform(self, x_ND: Float[Array, "N R"], c: Curvature, key: PRNGKeyArray) -> Float[Array, "N out"]:
+    def fit_transform(self, x_ND: Float[Array, "N R"], c: ScalarCurvature, key: PRNGKeyArray) -> Float[Array, "N out"]:
         """Fit on ``x_ND`` then return its embedding (equivalent to ``fit(...).transform(...)``)."""
         return self.fit(x_ND, c, key).transform(x_ND)

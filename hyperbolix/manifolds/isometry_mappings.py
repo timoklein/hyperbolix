@@ -44,13 +44,14 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, floor_at
-from .protocol import Curvature
+from ..utils.math_utils import MIN_NORM, floor_at, safe_hypot_norm
+from ..utils.precision import MATMUL_PRECISION
+from .protocol import ScalarCurvature
 
 
 def hyperboloid_to_poincare(
     x: Float[Array, "dim_plus_1"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim"]:
     """Convert hyperboloid point to Poincaré ball via stereographic projection.
 
@@ -94,7 +95,7 @@ def hyperboloid_to_poincare(
 
 def poincare_to_hyperboloid(
     y: Float[Array, "dim"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim_plus_1"]:
     """Convert Poincaré ball point to hyperboloid via inverse stereographic projection.
 
@@ -127,7 +128,7 @@ def poincare_to_hyperboloid(
     References:
         Wikipedia: Hyperboloid model - Relation to other models
     """
-    y_sqnorm = jnp.dot(y, y)
+    y_sqnorm = jnp.dot(y, y, precision=MATMUL_PRECISION)
     sqrt_c = jnp.sqrt(c)
 
     # Curvature-aware inverse stereographic projection. The spatial part scales
@@ -144,7 +145,7 @@ def poincare_to_hyperboloid(
 
 def pv_to_poincare(
     x: Float[Array, "dim"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim"]:
     """Convert a Proper Velocity point to the Poincaré ball.
 
@@ -180,13 +181,19 @@ def pv_to_poincare(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    beta_inv = jnp.sqrt(1.0 + c * jnp.dot(x, x))  # 1/β_x = √(1 + c·||x||²)
+    # √(1 + c·||x||²) via `safe_hypot_norm`: `dot(x, x)` overflows float32 once ||x|| passes
+    # 1.8e19/√c, and `x / (1 + inf)` then maps a far-out PV point to the *origin* instead of near
+    # the ball boundary. `safe_hypot_norm` never materialises the square, and takes it in one
+    # reduction instead of rounding `safe_norm(x)` and squaring it again. Same form and the same
+    # measurement as `ProperVelocity._beta_inv`; see there.
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
+    beta_inv = safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))  # 1/β_x
     return x / (1.0 + beta_inv)
 
 
 def poincare_to_pv(
     y: Float[Array, "dim"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim"]:
     """Convert a Poincaré ball point to Proper Velocity space.
 
@@ -220,13 +227,13 @@ def poincare_to_pv(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    denominator = floor_at(1.0 - c * jnp.dot(y, y), MIN_NORM)
+    denominator = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), MIN_NORM)
     return 2.0 * y / denominator
 
 
 def pv_to_hyperboloid(
     x: Float[Array, "dim"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim_plus_1"]:
     """Convert a Proper Velocity point to the hyperboloid model.
 
@@ -263,13 +270,18 @@ def pv_to_hyperboloid(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026.
     """
-    time = jnp.sqrt(1.0 / c + jnp.dot(x, x))  # z₀ = √(1/c + ||x||²) ≥ 1/√c
+    # √(1/c + ||x||²) via `safe_hypot_norm` — the same shape as `Hyperboloid._proj`, and the same
+    # fix: `dot(x, x)` overflows float32 past ||x|| = 1.8e19, returning an infinite time slot for
+    # a point whose time slot is perfectly representable. `safe_hypot_norm`, not
+    # `safe_hypot(safe_norm(x), .)`: it keeps `sum(x**2)` intact instead of rounding the norm and
+    # squaring it again, which is what the hyperboloid constraint check cancels against.
+    time = safe_hypot_norm(x, jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype)))
     return jnp.concatenate([time[None], x])
 
 
 def hyperboloid_to_pv(
     x: Float[Array, "dim_plus_1"],
-    c: Curvature,
+    c: ScalarCurvature,
 ) -> Float[Array, "dim"]:
     """Convert a hyperboloid point to Proper Velocity space.
 

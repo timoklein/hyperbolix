@@ -16,7 +16,7 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 - **Pure JAX/Flax NNX**: No PyTorch dependency, fully compatible with JAX ecosystem
 - **vmap-native API**: Efficient batching through JAX's functional paradigm
 - **JIT-compatible**: All operations support JIT compilation for performance
-- **Comprehensive Test Suite**: 3,550+ tests (parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
+- **Comprehensive Test Suite**: 4,000+ tests (parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
 
 ## Quick Example
 

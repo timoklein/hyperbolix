@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install
 uv sync --locked --dev
 
-# Run all tests (~3,551 tests)
+# Run all tests (4,076 items across 959 test functions)
 uv run pytest
 
 # Run a single test file
@@ -17,8 +17,9 @@ uv run pytest tests/test_manifolds.py -v
 # Run a single test function
 uv run pytest tests/test_manifolds.py::test_dist -v
 
-# Run a fast subset (dim2 only)
-uv run pytest -k "dim2"
+# Run the dim-2 float32 slice of the dim-parametrized suites (78/386 in test_manifolds.py)
+# The parametrization ids spell the dimension as a bare number, e.g. [PoincareBall-c1-2-float32-10]
+uv run pytest -k "2-float32"
 
 # Lint and format
 uv run ruff check hyperbolix tests
@@ -41,7 +42,7 @@ After making changes, run the test files that cover the affected code:
 ```bash
 uv run pytest tests/<relevant_test_file>.py -x -v
 ```
-For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "dim2"` to speed up parametrized tests during iteration.
+For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (78 of the 386 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
 
 ## Architecture
 

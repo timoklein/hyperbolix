@@ -6,12 +6,59 @@ interfaces with the PyTorch test fixtures but using JAX/NumPy random operations.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 import hyperbolix as hj
+
+
+def _assert_pythonpath_checkout_is_the_imported_one() -> None:
+    """Fail loudly when ``PYTHONPATH`` names a checkout that is *not* the one under test.
+
+    Why this exists: comparing a branch against its parent commit is usually done by pointing
+    ``PYTHONPATH`` at a second worktree. Several things silently outrank ``PYTHONPATH`` on
+    ``sys.path`` -- ``python -m pytest`` prepends the current directory (CPython's ``-m``, not
+    pytest), and under ``--import-mode=prepend`` pytest prepends the rootdir as well. When the
+    current directory is itself a checkout, ``import hyperbolix`` then resolves to the local
+    tree and the "this fails on the parent commit" gate quietly tests the branch's own code.
+
+    The check is a no-op when ``PYTHONPATH`` is unset or holds no directory with a
+    ``hyperbolix`` package, so ordinary ``uv run pytest`` runs are unaffected.
+    """
+    raw = os.environ.get("PYTHONPATH", "")
+    if not raw:
+        return
+
+    imported = Path(hj.__file__).resolve().parent
+    for entry in raw.split(os.pathsep):
+        if not entry:
+            continue
+        expected = Path(entry).resolve() / "hyperbolix"
+        if not (expected / "__init__.py").is_file():
+            continue
+        # First PYTHONPATH entry carrying a hyperbolix package: that is the checkout the caller
+        # asked for. Anything else winning means something was prepended ahead of it.
+        if expected == imported:
+            return
+        raise RuntimeError(
+            "PYTHONPATH names a hyperbolix checkout that pytest did NOT import.\n"
+            f"  PYTHONPATH asks for: {expected}\n"
+            f"  actually imported:   {imported}\n"
+            "Something is prepended ahead of PYTHONPATH on sys.path. Common causes and fixes:\n"
+            "  * `python -m pytest` inserts the current directory at sys.path[0]; run the\n"
+            "    `pytest` console script instead, or cd somewhere that is not a checkout.\n"
+            "  * `--import-mode=prepend` (pytest's default) inserts the rootdir; this repo sets\n"
+            "    `--import-mode=importlib` in pyproject.toml -- do not override it.\n"
+            "Refusing to run: the results would describe the wrong checkout."
+        )
+
+
+_assert_pythonpath_checkout_is_the_imported_one()
 
 # Enable float64 support in JAX
 jax.config.update("jax_enable_x64", True)

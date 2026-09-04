@@ -28,6 +28,8 @@ from flax import nnx
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
+from hyperbolix.utils.precision import MATMUL_PRECISION
+
 """
 Dimension key:
   B: batch size
@@ -80,7 +82,7 @@ class HyperPPFeatureScaling(nnx.Module):
                 msg = f"alpha must be in (0, 1), got {alpha}"
                 raise ValueError(msg)
             self._atanh_alpha = math.atanh(alpha)
-            self.xi_theta = nnx.Linear(dim, 1, param_dtype=param_dtype, rngs=rngs)
+            self.xi_theta = nnx.Linear(dim, 1, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs)
         else:
             self._atanh_alpha = None
             self.xi_theta = None

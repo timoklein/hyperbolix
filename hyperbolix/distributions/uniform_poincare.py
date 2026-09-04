@@ -22,7 +22,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
-from hyperbolix.utils.math_utils import MIN_NORM
+from hyperbolix.utils.math_utils import safe_normalize
 from hyperbolix.utils.math_utils import acosh as safe_acosh
 from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
@@ -141,9 +141,10 @@ def _sample_uniform_direction(
 ) -> Float[Array, "... n"]:
     """Sample directions uniformly on S^{n-1} via the Muller method."""
     z_SD = jax.random.normal(key, shape=(*shape, n), dtype=dtype)
-    norm_S1 = jnp.sqrt(jnp.sum(z_SD**2, axis=-1, keepdims=True))  # (*S, 1)
-    norm_S1 = jnp.maximum(norm_S1, MIN_NORM)
-    return z_SD / norm_S1
+    # `safe_normalize` is exactly this three-line idiom, max-scaled: unit rows for every non-zero
+    # z (including magnitudes whose square would overflow) and the exact zero vector at z = 0,
+    # which is what `z / MIN_NORM` produced anyway.
+    return safe_normalize(z_SD)
 
 
 # ---------------------------------------------------------------------------
