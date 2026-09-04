@@ -88,13 +88,15 @@ jobs:
           - "test_optimizers.py"
           - "test_wrapped_normal.py test_uniform_poincare.py"
           - "test_busemann.py test_frechet_mean.py test_horopca.py test_cosne.py"
-          - "test_helpers.py test_math_utils.py test_precision.py test_smooth_clamp_vs_clip.py"
+          - "test_helpers.py test_math_utils.py test_precision.py test_smooth_clamp.py"
+          - "test_imports.py test_package_surface.py"
           # NN layer tests (subdirectory): hyperboloid family
           - "nn_layers/test_hyperboloid_conv.py nn_layers/test_hyperboloid_conv_fhnn.py nn_layers/test_hyperboloid_conv_ilnn.py"
           - "nn_layers/test_hyperboloid_linear_fhnn.py nn_layers/test_hyperboloid_linear_plfc.py"
           - "nn_layers/test_hyperboloid_activations.py nn_layers/test_hyperboloid_positional.py nn_layers/test_hyperboloid_pool.py"
           - "nn_layers/test_hyperboloid_attention.py nn_layers/test_hyperboloid_residual.py"
           - "nn_layers/test_hyperboloid_fgg.py"
+          - "nn_layers/test_hyperboloid_core_stability.py"
           - "nn_layers/test_hypformer.py"
           # NN layer tests: Poincare and proper-velocity families
           - "nn_layers/test_poincare_conv.py nn_layers/test_poincare_activations.py nn_layers/test_poincare_batchnorm.py"
@@ -102,8 +104,6 @@ jobs:
           - "nn_layers/test_pv_conv.py nn_layers/test_pv_linear.py nn_layers/test_pv_regression.py"
           # NN layer tests: misc/general
           - "nn_layers/test_regression_layers.py nn_layers/test_nn_layers.py nn_layers/test_busemann_layers.py nn_layers/test_gyro_normalization.py nn_layers/test_hybrid_regularization.py nn_layers/test_dtype_respected_x64.py nn_layers/test_helpers_validation.py"
-          # NOTE: created by a parallel fix agent as part of this test-overhaul
-          # branch; does not exist yet at the time this matrix entry was added.
           - "nn_layers/test_layer_contract.py"
 
     steps:

@@ -1327,7 +1327,7 @@ def test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian(dtype):
     assert float(np.linalg.norm(jac_AD)) > 0.0, "zero-initialized gyro-bias receives no gradient"
 
     # The companion guarantee: dist_0's own gradient at the origin must stay finite for both
-    # non-legacy arms (safe_norm / safe_hypot give an exactly-zero, hence finite, VJP there).
+    # arms (safe_norm / safe_hypot give an exactly-zero, hence finite, VJP there).
     origin_A = manifold.create_origin(c, dim)
     for version_idx in (0, 1):
         g_A = jax.grad(lambda p, v=version_idx: manifold.dist_0(p, c, version_idx=v))(origin_A)
@@ -1476,32 +1476,6 @@ def test_hyperboloid_dist_gradient_agrees_between_float32_and_float64(a: float):
     assert np.max(np.abs(grads[jnp.float32] - grads[jnp.float64])) <= 2e-5 * scale
 
 
-@pytest.mark.parametrize("c", CURVATURES)
-def test_hyperboloid_stable_and_legacy_arms_agree_in_the_legacy_regime(c: float):
-    """version_idx 0/1 (stable) == 2/3 (legacy acosh) while ``√c·d₀ < 2.5``.
-
-    The cap is essential and one-sided: below it the cancellation in ``⟨x, y⟩_L`` has not yet eaten
-    the significand, so the two arms must agree to near machine precision. Above it the *legacy*
-    arm is the one drifting, which is the whole reason for the rewrite — comparing there would pin
-    the bug rather than the fix.
-    """
-    e1, e2 = _hyperboloid_basis(5)
-    manifold = Hyperboloid(dtype=jnp.float64)
-    for a in (0.05, 0.8, 1.7, 2.4):
-        for psi in (0.0, 0.3, 1.2, np.pi):
-            for b in (a, min(a + 0.6, 2.5)):
-                x_A = _hyperboloid_point(a, c, e1, jnp.float64)
-                y_A = _hyperboloid_point(b, c, np.cos(psi) * e1 + np.sin(psi) * e2, jnp.float64)
-                if a == b and psi == 0.0:
-                    continue  # coincident: both arms return exactly 0
-                stable = float(manifold.dist(x_A, y_A, c, version_idx=0))
-                legacy = float(manifold.dist(x_A, y_A, c, version_idx=2))
-                assert stable == pytest.approx(legacy, rel=1e-11), f"a={a} b={b} psi={psi}"
-                # The smoothened pair agrees too, above their (different) positive floors.
-                stable_s = float(manifold.dist(x_A, y_A, c, version_idx=1))
-                assert stable_s == pytest.approx(stable, rel=1e-11, abs=1e-13)
-
-
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
 def test_hyperboloid_smoothened_arm_has_a_strictly_positive_floor(dtype):
     """version_idx 1 never returns 0, and equals the plain arm everywhere above its floor.
@@ -1532,9 +1506,9 @@ def test_hyperboloid_dist_0_smoothened_arm_has_a_strictly_positive_floor(dtype, 
     """``dist_0(origin, version_idx=1)`` equals ``arcsinh(20·eps)/√c``, and slot 0 is exactly 0.
 
     2.4e-6 (float32) / 4.4e-15 (float64) at ``c = 1`` — first-order the pairwise smoothened arm's
-    ``2·arcsinh(10·eps)/√c``, so the two agree on what "never exactly zero" means. The legacy
-    smoothened arm's ``smooth_clamp_min`` put the floor at 0.16632/√c instead, i.e. 80% error at a
-    true radius of 0.1, in **both** dtypes.
+    ``2·arcsinh(10·eps)/√c``, so the two agree on what "never exactly zero" means. The old
+    ``smooth_clamp_min`` approach put the floor at 0.16632/√c instead, i.e. 80% error at a true
+    radius of 0.1, in **both** dtypes.
     """
     manifold = Hyperboloid(dtype=dtype)
     origin_A = manifold.create_origin(c, 8)
@@ -1546,49 +1520,6 @@ def test_hyperboloid_dist_0_smoothened_arm_has_a_strictly_positive_floor(dtype, 
 
     # The plain arm has a hard zero at the origin (safe_norm returns exactly 0 there).
     assert float(manifold.dist_0(origin_A, c, version_idx=0)) == 0.0
-
-
-# Recorded on 1.1.2 (commit 370e9db) before the rewrite, at the on-sheet point with spatial radius
-# 1e-3, c = 1.0, dim 8, direction e1 — i.e. a true geodesic radius of 9.99999833e-4. Slot 2 shows
-# acosh's 1 + 10·eps domain clamp (float32 floor sqrt(20·eps) = 1.5441e-3, a 54% overstatement);
-# slot 3 shows smooth_clamp_min's log(2)/50 remainder (floor acosh(1 + log(2)/50) = 0.16632).
-_DIST_0_LEGACY_GOLDEN = {
-    (jnp.float32, 2): 0.0015440807910636067,
-    (jnp.float64, 2): 0.0009999998333921221,
-    (jnp.float64, 3): 0.16632065504083338,
-}
-# Slot 3 in float32 is the one entry that is not bit-stable across XLA backends (the softplus in
-# smooth_clamp_min differs in the last ulp: 0.16632071137 on CPU, 0.16632072628 on an A100), so it
-# is pinned to the recorded value at one float32 ulp instead of bitwise.
-_DIST_0_LEGACY_GOLDEN_F32_SMOOTHENED = 0.16632071137428284
-
-
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
-def test_hyperboloid_dist_0_legacy_slots_reproduce_the_pre_fix_values(dtype):
-    """Slots 2/3 must return the pre-fix numbers bit for bit — that is the whole point of keeping them.
-
-    Slots 2/3 used to duplicate 0/1 for ``dist_0`` (unlike ``dist``, where they were already the
-    legacy acosh arms). They now carry the acosh implementation, so a result computed before this
-    change stays reproducible by naming ``VERSION_LEGACY``.
-    """
-    manifold = Hyperboloid(dtype=dtype)
-    c = 1.0
-    e1 = np.zeros(8)
-    e1[0] = 1.0
-    x_A = _hyperboloid_point_at_spatial_radius(1e-3, c, e1, dtype)
-
-    assert float(manifold.dist_0(x_A, c, version_idx=2)) == _DIST_0_LEGACY_GOLDEN[(dtype, 2)]
-    if dtype == jnp.float64:
-        assert float(manifold.dist_0(x_A, c, version_idx=3)) == _DIST_0_LEGACY_GOLDEN[(dtype, 3)]
-    else:
-        assert float(manifold.dist_0(x_A, c, version_idx=3)) == pytest.approx(_DIST_0_LEGACY_GOLDEN_F32_SMOOTHENED, rel=1e-6)
-
-    # Well above both legacy floors the four slots describe the same geometry again.
-    far_A = _hyperboloid_point_at_spatial_radius(5.0, c, e1, dtype)
-    stable = float(manifold.dist_0(far_A, c, version_idx=0))
-    assert stable == pytest.approx(np.arcsinh(5.0), rel=1e-6)
-    for version_idx in (2, 3):
-        assert float(manifold.dist_0(far_A, c, version_idx=version_idx)) == pytest.approx(stable, rel=1e-6)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)

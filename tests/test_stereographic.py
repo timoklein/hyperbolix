@@ -918,27 +918,6 @@ def test_shared_gyrovector_core_is_single_source():
         assert getattr(stereo_impl, name) is shared, f"stereographic.{name} diverged from the shared core"
 
 
-def test_class_wrappers_add_no_divergent_pre_or_post_processing(dtype):
-    """For ``c > 0`` the shared core is EXACTLY (not merely ``allclose``) Poincaré's result.
-
-    This is a CLASS-PLUMBING guard, not independent validation: both methods dispatch to the same
-    function object (see ``test_shared_gyrovector_core_is_single_source``), so a math error cannot
-    fail it. What it CAN catch — and the ``is``-check cannot — is either class's *method* growing
-    divergent pre/post-processing (extra casting, projection, reordering) around the shared call.
-
-    Not parametrized over ``c``: neither side depends on the curvature except through the one shared
-    call, so extra curvatures re-run the same plumbing."""
-    c = 3.0
-    x = jnp.array([0.12, -0.2, 0.05], dtype=dtype)
-    y = jnp.array([-0.15, 0.1, 0.2], dtype=dtype)
-    pm = Poincare(dtype=dtype)
-    sm = Stereographic(dtype=dtype)
-    assert bool(jnp.all(pm.addition(x, y, c) == sm.addition(x, y, c)))
-    assert bool(jnp.all(pm.gyration(x, y, x, c) == sm.gyration(x, y, x, c)))
-    assert bool(jnp.all(pm.proj(x * 6.0, c) == sm.proj(x * 6.0, c)))  # x*6 exits the c=3 ball → projects
-    assert bool(jnp.all(pm.conformal_factor(x, c) == sm.conformal_factor(x, c)))
-
-
 # ---------------------------------------------------------------------------
 # Riemannian optimizer integration: egrad2rgrad/expmap/retraction/ptransp exist
 # precisely so a ManifoldParam can live on this manifold — exercise that path

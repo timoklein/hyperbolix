@@ -1,32 +1,28 @@
-"""Numerical-stability gate for replacing the ``smooth_clamp`` overflow guard in ``sinh``/``cosh``
-with a hard ``jnp.clip`` (Option C), and for dropping PLFC's redundant outer guard (Option A).
+"""Tail-saturation properties of the shipped ``sinh``/``cosh`` overflow guard, plus the
+``smooth_clamp`` family's own property pins.
 
-These tests establish the *property* that justifies the change, independent of which clamp the
-installed library currently uses, so they remain valid before and after the source edit:
+``hyperbolix.utils.math_utils.sinh``/``cosh`` guard against overflow with a hard clip
+(``clamp_to``) at ``0.99 * log(finfo.max)`` — ~87.83 (f32), ~702.7 (f64). The first section pins
+what that guard does on its own, with no comparator:
 
-  * In the **valid regime** (|x| < overflow clamp), ``sinh(clip(x))`` and ``sinh(smooth_clamp(x))``
-    agree in forward AND gradient (both pass x through untouched). Since the 2026-08 accuracy
-    rewrite (git: 0b598b2) the shipped wrapper core is the stable expm1/exp form, NOT
-    ``jnp.sinh``/``jnp.cosh``, so agreement with a builtin-based comparator is a few ulps rather
-    than bitwise; the original bit-identity gate tests (and the Option A bare-``jnp.sinh``
-    redundancy test) were removed once the migration they justified had shipped and the library
-    stopped using bare ``jnp.sinh`` at the PLFC/FGG call sites.
-  * ``grad(sinh∘clip)`` is finite for ALL x, including the saturated tail (clip's VJP is 0 there,
-    times the finite ``cosh(clamp)`` → 0, no NaN).
-  * The only behavioral difference is in the saturated tail under a *squaring* downstream op, where
-    ``sinh²`` overflows to ``inf`` and hard clip yields a ``0·inf = nan`` cotangent while smooth
-    yields ``inf`` — BOTH degenerate. This regime is unreachable by the in-scope layers: PLFC clamps
-    its sinh input to ±v_max=±10 ≪ 87.83 (the guard we keep), so manifold validity and gradient
-    finiteness hold under extreme inputs (tested below and in test_hyperboloid_linear_plfc.py).
+  * forward stays finite over the whole real line, saturating past the clamp;
+  * ``grad(sinh o clip)`` is finite EVERYWHERE and exactly 0 in the saturated tail — the gradient
+    the layers actually propagate is always safe;
+  * even under a squaring downstream (where the forward value itself overflows to ``inf``), the
+    gradient is exactly 0, because the ``where``-based clamp's VJP is a ``select`` and never
+    multiplies the overflowed cotangent by a zero factor;
+  * the layers that feed the guard never reach that tail: PLFC/ILNN bound their ``sinh`` input to
+    +-``v_max`` (default 10, hard-capped at construction) << the clamp, so their forward and
+    gradient stay finite under extreme inputs.
 
-The final section then pins ``smooth_clamp`` itself. Every clamp above uses a very wide window (±87.8 for
-the sinh/cosh guard, ±v_max for PLFC), which is exactly the regime where the old implementation
-happened to be correct; the properties that hold for *narrow* windows are asserted there.
+The second section pins ``smooth_clamp`` itself, which is still used by the MLR ``asinh`` clamp in
+``poincare.py`` / ``hyperboloid.py`` / ``proper_velocity.py`` / ``poincare_regression.py``. Those
+call sites use wide windows; the properties asserted there are the ones that hold for *narrow*
+windows too, which is where the old gated implementation was wrong.
 
-Run: ``uv run pytest tests/test_smooth_clamp_vs_clip.py -v`` (conftest enables float64).
+Run: ``uv run pytest tests/test_smooth_clamp.py -v`` (conftest enables float64).
 """
 
-import contextlib
 import math
 
 import jax
@@ -34,14 +30,13 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-import hyperbolix.manifolds.hyperboloid as hyp_mod
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.nn_layers import HypConv2DHyperboloidILNN, HypLinearHyperboloidPLFC
 
-# The hard-clip side of every comparison below is the SHIPPED implementation, imported rather than
-# re-implemented. The file previously defined its own `jnp.sinh(jnp.clip(x, -c, c))` copies, which
-# made it a 33-item gate over code that is not in the library: a `math_utils.sinh -> 0.7*jnp.sinh`
-# mutation left all 33 items passing while `test_math_utils.py::test_sinh` failed (audit A3-02).
+# The hard-clip guard under test is the SHIPPED implementation, imported rather than re-implemented.
+# This file previously defined its own `jnp.sinh(jnp.clip(x, -c, c))` copies, which made it a gate
+# over code that is not in the library: a `math_utils.sinh -> 0.7*jnp.sinh` mutation left every item
+# passing while `test_math_utils.py::test_sinh` failed (audit A3-02).
 from hyperbolix.utils.math_utils import cosh as hard_cosh
 from hyperbolix.utils.math_utils import sinh as hard_sinh
 from hyperbolix.utils.math_utils import smooth_clamp, smooth_clamp_max, smooth_clamp_min
@@ -50,19 +45,8 @@ DTYPES = [jnp.float32, jnp.float64]
 
 
 def _clamp(dtype) -> float:
-    """The hyperbolix sinh/cosh overflow bound: 0.99 * log(finfo.max). ~87.83 (f32), ~709.0 (f64)."""
+    """The hyperbolix sinh/cosh overflow bound: 0.99 * log(finfo.max). ~87.83 (f32), ~702.7 (f64)."""
     return math.log(float(jnp.finfo(dtype).max)) * 0.99
-
-
-# The smooth-clamp alternative the shipped hard clip is being compared against.
-def smooth_sinh(x):
-    c = _clamp(x.dtype)
-    return jnp.sinh(smooth_clamp(x, -c, c))
-
-
-def smooth_cosh(x):
-    c = _clamp(x.dtype)
-    return jnp.cosh(smooth_clamp(x, -c, c))
 
 
 def _grid(dtype, lo, hi, n=4001):
@@ -70,265 +54,58 @@ def _grid(dtype, lo, hi, n=4001):
 
 
 # ==================================================================================================
-# 1. Forward equivalence
+# 1. The shipped hard-clip guard: finite forward and gradient over the whole real line
 # ==================================================================================================
 @pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("fn_hard,fn_smooth", [(hard_sinh, smooth_sinh), (hard_cosh, smooth_cosh)])
-def test_forward_equivalence_valid_regime(dtype, fn_hard, fn_smooth):
-    """Hard clip ~= smooth clamp for |x| < clamp; both finite & saturating beyond.
-
-    Tolerance-based, not bitwise: the shipped wrapper core is the stable expm1/exp form while the
-    smooth comparator goes through ``jnp.sinh``/``jnp.cosh``, so they differ by the builtin's own
-    error (~25 f32 ulps / ~500 f64 ulps at the extremes) — absorbed by rtol=1e-5.
-    """
+@pytest.mark.parametrize("fn", [hard_sinh, hard_cosh], ids=["sinh", "cosh"])
+def test_hard_clip_forward_and_gradient_are_finite_everywhere(dtype, fn):
+    """Forward and gradient are finite across the clamp, and the tail gradient is exactly 0."""
     clamp = _clamp(dtype)
-    # Valid regime: safely inside the band. Both leave x untouched -> same function up to core ulps.
-    x_valid = _grid(dtype, -(clamp - 1.0), clamp - 1.0)
-    h, s = fn_hard(x_valid), fn_smooth(x_valid)
-    assert jnp.allclose(h, s, rtol=1e-5, atol=4e-3 if dtype == jnp.float32 else 1e-7)
-    assert jnp.isfinite(h).all()
-
-    # Full range including the saturated tail: both stay finite (no inf/nan), bounded by the dtype.
     x_full = _grid(dtype, -1.5 * clamp, 1.5 * clamp)
-    h_full, s_full = fn_hard(x_full), fn_smooth(x_full)
-    assert jnp.isfinite(h_full).all(), "hard-clip forward overflowed"
-    assert jnp.isfinite(s_full).all(), "smooth-clamp forward overflowed"
 
+    assert jnp.isfinite(fn(x_full)).all(), "hard-clip forward overflowed"
 
-# ==================================================================================================
-# 2. Gradient equivalence
-# ==================================================================================================
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("fn_hard,fn_smooth", [(hard_sinh, smooth_sinh), (hard_cosh, smooth_cosh)])
-def test_gradient_equivalence_valid_regime(dtype, fn_hard, fn_smooth):
-    """In the interior the gradient is identical (cosh/sinh); everywhere the hard-clip grad is finite.
-
-    The crux test: hard clip's zero gradient in the tail times the finite cosh(clamp) is 0 — NOT a
-    NaN (the 0*inf concern materializes only if a downstream op squares the saturated value first;
-    grad of sinh∘clip alone is well-defined).
-    """
-    clamp = _clamp(dtype)
-    g_hard = jax.vmap(jax.grad(fn_hard))
-    g_smooth = jax.vmap(jax.grad(fn_smooth))
-
-    x_valid = _grid(dtype, -(clamp - 1.0), clamp - 1.0)
-    gh, gs = g_hard(x_valid), g_smooth(x_valid)
-    atol = 4e-3 if dtype == jnp.float32 else 1e-7
-    # Relative comparison: cosh grows huge near the band edge, so compare with generous rtol.
-    assert jnp.allclose(gh, gs, atol=atol, rtol=1e-3)
-    assert jnp.isfinite(gh).all()
-
-    # Full range incl. tail: hard-clip gradient must be finite EVERYWHERE (0 in the saturated tail).
-    x_full = _grid(dtype, -1.5 * clamp, 1.5 * clamp)
-    gh_full = g_hard(x_full)
-    assert jnp.isfinite(gh_full).all(), "hard-clip sinh/cosh produced a non-finite gradient"
-    # And the tail gradient is exactly 0 (clip saturates).
+    g_full = jax.vmap(jax.grad(fn))(x_full)
+    assert jnp.isfinite(g_full).all(), "hard-clip sinh/cosh produced a non-finite gradient"
     tail = jnp.abs(x_full) > clamp + 1.0
-    assert jnp.all(gh_full[tail] == 0.0)
-
-
-# ==================================================================================================
-# 3. Full VJP through a square+sum (mimics PLFC time reconstruction sum(w**2))
-# ==================================================================================================
-@pytest.mark.parametrize("dtype", DTYPES)
-def test_sinh_clip_vjp_through_square_valid_regime(dtype):
-    """VJP of sum(sinh(clip(x))**2) is finite and matches the smooth path in the VALID regime.
-
-    This is the operating regime of every in-scope layer (PLFC bounds the sinh input to ±v_max≪clamp).
-    In the saturated tail sinh**2 overflows to inf for BOTH variants — characterized in
-    test_saturated_tail_gradient_is_degenerate_for_both_clamps, not asserted finite here.
-    """
-    clamp = _clamp(dtype)
-    # Bound inputs well inside the band; sinh(clamp-1) is still enormous, so use a modest range that
-    # nonetheless exercises large values (sinh(20)~2.4e8) — representative of real saturated MLR scores.
-    x = _grid(dtype, -20.0, 20.0)
-
-    def f_hard(a):
-        return jnp.sum(jnp.sinh(jnp.clip(a, -clamp, clamp)) ** 2)
-
-    def f_smooth(a):
-        return jnp.sum(jnp.sinh(smooth_clamp(a, -clamp, clamp)) ** 2)
-
-    gh = jax.grad(f_hard)(x)
-    gs = jax.grad(f_smooth)(x)
-    assert jnp.isfinite(gh).all(), "hard-clip sinh∘square VJP not finite in valid regime"
-    assert jnp.isfinite(gs).all()
-    rtol = 1e-4 if dtype == jnp.float64 else 1e-2
-    assert jnp.allclose(gh, gs, rtol=rtol)
+    assert jnp.all(g_full[tail] == 0.0), "clip must kill the gradient in the saturated tail"
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_saturated_tail_gradient_is_zero_for_hard_clip_and_degenerate_for_smooth_clamp(dtype):
-    """Characterizes the saturated tail (|x| >= clamp) for BOTH dtypes — the only regime where hard
-    clip and smooth clamp differ, and a regime unreachable by in-scope layers (sinh inputs are
-    pre-bounded to +-v_max << clamp; clamp is ~87.8 for f32, ~702.7 for f64).
+@pytest.mark.parametrize("fn", [hard_sinh, hard_cosh], ids=["sinh", "cosh"])
+def test_saturated_tail_gradient_is_zero_for_hard_clip(dtype, fn):
+    """The saturated tail (|x| >= clamp), including under a squaring downstream op.
 
-    NOTE FOR WHOEVER SEES THIS FAIL: the last assertion pins a NEGATIVE property — that
-    ``grad((sinh o smooth_clamp)**2)`` is non-finite in the tail. A failure there most likely means
-    the behaviour IMPROVED (someone made the smooth saturated-tail gradient finite), not that
-    something regressed. Re-baseline the assertion rather than reverting the improvement. (The hard
-    clip's tail gradient was re-baselined this way once already: it was NaN while the clip was a
-    ``jnp.clip``, whose ``0/1`` JVP factor multiplies the overflowed ``2·sinh`` cotangent as
-    ``0 * inf = NaN``; the ``where``-based clamp's VJP is a ``select``, so it is exactly ``0``.)
+    Squaring the saturated value overflows to ``inf`` (f32: 7e37**2; f64: 7e304**2), which is what
+    the hyperboloid time reconstruction ``sum(w**2)`` would do. The gradient survives anyway: the
+    ``where``-based clamp's VJP is a ``select``, so the overflowed ``2*sinh`` cotangent is discarded
+    rather than multiplied by a ``0`` factor (which would give ``0 * inf = NaN``).
 
-    Established facts (identical structure for f32 and f64):
-      * forward sinh(clamp) is finite and hard ~= smooth (the only forward gap is the tiny smoothing
-        width at the knee);
-      * sinh(clamp)**2 overflows to inf (f32: 7e37**2; f64: 7e304**2) — the manifold time
-        reconstruction would too, for EITHER clamp;
-      * grad(sinh o clip) ALONE is finite (0) in the tail — the actual gradient the layers propagate
-        is always safe, dtype-independently;
-      * grad((sinh o clip)**2) in the tail: hard clip -> exactly 0 (finite) in both dtypes, because
-        the ``where``-based clamp selects the constant and its VJP never meets the overflowed
-        ``2·sinh`` cotangent; smooth clamp -> non-finite (f32: its tiny tail gradient underflows to
-        0*inf=nan; f64: inf). Only reachable if sinh**2 already overflowed.
+    This regime is unreachable by the in-scope layers — PLFC/ILNN bound their sinh input to
+    +-v_max << clamp — so this pins the guard's worst case, not an operating point.
     """
     clamp = _clamp(dtype)
     x_tail = jnp.array([clamp + 5.0, clamp + 50.0], dtype=dtype)
 
-    # Forward: finite, and hard ~= smooth (both saturate to ~sinh(clamp)).
-    assert jnp.isfinite(hard_sinh(x_tail)).all()
-    assert jnp.allclose(hard_sinh(x_tail), smooth_sinh(x_tail), rtol=1e-3)
-    # The square overflows to inf for both dtypes (degenerate regardless of clamp type).
-    assert jnp.all(jnp.isinf(hard_sinh(x_tail) ** 2))
+    assert jnp.isfinite(fn(x_tail)).all()
+    assert jnp.all(jnp.isinf(fn(x_tail) ** 2)), "the square is expected to overflow at the clamp"
 
-    # The gradient that layers actually propagate (sinh alone) is finite (0) in the tail.
-    g_alone = jax.vmap(jax.grad(hard_sinh))(x_tail)
+    g_alone = jax.vmap(jax.grad(fn))(x_tail)
     assert jnp.isfinite(g_alone).all()
     assert jnp.all(g_alone == 0.0)
 
-    # Under a squaring downstream (overflow), the hard clip's gradient is exactly 0 — the `where`
-    # clamp's VJP is a select, so the overflowed cotangent is never multiplied by a 0 factor — while
-    # the smooth clamp's is non-finite.
-    g_hard_sq = jax.vmap(jax.grad(lambda a: hard_sinh(a) ** 2))(x_tail)
-    g_smooth_sq = jax.vmap(jax.grad(lambda a: smooth_sinh(a) ** 2))(x_tail)
-    assert jnp.isfinite(g_hard_sq).all()
-    assert jnp.all(g_hard_sq == 0.0)
-    assert not jnp.isfinite(g_smooth_sq).any()
+    g_sq = jax.vmap(jax.grad(lambda a: fn(a) ** 2))(x_tail)
+    assert jnp.isfinite(g_sq).all()
+    assert jnp.all(g_sq == 0.0)
 
 
 # ==================================================================================================
-# 4. Layer equivalence + manifold validity (smooth vs hard clip, library-level)
+# 2. Extreme inputs: the layers that feed the guard stay finite
 # ==================================================================================================
-@contextlib.contextmanager
-def _patched(sinh_fn, cosh_fn):
-    """Swap the hyperboloid module-global sinh/cosh that expmap/compute_mlr resolve at call time.
-
-    Lets us A/B smooth vs hard clip without depending on the installed implementation. (The PLFC
-    output-path sinh is bare ``jnp.sinh`` after Option A — not a module global — but its input is
-    pre-bounded to ±v_max, so smooth/hard/bare coincide there regardless.)
-    """
-    saved = (hyp_mod.sinh, hyp_mod.cosh)
-    hyp_mod.sinh, hyp_mod.cosh = sinh_fn, cosh_fn
-    try:
-        yield
-    finally:
-        hyp_mod.sinh, hyp_mod.cosh = saved
-
-
-def _on_hyperboloid(x, c, atol):
-    mink = -(x[..., 0:1] ** 2) + jnp.sum(x[..., 1:] ** 2, axis=-1, keepdims=True)
-    return jnp.allclose(mink, -1.0 / c, atol=atol)
-
-
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("c", [0.1, 1.0, 10.0])
-def test_plfc_smooth_vs_hard_equivalence_and_manifold(dtype, c):
-    """PLFC forward under hard-clip sinh/cosh == under smooth clamp, and stays on the hyperboloid."""
-    manifold = Hyperboloid(dtype=dtype)
-    in_dim, out_dim, batch = 17, 21, 32
-    v = jax.random.normal(jax.random.PRNGKey(0), (batch, in_dim), dtype=dtype) * 0.3
-    x = jax.vmap(manifold.expmap_0, in_axes=(0, None))(v, c)
-    layer = HypLinearHyperboloidPLFC(manifold, in_dim, out_dim, rngs=nnx.Rngs(0))
-
-    with _patched(smooth_sinh, smooth_cosh):
-        y_smooth = layer(x, c=c)
-    with _patched(hard_sinh, hard_cosh):
-        y_hard = layer(x, c=c)
-
-    atol = 4e-3 if dtype == jnp.float32 else 1e-9
-    assert jnp.isfinite(y_hard).all()
-    assert jnp.allclose(y_hard, y_smooth, atol=atol, rtol=1e-4)
-    assert _on_hyperboloid(y_hard, c, atol=4e-3 if dtype == jnp.float32 else 1e-6)
-
-
-@pytest.mark.parametrize("dtype", DTYPES)
-def test_ilnn_conv_smooth_vs_hard_equivalence_and_manifold(dtype):
-    """ILNN conv forward under hard-clip == under smooth clamp, and stays on the hyperboloid."""
-    c = 1.0
-    manifold = Hyperboloid(dtype=dtype)
-    in_c, out_c, batch, hw = 9, 13, 4, 8
-    v = jax.random.normal(jax.random.PRNGKey(1), (batch, hw, hw, in_c), dtype=dtype) * 0.3
-    x = jax.vmap(manifold.expmap_0, in_axes=(0, None))(v.reshape(-1, in_c), c).reshape(batch, hw, hw, in_c)
-    layer = HypConv2DHyperboloidILNN(manifold, in_c, out_c, kernel_size=3, rngs=nnx.Rngs(0))
-
-    with _patched(smooth_sinh, smooth_cosh):
-        y_smooth = layer(x, c=c)
-    with _patched(hard_sinh, hard_cosh):
-        y_hard = layer(x, c=c)
-
-    atol = 4e-3 if dtype == jnp.float32 else 1e-9
-    assert jnp.isfinite(y_hard).all()
-    assert jnp.allclose(y_hard, y_smooth, atol=atol, rtol=1e-4)
-    assert _on_hyperboloid(y_hard, c, atol=4e-3 if dtype == jnp.float32 else 1e-6)
-
-
-# ==================================================================================================
-# 5. Extreme inputs: hard clip keeps expmap / layers finite and on-manifold
-# ==================================================================================================
-def _rel_on_hyperboloid(x, c, rtol):
-    """Scale-relative Minkowski check: |(-x0^2 + ||xs||^2) + 1/c| / max(x0^2, 1) <= rtol.
-
-    The absolute constraint residual grows with the coordinate magnitude (cancellation of two large
-    squares), so at large geodesic distances only a relative check is meaningful.
-    """
-    mink = -(x[..., 0] ** 2) + jnp.sum(x[..., 1:] ** 2, axis=-1)
-    scale = jnp.maximum(x[..., 0] ** 2, 1.0)
-    return jnp.all(jnp.abs(mink + 1.0 / c) / scale <= rtol)
-
-
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("c", [0.1, 1.0, 100.0])
-def test_expmap_extreme_tangent_hard_equals_smooth(dtype, c):
-    """expmap_0 of large-norm tangents stays finite under hard clip AND matches smooth clamp.
-
-    Norms are scaled so sqrt(c)*||v|| sweeps from small up to ~1.2x the overflow clamp, engaging the
-    guard. The gate question is "is hard clip no worse than smooth?" — answered by finiteness +
-    elementwise equivalence (both are identical below the clamp and both saturate to it above).
-    On-manifold validity is checked relatively (absolute residual is precision-bound at these scales).
-    """
-    manifold = Hyperboloid(dtype=dtype)
-    dim = 8
-    clamp = _clamp(dtype)
-    key = jax.random.PRNGKey(7)
-    dirs = jax.random.normal(key, (64, dim + 1), dtype=dtype)
-    dirs = dirs / jnp.linalg.norm(dirs, axis=-1, keepdims=True)
-    # sqrt(c) * ||v|| ranges over [0.5, 1.2*clamp]; ||v|| = arg / sqrt(c).
-    args = jnp.linspace(0.5, 1.2 * clamp, 64, dtype=dtype)[:, None]
-    v = dirs * (args / math.sqrt(c))
-
-    with _patched(hard_sinh, hard_cosh):
-        y_hard = jax.vmap(manifold.expmap_0, in_axes=(0, None))(v, c)
-    with _patched(smooth_sinh, smooth_cosh):
-        y_smooth = jax.vmap(manifold.expmap_0, in_axes=(0, None))(v, c)
-
-    # Gate question: "is hard clip no worse than smooth?" -> hard is finite wherever smooth is, and
-    # agrees with it there. (At sqrt(c)*||v|| near the clamp the expmap RECONSTRUCTION can overflow
-    # via the 1/sqrt(c) amplification for small c — identically for both clamps; not an Option C
-    # regression. sinh/cosh themselves stay finite, which tests 1-2 verify directly.)
-    finite = jnp.isfinite(y_smooth)
-    assert jnp.isfinite(y_hard[finite]).all(), "hard clip non-finite where smooth clamp is finite"
-    assert jnp.allclose(y_hard[finite], y_smooth[finite], rtol=1e-2, atol=0.0)
-    # Moderate sub-band (arg < 18): coordinates small enough for a meaningful manifold check.
-    moderate = args[:, 0] < 18.0
-    rtol = 1e-3 if dtype == jnp.float32 else 1e-9
-    assert _rel_on_hyperboloid(y_hard[moderate], c, rtol=rtol)
-
-
 @pytest.mark.parametrize("dtype", DTYPES)
 def test_plfc_extreme_input_finite_gradient_hard_clip(dtype):
-    """PLFC with large inputs + large kernel stays finite (fwd+grad) under hard clip — the ±v_max
-    guard (kept) bounds the sinh input so the saturated tail is never reached."""
+    """PLFC with large inputs + large kernel stays finite (fwd+grad) — the +-v_max guard bounds the
+    sinh input so the saturated tail is never reached."""
     c = 1.0
     manifold = Hyperboloid(dtype=dtype)
     in_dim, out_dim, batch = 17, 21, 16
@@ -342,8 +119,7 @@ def test_plfc_extreme_input_finite_gradient_hard_clip(dtype):
     def loss_fn(m):
         return jnp.sum(m(x, c=c) ** 2)
 
-    with _patched(hard_sinh, hard_cosh):
-        loss, grads = nnx.value_and_grad(loss_fn)(layer)
+    loss, grads = nnx.value_and_grad(loss_fn)(layer)
 
     assert jnp.isfinite(loss)
     assert jnp.isfinite(grads.kernel[...]).all()
@@ -351,12 +127,12 @@ def test_plfc_extreme_input_finite_gradient_hard_clip(dtype):
 
 
 # ==================================================================================================
-# 6. v_max overflow assertion (PLFC/ILNN construction guard)
+# 3. v_max overflow assertion (PLFC/ILNN construction guard)
 # ==================================================================================================
 def test_v_max_overflow_assertion():
     """Constructing PLFC/ILNN with a v_max that would overflow the float32 squared norm raises.
 
-    sinh(v_max) must stay below sqrt(finfo(float32).max) (~1.84e19, v_max ≲ 45) so the sinh
+    sinh(v_max) must stay below sqrt(finfo(float32).max) (~1.84e19, v_max <~ 45) so the sinh
     output path cannot overflow the time reconstruction.
     """
     manifold = Hyperboloid(dtype=jnp.float32)
@@ -373,9 +149,9 @@ def test_v_max_overflow_assertion():
 
 
 # ==================================================================================================
-# 7. smooth_clamp itself: bounded for EVERY window width (narrow-window overshoot regression)
+# 4. smooth_clamp itself: bounded for EVERY window width (narrow-window overshoot regression)
 # ==================================================================================================
-# Every clamp in sections 1-7 is two-sided with a very wide window, which is the regime where the
+# Every clamp above is two-sided with a very wide window, which is the regime where the
 # old implementation was correct. The old ``smooth_clamp`` composed two *gated* one-sided clamps,
 # ``jnp.where(x < min + eps, min + eps + sp(x - min - eps), x)``; since ``sp(0) = log(2)/beta`` and
 # not 0, the softplus branch did not glue onto the identity branch at the switch — it jumped by

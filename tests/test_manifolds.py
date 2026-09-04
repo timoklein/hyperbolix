@@ -689,14 +689,12 @@ def _radial_pair_exact_in_dtype(manifold, t: float, log2_ratio: int, c: float, d
 def test_hyperboloid_dist_stable_exact_along_radial_geodesic(dtype: jnp.dtype) -> None:
     """dist along a shared radial geodesic is exactly the radius difference — a closed form the
     Minkowski-inner cancellation bug corrupted past radius ~10 (f32) / ~20 (f64) under the old
-    acosh arm, now VERSION_LEGACY.
+    acosh form.
 
     ``x = expmap_0(t·v_hat)`` and ``y``, its spatial part rescaled by an exact factor 2, lie on the
     same geodesic ray through the origin, so ``d(x, y)`` is the difference of their radii — see
     :func:`_radial_pair_exact_in_dtype` for why that rescale makes the pair collinear *in the
-    dtype*. VERSION_LEGACY is checked to be off by more than 10x the dtype tolerance at the largest
-    radius: a regression guard that fails loudly if the switch wiring is ever reverted so
-    VERSION_DEFAULT points at the legacy arm.
+    dtype*.
 
     Both dtypes now run their full radius list. The old version built ``y = expmap_0(t2·v_hat)`` as
     a second independent rounding and so could only assert collinearity where the two normalizations
@@ -725,11 +723,30 @@ def test_hyperboloid_dist_stable_exact_along_radial_geodesic(dtype: jnp.dtype) -
         d_default = manifold.dist(x, y, c)
         assert jnp.allclose(d_default, expected, atol=atol, rtol=rtol), f"t={t}: {d_default} vs {expected}"
 
-    # Regression guard at the largest, most cancellation-prone radius: the legacy arm must be
-    # visibly wrong, or this test would silently stop catching a reverted switch.
-    x, y, expected = _radial_pair_exact_in_dtype(manifold, radii[-1], 1, c, dim, dtype)
-    d_legacy = manifold.dist(x, y, c, version_idx=hj.manifolds.Hyperboloid.VERSION_LEGACY)
-    assert abs(float(d_legacy) - expected) > 10.0 * atol
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hyperboloid_version_idx_out_of_range_raises(dtype: jnp.dtype) -> None:
+    """A static ``version_idx`` outside {0, 1} must raise, not be silently clamped.
+
+    ``lax.switch`` pins an out-of-range index into range instead of raising, so a stale
+    ``version_idx=2`` (a slot that no longer exists) would quietly run the smoothened arm.
+    """
+    c = 1.0
+    manifold = hj.manifolds.Hyperboloid(dtype=dtype)
+    dim = 5
+    origin = manifold.create_origin(c, dim)
+    x = manifold.proj(jnp.asarray([1.0, 0.1, 0.2, 0.0, 0.0, 0.0], dtype=dtype), c)
+    y = manifold.proj(jnp.asarray([1.0, 0.3, 0.4, 0.0, 0.0, 0.0], dtype=dtype), c)
+
+    for version_idx in (2, 3, -1):
+        with pytest.raises(ValueError):
+            manifold.dist(x, y, c, version_idx=version_idx)
+        with pytest.raises(ValueError):
+            manifold.dist_0(x, c, version_idx=version_idx)
+
+    # The smoothened arm still has its strictly-positive floor at coincidence / the origin.
+    assert float(manifold.dist(x, x, c, version_idx=1)) > 0.0
+    assert float(manifold.dist_0(origin, c, version_idx=1)) > 0.0
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])

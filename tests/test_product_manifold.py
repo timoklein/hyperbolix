@@ -144,14 +144,6 @@ def two_points(product, rng):
     return x, y
 
 
-@pytest.fixture
-def point_and_tangent(product, rng, cs):
-    """A valid point and a small tangent vector at that point."""
-    x = _make_product_point(product, rng)
-    v = _make_small_tangent(product, x, rng, cs)
-    return x, v
-
-
 # ===========================================================================
 # 1. Construction tests
 # ===========================================================================

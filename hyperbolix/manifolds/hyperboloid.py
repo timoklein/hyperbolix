@@ -33,8 +33,9 @@ Use jax.vmap for batching and jax.jit for compilation:
     >>> distance = dist_jit(x, y, c=1.0, version_idx=VERSION_DEFAULT)
 
 Version Constants:
-    The same four slots select an arm of *both* the pairwise ``dist`` and the origin distance
+    The same two slots select an arm of *both* the pairwise ``dist`` and the origin distance
     ``dist_0``; the two are listed separately below because they are different implementations.
+    A ``version_idx`` outside {0, 1} raises ``ValueError``.
 
     VERSION_DEFAULT (0):
         ``dist``: cancellation-free hyperbolic-haversine distance (hard floor at 0). Accurate at
@@ -46,17 +47,6 @@ Version Constants:
         ``2·arcsinh(10·eps)/√c`` applied in quadrature.
         ``dist_0``: VERSION_DEFAULT with the spatial radius floored in quadrature, giving a floor
         of ``arcsinh(20·eps)/√c`` — the same floor to first order.
-    VERSION_LEGACY (2):
-        ``dist``: pre-fix acosh-based distance with hard clipping, reproduced bit-for-bit for
-        reproducibility. Routes through the Minkowski inner product and loses all precision once
-        √c·(d₀(x) + d₀(y) - d(x, y)) exceeds ln(1/eps) — 15.9 (float32) / 36.0 (float64).
-        ``dist_0``: pre-fix ``acosh(clip(√c·x₀, 1))/√c``. ``acosh``'s ``1 + 10·eps`` domain clamp
-        makes every radius below ``sqrt(20·eps)/√c`` (1.5e-3 in float32) unrepresentable, and
-        recovering the radius from ``x₀ = cosh(√c·d)/√c`` costs a further ``eps/(2·d²)`` relative.
-        Use either only to match results computed before this fix.
-    VERSION_LEGACY_SMOOTHENED (3): VERSION_LEGACY with soft clamping (``smooth_clamp_min``), and
-        the same precision loss. For ``dist_0`` the softplus remainder additionally puts a
-        ``0.16632/√c`` floor under *every* point that is not bitwise the origin, in both dtypes.
 
 Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
@@ -72,7 +62,6 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import (
     MIN_NORM,
-    acosh,
     cosh,
     floor_at,
     safe_hypot,
@@ -82,7 +71,6 @@ from ..utils.math_utils import (
     safe_sqrt,
     sinh,
     smooth_clamp,
-    smooth_clamp_min,
 )
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
@@ -91,8 +79,6 @@ from .protocol import ScalarCurvature
 # Version selection constants for _dist() and _dist_0()
 VERSION_DEFAULT = 0
 VERSION_SMOOTHENED = 1
-VERSION_LEGACY = 2
-VERSION_LEGACY_SMOOTHENED = 3
 
 
 def _create_origin(c: ScalarCurvature, dim: int, dtype=jnp.float32) -> Float[Array, "dim_plus_1"]:
@@ -459,7 +445,7 @@ def _dist_stable_smoothened(
     that stay finite through coincidence. Because ``hypot`` is smooth and the floor enters in
     quadrature, the perturbation is ``O(ε²/S)`` — invisible at any distance above the floor.
 
-    ``smooth_clamp_min`` is deliberately *not* used here (the legacy arm's approach). Its softplus
+    ``smooth_clamp_min`` is deliberately *not* used here (the old approach). Its softplus
     remainder adds ``log(2)/β = 0.0139`` at the clamp point and never fully decays, so it would
     shift **every** distance in the working range by ~0.028 rather than only lifting zero.
     """
@@ -467,35 +453,6 @@ def _dist_stable_smoothened(
     eps = 10.0 * float(jnp.finfo(x.dtype).eps)
     sinh_half_floored = safe_hypot(frame.sinh_half, jnp.asarray(eps, dtype=x.dtype))
     return 2.0 * jnp.arcsinh(sinh_half_floored) / frame.sqrt_c
-
-
-def _dist_legacy(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Standard acosh distance with hard clipping.
-
-    Kept for reference and comparison only. It routes through :func:`_minkowski_inner` and so loses
-    all precision once ``√c·(d₀(x) + d₀(y) - d(x, y))`` exceeds ``ln(1/eps)`` — see
-    :func:`_polar_frame`. Prefer :func:`_dist_stable`.
-    """
-    sqrt_c = jnp.sqrt(c)
-    lorentz_inner = _minkowski_inner(x, y)
-    arg = floor_at(-c * lorentz_inner, 1.0)
-    res = acosh(arg) / sqrt_c
-    # Zero out if points are identical
-    same = jnp.all(jnp.equal(x, y))
-    return jnp.where(same, 0.0, res)  # type: ignore[return-value]
-
-
-def _dist_legacy_smoothened(
-    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
-) -> Float[Array, ""]:
-    """Smoothened distance with soft clamping. Legacy — see :func:`_dist_legacy`."""
-    sqrt_c = jnp.sqrt(c)
-    lorentz_inner = _minkowski_inner(x, y)
-    arg = smooth_clamp_min(-c * lorentz_inner, 1.0)
-    res = acosh(arg) / sqrt_c
-    # Zero out if points are identical
-    same = jnp.all(jnp.equal(x, y))
-    return jnp.where(same, 0.0, res)  # type: ignore[return-value]
 
 
 def _dist(
@@ -510,7 +467,9 @@ def _dist(
         x: Hyperboloid point, shape (dim+1,)
         y: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        version_idx: Distance version index (use VERSION_* constants)
+        version_idx: Distance version index (use VERSION_* constants). A static Python ``int``
+            outside {0, 1} raises ``ValueError``; a *traced* index keeps ``lax.switch``'s clamping
+            behaviour (it is silently pinned into range) because it cannot be checked at trace time.
 
     Returns:
         Geodesic distance d(x, y), scalar
@@ -518,7 +477,11 @@ def _dist(
     References:
         Nickel & Kiela. "Poincaré embeddings for learning hierarchical representations." NeurIPS 2017.
     """
-    return lax.switch(version_idx, [_dist_stable, _dist_stable_smoothened, _dist_legacy, _dist_legacy_smoothened], x, y, c)
+    # `lax.switch` clamps an out-of-range index instead of raising, so a stale `version_idx=2`
+    # would silently select the smoothened arm. `version_idx` is a static Python int under JIT.
+    if isinstance(version_idx, int) and not 0 <= version_idx <= 1:
+        raise ValueError(f"version_idx must be VERSION_DEFAULT (0) or VERSION_SMOOTHENED (1), got {version_idx}")
+    return lax.switch(version_idx, [_dist_stable, _dist_stable_smoothened], x, y, c)
 
 
 def _sqdist(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -575,14 +538,15 @@ def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[A
     The ``x₀`` route cannot: ``x₀ = cosh(√c·d)/√c ≈ (1 + c·d²/2)/√c`` stores ``d`` only to
     ``sqrt(eps)`` resolution (relative error ``eps/(2·c·d²)``), and ``acosh``'s ``1 + 10·eps``
     domain clamp then flattens every radius below ``sqrt(20·eps)/√c`` — 1.5e-3 in float32 — onto
-    that one value. Measured at ``c = 1``, float32, dim 8 (median relative error, legacy → this):
+    that one value. Measured at ``c = 1``, float32, dim 8 (median relative error, old acosh form →
+    this):
     1.5e3 → 2.5e-9 at ``r = 1e-6``, 5.4e-1 → 9.8e-8 at 1e-3, 5.0e-4 → 2.7e-8 at 1e-2, 3.5e-6 →
     1.8e-8 at 0.1 (the ``eps/(2·c·d²)`` term), and ≤7.1e-8 → ≤5.2e-8 over ``r ∈ [1, 40]``
     (``logs/2026-09-02_submission-numerics/probe_hyperboloid_origin.py``, A100, jax 0.9.1).
 
     ``arcsinh`` needs no domain clamp (its argument is a norm, so the whole real half-line is
     valid) and its derivative ``1/sqrt(1 + u²)`` is bounded by 1 everywhere, so the singularity
-    that motivated :func:`_dist_0_legacy_smoothened`'s soft clamp is gone rather than smoothed.
+    that motivated the old soft clamp is gone rather than smoothed.
     ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at the origin, which is
     what keeps ``jax.grad(dist_0)`` finite there without a ``where``-guard.
 
@@ -602,7 +566,7 @@ def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature)
     smoothened arms agree on what "never exactly zero" means. Applied in quadrature like
     :func:`_dist_stable_smoothened`, the perturbation is ``O(ε²/u)`` and invisible above the floor.
 
-    ``smooth_clamp_min`` (the legacy arm's approach) is deliberately not used: its ``log(2)/β``
+    ``smooth_clamp_min`` (the old approach) is deliberately not used: its ``log(2)/β``
     softplus remainder put a **0.16632/√c** floor under every non-origin point in *both* dtypes.
     """
     sqrt_c = jnp.sqrt(c)
@@ -611,59 +575,20 @@ def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature)
     return jnp.arcsinh(radius_floored) / sqrt_c
 
 
-def _dist_0_legacy(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Standard acosh distance from origin with hard clipping.
-
-    Kept for reference and comparison only. It reads the radius off ``x₀`` through ``acosh``, whose
-    domain clamp makes every radius below ``sqrt(20·eps)/√c`` (1.5e-3 float32, 6.7e-8 float64)
-    unrepresentable, and the bitwise ``at_origin`` guard makes the gradient there exactly zero.
-    Prefer :func:`_dist_0_stable`.
-    """
-    sqrt_c = jnp.sqrt(c)
-    x0 = x[0]
-    arg = floor_at(sqrt_c * x0, 1.0)
-    res = acosh(arg) / sqrt_c
-    # Zero out if at origin
-    origin = _create_origin(c, x.shape[0] - 1, x.dtype)
-    at_origin = jnp.all(jnp.equal(x, origin))
-    return jnp.where(at_origin, 0.0, res)  # type: ignore[return-value]
-
-
-def _dist_0_legacy_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Smoothened distance from origin with soft clamping. Legacy — see :func:`_dist_0_legacy`.
-
-    ``smooth_clamp_min(√c·x₀, 1.0)`` adds ``log(2)/β = 0.0139`` to the ``acosh`` argument, i.e. a
-    floor of ``acosh(1 + log(2)/50)/√c = 0.16632/√c`` on every point that is not bitwise the
-    origin, in both dtypes.
-    """
-    sqrt_c = jnp.sqrt(c)
-    x0 = x[0]
-    arg = smooth_clamp_min(sqrt_c * x0, 1.0)
-    res = acosh(arg) / sqrt_c
-    # Zero out if at origin
-    origin = _create_origin(c, x.shape[0] - 1, x.dtype)
-    at_origin = jnp.all(jnp.equal(x, origin))
-    return jnp.where(at_origin, 0.0, res)  # type: ignore[return-value]
-
-
 def _dist_0(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
     """Compute geodesic distance from hyperboloid origin.
 
-    Slots 0/1 read the geodesic radius off the **spatial** part ``x_s`` and ignore ``x₀``; an
+    Both slots read the geodesic radius off the **spatial** part ``x_s`` and ignore ``x₀``; an
     off-sheet input therefore gets the radius of its :func:`_proj` projection. A raw
     ``jax.grad(dist_0)`` consequently has its support on ``x_s`` rather than on ``x₀``; the two
     differ by a multiple of the constraint normal, so after :func:`_egrad2rgrad` /
     :func:`_tangent_proj` the Riemannian gradient is identical and optimizers are unaffected.
 
-    .. note::
-       **Breaking change.** ``version_idx=2``/``3`` used to duplicate 0/1; they now select the
-       pre-fix ``acosh`` arms (:func:`_dist_0_legacy`, :func:`_dist_0_legacy_smoothened`), matching
-       what those slots already meant for :func:`_dist`.
-
     Args:
         x: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        version_idx: Distance version index (use VERSION_* constants)
+        version_idx: Distance version index (use VERSION_* constants); see :func:`_dist` for the
+            static-vs-traced range-check behaviour.
 
     Returns:
         Geodesic distance d(origin, x), scalar
@@ -671,9 +596,11 @@ def _dist_0(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, version_idx: int 
     References:
         Nickel & Kiela. "Poincaré embeddings for learning hierarchical representations." NeurIPS 2017.
     """
-    return lax.switch(
-        version_idx, [_dist_0_stable, _dist_0_stable_smoothened, _dist_0_legacy, _dist_0_legacy_smoothened], x, c
-    )
+    # `lax.switch` clamps an out-of-range index instead of raising, so a stale `version_idx=2`
+    # would silently select the smoothened arm. `version_idx` is a static Python int under JIT.
+    if isinstance(version_idx, int) and not 0 <= version_idx <= 1:
+        raise ValueError(f"version_idx must be VERSION_DEFAULT (0) or VERSION_SMOOTHENED (1), got {version_idx}")
+    return lax.switch(version_idx, [_dist_0_stable, _dist_0_stable_smoothened], x, c)
 
 
 def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
@@ -1460,8 +1387,6 @@ class Hyperboloid(ManifoldBase):
 
     VERSION_DEFAULT = VERSION_DEFAULT
     VERSION_SMOOTHENED = VERSION_SMOOTHENED
-    VERSION_LEGACY = VERSION_LEGACY
-    VERSION_LEGACY_SMOOTHENED = VERSION_LEGACY_SMOOTHENED
 
     def create_origin(self, c: ScalarCurvature, dim: int) -> Float[Array, "dim_plus_1"]:
         """Create hyperboloid origin [1/√c, 0, ..., 0]."""
@@ -1520,7 +1445,6 @@ class Hyperboloid(ManifoldBase):
         differ by a multiple of the constraint normal, so the Riemannian gradient after
         :meth:`egrad2rgrad` / :meth:`tangent_proj` is identical and optimizers are unaffected.
 
-        ``version_idx`` 2/3 select the pre-fix ``acosh`` arms — see :func:`_dist_0`.
         """
         return _dist_0(self._cast(x), c, version_idx)
 
@@ -1529,8 +1453,8 @@ class Hyperboloid(ManifoldBase):
 
         That is the mathematical definition; it is now evaluated cancellation-free as
         ``d_L² = 4·sinh²(√c·d(x,y)/2)/c`` off the :func:`_polar_frame` decomposition instead of the
-        literal subtraction, which loses precision the same way :func:`_dist_legacy` does (see
-        :func:`_sqdist`'s docstring for the full derivation).
+        literal ``-2/c - 2⟨x,y⟩_L`` subtraction, which loses precision the same way the old
+        ``acosh`` form did (see :func:`_sqdist`'s docstring for the full derivation).
 
         A fast, ``acosh``-free dissimilarity that is monotone in the geodesic :meth:`dist`
         (``d_L² = (2/c)(cosh(√c·d) - 1)``) but is **not** the squared geodesic distance and **not**

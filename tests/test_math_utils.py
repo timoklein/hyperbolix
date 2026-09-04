@@ -126,32 +126,6 @@ def test_smooth_clamp_max_gradient_is_the_softplus_sigmoid(beta: float):
     assert 0.0 <= float(grads[-1]) <= float(grads[3])
 
 
-@pytest.mark.parametrize("beta", [10.0, 50.0])
-def test_smooth_clamp_gradient_is_the_sigmoid_difference(beta: float):
-    """Two-sided ``smooth_clamp`` gradient = sigmoid(beta·(x - min)) - sigmoid(beta·(x - max)).
-
-    ``smooth_clamp`` is the two-sided difference form, NOT a composition of the one-sided clamps
-    (composing them overshoots narrow windows — pinned in test_smooth_clamp_vs_clip.py). Its
-    derivative is therefore the plain difference of the two boundary sigmoids. Pinning it catches
-    a dropped term or a re-simplification into the composition, which the range-only forward test
-    cannot: the composition also keeps the output inside wide windows.
-    """
-    min_val, max_val = -1.5, 1.5
-    xs = jnp.array([-4.0, -1.6, 0.0, 1.6, 4.0], dtype=jnp.float32)
-
-    grads = jax.vmap(jax.grad(lambda v: smooth_clamp(v, min_val, max_val, smoothing_factor=beta)))(xs)
-
-    x_np = np.asarray(xs, dtype=np.float64)
-    expected = np.asarray(jax.nn.sigmoid(beta * (x_np - min_val))) - np.asarray(jax.nn.sigmoid(beta * (x_np - max_val)))
-
-    assert np.allclose(np.asarray(grads), expected, rtol=1e-4, atol=1e-6)
-    assert float(grads[2]) == pytest.approx(1.0, rel=1e-6), "no attenuation strictly inside the interval"
-    # Symmetric attenuation: just outside each bound the gradient is alive but < 1; far outside it
-    # decays further (to exactly 0 in float32 at beta=50 — see the max-side test).
-    assert 0.0 < float(grads[1]) < 1.0 and 0.0 < float(grads[3]) < 1.0
-    assert float(grads[0]) <= float(grads[1]) and float(grads[-1]) <= float(grads[3])
-
-
 def test_cosh():
     """Test numerically stable cosh."""
     # Test normal values

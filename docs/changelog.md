@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **`Hyperboloid.dist`/`dist_0` slots 2 and 3 (`VERSION_LEGACY`, `VERSION_LEGACY_SMOOTHENED`) are gone; a `version_idx` outside `{0, 1}` now raises `ValueError`.** The explicit check is needed because `lax.switch` silently clamps an out-of-range index into range, so a stale `version_idx=2` would have quietly run the smoothened arm instead of failing. The two slots were added in 1.1.2 / 1.2.0 by the very fixes that made them obsolete (the cancellation-free `dist` rewrite and the origin-chart `dist_0` rewrite); at 1.1.1 the switch had only two slots, so no pre-fix code ever passed 2 or 3, and pre-fix numbers remain reproducible by installing `hyperbolix==1.1.1` from PyPI. For the record, the four golden values the deleted regression test pinned — on-sheet point at spatial radius `1e-3`, `c = 1`, dim 8, direction `e1`, true geodesic radius `9.99999833e-4` — were: slot 2 float32 `0.0015440807910636067`, slot 2 float64 `0.0009999998333921221`, slot 3 float64 `0.16632065504083338`, slot 3 float32 `0.16632071137428284` (CPU; ±1 ulp on an A100)
+
 ## [1.2.0] - 2026-09-04
 
 ### Fixed

@@ -24,7 +24,7 @@ docs/javascripts/mathjax/
 results/
 
 # PDF files
-.pdf
+*.pdf
 
 # Session logs / probe scripts
 logs/
