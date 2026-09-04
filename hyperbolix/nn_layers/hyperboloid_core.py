@@ -33,9 +33,8 @@ from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
-from hyperbolix.utils.math_utils import clamp_to
+from hyperbolix.utils.math_utils import clamp_to, floor_at, safe_hypot_norm
 from hyperbolix.utils.math_utils import cosh as safe_cosh
-from hyperbolix.utils.math_utils import floor_at, safe_hypot_norm
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 from hyperbolix.utils.precision import MATMUL_PRECISION
 
@@ -251,16 +250,21 @@ def spatial_to_hyperboloid(
     scale = jnp.sqrt(c_in / c_out)
     scaled_D = scale * spatial  # (..., D)
 
-    # x0 = sqrt(||s||^2 + 1/c_out) via `safe_hypot_norm`: bit-identical to that expression, but
-    # `sum(s**2)` is never squared unscaled, so a point at float32 spatial radius > 1.8e19 gets a
-    # finite time slot instead of inf. It must NOT be spelled `safe_hypot(safe_norm(s), .)` --
-    # that rounds ||s|| and squares it again, and the caller's constraint check
-    # `-x0**2 + sum(s**2) = -1/c_out` then no longer cancels (at c_out = 0.1 the residual grew from
-    # 6.1e-5 to 2.4e-4 against a 1e-4 tolerance). `sqrt(floor_at(a, eps)) == floor_at(sqrt(a),
-    # sqrt(eps))` for a >= 0, so the outer floor is preserved exactly (it only bites when 1/c_out
-    # itself is below eps).
-    inv_sqrt_c_out = jnp.asarray(1.0, dtype=scaled_D.dtype) / jnp.sqrt(jnp.asarray(c_out, dtype=scaled_D.dtype))
-    x0 = floor_at(safe_hypot_norm(scaled_D, inv_sqrt_c_out), jnp.sqrt(jnp.asarray(eps, dtype=scaled_D.dtype)))
+    # x0 = sqrt(sum(s**2) + 1/c_out) in ONE reduction over the spatial part. This is the hot path:
+    # `spatial_to_hyperboloid` sits behind every `HTCLinear` forward, so it reads `s` once.
+    # The sum of squares is kept intact under the sqrt rather than being rounded to ||s|| and
+    # squared again -- the caller's constraint check `-x0**2 + sum(s**2) = -1/c_out` cancels the
+    # rounding of the sum against itself, and it does not cancel a re-squared norm (at c_out = 0.1
+    # the residual grew from 6.1e-5 to 2.4e-4 against a 1e-4 tolerance).
+    # Plain `jnp.sqrt`: the argument is >= 1/c_out > 0, so it is never zero and the derivative is
+    # never infinite. The floor sits on the ARGUMENT, as it did before PR #75:
+    # `sqrt(floor_at(a, eps)) == floor_at(sqrt(a), sqrt(eps))` for a >= 0, so this is the same
+    # value; it only bites when 1/c_out is itself below eps.
+    # `sum(s**2)` overflows float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1),
+    # unreachable by a training run, and gives an infinite time slot there rather than a quietly
+    # saturated one.
+    inv_c_out = jnp.asarray(1.0, dtype=scaled_D.dtype) / jnp.asarray(c_out, dtype=scaled_D.dtype)
+    x0 = jnp.sqrt(floor_at(jnp.sum(scaled_D**2, axis=-1) + inv_c_out, jnp.asarray(eps, dtype=scaled_D.dtype)))
 
     return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D+1)
 

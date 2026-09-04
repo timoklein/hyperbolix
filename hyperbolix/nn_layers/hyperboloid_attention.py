@@ -27,8 +27,6 @@ from flax import nnx
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
-from hyperbolix.utils.math_utils import safe_hypot_norm
-
 from .hyperboloid_core import MATMUL_PRECISION, lorentz_midpoint, spatial_to_hyperboloid
 from .hyperboloid_linear import HTCLinear
 
@@ -70,12 +68,15 @@ def focus_transform(
     # Element-wise power sharpening
     sharpened_D = scaled_relu_D**power  # (..., D)
 
-    # Norm-preserving rescaling. `safe_hypot_norm(., sqrt(eps))` **is** `sqrt(sum(.**2) + eps)`,
-    # bit for bit, but nothing is squared unscaled, so a large activation cannot overflow the
-    # reduction. The `eps` floor itself is deliberate and unchanged: `norm_sharpened` is a divisor.
-    sqrt_eps = jnp.sqrt(jnp.asarray(eps, dtype=x_D.dtype))
-    norm_scaled = safe_hypot_norm(scaled_relu_D, sqrt_eps)[..., None]  # (..., 1)
-    norm_sharpened = safe_hypot_norm(sharpened_D, sqrt_eps)[..., None]  # (..., 1)
+    # Norm-preserving rescaling, one reduction each. `sqrt(sum(.**2) + eps)`: the additive `eps` is
+    # strictly positive, so the argument is never 0 and a plain `jnp.sqrt` needs no zero-guard --
+    # the `eps` is itself the divisor floor for `norm_sharpened` and is deliberate and unchanged.
+    # This is the hot path: `focus_transform` runs per token per head in linear attention.
+    # `sum(.**2)` overflows float32 past activation magnitude 1.8e19, unreachable by a training
+    # run, and propagates as `inf`.
+    eps_arr = jnp.asarray(eps, dtype=x_D.dtype)
+    norm_scaled = jnp.sqrt(jnp.sum(scaled_relu_D**2, axis=-1, keepdims=True) + eps_arr)  # (..., 1)
+    norm_sharpened = jnp.sqrt(jnp.sum(sharpened_D**2, axis=-1, keepdims=True) + eps_arr)  # (..., 1)
 
     return (norm_scaled / norm_sharpened) * sharpened_D  # (..., D)
 
