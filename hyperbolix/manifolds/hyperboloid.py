@@ -65,7 +65,6 @@ from ..utils.math_utils import (
     cosh,
     floor_at,
     safe_hypot,
-    safe_hypot_norm,
     safe_norm,
     safe_normalize,
     safe_sqrt,
@@ -127,6 +126,27 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_pl
     return jnp.concatenate([zeros, v_spatial], axis=-1)
 
 
+def _sqnorm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
+    """``sum(v**2)`` over the last axis: the one reduction every norm in this module shares.
+
+    Sharing the spelling is what lets XLA common-subexpression-eliminate the sum when several of
+    ``dist_0`` / ``logmap_0`` / ``_polar_frame`` are traced into the same graph. It overflows
+    float32 once a coordinate passes 1.8e19 (geodesic radius ~44 at ``c = 1``), which no training
+    run reaches; past that it propagates as ``inf`` rather than as a quietly saturated value.
+    """
+    return jnp.sum(v**2, axis=-1)
+
+
+def _norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
+    """``sqrt(sum(v**2))`` over the last axis, in one reduction, exact and zero-VJP at ``v = 0``.
+
+    ``safe_sqrt`` supplies the double-``where`` that keeps ``sqrt'(0) = inf`` out of the VJP; the
+    value is bit-identical to ``jnp.linalg.norm`` wherever the sum neither overflows nor
+    underflows.
+    """
+    return safe_sqrt(_sqnorm(v))
+
+
 def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Project point onto hyperboloid by adjusting temporal component.
 
@@ -138,25 +158,25 @@ def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "di
         Projected point with -x₀² + ||x_rest||² = -1/c, x₀ > 0, shape (dim+1,)
 
     Notes:
-        ``x₀ = sqrt(1/c + ‖x_s‖²)`` is evaluated as ``safe_hypot_norm(x_s, 1/√c)``, which never
-        materialises ``‖x_s‖²`` and keeps the ``sum(x_s**2)`` intact rather than rounding ``‖x_s‖``
-        and re-squaring it (see the primitive's docstring for why the difference is visible: it is
-        exactly the term the constraint check ``-x₀² + ‖x_s‖² = -1/c`` cancels). The old
-        ``sqrt(floor_at(1/c + dot(x_s, x_s), MIN_NORM))``
-        overflowed float32 as soon as any spatial coordinate passed 1.8e19 and returned
-        ``x₀ = inf`` for a point whose time slot is a perfectly ordinary float; one radius earlier
-        (1e19) the sum of squares was still finite but ``sqrt`` of it lost the ``1/c`` entirely, so
-        the constraint ``-x₀² + ‖x_s‖²`` evaluated to exactly ``0`` instead of ``-1/c``.
+        ``x₀ = sqrt(1/c + ‖x_s‖²)`` is one fused reduction over ``x_s``: the constant is added to
+        ``sum(x_s**2)`` under the ``sqrt``, so the sum of squares is kept intact and the constraint
+        check ``-x₀² + ‖x_s‖² = -1/c`` cancels the rounding of the sum against itself (rounding
+        ``‖x_s‖`` first and re-squaring it does not). This is the hot path: ``proj`` runs on every
+        sample of every hyperboloid forward, so it reads the spatial data once.
 
-        Dropping the ``MIN_NORM`` floor is a no-op on the finite domain: ``1/c > 0`` for every
-        admissible curvature, so ``1/c + ‖x_s‖² ≥ 1/c > MIN_NORM = 1e-15`` unless ``c > 1e15``,
-        which is far outside any supported regime. What the floor did do was clamp a non-finite
-        input; ``safe_hypot`` now passes ``inf`` through as ``inf``, the library's convention for
-        keeping an out-of-range point visibly degenerate.
+        Plain ``jnp.sqrt``, not ``safe_sqrt``: the argument is ``1/c + ‖x_s‖² ≥ 1/c > 0`` for every
+        admissible curvature, so it is never 0 and ``sqrt``'s derivative is never infinite. The
+        constant is ``1/c``, not ``(1/√c)²``, which avoids one rounding.
+
+        ``sum(x_s**2)`` overflows float32 once a spatial coordinate passes 1.8e19 (geodesic radius
+        ~44 at ``c = 1``), a regime no training run reaches; there it returns ``x₀ = inf`` rather
+        than a quietly saturated time slot, which is the library's convention for keeping an
+        out-of-range point visibly degenerate. No ``MIN_NORM`` floor: it was inactive on the finite
+        domain (``1/c > MIN_NORM`` unless ``c > 1e15``) and clamping ``inf`` is not wanted.
     """
     x_rest = x[1:]
-    inv_sqrt_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
-    x0_new = safe_hypot_norm(x_rest, inv_sqrt_c)
+    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    x0_new = jnp.sqrt(inv_c + _sqnorm(x_rest))
     return jnp.concatenate([x0_new[None], x_rest])
 
 
@@ -173,12 +193,13 @@ def _proj_batch(x: Float[Array, "... dim_plus_1"], c: ScalarCurvature) -> Float[
         Projected points with -x₀² + ||x_rest||² = -1/c, x₀ > 0, shape (..., dim+1)
 
     Notes:
-        Same ``safe_hypot_norm(x_s, 1/√c)`` reconstruction as :func:`_proj`, over the last axis; see
-        there for the overflow it removes and for why the ``MIN_NORM`` floor was inactive.
+        Same one-reduction ``sqrt(1/c + sum(x_s**2))`` reconstruction as :func:`_proj`, over the
+        last axis; see there for why the ``sqrt`` needs no zero-guard, why the ``MIN_NORM`` floor
+        was inactive, and what happens past float32 coordinate 1.8e19.
     """
     x_rest = x[..., 1:]  # Shape: (..., dim)
-    inv_sqrt_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
-    x0_new = safe_hypot_norm(x_rest, inv_sqrt_c)[..., None]  # Shape: (..., 1)
+    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    x0_new = jnp.sqrt(inv_c + _sqnorm(x_rest))[..., None]  # Shape: (..., 1)
     return jnp.concatenate([x0_new, x_rest], axis=-1)
 
 
@@ -302,8 +323,9 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
       ``a + b > 88``, while the quotient itself is perfectly representable.
     * ``√r_x·√r_y·chord``, never ``√(r_x·r_y)`` and never ``chord²·r_x·r_y``: both alternatives
       square a spatial radius, which leaves float32 at radius 44.
-    * every norm goes through :func:`~hyperbolix.utils.math_utils.safe_norm`, whose max-scaling is
-      what keeps a legitimate ``1e-34`` chord from being flushed to the ``MIN_NORM`` floor.
+    * no norm here carries an additive ``MIN_NORM²`` under its ``sqrt``; that floor is what used to
+      flush a legitimate ``1e-34`` chord up to ``1e-15``. The floors that remain are multiplicative
+      ``floor_at`` on the quantities that are divided by, and only those.
     * ``(u_x - u_y)`` is a difference, not a quotient of exponentials: for ``a ≈ b`` (small
       distances) the subtraction of nearby floats is exact (Sterbenz), whereas the algebraically
       equal ``½·(√(u_x/u_y) - √(u_y/u_x))`` loses all significance there.
@@ -547,7 +569,7 @@ def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[A
     ``arcsinh`` needs no domain clamp (its argument is a norm, so the whole real half-line is
     valid) and its derivative ``1/sqrt(1 + u²)`` is bounded by 1 everywhere, so the singularity
     that motivated the old soft clamp is gone rather than smoothed.
-    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at the origin, which is
+    :func:`_norm` supplies the exactly-zero value *and* exactly-zero VJP at the origin, which is
     what keeps ``jax.grad(dist_0)`` finite there without a ``where``-guard.
 
     Reads only ``x_s``: an off-sheet input gets the radius of its :func:`_proj` projection, which
@@ -555,7 +577,11 @@ def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[A
     what ``ProperVelocity._dist_0`` already does.
     """
     sqrt_c = jnp.sqrt(c)
-    return jnp.arcsinh(sqrt_c * safe_norm(x[1:])) / sqrt_c
+    # One reduction (:func:`_norm` = ``safe_sqrt(sum(x_s**2))``); the spatial part can be exactly
+    # zero at the origin, which is why it is `safe_sqrt` rather than a plain `sqrt`. `sum(x_s**2)`
+    # overflows float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1), unreachable by a
+    # training run, and propagates as `inf` — `arcsinh(inf) = inf`, the correct limit.
+    return jnp.arcsinh(sqrt_c * _norm(x[1:])) / sqrt_c
 
 
 def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -571,7 +597,9 @@ def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature)
     """
     sqrt_c = jnp.sqrt(c)
     eps = 20.0 * float(jnp.finfo(x.dtype).eps)
-    radius_floored = safe_hypot(sqrt_c * safe_norm(x[1:]), jnp.asarray(eps, dtype=x.dtype))
+    # Same one-reduction radius as :func:`_dist_0_stable`; the scalar `safe_hypot` that applies the
+    # ε floor stays (it composes two already-reduced scalars, so it costs no extra pass).
+    radius_floored = safe_hypot(sqrt_c * _norm(x[1:]), jnp.asarray(eps, dtype=x.dtype))
     return jnp.arcsinh(radius_floored) / sqrt_c
 
 
@@ -794,8 +822,8 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
     1e-20…1e10, with an identity VJP), and it routes through :func:`_minkowski_inner`, which turns
     an ``inf`` spatial input into an all-NaN result instead of leaving the time slot intact.
 
-    **An infinitely far point maps to an infinite tangent vector, not to NaN.** ``safe_norm``
-    deliberately passes an ``inf`` spatial entry through as ``inf`` (see its docstring), which made
+    **An infinitely far point maps to an infinite tangent vector, not to NaN.** The radius
+    deliberately passes an ``inf`` spatial entry through as ``inf``, which made
     ``u = inf`` and the scale ``arcsinh(inf)/inf = inf/inf`` a NaN that then poisoned the whole
     vector — the time slot included. The pairwise :func:`dist` / :func:`_polar_frame` convention for
     an out-of-range input is ``±inf``, not NaN, and this now matches: ``scale`` is ``where(isfinite(u),
@@ -828,15 +856,16 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
     """
     sqrt_c = jnp.sqrt(c)
     y_rest = y[1:]
-    # ``safe_norm``, not the file's older ``sqrt(sum(y_s²) + MIN_NORM²)``: the spatial part of a
-    # float32 point at radius 45 is 1.6e19, whose sum of squares overflows to inf while the norm
-    # itself is perfectly representable (the old expression then returned an all-zero tangent
-    # vector there, and the arcsinh form would return NaN). ``safe_norm`` gives an exact 0 with an
-    # exactly-zero VJP at the origin, so the ``MIN_NORM`` floor below is forward-only — it just
-    # stops ``arcsinh(u)/u`` from evaluating 0/0; the Jacobian at y = origin is the identity either
-    # way. That matters for the gyro-bias path of the PLFC / Busemann FC layers, whose bias point
-    # is the origin at zero init.
-    y_rest_norm = floor_at(safe_norm(y_rest), MIN_NORM)
+    # One reduction (:func:`_norm`), which is also the sum `_dist_0`/`_polar_frame` form, so XLA
+    # can CSE it when they are traced together. `safe_sqrt` inside `_norm`, not a plain `sqrt`:
+    # `y_s` is exactly zero at the origin, where `sqrt'(0) = inf` would meet a zero cotangent as
+    # 0*inf = NaN. The `MIN_NORM` floor around it is the divisor guard and is forward-only — it
+    # just stops `arcsinh(u)/u` from evaluating 0/0; the Jacobian at y = origin is the identity
+    # either way. That matters for the gyro-bias path of the PLFC / Busemann FC layers, whose bias
+    # point is the origin at zero init. `sum(y_s**2)` overflows float32 past coordinate 1.8e19
+    # (geodesic radius ~44 at c = 1), unreachable by a training run; there it propagates as `inf`
+    # and the `where(isfinite(u))` below turns that into ±inf entries rather than NaN.
+    y_rest_norm = floor_at(_norm(y_rest), MIN_NORM)
 
     u = sqrt_c * y_rest_norm
     # = d₀(y)/‖y_s‖, → 1 as u → 0. The `where` only fires on a non-finite `u`, where the quotient

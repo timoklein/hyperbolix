@@ -25,7 +25,7 @@ Dimension key:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, floor_at, safe_norm
+from ..utils.math_utils import MIN_NORM, floor_at, safe_sqrt
 from ..utils.precision import MATMUL_PRECISION
 from .protocol import ScalarCurvature
 
@@ -67,20 +67,23 @@ def _conformal_factor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array
 def _proj(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """Project onto the manifold. A boundary exists only for ``c > 0`` (``‖x‖ < 1/√c``); for ``c ≤ 0``
     (Euclidean / spherical) the space is all of R^d and this is the identity."""
-    # `safe_norm` + `floor_at`. The floor is deliberate: `norm` divides in the *untaken* branch
-    # of the `where` too, and 0-cotangent times that branch's inf is NaN. The max-scaling is the
-    # fix -- `x` here is by definition unprojected, and `sum(x**2)` overflows float32 above
-    # coordinate 1.8e19. That mattered more than anywhere else in the library: with `norm = inf`
-    # the clamp `x * (max_norm / inf)` is the ZERO VECTOR, so the farthest representable point was
-    # projected onto the origin instead of onto the boundary (measured: ||proj(x)|| = 0.0 at
-    # float32 radius 1e20, now 0.99999).
-    # The trailing `[..., None]` is what makes the clamp broadcast against `x`: `safe_norm`
-    # reduces the last axis, so it must be re-added before the result multiplies a `(..., dim)`
-    # operand -- exactly as :func:`_proj_batch` does. For the single point this function is
-    # contracted for it is a shape-(1,) scalar and the result is bit-identical either way; it is
-    # the (B, dim) inputs that several call sites and tests pass anyway that need it, and they
-    # now get the per-row clamp instead of the pre-sweep whole-array Frobenius one.
-    norm = floor_at(safe_norm(x)[..., None], MIN_NORM)
+    # One reduction: `safe_sqrt(sum(x**2))`, wrapped in the `floor_at`. This runs on every sample
+    # of every Poincare/stereographic forward, so it reads `x` once.
+    # `safe_sqrt`, not a plain `sqrt`: `x` can be exactly the origin, where `sqrt'(0) = inf` meets
+    # the *untaken* `where` branch's zero cotangent as 0*inf = NaN.
+    # The `floor_at` is deliberate and must stay *around* the sqrt: `norm` divides in the untaken
+    # branch too, and `floor_at` under the sqrt would not stop that branch's infinite derivative.
+    # `sum(x**2)` overflows float32 past coordinate 1.8e19, which no training run reaches (`x` here
+    # is unprojected, so it is the one site where an out-of-range input is conceivable). There
+    # `norm = inf` and the clamp `x * (max_norm / inf)` returns the ZERO VECTOR -- the pre-1.2.0
+    # behaviour, documented in the changelog rather than guarded.
+    # `axis=-1, keepdims=True` is what makes the clamp broadcast against `x`: the reduction removes
+    # the last axis, so it must be re-added before the result multiplies a `(..., dim)` operand --
+    # exactly as :func:`_proj_batch` does. For the single point this function is contracted for it
+    # is a shape-(1,) scalar and the result is bit-identical either way; it is the (B, dim) inputs
+    # that several call sites and tests pass anyway that need it, and they get the per-row clamp
+    # instead of the pre-sweep whole-array Frobenius one.
+    norm = floor_at(safe_sqrt(jnp.sum(x**2, axis=-1, keepdims=True)), MIN_NORM)
     max_norm = _max_norm(x, c)
     cond = norm > max_norm
     return jnp.where(cond, x * (max_norm / norm), x)
@@ -97,8 +100,10 @@ def _proj_batch(x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, 
     it reads only ``x``'s dtype, so it is a scalar either way and the clamp is bit-identical (probed
     over a (64, 16) batch, both dtypes, ``c`` in {0.3, 1, 2.5}, rows inside and past the boundary).
     """
-    # `safe_norm` + `floor_at` over the last axis; see :func:`_proj` for both halves.
-    norm = floor_at(safe_norm(x)[..., None], MIN_NORM)  # (..., 1)
+    # One reduction, `floor_at(safe_sqrt(sum(x**2)), MIN_NORM)` over the last axis; see
+    # :func:`_proj` for why the sqrt is `safe_sqrt`, why the floor sits outside it, and what
+    # happens past float32 coordinate 1.8e19.
+    norm = floor_at(safe_sqrt(jnp.sum(x**2, axis=-1, keepdims=True)), MIN_NORM)  # (..., 1)
     max_norm = _max_norm(x, c)
     cond = norm > max_norm
     return jnp.where(cond, x * (max_norm / norm), x)

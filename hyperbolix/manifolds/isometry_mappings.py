@@ -44,7 +44,7 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, floor_at, safe_hypot_norm
+from ..utils.math_utils import MIN_NORM, floor_at
 from ..utils.precision import MATMUL_PRECISION
 from .protocol import ScalarCurvature
 
@@ -181,13 +181,14 @@ def pv_to_poincare(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    # √(1 + c·||x||²) via `safe_hypot_norm`: `dot(x, x)` overflows float32 once ||x|| passes
-    # 1.8e19/√c, and `x / (1 + inf)` then maps a far-out PV point to the *origin* instead of near
-    # the ball boundary. `safe_hypot_norm` never materialises the square, and takes it in one
-    # reduction instead of rounding `safe_norm(x)` and squaring it again. Same form and the same
-    # measurement as `ProperVelocity._beta_inv`; see there.
+    # √(1 + c·||x||²) in one reduction over `x`. Plain `jnp.sqrt`: the additive 1 is strictly
+    # positive, so the argument is never 0 and the derivative is never infinite. The `sqrt_c * x`
+    # association is the more accurate one; same form and same measurement as
+    # `ProperVelocity._beta_inv`, see there. `sum((√c·x)**2)` overflows float32 once ||x|| passes
+    # 1.8e19/√c (geodesic radius ~44 at c = 1), unreachable by a training run; there `x / (1 + inf)`
+    # maps a far-out PV point to the origin, the pre-1.2.0 behaviour.
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
-    beta_inv = safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))  # 1/β_x
+    beta_inv = jnp.sqrt(jnp.sum((sqrt_c * x) ** 2, axis=-1) + 1.0)  # 1/β_x
     return x / (1.0 + beta_inv)
 
 
@@ -270,12 +271,14 @@ def pv_to_hyperboloid(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026.
     """
-    # √(1/c + ||x||²) via `safe_hypot_norm` — the same shape as `Hyperboloid._proj`, and the same
-    # fix: `dot(x, x)` overflows float32 past ||x|| = 1.8e19, returning an infinite time slot for
-    # a point whose time slot is perfectly representable. `safe_hypot_norm`, not
-    # `safe_hypot(safe_norm(x), .)`: it keeps `sum(x**2)` intact instead of rounding the norm and
-    # squaring it again, which is what the hyperboloid constraint check cancels against.
-    time = safe_hypot_norm(x, jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype)))
+    # √(1/c + ||x||²) in one reduction over `x` — the same spelling as `Hyperboloid._proj`, which
+    # keeps `sum(x**2)` intact so the hyperboloid constraint check cancels its rounding. Plain
+    # `jnp.sqrt`: `1/c > 0`, so the argument is never 0 and the derivative is never infinite. The
+    # constant is `1/c`, not `(1/√c)²`, which avoids one rounding. `sum(x**2)` overflows float32
+    # past coordinate 1.8e19 (geodesic radius ~44 at c = 1), unreachable by a training run, and
+    # returns an infinite time slot there rather than a quietly saturated one.
+    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    time = jnp.sqrt(inv_c + jnp.sum(x**2, axis=-1))
     return jnp.concatenate([time[None], x])
 
 

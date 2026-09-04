@@ -1093,9 +1093,24 @@ def test_hyperboloid_dist_on_a_shared_ray_is_the_radius_difference(dtype, rtol: 
     assert opposite == pytest.approx((a_stored + b_stored) / np.sqrt(c), rel=tol)
 
 
-@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+# The radius grid is per-dtype: float32 stops at 43, float64 keeps 45. A point at radius ``a`` has
+# spatial coordinate ``sinh(a)/√c``, which at ``a = 45, c = 0.3`` is 3.2e19 — past the 1.845e19
+# where a one-pass ``sum(x_s**2)`` overflows float32, so ``dist_0`` there is ``inf`` by policy (see
+# the norm-policy section below). That band is the retired float32 overflow guard, so the radius
+# moves to float64 rather than the assertion being loosened. 43.0 is the repo's existing float32
+# radial ceiling (``tests/test_manifolds.py``). Tolerances are unchanged.
+_ORIGIN_RADII = {
+    jnp.float32: [1e-4, 1e-3, 1e-2, 0.5, 5.0, 20.0, 43.0],
+    jnp.float64: [1e-4, 1e-3, 1e-2, 0.5, 5.0, 20.0, 45.0],
+}
+_ORIGIN_CASES = [(dtype, rtol, a) for dtype, rtol in _HYP_DTYPES for a in _ORIGIN_RADII[dtype]]
+_ORIGIN_IDS = [
+    f"{a:g}-{dtype_id}" for (dtype, _), dtype_id in zip(_HYP_DTYPES, _HYP_DTYPE_IDS, strict=True) for a in _ORIGIN_RADII[dtype]
+]
+
+
+@pytest.mark.parametrize(("dtype", "rtol", "a"), _ORIGIN_CASES, ids=_ORIGIN_IDS)
 @pytest.mark.parametrize("c", CURVATURES)
-@pytest.mark.parametrize("a", [1e-4, 1e-3, 1e-2, 0.5, 5.0, 20.0, 45.0])
 def test_hyperboloid_dist_and_logmap_to_the_origin_match_the_origin_variants(dtype, rtol: float, c: float, a: float):
     """``dist(x, origin) == dist_0(x)`` and ``logmap(origin, x) == d·e_rad``.
 
@@ -2015,26 +2030,32 @@ def test_poincare_metric_tensor_dist_gradient_is_the_conformal_factor_at_small_s
 
 
 # ---------------------------------------------------------------------------------------------
-# Safe-norm sweep — the additive-epsilon norm idiom, replaced library-wide.
+# Norm policy on the hot path — one reduction, gradient-safe at zero, no additive floor.
 #
-# The old idiom ``sqrt(sum(x**2) + MIN_NORM**2)`` gave ``sqrt`` a finite derivative at ``x = 0``,
-# which ``jnp.linalg.norm`` does not (its VJP there is ``0/0 = NaN``). It bought that with two
-# defects, both documented on ``math_utils.safe_norm``:
+# Every per-sample norm in the library is a single pass over the data: ``safe_sqrt(sum(v**2))``
+# where the input can be exactly zero, a plain ``sqrt(const + sum(v**2))`` where a strictly
+# positive constant is added, and ``floor_at(., MIN_NORM)`` *around* either where the norm is a
+# divisor. That replaces two older idioms:
 #
-#   * **Overflow** — ``sum(x**2)`` overflows float32 once any coordinate passes 1.8e19, even
-#     though the norm is representable. Measured on the parent (``parent_gate/gate.py``):
-#     ``Hyperboloid.proj`` at float32 spatial radius 5e19 returns ``x0 = inf``, and already at
-#     1e19 the constraint ``-x0² + ‖x_s‖²`` evaluates to exactly ``0`` instead of ``-1/c``
-#     (the sum of squares is exact, but ``sqrt`` of it loses the ``1/c``). The Poincaré
-#     ``_gyrovector_core._proj`` fails worse: at radius 1e20 the clamp ``x·(max_norm/inf)``
-#     collapses the point onto the **origin** rather than onto the ball boundary.
-#   * **Underflow** — the ``1e-30`` floor dominates a genuinely small vector, with relative
-#     residual ``MIN_NORM²/(2r²)``: 5.0e-15 at float64 radius 1e-8 (measured on the parent), and
-#     41 % at float32 radius 1e-15 (2.83e-15 returned where 2.00e-15 is correct).
+#   * the additive ``sqrt(sum(x**2) + MIN_NORM**2)``, whose ``1e-30`` floor dominates a genuinely
+#     small vector — relative residual ``MIN_NORM²/(2r²)``: 5.0e-15 at float64 radius 1e-8, and
+#     41 % at float32 radius 1e-15 (2.83e-15 returned where 2.00e-15 is correct). That defect is
+#     what the tiny-radius oracles below still gate.
+#   * the max-scaled two-reduction ``safe_norm``/``safe_hypot_norm``, which read the data twice to
+#     buy an overflow guard that only fires past float32 coordinate 1.8e19 — geodesic radius ~44
+#     at ``c = 1``, a regime no SGD run reaches. The guard is not worth a second memory pass on the
+#     hot path, so past that radius the library is loud rather than saturated: the hyperboloid, PV
+#     and isometry sites return ``inf``, and the Poincaré/stereographic boundary clamp returns the
+#     origin (the pre-1.2.0 behaviour, documented in the changelog).
 #
-# ``safe_norm`` / ``safe_hypot`` / ``safe_sqrt`` are max-scaled, so neither happens, and all
-# three give an exact ``0`` with an exactly-zero VJP at the zero vector. See
-# ``logs/2026-09-03_safe_norm_sweep/inventory.md`` for the full site list.
+# The extreme-radius oracles below therefore test the *algorithm*, not float32's range: the two
+# that can be stated exactly run in float64, and the one that cannot (``expmap_0`` past the
+# ``sinh`` cap, where the capped spatial value squared overflows in float64 too) asserts the
+# weaker but real contract — ``inf``, never NaN.
+#
+# ``safe_sqrt``'s double-``where`` is what supplies the exact ``0`` and the exactly-zero VJP at the
+# zero vector; the zero-gradient oracle at the end of this section is the regression guard for the
+# whole conversion. See ``logs/2026-09-03_safe_norm_sweep/inventory.md`` for the full site list.
 # ---------------------------------------------------------------------------------------------
 
 # Radii chosen so the residual is the *only* error term: at these radii atanh(z) == z to well
@@ -2067,29 +2088,30 @@ def test_poincare_dist_0_matches_the_analytic_form_at_a_tiny_radius(dtype, c: fl
     assert float(manifold.dist(y_D, x_D, c)) == pytest.approx(expected, rel=_TINY_RADIUS_RTOL[dtype])
 
 
-# Above spatial radius sqrt(1/(2*c*eps32)) -- 3.7e3 at c = 0.3, 2.0e3 at c = 1, 1.3e3 at c = 2.5 --
-# NO float32 x0 satisfies -x0² + ‖x_s‖² = -1/c: consecutive float32 near x0 are 2·x0²·eps apart in
-# the squared domain, and 1/c is smaller than that gap. (`nn_layers/hyperboloid_core.py` documents
-# the same limit.) So the overflow band is checked against the *time slot*, x0 = sqrt(1/c + ‖x_s‖²)
-# rounded to float32, and the constraint itself is checked at a radius float32 can represent.
-_OVERFLOW_RADII = [5e19, 1e20]  # 1.8e19 is where sum(x_s**2) overflows float32
+# Above spatial radius sqrt(1/(2*c*eps)) -- 3.7e3 at c = 0.3 in float32, 6.7e7 in float64 --
+# NO float of that dtype satisfies -x0² + ‖x_s‖² = -1/c: consecutive floats near x0 are 2·x0²·eps
+# apart in the squared domain, and 1/c is smaller than that gap. (`nn_layers/hyperboloid_core.py`
+# documents the same limit.) So the enormous-radius band is checked against the *time slot*,
+# x0 = sqrt(1/c + ‖x_s‖²), and the constraint itself at a radius the dtype can represent.
+_OVERFLOW_RADII = [5e19, 1e20]  # far past float32's 1.8e19; representable in float64
 _REPRESENTABLE_RADII = [1.0, 10.0, 100.0]
 
 
 @pytest.mark.parametrize("c", CURVATURES)
 @pytest.mark.parametrize("r", _OVERFLOW_RADII)
-def test_hyperboloid_proj_time_slot_survives_the_float32_overflow(c: float, r: float):
-    """``proj`` past float32 spatial radius 1.8e19: ``x0`` finite and correct to float32 rounding.
+def test_hyperboloid_proj_time_slot_is_exact_at_an_enormous_radius(c: float, r: float):
+    """``proj`` at spatial radius 5e19 to 1e20: ``x0 = sqrt(1/c + r²)`` to the dtype's rounding.
 
-    The old ``sqrt(floor_at(1/c + dot(x_s, x_s), MIN_NORM))`` forms the sum of squares, which
-    overflows while ``‖x_s‖`` — and therefore ``x0`` — is a perfectly ordinary float. Measured on
-    the parent: ``x0 = inf`` at both radii, at every curvature.
+    This guards the *algorithm*, not float32's range. The radii are far outside anything a
+    training run reaches; float64 is used so ``1/c + r²`` is representable and the assertion can be
+    an equality against the reference value. What it would catch is a time slot built by rounding
+    ``‖x_s‖`` and re-squaring it, or one that lost the ``1/c`` term.
     """
-    manifold = Hyperboloid(dtype=jnp.float32)
-    x_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(r))
+    manifold = Hyperboloid(dtype=jnp.float64)
+    x_A = jnp.zeros(4, dtype=jnp.float64).at[1].set(jnp.float64(r))
 
     x0 = float(np.asarray(manifold.proj(x_A, c), dtype=np.float64)[0])
-    reference = float(np.float32(np.sqrt(1.0 / c + np.float64(r) ** 2)))
+    reference = float(np.sqrt(1.0 / c + np.float64(r) ** 2))
     assert np.isfinite(x0), f"c={c} r={r}: x0={x0}"
     assert x0 == reference, f"c={c} r={r}: x0={x0:.6e} != float32(sqrt(1/c + r^2))={reference:.6e}"
 
@@ -2116,38 +2138,44 @@ def test_hyperboloid_proj_still_satisfies_the_constraint_in_the_ordinary_band(c:
 
 
 @pytest.mark.parametrize("c", CURVATURES)
-def test_hyperboloid_expmap_0_saturates_to_a_consistent_point_not_an_infinite_time_slot(c: float):
-    """``expmap_0`` of a length-1e19 tangent vector saturates; it must saturate *on the sheet*.
+def test_hyperboloid_expmap_0_past_the_sinh_cap_is_infinite_not_nan(c: float):
+    """``expmap_0`` of a length-1e19 tangent vector: ``x0 = inf``, spatial finite, no NaN.
 
-    A tangent vector that long is past the ``sinh`` clamp, so the result is the clamp's saturation
-    value — that part is expected. What was wrong is that ``proj`` then gave it an **infinite**
-    time slot beside a finite spatial part: measured on the parent, ``[inf, 7.0e37, 0, 0]``. At
-    saturation the on-sheet asymptote is ``x0 = ‖x_s‖`` (the ``1/c`` is 38 orders below), and that
-    is what it returns now.
+    Unlike the two oracles around it this one cannot be restated in float64: ``sinh`` clips its
+    argument at ``0.99·log(finfo.max)`` in *both* dtypes, so the capped spatial value (7.0e37 at
+    ``c = 1``) squared overflows the time slot's ``1/c + sum(x_s**2)`` in float64 as well. The
+    contract is therefore the weaker but real one — the point is loudly out of range rather than
+    quietly saturated, and an ``inf`` stays visible downstream where a NaN would silently poison
+    every parameter it touches.
+
+    A tangent vector this long is 20 orders of magnitude past anything a training run produces;
+    what this guards is that the failure mode stays ``inf``.
     """
     manifold = Hyperboloid(dtype=jnp.float32)
     v_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(1e19))
 
     y64 = np.asarray(manifold.expmap_0(v_A, c), dtype=np.float64)
-    assert np.all(np.isfinite(y64)), f"c={c}: {y64}"
-    spatial = float(np.linalg.norm(y64[1:]))
-    assert spatial > 0.0, f"c={c}: {y64}"
-    assert y64[0] == pytest.approx(spatial, rel=1e-6), f"c={c}: x0={y64[0]:.6e} ||y_s||={spatial:.6e}"
+    assert not np.any(np.isnan(y64)), f"c={c}: {y64}"
+    assert np.isinf(y64[0]) and y64[0] > 0.0, f"c={c}: x0={y64[0]}"
+    assert np.all(np.isfinite(y64[1:])), f"c={c}: {y64}"
+    assert float(np.linalg.norm(y64[1:])) > 0.0, f"c={c}: {y64}"
 
 
 @pytest.mark.parametrize("r", [1e19, 1e20])
 def test_poincare_proj_clamps_a_far_point_to_the_boundary_not_to_the_origin(r: float):
-    """``_proj`` past the float32 overflow radius must land on the ball boundary.
+    """``_proj`` of a point at radius 1e19 to 1e20 must land on the ball boundary, not on the origin.
 
-    With the overflowing norm the clamp is ``x · (max_norm / inf) = 0``: the farthest possible
-    input produced the *origin*, the point that is farthest from where it belongs. Measured on
-    the parent at ``r = 1e20``: ``‖proj(x)‖ = 0.0``.
+    This guards the *clamp*, not the dtype's range, so it runs in float64 where ``sum(x**2)`` is
+    representable at these radii. The failure it gates is a norm that comes back non-finite: the
+    clamp is then ``x · (max_norm / inf) = 0`` and the farthest possible input produces the
+    *origin*, the point that is farthest from where it belongs. (In float32 past coordinate 1.8e19
+    that is exactly what happens, deliberately — see the section comment.)
     """
     c = 1.0
-    x_D = jnp.zeros(4, dtype=jnp.float32).at[0].set(jnp.float32(r))
+    x_D = jnp.zeros(4, dtype=jnp.float64).at[0].set(jnp.float64(r))
     p_D = np.asarray(_proj(x_D, c), dtype=np.float64)
 
-    max_norm = 1.0 / np.sqrt(c) - float(np.finfo(np.float32).eps) ** 0.75
+    max_norm = 1.0 / np.sqrt(c) - float(np.finfo(np.float64).eps) ** 0.75
     assert float(np.linalg.norm(p_D)) == pytest.approx(max_norm, rel=1e-5), f"r={r}"
 
 
