@@ -28,8 +28,6 @@ from flax import nnx
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
-from hyperbolix.utils.precision import gemm_precision
-
 """
 Dimension key:
   B: batch size
@@ -82,9 +80,9 @@ class HyperPPFeatureScaling(nnx.Module):
                 msg = f"alpha must be in (0, 1), got {alpha}"
                 raise ValueError(msg)
             self._atanh_alpha = math.atanh(alpha)
-            # Training-path GEMM: follows the user's JAX matmul precision. nnx.Linear captures
-            # `precision` at construction, so an override must be set before this runs.
-            self.xi_theta = nnx.Linear(dim, 1, param_dtype=param_dtype, precision=gemm_precision(), rngs=rngs)
+            # Layer weight GEMM: no `precision` kwarg, so it follows JAX's own
+            # `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.
+            self.xi_theta = nnx.Linear(dim, 1, param_dtype=param_dtype, rngs=rngs)
         else:
             self._atanh_alpha = None
             self.xi_theta = None

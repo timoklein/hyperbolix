@@ -15,7 +15,6 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-import hyperbolix.utils.precision
 from hyperbolix.manifolds import hyperboloid as hyperboloid_module
 from hyperbolix.manifolds import poincare as poincare_module
 from hyperbolix.manifolds import proper_velocity as proper_velocity_module
@@ -23,7 +22,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
 from hyperbolix.nn_layers.hyperboloid_linear import FGGLinear
-from hyperbolix.utils.precision import MATMUL_PRECISION, gemm_precision
+from hyperbolix.utils.precision import MATMUL_PRECISION
 
 
 class TestPoincareClassConstants:
@@ -186,23 +185,17 @@ class TestMLRFunctions:
 
 
 # ---------------------------------------------------------------------------------------
-# GEMM precision knob (hyperbolix.utils.precision)
+# The precision split (hyperbolix.utils.precision)
 #
-# The geometry dots stay pinned at HIGHEST; the training-path GEMMs follow the user's JAX
-# precision setting unless GEMM_PRECISION overrides it. On CPU, DEFAULT and HIGHEST are the
+# The geometry dots are pinned at HIGHEST; the layer weight GEMMs pass no `precision` kwarg
+# and follow JAX's own `jax_default_matmul_precision`. On CPU, DEFAULT and HIGHEST are the
 # same arithmetic (there is no TF32 path), so the only way to observe the setting here is the
 # lowered StableHLO — which is what the lowering tests below read.
 # ---------------------------------------------------------------------------------------
 
 
-def test_gemm_precision_defaults_to_the_jax_default():
-    """The shipped default is `None`: JAX's own matmul precision governs the layer GEMMs."""
-    assert hyperbolix.utils.precision.GEMM_PRECISION is None
-    assert gemm_precision() is None
-
-
 def test_matmul_precision_stays_pinned_at_highest():
-    """The manifold vector dots and decomposition/ contractions are not user-configurable."""
+    """The geometry dots are not user-configurable."""
     assert MATMUL_PRECISION is jax.lax.Precision.HIGHEST
 
 
@@ -210,21 +203,23 @@ def _lower_fgg_linear_forward():
     """Lower a jitted float32 FGGLinear forward and return the StableHLO text.
 
     The layer is constructed inside this helper on purpose: every site captures the precision
-    when it is traced (and `nnx.Linear` already at construction), so a GEMM_PRECISION override
-    only takes effect for a model built after it is set.
+    when it is traced (and `nnx.Linear` already at construction), so the surrounding
+    `jax.default_matmul_precision` context has to be entered before the model is built.
     """
     layer = FGGLinear(9, 5, rngs=nnx.Rngs(0), param_dtype=jnp.float32)
     x_BAi = jnp.zeros((4, 9), dtype=jnp.float32).at[:, 0].set(1.0)  # origin, curvature 1
     return jax.jit(lambda a: layer(a, 1.0)).lower(x_BAi).as_text()
 
 
-def test_default_lowering_leaves_the_gemm_at_the_jax_default_precision():
+def test_default_lowering_leaves_the_layer_gemm_at_the_jax_default_precision():
+    """`FGGLinear`'s `x @ V` carries no `precision` kwarg, so it lowers at DEFAULT."""
     text = _lower_fgg_linear_forward()
     assert "precision = [DEFAULT, DEFAULT]" in text
     assert "HIGHEST" not in text
 
 
-def test_gemm_precision_override_reaches_the_lowered_hlo(monkeypatch):
-    monkeypatch.setattr(hyperbolix.utils.precision, "GEMM_PRECISION", jax.lax.Precision.HIGHEST)
-    text = _lower_fgg_linear_forward()
+def test_jax_default_matmul_precision_context_reaches_the_layer_gemm():
+    """`jax.default_matmul_precision("highest")` is the supported way to force full float32."""
+    with jax.default_matmul_precision("highest"):
+        text = _lower_fgg_linear_forward()
     assert "precision = [HIGHEST, HIGHEST]" in text

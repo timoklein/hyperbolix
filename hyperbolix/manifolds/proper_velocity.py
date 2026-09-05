@@ -52,7 +52,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt, sinh, smooth_clamp
-from ..utils.precision import MATMUL_PRECISION, gemm_precision
+from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from ._gyrovector_core import _gyration
 from .protocol import ScalarCurvature
@@ -507,9 +507,9 @@ def _compute_mlr(
     # measurement as `_beta_inv`; see there.
     beta_inv_x_B1 = safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))[:, None]  # (B, 1)
 
-    # Batched training-path GEMM: follows the user's JAX matmul precision (set
-    # hyperbolix.utils.precision.GEMM_PRECISION = HIGHEST to force it, as 1.2.0 did).
-    xz_BP = jnp.einsum("bi,oi->bo", x, z, precision=gemm_precision())  # (B, P)
+    # Pinned HIGHEST: the MLR logits are a decision quantity, and this dot enters the asinh
+    # argument as a difference of a radial and an angular term (see hyperbolix.utils.precision).
+    xz_BP = jnp.einsum("bi,oi->bo", x, z, precision=MATMUL_PRECISION)  # (B, P)
 
     # Eq. 19 asinh argument, in (B, P).
     term_A_BP = cosh(sr_1P) * (sqrt_c / z_norm_P1.T) * xz_BP

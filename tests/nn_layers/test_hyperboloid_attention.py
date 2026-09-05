@@ -217,15 +217,22 @@ def test_attn_output_shape_and_jit(cls):
     rngs = nnx.Rngs(0)
     model = _make_attn(cls, A_in, D_out, num_heads=1, rngs=rngs)
     x = _make_hyp_points(jax.random.PRNGKey(10), B, N, A_in, c=1.0)
-    y = model(x, c_in=1.0, c_attn=1.0, c_out=1.0)
-    assert y.shape == (B, N, D_out + 1)
-    assert jnp.all(jnp.isfinite(y))
 
-    @nnx.jit
-    def forward(m, inp):
-        return m(inp, c_in=1.0, c_attn=1.0, c_out=1.0)
+    # Full float32 for both passes: the layer weight GEMMs follow JAX's matmul precision, and
+    # TF32's run-to-run rounding between the eager and jitted lowerings exceeds the 1e-5
+    # tolerance below on an Ampere/Hopper card. The values are not wrong; this test is about
+    # eager-vs-jit agreement of the algebra, not about TF32 reproducibility. The context manager
+    # is jit-cache aware, so it covers the traced call too.
+    with jax.default_matmul_precision("highest"):
+        y = model(x, c_in=1.0, c_attn=1.0, c_out=1.0)
+        assert y.shape == (B, N, D_out + 1)
+        assert jnp.all(jnp.isfinite(y))
 
-    y_jit = forward(model, x)
+        @nnx.jit
+        def forward(m, inp):
+            return m(inp, c_in=1.0, c_attn=1.0, c_out=1.0)
+
+        y_jit = forward(model, x)
     # XLA fusion reorders f32 arithmetic by ~1e-7 on O(1) values; 1e-12 is only valid in f64.
     tol = 1e-5 if y_jit.dtype == jnp.float32 else 1e-12
     assert jnp.allclose(y_jit, y, rtol=tol, atol=tol)
@@ -670,8 +677,13 @@ def test_causal_first_token_self_only(cls):
     x_long = _make_hyp_points(jax.random.PRNGKey(23), B, 8, A_in, c)
     x_long = x_long.at[:, 0, :].set(x_short[:, 0, :])
 
-    y_short = model(x_short, c_in=c, c_attn=c, c_out=c, causal=True)  # (B, 1, A)
-    y_long = model(x_long, c_in=c, c_attn=c, c_out=c, causal=True)  # (B, 8, A)
+    # Full float32 for both passes: the layer weight GEMMs follow JAX's matmul precision, and
+    # TF32 rounds the N=1 and N=8 lowerings of the same first token differently by more than the
+    # 1e-5 tolerance below. The values are not wrong; this test is about the causal mask, not
+    # about TF32 reproducibility across shapes.
+    with jax.default_matmul_precision("highest"):
+        y_short = model(x_short, c_in=c, c_attn=c, c_out=c, causal=True)  # (B, 1, A)
+        y_long = model(x_long, c_in=c, c_attn=c, c_out=c, causal=True)  # (B, 8, A)
 
     assert jnp.allclose(y_short[:, 0, :], y_long[:, 0, :], atol=1e-5), (
         "First token output differs between N=1 and N=8 in causal mode"

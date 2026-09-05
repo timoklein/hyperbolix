@@ -69,7 +69,7 @@ import jax.scipy.special
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, smooth_clamp, tanh
-from ..utils.precision import MATMUL_PRECISION, gemm_precision
+from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
@@ -709,9 +709,10 @@ def _compute_mlr_pp(
     # transcription bug the same author fixed in hypll. Do not "restore" it.
     lam_B1 = _conformal_factor_batch(x, c)  # (B, 1)
 
-    # Batched training-path GEMM: follows the user's JAX matmul precision (set
-    # hyperbolix.utils.precision.GEMM_PRECISION = HIGHEST to force it, as 1.2.0 did).
-    z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1, precision=gemm_precision())  # (B, P)
+    # Pinned HIGHEST: the MLR logits are a decision quantity, and this dot enters the asinh
+    # argument as a difference of a radial and an angular term. Measured f32-vs-f64 relative
+    # error of compute_mlr_pp on an A100: 3.8e-5 … 1.4e-4 under TF32, 6.0e-8 … 2.2e-7 here.
+    z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1, precision=MATMUL_PRECISION)  # (B, P)
     asinh_arg_BP = sqrt_c * lam_B1 * z_unitx_BP * cosh(sqrt_c2r_1P) - (lam_B1 - 1) * sinh(sqrt_c2r_1P)  # (B, P)
 
     eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps

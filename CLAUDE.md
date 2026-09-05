@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install
 uv sync --locked --dev
 
-# Run all tests (4,056 items across 960 test functions)
+# Run all tests (4,055 items across 959 test functions)
 uv run pytest
 
 # Run a single test file

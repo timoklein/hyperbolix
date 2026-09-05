@@ -38,7 +38,7 @@ from hyperbolix.decomposition.frechet import frechet_mean  # noqa: E402
 from hyperbolix.manifolds import Hyperboloid, Poincare  # noqa: E402
 from hyperbolix.manifolds.isometry_mappings import poincare_to_hyperboloid  # noqa: E402
 from hyperbolix.nn_layers.hyperboloid_core import (  # noqa: E402
-    gemm_precision,
+    MATMUL_PRECISION,
     lorentz_midpoint,
     lorentz_residual,
 )
@@ -59,13 +59,13 @@ def _naive_lorentz_residual(x, y, w_y, c, eps=1e-7):
 def _naive_lorentz_midpoint(points, weights, c, eps=1e-7):
     """Old ``lorentz_midpoint`` body: ``<h,h>_L`` as the literal ``-h_0^2 + ||h_s||^2``.
 
-    The weighted sum goes through ``gemm_precision()``, exactly as the library's does, so that
-    both run in the same arithmetic whatever the user's precision setting is. Pinning either side
-    to a different precision would make ``library vs naive`` measure that difference (TF32 against
-    float32 is three digits) instead of the difference between the two algebraic forms, which is
-    what the comparison exists to test: below the cancellation regime the two forms agree.
+    The weighted sum carries ``MATMUL_PRECISION``, exactly as the library's does, so that both
+    run in the same arithmetic. Pinning either side to a different precision would make
+    ``library vs naive`` measure that difference (TF32 against float32 is three digits) instead
+    of the difference between the two algebraic forms, which is what the comparison exists to
+    test: below the cancellation regime the two forms agree.
     """
-    h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=gemm_precision())
+    h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
     mink_1 = -(h_NA[..., 0:1] ** 2) + jnp.sum(h_NA[..., 1:] ** 2, axis=-1, keepdims=True)
     denom_1 = jnp.sqrt(jnp.maximum(c * jnp.abs(mink_1), eps))
     return h_NA / denom_1

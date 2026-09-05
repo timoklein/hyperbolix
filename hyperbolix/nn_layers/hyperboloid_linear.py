@@ -30,7 +30,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, floor_at, safe_hypot, safe_norm, safe_sqrt
 
 from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import build_spacelike_V, gemm_precision, htc, sinh_lift_to_hyperboloid
+from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid
 
 
 def _fhcnn_forward(
@@ -66,9 +66,9 @@ def _fhcnn_forward(
     kernel_OI = kernel_OI.astype(x_BI.dtype)
     bias_1O = bias_1O.astype(x_BI.dtype)
     scale_val = jnp.asarray(scale_val, dtype=x_BI.dtype)
-    # Training-path GEMM: follows the user's JAX matmul precision (GEMM_PRECISION overrides;
-    # see hyperbolix.utils.precision).
-    x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI, precision=gemm_precision()) + bias_1O
+    # Layer weight GEMM: no `precision` kwarg, so it follows JAX's own
+    # `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.
+    x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O
 
     # Split into time and space: x0 is first coord, x_rem is spatial
     x0_B1 = x_BO[:, 0:1]  # (B, 1) -- time coordinate
@@ -154,8 +154,9 @@ def _fhnn_forward(
     kernel_OI = kernel_OI.astype(x_BI.dtype)
     bias_1O = bias_1O.astype(x_BI.dtype)
     scale_val = jnp.asarray(scale_val, dtype=x_BI.dtype)
-    # Training-path GEMM: follows the user's JAX matmul precision (GEMM_PRECISION overrides).
-    z_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI, precision=gemm_precision()) + bias_1O  # (B, O)
+    # Layer weight GEMM: no `precision` kwarg, so it follows JAX's own
+    # `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.
+    z_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O  # (B, O)
 
     # Split into time logit and spatial components
     z0_B1 = z_BO[:, 0:1]  # (B, 1)
@@ -367,11 +368,12 @@ def _fgg_linear_forward(
     V_AiO = V_AiO.astype(x_BAi.dtype)
 
     # Minkowski inner products via matmul (metric in V). The Minkowski metric is absorbed into
-    # V, so the -x0*V0 + <x_s, V_s> cancellation happens *inside* this single accumulation:
-    # TF32 inputs leave ~1e-3 of the pre-cancellation magnitude in the result. It is still a
-    # training-path GEMM, so it follows the user's JAX matmul precision — set
-    # hyperbolix.utils.precision.GEMM_PRECISION = HIGHEST before the first trace to close that gap.
-    z_BO = jnp.matmul(x_BAi, V_AiO, precision=gemm_precision())  # (B, O)
+    # V, so the -x0*V0 + <x_s, V_s> cancellation happens *inside* this single accumulation, and
+    # TF32 inputs leave ~1e-3 of the pre-cancellation magnitude in the result. This is a layer
+    # weight GEMM and takes no `precision` kwarg, so it follows JAX's own
+    # `jax_default_matmul_precision`; a deep FGG stack is a good reason to set that to
+    # "highest" (see hyperbolix.utils.precision).
+    z_BO = jnp.matmul(x_BAi, V_AiO)  # (B, O)
 
     # Apply Euclidean activation (Lorentzian wrapping implicit via cancellation)
     if activation is not None:
@@ -985,9 +987,9 @@ class HTCLinear(nnx.Module):
         def linear_fn(z):
             # Cast params to the working dtype so float64 weights (from global
             # jax_enable_x64) don't promote a float32 computation to float64.
-            # Training-path GEMM: follows the user's JAX matmul precision (GEMM_PRECISION
-            # overrides; see hyperbolix.utils.precision).
-            out = jnp.matmul(z, self.kernel[...].astype(z.dtype), precision=gemm_precision())
+            # Layer weight GEMM: no `precision` kwarg, so it follows JAX's own
+            # `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.
+            out = jnp.matmul(z, self.kernel[...].astype(z.dtype))
             if self.bias is not None:
                 out = out + self.bias[...].astype(z.dtype)
             return out

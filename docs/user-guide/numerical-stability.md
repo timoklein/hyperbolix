@@ -69,6 +69,44 @@ dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
     # If > 7, create Poincare(dtype=jnp.float64) instead
     ```
 
+### TF32 on Ampere and Hopper GPUs
+
+The dtype is not the only thing setting your float32 accuracy on a modern NVIDIA card.
+XLA:GPU runs float32 matmuls in **TF32** by default, whose 10-bit mantissa carries ~1e-3
+relative error against float32's ~1e-7 — three of your seven significant digits, silently.
+
+hyperbolix splits its float32 dot products in two:
+
+- **Geometry is pinned** to `jax.lax.Precision.HIGHEST` and is not configurable: the manifold
+  vector dots, `lorentz_midpoint` and `poincare_weighted_midpoint`, the conv patch extraction,
+  the attention score and aggregation einsums and the spatial residual projection added to
+  that aggregate, and the MLR heads. These are the cancellations the geometry is built on, and they are not
+  where the throughput is.
+- **Layer weight GEMMs follow JAX** — `HTCLinear` (the attention Q/K/V projections included),
+  `FGGLinear`/`FGGConv2D`, the FHCNN/FHNN and PLFC linears, the Poincaré and proper-velocity
+  linear and conv layers, the VQ codebook matmul.
+  On an Ampere or Hopper card these run in TF32 unless you say otherwise.
+
+To run everything in full float32, set JAX's own knob:
+
+```python
+jax.config.update("jax_default_matmul_precision", "highest")
+
+# or scoped to a block (both spellings are jit-cache aware — changing them re-traces):
+with jax.default_matmul_precision("highest"):
+    logits = model(x)
+```
+
+A deep, fully hyperbolic stack is a good reason to do so: a TF32 error introduced in an early
+layer's weight GEMM is carried by every layer after it. Measured on an A100 (jax 0.9.1,
+ambient dim 33, batch 64, float32 against a float64 reference), the relative error of
+`FGGLinear` is **2.6e-4** at the TF32 default against **6.8e-8** under `HIGHEST`, and
+`FGGLorentzMLR` **1.3e-4 … 3.6e-4** against **3.6e-8 … 9.6e-8**. The cost is real but modest:
+`HIGHEST` replaces one TF32 pass with a three-pass float32 emulation, measured **+5.5 %** on a
+jitted hyperbolic attention forward.
+
+`HIGHEST` is a no-op on CPU (there is no TF32 path) and for float64 anywhere.
+
 ### The Hyperboloid's Two-Point Cancellation Failure Mode
 
 The distance-from-origin table above governs single-point operations (`dist_0`, `logmap_0`,

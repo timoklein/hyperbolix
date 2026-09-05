@@ -29,7 +29,7 @@ from jaxtyping import Array, Float
 
 from hyperbolix.utils.math_utils import safe_hypot_norm
 
-from .hyperboloid_core import gemm_precision, lorentz_midpoint, spatial_to_hyperboloid
+from .hyperboloid_core import MATMUL_PRECISION, lorentz_midpoint, spatial_to_hyperboloid
 from .hyperboloid_linear import HTCLinear
 
 # ---------------------------------------------------------------------------
@@ -266,11 +266,11 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         self.power = power
         self.temperature = nnx.Param(jnp.array(1.0, dtype=param_dtype))
         # Spatial residual projection ψ: D → D (shared across heads). Its output is added to the
-        # attention aggregate, so it follows the same GEMM precision the aggregate does — the
-        # user's JAX matmul setting, or GEMM_PRECISION if they overrode it. nnx.Linear captures
-        # `precision` here, at construction, so the override must be in place before this runs.
+        # attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at
+        # the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even
+        # when every attention einsum is already pinned (see hyperbolix.utils.precision).
         self.residual_proj = nnx.Linear(
-            out_features, out_features, param_dtype=param_dtype, precision=gemm_precision(), rngs=rngs
+            out_features, out_features, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs
         )
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
@@ -304,9 +304,10 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
             def scan_step(carry, inputs):
                 S_BHDE, z_BHD = carry
                 k_BHD, v_BHD = inputs
-                # Training-path GEMM: follows the user's JAX matmul precision (GEMM_PRECISION
-                # overrides; see hyperbolix.utils.precision).
-                S_BHDE = S_BHDE + jnp.einsum("bhd,bhe->bhde", k_BHD, v_BHD, precision=gemm_precision())
+                # Attention geometry, pinned HIGHEST: this outer product accumulates across the
+                # whole prefix, so a TF32 rounding of each term compounds along the scan and the
+                # numerator/denominator ratio below inherits it (see hyperbolix.utils.precision).
+                S_BHDE = S_BHDE + jnp.einsum("bhd,bhe->bhde", k_BHD, v_BHD, precision=MATMUL_PRECISION)
                 z_BHD = z_BHD + k_BHD
                 return (S_BHDE, z_BHD), (S_BHDE, z_BHD)
 
@@ -314,24 +315,26 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
             init_z = jnp.zeros((B_size, H, D), dtype=focused_key_BNHD.dtype)
             _, (S_cum_NBHDE, z_cum_NBHD) = jax.lax.scan(scan_step, (init_S, init_z), (fk_NBHD, fv_NBHD))
 
-            # output_n = Q_n @ S_n / (Q_n @ z_n + eps); both are training-path GEMMs and follow
-            # the user's JAX matmul precision (GEMM_PRECISION overrides).
-            num_NBHD = jnp.einsum("nbhd,nbhde->nbhe", fq_NBHD, S_cum_NBHDE, precision=gemm_precision())  # (N, B, H, D)
-            den_NBH1 = jnp.einsum("nbhd,nbhd->nbh", fq_NBHD, z_cum_NBHD, precision=gemm_precision())[..., None]  # (N, B, H, 1)
+            # output_n = Q_n @ S_n / (Q_n @ z_n + eps); attention geometry, pinned HIGHEST — the
+            # causal-mask properties the tests assert (no future leakage, first token attends to
+            # itself alone) are exact identities that TF32 breaks.
+            num_NBHD = jnp.einsum("nbhd,nbhde->nbhe", fq_NBHD, S_cum_NBHDE, precision=MATMUL_PRECISION)  # (N, B, H, D)
+            den_NBH1 = jnp.einsum("nbhd,nbhd->nbh", fq_NBHD, z_cum_NBHD, precision=MATMUL_PRECISION)[..., None]  # (N, B, H, 1)
             output_spatial_BNHD = jnp.transpose(num_NBHD / (den_NBH1 + eps), (1, 0, 2, 3))  # (B, N, H, D)
         else:
             # 2. Bidirectional linear attention via kernel trick: φ(Q)(φ(K)^T V) / φ(Q)(φ(K)^T 1)
-            # All three are training-path GEMMs and follow the user's JAX matmul precision
-            # (GEMM_PRECISION overrides; see hyperbolix.utils.precision).
+            # All three are attention geometry, pinned HIGHEST: the kernel trick replaces an
+            # explicit normalized attention matrix with a numerator/denominator ratio, so a TF32
+            # error on either sum shows up undamped in the output (see hyperbolix.utils.precision).
             key_value_product_BHDE = jnp.einsum(
-                "bnhd,bnhe->bhde", focused_key_BNHD, value_spatial_BNHD, precision=gemm_precision()
+                "bnhd,bnhe->bhde", focused_key_BNHD, value_spatial_BNHD, precision=MATMUL_PRECISION
             )  # (B, H, D, D)
             numerator_BNHD = jnp.einsum(
-                "bnhd,bhde->bnhe", focused_query_BNHD, key_value_product_BHDE, precision=gemm_precision()
+                "bnhd,bhde->bnhe", focused_query_BNHD, key_value_product_BHDE, precision=MATMUL_PRECISION
             )  # (B, N, H, D)
 
             key_sum_BHD = focused_key_BNHD.sum(axis=1)  # (B, H, D)
-            denominator_BNH1 = jnp.einsum("bnhd,bhd->bnh", focused_query_BNHD, key_sum_BHD, precision=gemm_precision())[
+            denominator_BNH1 = jnp.einsum("bnhd,bhd->bnh", focused_query_BNHD, key_sum_BHD, precision=MATMUL_PRECISION)[
                 ..., None
             ]  # (B, N, H, 1)
 
@@ -401,11 +404,11 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
             rngs=rngs,
         )
         # Spatial residual projection ψ: D → D (shared across heads). Its output is added to the
-        # attention aggregate, so it follows the same GEMM precision the aggregate does — the
-        # user's JAX matmul setting, or GEMM_PRECISION if they overrode it. nnx.Linear captures
-        # `precision` here, at construction, so the override must be in place before this runs.
+        # attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at
+        # the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even
+        # when every attention einsum is already pinned (see hyperbolix.utils.precision).
         self.residual_proj = nnx.Linear(
-            out_features, out_features, param_dtype=param_dtype, precision=gemm_precision(), rngs=rngs
+            out_features, out_features, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs
         )
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
@@ -418,10 +421,11 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         head_dim = query_spatial_BNHD.shape[-1]
 
         # Scaled dot-product attention: softmax(Q_s K_s^T / √D) V_s
-        # Both einsums are training-path GEMMs and follow the user's JAX matmul precision
-        # (GEMM_PRECISION overrides; see hyperbolix.utils.precision).
+        # Both einsums are attention geometry, pinned HIGHEST: the scores go through a softmax,
+        # which turns a TF32 ~1e-3 absolute score error into a visibly wrong weight distribution,
+        # and the masked-position identities the causal tests assert are exact.
         scores_BNHM = jnp.einsum(
-            "bnhd,bmhd->bnhm", query_spatial_BNHD, key_spatial_BNHD, precision=gemm_precision()
+            "bnhd,bmhd->bnhm", query_spatial_BNHD, key_spatial_BNHD, precision=MATMUL_PRECISION
         ) / jnp.sqrt(float(head_dim))
         if causal:
             N = scores_BNHM.shape[1]
@@ -429,7 +433,7 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
             scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, -1e9)
         attn_weights_BNHM = jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
         output_spatial_BNHD = jnp.einsum(
-            "bnhm,bmhd->bnhd", attn_weights_BNHM, value_spatial_BNHD, precision=gemm_precision()
+            "bnhm,bmhd->bnhd", attn_weights_BNHM, value_spatial_BNHD, precision=MATMUL_PRECISION
         )  # (B, N, H, D)
 
         # Spatial residual
@@ -503,13 +507,12 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
 
         # 1. Pairwise Lorentzian similarity: <Q,K>_L = -Q_0 K_0 + Q_s · K_s
         # This is the exact cancellation `_polar_frame` was written to avoid, with both halves
-        # produced by a matmul — under the TF32 default the subtraction amplifies a ~1e-3 relative
-        # input error instead of float32's ~1e-7. Both dots are still training-path GEMMs, so they
-        # follow the user's JAX matmul precision; this is the site that most rewards setting
-        # GEMM_PRECISION = HIGHEST (see hyperbolix.utils.precision).
+        # produced by a matmul — under TF32 the subtraction would amplify a ~1e-3 relative input
+        # error instead of float32's ~1e-7. Both dots are therefore pinned HIGHEST: this is the
+        # site that rewards it most (see hyperbolix.utils.precision).
         lorentz_inner_BNHM = -jnp.einsum(
-            "bnha,bmha->bnhm", query_BNHA[..., 0:1], key_BNHA[..., 0:1], precision=gemm_precision()
-        ) + jnp.einsum("bnhd,bmhd->bnhm", query_BNHA[..., 1:], key_BNHA[..., 1:], precision=gemm_precision())  # (B, N, H, M)
+            "bnha,bmha->bnhm", query_BNHA[..., 0:1], key_BNHA[..., 0:1], precision=MATMUL_PRECISION
+        ) + jnp.einsum("bnhd,bmhd->bnhm", query_BNHA[..., 1:], key_BNHA[..., 1:], precision=MATMUL_PRECISION)  # (B, N, H, M)
         # Cast scalar params to compute dtype: storage (param_dtype) and compute
         # (input/manifold dtype) are decoupled, so the params must not drag the
         # scores to their storage dtype.
