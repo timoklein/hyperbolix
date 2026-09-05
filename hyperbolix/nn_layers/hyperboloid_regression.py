@@ -217,10 +217,10 @@ class FGGLorentzMLR(nnx.Module):
         # 2. Minkowski inner products, pinned HIGHEST: the metric is absorbed into V, so the
         # Lorentz cancellation happens inside one accumulation, and this is a decision quantity
         # (the MLR logits) rather than a hidden activation — TF32 would leave ~1e-3 of the
-        # pre-cancellation magnitude in the logit. The cost of this pin on its own was not
-        # isolated; with every dot in the head at HIGHEST against every dot at TF32 the head's
-        # forward+backward at B=65536, D=512 costs 1.3x-2.2x on an H100 (five rounds, the two
-        # statistics disagree), an upper bound on this line's share.
+        # pre-cancellation magnitude in the logit. Measured on the sibling HypRegressionHyperboloid
+        # head (the same pinned x @ V shape): its forward alone at B=1e7, 10 classes on an H100 is
+        # 2.6x (D=128) / 2.0x (D=32) of a TF32 head, and 1.05x on a whole training step. This
+        # layer's own share was not measured.
         mink_BK = jnp.matmul(x_BAi, V_AiK, precision=MATMUL_PRECISION)  # (B, K)
 
         # 3. Signed scaled distances (matching reference fc_mlr: no norm scaling)
