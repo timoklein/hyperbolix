@@ -504,10 +504,13 @@ dist_precise = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ### The Round-Trip Ceiling {#poincare-roundtrip-ceiling}
 
 `proj` keeps points inside $1/\sqrt{c}$ by a margin of `eps**0.75`
-(`_gyrovector_core._get_max_norm_eps`), which caps the largest geodesic radius the ball can
-represent at $\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$. Past that radius `expmap_0`
+(`_gyrovector_core._get_max_norm_eps`), which caps the largest tangent vector `expmap_0` can
+represent at $\|v\| = \mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$ — a geodesic radius of
+$d_0 = 2\,\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$, i.e. $12.65/\sqrt{c}$ in float32 and
+$27.7/\sqrt{c}$ in float64 (the factor 2 is the Poincaré metric's). Past that `expmap_0`
 saturates and `logmap_0(expmap_0(v))` hands back the ceiling instead of `v`. Measured ceilings
-(median returned radius on a round trip, in units of $1/\sqrt{c}$):
+(median returned $\|v\|$ on a round trip, in units of $1/\sqrt{c}$; double them for the geodesic
+radius):
 
 | library | float32 | float64 | boundary margin |
 | --- | --- | --- | --- |
