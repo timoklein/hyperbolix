@@ -206,12 +206,13 @@ reduction count. That is the whole list:
 |---|---|
 | `Hyperboloid` | `proj`, `proj_batch`, `dist_0` (both version slots) |
 | `Poincare` / `Stereographic` | `proj`, `proj_batch` (the shared gyrovector core), and `Poincare.expmap` |
-| Layers | `spatial_to_hyperboloid` (so `HTCLinear`), the FHCNN and FGG linear forwards, the linear-attention `focus_transform` |
+| Layers | `spatial_to_hyperboloid` (so `HTCLinear`), the FHCNN and FGG linear forwards |
 
 Every other per-sample norm keeps the max-scaled two-pass form, which is full-range safe:
 hyperboloid `logmap_0` (which measured *faster* in 1.2.0), the pairwise `dist`/`logmap` polar
 frame, hyperboloid and Poincaré `tangent_norm`, `Poincare.expmap_0` (no measured change either
-way), the FHNN linear forward, every `ProperVelocity` operation and the proper-velocity isometry
+way), the FHNN linear forward, the linear-attention `focus_transform` (converting it measured no
+speedup of its own), every `ProperVelocity` operation and the proper-velocity isometry
 maps, the Poincaré metric-tensor distances, the rest of `Stereographic`, `Euclidean` and
 `ProductManifold`, the wrapped-normal `log_prob`, and every weight norm. Where nothing was
 measured slower there is no cost to trade the full-range guarantee against.
@@ -237,7 +238,7 @@ argued — and it is **not** uniform:
 | `Hyperboloid.proj`, `proj_batch` | $x_0 = \infty$, spatial part unchanged, no NaN |
 | `Hyperboloid.dist_0` (both version slots) | $\infty$ |
 | `spatial_to_hyperboloid` (`HTCLinear`), FHCNN linear forward | $x_0 = \infty$, no NaN |
-| FGG linear forward, linear-attention `focus_transform` | NaN throughout the output |
+| FGG linear forward | NaN throughout the output |
 | Poincaré and $\kappa$-stereographic `proj` (the boundary clamp) | the **origin** — a finite point, with a finite (exactly zero) gradient |
 | `Poincare.expmap` | the **base point** — a finite point (the origin, when the base is the origin) |
 | everything on the two-pass form | unchanged from 1.2.0 |
