@@ -54,6 +54,7 @@ Use version_idx as static argument for JIT (static_argnames=['version_idx']).
 
 from typing import NamedTuple
 
+import jax
 import jax.lax as lax
 import jax.numpy as jnp
 from jax.scipy.special import digamma
@@ -145,6 +146,50 @@ def _norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
     return safe_sqrt(_sqnorm(v))
 
 
+@jax.custom_jvp
+def _time_slot(x_spatial: Float[Array, "... n"], inv_c: Float[Array, "..."]) -> Float[Array, "..."]:
+    """``x₀ = sqrt(1/c + ‖x_s‖²)``: the hyperboloid time coordinate, in one reduction.
+
+    The value is exactly ``jnp.sqrt(inv_c + _sqnorm(x_spatial))`` — see :func:`_proj` for why the
+    constant goes *under* the ``sqrt``, why the ``sqrt`` needs no zero-guard, and what happens past
+    float32 coordinate 1.8e19. The custom derivative below changes no forward bit.
+
+    The rule exists for the backward's fusion shape, not for its arithmetic: reverse-mode AD already
+    derives ``∂x₀/∂x_s = x_s/x₀`` and ``∂x₀/∂(1/c) = 1/(2x₀)``, which is what this rule states. What
+    it adds is the ``optimization_barrier`` on the per-row factor ``1/x₀``. Without it XLA:GPU emits
+    the backward's reduction and the broadcast that consumes it as a single Triton block-level
+    fusion whose output is the full ``(B, n)`` cotangent; the trailing ``pad`` that re-embeds the
+    spatial cotangent into the ambient slot cannot join a Triton fusion and is left as a standalone
+    full-tensor copy — one extra read and one extra write of the whole batch, and in ``expmap_0``
+    the ``sinh``/``cosh`` chain gets recomputed inside each such fusion as well. Materialising
+    ``1/x₀`` as a ``(B,)`` buffer puts the reduction back in a plain reduce and lets the ``pad``
+    fuse into the elementwise kernel that already reads ``x``. See
+    ``logs/2026-09-05_proj_backward/`` for the HLO the two spellings produce.
+
+    Args:
+        x_spatial: Spatial part ``x_s``, reduced over the last axis
+        inv_c: ``1/c``, broadcast against ``x_spatial.shape[:-1]``
+
+    Returns:
+        ``sqrt(1/c + ‖x_s‖²)``, shape ``x_spatial.shape[:-1]``
+    """
+    return jnp.sqrt(inv_c + _sqnorm(x_spatial))
+
+
+@_time_slot.defjvp
+def _time_slot_jvp(primals, tangents):
+    """``dx₀ = (⟨x_s, dx_s⟩ + d(1/c)/2) · (1/x₀)``, reusing the forward's ``x₀`` as the residual."""
+    x_spatial, inv_c = primals
+    dx_spatial, dinv_c = tangents
+    x0 = jnp.sqrt(inv_c + _sqnorm(x_spatial))
+    # Barrier on the reciprocal, not on `x0`: it has to sit at the *end* of the per-row scalar
+    # chain, or the divide it guards lands in a kernel of its own instead of fusing with the
+    # cotangent multiply. `1/x0` then a multiply is also the arithmetic XLA emits for `.../x0`.
+    inv_x0 = lax.optimization_barrier(jnp.asarray(1.0, dtype=x0.dtype) / x0)
+    dx0 = (jnp.sum(x_spatial * dx_spatial, axis=-1) + 0.5 * dinv_c) * inv_x0
+    return x0, dx0
+
+
 def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Project point onto hyperboloid by adjusting temporal component.
 
@@ -171,10 +216,16 @@ def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "di
         than a quietly saturated time slot, which is the library's convention for keeping an
         out-of-range point visibly degenerate. No ``MIN_NORM`` floor: it was inactive on the finite
         domain (``1/c > MIN_NORM`` unless ``c > 1e15``) and clamping ``inf`` is not wanted.
+
+        The reduction is spelled through :func:`_time_slot`, which carries a ``custom_jvp``. It
+        states the same derivative reverse-mode AD would derive and leaves every forward bit
+        unchanged; what it adds is a fusion barrier that keeps the backward's reduction out of the
+        full-width cotangent kernel, so the ``concatenate``'s transposed ``pad`` still fuses with
+        the multiply instead of becoming a standalone copy of the whole batch. See there.
     """
     x_rest = x[1:]
     inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
-    x0_new = jnp.sqrt(inv_c + _sqnorm(x_rest))
+    x0_new = _time_slot(x_rest, inv_c)
     return jnp.concatenate([x0_new[None], x_rest])
 
 
@@ -193,11 +244,12 @@ def _proj_batch(x: Float[Array, "... dim_plus_1"], c: ScalarCurvature) -> Float[
     Notes:
         Same one-reduction ``sqrt(1/c + sum(x_s**2))`` reconstruction as :func:`_proj`, over the
         last axis; see there for why the ``sqrt`` needs no zero-guard, why the ``MIN_NORM`` floor
-        was inactive, and what happens past float32 coordinate 1.8e19.
+        was inactive, what happens past float32 coordinate 1.8e19, and what the :func:`_time_slot`
+        ``custom_jvp`` does for the backward.
     """
     x_rest = x[..., 1:]  # Shape: (..., dim)
     inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
-    x0_new = jnp.sqrt(inv_c + _sqnorm(x_rest))[..., None]  # Shape: (..., 1)
+    x0_new = _time_slot(x_rest, inv_c)[..., None]  # Shape: (..., 1)
     return jnp.concatenate([x0_new, x_rest], axis=-1)
 
 

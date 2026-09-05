@@ -2169,6 +2169,60 @@ def test_hyperboloid_expmap_0_past_the_sinh_cap_is_infinite_not_nan(c: float):
     assert float(np.linalg.norm(y64[1:])) > 0.0, f"c={c}: {y64}"
 
 
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("traced_c", [False, True], ids=["static_c", "traced_c"])
+def test_hyperboloid_time_slot_custom_jvp_matches_plain_autodiff(dtype, traced_c: bool, monkeypatch):
+    """``_time_slot``'s ``custom_jvp`` reproduces what AD derives from ``sqrt(1/c + sum(x_s**2))``.
+
+    The rule is there for the backward's XLA fusion shape, not for its arithmetic, so what this
+    checks is that none of the arithmetic moved: the forward value bit for bit, and ``jax.grad``
+    and ``jax.jvp`` of ``proj``, ``proj_batch`` and ``expmap_0`` equal the plain-autodiff values to
+    the dtype's rounding. The cases are the ones a hand-written rule can get wrong where AD cannot:
+    an exactly-zero tangent, the zero vector (where ``x0 = sqrt(1/c)`` is still positive), and a
+    traced curvature, whose cotangent ``1/(2·x0)`` the rule states by hand and ``LearnableCurvature``
+    consumes.
+    """
+    from hyperbolix.manifolds import hyperboloid as hyp_mod
+
+    tol = 1e-6 if dtype is jnp.float32 else 1e-13
+    manifold = Hyperboloid(dtype=dtype)
+    c = jnp.asarray(0.7, dtype=dtype) if traced_c else 0.7
+    x_A = jax.random.normal(jax.random.key(0), (5,), dtype=dtype)
+    cases = [(x_A, jnp.ones_like(x_A)), (x_A, jnp.zeros_like(x_A)), (jnp.zeros_like(x_A), jnp.ones_like(x_A))]
+    ops = {
+        "proj": lambda z, cc: manifold.proj(z, cc),
+        "proj_batch": lambda z, cc: manifold.proj_batch(jnp.stack([z, 2.0 * z]), cc),
+        "expmap_0": lambda z, cc: manifold.expmap_0(z, cc),
+    }
+
+    def measure(fn, x_D, t_D) -> list:
+        """``[value, d/dx, jvp along t, d/dc]`` of one op at one point; ``d/dc`` only if traced."""
+
+        def loss(z, cc):
+            return jnp.sum(jnp.sin(fn(z, cc)))
+
+        row = [
+            np.asarray(fn(x_D, c)),
+            np.asarray(jax.grad(loss)(x_D, c)),
+            np.asarray(jax.jvp(lambda z: fn(z, c), (x_D,), (t_D,))[1]),
+        ]
+        if traced_c:
+            row.append(np.asarray(jax.grad(loss, argnums=1)(x_D, c)))
+        return row
+
+    got = {name: [measure(fn, x, t) for x, t in cases] for name, fn in ops.items()}
+    # The reference: the same time slot with no custom rule, so JAX differentiates it itself.
+    monkeypatch.setattr(hyp_mod, "_time_slot", lambda x_s, inv_c: jnp.sqrt(inv_c + jnp.sum(x_s**2, axis=-1)))
+
+    for name, fn in ops.items():
+        for i, ((x, t), new) in enumerate(zip(cases, got[name], strict=True)):
+            ref = measure(fn, x, t)
+            np.testing.assert_array_equal(new[0], ref[0], err_msg=f"{name} case {i} forward")
+            labels = ("d/dx", "jvp", "d/dc")[: len(new) - 1]
+            for label, a, b in zip(labels, new[1:], ref[1:], strict=True):
+                np.testing.assert_allclose(a, b, rtol=tol, atol=tol, err_msg=f"{name} case {i} {label}")
+
+
 @pytest.mark.parametrize("r", [1e19, 1e20])
 def test_poincare_proj_clamps_a_far_point_to_the_boundary_not_to_the_origin(r: float):
     """``_proj`` of a point at radius 1e19 to 1e20 must land on the ball boundary, not on the origin.
