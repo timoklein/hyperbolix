@@ -276,7 +276,7 @@ argued — and it is **not** uniform:
 | `Hyperboloid.proj`, `proj_batch` | $x_0 = \infty$, spatial part unchanged, no NaN |
 | `Hyperboloid.dist_0` (both version slots) | $\infty$ |
 | `spatial_to_hyperboloid` (`HTCLinear`), FHCNN linear forward | $x_0 = \infty$, no NaN |
-| FGG linear forward | NaN throughout the output |
+| FGG linear forward | non-finite (NaN or $\infty$, depending on the input) |
 | Poincaré and $\kappa$-stereographic `proj` (the boundary clamp) | the **origin** — a finite point, with a finite (exactly zero) gradient |
 | `Poincare.expmap` | the **base point** — a finite point (the origin, when the base is the origin) |
 | everything on the two-pass form | unchanged from 1.2.0 |

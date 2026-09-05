@@ -2032,21 +2032,29 @@ def test_poincare_metric_tensor_dist_gradient_is_the_conformal_factor_at_small_s
 # ---------------------------------------------------------------------------------------------
 # Norm policy on the hot path — one reduction, gradient-safe at zero, no additive floor.
 #
-# Every per-sample norm in the library is a single pass over the data: ``safe_sqrt(sum(v**2))``
+# Every per-sample norm in the library is free of the additive floor: ``safe_sqrt(sum(v**2))``
 # where the input can be exactly zero, a plain ``sqrt(const + sum(v**2))`` where a strictly
 # positive constant is added, and ``floor_at(., MIN_NORM)`` *around* either where the norm is a
-# divisor. That replaces two older idioms:
+# divisor. That replaces two older idioms, but not to the same extent:
 #
 #   * the additive ``sqrt(sum(x**2) + MIN_NORM**2)``, whose ``1e-30`` floor dominates a genuinely
 #     small vector — relative residual ``MIN_NORM²/(2r²)``: 5.0e-15 at float64 radius 1e-8, and
 #     41 % at float32 radius 1e-15 (2.83e-15 returned where 2.00e-15 is correct). That defect is
-#     what the tiny-radius oracles below still gate.
-#   * the max-scaled two-reduction ``safe_norm``/``safe_hypot_norm``, which read the data twice to
+#     what the tiny-radius oracles below still gate. It is gone from every site.
+#   * the max-scaled two-reduction ``safe_norm``/``safe_hypot_norm``, which reads the data twice to
 #     buy an overflow guard that only fires past float32 coordinate 1.8e19 — geodesic radius ~44
-#     at ``c = 1``, a regime no SGD run reaches. The guard is not worth a second memory pass on the
-#     hot path, so past that radius the library is loud rather than saturated: the hyperboloid, PV
-#     and isometry sites return ``inf``, and the Poincaré/stereographic boundary clamp returns the
-#     origin (the pre-1.2.0 behaviour, documented in the changelog).
+#     at ``c = 1``, a regime no SGD run reaches. It gave way to the single reduction only on the
+#     hot-path sites where the second memory pass measured slower; ``logmap_0``, every
+#     ProperVelocity site, both PV isometries, the FHNN forward and the linear-attention
+#     ``focus_transform`` keep it and stay finite past that coordinate.
+#
+# Past that coordinate the *converted* sites are loud rather than saturated, and what each one
+# gives was measured rather than argued (float32, ``c = 1``; see
+# ``logs/2026-09-04_safe_norm_hot_path_revert/contract/out_of_range_31403c2.log``): the hyperboloid
+# ``proj``/``proj_batch``/``dist_0``, and the layers built on ``spatial_to_hyperboloid``, return
+# ``inf`` with no NaN; the Poincaré/stereographic boundary clamp returns the origin, a finite point
+# (the pre-1.2.0 behaviour, documented in the changelog), and ``Poincare.expmap`` inherits that
+# clamp; ``FGGLinear`` returns non-finite values — NaN or ``inf``, depending on the input.
 #
 # The extreme-radius oracles below therefore test the *algorithm*, not float32's range: the two
 # that can be stated exactly run in float64, and the one that cannot (``expmap_0`` past the

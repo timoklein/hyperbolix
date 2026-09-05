@@ -383,7 +383,9 @@ def _fgg_linear_forward(
     # z. Same spelling (and the same cancellation argument) as Hyperboloid._proj: the sum of
     # squares is kept intact under the sqrt. Plain `jnp.sqrt` -- the argument is >= 1/c > 0.
     # `sum(z**2)` overflows float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1),
-    # unreachable by a training run, and gives an infinite time slot there.
+    # unreachable by a training run; past it the output is non-finite -- NaN or `inf`, depending on
+    # the input, since the overflow enters through the preceding matmul rather than through `z`
+    # alone.
     inv_c = jnp.asarray(1.0, dtype=z_BO.dtype) / jnp.asarray(c, dtype=z_BO.dtype)
     y_0_B1 = jnp.sqrt(jnp.sum(z_BO**2, axis=-1, keepdims=True) + inv_c)  # (B, 1)
 
