@@ -8,8 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install
 uv sync --locked --dev
 
-# Run all tests (4,067 items across 962 test functions)
-uv run pytest
+# Run all tests (4,067 items across 962 test functions) on all cores (pytest-xdist; ~11 min on 12 workers,
+# hours single-process: the suite is JAX-compile-heavy)
+uv run pytest -n auto
 
 # Run a single test file
 uv run pytest tests/test_manifolds.py -v
@@ -42,6 +43,7 @@ After making changes, run the test files that cover the affected code:
 ```bash
 uv run pytest tests/<relevant_test_file>.py -x -v
 ```
+Anything larger than one or two files gets `-n auto` (pytest-xdist); never run the full suite single-process.
 For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (78 of the 388 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
 
 ## Architecture
