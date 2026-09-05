@@ -338,9 +338,6 @@ class HypVQMLRPoincare(nnx.Module):
         Code / latent dimension ``C`` (= MLR ``in_dim``).
     rngs : nnx.Rngs
         RNGs for the MLR parameter init.
-    clamping_factor, smoothing_factor : float
-        Passed through to ``HypRegressionPoincarePP`` (asinh clamp; defaults
-        1.0 / 50.0).
     out_dtype : jnp.dtype
         Dtype of ``output.quantized`` (default: float32) — the manifold→decoder
         boundary cast.
@@ -356,8 +353,6 @@ class HypVQMLRPoincare(nnx.Module):
         code_dim: int,
         *,
         rngs: nnx.Rngs,
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         out_dtype: jnp.dtype = jnp.float32,  # type: ignore[assignment]
         param_dtype: DTypeLike = jnp.float32,
     ) -> None:
@@ -376,8 +371,6 @@ class HypVQMLRPoincare(nnx.Module):
             in_dim=code_dim,
             out_dim=num_codes,
             rngs=rngs,
-            clamping_factor=clamping_factor,
-            smoothing_factor=smoothing_factor,
             param_dtype=param_dtype,
         )
 

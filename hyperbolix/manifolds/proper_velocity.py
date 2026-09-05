@@ -46,12 +46,10 @@ Chen et al. "Proper Velocity Neural Networks." ICLR 2026.
 Ungar. "A Gyrovector Space Approach to Hyperbolic Geometry." 2022.
 """
 
-import math
-
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt, sinh, smooth_clamp
+from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt, sinh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from ._gyrovector_core import _gyration
@@ -463,8 +461,6 @@ def _compute_mlr(
     z: Float[Array, "out_dim in_dim"],
     r: Float[Array, "out_dim 1"],
     c: ScalarCurvature,
-    clamping_factor: float,
-    smoothing_factor: float,
     min_enorm: float = 1e-15,
 ) -> Float[Array, "batch out_dim"]:
     """PV multinomial logistic regression (paper Thm 5.2, Eq. 19 with K = -c).
@@ -477,17 +473,14 @@ def _compute_mlr(
                     - sinh(√c·r_k) · √(1 + c·||x||²)
                  )
 
-    The asinh argument is smoothly clamped to ``±clamping_factor · log(2/eps)``
-    for numerical stability, matching the convention used by the Poincaré and
-    Hyperboloid MLR helpers.
+    The asinh argument is unclamped, matching the convention used by the
+    Poincaré and Hyperboloid MLR helpers.
 
     Args:
         x: PV points, shape (batch, in_dim).
         z: Per-class spatial directions, shape (out_dim, in_dim).
         r: Per-class scalar offsets, shape (out_dim, 1).
         c: Curvature (positive).
-        clamping_factor: Scales the dtype-dependent clamp bound.
-        smoothing_factor: Softness of the smooth clamp transition.
         min_enorm: Multiplicative floor on ‖z‖ when normalizing z.
 
     Returns:
@@ -516,10 +509,9 @@ def _compute_mlr(
     term_B_BP = sinh(sr_1P) * beta_inv_x_B1
     asinh_arg_BP = term_A_BP - term_B_BP
 
-    eps = jnp.finfo(x.dtype).eps
-    clamp = clamping_factor * float(math.log(2.0 / eps))
-    asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, smoothing_factor)
-
+    # No clamp on the asinh argument — same reason as in `manifolds/hyperboloid._compute_mlr`;
+    # see there. PV coordinates are unconstrained, so this argument grows like `sinh(r)` with no
+    # bounded factor in front of it.
     return (z_norm_P1.T / sqrt_c) * jnp.asinh(asinh_arg_BP)
 
 
@@ -684,17 +676,7 @@ class ProperVelocity(ManifoldBase):
         z: Float[Array, "out_dim in_dim"],
         r: Float[Array, "out_dim 1"],
         c: ScalarCurvature,
-        clamping_factor: float,
-        smoothing_factor: float,
         min_enorm: float = 1e-15,
     ) -> Float[Array, "batch out_dim"]:
         """PV multinomial logistic regression (paper Thm 5.2)."""
-        return _compute_mlr(
-            self._cast(x),
-            self._cast(z),
-            self._cast(r),
-            c,
-            clamping_factor,
-            smoothing_factor,
-            min_enorm,
-        )
+        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)

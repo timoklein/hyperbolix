@@ -52,7 +52,6 @@ Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
 """
 
-import math
 from typing import NamedTuple
 
 import jax.lax as lax
@@ -69,7 +68,6 @@ from ..utils.math_utils import (
     safe_normalize,
     safe_sqrt,
     sinh,
-    smooth_clamp,
 )
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
@@ -1241,8 +1239,6 @@ def _compute_mlr(
     z: Float[Array, "out_dim in_dim_minus_1"],
     r: Float[Array, "out_dim 1"],
     c: ScalarCurvature,
-    clamping_factor: float,
-    smoothing_factor: float,
     min_enorm: float = 1e-15,
 ) -> Float[Array, "batch out_dim"]:
     """Compute FHCNN multinomial linear regression on the hyperboloid.
@@ -1252,8 +1248,6 @@ def _compute_mlr(
         z: Hyperplane tangent normals at origin (time coord omitted), shape (out_dim, in_dim-1)
         r: Hyperplane translations, shape (out_dim, 1)
         c: Manifold curvature (positive)
-        clamping_factor: Clamping value for the output
-        smoothing_factor: Smoothing factor for the output
         min_enorm: Minimum norm to avoid division by zero
 
     Returns:
@@ -1295,9 +1289,13 @@ def _compute_mlr(
     alpha_BP = -x0_B1 * sinh(sqrt_cr_1P) * z_norm_1P + cosh(sqrt_cr_1P) * zx_rem_BP
     asinh_arg_BP = sqrt_c * alpha_BP / z_norm_1P
 
-    eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
-    clamp = clamping_factor * float(math.log(2 / eps))
-    asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, smoothing_factor)
+    # No clamp on the asinh argument: `asinh` is defined on all of R with derivative
+    # `1/√(1+x²) ≤ 1`, and the only infinite argument comes from a point that has already
+    # overflowed the float32 manifold — the retired `smooth_clamp` to ±log(2/eps) turned that
+    # into a finite, plausible logit and hid the divergence. Its bound was dtype-dependent, so
+    # at c = 1, radius 5, default init the float32 logits sat 9.4e-2 (D = 128) / 1.8e-1
+    # (D = 32) from the float64 ones relative to the largest logit, and every clamped cell had
+    # an exactly-zero input gradient. logs/2026-09-04_safe_norm_hot_path_revert/precision/mlr_clamp
     signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c
     res_BP = z_norm_1P * signed_dist2hyp_BP
     return res_BP
@@ -1598,12 +1596,10 @@ class Hyperboloid(ManifoldBase):
         z: Float[Array, "out_dim in_dim_minus_1"],
         r: Float[Array, "out_dim 1"],
         c: ScalarCurvature,
-        clamping_factor: float,
-        smoothing_factor: float,
         min_enorm: float = 1e-15,
     ) -> Float[Array, "batch out_dim"]:
         """Compute multinomial linear regression on hyperboloid."""
-        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)
+        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)
 
     def busemann(self, x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Closed-form Lorentz Busemann function ``B^v(x) = (1/√c)·log(√c·(x_t - ⟨x_s, v⟩))``.

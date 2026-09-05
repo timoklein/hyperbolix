@@ -6,7 +6,6 @@ Dimension key:
   P: number of hyperplanes / output classes (out_dim)
 """
 
-import math
 from collections.abc import Callable
 from typing import Any
 
@@ -19,7 +18,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import ManifoldParam
-from ..utils.math_utils import floor_at, safe_norm, smooth_clamp
+from ..utils.math_utils import floor_at, safe_norm
 from ._helpers import validate_poincare_manifold
 
 
@@ -50,10 +49,6 @@ class HypRegressionPoincare(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    clamping_factor : float
-        Clamping factor for the multinomial linear regression output (default: 1.0)
-    smoothing_factor : float
-        Smoothing factor for the multinomial linear regression output (default: 50.0)
     curvature : float or callable
         Curvature tag for the manifold-valued ``bias`` parameter (default: 1.0).
         The Riemannian optimizer uses this value for the bias update
@@ -67,8 +62,8 @@ class HypRegressionPoincare(nnx.Module):
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space,
-        clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
+        This layer is designed to work with nnx.jit. The configuration parameter ``input_space``
+        is treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -84,8 +79,6 @@ class HypRegressionPoincare(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         curvature: float | Callable[[], Any] = 1.0,
         param_dtype: DTypeLike = jnp.float32,
     ):
@@ -101,8 +94,6 @@ class HypRegressionPoincare(nnx.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
 
         # Trainable parameters
         # Tangent space weight (Euclidean) — scaled to match reference (van Spengler et al. 2023)
@@ -185,12 +176,8 @@ class HypRegressionPoincare(nnx.Module):
         # asinh argument
         asinh_arg_BP = sqrt_c * lambda_sub_BP1.squeeze(-1) * suba_BP / a_norm_P1.T  # (B, P)
 
-        # Smoothly clamp the input of asinh()
-        eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
-        clamp = self.clamping_factor * float(math.log(2 / eps))
-        asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, self.smoothing_factor)
-
-        # Signed distance to hyperplane
+        # Signed distance to hyperplane. No clamp on the asinh argument — same reason as in
+        # `manifolds/hyperboloid._compute_mlr`; see there.
         signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c  # (B, P)
 
         # Conformal factor for p
@@ -256,18 +243,14 @@ class HypRegressionPoincarePP(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    clamping_factor : float
-        Clamping factor for the multinomial linear regression output (default: 1.0)
-    smoothing_factor : float
-        Smoothing factor for the multinomial linear regression output (default: 50.0)
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space,
-        clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
+        This layer is designed to work with nnx.jit. The configuration parameter ``input_space``
+        is treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -283,8 +266,6 @@ class HypRegressionPoincarePP(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
@@ -299,8 +280,6 @@ class HypRegressionPoincarePP(nnx.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
 
         # Trainable parameters
         # Tangent space weight — scaled to match reference (van Spengler et al. 2023)
@@ -336,13 +315,6 @@ class HypRegressionPoincarePP(nnx.Module):
             x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
 
         # Compute multinomial linear regression
-        res = self.manifold.compute_mlr_pp(
-            x,
-            self.kernel[...],
-            self.bias[...],
-            c,
-            self.clamping_factor,
-            self.smoothing_factor,
-        )
+        res = self.manifold.compute_mlr_pp(x, self.kernel[...], self.bias[...], c)
 
         return res

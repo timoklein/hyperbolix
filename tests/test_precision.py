@@ -13,6 +13,7 @@ itself, and ``TestVmapJitCompat``, a byte-identical clone (same literal points) 
 
 import jax
 import jax.numpy as jnp
+import pytest
 from flax import nnx
 
 from hyperbolix.manifolds import hyperboloid as hyperboloid_module
@@ -119,7 +120,7 @@ class TestMLRFunctions:
         z = jax.random.normal(k2, (5, 3)) * 0.1  # out_dim=5
         r = jax.random.normal(k3, (5, 1)) * 0.01
 
-        result = manifold.compute_mlr_pp(x, z, r, c=1.0, clamping_factor=1.0, smoothing_factor=50.0)
+        result = manifold.compute_mlr_pp(x, z, r, c=1.0)
         assert result.shape == (4, 5)
         assert jnp.all(jnp.isfinite(result))
         assert result.dtype == jnp.float64
@@ -137,7 +138,7 @@ class TestMLRFunctions:
         z = jnp.array([[0.7, -0.3]])
         r = jnp.array([[0.4]])
 
-        logits = manifold.compute_mlr_pp(x, z, r, c=1.0, clamping_factor=10.0, smoothing_factor=50.0)
+        logits = manifold.compute_mlr_pp(x, z, r, c=1.0)
         dist = jnp.abs(logits[0, 0]) / (2.0 * jnp.linalg.norm(z))
         assert jnp.allclose(dist, 0.915745, atol=1e-4)
 
@@ -153,7 +154,7 @@ class TestMLRFunctions:
             z_hat = z[0] / jnp.linalg.norm(z[0])
             q = manifold.expmap_0(r[0, 0] * z_hat, c)
 
-            logit = manifold.compute_mlr_pp(q[None], z, r, c=c, clamping_factor=10.0, smoothing_factor=50.0)
+            logit = manifold.compute_mlr_pp(q[None], z, r, c=c)
             assert jnp.allclose(logit[0, 0], 0.0, atol=1e-10)
 
     def test_hyperboloid_compute_mlr(self):
@@ -165,7 +166,7 @@ class TestMLRFunctions:
         z = jax.random.normal(k2, (5, 3)) * 0.1  # out_dim=5, in_dim-1=3
         r = jax.random.normal(k3, (5, 1)) * 0.01
 
-        result = manifold.compute_mlr(x, z, r, c=1.0, clamping_factor=1.0, smoothing_factor=50.0)
+        result = manifold.compute_mlr(x, z, r, c=1.0)
         assert result.shape == (4, 5)
         assert jnp.all(jnp.isfinite(result))
         assert result.dtype == jnp.float64
@@ -178,10 +179,80 @@ class TestMLRFunctions:
         z = jax.random.normal(k2, (5, 3)) * 0.1  # out_dim=5, in_dim=3 (PV has no time coord)
         r = jax.random.normal(k3, (5, 1)) * 0.01
 
-        result = manifold.compute_mlr(x, z, r, c=1.0, clamping_factor=1.0, smoothing_factor=50.0)
+        result = manifold.compute_mlr(x, z, r, c=1.0)
         assert result.shape == (4, 5)
         assert jnp.all(jnp.isfinite(result))
         assert result.dtype == jnp.float64
+
+    # -----------------------------------------------------------------------------------
+    # The asinh argument is not clamped (see manifolds/hyperboloid._compute_mlr)
+    #
+    # The retired `smooth_clamp` bounded it at the running dtype's own `log(2/eps)`, ±16.6355
+    # in float32 against ±36.7368 in float64, so the two dtypes returned different logits by
+    # design and an overflowed point came back as a finite, plausible score.
+    # -----------------------------------------------------------------------------------
+    @pytest.mark.parametrize("c", [0.5, 1.0, 2.5])
+    @pytest.mark.parametrize("model", ["hyperboloid", "poincare_pp", "pv"])
+    def test_mlr_matches_the_closed_form_at_a_large_asinh_argument(self, model, c):
+        """An asinh argument of 30 — past the retired float32 bound — is reported identically
+        by a float32 and a float64 head, and equals the closed form.
+
+        One hyperplane through the origin (``r = 0``, unit normal along ``e_0``) makes the
+        argument exactly ``30`` by construction in all three models, so the expected logit has
+        no free constants. Under the old bound the float32 arm returned ``asinh(16.6355)``.
+        """
+        arg = 30.0
+        z_PD = jnp.array([[1.0, 0.0, 0.0]], dtype=jnp.float64)
+        r_P1 = jnp.zeros((1, 1), dtype=jnp.float64)
+        sqrt_c = float(jnp.sqrt(jnp.asarray(c, dtype=jnp.float64)))
+
+        if model == "hyperboloid":
+            x_s_D = jnp.array([arg / sqrt_c, 0.0, 0.0], dtype=jnp.float64)
+            x_t = jnp.sqrt(1.0 / c + jnp.dot(x_s_D, x_s_D))
+            x_BD = jnp.concatenate([x_t[None], x_s_D])[None]
+            expected = float(jnp.arcsinh(arg) / sqrt_c)  # ‖z‖ = 1
+            manifolds = (Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=jnp.float64))
+            call = lambda m, x: m.compute_mlr(x, z_PD, r_P1, c)  # noqa: E731
+        elif model == "poincare_pp":
+            # asinh_arg = √c·λ(x)·x₀ with λ = 2/(1 - c‖x‖²); solve for x₀ on the ẑ axis.
+            x0 = float((-1.0 + (1.0 + arg**2) ** 0.5) / (arg * sqrt_c))
+            x_BD = jnp.array([[x0, 0.0, 0.0]], dtype=jnp.float64)
+            expected = float(2.0 * jnp.arcsinh(arg) / sqrt_c)  # 2‖z‖·asinh(arg)/√c
+            manifolds = (Poincare(dtype=jnp.float32), Poincare(dtype=jnp.float64))
+            call = lambda m, x: m.compute_mlr_pp(x, z_PD, r_P1, c)  # noqa: E731
+        else:
+            x_BD = jnp.array([[arg / sqrt_c, 0.0, 0.0]], dtype=jnp.float64)
+            expected = float(jnp.arcsinh(arg) / sqrt_c)  # (‖z‖/√c)·asinh(arg)
+            manifolds = (ProperVelocity(dtype=jnp.float32), ProperVelocity(dtype=jnp.float64))
+            call = lambda m, x: m.compute_mlr(x, z_PD, r_P1, c)  # noqa: E731
+
+        assert float(call(manifolds[1], x_BD)[0, 0]) == pytest.approx(expected, rel=1e-12)
+        assert float(call(manifolds[0], x_BD.astype(jnp.float32))[0, 0]) == pytest.approx(expected, rel=1e-5)
+
+    @pytest.mark.parametrize("model", ["hyperboloid", "pv"])
+    def test_mlr_logit_is_infinite_when_the_asinh_argument_overflows(self, model):
+        """A point far enough that the float32 asinh argument overflows gives ``inf``, not a
+        saturated finite score. That is the loud failure: the loss goes NaN instead of the head
+        reporting a plausible margin for a point that has left the representable manifold.
+
+        ``⟨x_s, z⟩ = 1e38 · 10`` overflows float32 while every other factor stays finite
+        (``r = 0``, so the ``x_t·sinh(√c·r)`` term is exactly zero). The Poincaré HNN++ argument
+        has no such case: it is bounded by the conformal factor of a ball point.
+        """
+        c = 1.0
+        z_PD = jnp.array([[10.0, 0.0, 0.0]], dtype=jnp.float32)
+        r_P1 = jnp.zeros((1, 1), dtype=jnp.float32)
+        big = jnp.float32(1e38)
+
+        if model == "hyperboloid":
+            x_BD = jnp.array([[big, big, 0.0, 0.0]], dtype=jnp.float32)
+            logits = Hyperboloid(dtype=jnp.float32).compute_mlr(x_BD, z_PD, r_P1, c)
+        else:
+            x_BD = jnp.array([[big, 0.0, 0.0]], dtype=jnp.float32)
+            logits = ProperVelocity(dtype=jnp.float32).compute_mlr(x_BD, z_PD, r_P1, c)
+
+        assert bool(jnp.isinf(logits[0, 0])), f"expected an infinite logit, got {logits}"
+        assert not bool(jnp.isnan(logits[0, 0]))
 
 
 # ---------------------------------------------------------------------------------------

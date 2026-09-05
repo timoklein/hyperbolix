@@ -71,10 +71,6 @@ class HypConv2DPV(nnx.Module):
         requires recompilation.
     inner_activation : Callable[[Array], Array] | None
         Optional activation applied inside the outer sinh (paper Eq. 23). Default None.
-    clamping_factor : float
-        Clamping factor for the PV MLR output (default: 1.0).
-    smoothing_factor : float
-        Smoothing factor for the PV MLR output (default: 50.0).
     kernel_init_std : float | None
         Standard deviation for the Gaussian kernel init. If ``None`` (default),
         uses He scaling ``sqrt(2 / (kernel_h * kernel_w * in_channels))`` so
@@ -93,9 +89,8 @@ class HypConv2DPV(nnx.Module):
         directly on the PV features — no expmap_0/logmap_0 round-trips needed.
 
     JIT Compatibility:
-        Configuration parameters (padding, input_space, inner_activation,
-        clamping_factor, smoothing_factor) are treated as static and are baked
-        into the compiled function.
+        Configuration parameters (padding, input_space, inner_activation) are
+        treated as static and are baked into the compiled function.
 
     Dimension math:
         - patch extraction: (H, W, C_in) → (oh, ow, K²·C_in)
@@ -118,8 +113,6 @@ class HypConv2DPV(nnx.Module):
         padding: str = "SAME",
         input_space: str = "manifold",
         inner_activation: Callable[[Array], Array] | None = None,
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         kernel_init_std: float | None = None,
         param_dtype: DTypeLike = jnp.float32,
     ):
@@ -138,8 +131,6 @@ class HypConv2DPV(nnx.Module):
         self.input_space = input_space
         self.padding = padding
         self.inner_activation = inner_activation
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
 
         self.kernel_size = as_pair(kernel_size)
         self.stride = as_pair(stride)
@@ -213,8 +204,6 @@ class HypConv2DPV(nnx.Module):
             self.manifold,
             c,
             "manifold",
-            self.clamping_factor,
-            self.smoothing_factor,
             self.inner_activation,
         )  # (N, C_out) on PV manifold
 

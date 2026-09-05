@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install
 uv sync --locked --dev
 
-# Run all tests (4,055 items across 959 test functions)
+# Run all tests (4,067 items across 962 test functions)
 uv run pytest
 
 # Run a single test file
@@ -86,6 +86,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 - Float32 reliable for hyperbolic distances < 7; float64 needed for distances > 10
 - Conformal factor lambda grows exponentially near Poincare ball boundary
 - Tests parametrize both dtypes with tolerances: `atol=4e-3` (f32), `atol=1e-7` (f64)
+- **Loud divergence over silent saturation.** A guard that maps an already non-finite input (an `inf` time coordinate, a point past the float32 manifold) onto a finite, plausible output hides the divergence; a NaN loss is the intended signal. Do not add clamps or saturations whose only remaining job is finiteness on inputs that are already non-finite, and propose removing such guards when found (the MLR `asinh` clamp inherited from the PyTorch code was removed for this reason). Guards that fix real float32 rounding on finite inputs (`floor_at` on divisors, `safe_sqrt` at zero) are a different matter and stay
 
 ### Test structure
 

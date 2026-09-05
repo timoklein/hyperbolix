@@ -75,10 +75,6 @@ class HypConv2DPoincare(nnx.Module):
         If True, use identity initialization (1/2 * I) for the linear sublayer weights,
         matching the reference Poincaré ResNet implementation (default: True).
         The 1/2 factor compensates for the factor of 2 inside the HNN++ distance formula.
-    clamping_factor : float
-        Clamping factor for the HNN++ linear layer output (default: 1.0)
-    smoothing_factor : float
-        Smoothing factor for the HNN++ linear layer output (default: 50.0)
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
@@ -117,8 +113,6 @@ class HypConv2DPoincare(nnx.Module):
         padding: str = "SAME",
         input_space: str = "tangent",
         id_init: bool = True,
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
@@ -148,9 +142,6 @@ class HypConv2DPoincare(nnx.Module):
         beta_n = jax.scipy.special.beta(concat_dim / 2.0, 0.5)
         beta_ni = jax.scipy.special.beta(in_channels / 2.0, 0.5)
         self.beta_scale = float(beta_n / beta_ni)
-
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
 
         # Trainable parameters — owned directly for flat parameter paths
         # Weight initialization: identity from reference (van Spengler et al. 2023)
@@ -234,8 +225,6 @@ class HypConv2DPoincare(nnx.Module):
             self.manifold,
             c,
             "manifold",
-            self.clamping_factor,
-            self.smoothing_factor,
         )
 
         # Step 6: Map back to tangent space

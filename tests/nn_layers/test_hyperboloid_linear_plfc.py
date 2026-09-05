@@ -36,8 +36,7 @@ def plfc_reference(x_BAi, kernel_OI, bias_O1, c, v_max=10.0):
         y_s        = sinh(clip(sqrt(c)*v, +-v_max))/sqrt(c)                  (sinh diffeo)
         y_t        = sqrt(||y_s||^2 + 1/c)                                   (constraint)
 
-    The library's smooth clamp on the asinh argument is a value-identity well
-    inside its bound (~36 at float64, clamping_factor=1), which the test inputs are.
+    The library applies no clamp to the asinh argument, so this is the exact same expression.
     """
     x_BAi = np.asarray(x_BAi, dtype=np.float64)
     z_OI = np.asarray(kernel_OI, dtype=np.float64)

@@ -103,7 +103,7 @@ def test_hyperboloid_mlr_vanishes_on_its_own_hyperplane(c: float, r_val: float):
     # The constructed point must genuinely be on the manifold, else "logit == 0" proves nothing.
     assert bool(manifold.is_in_manifold(x_A, c, atol=1e-10))
 
-    logit = manifold.compute_mlr(x_A[None], z_PD, r_P1, c, clamping_factor=10.0, smoothing_factor=50.0)
+    logit = manifold.compute_mlr(x_A[None], z_PD, r_P1, c)
 
     assert float(logit[0, 0]) == pytest.approx(0.0, abs=1e-12)
 
@@ -121,7 +121,7 @@ def test_hyperboloid_mlr_matches_closed_form_at_zero_offset(c: float):
     x_s_D = jnp.array([0.2, -0.1, 0.15], dtype=F64)
     x_A = jnp.concatenate([jnp.array([np.sqrt(1.0 / c + float(jnp.dot(x_s_D, x_s_D)))], dtype=F64), x_s_D])
 
-    logits_BP = manifold.compute_mlr(x_A[None], z_PD, r_P1, c, clamping_factor=10.0, smoothing_factor=50.0)
+    logits_BP = manifold.compute_mlr(x_A[None], z_PD, r_P1, c)
 
     sqrt_c = np.sqrt(c)
     z_np = np.asarray(z_PD, dtype=np.float64)
@@ -151,7 +151,7 @@ def test_hyperboloid_mlr_sign_follows_side_and_margin_is_monotone(c: float):
         x_s_D = (base + float(delta)) * z_hat_D
         x_t = np.sqrt(1.0 / c + float(jnp.dot(x_s_D, x_s_D)))
         x_A = jnp.concatenate([jnp.array([x_t], dtype=F64), x_s_D])
-        logits.append(float(manifold.compute_mlr(x_A[None], z_PD, r_P1, c, 10.0, 50.0)[0, 0]))
+        logits.append(float(manifold.compute_mlr(x_A[None], z_PD, r_P1, c)[0, 0]))
 
     assert logits[0] < logits[1] < logits[2] < logits[3] < logits[4], "margin is not monotone along ẑ"
     assert logits[0] < 0.0 and logits[1] < 0.0, "points on the origin side must score negative"
@@ -174,7 +174,7 @@ def test_pv_mlr_vanishes_on_its_own_hyperplane(c: float, r_val: float):
     z_hat_D = z_PD[0] / jnp.linalg.norm(z_PD[0])
     x_D = _hyperplane_offset(c, r_val) * z_hat_D
 
-    logit = manifold.compute_mlr(x_D[None], z_PD, r_P1, c, clamping_factor=10.0, smoothing_factor=50.0)
+    logit = manifold.compute_mlr(x_D[None], z_PD, r_P1, c)
 
     assert float(logit[0, 0]) == pytest.approx(0.0, abs=1e-12)
 
@@ -187,7 +187,7 @@ def test_pv_mlr_matches_closed_form_at_zero_offset(c: float):
     r_P1 = jnp.zeros((2, 1), dtype=F64)
     x_D = jnp.array([0.2, -0.1, 0.15], dtype=F64)
 
-    logits_BP = manifold.compute_mlr(x_D[None], z_PD, r_P1, c, clamping_factor=10.0, smoothing_factor=50.0)
+    logits_BP = manifold.compute_mlr(x_D[None], z_PD, r_P1, c)
 
     sqrt_c = np.sqrt(c)
     z_np = np.asarray(z_PD, dtype=np.float64)
@@ -209,7 +209,7 @@ def test_pv_mlr_sign_follows_side_and_margin_is_monotone(c: float):
 
     offsets = np.array([-0.5, -0.2, 0.0, 0.2, 0.5])
     x_BD = jnp.stack([(base + float(d)) * z_hat_D for d in offsets])
-    logits = np.asarray(manifold.compute_mlr(x_BD, z_PD, r_P1, c, 10.0, 50.0)[:, 0])
+    logits = np.asarray(manifold.compute_mlr(x_BD, z_PD, r_P1, c)[:, 0])
 
     assert np.all(np.diff(logits) > 0.0), "margin is not monotone along ẑ"
     assert logits[0] < 0.0 and logits[1] < 0.0

@@ -60,15 +60,13 @@ For numerical accuracy with large distances or near-boundary points:
 - Consider projection after operations to maintain manifold constraints
 """
 
-import math
-
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, smooth_clamp, tanh
+from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, tanh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
@@ -674,8 +672,6 @@ def _compute_mlr_pp(
     z: Float[Array, "out_dim in_dim"],
     r: Float[Array, "out_dim 1"],
     c: ScalarCurvature,
-    clamping_factor: float,
-    smoothing_factor: float,
     min_enorm: float = 1e-15,
 ) -> Float[Array, "batch out_dim"]:
     """Compute HNN++ multinomial linear regression on the Poincare ball.
@@ -685,8 +681,6 @@ def _compute_mlr_pp(
         z: Hyperplane tangent normals at origin, shape (out_dim, in_dim)
         r: Hyperplane translations, shape (out_dim, 1)
         c: Manifold curvature (positive)
-        clamping_factor: Clamping value for the output
-        smoothing_factor: Smoothing factor for the output
         min_enorm: Minimum norm to avoid division by zero
 
     Returns:
@@ -715,9 +709,9 @@ def _compute_mlr_pp(
     z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1, precision=MATMUL_PRECISION)  # (B, P)
     asinh_arg_BP = sqrt_c * lam_B1 * z_unitx_BP * cosh(sqrt_c2r_1P) - (lam_B1 - 1) * sinh(sqrt_c2r_1P)  # (B, P)
 
-    eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
-    clamp = clamping_factor * float(math.log(2 / eps))
-    asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, smoothing_factor)  # (B, P)
+    # No clamp on the asinh argument — same reason as in `manifolds/hyperboloid._compute_mlr`;
+    # see there. λ(x) puts this argument past the old float32 bound sooner than the hyperboloid
+    # one does: λ ≈ 75 already at geodesic radius 5, c = 1.
     signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c  # (B, P)
     res_BP = 2 * z_norm_P1.T * signed_dist2hyp_BP  # z_norm.T broadcasts (1, P) over (B, P)
     return res_BP
@@ -960,12 +954,10 @@ class Poincare(ManifoldBase):
         z: Float[Array, "out_dim in_dim"],
         r: Float[Array, "out_dim 1"],
         c: ScalarCurvature,
-        clamping_factor: float,
-        smoothing_factor: float,
         min_enorm: float = 1e-15,
     ) -> Float[Array, "batch out_dim"]:
         """Compute HNN++ multinomial linear regression on the Poincare ball."""
-        return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)
+        return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)
 
     def beta_concat(self, points: Float[Array, "M n_i"], c: ScalarCurvature) -> Float[Array, "n"]:
         """Beta-concatenation of M equal-dimensional Poincaré ball points."""

@@ -209,8 +209,6 @@ def _hyperboloid_plfc_forward(
     manifold: Hyperboloid,
     c: float,
     input_space: str,
-    clamping_factor: float,
-    smoothing_factor: float,
     v_max: float,
 ) -> Float[Array, "batch out_dim"]:
     """Pure-function PLFC forward pass for the hyperboloid model.
@@ -224,7 +222,7 @@ def _hyperboloid_plfc_forward(
         x_BAi = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BAi, c)
 
     # Compute multinomial logistic regression scores: (B, O) where O = out_dim-1
-    v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
+    v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c)
 
     # Output-side guard + sinh diffeomorphism + time reconstruction (shared with the Busemann FC
     # layer). compute_mlr only bounds its asinh argument, leaving v ∝ ‖kernel_row‖ unbounded; the
@@ -720,10 +718,6 @@ class HypLinearHyperboloidPLFC(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    clamping_factor : float
-        Clamping factor for the multinomial linear regression output (default: 1.0)
-    smoothing_factor : float
-        Smoothing factor for the multinomial linear regression output (default: 50.0)
     v_max : float
         Output-side guard: the sinh argument ``sqrt(c)*v`` is hard-clipped to
         ``±v_max``, bounding the output spatial norm by ``sinh(v_max)/sqrt(c)``
@@ -745,8 +739,7 @@ class HypLinearHyperboloidPLFC(nnx.Module):
     -----
     JIT Compatibility:
         This layer is designed to work with nnx.jit. Configuration parameters (input_space,
-        clamping_factor, smoothing_factor, v_max) are treated as static and will be baked
-        into the compiled function.
+        v_max) are treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -764,8 +757,6 @@ class HypLinearHyperboloidPLFC(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         v_max: float = 10.0,
         use_gyro_bias: bool = False,
         kernel_init_std: float = 0.02,
@@ -783,8 +774,6 @@ class HypLinearHyperboloidPLFC(nnx.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
         _assert_v_max_safe(v_max)
         self.v_max = v_max
 
@@ -829,8 +818,6 @@ class HypLinearHyperboloidPLFC(nnx.Module):
             self.manifold,
             c,
             self.input_space,
-            self.clamping_factor,
-            self.smoothing_factor,
             self.v_max,
         )
 

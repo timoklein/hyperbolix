@@ -34,8 +34,6 @@ def _pv_fc_forward(
     manifold: ProperVelocity,
     c: float,
     input_space: str,
-    clamping_factor: float,
-    smoothing_factor: float,
     inner_activation: Callable[[Array], Array] | None = None,
 ) -> Float[Array, "batch out_dim"]:
     """Pure-function PV FC forward pass (paper Thm 5.3 / Eq. 22).
@@ -52,7 +50,7 @@ def _pv_fc_forward(
     if input_space == "tangent":
         x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BI, c)
 
-    v_BO = manifold.compute_mlr(x_BI, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
+    v_BO = manifold.compute_mlr(x_BI, kernel_OI, bias_O1, c)
 
     if inner_activation is not None:
         v_BO = inner_activation(v_BO)
@@ -90,10 +88,6 @@ class HypLinearPV(nnx.Module):
     inner_activation : Callable[[Array], Array] | None
         Optional activation applied to ``v`` before the outer sinh
         (paper Eq. 23 ablation). Default None.
-    clamping_factor : float
-        Clamping factor for the MLR output (default: 1.0).
-    smoothing_factor : float
-        Smoothing factor for the MLR output (default: 50.0).
     kernel_init_std : float | None
         Standard deviation for the Gaussian kernel init. If ``None`` (default),
         uses He scaling ``sqrt(2 / in_dim)`` so stacked layers preserve variance
@@ -110,8 +104,8 @@ class HypLinearPV(nnx.Module):
     Notes
     -----
     JIT Compatibility:
-        Configuration parameters (input_space, clamping_factor, smoothing_factor,
-        inner_activation) are treated as static and are baked into the compiled function.
+        Configuration parameters (input_space, inner_activation) are treated
+        as static and are baked into the compiled function.
 
     References
     ----------
@@ -127,8 +121,6 @@ class HypLinearPV(nnx.Module):
         rngs: nnx.Rngs,
         input_space: str = "manifold",
         inner_activation: Callable[[Array], Array] | None = None,
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         kernel_init_std: float | None = None,
         param_dtype: DTypeLike = jnp.float32,
     ):
@@ -144,8 +136,6 @@ class HypLinearPV(nnx.Module):
         self.out_dim = out_dim
         self.input_space = input_space
         self.inner_activation = inner_activation
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
 
         # Kernel init: He(in_dim) by default so deep stacks preserve variance
         # under ReLU. Override via ``kernel_init_std`` when using as a final
@@ -183,7 +173,5 @@ class HypLinearPV(nnx.Module):
             self.manifold,
             c,
             self.input_space,
-            self.clamping_factor,
-            self.smoothing_factor,
             self.inner_activation,
         )

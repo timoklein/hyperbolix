@@ -36,8 +36,7 @@ def pv_fc_reference(x_BI, kernel_OI, bias_O1, c, inner_activation=None):
                                                  - sinh(sqrt(c) r_k)*beta_inv(x) )   (Eq. 19)
         y_k         = sinh(sqrt(c) * sigma(v_k(x))) / sqrt(c)                        (Eq. 22)
 
-    The library's smooth clamp on the asinh argument is a value-identity well inside
-    its bound (~36 at float64, clamping_factor=1), which the test inputs are.
+    The library applies no clamp to the asinh argument, so this is the exact same expression.
     """
     x_BI = np.asarray(x_BI, dtype=np.float64)
     z_OI = np.asarray(kernel_OI, dtype=np.float64)
@@ -211,8 +210,6 @@ def test_pv_fc_forward_helper_matches_layer(dtype):
         manifold,
         1.0,
         "manifold",
-        layer.clamping_factor,
-        layer.smoothing_factor,
         None,
     )
     atol = 1e-6 if dtype == jnp.float32 else 1e-12
