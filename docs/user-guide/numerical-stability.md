@@ -123,7 +123,19 @@ same cell is **0.199 %** against **8.0e-7** and **0.274 %** against **1.0e-6** �
 the FGG hidden dot is left on the default despite its cancellation. That cell is the *worst* of
 a 24-cell grid (depths 2/8/16, $c \in \{0.1, 1\}$, input radius $\{0.5, 5\}$), one
 initialisation and one input draw per cell and no seeds: these are grid maxima at $n = 1$, not
-means. For a deep or gradient-sensitive stack, set the global knob.
+means.
+
+The two stacks differ in the radius they reach. `HTCLinear` feeds the whole ambient point — time
+coordinate included — through its Euclidean kernel, so at the default init the curvature-scaled
+geodesic radius $\sqrt{c}\,r$ climbs by ≈0.35 nats per layer (measured mean +0.36 … +0.38 at depths
+8 and 16, the input→layer-1 step excluded), while an `FGGLinear` stack stays at its input radius
+(−0.011 … +0.002). Across the four depth-16 cells the `HTCLinear` stack's TF32 parameter-gradient
+error is **2.3–7.8×** the `FGGLinear` stack's, on that one initialisation and one input draw per
+cell. Whether the radius climb is *what* costs the precision is a **hypothesis**: rescaling the HTC
+kernel by $1/\sqrt{2}$ to flatten the climb cuts the depth-16 error 3.9× in a CPU rounding
+emulation, but doubling the climb did not raise it and the emulation does not reproduce the GPU
+gap. At depth 2 the HTC/FGG ratios are 0.87–0.97, which is not an ordering. For a deep or
+gradient-sensitive stack, set the global knob.
 
 `HIGHEST` is a no-op on CPU (there is no TF32 path) and for float64 anywhere.
 

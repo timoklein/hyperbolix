@@ -79,8 +79,43 @@ against 2.5e-6 under global ``HIGHEST``, and its input gradient 2.013 % against 
 ``FGGLinear`` stack at the same cell is 0.199 % against 8.0e-7 and 0.274 % against 1.0e-6. That
 cell is the **worst** of a 24-cell grid (depths 2/8/16, ``c in {0.1, 1}``, input radius
 ``{0.5, 5}``), with one initialisation and one input draw per cell and no seeds — so these are
-maxima over the grid, not means, and n = 1 per cell. For a deep or gradient-sensitive stack, set
-the global knob (the snippet above).
+maxima over the grid, not means, and n = 1 per cell. What that grid does record is a radius climb
+(follow-up probes and their re-derivation in
+``logs/2026-09-06_numerics_review_followup/depth_reversal/`` and its ``audit/``): ``HTCLinear``
+applies its kernel to the full ambient point ``(x_0, x_s)`` with zero bias at init, so
+``||z||^2 ~ x_0^2 + ||x_s||^2 = (1 + 2 sinh(rho_in)^2)/c`` and the curvature-scaled radius
+``rho = sqrt(c) * r`` maps forward as ``rho_out = asinh(sqrt(1 + 2 sinh(rho_in)^2))``, an increment
+of exactly ``log(sqrt(2)) = 0.347`` at large ``rho`` — though from a small input radius the first
+layer jumps to ~0.9 rather than adding 0.35 — and against the recorded per-layer radii that closed
+form holds within +-0.10 nats (54 % of layers within +-0.04; the residuals are layer-index-dependent,
+i.e. the gain of that one weight draw); excluding the input->layer-1 step, HTC's mean per-layer
+increment is 0.36-0.38 nats at depths 8 and 16 and 0.37-0.45 at depth 2 (individual layers
+0.29-0.45), against -0.011 … +0.002 for ``FGGLinear`` (individual -0.041 … +0.022). At the one pair
+where it can be checked ``c`` enters only through ``sqrt(c) * r`` — depth-16 HTC at ``rho = 6.67``
+(``c = 0.1``) and 6.77 (``c = 1``) give 1.639e-3 and 1.643e-3, 0.24 % apart — but that is n = 1, the
+matching depth-8 and depth-2 pairs are 10 % and 12 % apart, and the cells do not collapse onto one
+curve (sorted by ``rho`` the HTC cells invert twice, by 9.0 % and 5.9 %, and ``FGGLinear`` at depth
+16, ``rho = 4.88`` is 2.2x worse than HTC at depth 2, ``rho = 5.77``). That the climb is *what makes*
+the TF32 error grow is a **hypothesis**, with evidence in one direction only: rescaling the HTC kernel
+by ``1/sqrt(2)`` at ``c = 1``, radius 5, depth 16 holds the radius flat (5.00 -> 4.55) and cuts the
+parameter-gradient error from 3.23e-3 to 8.31e-4 (3.9x, disjoint ranges, Welch t = 4.6), but the
+opposite rescaling by ``sqrt(2)`` runs the radius up to 15.6 without raising the error (3.39e-3,
+t = 0.20), and in that same emulation HTC and FGG are indistinguishable at the cell where the GPU grid
+puts them 7.75x apart (3.23e-3 against 3.11e-3, t = 0.23) — CPU TF32 emulation, 8 rounding
+realizations, one weight draw, and a different HTC draw from the grid's. At depth 2 the HTC/FGG
+parameter-gradient ratios are 0.87/0.93/0.97/0.97, which is not an ordering: the single-GEMM TF32
+floor with two perturbed operands is ``sqrt(2)*u/sqrt(3) ~ 4.0e-4`` for TF32's unit roundoff
+``u = 2^-11`` (3.97e-4 measured on these operands), the ``r = 0.5`` cells sit at that floor
+(2.9-3.4e-4) while the ``c = 1``, ``r = 5`` cells are 2.3x above it (9.2e-4, 9.5e-4), and on cell
+means the emulation flips the depth-2 sign in exactly one of the four. Single HTC cells are not tight
+either — the emulation's realization sd is 6-61 % of the cell mean for HTC against 2-11 % for FGG, and
+on its weight draw HTC depth 8 is worse than depth 16 in one cell (1.15e-2 against 3.23e-3). Finally,
+the grid's error is one relative L2 over the whole flattened gradient tree, and at depth 16, ``c = 1``,
+radius 5 the head kernel carries 86 % of HTC's squared error and 87 % of its squared reference norm
+(``FGGLinear`` 49 % / 34 %); the per-leaf errors are individually elevated (HTC layers 5-15 ~1.7e-2
+against FGG's ~2.5e-3), so this is not a layer-counting artefact, but the reported number is in
+practice the head-kernel gradient's relative error, on a gradient whose norm the radius inflates
+(60.8 against 3.53). For a deep or gradient-sensitive stack, set the global knob (the snippet above).
 
 Why the geometry is pinned rather than left to the same knob
 ------------------------------------------------------------
