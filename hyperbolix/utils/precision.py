@@ -1,9 +1,10 @@
 r"""Matmul precision for the float32 dot products that touch manifold data.
 
 :data:`MATMUL_PRECISION` (``jax.lax.Precision.HIGHEST``, not user-configurable) is pinned on
-the sites where the *geometry* is computed, and nowhere else. Everything else — the layer
-weight GEMMs — passes no ``precision`` keyword at all and follows JAX's own
-``jax_default_matmul_precision``, which on Ampere/Hopper means TF32.
+the sites where the *geometry* is computed, and nowhere else. Most layer weight GEMMs pass no
+``precision`` keyword at all and follow JAX's own ``jax_default_matmul_precision``, which on
+Ampere/Hopper means TF32. The exception is the point-to-hyperplane layers, whose kernel dot *is*
+one of the pinned geometry einsums — see the two lists below.
 
 Pinned to ``HIGHEST``
 ---------------------
@@ -21,20 +22,31 @@ Pinned to ``HIGHEST``
 - the attention score and aggregation einsums in ``hyperboloid_attention.py`` (the Lorentzian
   similarity, the softmax scores and weighted values, the linear-attention kernel sums) and the
   spatial residual projection that is added to that aggregate;
-- the MLR heads, which are decision quantities rather than hidden activations:
-  ``HypRegressionHyperboloid``, ``Hyperboloid._compute_mlr``, ``Poincare._compute_mlr_pp`` and
-  ``ProperVelocity._compute_mlr``.
+- the point-to-hyperplane einsums — ``Hyperboloid._compute_mlr``, ``Poincare._compute_mlr_pp``,
+  ``ProperVelocity._compute_mlr``, and the ``HypRegressionHyperboloid`` / ``FGGLorentzMLR``
+  heads — because the ``asinh`` argument they form is a difference of a radial and an angular
+  term that cancels. The hidden PLFC, Poincaré++ and proper-velocity linear and convolution
+  layers *are* those einsums applied to their own kernel, so their weight GEMM runs at
+  ``HIGHEST`` too: ``HypLinearHyperboloidPLFC``, ``HypLinearPoincarePP``, ``HypLinearPV``,
+  ``HypConv2DHyperboloidILNN``, ``HypConv2DPoincare`` and ``HypConv2DPV``.
 
 Following JAX's default
 -----------------------
-The layer weight GEMMs — ``HTCLinear`` (including the attention Q/K/V projections),
-``FGGLinear``/``FGGConv2D``, the FHCNN and FHNN linears, ``HypLinearHyperboloidPLFC``, the
-Poincaré and proper-velocity linear and convolution layers, ``HypVQMLRPoincare``'s
-implicit-codebook matmul and ``hybrid_regularization``'s ``nnx.Linear`` — carry no
-``precision`` keyword. These are the
-sites where ``HIGHEST`` actually costs throughput (it replaces one TF32 pass with a
-three-pass float32 emulation; measured +5.5 % on a jitted hyperbolic attention forward), and
-whether to pay that is the user's call, not the library's.
+The remaining layer weight GEMMs — ``HTCLinear`` (including the attention Q/K/V projections),
+``FGGLinear``/``FGGConv2D``, the FHCNN and FHNN linears, ``HypLinearPoincare``,
+``HypVQMLRPoincare``'s implicit-codebook matmul and ``hybrid_regularization``'s ``nnx.Linear``
+— carry no ``precision`` keyword. These are the sites where ``HIGHEST`` actually costs
+throughput (it replaces one TF32 pass with a three-pass float32 emulation; measured +5.5 % on a
+jitted hyperbolic attention forward), and whether to pay that is the user's call, not the
+library's.
+
+One of them does carry a cancellation and is still left on the default: the FGG hidden dot
+``x @ V`` absorbs the Minkowski metric into ``V``, so the ``-x0*V0 + <x_s, V_s>`` cancellation
+happens *inside* a single accumulation — the same product ``FGGLorentzMLR`` pins. The comment on
+the ``jnp.matmul`` in ``nn_layers/hyperboloid_linear._fgg_linear_forward`` states the reasoning.
+The depth grid below is why it is left alone: **at depth 16** an FGG stack's float32 gradient
+error under the default is smaller than an ``HTCLinear`` stack's, which has no cancellation at
+all, so the cancellation is not what dominates there.
 
 To run **everything** in full float32, set JAX's own knob — one line, and jit-cache aware, so
 changing it re-traces::
@@ -53,6 +65,22 @@ every layer after it. Measured on an A100 (jax 0.9.1, ambient dim 33, batch 64,
 ``FGGLinear`` 2.6e-4 under TF32 against 6.8e-8 under ``HIGHEST``, ``FGGLorentzMLR``
 1.3e-4 … 3.6e-4 against 3.6e-8 … 9.6e-8 — roughly ~1e-4 against ~1e-7 on the layers, three of
 float32's seven significant digits.
+
+Depth decides whether that matters, and at depth 2 it does not. An independent teacher-student
+comparison (5 seeds per arm, ``D = 128``, ``B = 256``, ``c = 1``, 2 000 Adam updates,
+independent A100 measurement, jax 0.9.1) found no mean heldout-loss difference between the
+default and global ``HIGHEST``: 0.27736 against 0.27738 for an ``HTCLinear`` stack, 0.28610
+against 0.28614 for an ``FGGLinear`` one, against a per-arm seed spread of ~0.015-0.017. The
+float32-vs-float64 gradient error does grow with depth. At depth 16, ``c = 1``, input geodesic
+radius 5 (same measurement; the grid is in
+``logs/2026-09-06_numerics_independent_review/training/gpu/depth.json``): the ``HTCLinear``
+stack's parameter gradient is 1.539 % relative L2 off a float64 reference under the default
+against 2.5e-6 under global ``HIGHEST``, and its input gradient 2.013 % against 1.2e-5; the
+``FGGLinear`` stack at the same cell is 0.199 % against 8.0e-7 and 0.274 % against 1.0e-6. That
+cell is the **worst** of a 24-cell grid (depths 2/8/16, ``c in {0.1, 1}``, input radius
+``{0.5, 5}``), with one initialisation and one input draw per cell and no seeds — so these are
+maxima over the grid, not means, and n = 1 per cell. For a deep or gradient-sensitive stack, set
+the global knob (the snippet above).
 
 Why the geometry is pinned rather than left to the same knob
 ------------------------------------------------------------
@@ -91,6 +119,7 @@ MATMUL_PRECISION = jax.lax.Precision.HIGHEST
 
 Fixed at ``HIGHEST`` and not user-configurable: accuracy here is a property of the geometry,
 not a knob. The module docstring lists the pinned sites and the measurements behind them. The
-layer weight GEMMs pass no ``precision`` keyword and follow
-``jax_default_matmul_precision`` instead.
+layer weight GEMMs pass no ``precision`` keyword and follow ``jax_default_matmul_precision``
+instead — all but the point-to-hyperplane layers, whose kernel dot is one of the pinned
+einsums.
 """

@@ -80,12 +80,17 @@ hyperbolix splits its float32 dot products in two:
 - **Geometry is pinned** to `jax.lax.Precision.HIGHEST` and is not configurable: the manifold
   vector dots, `lorentz_midpoint` and `poincare_weighted_midpoint`, the conv patch extraction,
   the attention score and aggregation einsums and the spatial residual projection added to
-  that aggregate, and the MLR heads. These are the cancellations the geometry is built on, and they are not
+  that aggregate, and the point-to-hyperplane kernel einsums — the MLR heads, and with them the
+  PLFC, Poincaré++ and proper-velocity linear and conv layers, whose weight GEMM *is* that
+  einsum applied to their kernel. These are the cancellations the geometry is built on, and they are not
   where the throughput is.
-- **Layer weight GEMMs follow JAX** — `HTCLinear` (the attention Q/K/V projections included),
-  `FGGLinear`/`FGGConv2D`, the FHCNN/FHNN and PLFC linears, the Poincaré and proper-velocity
-  linear and conv layers, the VQ codebook matmul.
-  On an Ampere or Hopper card these run in TF32 unless you say otherwise.
+- **The other layer weight GEMMs follow JAX** — `HTCLinear` (the attention Q/K/V projections
+  included), `FGGLinear`/`FGGConv2D`, the FHCNN/FHNN linears, `HypLinearPoincare`, the VQ
+  codebook matmul.
+  On an Ampere or Hopper card these run in TF32 unless you say otherwise. The FGG hidden dot
+  `x @ V` is a deliberate exception: it absorbs the Minkowski metric into `V`, so its
+  cancellation happens inside one accumulation, and it is left on the default anyway (see the
+  depth numbers below).
 
 To run everything in full float32, set JAX's own knob:
 
@@ -104,6 +109,21 @@ ambient dim 33, batch 64, float32 against a float64 reference), the relative err
 `FGGLorentzMLR` **1.3e-4 … 3.6e-4** against **3.6e-8 … 9.6e-8**. The cost is real but modest:
 `HIGHEST` replaces one TF32 pass with a three-pass float32 emulation, measured **+5.5 %** on a
 jitted hyperbolic attention forward.
+
+**Depth is what decides whether you need it.** At depth 2 you do not: an independent
+teacher-student comparison (5 seeds per arm, $D = 128$, $B = 256$, $c = 1$, 2 000 Adam updates,
+independent A100 measurement, jax 0.9.1) found no mean heldout-loss difference between the
+default and global `HIGHEST` — 0.27736 against 0.27738 for an `HTCLinear` stack, 0.28610
+against 0.28614 for an `FGGLinear` one, against a seed spread of ~0.015–0.017. The
+float32-vs-float64 gradient error does grow with depth. At depth 16, $c = 1$, input geodesic
+radius 5 (same measurement), the `HTCLinear` stack's parameter gradient is **1.539 %**
+relative L2 off a float64 reference under the default against **2.5e-6** under global
+`HIGHEST`, and its input gradient **2.013 %** against **1.2e-5**; the `FGGLinear` stack at that
+same cell is **0.199 %** against **8.0e-7** and **0.274 %** against **1.0e-6** — which is why
+the FGG hidden dot is left on the default despite its cancellation. That cell is the *worst* of
+a 24-cell grid (depths 2/8/16, $c \in \{0.1, 1\}$, input radius $\{0.5, 5\}$), one
+initialisation and one input draw per cell and no seeds: these are grid maxima at $n = 1$, not
+means. For a deep or gradient-sensitive stack, set the global knob.
 
 `HIGHEST` is a no-op on CPU (there is no TF32 path) and for float64 anywhere.
 
@@ -266,8 +286,9 @@ same finite (in fact exactly zero) derivative with no floor on the value at all.
 
 The **max-scaled** `safe_norm`/`safe_hypot_norm` reads the input twice — once for
 $\max_i |x_i|$, once for the sum — to keep $\sum_i x_i^2$ from overflowing float32, which happens
-once a coordinate passes $1.8\times10^{19}$. That is geodesic radius $\approx 44$ at $c = 1$: a
-regime no training run visits. So the converted sites take the single reduction and give up their
+once a coordinate passes $1.8\times10^{19}$. That is geodesic radius $\approx 45$ at $c = 1$ and
+$\approx 139$ at $c = 0.1$, in float32; a network that far out is already diverging, and `inf` is
+the signal you want. So the converted sites take the single reduction and give up their
 answer past that coordinate. What they give instead was measured, float32 at $c = 1$, rather than
 argued — and it is **not** uniform:
 
@@ -291,8 +312,8 @@ there.)
 One consequence worth stating plainly: for the converted origin-chart operations the largest
 representable geodesic radius drops. It used to be set by $x_0 = \cosh(a)$ fitting the dtype —
 radius $\approx 88$ in float32, $\approx 709$ in float64. For `proj` and `dist_0` it is now set by
-the **coordinate**, $\sinh(a)/\sqrt{c} < \sqrt{\texttt{finfo.max}}$ — radius $\approx 44$ in
-float32 and $\approx 355$ in float64. `logmap_0` and the pairwise `dist`/`logmap` keep the
+the **coordinate**, $\sinh(a)/\sqrt{c} < \sqrt{\texttt{finfo.max}}$ — radius $\approx 45$ in
+float32 and $\approx 356$ in float64. `logmap_0` and the pairwise `dist`/`logmap` keep the
 two-pass norm and therefore keep both their finite result and the old $\approx 88$ / $\approx 709$
 ceiling. Every hyperbolic model in the literature lives four to five orders of magnitude inside
 either limit.
