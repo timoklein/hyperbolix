@@ -2,102 +2,102 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/changelog/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/developer-guide/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/getting-started/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/decomposition/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/distributions/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/manifolds/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/optimizers/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/utils/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/activations/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/attention/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/convolutional/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/linear/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/normalization/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/positional-encoding/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/primitives/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/regression/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/api-reference/nn-layers/vector-quantization/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/user-guide/batching-jit/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/user-guide/manifolds/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/user-guide/nn-layers/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/user-guide/numerical-stability/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/user-guide/optimizers/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
     <url>
          <loc>https://timoklein.github.io/hyperbolix/latest/user-guide/training-workflows/</loc>
-         <lastmod>2026-09-04</lastmod>
+         <lastmod>2026-09-06</lastmod>
     </url>
 </urlset>

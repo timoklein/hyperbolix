@@ -1709,6 +1709,15 @@
 <p>Utility functions for hyperbolic deep learning.</p>
 <h2 id="math-utilities">Math Utilities<a class="headerlink" href="#math-utilities" title="Permanent link">&para;</a></h2>
 <p>Numerically stable implementations of hyperbolic functions.</p>
+<p>Note which norm primitive goes where. On the <strong>hot path</strong> — every per-sample norm inside <code>proj</code>,
+<code>expmap</code>, <code>logmap</code>, the distances and the layer forwards — the library takes a single reduction:
+<code>safe_sqrt(sum(v**2))</code> when the input can be exactly zero, a plain <code>sqrt(const + sum(v**2))</code> when a
+strictly positive constant is added, and <code>floor_at(..., MIN_NORM)</code> around either when the norm is a
+divisor. <code>safe_norm</code>, <code>safe_hypot_norm</code> and <code>safe_normalize</code> are max-scaled and read the input
+twice; they are used for the <strong>weight</strong> norms, computed once per forward over a kernel rather than
+once per sample, and they are the right choice in user code that needs the full float32 exponent
+range. See
+<a href="../../user-guide/numerical-stability/#safe-norms">Norms: one reduction, gradient-safe at zero</a>.</p>
 
 
 <div class="doc doc-object doc-module">
@@ -3528,7 +3537,16 @@ value instead of overflowing to <code>inf</code> and NaN-ing the rest of the mod
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">capped_exp</span><span class="p">(</span><span class="n">log_scale</span><span class="p">)</span>  <span class="c1"># finite, saturates at exp(0.99*log(finfo.max))</span>
 </span></code></pre></div>
 <h2 id="matmul-precision">Matmul Precision<a class="headerlink" href="#matmul-precision" title="Permanent link">&para;</a></h2>
-<p><code>MATMUL_PRECISION</code> pins float32 dot products touching manifold data (points, tangent vectors, hyperplane normals) to <code>jax.lax.Precision.HIGHEST</code>, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on.</p>
+<p><code>MATMUL_PRECISION</code> pins the <strong>geometry</strong> to <code>jax.lax.Precision.HIGHEST</code>, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on. It is not user-configurable. Pinned: the vector-vector reductions inside <code>manifolds/</code> and the <code>decomposition/</code> (HoroPCA) contractions; <code>lorentz_midpoint</code> and <code>poincare_weighted_midpoint</code>; the conv patch extraction (a 0/1-filter convolution, so a pure data copy); the attention score and aggregation einsums and the spatial residual projection added to that aggregate; and the MLR heads (<code>HypRegressionHyperboloid</code> and the three <code>_compute_mlr</code> einsums in <code>manifolds/</code>), which are decision quantities.</p>
+<p>The <strong>layer weight GEMMs</strong> pass no <code>precision</code> keyword at all — <code>HTCLinear</code> (including the attention Q/K/V projections), <code>FGGLinear</code>/<code>FGGConv2D</code>, the FHCNN/FHNN and PLFC linears, the Poincaré and proper-velocity linear and convolution layers, <code>HypVQMLRPoincare</code>'s codebook matmul, <code>hybrid_regularization</code>'s <code>nnx.Linear</code>. These follow JAX's own <code>jax_default_matmul_precision</code>, which on Ampere/Hopper means TF32. That is where <code>HIGHEST</code> actually costs throughput (one TF32 pass becomes a three-pass float32 emulation; measured +5.5 % on a jitted hyperbolic attention forward), so the trade is yours to make:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># JAX-wide (jit-cache aware — changing it re-traces)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_default_matmul_precision&quot;</span><span class="p">,</span> <span class="s2">&quot;highest&quot;</span><span class="p">)</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># or scoped to a block</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="k">with</span> <span class="n">jax</span><span class="o">.</span><span class="n">default_matmul_precision</span><span class="p">(</span><span class="s2">&quot;highest&quot;</span><span class="p">):</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">logits</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span></code></pre></div>
+<p>A deep, fully hyperbolic stack is a good reason to set it: a TF32 error introduced in an early layer's weight GEMM is carried by every layer after it. Measured on an A100 (jax 0.9.1, float32 against a float64 reference), <code>FGGLinear</code>'s relative error is 2.6e-4 at the TF32 default against 6.8e-8 under <code>HIGHEST</code> — roughly ~1e-4 against ~1e-7 on the layers. <code>HIGHEST</code> is a no-op on CPU and for float64 anywhere.</p>
 
 
 <div class="doc doc-object doc-module">
@@ -3544,26 +3562,71 @@ value instead of overflowing to <code>inf</code> and NaN-ing the rest of the mod
     <div class="doc doc-contents first">
 
         <p>Matmul precision for the float32 dot products that touch manifold data.</p>
-<p>The library pins one setting, :data:<code>MATMUL_PRECISION</code>, on every float32 dot-product
-primitive (<code>jnp.dot</code> / <code>jnp.einsum</code> / <code>jnp.matmul</code> / <code>lax.conv_general_dilated*</code> /
-<code>nnx.Linear</code>) that consumes or produces points, tangent vectors or hyperplane normals.
-It lives in <code>utils/</code> — a neutral home both <code>manifolds/</code> and <code>nn_layers/</code> can import
-from, since <code>manifolds/</code> must not depend on <code>nn_layers/</code>. It was originally defined in
-<code>hyperbolix.nn_layers.hyperboloid_core</code>, which now re-exports it, so
-<code>hyperboloid_core.MATMUL_PRECISION</code> keeps working.</p>
+<p>:data:<code>MATMUL_PRECISION</code> (<code>jax.lax.Precision.HIGHEST</code>, not user-configurable) is pinned on
+the sites where the <em>geometry</em> is computed, and nowhere else. Everything else — the layer
+weight GEMMs — passes no <code>precision</code> keyword at all and follows JAX's own
+<code>jax_default_matmul_precision</code>, which on Ampere/Hopper means TF32.</p>
 
 
-<details class="why" open>
-  <summary>Why</summary>
+<details class="pinned-to-``highest``" open>
+  <summary>Pinned to <code>HIGHEST</code></summary>
+  <ul>
+<li>the vector-vector reductions inside <code>manifolds/</code> (behind <code>dist</code>, <code>addition</code>,
+  <code>gyration</code>, <code>expmap</code>, <code>logmap</code>, <code>ptransp</code>, <code>tangent_inner</code>, <code>egrad2rgrad</code>, the
+  Lorentz inner product, the Busemann coordinate and the boundary factors) and the
+  <code>decomposition/</code> (HoroPCA) contractions. XLA lowers a vector-vector dot to a reduction
+  rather than a tensor-core GEMM, so <code>HIGHEST</code> costs essentially nothing here;</li>
+<li><code>lorentz_midpoint</code> and <code>poincare_weighted_midpoint</code> — the two Fréchet-mean normalizers,
+  whose whole design is a cancellation-free identity that only holds to <code>O(eps)</code> if its
+  inputs are float32-accurate;</li>
+<li>the patch extraction in the hyperboloid, Poincaré and proper-velocity convolutions. XLA
+  implements <code>conv_general_dilated_patches</code> as a convolution against a 0/1 filter, i.e. a
+  pure data copy, so TF32 there would round every input to a 10-bit mantissa for nothing;</li>
+<li>the attention score and aggregation einsums in <code>hyperboloid_attention.py</code> (the Lorentzian
+  similarity, the softmax scores and weighted values, the linear-attention kernel sums) and the
+  spatial residual projection that is added to that aggregate;</li>
+<li>the MLR heads, which are decision quantities rather than hidden activations:
+  <code>HypRegressionHyperboloid</code>, <code>Hyperboloid._compute_mlr</code>, <code>Poincare._compute_mlr_pp</code> and
+  <code>ProperVelocity._compute_mlr</code>.</li>
+</ul>
+</details>
+
+<details class="following-jax&#39;s-default" open>
+  <summary>Following JAX's default</summary>
+  <p>The layer weight GEMMs — <code>HTCLinear</code> (including the attention Q/K/V projections),
+<code>FGGLinear</code>/<code>FGGConv2D</code>, the FHCNN and FHNN linears, <code>HypLinearHyperboloidPLFC</code>, the
+Poincaré and proper-velocity linear and convolution layers, <code>HypVQMLRPoincare</code>'s
+implicit-codebook matmul and <code>hybrid_regularization</code>'s <code>nnx.Linear</code> — carry no
+<code>precision</code> keyword. These are the
+sites where <code>HIGHEST</code> actually costs throughput (it replaces one TF32 pass with a
+three-pass float32 emulation; measured +5.5 % on a jitted hyperbolic attention forward), and
+whether to pay that is the user's call, not the library's.</p>
+<p>To run <strong>everything</strong> in full float32, set JAX's own knob — one line, and jit-cache aware, so
+changing it re-traces::</p>
+<div class="language-text highlight"><pre><span></span><code>jax.config.update(&quot;jax_default_matmul_precision&quot;, &quot;highest&quot;)
+</code></pre></div>
+<p>or scoped to a block::</p>
+<div class="language-text highlight"><pre><span></span><code>with jax.default_matmul_precision(&quot;highest&quot;):
+    logits = model(x)
+</code></pre></div>
+<p>A deep, fully hyperbolic stack is a good reason to do so: the pinned sites keep the geometry
+honest, but a TF32 error introduced in an early layer's weight GEMM is carried forward by
+every layer after it. Measured on an A100 (jax 0.9.1, ambient dim 33, batch 64,
+<code>c in {0.1, 1.0}</code> x spatial radius <code>in {0.5, 5, 20}</code>, float32 against a float64 reference):
+<code>FGGLinear</code> 2.6e-4 under TF32 against 6.8e-8 under <code>HIGHEST</code>, <code>FGGLorentzMLR</code>
+1.3e-4 … 3.6e-4 against 3.6e-8 … 9.6e-8 — roughly ~1e-4 against ~1e-7 on the layers, three of
+float32's seven significant digits.</p>
+</details>
+
+<details class="why-the-geometry-is-pinned-rather-than-left-to-the-same-knob" open>
+  <summary>Why the geometry is pinned rather than left to the same knob</summary>
   <p>On Ampere/Hopper, XLA:GPU defaults float32 matmuls to TF32, whose 10-bit mantissa carries
 ~1e-3 relative error — far coarser than float32's ~1e-7. Hyperbolic geometry spends that
 budget on cancellations whose entire design assumes float32 accuracy:</p>
 <ul>
-<li>the Lorentz inner product <code>&lt;x,y&gt;_L = -x_0 y_0 + &lt;x_s, y_s&gt;</code>, formed as a difference of
-  two dots (hyperboloid <code>dist</code>/<code>expmap</code>/<code>ptransp</code>, the attention scores, the Busemann
-  coordinate, the HoroPCA ideal-span projections) or, with the Minkowski metric absorbed
-  into the weight matrix, <em>inside a single accumulation</em> (<code>FGGLinear</code>,
-  <code>FGGLorentzMLR</code>, <code>HypRegressionHyperboloid</code>);</li>
+<li>the Lorentz inner product <code>&lt;x,y&gt;_L = -x_0 y_0 + &lt;x_s, x_s&gt;</code>, formed as a difference of two
+  dots (hyperboloid <code>dist</code>/<code>expmap</code>/<code>ptransp</code>, the attention scores, the Busemann
+  coordinate, the HoroPCA ideal-span projections);</li>
 <li>the <code>lorentz_midpoint</code> normalizer, a cancellation-free identity that exists precisely to
   keep the float32 error at <code>O(eps)</code> at any radius;</li>
 <li>the Poincaré/stereographic boundary factors <code>1 - c*||x||^2</code> and
@@ -3572,13 +3635,15 @@ budget on cancellations whose entire design assumes float32 accuracy:</p>
 </ul>
 <p>Measured on an A100 (jax 0.9.1): the f32-vs-f64 relative error of <code>lorentz_midpoint</code> is
 4.6e-5 … 2.6e-4 at the TF32 default and 2.6e-8 … 1.6e-7 with <code>HIGHEST</code> — a ~2000x accuracy
-loss that <code>HIGHEST</code> removes. The eager float32 gradient of the hyperboloid MLR improves
-from 1.5e-4 to 2.7e-7 relative over the same switch.</p>
-<p><code>HIGHEST</code> is a no-op on CPU (no TF32 path) and for float64 anywhere, so this costs nothing
-outside float32 GPU matmuls; on tensor-core GPUs it trades GEMM throughput for accuracy
-(<code>HIGHEST</code> replaces one TF32 pass with a three-pass float32 emulation — measured +5.5 % on
-a jitted hyperbolic attention forward). The setting is deliberately <em>not</em> a per-call keyword
-on the manifold or layer signatures: accuracy here is a property of the geometry, not a knob.</p>
+loss that <code>HIGHEST</code> removes. The eager float32 gradient of the hyperboloid MLR improves from
+1.5e-4 to 2.7e-7 relative over the same switch. These are not throughput-critical sites, so
+the library pays for the accuracy rather than exposing the choice.</p>
+<p>This module lives in <code>utils/</code> — a neutral home both <code>manifolds/</code> and <code>nn_layers/</code> can
+import from, since <code>manifolds/</code> must not depend on <code>nn_layers/</code>. <code>MATMUL_PRECISION</code> was
+originally defined in <code>hyperbolix.nn_layers.hyperboloid_core</code>, which re-exports it, so
+<code>hyperboloid_core.MATMUL_PRECISION</code> keeps working.</p>
+<p><code>HIGHEST</code> is a no-op on CPU (no TF32 path) and for float64 anywhere, so the pinning costs
+nothing outside float32 GPU matmuls.</p>
 </details>
 
 
@@ -3596,6 +3661,34 @@ on the manifold or layer signatures: accuracy here is a property of the geometry
 
 
 
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="hyperbolix.utils.precision.MATMUL_PRECISION" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">MATMUL_PRECISION</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#hyperbolix.utils.precision.MATMUL_PRECISION" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">MATMUL_PRECISION</span> <span class="o">=</span> <span class="n">HIGHEST</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Precision for every dot product that computes geometry rather than a layer's weights.</p>
+<p>Fixed at <code>HIGHEST</code> and not user-configurable: accuracy here is a property of the geometry,
+not a knob. The module docstring lists the pinned sites and the measurements behind them. The
+layer weight GEMMs pass no <code>precision</code> keyword and follow
+<code>jax_default_matmul_precision</code> instead.</p>
+
+    </div>
+
+</div>
 
 
 
@@ -3851,30 +3944,30 @@ outside the clamp is rescaled.</p>
     </div>
 
 </div><h3 id="usage-example_1">Usage Example<a class="headerlink" href="#usage-example_1" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">flax</span><span class="w"> </span><span class="kn">import</span> <span class="n">nnx</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">optax</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix</span><span class="w"> </span><span class="kn">import</span> <span class="n">LearnableCurvature</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Hyperboloid</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">HypLinearHyperboloidPLFC</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="k">class</span><span class="w"> </span><span class="nc">Model</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>               <span class="c1"># static, shared</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span> <span class="o">=</span> <span class="n">LearnableCurvature</span><span class="p">(</span>             <span class="c1"># one per distinct c</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>            <span class="n">init_c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>            <span class="n">parameterization</span><span class="o">=</span><span class="s2">&quot;softplus&quot;</span><span class="p">,</span>                 <span class="c1"># or &quot;log&quot; (MERU)</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>            <span class="n">c_min</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">c_max</span><span class="o">=</span><span class="mf">10.0</span><span class="p">,</span>                       <span class="c1"># default clamp</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>        <span class="p">)</span>
-</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">fc</span> <span class="o">=</span> <span class="n">HypLinearHyperboloidPLFC</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span> <span class="mi">33</span><span class="p">,</span> <span class="mi">65</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
-</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
-</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>        <span class="n">c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span><span class="p">()</span>                              <span class="c1"># positive, clamped</span>
-</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="n">c</span><span class="p">)</span>
-</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>
-</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>
-</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="c1"># Updated by any standard Euclidean optimizer — no Riemannian optimizer needed.</span>
-</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">flax</span><span class="w"> </span><span class="kn">import</span> <span class="n">nnx</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">optax</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix</span><span class="w"> </span><span class="kn">import</span> <span class="n">LearnableCurvature</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Hyperboloid</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">HypLinearHyperboloidPLFC</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="k">class</span><span class="w"> </span><span class="nc">Model</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">Hyperboloid</span><span class="p">(</span><span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>               <span class="c1"># static, shared</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span> <span class="o">=</span> <span class="n">LearnableCurvature</span><span class="p">(</span>             <span class="c1"># one per distinct c</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>            <span class="n">init_c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>            <span class="n">parameterization</span><span class="o">=</span><span class="s2">&quot;softplus&quot;</span><span class="p">,</span>                 <span class="c1"># or &quot;log&quot; (MERU)</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>            <span class="n">c_min</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">c_max</span><span class="o">=</span><span class="mf">10.0</span><span class="p">,</span>                       <span class="c1"># default clamp</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>        <span class="p">)</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">fc</span> <span class="o">=</span> <span class="n">HypLinearHyperboloidPLFC</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span> <span class="mi">33</span><span class="p">,</span> <span class="mi">65</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>        <span class="n">c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span><span class="p">()</span>                              <span class="c1"># positive, clamped</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="n">c</span><span class="p">)</span>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="c1"># Updated by any standard Euclidean optimizer — no Riemannian optimizer needed.</span>
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
 </span></code></pre></div>
 <p>See the <a href="../../user-guide/manifolds/#working-with-curvature">Manifolds User Guide — Working with Curvature</a> for the full discussion of parameterizations, clamping, the <code>nnx.scan</code> sharing rule, and per-factor <code>ProductManifold</code> usage.</p>
 <h2 id="helper-functions">Helper Functions<a class="headerlink" href="#helper-functions" title="Permanent link">&para;</a></h2>
@@ -4659,60 +4752,60 @@ diameter and relative delta (delta normalized by diameter).</p>
 
 </div><h3 id="usage-examples">Usage Examples<a class="headerlink" href="#usage-examples" title="Permanent link">&para;</a></h3>
 <h4 id="pairwise-distances">Pairwise Distances<a class="headerlink" href="#pairwise-distances" title="Permanent link">&para;</a></h4>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">compute_pairwise_distances</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1"># Set of points on Poincaré ball</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="n">points</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="p">[</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">],</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="p">[</span><span class="mf">0.3</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.1</span><span class="p">],</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="p">[</span><span class="o">-</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">],</span>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="p">[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">]</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="p">])</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="c1"># Compute all pairwise distances</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="n">dist_matrix</span> <span class="o">=</span> <span class="n">compute_pairwise_distances</span><span class="p">(</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>    <span class="n">points</span><span class="p">,</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    <span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>    <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>    <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span>
-</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="p">)</span>
-</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>
-</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="c1"># Result: (4, 4) matrix of distances</span>
-</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="nb">print</span><span class="p">(</span><span class="n">dist_matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># (4, 4)</span>
-</span></code></pre></div>
-<h4 id="delta-hyperbolicity">Delta-Hyperbolicity<a class="headerlink" href="#delta-hyperbolicity" title="Permanent link">&para;</a></h4>
-<p>Measure how "hyperbolic" a dataset is using the Gromov delta metric:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_delta</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">compute_pairwise_distances</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># Generate random points</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="n">key</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">PRNGKey</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="n">points</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="o">*</span> <span class="mf">0.3</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1"># Project to Poincaré ball</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="n">points_proj</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">poincare</span><span class="o">.</span><span class="n">proj</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">))(</span><span class="n">points</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="c1"># Compute delta-hyperbolicity</span>
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="n">delta</span><span class="p">,</span> <span class="n">diameter</span><span class="p">,</span> <span class="n">rel_delta</span> <span class="o">=</span> <span class="n">get_delta</span><span class="p">(</span>
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>    <span class="n">points_proj</span><span class="p">,</span>
-</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>    <span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span>
-</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>    <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>    <span class="n">sample_size</span><span class="o">=</span><span class="mi">500</span><span class="p">,</span>  <span class="c1"># Points subsampled before the pairwise distance matrix</span>
-</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>    <span class="n">key</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">PRNGKey</span><span class="p">(</span><span class="mi">42</span><span class="p">),</span>  <span class="c1"># Only used when len(points) &gt; sample_size</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># Set of points on Poincaré ball</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="n">points</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    <span class="p">[</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">],</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="p">[</span><span class="mf">0.3</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.1</span><span class="p">],</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="p">[</span><span class="o">-</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">],</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    <span class="p">[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">]</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="p">])</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="c1"># Compute all pairwise distances</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="n">dist_matrix</span> <span class="o">=</span> <span class="n">compute_pairwise_distances</span><span class="p">(</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>    <span class="n">points</span><span class="p">,</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>    <span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>    <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>    <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span>
 </span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="p">)</span>
 </span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>
-</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Delta: </span><span class="si">{</span><span class="n">delta</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Diameter: </span><span class="si">{</span><span class="n">diameter</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Relative delta: </span><span class="si">{</span><span class="n">rel_delta</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="c1"># Result: (4, 4) matrix of distances</span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="nb">print</span><span class="p">(</span><span class="n">dist_matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># (4, 4)</span>
+</span></code></pre></div>
+<h4 id="delta-hyperbolicity">Delta-Hyperbolicity<a class="headerlink" href="#delta-hyperbolicity" title="Permanent link">&para;</a></h4>
+<p>Measure how "hyperbolic" a dataset is using the Gromov delta metric:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_delta</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1"># Generate random points</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="n">key</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">PRNGKey</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="n">points</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="o">*</span> <span class="mf">0.3</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="c1"># Project to Poincaré ball</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="n">points_proj</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">poincare</span><span class="o">.</span><span class="n">proj</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">))(</span><span class="n">points</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="c1"># Compute delta-hyperbolicity</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="n">delta</span><span class="p">,</span> <span class="n">diameter</span><span class="p">,</span> <span class="n">rel_delta</span> <span class="o">=</span> <span class="n">get_delta</span><span class="p">(</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>    <span class="n">points_proj</span><span class="p">,</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>    <span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>    <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>    <span class="n">sample_size</span><span class="o">=</span><span class="mi">500</span><span class="p">,</span>  <span class="c1"># Points subsampled before the pairwise distance matrix</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>    <span class="n">key</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">PRNGKey</span><span class="p">(</span><span class="mi">42</span><span class="p">),</span>  <span class="c1"># Only used when len(points) &gt; sample_size</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="p">)</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Delta: </span><span class="si">{</span><span class="n">delta</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Diameter: </span><span class="si">{</span><span class="n">diameter</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Relative delta: </span><span class="si">{</span><span class="n">rel_delta</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </span></code></pre></div>
 <p>The Gromov delta quantifies tree-likeness:</p>
 <ul>
@@ -4724,31 +4817,31 @@ diameter and relative delta (delta normalized by diameter).</p>
 <div class="admonition tip">
 <p class="admonition-title">JIT Compilation</p>
 <p>All utility functions support JIT compilation:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_all_distances</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">c</span><span class="p">):</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="k">return</span> <span class="n">compute_pairwise_distances</span><span class="p">(</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="n">points</span><span class="p">,</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>        <span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>        <span class="n">c</span><span class="o">=</span><span class="n">c</span><span class="p">,</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span>
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    <span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_all_distances</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">c</span><span class="p">):</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="k">return</span> <span class="n">compute_pairwise_distances</span><span class="p">(</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>        <span class="n">points</span><span class="p">,</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>        <span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>        <span class="n">c</span><span class="o">=</span><span class="n">c</span><span class="p">,</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>        <span class="n">version_idx</span><span class="o">=</span><span class="mi">0</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="p">)</span>
 </span></code></pre></div>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Batching</p>
 <p>For large datasets, consider batching delta-hyperbolicity computation:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Use smaller sample_size for faster computation</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">delta</span><span class="p">,</span> <span class="n">diameter</span><span class="p">,</span> <span class="n">rel_delta</span> <span class="o">=</span> <span class="n">get_delta</span><span class="p">(</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">points</span><span class="p">,</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">sample_size</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span>  <span class="c1"># Reduce from 500 for speed</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="n">seed</span><span class="o">=</span><span class="mi">42</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Use smaller sample_size for faster computation</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">delta</span><span class="p">,</span> <span class="n">diameter</span><span class="p">,</span> <span class="n">rel_delta</span> <span class="o">=</span> <span class="n">get_delta</span><span class="p">(</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">points</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="n">sample_size</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span>  <span class="c1"># Reduce from 500 for speed</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="n">seed</span><span class="o">=</span><span class="mi">42</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="p">)</span>
 </span></code></pre></div>
 </div>
 <h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
