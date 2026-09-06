@@ -2791,12 +2791,17 @@ relative error against float32's ~1e-7 — three of your seven significant digit
 <li><strong>Geometry is pinned</strong> to <code>jax.lax.Precision.HIGHEST</code> and is not configurable: the manifold
   vector dots, <code>lorentz_midpoint</code> and <code>poincare_weighted_midpoint</code>, the conv patch extraction,
   the attention score and aggregation einsums and the spatial residual projection added to
-  that aggregate, and the MLR heads. These are the cancellations the geometry is built on, and they are not
+  that aggregate, and the point-to-hyperplane kernel einsums — the MLR heads, and with them the
+  PLFC, Poincaré++ and proper-velocity linear and conv layers, whose weight GEMM <em>is</em> that
+  einsum applied to their kernel. These are the cancellations the geometry is built on, and they are not
   where the throughput is.</li>
-<li><strong>Layer weight GEMMs follow JAX</strong> — <code>HTCLinear</code> (the attention Q/K/V projections included),
-  <code>FGGLinear</code>/<code>FGGConv2D</code>, the FHCNN/FHNN and PLFC linears, the Poincaré and proper-velocity
-  linear and conv layers, the VQ codebook matmul.
-  On an Ampere or Hopper card these run in TF32 unless you say otherwise.</li>
+<li><strong>The other layer weight GEMMs follow JAX</strong> — <code>HTCLinear</code> (the attention Q/K/V projections
+  included), <code>FGGLinear</code>/<code>FGGConv2D</code>, the FHCNN/FHNN linears, <code>HypLinearPoincare</code>, the VQ
+  codebook matmul.
+  On an Ampere or Hopper card these run in TF32 unless you say otherwise. The FGG hidden dot
+  <code>x @ V</code> is a deliberate exception: it absorbs the Minkowski metric into <code>V</code>, so its
+  cancellation happens inside one accumulation, and it is left on the default anyway (see the
+  depth numbers below).</li>
 </ul>
 <p>To run everything in full float32, set JAX's own knob:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">&quot;jax_default_matmul_precision&quot;</span><span class="p">,</span> <span class="s2">&quot;highest&quot;</span><span class="p">)</span>
@@ -2812,6 +2817,31 @@ ambient dim 33, batch 64, float32 against a float64 reference), the relative err
 <code>FGGLorentzMLR</code> <strong>1.3e-4 … 3.6e-4</strong> against <strong>3.6e-8 … 9.6e-8</strong>. The cost is real but modest:
 <code>HIGHEST</code> replaces one TF32 pass with a three-pass float32 emulation, measured <strong>+5.5 %</strong> on a
 jitted hyperbolic attention forward.</p>
+<p><strong>Depth is what decides whether you need it.</strong> At depth 2 you do not: an independent
+teacher-student comparison (5 seeds per arm, <span class="arithmatex">\(D = 128\)</span>, <span class="arithmatex">\(B = 256\)</span>, <span class="arithmatex">\(c = 1\)</span>, 2 000 Adam updates,
+independent A100 measurement, jax 0.9.1) found no mean heldout-loss difference between the
+default and global <code>HIGHEST</code> — 0.27736 against 0.27738 for an <code>HTCLinear</code> stack, 0.28610
+against 0.28614 for an <code>FGGLinear</code> one, against a seed spread of ~0.015–0.017. The
+float32-vs-float64 gradient error does grow with depth. At depth 16, <span class="arithmatex">\(c = 1\)</span>, input geodesic
+radius 5 (same measurement), the <code>HTCLinear</code> stack's parameter gradient is <strong>1.539 %</strong>
+relative L2 off a float64 reference under the default against <strong>2.5e-6</strong> under global
+<code>HIGHEST</code>, and its input gradient <strong>2.013 %</strong> against <strong>1.2e-5</strong>; the <code>FGGLinear</code> stack at that
+same cell is <strong>0.199 %</strong> against <strong>8.0e-7</strong> and <strong>0.274 %</strong> against <strong>1.0e-6</strong> — which is why
+the FGG hidden dot is left on the default despite its cancellation. That cell is the <em>worst</em> of
+a 24-cell grid (depths 2/8/16, <span class="arithmatex">\(c \in \{0.1, 1\}\)</span>, input radius <span class="arithmatex">\(\{0.5, 5\}\)</span>), one
+initialisation and one input draw per cell and no seeds: these are grid maxima at <span class="arithmatex">\(n = 1\)</span>, not
+means.</p>
+<p>The two stacks differ in the radius they reach. <code>HTCLinear</code> feeds the whole ambient point — time
+coordinate included — through its Euclidean kernel, so at the default init the curvature-scaled
+geodesic radius <span class="arithmatex">\(\sqrt{c}\,r\)</span> climbs by ≈0.35 nats per layer (measured mean +0.36 … +0.38 at depths
+8 and 16, the input→layer-1 step excluded), while an <code>FGGLinear</code> stack stays at its input radius
+(−0.011 … +0.002). Across the four depth-16 cells the <code>HTCLinear</code> stack's TF32 parameter-gradient
+error is <strong>2.3–7.8×</strong> the <code>FGGLinear</code> stack's, on that one initialisation and one input draw per
+cell. Whether the radius climb is <em>what</em> costs the precision is a <strong>hypothesis</strong>: rescaling the HTC
+kernel by <span class="arithmatex">\(1/\sqrt{2}\)</span> to flatten the climb cuts the depth-16 error 3.9× in a CPU rounding
+emulation, but doubling the climb did not raise it and the emulation does not reproduce the GPU
+gap. At depth 2 the HTC/FGG ratios are 0.87–0.97, which is not an ordering. For a deep or
+gradient-sensitive stack, set the global knob.</p>
 <p><code>HIGHEST</code> is a no-op on CPU (there is no TF32 path) and for float64 anywhere.</p>
 <h3 id="the-hyperboloids-two-point-cancellation-failure-mode">The Hyperboloid's Two-Point Cancellation Failure Mode<a class="headerlink" href="#the-hyperboloids-two-point-cancellation-failure-mode" title="Permanent link">&para;</a></h3>
 <p>The distance-from-origin table above governs single-point operations (<code>dist_0</code>, <code>logmap_0</code>,
@@ -3011,8 +3041,9 @@ residual <span class="arithmatex">\(\texttt{MIN\_NORM}^2/(2r^2)\)</span>: <span 
 same finite (in fact exactly zero) derivative with no floor on the value at all.</p>
 <p>The <strong>max-scaled</strong> <code>safe_norm</code>/<code>safe_hypot_norm</code> reads the input twice — once for
 <span class="arithmatex">\(\max_i |x_i|\)</span>, once for the sum — to keep <span class="arithmatex">\(\sum_i x_i^2\)</span> from overflowing float32, which happens
-once a coordinate passes <span class="arithmatex">\(1.8\times10^{19}\)</span>. That is geodesic radius <span class="arithmatex">\(\approx 44\)</span> at <span class="arithmatex">\(c = 1\)</span>: a
-regime no training run visits. So the converted sites take the single reduction and give up their
+once a coordinate passes <span class="arithmatex">\(1.8\times10^{19}\)</span>. That is geodesic radius <span class="arithmatex">\(\approx 45\)</span> at <span class="arithmatex">\(c = 1\)</span> and
+<span class="arithmatex">\(\approx 139\)</span> at <span class="arithmatex">\(c = 0.1\)</span>, in float32; a network that far out is already diverging, and <code>inf</code> is
+the signal you want. So the converted sites take the single reduction and give up their
 answer past that coordinate. What they give instead was measured, float32 at <span class="arithmatex">\(c = 1\)</span>, rather than
 argued — and it is <strong>not</strong> uniform:</p>
 <table>
@@ -3060,13 +3091,18 @@ behaviour rather than an accident: with <span class="arithmatex">\(\lVert x\rVer
 (<code>Poincare.expmap_0</code>, which kept the two-pass norm, still returns the correct boundary point
 there.)</p>
 <p>One consequence worth stating plainly: for the converted origin-chart operations the largest
-representable geodesic radius drops. It used to be set by <span class="arithmatex">\(x_0 = \cosh(a)\)</span> fitting the dtype —
-radius <span class="arithmatex">\(\approx 88\)</span> in float32, <span class="arithmatex">\(\approx 709\)</span> in float64. For <code>proj</code> and <code>dist_0</code> it is now set by
-the <strong>coordinate</strong>, <span class="arithmatex">\(\sinh(a)/\sqrt{c} &lt; \sqrt{\texttt{finfo.max}}\)</span> — radius <span class="arithmatex">\(\approx 44\)</span> in
-float32 and <span class="arithmatex">\(\approx 355\)</span> in float64. <code>logmap_0</code> and the pairwise <code>dist</code>/<code>logmap</code> keep the
-two-pass norm and therefore keep both their finite result and the old <span class="arithmatex">\(\approx 88\)</span> / <span class="arithmatex">\(\approx 709\)</span>
-ceiling. Every hyperbolic model in the literature lives four to five orders of magnitude inside
-either limit.</p>
+representable geodesic radius drops. It used to be set by <span class="arithmatex">\(x_0 = \cosh(a)/\sqrt{c}\)</span> fitting the
+dtype, i.e. <span class="arithmatex">\(a = \ln(2\,\texttt{finfo.max})\)</span> — radius <span class="arithmatex">\(\approx 89\)</span> in float32, <span class="arithmatex">\(\approx 710\)</span> in
+float64 at <span class="arithmatex">\(c = 1\)</span> (89.416 / 710.476; the same number as <span class="arithmatex">\(\operatorname{arcsinh}(\texttt{finfo.max})\)</span>,
+since <span class="arithmatex">\(\sinh(a)\)</span> and <span class="arithmatex">\(\cosh(a)\)</span> leave the dtype together). For <code>proj</code> and <code>dist_0</code> it is now set by
+the <strong>coordinate</strong>, <span class="arithmatex">\(\sinh(a)/\sqrt{c} &lt; \sqrt{\texttt{finfo.max}}\)</span> — radius <span class="arithmatex">\(\approx 45\)</span> in
+float32 and <span class="arithmatex">\(\approx 356\)</span> in float64. <code>logmap_0</code> and the pairwise <code>dist</code>/<code>logmap</code> keep the
+two-pass norm and therefore keep both their finite result and a ceiling of that order: <code>logmap_0</code>
+reads only <span class="arithmatex">\(\lVert y_s\rVert\)</span> and keeps the old <span class="arithmatex">\(\approx 89\)</span> / <span class="arithmatex">\(\approx 710\)</span> exactly, while the
+pairwise pair binds a fraction of a radius earlier, at <span class="arithmatex">\(e^a/\sqrt{c} \le \texttt{finfo.max}\)</span>
+(<span class="arithmatex">\(a = \ln(\texttt{finfo.max})\)</span>: 88.72 / 709.78), because <code>_polar_frame</code> composes
+<span class="arithmatex">\(u = x_0 + \lVert x_s\rVert\)</span> and returns <span class="arithmatex">\(\pm\infty\)</span> once that overflows. Every hyperbolic model in
+the literature lives four to five orders of magnitude inside every one of these limits.</p>
 <p>What has <strong>not</strong> changed is how the constant is folded in. The hyperboloid time slot is
 <span class="arithmatex">\(x_0 = \sqrt{1/c + \sum_i (x_s)_i^2}\)</span> — the constant added to the sum <em>under</em> the square root, in
 the same reduction — and never <code>hypot(‖x_s‖, 1/√c)</code>, which rounds <span class="arithmatex">\(\lVert x_s\rVert\)</span> to the dtype
@@ -3809,8 +3845,10 @@ both radii. A loss separating two nearby points through slot 2 received no gradi
   <code>dist</code>/<code>logmap</code> are now genuinely safe there at any representable radius (see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>). The contrast that motivates this
   advice: the Poincaré ball itself cannot even <em>represent</em> a point past <span class="arithmatex">\(d_0 \approx 12.65/\sqrt{c}\)</span>
   (float32) / <span class="arithmatex">\(27.7/\sqrt{c}\)</span> (float64) — <code>proj</code>'s boundary clamp saturates there — while the
-  hyperboloid chart's representable ceiling is <span class="arithmatex">\(\sqrt{c}\,d \approx 88\)</span> (float32), where <code>cosh</code>
-  overflows.
+  hyperboloid chart's representable ceiling is <span class="arithmatex">\(\sqrt{c}\,d = \ln(2\,\texttt{finfo.max}) \approx 89\)</span>
+  (float32), where <span class="arithmatex">\(\cosh\)</span> overflows — with <code>dist</code> itself giving up a fraction of a radius earlier,
+  at <span class="arithmatex">\(\ln(\texttt{finfo.max}) \approx 88.7\)</span>, where the polar frame's <span class="arithmatex">\(x_0 + \lVert x_s\rVert = e^a\)</span>
+  does.
 - <strong>Very high dimensions</strong> (&gt; 1000): <code>VERSION_METRIC_TENSOR</code> (version 2) may be more stable
 - <strong>Debugging</strong>: Compare all versions — significant differences indicate numerical issues</p>
 <h3 id="hyperboloid-distance-versions">Hyperboloid Distance Versions<a class="headerlink" href="#hyperboloid-distance-versions" title="Permanent link">&para;</a></h3>

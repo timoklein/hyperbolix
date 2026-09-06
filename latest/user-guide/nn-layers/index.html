@@ -2266,7 +2266,7 @@ hyperbolic-aware default — keep it unless you have a reason to change it.</p>
 <tr>
 <td><code>HTCLinear</code></td>
 <td>Fan-in uniform <code>U(-√(3/in), √(3/in))</code></td>
-<td>Norm-preserving (per-layer Jacobian gain ≈ 1): <code>htc</code> applies no nonlinearity, so a fixed bound is contractive at realistic widths — the old <code>U(-0.02, 0.02)</code> froze depth-≥2 stacks. The Hypformer reference (Xavier·√2, <code>bound = 2√(3/(in+out))</code>) assumes ReLU + LayerNorm between layers; pass it explicitly to recover</td>
+<td>Norm-preserving (per-layer Jacobian gain ≈ 1), though the time coordinate still feeds the kernel, so a stack's spatial norm grows ≈√2 per layer and its geodesic radius by ≈0.35 nats at large radius (log√2; measured mean 0.36–0.45) (see <a href="../numerical-stability/#tf32-on-ampere-and-hopper-gpus">TF32 and depth</a>): <code>htc</code> applies no nonlinearity, so a fixed bound is contractive at realistic widths — the old <code>U(-0.02, 0.02)</code> froze depth-≥2 stacks. The Hypformer reference (Xavier·√2, <code>bound = 2√(3/(in+out))</code>) assumes ReLU + LayerNorm between layers; pass it explicitly to recover</td>
 </tr>
 <tr>
 <td><code>HypLinearHyperboloidFHCNN</code></td>
