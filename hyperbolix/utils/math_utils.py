@@ -261,7 +261,7 @@ def smooth_clamp(
 
 
 def _pow2_divisor(m: Float[Array, "..."]) -> Float[Array, "..."]:
-    """The rescaling divisor the safe-norm family shares: ``2**(e-1)`` for ``m = mantissa·2**e``.
+    """The rescaling divisor the safe-norm family shares: ``2**floor(log2 m)``, the binade floor of ``m``.
 
     A **power of two**, not ``m`` itself. That is the whole point: dividing and multiplying by a
     power of two only shifts the exponent, so both operations are exact and the rescale contributes
@@ -276,15 +276,24 @@ def _pow2_divisor(m: Float[Array, "..."]) -> Float[Array, "..."]:
     hyperboloid time slot ``x₀ = sqrt(‖s‖² + 1/c)`` is checked against ``-x₀² + ‖s‖² = -1/c``, where
     at ``x₀ ≈ 34`` one ulp of ``x₀²`` is 1.2e-4 and the rounding no longer cancels.
 
-    ``2**(e-1)``, not ``2**e``: ``jnp.frexp`` returns ``mantissa ∈ [0.5, 1)``, so ``2**e`` is
-    ``+inf`` for an ``m`` in the top binade (float32 ``e = 128``) while ``2**(e-1) ≤ 2**127`` is
-    always representable. Scaled magnitudes then land in ``[1, 2)`` rather than ``[0.5, 1)``, so the
-    sum of squares sits in ``[1, 4n)`` — as overflow-free as before.
+    The divisor is built by **masking the mantissa bits off** ``m``, which leaves
+    ``2**floor(log2 m)`` exactly on every backend. It is not built with ``jnp.ldexp``: ``ldexp``
+    computes ``m * 2**e`` and lowers to an XLA ``power``, which CUDA evaluates as a transcendental
+    accurate to ~1 ulp rather than exactly. In float64 on an A100 that is off by an ulp for 75 of
+    the 600 binades ``k ∈ [-300, 300)`` — ``ldexp(1.0, -33)`` returns one ulp *below* ``2**-33`` —
+    and an inexact divisor puts a rounding into every division it scales, which is the whole thing
+    this helper exists to avoid. (float32 is exact on both backends; the measurements are in
+    ``logs/2026-09-06_numerics_review_followup/gpu_norm_rescale/``.)
 
-    The divisor is floored at the smallest **normal** power of two (``2**minexp``, i.e.
-    ``finfo.tiny``): a subnormal ``m`` has ``e - 1 < minexp``, where ``ldexp`` returns 0 and the
-    division would be ``0/0``. Below that floor the scaled values are simply ``< 1``, which
-    overflows nothing.
+    ``2**floor(log2 m)``, never ``2 * 2**floor(log2 m)``: the larger choice is ``+inf`` for an ``m``
+    in the top binade (float32 ``m ≥ 2**127``) while ``2**floor(log2 m) ≤ 2**127`` is always
+    representable. Scaled magnitudes then land in ``[1, 2)`` rather than ``[0.5, 1)``, so the sum of
+    squares sits in ``[1, 4n)`` — as overflow-free as before.
+
+    The divisor is floored at the smallest **normal** power of two (``finfo.tiny``): a subnormal
+    ``m`` has all its significant bits in the mantissa field, so masking leaves 0 and the division
+    would be ``0/0``. Below that floor the scaled values are simply ``< 1``, which overflows
+    nothing.
 
     ``m`` is sanitized to ``1.0`` where it is zero or non-finite, which reproduces the previous
     ``jnp.where((scale > 0) & isfinite(scale), scale, 1)`` guard exactly: 0 would give ``0/0`` and
@@ -299,8 +308,11 @@ def _pow2_divisor(m: Float[Array, "..."]) -> Float[Array, "..."]:
         An exact power of two in ``[finfo.tiny, 2**(finfo.maxexp - 1)]``, same shape as ``m``
     """
     m_safe = jnp.where((m > 0.0) & jnp.isfinite(m), m, jnp.ones_like(m))
-    _, exponent = jnp.frexp(m_safe)
-    return jnp.ldexp(jnp.ones_like(m), jnp.maximum(exponent - 1, jnp.finfo(m.dtype).minexp))
+    uint_dtype = jnp.dtype(f"uint{8 * m.dtype.itemsize}")
+    mantissa_mask = jnp.asarray((1 << jnp.finfo(m.dtype).nmant) - 1, dtype=uint_dtype)
+    bits = jax.lax.bitcast_convert_type(m_safe, uint_dtype)
+    truncated = jax.lax.bitcast_convert_type(bits & ~mantissa_mask, m.dtype)
+    return jnp.maximum(truncated, jnp.asarray(jnp.finfo(m.dtype).tiny, dtype=m.dtype))
 
 
 @_jit

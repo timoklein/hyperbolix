@@ -7,6 +7,7 @@ import pytest
 
 from hyperbolix.utils.math_utils import (
     MIN_NORM,
+    _pow2_divisor,
     acosh,
     atanh,
     capped_exp,
@@ -897,6 +898,20 @@ def test_the_norm_rescale_adds_no_rounding_of_its_own():
                 assert d_pow2.max() <= 2, f"{where}: max ulp {d_pow2.max()}"
                 assert d_pow2.mean() <= 0.25, f"{where}: mean ulp {d_pow2.mean()}"
                 assert d_pow2.mean() <= d_max.mean(), f"{where}: {d_pow2.mean()} vs divide-by-max {d_max.mean()}"
+
+
+def test_the_rescale_divisor_is_an_exact_power_of_two_on_every_backend():
+    """Zero mantissa bits is what makes the rescale rounding-free; ``jnp.ldexp`` cannot give it.
+
+    ``ldexp`` computes ``m * 2**e`` through XLA's ``power``, which on CUDA rounds in float64
+    (``ldexp(1.0, -33)`` is one ulp below ``2**-33`` on an A100, 75 of 600 binades wrong), and an
+    inexact divisor rounds every division it scales.
+    """
+    for dt, int_bits, nmant in ((jnp.float32, np.uint32, 23), (jnp.float64, np.uint64, 52)):
+        k = np.arange(np.finfo(dt).minexp, np.finfo(dt).maxexp)
+        divisor = np.asarray(jax.jit(_pow2_divisor)(jnp.asarray(np.ldexp(np.full(k.shape, 1.5), k), dt)))
+        assert np.all(divisor.view(int_bits) & ((1 << nmant) - 1) == 0), f"{dt.__name__}: mantissa bits set"
+        assert np.array_equal(divisor, np.ldexp(np.ones(k.shape), k).astype(dt)), f"{dt.__name__}: wrong binade"
 
 
 def test_safe_hypot_norm_keeps_the_hyperboloid_constraint_residual_near_one_rounding():
