@@ -59,12 +59,11 @@ def _naive_lorentz_residual(x, y, w_y, c, eps=1e-7):
 def _naive_lorentz_midpoint(points, weights, c, eps=1e-7):
     """Old ``lorentz_midpoint`` body: ``<h,h>_L`` as the literal ``-h_0^2 + ||h_s||^2``.
 
-    The weighted sum carries ``MATMUL_PRECISION`` for the same reason the library's does: XLA:GPU
-    defaults float32 matmuls to TF32 (10-bit mantissa), so an unannotated ``einsum`` here would put
-    this baseline three digits below the library's float32 and the ``library vs naive`` comparison
-    would measure TF32, not the difference between the two algebraic forms. The whole point of
-    that comparison is that below the cancellation regime the two forms agree, which requires both
-    to run in the same arithmetic.
+    The weighted sum carries ``MATMUL_PRECISION``, exactly as the library's does, so that both
+    run in the same arithmetic. Pinning either side to a different precision would make
+    ``library vs naive`` measure that difference (TF32 against float32 is three digits) instead
+    of the difference between the two algebraic forms, which is what the comparison exists to
+    test: below the cancellation regime the two forms agree.
     """
     h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
     mink_1 = -(h_NA[..., 0:1] ** 2) + jnp.sum(h_NA[..., 1:] ** 2, axis=-1, keepdims=True)

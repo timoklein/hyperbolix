@@ -22,14 +22,15 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 
-# MIN_NORM is the library-wide gradient-safety floor for norms; `safe_norm`/`safe_hypot` are the
-# max-scaled primitives that compute them without materialising a sum of squares. Imported (not
-# redefined) so there is one value.
+# MIN_NORM is the library-wide gradient-safety floor for norms; `safe_sqrt` is the double-`where`
+# sqrt the per-sample one-reduction norms are built on, and `safe_norm`/`safe_hypot` remain for the
+# once-per-forward weight norms and the scalar compositions. Imported (not redefined) so there is
+# one value.
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, floor_at, safe_hypot, safe_hypot_norm, safe_norm
+from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, floor_at, safe_hypot, safe_norm, safe_sqrt
 
 from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import MATMUL_PRECISION, build_spacelike_V, htc, sinh_lift_to_hyperboloid
+from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid
 
 
 def _fhcnn_forward(
@@ -65,7 +66,9 @@ def _fhcnn_forward(
     kernel_OI = kernel_OI.astype(x_BI.dtype)
     bias_1O = bias_1O.astype(x_BI.dtype)
     scale_val = jnp.asarray(scale_val, dtype=x_BI.dtype)
-    x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI, precision=MATMUL_PRECISION) + bias_1O
+    # Layer weight GEMM: no `precision` kwarg, so it follows JAX's own
+    # `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.
+    x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O
 
     # Split into time and space: x0 is first coord, x_rem is spatial
     x0_B1 = x_BO[:, 0:1]  # (B, 1) -- time coordinate
@@ -73,10 +76,13 @@ def _fhcnn_forward(
 
     # Static branch - JIT friendly
     if normalize:
-        # `safe_norm` + `floor_at`: the floor is deliberate (`x_rem_norm_B1` is a divisor two
-        # lines down), the max-scaling removes the old spelling's float32 overflow past spatial
-        # coordinate 1.8e19. The origin mask below still fires (the floored norm is 1e-15 <= 1e-5).
-        x_rem_norm_B1 = floor_at(safe_norm(x_rem_BD)[..., None], MIN_NORM)  # (B, 1)
+        # One reduction: `safe_sqrt(sum(x_rem**2))` inside the `floor_at`. `safe_sqrt`, not a plain
+        # `sqrt`: the spatial part is exactly zero at the origin, where `sqrt'(0) = inf` would meet
+        # a zero cotangent as NaN. The floor is deliberate and stays *around* the sqrt
+        # (`x_rem_norm_B1` is a divisor two lines down); the origin mask below still fires (the
+        # floored norm is 1e-15 <= 1e-5). `sum(x_rem**2)` overflows float32 past spatial coordinate
+        # 1.8e19 (geodesic radius ~44 at c = 1), unreachable by a training run, and gives `inf`.
+        x_rem_norm_B1 = floor_at(safe_sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True)), MIN_NORM)  # (B, 1)
 
         # Learnable sigmoid scaling. capped_exp: scale_val is unconstrained — a runaway param
         # must saturate finite, not overflow to inf and NaN the time coordinate.
@@ -96,13 +102,15 @@ def _fhcnn_forward(
         mask_B1 = x_rem_norm_B1 <= 1e-5
         res_BA = jnp.where(mask_B1, origin_BA, res_BA)
     else:
-        # Reconstruct time from space: x0 = sqrt(||x_rem||^2 + 1/c), via `safe_hypot_norm`. Same
-        # shape (and same fix) as Hyperboloid._proj: `sum(x_rem**2)` overflows float32 past
-        # spatial radius 1.8e19 and returns an infinite time slot for a representable point, while
-        # the round-then-re-square `safe_hypot(safe_norm(.), .)` spelling costs the cancellation
-        # the Minkowski constraint check relies on.
-        inv_sqrt_c = jnp.asarray(1.0, dtype=x_BO.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x_BO.dtype))
-        res0_B1 = safe_hypot_norm(x_rem_BD, inv_sqrt_c)[..., None]  # (B, 1)
+        # Reconstruct time from space in ONE reduction: x0 = sqrt(sum(x_rem**2) + 1/c). Same
+        # spelling as Hyperboloid._proj, and for the same reason: keeping the sum of squares intact
+        # under the sqrt is what makes the Minkowski constraint check cancel its own rounding.
+        # Plain `jnp.sqrt` -- the argument is >= 1/c > 0, so there is no infinite derivative to
+        # guard. `sum(x_rem**2)` overflows float32 past spatial coordinate 1.8e19, unreachable by a
+        # training run, and returns an infinite time slot there rather than a saturated one.
+        # `normalize` is a static bool, so only one of the two branches is ever traced.
+        inv_c = jnp.asarray(1.0, dtype=x_BO.dtype) / jnp.asarray(c, dtype=x_BO.dtype)
+        res0_B1 = jnp.sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True) + inv_c)  # (B, 1)
         res_BA = jnp.concatenate([res0_B1, x_rem_BD], axis=-1)  # (B, A)
 
     return res_BA
@@ -146,7 +154,9 @@ def _fhnn_forward(
     kernel_OI = kernel_OI.astype(x_BI.dtype)
     bias_1O = bias_1O.astype(x_BI.dtype)
     scale_val = jnp.asarray(scale_val, dtype=x_BI.dtype)
-    z_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI, precision=MATMUL_PRECISION) + bias_1O  # (B, O)
+    # Layer weight GEMM: no `precision` kwarg, so it follows JAX's own
+    # `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.
+    z_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI) + bias_1O  # (B, O)
 
     # Split into time logit and spatial components
     z0_B1 = z_BO[:, 0:1]  # (B, 1)
@@ -164,15 +174,17 @@ def _fhnn_forward(
     # of the direct one: `y0**2` overflows float32 to inf past y0 ~ 1.8e19, turning a point whose
     # time slot is an ordinary float into an all-NaN row; and as y0 -> 1/sqrt(c) the subtraction
     # y0^2 - 1/c cancels catastrophically, losing most of the significand of a quantity the
-    # rescaling below divides by. Same reasoning as `Hyperboloid.proj`'s two-leg `safe_hypot`,
-    # which is the sum-of-squares counterpart.
+    # rescaling below divides by. `Hyperboloid.proj` reconstructs the same constraint from the
+    # spatial side instead, where a single `sqrt(1/c + sum(x_s**2))` has neither failure mode.
     inv_sqrt_c = jnp.asarray(1.0, dtype=y0_B1.dtype) / jnp.sqrt(jnp.asarray(c, dtype=y0_B1.dtype))
     target_norm_B1 = jnp.sqrt(y0_B1 - inv_sqrt_c) * jnp.sqrt(y0_B1 + inv_sqrt_c)  # (B, 1)
 
     # Rescale spatial to satisfy hyperboloid constraint.
     # `safe_norm`: exact 0 with an exactly-zero VJP at zero spatial input (linalg.norm's VJP at 0
     # is NaN and survives both the floor and the jnp.where below), and no sum of squares to
-    # overflow. No floor here -- `floor_at(., eps)` on the next line is the divisor guard.
+    # overflow. No floor here -- `floor_at(., eps)` on the next line is the divisor guard. Kept on
+    # the two-pass form: nothing in the FHNN forward measured slower in 1.2.0. `_fhcnn_forward`
+    # and `_fgg_linear_forward` did regress and are converted.
     z_rem_norm_B1 = safe_norm(z_rem_BD)[..., None]  # (B, 1)
     z_rem_norm_safe_B1 = floor_at(z_rem_norm_B1, eps)  # avoid division by zero
     y_rem_BD = target_norm_B1 / z_rem_norm_safe_B1 * z_rem_BD  # (B, D)
@@ -197,8 +209,6 @@ def _hyperboloid_plfc_forward(
     manifold: Hyperboloid,
     c: float,
     input_space: str,
-    clamping_factor: float,
-    smoothing_factor: float,
     v_max: float,
 ) -> Float[Array, "batch out_dim"]:
     """Pure-function PLFC forward pass for the hyperboloid model.
@@ -212,7 +222,7 @@ def _hyperboloid_plfc_forward(
         x_BAi = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BAi, c)
 
     # Compute multinomial logistic regression scores: (B, O) where O = out_dim-1
-    v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
+    v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c)
 
     # Output-side guard + sinh diffeomorphism + time reconstruction (shared with the Busemann FC
     # layer). compute_mlr only bounds its asinh argument, leaving v ∝ ‖kernel_row‖ unbounded; the
@@ -356,18 +366,26 @@ def _fgg_linear_forward(
     V_AiO = V_AiO.astype(x_BAi.dtype)
 
     # Minkowski inner products via matmul (metric in V). The Minkowski metric is absorbed into
-    # V, so the -x0*V0 + <x_s, V_s> cancellation happens *inside* this single accumulation:
-    # TF32 inputs would leave ~1e-3 of the pre-cancellation magnitude in the result.
-    z_BO = jnp.matmul(x_BAi, V_AiO, precision=MATMUL_PRECISION)  # (B, O)
+    # V, so the -x0*V0 + <x_s, V_s> cancellation happens *inside* this single accumulation, and
+    # TF32 inputs leave ~1e-3 of the pre-cancellation magnitude in the result. This is a layer
+    # weight GEMM and takes no `precision` kwarg, so it follows JAX's own
+    # `jax_default_matmul_precision`; a deep FGG stack is a good reason to set that to
+    # "highest" (see hyperbolix.utils.precision).
+    z_BO = jnp.matmul(x_BAi, V_AiO)  # (B, O)
 
     # Apply Euclidean activation (Lorentzian wrapping implicit via cancellation)
     if activation is not None:
         z_BO = activation(z_BO)
 
-    # Reconstruct hyperboloid point: spatial = z, time from constraint, via `safe_hypot_norm`.
-    # Same shape (and same overflow fix and same cancellation argument) as Hyperboloid._proj.
-    inv_sqrt_c = jnp.asarray(1.0, dtype=z_BO.dtype) / jnp.sqrt(jnp.asarray(c, dtype=z_BO.dtype))
-    y_0_B1 = safe_hypot_norm(z_BO, inv_sqrt_c)[..., None]  # (B, 1)
+    # Reconstruct hyperboloid point: spatial = z, time from the constraint, in ONE reduction over
+    # z. Same spelling (and the same cancellation argument) as Hyperboloid._proj: the sum of
+    # squares is kept intact under the sqrt. Plain `jnp.sqrt` -- the argument is >= 1/c > 0.
+    # `sum(z**2)` overflows float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1),
+    # unreachable by a training run; past it the output is non-finite -- NaN or `inf`, depending on
+    # the input, since the overflow enters through the preceding matmul rather than through `z`
+    # alone.
+    inv_c = jnp.asarray(1.0, dtype=z_BO.dtype) / jnp.asarray(c, dtype=z_BO.dtype)
+    y_0_B1 = jnp.sqrt(jnp.sum(z_BO**2, axis=-1, keepdims=True) + inv_c)  # (B, 1)
 
     return jnp.concatenate([y_0_B1, z_BO], axis=-1)  # (B, Ao)
 
@@ -700,10 +718,6 @@ class HypLinearHyperboloidPLFC(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    clamping_factor : float
-        Clamping factor for the multinomial linear regression output (default: 1.0)
-    smoothing_factor : float
-        Smoothing factor for the multinomial linear regression output (default: 50.0)
     v_max : float
         Output-side guard: the sinh argument ``sqrt(c)*v`` is hard-clipped to
         ``±v_max``, bounding the output spatial norm by ``sinh(v_max)/sqrt(c)``
@@ -725,8 +739,7 @@ class HypLinearHyperboloidPLFC(nnx.Module):
     -----
     JIT Compatibility:
         This layer is designed to work with nnx.jit. Configuration parameters (input_space,
-        clamping_factor, smoothing_factor, v_max) are treated as static and will be baked
-        into the compiled function.
+        v_max) are treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -744,8 +757,6 @@ class HypLinearHyperboloidPLFC(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         v_max: float = 10.0,
         use_gyro_bias: bool = False,
         kernel_init_std: float = 0.02,
@@ -763,8 +774,6 @@ class HypLinearHyperboloidPLFC(nnx.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
         _assert_v_max_safe(v_max)
         self.v_max = v_max
 
@@ -809,8 +818,6 @@ class HypLinearHyperboloidPLFC(nnx.Module):
             self.manifold,
             c,
             self.input_space,
-            self.clamping_factor,
-            self.smoothing_factor,
             self.v_max,
         )
 
@@ -969,7 +976,9 @@ class HTCLinear(nnx.Module):
         def linear_fn(z):
             # Cast params to the working dtype so float64 weights (from global
             # jax_enable_x64) don't promote a float32 computation to float64.
-            out = jnp.matmul(z, self.kernel[...].astype(z.dtype), precision=MATMUL_PRECISION)
+            # Layer weight GEMM: no `precision` kwarg, so it follows JAX's own
+            # `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.
+            out = jnp.matmul(z, self.kernel[...].astype(z.dtype))
             if self.bias is not None:
                 out = out + self.bias[...].astype(z.dtype)
             return out

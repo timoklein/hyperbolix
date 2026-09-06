@@ -33,16 +33,17 @@ from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
-from hyperbolix.utils.math_utils import clamp_to
+from hyperbolix.utils.math_utils import clamp_to, floor_at, safe_hypot_norm
 from hyperbolix.utils.math_utils import cosh as safe_cosh
-from hyperbolix.utils.math_utils import floor_at, safe_hypot_norm
 from hyperbolix.utils.math_utils import sinh as safe_sinh
-from hyperbolix.utils.precision import MATMUL_PRECISION
+from hyperbolix.utils.precision import MATMUL_PRECISION as MATMUL_PRECISION  # re-export
 
 # MATMUL_PRECISION used to be defined here; its home is now hyperbolix.utils.precision, a
 # neutral module both manifolds/ and nn_layers/ import from (manifolds/ must not depend on
 # nn_layers/). The import above keeps `hyperboloid_core.MATMUL_PRECISION` working for existing
-# importers; see hyperbolix/utils/precision.py for the TF32 rationale and the measurements.
+# importers; see hyperbolix/utils/precision.py for which sites are pinned, the TF32 rationale
+# and the measurements. Layer weight GEMMs pass no `precision` kwarg and follow JAX's own
+# `jax_default_matmul_precision`.
 
 
 def build_spacelike_V(
@@ -197,6 +198,9 @@ def extract_patches(
         window_strides=(stride_h, stride_w),
         padding="VALID",
         dimension_numbers=("NHWC", "OIHW", "NHWC"),
+        # Pinned HIGHEST: XLA implements the patch extraction as a convolution against a 0/1
+        # filter, so this is a pure data copy — under TF32 it would round every input value to
+        # a 10-bit mantissa before the layer's own GEMM ever sees it, for no throughput gain.
         precision=MATMUL_PRECISION,
     )
 
@@ -251,16 +255,21 @@ def spatial_to_hyperboloid(
     scale = jnp.sqrt(c_in / c_out)
     scaled_D = scale * spatial  # (..., D)
 
-    # x0 = sqrt(||s||^2 + 1/c_out) via `safe_hypot_norm`: bit-identical to that expression, but
-    # `sum(s**2)` is never squared unscaled, so a point at float32 spatial radius > 1.8e19 gets a
-    # finite time slot instead of inf. It must NOT be spelled `safe_hypot(safe_norm(s), .)` --
-    # that rounds ||s|| and squares it again, and the caller's constraint check
-    # `-x0**2 + sum(s**2) = -1/c_out` then no longer cancels (at c_out = 0.1 the residual grew from
-    # 6.1e-5 to 2.4e-4 against a 1e-4 tolerance). `sqrt(floor_at(a, eps)) == floor_at(sqrt(a),
-    # sqrt(eps))` for a >= 0, so the outer floor is preserved exactly (it only bites when 1/c_out
-    # itself is below eps).
-    inv_sqrt_c_out = jnp.asarray(1.0, dtype=scaled_D.dtype) / jnp.sqrt(jnp.asarray(c_out, dtype=scaled_D.dtype))
-    x0 = floor_at(safe_hypot_norm(scaled_D, inv_sqrt_c_out), jnp.sqrt(jnp.asarray(eps, dtype=scaled_D.dtype)))
+    # x0 = sqrt(sum(s**2) + 1/c_out) in ONE reduction over the spatial part. This is the hot path:
+    # `spatial_to_hyperboloid` sits behind every `HTCLinear` forward, so it reads `s` once.
+    # The sum of squares is kept intact under the sqrt rather than being rounded to ||s|| and
+    # squared again -- the caller's constraint check `-x0**2 + sum(s**2) = -1/c_out` cancels the
+    # rounding of the sum against itself, and it does not cancel a re-squared norm (at c_out = 0.1
+    # the residual grew from 6.1e-5 to 2.4e-4 against a 1e-4 tolerance).
+    # Plain `jnp.sqrt`: the argument is >= 1/c_out > 0, so it is never zero and the derivative is
+    # never infinite. The floor sits on the ARGUMENT, as it did before PR #75:
+    # `sqrt(floor_at(a, eps)) == floor_at(sqrt(a), sqrt(eps))` for a >= 0, so this is the same
+    # value; it only bites when 1/c_out is itself below eps.
+    # `sum(s**2)` overflows float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1),
+    # unreachable by a training run, and gives an infinite time slot there rather than a quietly
+    # saturated one.
+    inv_c_out = jnp.asarray(1.0, dtype=scaled_D.dtype) / jnp.asarray(c_out, dtype=scaled_D.dtype)
+    x0 = jnp.sqrt(floor_at(jnp.sum(scaled_D**2, axis=-1) + inv_c_out, jnp.asarray(eps, dtype=scaled_D.dtype)))
 
     return jnp.concatenate([x0[..., None], scaled_D], axis=-1)  # (..., D+1)
 
@@ -387,6 +396,9 @@ def lorentz_midpoint(
     is as large as that extreme radius and the identity's own terms cancel against each other.
     """
     # h = sum_m w_{n,m} * points_m  →  (..., N, A)
+    # Pinned HIGHEST: the cancellation-free identity below only holds to O(eps) if its inputs
+    # are float32-accurate; at the TF32 default the f32-vs-f64 relative error of this function
+    # is 4.6e-5 … 2.6e-4 instead of 2.6e-8 … 1.6e-7 (see hyperbolix.utils.precision).
     h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
     # Exact for on-sheet points (reference p = points_0, delta_m = x_m - p, W = sum_m w_m,
     # Delta = sum_m w_m delta_m):
@@ -404,6 +416,7 @@ def lorentz_midpoint(
     delta_MA = points - p_1A  # (..., M, A)
     dd_M = -(delta_MA[..., 0] ** 2) + jnp.sum(delta_MA[..., 1:] ** 2, axis=-1)  # (..., M), >= 0 on-sheet
     w_sum_N1 = jnp.sum(weights, axis=-1, keepdims=True)  # (..., N, 1)
+    # The two remaining contractions feed the same identity; pinned HIGHEST for the same reason.
     w_dd_N1 = jnp.einsum("...nm,...m->...n", weights, dd_M, precision=MATMUL_PRECISION)[..., None]  # (..., N, 1)
     big_delta_NA = jnp.einsum("...nm,...ma->...na", weights, delta_MA, precision=MATMUL_PRECISION)  # (..., N, A)
     big_dd_N1 = -(big_delta_NA[..., 0:1] ** 2) + jnp.sum(big_delta_NA[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., N, 1)

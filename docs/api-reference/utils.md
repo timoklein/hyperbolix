@@ -6,6 +6,16 @@ Utility functions for hyperbolic deep learning.
 
 Numerically stable implementations of hyperbolic functions.
 
+Note which norm primitive goes where. On the **hot path** — every per-sample norm inside `proj`,
+`expmap`, `logmap`, the distances and the layer forwards — the library takes a single reduction:
+`safe_sqrt(sum(v**2))` when the input can be exactly zero, a plain `sqrt(const + sum(v**2))` when a
+strictly positive constant is added, and `floor_at(..., MIN_NORM)` around either when the norm is a
+divisor. `safe_norm`, `safe_hypot_norm` and `safe_normalize` are max-scaled and read the input
+twice; they are used for the **weight** norms, computed once per forward over a kernel rather than
+once per sample, and they are the right choice in user code that needs the full float32 exponent
+range. See
+[Norms: one reduction, gradient-safe at zero](../user-guide/numerical-stability.md#safe-norms).
+
 ::: hyperbolix.utils.math_utils
     options:
       show_source: true
@@ -55,7 +65,20 @@ capped_exp(log_scale)  # finite, saturates at exp(0.99*log(finfo.max))
 
 ## Matmul Precision
 
-`MATMUL_PRECISION` pins float32 dot products touching manifold data (points, tangent vectors, hyperplane normals) to `jax.lax.Precision.HIGHEST`, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on.
+`MATMUL_PRECISION` pins the **geometry** to `jax.lax.Precision.HIGHEST`, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on. It is not user-configurable. Pinned: the vector-vector reductions inside `manifolds/` and the `decomposition/` (HoroPCA) contractions; `lorentz_midpoint` and `poincare_weighted_midpoint`; the conv patch extraction (a 0/1-filter convolution, so a pure data copy); the attention score and aggregation einsums and the spatial residual projection added to that aggregate; and the MLR heads (`HypRegressionHyperboloid` and the three `_compute_mlr` einsums in `manifolds/`), which are decision quantities.
+
+The **layer weight GEMMs** pass no `precision` keyword at all — `HTCLinear` (including the attention Q/K/V projections), `FGGLinear`/`FGGConv2D`, the FHCNN/FHNN and PLFC linears, the Poincaré and proper-velocity linear and convolution layers, `HypVQMLRPoincare`'s codebook matmul, `hybrid_regularization`'s `nnx.Linear`. These follow JAX's own `jax_default_matmul_precision`, which on Ampere/Hopper means TF32. That is where `HIGHEST` actually costs throughput (one TF32 pass becomes a three-pass float32 emulation; measured +5.5 % on a jitted hyperbolic attention forward), so the trade is yours to make:
+
+```python
+# JAX-wide (jit-cache aware — changing it re-traces)
+jax.config.update("jax_default_matmul_precision", "highest")
+
+# or scoped to a block
+with jax.default_matmul_precision("highest"):
+    logits = model(x)
+```
+
+A deep, fully hyperbolic stack is a good reason to set it: a TF32 error introduced in an early layer's weight GEMM is carried by every layer after it. Measured on an A100 (jax 0.9.1, float32 against a float64 reference), `FGGLinear`'s relative error is 2.6e-4 at the TF32 default against 6.8e-8 under `HIGHEST` — roughly ~1e-4 against ~1e-7 on the layers. `HIGHEST` is a no-op on CPU and for float64 anywhere.
 
 ::: hyperbolix.utils.precision
     options:

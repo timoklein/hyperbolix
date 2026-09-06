@@ -8,8 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install
 uv sync --locked --dev
 
-# Run all tests (4,083 items across 959 test functions)
-uv run pytest
+# Run all tests (4,071 items across 963 test functions) on all cores (pytest-xdist; ~11 min on 12 workers,
+# hours single-process: the suite is JAX-compile-heavy)
+uv run pytest -n auto
 
 # Run a single test file
 uv run pytest tests/test_manifolds.py -v
@@ -17,7 +18,7 @@ uv run pytest tests/test_manifolds.py -v
 # Run a single test function
 uv run pytest tests/test_manifolds.py::test_dist -v
 
-# Run the dim-2 float32 slice of the dim-parametrized suites (78/386 in test_manifolds.py)
+# Run the dim-2 float32 slice of the dim-parametrized suites (78/388 in test_manifolds.py)
 # The parametrization ids spell the dimension as a bare number, e.g. [PoincareBall-c1-2-float32-10]
 uv run pytest -k "2-float32"
 
@@ -42,7 +43,8 @@ After making changes, run the test files that cover the affected code:
 ```bash
 uv run pytest tests/<relevant_test_file>.py -x -v
 ```
-For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (78 of the 386 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
+Anything larger than one or two files gets `-n auto` (pytest-xdist); never run the full suite single-process.
+For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (78 of the 388 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
 
 ## Architecture
 
@@ -86,6 +88,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 - Float32 reliable for hyperbolic distances < 7; float64 needed for distances > 10
 - Conformal factor lambda grows exponentially near Poincare ball boundary
 - Tests parametrize both dtypes with tolerances: `atol=4e-3` (f32), `atol=1e-7` (f64)
+- **Loud divergence over silent saturation.** A guard that maps an already non-finite input (an `inf` time coordinate, a point past the float32 manifold) onto a finite, plausible output hides the divergence; a NaN loss is the intended signal. Do not add clamps or saturations whose only remaining job is finiteness on inputs that are already non-finite, and propose removing such guards when found (the MLR `asinh` clamp inherited from the PyTorch code was removed for this reason). Guards that fix real float32 rounding on finite inputs (`floor_at` on divisors, `safe_sqrt` at zero) are a different matter and stay
 
 ### Test structure
 

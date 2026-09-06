@@ -69,6 +69,44 @@ dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
     # If > 7, create Poincare(dtype=jnp.float64) instead
     ```
 
+### TF32 on Ampere and Hopper GPUs
+
+The dtype is not the only thing setting your float32 accuracy on a modern NVIDIA card.
+XLA:GPU runs float32 matmuls in **TF32** by default, whose 10-bit mantissa carries ~1e-3
+relative error against float32's ~1e-7 — three of your seven significant digits, silently.
+
+hyperbolix splits its float32 dot products in two:
+
+- **Geometry is pinned** to `jax.lax.Precision.HIGHEST` and is not configurable: the manifold
+  vector dots, `lorentz_midpoint` and `poincare_weighted_midpoint`, the conv patch extraction,
+  the attention score and aggregation einsums and the spatial residual projection added to
+  that aggregate, and the MLR heads. These are the cancellations the geometry is built on, and they are not
+  where the throughput is.
+- **Layer weight GEMMs follow JAX** — `HTCLinear` (the attention Q/K/V projections included),
+  `FGGLinear`/`FGGConv2D`, the FHCNN/FHNN and PLFC linears, the Poincaré and proper-velocity
+  linear and conv layers, the VQ codebook matmul.
+  On an Ampere or Hopper card these run in TF32 unless you say otherwise.
+
+To run everything in full float32, set JAX's own knob:
+
+```python
+jax.config.update("jax_default_matmul_precision", "highest")
+
+# or scoped to a block (both spellings are jit-cache aware — changing them re-traces):
+with jax.default_matmul_precision("highest"):
+    logits = model(x)
+```
+
+A deep, fully hyperbolic stack is a good reason to do so: a TF32 error introduced in an early
+layer's weight GEMM is carried by every layer after it. Measured on an A100 (jax 0.9.1,
+ambient dim 33, batch 64, float32 against a float64 reference), the relative error of
+`FGGLinear` is **2.6e-4** at the TF32 default against **6.8e-8** under `HIGHEST`, and
+`FGGLorentzMLR` **1.3e-4 … 3.6e-4** against **3.6e-8 … 9.6e-8**. The cost is real but modest:
+`HIGHEST` replaces one TF32 pass with a three-pass float32 emulation, measured **+5.5 %** on a
+jitted hyperbolic attention forward.
+
+`HIGHEST` is a no-op on CPU (there is no TF32 path) and for float64 anywhere.
+
 ### The Hyperboloid's Two-Point Cancellation Failure Mode
 
 The distance-from-origin table above governs single-point operations (`dist_0`, `logmap_0`,
@@ -176,8 +214,8 @@ Operations that inherit the fix without any change of their own: gyro `addition`
 mis-normalised every float32 sample inside radius 1.5e-3.
 
 !!! note "An infinitely far point gives an infinite tangent vector, not NaN"
-    `safe_norm` passes an `inf` spatial entry through as `inf` on purpose, so an out-of-range point
-    stays visibly degenerate instead of silently NaN-poisoning everything downstream. That made
+    A spatial entry that is `inf` passes through the radius as `inf` on purpose, so an out-of-range
+    point stays visibly degenerate instead of silently NaN-poisoning everything downstream. That made
     `logmap_0`'s scale $\operatorname{arcsinh}(u)/u$ an $\infty/\infty$ NaN, which then multiplied
     *every* entry — the time slot included. It is now
     `where(isfinite(u), arcsinh(u)/u, 1)`: the infinite entries come back as $\pm\infty$ with their
@@ -188,56 +226,105 @@ mis-normalised every float32 sample inside radius 1.5e-3.
     (where the extra `where` changes the VJP's fusion) against a 4-ulp CPU-vs-GPU spread the unchanged
     code already had.
 
-### No Norm Is an Additive Epsilon Any More {#safe-norms}
+### Norms: One Reduction, Gradient-Safe at Zero {#safe-norms}
 
-Anywhere the library needs a Euclidean norm on a differentiated path it calls one of four
-`math_utils` primitives instead of the old `sqrt(sum(x**2) + MIN_NORM**2)` idiom: `safe_norm`
-(rescaled, for an input whose magnitude is unbounded), `safe_hypot` (the two-leg
-$\sqrt{p^2+q^2}$), `safe_hypot_norm` (the mixed $\sqrt{\lVert v\rVert^2 + q^2}$), or `safe_sqrt`
-(for a quantity that arrives already squared — a Minkowski or Riemannian form, or a sum of squares
-that provably cannot overflow).
+On the operations that 1.2.0 made slower, the per-sample Euclidean norm is a **single pass over
+the data** again: `safe_sqrt(sum(v**2))` where the input can be exactly zero, a plain
+`sqrt(const + sum(v**2))` where a strictly positive constant is added, and
+`floor_at(..., MIN_NORM)` wrapped *around* either where the norm is a divisor. These run on every
+sample of every step, so the norm they use is judged by what it costs an SGD run — and a second
+read of the same `(B, dim)` array is a real cost, while the failure it guards against is not one
+training reaches.
 
-The old idiom was a *gradient* guard: it gives `sqrt` a finite derivative at $x = 0$, which
-`jnp.linalg.norm` does not (its VJP there is $0/0 =$ NaN). It paid for that at both ends of the
-exponent range. **At the top**, $\sum_i x_i^2$ overflows float32 as soon as any coordinate passes
-$1.8\times10^{19}$, even though the norm itself is representable — this is the hyperboloid radius
-ceiling, where `proj` returned an infinite time slot for a point whose time slot is a perfectly
-ordinary float (and, one radius earlier, an $x_0$ whose Minkowski residual was $0$ rather than
-$-1/c$). The Poincaré ball's boundary clamp failed the same way but louder: with
-$\lVert x\rVert = \infty$ the clamp $x \cdot (r_{\max} / \lVert x \rVert)$ evaluates to the
-**zero vector**, so the farthest representable point was projected onto the origin. **At the
-bottom**, the additive $\texttt{MIN\_NORM}^2 = 10^{-30}$ dominates any genuinely small vector,
-with relative residual $\texttt{MIN\_NORM}^2/(2r^2)$: $5.0\times10^{-15}$ for a float64 point at
-radius $10^{-8}$, and 41 % for a float32 point at radius $10^{-15}$, where `dist_0` returned
-$2.83\times10^{-15}$ for a true $2.00\times10^{-15}$.
+A site is converted only where 1.2.0 measured **slower** (hyperboloid `expmap_0` 1.28x, `HTCLinear`
+forward+backward 1.12x, on both A100 and H100) or where PR #75 raised the compiled kernel /
+reduction count. That is the whole list:
 
-Which primitive goes where is a cost decision, not a taste one. Max-scaling costs a second
-reduction over the input, and on `Poincare.dist` — whose argument is a *ball* point, so
-$\sum_i x_i^2 \le 4/c$ and overflow is unreachable — that reduction is 2 extra XLA kernels at
-batch $10^7$ for a failure mode that cannot occur. Those sites use `safe_sqrt(sum(x**2))`, which
-is the same double-`where` construction on the scalar and compiles to exactly the kernel count the
-old idiom did. Tangent vectors, unprojected inputs, hyperboloid and proper-velocity coordinates,
-and layer weights are all unbounded, and those use `safe_norm`.
+| Where | Operations |
+|---|---|
+| `Hyperboloid` | `proj`, `proj_batch`, `dist_0` (both version slots) |
+| `Poincare` / `Stereographic` | `proj`, `proj_batch` (the shared gyrovector core), and `Poincare.expmap` |
+| Layers | `spatial_to_hyperboloid` (so `HTCLinear`), the FHCNN and FGG linear forwards |
 
-The rescaling divides by an exact **power of two** — the one just below $\max_i|x_i|$, via
-`jnp.frexp`/`jnp.ldexp` — rather than by $\max_i|x_i|$ itself. Dividing and multiplying by a power
-of two only shifts the exponent, so the rescale contributes **no rounding of its own**: the result
-tracks the plain $\sqrt{\sum_i x_i^2}$ to 0 ulp at most dimensions and at most 2 ulp at the rest
-(where XLA associates the two reductions differently), while still never forming a quantity that
-can overflow. Dividing by the maximum is inexact and leaves 1–2 ulp behind,
-which is invisible until a caller recomputes the same sum of squares: the hyperboloid's
-$x_0 = \sqrt{\lVert x_s\rVert^2 + 1/c}$ is checked against $-x_0^2 + \lVert x_s\rVert^2 = -1/c$,
-and at $x_0 \approx 34$ one float32 ulp of $x_0^2$ is $1.2\times10^{-4}$. For the same reason the
-time slot is built with `safe_hypot_norm(x_s, 1/\sqrt{c})`, one reduction, and **not** with
-`safe_hypot(safe_norm(x_s), ...)`, which rounds $\lVert x_s\rVert$ and then squares it again.
+Every other per-sample norm keeps the max-scaled two-pass form, which is full-range safe:
+hyperboloid `logmap_0` (which measured *faster* in 1.2.0), the pairwise `dist`/`logmap` polar
+frame, hyperboloid and Poincaré `tangent_norm`, `Poincare.expmap_0` (no measured change either
+way), the FHNN linear forward, the linear-attention `focus_transform` (converting it measured no
+speedup of its own), every `ProperVelocity` operation and the proper-velocity isometry
+maps, the Poincaré metric-tensor distances, the rest of `Stereographic`, `Euclidean` and
+`ProductManifold`, the wrapped-normal `log_prob`, and every weight norm. Where nothing was
+measured slower there is no cost to trade the full-range guarantee against.
 
-All four return an exact `0` with an **exactly zero** VJP at the zero vector — the finite,
+Neither of the two older idioms is used on that path any more. The **additive**
+`sqrt(sum(x**2) + MIN_NORM**2)` was a gradient guard: it gives `sqrt` a finite derivative at
+$x = 0$, which `jnp.linalg.norm` does not (its VJP there is $0/0 =$ NaN). It paid for that with a
+$\texttt{MIN\_NORM}^2 = 10^{-30}$ floor that dominates any genuinely small vector, relative
+residual $\texttt{MIN\_NORM}^2/(2r^2)$: $5.0\times10^{-15}$ for a float64 point at radius
+$10^{-8}$, and 41 % for a float32 point at radius $10^{-15}$, where `dist_0` returned
+$2.83\times10^{-15}$ for a true $2.00\times10^{-15}$. `safe_sqrt`'s double-`where` supplies the
+same finite (in fact exactly zero) derivative with no floor on the value at all.
+
+The **max-scaled** `safe_norm`/`safe_hypot_norm` reads the input twice — once for
+$\max_i |x_i|$, once for the sum — to keep $\sum_i x_i^2$ from overflowing float32, which happens
+once a coordinate passes $1.8\times10^{19}$. That is geodesic radius $\approx 44$ at $c = 1$: a
+regime no training run visits. So the converted sites take the single reduction and give up their
+answer past that coordinate. What they give instead was measured, float32 at $c = 1$, rather than
+argued — and it is **not** uniform:
+
+| Converted operation | Past coordinate $1.8\times10^{19}$ (measured, float32, $c = 1$) |
+|---|---|
+| `Hyperboloid.proj`, `proj_batch` | $x_0 = \infty$, spatial part unchanged, no NaN |
+| `Hyperboloid.dist_0` (both version slots) | $\infty$ |
+| `spatial_to_hyperboloid` (`HTCLinear`), FHCNN linear forward | $x_0 = \infty$, no NaN |
+| FGG linear forward | non-finite (NaN or $\infty$, depending on the input) |
+| Poincaré and $\kappa$-stereographic `proj` (the boundary clamp) | the **origin** — a finite point, with a finite (exactly zero) gradient |
+| `Poincare.expmap` | the **base point** — a finite point (the origin, when the base is the origin) |
+| everything on the two-pass form | unchanged from 1.2.0 |
+
+So two of the converted sites do saturate to a finite point, and that is the clamp's documented
+behaviour rather than an accident: with $\lVert x\rVert = \infty$ the boundary clamp
+$x \cdot (r_{\max}/\lVert x\rVert)$ *is* the zero vector, which is the pre-1.2.0 behaviour, and
+`expmap` inherits it through the same clamp. Nothing is added to guard a regime SGD cannot reach.
+(`Poincare.expmap_0`, which kept the two-pass norm, still returns the correct boundary point
+there.)
+
+One consequence worth stating plainly: for the converted origin-chart operations the largest
+representable geodesic radius drops. It used to be set by $x_0 = \cosh(a)$ fitting the dtype —
+radius $\approx 88$ in float32, $\approx 709$ in float64. For `proj` and `dist_0` it is now set by
+the **coordinate**, $\sinh(a)/\sqrt{c} < \sqrt{\texttt{finfo.max}}$ — radius $\approx 44$ in
+float32 and $\approx 355$ in float64. `logmap_0` and the pairwise `dist`/`logmap` keep the
+two-pass norm and therefore keep both their finite result and the old $\approx 88$ / $\approx 709$
+ceiling. Every hyperbolic model in the literature lives four to five orders of magnitude inside
+either limit.
+
+What has **not** changed is how the constant is folded in. The hyperboloid time slot is
+$x_0 = \sqrt{1/c + \sum_i (x_s)_i^2}$ — the constant added to the sum *under* the square root, in
+the same reduction — and never `hypot(‖x_s‖, 1/√c)`, which rounds $\lVert x_s\rVert$ to the dtype
+and then squares it again. The library's own constraint check is
+$-x_0^2 + \lVert x_s\rVert^2 = -1/c$: when $x_0$ is built from the same $\sum_i (x_s)_i^2$ that
+check forms, the rounding of the sum cancels against itself and the residual is one rounding of
+$x_0$; when $x_0$ is built from a re-squared norm the two no longer cancel, and at
+$x_0 \approx 34$ one float32 ulp of $x_0^2$ is $1.2\times10^{-4}$. The constant is spelled `1/c`
+rather than `(1/√c)**2`, which is one rounding fewer.
+
+All the primitives stay public in `hyperbolix.utils.math_utils`, and each has its own job.
+`safe_norm`, `safe_hypot_norm` and `safe_normalize` are the max-scaled, full-range ones: they hold
+every per-sample site that was not converted, and the **weight** norms — computed once per forward
+over an `(in, out)` kernel, where a second reduction is not on the per-sample path. They also
+remain the right choice in user code that genuinely needs the full float32 exponent range.
+`safe_hypot` is different: it is a two-leg *scalar* composer $\sqrt{p^2+q^2}$, and it is on the hot
+path — the hyperboloid `_polar_frame` builds its radial and angular legs with it. `safe_sqrt` is
+the scalar counterpart used at the converted sites.
+
+All of them return an exact `0` with an **exactly zero** VJP at the zero vector — the finite,
 direction-free choice at a point where the derivative does not exist — and pass a non-finite input
 through as `inf` rather than turning it into NaN. Where a norm is a *divisor* the floor is still
-there, but as `floor_at(safe_norm(x), MIN_NORM)`: a multiplicative floor, exact everywhere above
-itself, instead of an additive one that perturbs every value. One subtlety when the floored norm
-feeds a $\sinh(t)/t$: the floor has to be applied to $t$ itself and not only to the denominator,
-or the ratio is $0$ at $t = 0$ instead of $1$.
+there, as `floor_at(safe_sqrt(sum(x**2)), MIN_NORM)`: a multiplicative floor, exact everywhere
+above itself, instead of an additive one that perturbs every value. It has to sit **around** the
+square root, not under it — `floor_at` under the `sqrt` still leaves `sqrt'(0) = inf` in the
+untaken branch of the surrounding `where`, and $0 \times \infty$ is NaN. One further subtlety when
+the floored norm feeds a $\sinh(t)/t$: the floor has to be applied to $t$ itself and not only to
+the denominator, or the ratio is $0$ at $t = 0$ instead of $1$.
 
 !!! note "The pairwise `dist` reads the same radial gap off the spatial part"
     `dist` is a separate code path, and it used to carry its own $O(\varepsilon/r)$ relative error
@@ -417,10 +504,13 @@ dist_precise = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ### The Round-Trip Ceiling {#poincare-roundtrip-ceiling}
 
 `proj` keeps points inside $1/\sqrt{c}$ by a margin of `eps**0.75`
-(`_gyrovector_core._get_max_norm_eps`), which caps the largest geodesic radius the ball can
-represent at $\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$. Past that radius `expmap_0`
+(`_gyrovector_core._get_max_norm_eps`), which caps the largest tangent vector `expmap_0` can
+represent at $\|v\| = \mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$ — a geodesic radius of
+$d_0 = 2\,\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$, i.e. $12.65/\sqrt{c}$ in float32 and
+$27.7/\sqrt{c}$ in float64 (the factor 2 is the Poincaré metric's). Past that `expmap_0`
 saturates and `logmap_0(expmap_0(v))` hands back the ceiling instead of `v`. Measured ceilings
-(median returned radius on a round trip, in units of $1/\sqrt{c}$):
+(median returned $\|v\|$ on a round trip, in units of $1/\sqrt{c}$; double them for the geodesic
+radius):
 
 | library | float32 | float64 | boundary margin |
 | --- | --- | --- | --- |
@@ -865,7 +955,7 @@ Möbius addition (independent of the formula under test), $c = 1$, dim 8, before
     exactly `0` instead: 23 of 60 probed gradient cells, across both dtypes, three curvatures and
     both radii. A loss separating two nearby points through slot 2 received no gradient at all. At
     $y = x$ the derivative does not exist and the convention is the finite, direction-free 0, which
-    `safe_norm` now supplies (it also keeps `dist(x, x)` exactly 0).
+    `safe_sqrt`'s double-`where` now supplies (it also keeps `dist(x, x)` exactly 0).
 
 ### Which Version to Use?
 
@@ -1047,14 +1137,15 @@ def safe_clip_to_interior(x_batch, c=1.0, safety_factor=0.9):
 
 **Solution**:
 ```python
-# Manifold functions handle this internally: every norm on a differentiated path goes
-# through math_utils.safe_norm, which returns an exact 0 with an exactly-zero gradient
-# at v = 0 (see "Every Norm Is Max-Scaled" above). If you need the same in your own code,
-# use the library's primitives rather than rolling a floor:
-from hyperbolix.utils import safe_norm, safe_normalize
+# Manifold functions handle this internally: every norm on a differentiated path is
+# safe_sqrt(sum(v**2)), which returns an exact 0 with an exactly-zero gradient at v = 0
+# (see "Norms: One Reduction, Gradient-Safe at Zero" above). If you need the same in your
+# own code, use the library's primitives rather than rolling a floor:
+from hyperbolix.utils import safe_normalize, safe_sqrt
+import jax.numpy as jnp
 
-norm = safe_norm(v)            # 0 at v = 0, gradient 0, no sum of squares to overflow
-unit = safe_normalize(v)       # exact zero vector at v = 0, unit vector everywhere else
+norm = safe_sqrt(jnp.sum(v**2, axis=-1))  # 0 at v = 0, gradient 0, one reduction
+unit = safe_normalize(v)                  # exact zero vector at v = 0, unit vector otherwise
 ```
 
 ### Edge Case 3: Large Learning Rates

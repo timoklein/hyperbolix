@@ -39,18 +39,14 @@ class HypRegressionHyperboloid(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    clamping_factor : float
-        Clamping factor for the multinomial linear regression output (default: 1.0)
-    smoothing_factor : float
-        Smoothing factor for the multinomial linear regression output (default: 50.0)
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space,
-        clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
+        This layer is designed to work with nnx.jit. The configuration parameter ``input_space``
+        is treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -66,8 +62,6 @@ class HypRegressionHyperboloid(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
@@ -79,8 +73,6 @@ class HypRegressionHyperboloid(nnx.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
 
         # Trainable parameters
         # kernel lies in the tangent space of the Hyperboloid origin, so the time coordinate along axis is zero
@@ -123,8 +115,6 @@ class HypRegressionHyperboloid(nnx.Module):
             self.kernel[...],
             self.bias[...],
             c,
-            self.clamping_factor,
-            self.smoothing_factor,
         )
 
         return res
@@ -224,8 +214,13 @@ class FGGLorentzMLR(nnx.Module):
         # Cast V to match input dtype (avoids float32/float64 scatter warnings)
         V_AiK = V_AiK.astype(x_BAi.dtype)
 
-        # 2. Minkowski inner products. Same reason as _fgg_linear_forward: the metric is
-        # absorbed into V, so the Lorentz cancellation happens inside one accumulation.
+        # 2. Minkowski inner products, pinned HIGHEST: the metric is absorbed into V, so the
+        # Lorentz cancellation happens inside one accumulation, and this is a decision quantity
+        # (the MLR logits) rather than a hidden activation — TF32 would leave ~1e-3 of the
+        # pre-cancellation magnitude in the logit. Measured on the sibling HypRegressionHyperboloid
+        # head (the same pinned x @ V shape): its forward alone at B=1e7, 10 classes on an H100 is
+        # 2.6x (D=128) / 2.0x (D=32) of a TF32 head, and 1.05x on a whole training step. This
+        # layer's own share was not measured.
         mink_BK = jnp.matmul(x_BAi, V_AiK, precision=MATMUL_PRECISION)  # (B, K)
 
         # 3. Signed scaled distances (matching reference fc_mlr: no norm scaling)

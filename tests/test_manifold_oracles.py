@@ -103,7 +103,7 @@ def test_hyperboloid_mlr_vanishes_on_its_own_hyperplane(c: float, r_val: float):
     # The constructed point must genuinely be on the manifold, else "logit == 0" proves nothing.
     assert bool(manifold.is_in_manifold(x_A, c, atol=1e-10))
 
-    logit = manifold.compute_mlr(x_A[None], z_PD, r_P1, c, clamping_factor=10.0, smoothing_factor=50.0)
+    logit = manifold.compute_mlr(x_A[None], z_PD, r_P1, c)
 
     assert float(logit[0, 0]) == pytest.approx(0.0, abs=1e-12)
 
@@ -121,7 +121,7 @@ def test_hyperboloid_mlr_matches_closed_form_at_zero_offset(c: float):
     x_s_D = jnp.array([0.2, -0.1, 0.15], dtype=F64)
     x_A = jnp.concatenate([jnp.array([np.sqrt(1.0 / c + float(jnp.dot(x_s_D, x_s_D)))], dtype=F64), x_s_D])
 
-    logits_BP = manifold.compute_mlr(x_A[None], z_PD, r_P1, c, clamping_factor=10.0, smoothing_factor=50.0)
+    logits_BP = manifold.compute_mlr(x_A[None], z_PD, r_P1, c)
 
     sqrt_c = np.sqrt(c)
     z_np = np.asarray(z_PD, dtype=np.float64)
@@ -151,7 +151,7 @@ def test_hyperboloid_mlr_sign_follows_side_and_margin_is_monotone(c: float):
         x_s_D = (base + float(delta)) * z_hat_D
         x_t = np.sqrt(1.0 / c + float(jnp.dot(x_s_D, x_s_D)))
         x_A = jnp.concatenate([jnp.array([x_t], dtype=F64), x_s_D])
-        logits.append(float(manifold.compute_mlr(x_A[None], z_PD, r_P1, c, 10.0, 50.0)[0, 0]))
+        logits.append(float(manifold.compute_mlr(x_A[None], z_PD, r_P1, c)[0, 0]))
 
     assert logits[0] < logits[1] < logits[2] < logits[3] < logits[4], "margin is not monotone along ẑ"
     assert logits[0] < 0.0 and logits[1] < 0.0, "points on the origin side must score negative"
@@ -174,7 +174,7 @@ def test_pv_mlr_vanishes_on_its_own_hyperplane(c: float, r_val: float):
     z_hat_D = z_PD[0] / jnp.linalg.norm(z_PD[0])
     x_D = _hyperplane_offset(c, r_val) * z_hat_D
 
-    logit = manifold.compute_mlr(x_D[None], z_PD, r_P1, c, clamping_factor=10.0, smoothing_factor=50.0)
+    logit = manifold.compute_mlr(x_D[None], z_PD, r_P1, c)
 
     assert float(logit[0, 0]) == pytest.approx(0.0, abs=1e-12)
 
@@ -187,7 +187,7 @@ def test_pv_mlr_matches_closed_form_at_zero_offset(c: float):
     r_P1 = jnp.zeros((2, 1), dtype=F64)
     x_D = jnp.array([0.2, -0.1, 0.15], dtype=F64)
 
-    logits_BP = manifold.compute_mlr(x_D[None], z_PD, r_P1, c, clamping_factor=10.0, smoothing_factor=50.0)
+    logits_BP = manifold.compute_mlr(x_D[None], z_PD, r_P1, c)
 
     sqrt_c = np.sqrt(c)
     z_np = np.asarray(z_PD, dtype=np.float64)
@@ -209,7 +209,7 @@ def test_pv_mlr_sign_follows_side_and_margin_is_monotone(c: float):
 
     offsets = np.array([-0.5, -0.2, 0.0, 0.2, 0.5])
     x_BD = jnp.stack([(base + float(d)) * z_hat_D for d in offsets])
-    logits = np.asarray(manifold.compute_mlr(x_BD, z_PD, r_P1, c, 10.0, 50.0)[:, 0])
+    logits = np.asarray(manifold.compute_mlr(x_BD, z_PD, r_P1, c)[:, 0])
 
     assert np.all(np.diff(logits) > 0.0), "margin is not monotone along ẑ"
     assert logits[0] < 0.0 and logits[1] < 0.0
@@ -1093,9 +1093,24 @@ def test_hyperboloid_dist_on_a_shared_ray_is_the_radius_difference(dtype, rtol: 
     assert opposite == pytest.approx((a_stored + b_stored) / np.sqrt(c), rel=tol)
 
 
-@pytest.mark.parametrize(("dtype", "rtol"), _HYP_DTYPES, ids=_HYP_DTYPE_IDS)
+# The radius grid is per-dtype: float32 stops at 43, float64 keeps 45. A point at radius ``a`` has
+# spatial coordinate ``sinh(a)/√c``, which at ``a = 45, c = 0.3`` is 3.2e19 — past the 1.845e19
+# where a one-pass ``sum(x_s**2)`` overflows float32, so ``dist_0`` there is ``inf`` by policy (see
+# the norm-policy section below). That band is the retired float32 overflow guard, so the radius
+# moves to float64 rather than the assertion being loosened. 43.0 is the repo's existing float32
+# radial ceiling (``tests/test_manifolds.py``). Tolerances are unchanged.
+_ORIGIN_RADII = {
+    jnp.float32: [1e-4, 1e-3, 1e-2, 0.5, 5.0, 20.0, 43.0],
+    jnp.float64: [1e-4, 1e-3, 1e-2, 0.5, 5.0, 20.0, 45.0],
+}
+_ORIGIN_CASES = [(dtype, rtol, a) for dtype, rtol in _HYP_DTYPES for a in _ORIGIN_RADII[dtype]]
+_ORIGIN_IDS = [
+    f"{a:g}-{dtype_id}" for (dtype, _), dtype_id in zip(_HYP_DTYPES, _HYP_DTYPE_IDS, strict=True) for a in _ORIGIN_RADII[dtype]
+]
+
+
+@pytest.mark.parametrize(("dtype", "rtol", "a"), _ORIGIN_CASES, ids=_ORIGIN_IDS)
 @pytest.mark.parametrize("c", CURVATURES)
-@pytest.mark.parametrize("a", [1e-4, 1e-3, 1e-2, 0.5, 5.0, 20.0, 45.0])
 def test_hyperboloid_dist_and_logmap_to_the_origin_match_the_origin_variants(dtype, rtol: float, c: float, a: float):
     """``dist(x, origin) == dist_0(x)`` and ``logmap(origin, x) == d·e_rad``.
 
@@ -2015,26 +2030,40 @@ def test_poincare_metric_tensor_dist_gradient_is_the_conformal_factor_at_small_s
 
 
 # ---------------------------------------------------------------------------------------------
-# Safe-norm sweep — the additive-epsilon norm idiom, replaced library-wide.
+# Norm policy on the hot path — one reduction, gradient-safe at zero, no additive floor.
 #
-# The old idiom ``sqrt(sum(x**2) + MIN_NORM**2)`` gave ``sqrt`` a finite derivative at ``x = 0``,
-# which ``jnp.linalg.norm`` does not (its VJP there is ``0/0 = NaN``). It bought that with two
-# defects, both documented on ``math_utils.safe_norm``:
+# Every per-sample norm in the library is free of the additive floor: ``safe_sqrt(sum(v**2))``
+# where the input can be exactly zero, a plain ``sqrt(const + sum(v**2))`` where a strictly
+# positive constant is added, and ``floor_at(., MIN_NORM)`` *around* either where the norm is a
+# divisor. That replaces two older idioms, but not to the same extent:
 #
-#   * **Overflow** — ``sum(x**2)`` overflows float32 once any coordinate passes 1.8e19, even
-#     though the norm is representable. Measured on the parent (``parent_gate/gate.py``):
-#     ``Hyperboloid.proj`` at float32 spatial radius 5e19 returns ``x0 = inf``, and already at
-#     1e19 the constraint ``-x0² + ‖x_s‖²`` evaluates to exactly ``0`` instead of ``-1/c``
-#     (the sum of squares is exact, but ``sqrt`` of it loses the ``1/c``). The Poincaré
-#     ``_gyrovector_core._proj`` fails worse: at radius 1e20 the clamp ``x·(max_norm/inf)``
-#     collapses the point onto the **origin** rather than onto the ball boundary.
-#   * **Underflow** — the ``1e-30`` floor dominates a genuinely small vector, with relative
-#     residual ``MIN_NORM²/(2r²)``: 5.0e-15 at float64 radius 1e-8 (measured on the parent), and
-#     41 % at float32 radius 1e-15 (2.83e-15 returned where 2.00e-15 is correct).
+#   * the additive ``sqrt(sum(x**2) + MIN_NORM**2)``, whose ``1e-30`` floor dominates a genuinely
+#     small vector — relative residual ``MIN_NORM²/(2r²)``: 5.0e-15 at float64 radius 1e-8, and
+#     41 % at float32 radius 1e-15 (2.83e-15 returned where 2.00e-15 is correct). That defect is
+#     what the tiny-radius oracles below still gate. It is gone from every site.
+#   * the max-scaled two-reduction ``safe_norm``/``safe_hypot_norm``, which reads the data twice to
+#     buy an overflow guard that only fires past float32 coordinate 1.8e19 — geodesic radius ~44
+#     at ``c = 1``, a regime no SGD run reaches. It gave way to the single reduction only on the
+#     hot-path sites where the second memory pass measured slower; ``logmap_0``, every
+#     ProperVelocity site, both PV isometries, the FHNN forward and the linear-attention
+#     ``focus_transform`` keep it and stay finite past that coordinate.
 #
-# ``safe_norm`` / ``safe_hypot`` / ``safe_sqrt`` are max-scaled, so neither happens, and all
-# three give an exact ``0`` with an exactly-zero VJP at the zero vector. See
-# ``logs/2026-09-03_safe_norm_sweep/inventory.md`` for the full site list.
+# Past that coordinate the *converted* sites are loud rather than saturated, and what each one
+# gives was measured rather than argued (float32, ``c = 1``; see
+# ``logs/2026-09-04_safe_norm_hot_path_revert/contract/out_of_range_31403c2.log``): the hyperboloid
+# ``proj``/``proj_batch``/``dist_0``, and the layers built on ``spatial_to_hyperboloid``, return
+# ``inf`` with no NaN; the Poincaré/stereographic boundary clamp returns the origin, a finite point
+# (the pre-1.2.0 behaviour, documented in the changelog), and ``Poincare.expmap`` inherits that
+# clamp; ``FGGLinear`` returns non-finite values — NaN or ``inf``, depending on the input.
+#
+# The extreme-radius oracles below therefore test the *algorithm*, not float32's range: the two
+# that can be stated exactly run in float64, and the one that cannot (``expmap_0`` past the
+# ``sinh`` cap, where the capped spatial value squared overflows in float64 too) asserts the
+# weaker but real contract — ``inf``, never NaN.
+#
+# ``safe_sqrt``'s double-``where`` is what supplies the exact ``0`` and the exactly-zero VJP at the
+# zero vector; the zero-gradient oracle at the end of this section is the regression guard for the
+# whole conversion. See ``logs/2026-09-03_safe_norm_sweep/inventory.md`` for the full site list.
 # ---------------------------------------------------------------------------------------------
 
 # Radii chosen so the residual is the *only* error term: at these radii atanh(z) == z to well
@@ -2067,31 +2096,32 @@ def test_poincare_dist_0_matches_the_analytic_form_at_a_tiny_radius(dtype, c: fl
     assert float(manifold.dist(y_D, x_D, c)) == pytest.approx(expected, rel=_TINY_RADIUS_RTOL[dtype])
 
 
-# Above spatial radius sqrt(1/(2*c*eps32)) -- 3.7e3 at c = 0.3, 2.0e3 at c = 1, 1.3e3 at c = 2.5 --
-# NO float32 x0 satisfies -x0² + ‖x_s‖² = -1/c: consecutive float32 near x0 are 2·x0²·eps apart in
-# the squared domain, and 1/c is smaller than that gap. (`nn_layers/hyperboloid_core.py` documents
-# the same limit.) So the overflow band is checked against the *time slot*, x0 = sqrt(1/c + ‖x_s‖²)
-# rounded to float32, and the constraint itself is checked at a radius float32 can represent.
-_OVERFLOW_RADII = [5e19, 1e20]  # 1.8e19 is where sum(x_s**2) overflows float32
+# Above spatial radius sqrt(1/(2*c*eps)) -- 3.7e3 at c = 0.3 in float32, 6.7e7 in float64 --
+# NO float of that dtype satisfies -x0² + ‖x_s‖² = -1/c: consecutive floats near x0 are 2·x0²·eps
+# apart in the squared domain, and 1/c is smaller than that gap. (`nn_layers/hyperboloid_core.py`
+# documents the same limit.) So the enormous-radius band is checked against the *time slot*,
+# x0 = sqrt(1/c + ‖x_s‖²), and the constraint itself at a radius the dtype can represent.
+_OVERFLOW_RADII = [5e19, 1e20]  # far past float32's 1.8e19; representable in float64
 _REPRESENTABLE_RADII = [1.0, 10.0, 100.0]
 
 
 @pytest.mark.parametrize("c", CURVATURES)
 @pytest.mark.parametrize("r", _OVERFLOW_RADII)
-def test_hyperboloid_proj_time_slot_survives_the_float32_overflow(c: float, r: float):
-    """``proj`` past float32 spatial radius 1.8e19: ``x0`` finite and correct to float32 rounding.
+def test_hyperboloid_proj_time_slot_is_exact_at_an_enormous_radius(c: float, r: float):
+    """``proj`` at spatial radius 5e19 to 1e20: ``x0 = sqrt(1/c + r²)`` to the dtype's rounding.
 
-    The old ``sqrt(floor_at(1/c + dot(x_s, x_s), MIN_NORM))`` forms the sum of squares, which
-    overflows while ``‖x_s‖`` — and therefore ``x0`` — is a perfectly ordinary float. Measured on
-    the parent: ``x0 = inf`` at both radii, at every curvature.
+    This guards the *algorithm*, not float32's range. The radii are far outside anything a
+    training run reaches; float64 is used so ``1/c + r²`` is representable and the assertion can be
+    an equality against the reference value. What it would catch is a time slot built by rounding
+    ``‖x_s‖`` and re-squaring it, or one that lost the ``1/c`` term.
     """
-    manifold = Hyperboloid(dtype=jnp.float32)
-    x_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(r))
+    manifold = Hyperboloid(dtype=jnp.float64)
+    x_A = jnp.zeros(4, dtype=jnp.float64).at[1].set(jnp.float64(r))
 
     x0 = float(np.asarray(manifold.proj(x_A, c), dtype=np.float64)[0])
-    reference = float(np.float32(np.sqrt(1.0 / c + np.float64(r) ** 2)))
+    reference = float(np.sqrt(1.0 / c + np.float64(r) ** 2))
     assert np.isfinite(x0), f"c={c} r={r}: x0={x0}"
-    assert x0 == reference, f"c={c} r={r}: x0={x0:.6e} != float32(sqrt(1/c + r^2))={reference:.6e}"
+    assert x0 == reference, f"c={c} r={r}: x0={x0:.6e} != sqrt(1/c + r^2)={reference:.6e}"
 
     # proj_batch must agree with proj row for row.
     batch = jnp.stack([x_A, x_A])
@@ -2116,38 +2146,98 @@ def test_hyperboloid_proj_still_satisfies_the_constraint_in_the_ordinary_band(c:
 
 
 @pytest.mark.parametrize("c", CURVATURES)
-def test_hyperboloid_expmap_0_saturates_to_a_consistent_point_not_an_infinite_time_slot(c: float):
-    """``expmap_0`` of a length-1e19 tangent vector saturates; it must saturate *on the sheet*.
+def test_hyperboloid_expmap_0_past_the_sinh_cap_is_infinite_not_nan(c: float):
+    """``expmap_0`` of a length-1e19 tangent vector: ``x0 = inf``, spatial finite, no NaN.
 
-    A tangent vector that long is past the ``sinh`` clamp, so the result is the clamp's saturation
-    value — that part is expected. What was wrong is that ``proj`` then gave it an **infinite**
-    time slot beside a finite spatial part: measured on the parent, ``[inf, 7.0e37, 0, 0]``. At
-    saturation the on-sheet asymptote is ``x0 = ‖x_s‖`` (the ``1/c`` is 38 orders below), and that
-    is what it returns now.
+    Unlike the two oracles around it this one cannot be restated in float64: ``sinh`` clips its
+    argument at ``0.99·log(finfo.max)`` in *both* dtypes, so the capped spatial value (7.0e37 at
+    ``c = 1``) squared overflows the time slot's ``1/c + sum(x_s**2)`` in float64 as well. The
+    contract is therefore the weaker but real one — the point is loudly out of range rather than
+    quietly saturated, and an ``inf`` stays visible downstream where a NaN would silently poison
+    every parameter it touches.
+
+    A tangent vector this long is 20 orders of magnitude past anything a training run produces;
+    what this guards is that the failure mode stays ``inf``.
     """
     manifold = Hyperboloid(dtype=jnp.float32)
     v_A = jnp.zeros(4, dtype=jnp.float32).at[1].set(jnp.float32(1e19))
 
     y64 = np.asarray(manifold.expmap_0(v_A, c), dtype=np.float64)
-    assert np.all(np.isfinite(y64)), f"c={c}: {y64}"
-    spatial = float(np.linalg.norm(y64[1:]))
-    assert spatial > 0.0, f"c={c}: {y64}"
-    assert y64[0] == pytest.approx(spatial, rel=1e-6), f"c={c}: x0={y64[0]:.6e} ||y_s||={spatial:.6e}"
+    assert not np.any(np.isnan(y64)), f"c={c}: {y64}"
+    assert np.isinf(y64[0]) and y64[0] > 0.0, f"c={c}: x0={y64[0]}"
+    assert np.all(np.isfinite(y64[1:])), f"c={c}: {y64}"
+    assert float(np.linalg.norm(y64[1:])) > 0.0, f"c={c}: {y64}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("traced_c", [False, True], ids=["static_c", "traced_c"])
+def test_hyperboloid_time_slot_custom_jvp_matches_plain_autodiff(dtype, traced_c: bool, monkeypatch):
+    """``_time_slot``'s ``custom_jvp`` reproduces what AD derives from ``sqrt(1/c + sum(x_s**2))``.
+
+    The rule is there for the backward's XLA fusion shape, not for its arithmetic, so what this
+    checks is that none of the arithmetic moved: the forward value bit for bit, and ``jax.grad``
+    and ``jax.jvp`` of ``proj``, ``proj_batch`` and ``expmap_0`` equal the plain-autodiff values to
+    the dtype's rounding. The cases are the ones a hand-written rule can get wrong where AD cannot:
+    an exactly-zero tangent, the zero vector (where ``x0 = sqrt(1/c)`` is still positive), and a
+    traced curvature, whose cotangent ``1/(2·x0)`` the rule states by hand and ``LearnableCurvature``
+    consumes.
+    """
+    from hyperbolix.manifolds import hyperboloid as hyp_mod
+
+    tol = 1e-6 if dtype is jnp.float32 else 1e-13
+    manifold = Hyperboloid(dtype=dtype)
+    c = jnp.asarray(0.7, dtype=dtype) if traced_c else 0.7
+    x_A = jax.random.normal(jax.random.key(0), (5,), dtype=dtype)
+    cases = [(x_A, jnp.ones_like(x_A)), (x_A, jnp.zeros_like(x_A)), (jnp.zeros_like(x_A), jnp.ones_like(x_A))]
+    ops = {
+        "proj": lambda z, cc: manifold.proj(z, cc),
+        "proj_batch": lambda z, cc: manifold.proj_batch(jnp.stack([z, 2.0 * z]), cc),
+        "expmap_0": lambda z, cc: manifold.expmap_0(z, cc),
+    }
+
+    def measure(fn, x_D, t_D) -> list:
+        """``[value, d/dx, jvp along t, d/dc]`` of one op at one point; ``d/dc`` only if traced."""
+
+        def loss(z, cc):
+            return jnp.sum(jnp.sin(fn(z, cc)))
+
+        row = [
+            np.asarray(fn(x_D, c)),
+            np.asarray(jax.grad(loss)(x_D, c)),
+            np.asarray(jax.jvp(lambda z: fn(z, c), (x_D,), (t_D,))[1]),
+        ]
+        if traced_c:
+            row.append(np.asarray(jax.grad(loss, argnums=1)(x_D, c)))
+        return row
+
+    got = {name: [measure(fn, x, t) for x, t in cases] for name, fn in ops.items()}
+    # The reference: the same time slot with no custom rule, so JAX differentiates it itself.
+    monkeypatch.setattr(hyp_mod, "_time_slot", lambda x_s, inv_c: jnp.sqrt(inv_c + jnp.sum(x_s**2, axis=-1)))
+
+    for name, fn in ops.items():
+        for i, ((x, t), new) in enumerate(zip(cases, got[name], strict=True)):
+            ref = measure(fn, x, t)
+            np.testing.assert_array_equal(new[0], ref[0], err_msg=f"{name} case {i} forward")
+            labels = ("d/dx", "jvp", "d/dc")[: len(new) - 1]
+            for label, a, b in zip(labels, new[1:], ref[1:], strict=True):
+                np.testing.assert_allclose(a, b, rtol=tol, atol=tol, err_msg=f"{name} case {i} {label}")
 
 
 @pytest.mark.parametrize("r", [1e19, 1e20])
 def test_poincare_proj_clamps_a_far_point_to_the_boundary_not_to_the_origin(r: float):
-    """``_proj`` past the float32 overflow radius must land on the ball boundary.
+    """``_proj`` of a point at radius 1e19 to 1e20 must land on the ball boundary, not on the origin.
 
-    With the overflowing norm the clamp is ``x · (max_norm / inf) = 0``: the farthest possible
-    input produced the *origin*, the point that is farthest from where it belongs. Measured on
-    the parent at ``r = 1e20``: ``‖proj(x)‖ = 0.0``.
+    This guards the *clamp*, not the dtype's range, so it runs in float64 where ``sum(x**2)`` is
+    representable at these radii. The failure it gates is a norm that comes back non-finite: the
+    clamp is then ``x · (max_norm / inf) = 0`` and the farthest possible input produces the
+    *origin*, the point that is farthest from where it belongs. (In float32 past coordinate 1.8e19
+    that is exactly what happens, deliberately — see the section comment.)
     """
     c = 1.0
-    x_D = jnp.zeros(4, dtype=jnp.float32).at[0].set(jnp.float32(r))
+    x_D = jnp.zeros(4, dtype=jnp.float64).at[0].set(jnp.float64(r))
     p_D = np.asarray(_proj(x_D, c), dtype=np.float64)
 
-    max_norm = 1.0 / np.sqrt(c) - float(np.finfo(np.float32).eps) ** 0.75
+    max_norm = 1.0 / np.sqrt(c) - float(np.finfo(np.float64).eps) ** 0.75
     assert float(np.linalg.norm(p_D)) == pytest.approx(max_norm, rel=1e-5), f"r={r}"
 
 
@@ -2180,12 +2270,15 @@ def _zero_gradient_cases() -> list[tuple[str, object, object]]:
 
 @pytest.mark.parametrize("name,fn,x0", _zero_gradient_cases(), ids=[c[0] for c in _zero_gradient_cases()])
 def test_converted_norms_have_an_exactly_zero_gradient_at_the_zero_vector(name, fn, x0):
-    """Every converted norm site gives ``grad == 0`` at the zero vector — not NaN, not inf.
+    """Every norm site below gives ``grad == 0`` at the zero vector — not NaN, not inf.
 
-    Zero is the finite, direction-free choice at a point where the derivative does not exist, and
-    it is what ``safe_norm``/``safe_sqrt``'s double-``where`` construction produces. Measured on
-    the parent, the Euclidean, Proper-Velocity ``tangent_norm`` and every ``ProductManifold``
-    entry returned NaN (bare ``jnp.linalg.norm``, or ``sqrt'(0) = inf`` meeting a zero cotangent).
+    The 14 paths deliberately span both spellings the library uses, because the guarantee has to
+    hold either way: the one-pass ``safe_sqrt(sum(v**2))`` at the sites that were converted, and
+    the max-scaled two-pass ``safe_norm``/``safe_hypot_norm`` at the sites that kept it. Both are
+    the same double-``where`` construction, and both produce zero — the finite, direction-free
+    choice at a point where the derivative does not exist. Measured on the parent, the Euclidean,
+    Proper-Velocity ``tangent_norm`` and every ``ProductManifold`` entry returned NaN (bare
+    ``jnp.linalg.norm``, or ``sqrt'(0) = inf`` meeting a zero cotangent).
     """
     g = np.asarray(jax.grad(fn)(x0), dtype=np.float64)
     assert np.all(np.isfinite(g)), f"{name}: {g}"

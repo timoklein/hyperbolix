@@ -60,15 +60,13 @@ For numerical accuracy with large distances or near-boundary points:
 - Consider projection after operations to maintain manifold constraints
 """
 
-import math
-
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, smooth_clamp, tanh
+from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, tanh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
@@ -365,11 +363,15 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    # `safe_norm` + explicit `floor_at`: the floor is deliberate (`c_norm_prod` divides two lines
-    # below, and `tanh(t)/t → 1` needs t > 0), the max-scaling is the fix for the old spelling's
-    # float32 overflow past coordinate 1.8e19. Matches _expmap_0. `[..., None]` keeps the norm
+    # One reduction: `safe_sqrt(sum(v**2))` inside the `floor_at`. `v` is a tangent vector and can
+    # be exactly zero, so `safe_sqrt` (double-`where`) rather than a plain `sqrt`, whose infinite
+    # derivative at 0 would meet a zero cotangent as NaN. The floor is deliberate and stays
+    # *around* the sqrt (`c_norm_prod` divides two lines below, and `tanh(t)/t → 1` needs the same
+    # floored t in numerator and denominator). `sum(v**2)` overflows float32 past coordinate
+    # 1.8e19, unreachable by a training run; there the norm is `inf` and the clamped result is the
+    # origin, the pre-1.2.0 behaviour. Matches _expmap_0. `axis=-1, keepdims=True` keeps the norm
     # broadcastable against the `(..., dim)` operand it divides below (see _gyrovector_core._proj).
-    v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
+    v_norm = floor_at(safe_sqrt(jnp.sum(v**2, axis=-1, keepdims=True)), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * v_norm
     lambda_x = _conformal_factor(x, c)
     # ||second_term|| = |tanh(·)|/√c < 1/√c, i.e. strictly inside the ball, so an explicit _proj
@@ -400,7 +402,10 @@ def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     # `sum(v**2)` overflowed float32 above coordinate 1.8e19. The floor is deliberate --
     # `c_norm_prod` divides three lines down, and `tanh(t)/t -> 1` needs numerator and denominator
     # to be the same floored quantity. `[..., None]` keeps the norm broadcastable against the
-    # `(..., dim)` operand it divides below (see _gyrovector_core._proj).
+    # `(..., dim)` operand it divides below (see _gyrovector_core._proj). Kept on the two-pass form
+    # because `expmap_0` measured no change between 1.1.2 and 1.2.0 (5/2 kernels either way), so
+    # there is no cost to trade the full-range guarantee against. `_expmap` is the one that
+    # regressed and is converted.
     v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
     sqrt_c = jnp.sqrt(c)
     c_norm_prod = sqrt_c * v_norm
@@ -569,7 +574,8 @@ def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurva
     """
     lambda_x = _conformal_factor(x, c)
     # `safe_norm`: exact 0 with an exactly-zero VJP at v = 0 (a bare jnp.linalg.norm has VJP
-    # 0/0 = NaN there). Returned, not divided by, so no floor — ‖0‖_x is exactly 0.
+    # 0/0 = NaN there). Returned, not divided by, so no floor — ‖0‖_x is exactly 0. Kept on the
+    # two-pass form: nothing measured slower here, so the full-range guarantee costs nothing.
     return lambda_x * safe_norm(v)
 
 
@@ -666,8 +672,6 @@ def _compute_mlr_pp(
     z: Float[Array, "out_dim in_dim"],
     r: Float[Array, "out_dim 1"],
     c: ScalarCurvature,
-    clamping_factor: float,
-    smoothing_factor: float,
     min_enorm: float = 1e-15,
 ) -> Float[Array, "batch out_dim"]:
     """Compute HNN++ multinomial linear regression on the Poincare ball.
@@ -677,8 +681,6 @@ def _compute_mlr_pp(
         z: Hyperplane tangent normals at origin, shape (out_dim, in_dim)
         r: Hyperplane translations, shape (out_dim, 1)
         c: Manifold curvature (positive)
-        clamping_factor: Clamping value for the output
-        smoothing_factor: Smoothing factor for the output
         min_enorm: Minimum norm to avoid division by zero
 
     Returns:
@@ -701,12 +703,15 @@ def _compute_mlr_pp(
     # transcription bug the same author fixed in hypll. Do not "restore" it.
     lam_B1 = _conformal_factor_batch(x, c)  # (B, 1)
 
+    # Pinned HIGHEST: the MLR logits are a decision quantity, and this dot enters the asinh
+    # argument as a difference of a radial and an angular term. Measured f32-vs-f64 relative
+    # error of compute_mlr_pp on an A100: 3.8e-5 … 1.4e-4 under TF32, 6.0e-8 … 2.2e-7 here.
     z_unitx_BP = jnp.einsum("bi,oi->bo", x, z / z_norm_P1, precision=MATMUL_PRECISION)  # (B, P)
     asinh_arg_BP = sqrt_c * lam_B1 * z_unitx_BP * cosh(sqrt_c2r_1P) - (lam_B1 - 1) * sinh(sqrt_c2r_1P)  # (B, P)
 
-    eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
-    clamp = clamping_factor * float(math.log(2 / eps))
-    asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, smoothing_factor)  # (B, P)
+    # No clamp on the asinh argument — same reason as in `manifolds/hyperboloid._compute_mlr`;
+    # see there. λ(x) puts this argument past the old float32 bound sooner than the hyperboloid
+    # one does: λ ≈ 75 already at geodesic radius 5, c = 1.
     signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c  # (B, P)
     res_BP = 2 * z_norm_P1.T * signed_dist2hyp_BP  # z_norm.T broadcasts (1, P) over (B, P)
     return res_BP
@@ -949,12 +954,10 @@ class Poincare(ManifoldBase):
         z: Float[Array, "out_dim in_dim"],
         r: Float[Array, "out_dim 1"],
         c: ScalarCurvature,
-        clamping_factor: float,
-        smoothing_factor: float,
         min_enorm: float = 1e-15,
     ) -> Float[Array, "batch out_dim"]:
         """Compute HNN++ multinomial linear regression on the Poincare ball."""
-        return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)
+        return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)
 
     def beta_concat(self, points: Float[Array, "M n_i"], c: ScalarCurvature) -> Float[Array, "n"]:
         """Beta-concatenation of M equal-dimensional Poincaré ball points."""

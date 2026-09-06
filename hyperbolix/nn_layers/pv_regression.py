@@ -46,10 +46,6 @@ class HypRegressionPV(nnx.Module):
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration — changing it after initialization
         requires recompilation.
-    clamping_factor : float
-        Clamping factor for the MLR output (default: 1.0).
-    smoothing_factor : float
-        Smoothing factor for the MLR output (default: 50.0).
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
@@ -57,8 +53,8 @@ class HypRegressionPV(nnx.Module):
     Notes
     -----
     JIT Compatibility:
-        Configuration parameters (input_space, clamping_factor, smoothing_factor)
-        are treated as static and are baked into the compiled function.
+        The configuration parameter ``input_space`` is treated as static and
+        will be baked into the compiled function.
 
     References
     ----------
@@ -73,8 +69,6 @@ class HypRegressionPV(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
@@ -88,8 +82,6 @@ class HypRegressionPV(nnx.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
 
         # Kernel init: small normal with std = 1e-2 (matches paper reference
         # PVManifoldMLR.reset_parameters in the Chen et al. repo).
@@ -125,6 +117,4 @@ class HypRegressionPV(nnx.Module):
             self.kernel[...],
             self.bias[...],
             c,
-            self.clamping_factor,
-            self.smoothing_factor,
         )

@@ -725,10 +725,6 @@ class HypConv2DHyperboloidILNN(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    clamping_factor : float
-        Clamping factor for the multinomial linear regression output (default: 1.0)
-    smoothing_factor : float
-        Smoothing factor for the multinomial linear regression output (default: 50.0)
     v_max : float
         Output-side guard: the sinh argument ``sqrt(c)*v`` is hard-clipped to
         ``±v_max``, bounding the output spatial norm by ``sinh(v_max)/sqrt(c)``
@@ -781,8 +777,7 @@ class HypConv2DHyperboloidILNN(nnx.Module):
 
     JIT Compatibility:
         This layer is designed to work with nnx.jit. Configuration parameters (padding, pad_mode,
-        input_space, clamping_factor, smoothing_factor, v_max) are treated as static and baked
-        into the compiled function.
+        input_space, v_max) are treated as static and baked into the compiled function.
 
     See Also
     --------
@@ -809,8 +804,6 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         padding: str = "SAME",
         pad_mode: str = "origin",
         input_space: str = "manifold",
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         v_max: float = 10.0,
         use_gyro_bias: bool = False,
         kernel_init_std: float | None = None,
@@ -834,8 +827,6 @@ class HypConv2DHyperboloidILNN(nnx.Module):
         self.input_space = input_space
         self.padding = padding
         self.pad_mode = pad_mode
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
         _assert_v_max_safe(v_max)
         self.v_max = v_max
 
@@ -906,8 +897,6 @@ class HypConv2DHyperboloidILNN(nnx.Module):
             self.manifold,
             c,
             "manifold",  # LogCat output is already on manifold
-            self.clamping_factor,
-            self.smoothing_factor,
             self.v_max,
         )  # (B*H'*W', out_channels)
 

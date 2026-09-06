@@ -28,8 +28,8 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
-from hyperbolix.utils.precision import MATMUL_PRECISION
 from hyperbolix.manifolds.protocol import Manifold
+from hyperbolix.utils.precision import MATMUL_PRECISION
 
 from ._helpers import validate_poincare_manifold
 
@@ -126,6 +126,9 @@ def poincare_weighted_midpoint(
     # Eq. 41 numerator / denominator, contracted over the M axis:
     #   numerator_n = Σ_m w_nm · λ(x_m) · x_m   (N, C)
     #   denom_n     = Σ_m w_nm · (λ(x_m) - 1)   (N,)
+    # Both contractions are pinned HIGHEST: this is the Poincaré counterpart of
+    # `lorentz_midpoint`, and λ grows without bound near the boundary, so a TF32 ~1e-3
+    # relative error on either sum lands directly on the midpoint (see hyperbolix.utils.precision).
     numerator_NC = jnp.einsum("nm,mc->nc", weights_NM, lambda_M[:, None] * points_MC, precision=MATMUL_PRECISION)  # (N, C)
     denom_N = jnp.einsum("nm,m->n", weights_NM, lambda_M - 1.0, precision=MATMUL_PRECISION)  # (N,)
     # Empty row (all-zero weights) -> denom 0 and numerator 0; map to origin

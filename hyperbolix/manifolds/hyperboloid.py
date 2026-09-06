@@ -52,9 +52,9 @@ Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
 """
 
-import math
 from typing import NamedTuple
 
+import jax
 import jax.lax as lax
 import jax.numpy as jnp
 from jax.scipy.special import digamma
@@ -65,12 +65,10 @@ from ..utils.math_utils import (
     cosh,
     floor_at,
     safe_hypot,
-    safe_hypot_norm,
     safe_norm,
     safe_normalize,
     safe_sqrt,
     sinh,
-    smooth_clamp,
 )
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
@@ -127,6 +125,71 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_pl
     return jnp.concatenate([zeros, v_spatial], axis=-1)
 
 
+def _sqnorm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
+    """``sum(v**2)`` over the last axis: the one reduction every norm in this module shares.
+
+    Sharing the spelling is what lets XLA common-subexpression-eliminate the sum when several of
+    ``dist_0`` / ``logmap_0`` / ``_polar_frame`` are traced into the same graph. It overflows
+    float32 once a coordinate passes 1.8e19 (geodesic radius ~44 at ``c = 1``), which no training
+    run reaches; past that it propagates as ``inf`` rather than as a quietly saturated value.
+    """
+    return jnp.sum(v**2, axis=-1)
+
+
+def _norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
+    """``sqrt(sum(v**2))`` over the last axis, in one reduction, exact and zero-VJP at ``v = 0``.
+
+    ``safe_sqrt`` supplies the double-``where`` that keeps ``sqrt'(0) = inf`` out of the VJP; the
+    value is bit-identical to ``jnp.linalg.norm`` wherever the sum neither overflows nor
+    underflows.
+    """
+    return safe_sqrt(_sqnorm(v))
+
+
+@jax.custom_jvp
+def _time_slot(x_spatial: Float[Array, "... n"], inv_c: Float[Array, "..."]) -> Float[Array, "..."]:
+    """``x₀ = sqrt(1/c + ‖x_s‖²)``: the hyperboloid time coordinate, in one reduction.
+
+    The value is exactly ``jnp.sqrt(inv_c + _sqnorm(x_spatial))`` — see :func:`_proj` for why the
+    constant goes *under* the ``sqrt``, why the ``sqrt`` needs no zero-guard, and what happens past
+    float32 coordinate 1.8e19. The custom derivative below changes no forward bit.
+
+    The rule exists for the backward's fusion shape, not for its arithmetic: reverse-mode AD already
+    derives ``∂x₀/∂x_s = x_s/x₀`` and ``∂x₀/∂(1/c) = 1/(2x₀)``, which is what this rule states. What
+    it adds is the ``optimization_barrier`` on the per-row factor ``1/x₀``. Without it XLA:GPU emits
+    the backward's reduction and the broadcast that consumes it as a single Triton block-level
+    fusion whose output is the full ``(B, n)`` cotangent; the trailing ``pad`` that re-embeds the
+    spatial cotangent into the ambient slot cannot join a Triton fusion and is left as a standalone
+    full-tensor copy — one extra read and one extra write of the whole batch, and in ``expmap_0``
+    the ``sinh``/``cosh`` chain gets recomputed inside each such fusion as well. Materialising
+    ``1/x₀`` as a ``(B,)`` buffer puts the reduction back in a plain reduce and lets the ``pad``
+    fuse into the elementwise kernel that already reads ``x``. See
+    ``logs/2026-09-05_proj_backward/`` for the HLO the two spellings produce.
+
+    Args:
+        x_spatial: Spatial part ``x_s``, reduced over the last axis
+        inv_c: ``1/c``, broadcast against ``x_spatial.shape[:-1]``
+
+    Returns:
+        ``sqrt(1/c + ‖x_s‖²)``, shape ``x_spatial.shape[:-1]``
+    """
+    return jnp.sqrt(inv_c + _sqnorm(x_spatial))
+
+
+@_time_slot.defjvp
+def _time_slot_jvp(primals, tangents):
+    """``dx₀ = (⟨x_s, dx_s⟩ + d(1/c)/2) · (1/x₀)``, reusing the forward's ``x₀`` as the residual."""
+    x_spatial, inv_c = primals
+    dx_spatial, dinv_c = tangents
+    x0 = jnp.sqrt(inv_c + _sqnorm(x_spatial))
+    # Barrier on the reciprocal, not on `x0`: it has to sit at the *end* of the per-row scalar
+    # chain, or the divide it guards lands in a kernel of its own instead of fusing with the
+    # cotangent multiply. `1/x0` then a multiply is also the arithmetic XLA emits for `.../x0`.
+    inv_x0 = lax.optimization_barrier(jnp.asarray(1.0, dtype=x0.dtype) / x0)
+    dx0 = (jnp.sum(x_spatial * dx_spatial, axis=-1) + 0.5 * dinv_c) * inv_x0
+    return x0, dx0
+
+
 def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Project point onto hyperboloid by adjusting temporal component.
 
@@ -138,25 +201,31 @@ def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "di
         Projected point with -x₀² + ||x_rest||² = -1/c, x₀ > 0, shape (dim+1,)
 
     Notes:
-        ``x₀ = sqrt(1/c + ‖x_s‖²)`` is evaluated as ``safe_hypot_norm(x_s, 1/√c)``, which never
-        materialises ``‖x_s‖²`` and keeps the ``sum(x_s**2)`` intact rather than rounding ``‖x_s‖``
-        and re-squaring it (see the primitive's docstring for why the difference is visible: it is
-        exactly the term the constraint check ``-x₀² + ‖x_s‖² = -1/c`` cancels). The old
-        ``sqrt(floor_at(1/c + dot(x_s, x_s), MIN_NORM))``
-        overflowed float32 as soon as any spatial coordinate passed 1.8e19 and returned
-        ``x₀ = inf`` for a point whose time slot is a perfectly ordinary float; one radius earlier
-        (1e19) the sum of squares was still finite but ``sqrt`` of it lost the ``1/c`` entirely, so
-        the constraint ``-x₀² + ‖x_s‖²`` evaluated to exactly ``0`` instead of ``-1/c``.
+        ``x₀ = sqrt(1/c + ‖x_s‖²)`` is one fused reduction over ``x_s``: the constant is added to
+        ``sum(x_s**2)`` under the ``sqrt``, so the sum of squares is kept intact and the constraint
+        check ``-x₀² + ‖x_s‖² = -1/c`` cancels the rounding of the sum against itself (rounding
+        ``‖x_s‖`` first and re-squaring it does not). This is the hot path: ``proj`` runs on every
+        sample of every hyperboloid forward, so it reads the spatial data once.
 
-        Dropping the ``MIN_NORM`` floor is a no-op on the finite domain: ``1/c > 0`` for every
-        admissible curvature, so ``1/c + ‖x_s‖² ≥ 1/c > MIN_NORM = 1e-15`` unless ``c > 1e15``,
-        which is far outside any supported regime. What the floor did do was clamp a non-finite
-        input; ``safe_hypot`` now passes ``inf`` through as ``inf``, the library's convention for
-        keeping an out-of-range point visibly degenerate.
+        Plain ``jnp.sqrt``, not ``safe_sqrt``: the argument is ``1/c + ‖x_s‖² ≥ 1/c > 0`` for every
+        admissible curvature, so it is never 0 and ``sqrt``'s derivative is never infinite. The
+        constant is ``1/c``, not ``(1/√c)²``, which avoids one rounding.
+
+        ``sum(x_s**2)`` overflows float32 once a spatial coordinate passes 1.8e19 (geodesic radius
+        ~44 at ``c = 1``), a regime no training run reaches; there it returns ``x₀ = inf`` rather
+        than a quietly saturated time slot, which is the library's convention for keeping an
+        out-of-range point visibly degenerate. No ``MIN_NORM`` floor: it was inactive on the finite
+        domain (``1/c > MIN_NORM`` unless ``c > 1e15``) and clamping ``inf`` is not wanted.
+
+        The reduction is spelled through :func:`_time_slot`, which carries a ``custom_jvp``. It
+        states the same derivative reverse-mode AD would derive and leaves every forward bit
+        unchanged; what it adds is a fusion barrier that keeps the backward's reduction out of the
+        full-width cotangent kernel, so the ``concatenate``'s transposed ``pad`` still fuses with
+        the multiply instead of becoming a standalone copy of the whole batch. See there.
     """
     x_rest = x[1:]
-    inv_sqrt_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
-    x0_new = safe_hypot_norm(x_rest, inv_sqrt_c)
+    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    x0_new = _time_slot(x_rest, inv_c)
     return jnp.concatenate([x0_new[None], x_rest])
 
 
@@ -173,12 +242,14 @@ def _proj_batch(x: Float[Array, "... dim_plus_1"], c: ScalarCurvature) -> Float[
         Projected points with -x₀² + ||x_rest||² = -1/c, x₀ > 0, shape (..., dim+1)
 
     Notes:
-        Same ``safe_hypot_norm(x_s, 1/√c)`` reconstruction as :func:`_proj`, over the last axis; see
-        there for the overflow it removes and for why the ``MIN_NORM`` floor was inactive.
+        Same one-reduction ``sqrt(1/c + sum(x_s**2))`` reconstruction as :func:`_proj`, over the
+        last axis; see there for why the ``sqrt`` needs no zero-guard, why the ``MIN_NORM`` floor
+        was inactive, what happens past float32 coordinate 1.8e19, and what the :func:`_time_slot`
+        ``custom_jvp`` does for the backward.
     """
     x_rest = x[..., 1:]  # Shape: (..., dim)
-    inv_sqrt_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
-    x0_new = safe_hypot_norm(x_rest, inv_sqrt_c)[..., None]  # Shape: (..., 1)
+    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    x0_new = _time_slot(x_rest, inv_c)[..., None]  # Shape: (..., 1)
     return jnp.concatenate([x0_new, x_rest], axis=-1)
 
 
@@ -547,7 +618,7 @@ def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[A
     ``arcsinh`` needs no domain clamp (its argument is a norm, so the whole real half-line is
     valid) and its derivative ``1/sqrt(1 + u²)`` is bounded by 1 everywhere, so the singularity
     that motivated the old soft clamp is gone rather than smoothed.
-    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at the origin, which is
+    :func:`_norm` supplies the exactly-zero value *and* exactly-zero VJP at the origin, which is
     what keeps ``jax.grad(dist_0)`` finite there without a ``where``-guard.
 
     Reads only ``x_s``: an off-sheet input gets the radius of its :func:`_proj` projection, which
@@ -555,7 +626,11 @@ def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[A
     what ``ProperVelocity._dist_0`` already does.
     """
     sqrt_c = jnp.sqrt(c)
-    return jnp.arcsinh(sqrt_c * safe_norm(x[1:])) / sqrt_c
+    # One reduction (:func:`_norm` = ``safe_sqrt(sum(x_s**2))``); the spatial part can be exactly
+    # zero at the origin, which is why it is `safe_sqrt` rather than a plain `sqrt`. `sum(x_s**2)`
+    # overflows float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1), unreachable by a
+    # training run, and propagates as `inf` — `arcsinh(inf) = inf`, the correct limit.
+    return jnp.arcsinh(sqrt_c * _norm(x[1:])) / sqrt_c
 
 
 def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -571,7 +646,9 @@ def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature)
     """
     sqrt_c = jnp.sqrt(c)
     eps = 20.0 * float(jnp.finfo(x.dtype).eps)
-    radius_floored = safe_hypot(sqrt_c * safe_norm(x[1:]), jnp.asarray(eps, dtype=x.dtype))
+    # Same one-reduction radius as :func:`_dist_0_stable`; the scalar `safe_hypot` that applies the
+    # ε floor stays (it composes two already-reduced scalars, so it costs no extra pass).
+    radius_floored = safe_hypot(sqrt_c * _norm(x[1:]), jnp.asarray(eps, dtype=x.dtype))
     return jnp.arcsinh(radius_floored) / sqrt_c
 
 
@@ -835,7 +912,8 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
     # exactly-zero VJP at the origin, so the ``MIN_NORM`` floor below is forward-only — it just
     # stops ``arcsinh(u)/u`` from evaluating 0/0; the Jacobian at y = origin is the identity either
     # way. That matters for the gyro-bias path of the PLFC / Busemann FC layers, whose bias point
-    # is the origin at zero init.
+    # is the origin at zero init. This site keeps the max-scaled two-pass norm: `logmap_0` measured
+    # *faster* in 1.2.0 than in 1.1.2, so there is nothing here to win back.
     y_rest_norm = floor_at(safe_norm(y_rest), MIN_NORM)
 
     u = sqrt_c * y_rest_norm
@@ -1213,8 +1291,6 @@ def _compute_mlr(
     z: Float[Array, "out_dim in_dim_minus_1"],
     r: Float[Array, "out_dim 1"],
     c: ScalarCurvature,
-    clamping_factor: float,
-    smoothing_factor: float,
     min_enorm: float = 1e-15,
 ) -> Float[Array, "batch out_dim"]:
     """Compute FHCNN multinomial linear regression on the hyperboloid.
@@ -1224,8 +1300,6 @@ def _compute_mlr(
         z: Hyperplane tangent normals at origin (time coord omitted), shape (out_dim, in_dim-1)
         r: Hyperplane translations, shape (out_dim, 1)
         c: Manifold curvature (positive)
-        clamping_factor: Clamping value for the output
-        smoothing_factor: Smoothing factor for the output
         min_enorm: Minimum norm to avoid division by zero
 
     Returns:
@@ -1260,18 +1334,20 @@ def _compute_mlr(
     z_norm_1P = floor_at(z_enorm_P1, min_enorm).T  # (1,P)
     x0_B1 = x[:, 0:1]  # time coordinate
     x_rem_BD = x[:, 1:]  # space coordinates, D = in_dim-1
-    # TF32 (the XLA:GPU default for float32 matmuls on Ampere/Hopper) feeds the alpha_BP
-    # difference below, so this dot carries the library-wide MATMUL_PRECISION from
-    # hyperbolix.utils.precision (a neutral home both manifolds/ and nn_layers/ import from;
-    # nn_layers.hyperboloid_core.MATMUL_PRECISION re-exports it). Measured on an A100: the eager
-    # float32 gradient of _compute_mlr goes from 1.5e-4 to 2.7e-7 relative vs a float64 reference.
+    # Pinned HIGHEST: this feeds the alpha_BP difference below, and the MLR logits are a decision
+    # quantity. Measured on an A100, the eager float32 gradient of _compute_mlr goes from 1.5e-4
+    # (TF32, the XLA:GPU default on Ampere/Hopper) to 2.7e-7 relative vs a float64 reference.
     zx_rem_BP = jnp.einsum("bi,oi->bo", x_rem_BD, z, precision=MATMUL_PRECISION)
     alpha_BP = -x0_B1 * sinh(sqrt_cr_1P) * z_norm_1P + cosh(sqrt_cr_1P) * zx_rem_BP
     asinh_arg_BP = sqrt_c * alpha_BP / z_norm_1P
 
-    eps = jnp.finfo(jnp.float32).eps if x.dtype == jnp.float32 else jnp.finfo(jnp.float64).eps
-    clamp = clamping_factor * float(math.log(2 / eps))
-    asinh_arg_BP = smooth_clamp(asinh_arg_BP, -clamp, clamp, smoothing_factor)
+    # No clamp on the asinh argument: `asinh` is defined on all of R with derivative
+    # `1/√(1+x²) ≤ 1`, and the only infinite argument comes from a point that has already
+    # overflowed the float32 manifold — the retired `smooth_clamp` to ±log(2/eps) turned that
+    # into a finite, plausible logit and hid the divergence. Its bound was dtype-dependent, so
+    # at c = 1, radius 5, default init the float32 logits sat 9.4e-2 (D = 128) / 1.8e-1
+    # (D = 32) from the float64 ones relative to the largest logit, and every clamped cell had
+    # an exactly-zero input gradient. logs/2026-09-04_safe_norm_hot_path_revert/precision/mlr_clamp
     signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c
     res_BP = z_norm_1P * signed_dist2hyp_BP
     return res_BP
@@ -1572,12 +1648,10 @@ class Hyperboloid(ManifoldBase):
         z: Float[Array, "out_dim in_dim_minus_1"],
         r: Float[Array, "out_dim 1"],
         c: ScalarCurvature,
-        clamping_factor: float,
-        smoothing_factor: float,
         min_enorm: float = 1e-15,
     ) -> Float[Array, "batch out_dim"]:
         """Compute multinomial linear regression on hyperboloid."""
-        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, clamping_factor, smoothing_factor, min_enorm)
+        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)
 
     def busemann(self, x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Closed-form Lorentz Busemann function ``B^v(x) = (1/√c)·log(√c·(x_t - ⟨x_s, v⟩))``.

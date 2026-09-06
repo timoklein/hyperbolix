@@ -19,7 +19,6 @@ from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import ManifoldParam
 from ..utils.math_utils import sinh
-from ..utils.precision import MATMUL_PRECISION
 from ._helpers import validate_poincare_manifold
 
 
@@ -143,7 +142,9 @@ class HypLinearPoincare(nnx.Module):
         # kernel to the input dtype so float64 weights (from global
         # jax_enable_x64) don't promote a float32 computation to float64.
         kernel_OI = self.kernel[...].astype(x_BI.dtype)
-        x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI, precision=MATMUL_PRECISION)  # (B, I) @ (I, O) -> (B, O)
+        # Layer weight GEMM: no `precision` kwarg, so it follows JAX's own
+        # `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.
+        x_BO = jnp.einsum("bi,oi->bo", x_BI, kernel_OI)  # (B, I) @ (I, O) -> (B, O)
 
         # Map back to manifold
         x_BO = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BO, c)
@@ -160,8 +161,6 @@ def _poincare_pp_forward(
     manifold: Poincare,
     c: float,
     input_space: str,
-    clamping_factor: float,
-    smoothing_factor: float,
 ) -> Float[Array, "batch out_dim"]:
     """Pure-function HNN++ forward pass.
 
@@ -172,7 +171,7 @@ def _poincare_pp_forward(
         x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BI, c)
 
     # Compute multinomial linear regression
-    v = manifold.compute_mlr_pp(x_BI, kernel_OI, bias_O1, c, clamping_factor, smoothing_factor)
+    v = manifold.compute_mlr_pp(x_BI, kernel_OI, bias_O1, c)
 
     # Generalized linear transformation
     sqrt_c = jnp.sqrt(c)
@@ -209,18 +208,14 @@ class HypLinearPoincarePP(nnx.Module):
     input_space : str
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
-    clamping_factor : float
-        Clamping factor for the multinomial linear regression output (default: 1.0)
-    smoothing_factor : float
-        Smoothing factor for the multinomial linear regression output (default: 50.0)
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
     Notes
     -----
     JIT Compatibility:
-        This layer is designed to work with nnx.jit. Configuration parameters (input_space,
-        clamping_factor, smoothing_factor) are treated as static and will be baked into the compiled function.
+        This layer is designed to work with nnx.jit. The configuration parameter ``input_space``
+        is treated as static and will be baked into the compiled function.
 
     References
     ----------
@@ -236,8 +231,6 @@ class HypLinearPoincarePP(nnx.Module):
         *,
         rngs: nnx.Rngs,
         input_space: str = "manifold",
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if input_space not in ["tangent", "manifold"]:
@@ -252,8 +245,6 @@ class HypLinearPoincarePP(nnx.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.input_space = input_space
-        self.clamping_factor = clamping_factor
-        self.smoothing_factor = smoothing_factor
 
         # Trainable parameters
         # Tangent space weight - initialized with std = 1/sqrt(fan_in)
@@ -290,6 +281,4 @@ class HypLinearPoincarePP(nnx.Module):
             self.manifold,
             c,
             self.input_space,
-            self.clamping_factor,
-            self.smoothing_factor,
         )

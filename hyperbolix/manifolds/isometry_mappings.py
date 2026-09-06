@@ -183,9 +183,10 @@ def pv_to_poincare(
     """
     # √(1 + c·||x||²) via `safe_hypot_norm`: `dot(x, x)` overflows float32 once ||x|| passes
     # 1.8e19/√c, and `x / (1 + inf)` then maps a far-out PV point to the *origin* instead of near
-    # the ball boundary. `safe_hypot_norm` never materialises the square, and takes it in one
-    # reduction instead of rounding `safe_norm(x)` and squaring it again. Same form and the same
-    # measurement as `ProperVelocity._beta_inv`; see there.
+    # the ball boundary. `safe_hypot_norm` never materialises the square, and computes
+    # `sqrt(1 + c||x||^2)` directly from the scaled input instead of rounding `safe_norm(x)` and
+    # squaring it again (kept two-pass, unchanged from 1.2.0). Same form and the same measurement
+    # as `ProperVelocity._beta_inv`; see there.
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
     beta_inv = safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))  # 1/β_x
     return x / (1.0 + beta_inv)

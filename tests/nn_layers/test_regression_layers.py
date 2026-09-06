@@ -193,7 +193,7 @@ def test_hyperboloid_mlr_gradient_finite_with_a_zero_normal_row(dtype, jit):
     r_P1 = jax.random.normal(key_r, (out_dim, 1), dtype=dtype) * 0.3
 
     def loss(z):
-        return jnp.sum(manifold.compute_mlr(x_BA, z, r_P1, c, 1.0, 50.0) ** 2)
+        return jnp.sum(manifold.compute_mlr(x_BA, z, r_P1, c) ** 2)
 
     grad_fn = jax.jit(jax.grad(loss)) if jit else jax.grad(loss)
     g_PD = grad_fn(z_PD)
@@ -232,3 +232,36 @@ def test_poincare_regression_gradient_finite_with_a_zero_normal_row(dtype, jit):
     assert jnp.isfinite(g_PD).all(), f"non-finite gradient with a zero normal row: {g_PD}"
     assert jnp.all(g_PD[_ZERO_ROW] == 0.0), f"zero row must receive an exactly-zero gradient: {g_PD[_ZERO_ROW]}"
     assert jnp.any(jnp.abs(jnp.delete(g_PD, _ZERO_ROW, axis=0)) > 0.0)
+
+
+# --------------------------------------------------------------------------- #
+# A far point still gets a gradient
+#
+# The retired `smooth_clamp` on the asinh argument had slope `exp(-50·d)` past its bound, so a
+# float32 point whose argument cleared the dtype-dependent bound (16.6355) received an *exactly
+# zero* gradient and could never move again under SGD. With the shipped init at c = 1, D = 128,
+# that bound bit from geodesic radius 4.75 and had 73% of the (batch, class) cells frozen by
+# radius 7 (logs/2026-09-04_safe_norm_hot_path_revert/precision/mlr_clamp).
+# --------------------------------------------------------------------------- #
+
+
+def test_hyperboloid_mlr_gradient_survives_a_far_point():
+    """A float32 point at geodesic radius 7 gets an input gradient of the same order as one at
+    radius 1, not the zero the retired asinh-argument clamp handed it."""
+    c, in_dim, out_dim = 1.0, 128, 10
+    dtype = jnp.float32
+    manifold = get_hyperboloid(dtype)
+    layer = HypRegressionHyperboloid(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), param_dtype=dtype)
+
+    direction_S = jax.random.normal(jax.random.PRNGKey(0), (in_dim - 1,), dtype=dtype)
+    direction_S = direction_S / jnp.linalg.norm(direction_S)
+
+    def max_logit_at_radius(radius):
+        v_D = jnp.concatenate([jnp.zeros((1,), dtype), radius * direction_S])
+        return jnp.max(layer(manifold.expmap_0(v_D, c)[None], c=c))
+
+    g_near = float(jnp.abs(jax.grad(max_logit_at_radius)(jnp.asarray(1.0, dtype))))
+    g_far = float(jnp.abs(jax.grad(max_logit_at_radius)(jnp.asarray(7.0, dtype))))
+
+    assert g_far > 0.0, "a far point must still receive a gradient"
+    assert g_far > 0.1 * g_near, f"far-point gradient collapsed: {g_far} vs {g_near} at radius 1"

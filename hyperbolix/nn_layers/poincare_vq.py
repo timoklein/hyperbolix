@@ -35,7 +35,6 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.poincare import Poincare
-from hyperbolix.utils.precision import MATMUL_PRECISION
 
 from ._helpers import validate_poincare_manifold
 from .poincare_batchnorm import poincare_weighted_midpoint
@@ -339,9 +338,6 @@ class HypVQMLRPoincare(nnx.Module):
         Code / latent dimension ``C`` (= MLR ``in_dim``).
     rngs : nnx.Rngs
         RNGs for the MLR parameter init.
-    clamping_factor, smoothing_factor : float
-        Passed through to ``HypRegressionPoincarePP`` (asinh clamp; defaults
-        1.0 / 50.0).
     out_dtype : jnp.dtype
         Dtype of ``output.quantized`` (default: float32) — the manifold→decoder
         boundary cast.
@@ -357,8 +353,6 @@ class HypVQMLRPoincare(nnx.Module):
         code_dim: int,
         *,
         rngs: nnx.Rngs,
-        clamping_factor: float = 1.0,
-        smoothing_factor: float = 50.0,
         out_dtype: jnp.dtype = jnp.float32,  # type: ignore[assignment]
         param_dtype: DTypeLike = jnp.float32,
     ) -> None:
@@ -377,8 +371,6 @@ class HypVQMLRPoincare(nnx.Module):
             in_dim=code_dim,
             out_dim=num_codes,
             rngs=rngs,
-            clamping_factor=clamping_factor,
-            smoothing_factor=smoothing_factor,
             param_dtype=param_dtype,
         )
 
@@ -420,7 +412,9 @@ class HypVQMLRPoincare(nnx.Module):
         # Implicit codebook = bias · kernel; (K,1)·(K,C) → (K,C). The matmul keeps
         # the op differentiable w.r.t. the MLR parameters.
         codes_KC = self.mlr.bias[...] * self.mlr.kernel[...]  # (K, C)
-        z_q_NC = jnp.matmul(st_weights_NK, codes_KC, precision=MATMUL_PRECISION)  # (N, C) — gradient flows to the MLR
+        # Layer weight GEMM: no `precision` kwarg, so it follows JAX's own
+        # `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.
+        z_q_NC = jnp.matmul(st_weights_NK, codes_KC)  # (N, C) — gradient flows to the MLR
 
         perplexity = _codebook_perplexity(indices_N, self.num_codes)
         return PoincareVQOutput(
