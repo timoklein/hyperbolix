@@ -800,7 +800,10 @@ def _hyperboloid_case(a: float, kind: str, param: float, c: float, dim: int, dty
         b, psi = a, param
     else:
         b, psi = a + 1.0, param
-    if max(a, b) > 88.0:  # cosh(88) overflows float32
+    # Conservative float32 cap, just under the first thing that leaves the dtype: the polar frame's
+    # u = x0 + r_x = e^a, which overflows past log(finfo.max) = 88.72. (cosh(a) itself survives to
+    # log(2*finfo.max) = 89.42; cosh(88) = 8.3e37 is still finite.)
+    if max(a, b) > 88.0:
         return None
 
     e1, e2 = _hyperboloid_basis(dim)

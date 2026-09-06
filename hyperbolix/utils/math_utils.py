@@ -237,8 +237,10 @@ def smooth_clamp(
     difference form above is the one that is provably bounded.
 
     In floating point the strictness degrades only in the saturated tails, where the remainder terms
-    underflow to 0 and the output equals ``min_value``/``max_value`` exactly (``beta*d`` past ~88 in
-    float32, ~745 in float64). Inclusion in ``[min_value, max_value]`` always holds.
+    underflow to 0 and the output equals ``min_value``/``max_value`` exactly. That is an
+    *underflow* of ``exp(-beta*d)``, not an overflow: it happens past ``-log(smallest_subnormal)``,
+    measured at ``beta*d`` ~104 in float32 and ~745 in float64. Inclusion in
+    ``[min_value, max_value]`` always holds.
 
     Args:
         x: Input array of any shape
@@ -503,7 +505,8 @@ def capped_exp(x: Float[Array, "..."]) -> Float[Array, "..."]:
     parameterization offers an opt-in straight-through backward for that regime; here the plain cap
     is kept because the straight-through form trades forward-value exactness for it (its
     ``stop_gradient`` arithmetic rounds through the raw parameter's magnitude), and a scale
-    parameter past ~88 means training has already diverged — the guard's job is containment.
+    parameter past the cap (≈87.8 in float32, ≈702.7 in float64) means training has already
+    diverged — the guard's job is containment.
 
     Args:
         x: Input array of any shape

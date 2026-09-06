@@ -407,8 +407,9 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
 
     **Operation orderings that are load-bearing** (each measured, do not "simplify"):
 
-    * ``√u_x`` and ``√u_y`` are taken *separately*. ``√(u_x·u_y)`` overflows float32 as soon as
-      ``a + b > 88``, while the quotient itself is perfectly representable.
+    * ``√u_x`` and ``√u_y`` are taken *separately*. ``u_x·u_y = e^(a+b)/c``, so ``√(u_x·u_y)``
+      overflows float32 as soon as ``a + b > log(finfo.max) = 88.72`` (at ``c = 1``), while the
+      quotient itself is perfectly representable.
     * ``√r_x·√r_y·chord``, never ``√(r_x·r_y)`` and never ``chord²·r_x·r_y``: both alternatives
       square a spatial radius, which leaves float32 at radius ~45.
     * every norm goes through :func:`~hyperbolix.utils.math_utils.safe_norm`, whose max-scaling is

@@ -310,13 +310,18 @@ $x \cdot (r_{\max}/\lVert x\rVert)$ *is* the zero vector, which is the pre-1.2.0
 there.)
 
 One consequence worth stating plainly: for the converted origin-chart operations the largest
-representable geodesic radius drops. It used to be set by $x_0 = \cosh(a)$ fitting the dtype —
-radius $\approx 88$ in float32, $\approx 709$ in float64. For `proj` and `dist_0` it is now set by
+representable geodesic radius drops. It used to be set by $x_0 = \cosh(a)/\sqrt{c}$ fitting the
+dtype, i.e. $a = \ln(2\,\texttt{finfo.max})$ — radius $\approx 89$ in float32, $\approx 710$ in
+float64 at $c = 1$ (89.416 / 710.476; the same number as $\operatorname{arcsinh}(\texttt{finfo.max})$,
+since $\sinh(a)$ and $\cosh(a)$ leave the dtype together). For `proj` and `dist_0` it is now set by
 the **coordinate**, $\sinh(a)/\sqrt{c} < \sqrt{\texttt{finfo.max}}$ — radius $\approx 45$ in
 float32 and $\approx 356$ in float64. `logmap_0` and the pairwise `dist`/`logmap` keep the
-two-pass norm and therefore keep both their finite result and the old $\approx 88$ / $\approx 709$
-ceiling. Every hyperbolic model in the literature lives four to five orders of magnitude inside
-either limit.
+two-pass norm and therefore keep both their finite result and a ceiling of that order: `logmap_0`
+reads only $\lVert y_s\rVert$ and keeps the old $\approx 89$ / $\approx 710$ exactly, while the
+pairwise pair binds a fraction of a radius earlier, at $e^a/\sqrt{c} \le \texttt{finfo.max}$
+($a = \ln(\texttt{finfo.max})$: 88.72 / 709.78), because `_polar_frame` composes
+$u = x_0 + \lVert x_s\rVert$ and returns $\pm\infty$ once that overflows. Every hyperbolic model in
+the literature lives four to five orders of magnitude inside every one of these limits.
 
 What has **not** changed is how the constant is folded in. The hyperboloid time slot is
 $x_0 = \sqrt{1/c + \sum_i (x_s)_i^2}$ — the constant added to the sum *under* the square root, in
@@ -992,8 +997,10 @@ Möbius addition (independent of the formula under test), $c = 1$, dim 8, before
   #the-hyperboloids-two-point-cancellation-failure-mode)). The contrast that motivates this
   advice: the Poincaré ball itself cannot even *represent* a point past $d_0 \approx 12.65/\sqrt{c}$
   (float32) / $27.7/\sqrt{c}$ (float64) — `proj`'s boundary clamp saturates there — while the
-  hyperboloid chart's representable ceiling is $\sqrt{c}\,d \approx 88$ (float32), where `cosh`
-  overflows.
+  hyperboloid chart's representable ceiling is $\sqrt{c}\,d = \ln(2\,\texttt{finfo.max}) \approx 89$
+  (float32), where $\cosh$ overflows — with `dist` itself giving up a fraction of a radius earlier,
+  at $\ln(\texttt{finfo.max}) \approx 88.7$, where the polar frame's $x_0 + \lVert x_s\rVert = e^a$
+  does.
 - **Very high dimensions** (> 1000): `VERSION_METRIC_TENSOR` (version 2) may be more stable
 - **Debugging**: Compare all versions — significant differences indicate numerical issues
 
