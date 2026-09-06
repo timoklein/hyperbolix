@@ -368,8 +368,11 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     # derivative at 0 would meet a zero cotangent as NaN. The floor is deliberate and stays
     # *around* the sqrt (`c_norm_prod` divides two lines below, and `tanh(t)/t → 1` needs the same
     # floored t in numerator and denominator). `sum(v**2)` overflows float32 past coordinate
-    # 1.8e19, unreachable by a training run; there the norm is `inf` and the clamped result is the
-    # origin, the pre-1.2.0 behaviour. Matches _expmap_0. `axis=-1, keepdims=True` keeps the norm
+    # 1.8e19, and a tangent vector that long comes from an already-diverging network; there the
+    # norm is `inf`, `tanh(inf)/inf * v` is the zero vector and `x ⊕ 0 = x`, so the result is the
+    # base point `x` (documented in the changelog). `_expmap_0` keeps the two-pass norm, so it
+    # stays finite past that coordinate and returns its boundary clamp instead.
+    # `axis=-1, keepdims=True` keeps the norm
     # broadcastable against the `(..., dim)` operand it divides below (see _gyrovector_core._proj).
     v_norm = floor_at(safe_sqrt(jnp.sum(v**2, axis=-1, keepdims=True)), MIN_NORM)
     c_norm_prod = jnp.sqrt(c) * v_norm
@@ -402,9 +405,12 @@ def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     # `sum(v**2)` overflowed float32 above coordinate 1.8e19. The floor is deliberate --
     # `c_norm_prod` divides three lines down, and `tanh(t)/t -> 1` needs numerator and denominator
     # to be the same floored quantity. `[..., None]` keeps the norm broadcastable against the
-    # `(..., dim)` operand it divides below (see _gyrovector_core._proj). Kept on the two-pass form
-    # because `expmap_0` measured no change between 1.1.2 and 1.2.0 (5/2 kernels either way), so
-    # there is no cost to trade the full-range guarantee against. `_expmap` is the one that
+    # `(..., dim)` operand it divides below (see _gyrovector_core._proj). The two-pass form is not
+    # free: in isolation the max-scaled `safe_norm` costs about 1.2-1.35x the one-pass
+    # `safe_sqrt(sum(v**2))` (forward, float32, measured on an A100 with jax 0.9.1; no controlled
+    # H100 A/B of this site exists), and at most ~1 % inside a training step for this site. It
+    # stays because `v` is a tangent vector of unbounded magnitude, so the full-range guarantee is
+    # worth a second reduction here, unlike the ball-point sites. `_expmap` is the one that
     # regressed and is converted.
     v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
     sqrt_c = jnp.sqrt(c)

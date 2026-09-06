@@ -793,7 +793,8 @@ def test_hyperboloid_tangent_norm_zero_vector_finite_grad() -> None:
     """``tangent_norm`` must have a finite gradient at the zero tangent vector.
 
     sqrt'(0) = inf, so a bare ``sqrt(clip(⟨v,v⟩_L, 0))`` yields a 0·inf = NaN gradient at v = 0;
-    the ``+ MIN_NORM²`` floor (matching ``_expmap``) keeps it finite.
+    the ``safe_norm``/``safe_hypot`` composition keeps it finite, with no floor on the value —
+    the same double-``where`` device ``_expmap`` gets from ``floor_at(safe_sqrt(·), MIN_NORM)``.
     """
     manifold, c = hj.manifolds.Hyperboloid(dtype=jnp.float64), 1.0
 
@@ -838,8 +839,10 @@ def test_hyperboloid_logmap_0_of_an_infinite_point_is_infinite_not_nan(dtype) ->
 def test_poincare_tangent_norm_zero_vector_finite_grad() -> None:
     """``tangent_norm`` must have a finite gradient at the zero tangent vector (Poincaré).
 
-    ``λ(x)·||v||`` with a bare ``jnp.linalg.norm`` has VJP 0/0 = NaN at v = 0; the safe norm
-    ``sqrt(||v||² + MIN_NORM²)`` (matching ``_expmap``/``_proj``) keeps it finite.
+    ``λ(x)·||v||`` with a bare ``jnp.linalg.norm`` has VJP 0/0 = NaN at v = 0; ``safe_norm``'s
+    double-``where`` keeps it finite, with no floor on the value (``||0||_x`` is exactly 0).
+    ``_expmap``/``_proj`` get the same guard from ``floor_at(safe_sqrt(sum(v**2)), MIN_NORM)``,
+    where the floor is there because the norm is a divisor.
     """
     manifold, c = hj.manifolds.Poincare(dtype=jnp.float64), 1.0
 
@@ -1197,7 +1200,7 @@ def test_poincare_expmap_0_stays_inside_the_projection_boundary(dtype: jnp.dtype
 def test_poincare_expmap_0_gradients_survive_the_scalar_clamp(dtype: jnp.dtype) -> None:
     """``grad`` is finite at ``v = 0`` and the Jacobian is unchanged away from the boundary.
 
-    The ``sqrt(‖v‖² + MIN_NORM²)`` safe norm is what keeps the gradient at the origin finite
+    The ``floor_at(safe_norm(v), MIN_NORM)`` norm is what keeps the gradient at the origin finite
     (``jnp.linalg.norm``'s VJP there is 0/0); the clamp must not disturb it. Away from the clamp
     the two coefficients differ only in ``tanh``'s own rounding, so the Jacobians agree far inside
     the stated tolerances: measured max absolute difference 0.0 (CPU, both dtypes) and 8.9e-8

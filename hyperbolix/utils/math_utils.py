@@ -312,8 +312,9 @@ def safe_norm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
     ``sqrt(sum(v**2) + MIN_NORM**2)`` idiom cannot do, in *both* directions:
 
     * **Overflow**: ``sum(v**2)`` overflows float32 once ``|v| > 1.8e19`` — reached by the spatial
-      part of a hyperboloid point at radius 44 (``sinh(44) = 1.6e18`` … radius 45 already squares
-      past ``3.4e38``), while the norm itself, ``1.6e18``, is perfectly representable.
+      part of a hyperboloid point at geodesic radius ~45 (``arcsinh(1.8e19) = 45.03`` at ``c = 1``;
+      radius 44 is only coordinate ``6.4e18``), while the norm itself, ``1.8e19``, is perfectly
+      representable.
     * **Underflow**: the ``+ MIN_NORM**2 = 1e-30`` floor *dominates* any genuinely small vector.
       A float32 chord of ``1e-34`` (a legitimate angular separation between two nearly parallel
       unit vectors) comes back as ``1e-15``, i.e. 19 orders of magnitude too large.

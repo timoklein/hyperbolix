@@ -82,7 +82,7 @@ def _beta_inv(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     Evaluated as ``safe_hypot_norm(√c·x, 1)`` rather than ``sqrt(1 + c·dot(x, x))``.
     Proper-velocity coordinates are unconstrained -- that is the point of the model -- so
     ``dot(x, x)`` genuinely reaches the float32 overflow at ``‖x‖ = 1.8e19`` (geodesic radius
-    ``arcsinh(1.8e19) ≈ 44``), where the old form returned ``inf`` and ``_beta`` collapsed to 0,
+    ``arcsinh(1.8e19) ≈ 45``), where the old form returned ``inf`` and ``_beta`` collapsed to 0,
     silently zeroing every coefficient built from it. ``safe_hypot_norm`` never materialises the
     square either, and unlike the two-leg ``safe_hypot(1, √c·safe_norm(x))`` it does not round
     ``‖x‖`` to the dtype and then square it again. Measured against an 80-bit reference over

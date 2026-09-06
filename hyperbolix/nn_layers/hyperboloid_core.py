@@ -265,9 +265,9 @@ def spatial_to_hyperboloid(
     # never infinite. The floor sits on the ARGUMENT, as it did before PR #75:
     # `sqrt(floor_at(a, eps)) == floor_at(sqrt(a), sqrt(eps))` for a >= 0, so this is the same
     # value; it only bites when 1/c_out is itself below eps.
-    # `sum(s**2)` overflows float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1),
-    # unreachable by a training run, and gives an infinite time slot there rather than a quietly
-    # saturated one.
+    # `sum(s**2)` overflows float32 past coordinate 1.8e19 -- geodesic radius ~45 at c = 1, ~139 at
+    # c = 0.1 -- where the network producing it is already diverging, and gives an infinite time
+    # slot there, the intended signal, rather than a quietly saturated one.
     inv_c_out = jnp.asarray(1.0, dtype=scaled_D.dtype) / jnp.asarray(c_out, dtype=scaled_D.dtype)
     x0 = jnp.sqrt(floor_at(jnp.sum(scaled_D**2, axis=-1) + inv_c_out, jnp.asarray(eps, dtype=scaled_D.dtype)))
 
@@ -289,9 +289,10 @@ def sinh_lift_to_hyperboloid(
         y_s = sinh(clip(√c · score, ±v_max)) / √c
         y_t = √(‖y_s‖² + 1/c)
 
-    The ``clip`` is an output-side overflow guard: ``compute_mlr`` / the Busemann logit only
-    bound an ``asinh``/``log`` argument, leaving the score ∝ ``‖kernel_row‖`` unbounded, and
-    the ``sinh`` exponentiates it. Hard ``jnp.clip`` (not ``smooth_clamp``) matches the Shi
+    The ``clip`` is an output-side overflow guard: the score ∝ ``‖kernel_row‖`` is unbounded
+    (neither ``compute_mlr`` nor the Busemann logit bounds anything — ``compute_mlr``'s
+    ``smooth_clamp`` was removed in this release), and the ``sinh`` exponentiates it. Hard
+    ``jnp.clip`` (not ``smooth_clamp``) matches the Shi
     et al. 2026 reference and is value-identical for ``|√c·score| ≤ v_max`` — it only zeroes
     the gradient in the already-saturated tail. Callers must ``_assert_v_max_safe(v_max)`` so
     the bare ``jnp.sinh`` below cannot overflow float32.

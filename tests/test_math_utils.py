@@ -672,7 +672,7 @@ def test_atanh_float64_is_the_log1p_form_bitwise_on_the_whole_domain():
 #
 #   overflow  — ``sum(v**2)`` leaves float32 at |v| ~ 1.8e19, while the norm itself is
 #               representable up to 3.4e38 (the hyperboloid spatial radius passes 1.8e19 at
-#               geodesic radius 44).
+#               geodesic radius ~45).
 #   underflow — the ``+ MIN_NORM**2`` floor is 1e-30, so any true norm below 1e-15 is replaced by
 #               1e-15. A float32 angular chord of 1e-34 is a legitimate input, not noise.
 #   VJP       — with the scale under ``stop_gradient`` the derivative is exactly ``v/‖v‖``; at

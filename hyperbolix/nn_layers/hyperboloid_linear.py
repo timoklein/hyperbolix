@@ -81,7 +81,8 @@ def _fhcnn_forward(
         # a zero cotangent as NaN. The floor is deliberate and stays *around* the sqrt
         # (`x_rem_norm_B1` is a divisor two lines down); the origin mask below still fires (the
         # floored norm is 1e-15 <= 1e-5). `sum(x_rem**2)` overflows float32 past spatial coordinate
-        # 1.8e19 (geodesic radius ~44 at c = 1), unreachable by a training run, and gives `inf`.
+        # 1.8e19 -- geodesic radius ~45 at c = 1, ~139 at c = 0.1 -- where the network producing it
+        # is already diverging, and gives `inf`, which is the intended signal.
         x_rem_norm_B1 = floor_at(safe_sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True)), MIN_NORM)  # (B, 1)
 
         # Learnable sigmoid scaling. capped_exp: scale_val is unconstrained — a runaway param
@@ -106,8 +107,9 @@ def _fhcnn_forward(
         # spelling as Hyperboloid._proj, and for the same reason: keeping the sum of squares intact
         # under the sqrt is what makes the Minkowski constraint check cancel its own rounding.
         # Plain `jnp.sqrt` -- the argument is >= 1/c > 0, so there is no infinite derivative to
-        # guard. `sum(x_rem**2)` overflows float32 past spatial coordinate 1.8e19, unreachable by a
-        # training run, and returns an infinite time slot there rather than a saturated one.
+        # guard. `sum(x_rem**2)` overflows float32 past spatial coordinate 1.8e19 -- geodesic radius
+        # ~45 at c = 1, ~139 at c = 0.1 -- where the network producing it is already diverging, and
+        # returns an infinite time slot there, the intended signal, rather than a saturated one.
         # `normalize` is a static bool, so only one of the two branches is ever traced.
         inv_c = jnp.asarray(1.0, dtype=x_BO.dtype) / jnp.asarray(c, dtype=x_BO.dtype)
         res0_B1 = jnp.sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True) + inv_c)  # (B, 1)
@@ -225,9 +227,10 @@ def _hyperboloid_plfc_forward(
     v_BO = manifold.compute_mlr(x_BAi, kernel_OI, bias_O1, c)
 
     # Output-side guard + sinh diffeomorphism + time reconstruction (shared with the Busemann FC
-    # layer). compute_mlr only bounds its asinh argument, leaving v ∝ ‖kernel_row‖ unbounded; the
-    # sinh exponentiates it, so sinh_lift_to_hyperboloid hard-clips sqrt(c)*v to ±v_max before the
-    # element-wise sinh (NOT expmap_0, which applies sinh to the norm). The constructor's
+    # layer). The score v ∝ ‖kernel_row‖ is unbounded (compute_mlr bounds nothing -- its
+    # smooth_clamp was removed in this release) and the element-wise sinh exponentiates it, so
+    # sinh_lift_to_hyperboloid hard-clips sqrt(c)*v to ±v_max before the sinh (NOT expmap_0, which
+    # applies sinh to the norm). The constructor's
     # _assert_v_max_safe keeps the bare jnp.sinh inside the helper safe from float32 overflow.
     res_BAo = sinh_lift_to_hyperboloid(v_BO, c, v_max)  # (B, Ao)
 
@@ -380,10 +383,10 @@ def _fgg_linear_forward(
     # Reconstruct hyperboloid point: spatial = z, time from the constraint, in ONE reduction over
     # z. Same spelling (and the same cancellation argument) as Hyperboloid._proj: the sum of
     # squares is kept intact under the sqrt. Plain `jnp.sqrt` -- the argument is >= 1/c > 0.
-    # `sum(z**2)` overflows float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1),
-    # unreachable by a training run; past it the output is non-finite -- NaN or `inf`, depending on
-    # the input, since the overflow enters through the preceding matmul rather than through `z`
-    # alone.
+    # `sum(z**2)` overflows float32 past coordinate 1.8e19 -- geodesic radius ~45 at c = 1, ~139 at
+    # c = 0.1 -- where the network producing it is already diverging; past it the output is
+    # non-finite, the intended signal -- NaN or `inf`, depending on the input, since the overflow
+    # enters through the preceding matmul rather than through `z` alone.
     inv_c = jnp.asarray(1.0, dtype=z_BO.dtype) / jnp.asarray(c, dtype=z_BO.dtype)
     y_0_B1 = jnp.sqrt(jnp.sum(z_BO**2, axis=-1, keepdims=True) + inv_c)  # (B, 1)
 
