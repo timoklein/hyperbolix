@@ -126,12 +126,15 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_pl
 
 
 def _sqnorm(v: Float[Array, "... n"]) -> Float[Array, "..."]:
-    """``sum(v**2)`` over the last axis: the one reduction every norm in this module shares.
+    """``sum(v**2)`` over the last axis: the one reduction the module's one-pass norms share.
 
-    Sharing the spelling is what lets XLA common-subexpression-eliminate the sum when several of
-    ``dist_0`` / ``logmap_0`` / ``_polar_frame`` are traced into the same graph. It overflows
-    float32 once a coordinate passes 1.8e19 (geodesic radius ~44 at ``c = 1``), which no training
-    run reaches; past that it propagates as ``inf`` rather than as a quietly saturated value.
+    Sharing the spelling is what lets XLA common-subexpression-eliminate the sum when
+    :func:`_norm` (hence ``dist_0``, both version slots) and :func:`_time_slot` / :func:`_proj` are
+    traced into the same graph. ``logmap_0`` spells its norm as the two-pass ``safe_norm`` and
+    ``_polar_frame`` sums scaled coordinates, so neither CSEs with this. It overflows float32 once
+    a coordinate passes 1.8e19 — geodesic radius ~45 at ``c = 1``, ~139 at ``c = 0.1`` — and a
+    network whose points sit there is already diverging; past that it propagates as ``inf``, which
+    is the intended signal, rather than as a quietly saturated value.
     """
     return jnp.sum(v**2, axis=-1)
 
@@ -154,17 +157,50 @@ def _time_slot(x_spatial: Float[Array, "... n"], inv_c: Float[Array, "..."]) -> 
     constant goes *under* the ``sqrt``, why the ``sqrt`` needs no zero-guard, and what happens past
     float32 coordinate 1.8e19. The custom derivative below changes no forward bit.
 
-    The rule exists for the backward's fusion shape, not for its arithmetic: reverse-mode AD already
-    derives ``∂x₀/∂x_s = x_s/x₀`` and ``∂x₀/∂(1/c) = 1/(2x₀)``, which is what this rule states. What
-    it adds is the ``optimization_barrier`` on the per-row factor ``1/x₀``. Without it XLA:GPU emits
-    the backward's reduction and the broadcast that consumes it as a single Triton block-level
-    fusion whose output is the full ``(B, n)`` cotangent; the trailing ``pad`` that re-embeds the
-    spatial cotangent into the ambient slot cannot join a Triton fusion and is left as a standalone
-    full-tensor copy — one extra read and one extra write of the whole batch, and in ``expmap_0``
-    the ``sinh``/``cosh`` chain gets recomputed inside each such fusion as well. Materialising
-    ``1/x₀`` as a ``(B,)`` buffer puts the reduction back in a plain reduce and lets the ``pad``
-    fuse into the elementwise kernel that already reads ``x``. See
-    ``logs/2026-09-05_proj_backward/`` for the HLO the two spellings produce.
+    The rule states the derivatives reverse-mode AD already derives — ``∂x₀/∂x_s = x_s/x₀`` and
+    ``∂x₀/∂(1/c) = 1/(2x₀)``. What it adds, on top of a bit-identical forward, is the
+    ``optimization_barrier`` on the per-row factor ``1/x₀``.
+
+    The effect is a conditional observation, not a general property. It appeared in float32 on
+    jax/jaxlib 0.9.1 at batch ``B ≥ 1e6``, at both ambient width 33 (``D = 32``) and 129
+    (``D = 128``), and only for a backward that materialises the full ``(B, n)`` cotangent —
+    ``jax.grad`` of a sum over the output, or any backward whose output is the gradient itself.
+    There XLA:GPU emits the backward's reduction and the broadcast that consumes it as one Triton
+    block-level fusion, and the trailing ``pad`` that re-embeds the spatial cotangent into the
+    ambient slot is left as a standalone full-tensor copy — one extra read and one extra write of
+    the whole batch; in ``expmap_0`` the ``sinh``/``cosh`` chain is recomputed inside each such
+    fusion as well. Materialising ``1/x₀`` as a ``(B,)`` buffer puts the reduction back in a plain
+    reduce and lets the ``pad`` fuse into the elementwise kernel that already reads ``x``.
+
+    Measured on an H100 against v1.1.2: at ``B = 1e7`` the rule-free spelling runs ``proj.grad``
+    1.35x and ``expmap_0.grad`` 1.76x slower at ``D = 128``, and 1.35x / 1.60x at ``D = 32``; at
+    ``B = 1e6, D = 32`` it is 1.94x / 1.74x; at ``B = 1e5`` the effect is absent (0.98x at
+    ``D = 128``). With the barrier the same ratios are 1.015x / 0.995x at ``D = 128`` and
+    1.00x / 0.98x at ``D = 32``. The before and after timings were taken on two different H100
+    hosts (galadriel, and dgx-h100-em2), each ratio against a v1.1.2 arm measured on the same host
+    in the same run, so no ratio crosses cards; 3-5 timing rounds, round-to-round spread 0.3-3 % on
+    the ``B = 1e7`` rows and on all dgx-h100-em2 rows, up to ~50 % on the galadriel ``B <= 1e6``
+    rows, where the ratio is still several times the spread. The A100 record is a compile record only (kernel
+    list, no timing): XLA picks a Triton ``kCustom`` fusion at *both* widths, and only the
+    kernel/reduction count delta is ``D = 128``-specific — ``proj.grad`` goes 2/1 → 3/1 and
+    ``expmap_0.grad`` 5/3 → 7/3, while at ``D = 32`` the counts are unchanged (2/1 and 4/3) and
+    only the fusion kind changes, from ``kCustom`` to ``kLoop``.
+
+    Outside those conditions the barrier does nothing. If the gradient feeds a scalar loss (e.g.
+    ``mean(proj(x)**2)``) the ``pad`` fuses into the loss reduction with or without it; an
+    independent A100 measurement (jax 0.9.1, ``B ≤ 262144``) put the barrier within ~1 % of the
+    rule-free spelling for ``expmap_0`` forward+backward at ``B = 262144, D = 128`` (1.003-1.006 at
+    both ``c = 1`` and ``c = 0.1``, against either spelling without the barrier; the ``proj`` rows
+    of the same run are noisier, one round contaminated), and up to ~5 % at ``B = 4096, D = 32``,
+    where the whole forward plus backward is under 0.1 ms.
+
+    Evidence (the ``logs/`` tree is gitignored and local):
+    ``logs/2026-09-04_safe_norm_hot_path_revert/vda/timing_D{32,128}/`` and
+    ``.../vda3/timing_D{32,128}/`` (the two H100 hosts),
+    ``.../kernels/branch_D{32,128}.json`` (before) and
+    ``.../kernels_final/branch_D{32,128}.json`` (after),
+    ``.../audit/gradient_fix_agent_report_c5eff23.md``, and
+    ``logs/2026-09-06_numerics_independent_review/timing/barrier/`` (the scalar-loss measurement).
 
     Args:
         x_spatial: Spatial part ``x_s``, reduced over the last axis
@@ -211,17 +247,19 @@ def _proj(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "di
         admissible curvature, so it is never 0 and ``sqrt``'s derivative is never infinite. The
         constant is ``1/c``, not ``(1/√c)²``, which avoids one rounding.
 
-        ``sum(x_s**2)`` overflows float32 once a spatial coordinate passes 1.8e19 (geodesic radius
-        ~44 at ``c = 1``), a regime no training run reaches; there it returns ``x₀ = inf`` rather
+        ``sum(x_s**2)`` overflows float32 once a spatial coordinate passes 1.8e19 — geodesic radius
+        ~45 at ``c = 1``, ~139 at ``c = 0.1`` — and a network whose points sit there is already
+        diverging; there it returns ``x₀ = inf``, the intended signal, rather
         than a quietly saturated time slot, which is the library's convention for keeping an
         out-of-range point visibly degenerate. No ``MIN_NORM`` floor: it was inactive on the finite
         domain (``1/c > MIN_NORM`` unless ``c > 1e15``) and clamping ``inf`` is not wanted.
 
         The reduction is spelled through :func:`_time_slot`, which carries a ``custom_jvp``. It
         states the same derivative reverse-mode AD would derive and leaves every forward bit
-        unchanged; what it adds is a fusion barrier that keeps the backward's reduction out of the
-        full-width cotangent kernel, so the ``concatenate``'s transposed ``pad`` still fuses with
-        the multiply instead of becoming a standalone copy of the whole batch. See there.
+        unchanged; what it adds is a fusion barrier that, under the conditions listed there, keeps
+        the backward's reduction out of the full-width cotangent kernel, so the ``concatenate``'s
+        transposed ``pad`` still fuses with the multiply instead of becoming a standalone copy of
+        the whole batch. See there.
     """
     x_rest = x[1:]
     inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
@@ -369,10 +407,11 @@ def _polar_frame(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
 
     **Operation orderings that are load-bearing** (each measured, do not "simplify"):
 
-    * ``√u_x`` and ``√u_y`` are taken *separately*. ``√(u_x·u_y)`` overflows float32 as soon as
-      ``a + b > 88``, while the quotient itself is perfectly representable.
+    * ``√u_x`` and ``√u_y`` are taken *separately*. ``u_x·u_y = e^(a+b)/c``, so ``√(u_x·u_y)``
+      overflows float32 as soon as ``a + b > log(finfo.max) = 88.72`` (at ``c = 1``), while the
+      quotient itself is perfectly representable.
     * ``√r_x·√r_y·chord``, never ``√(r_x·r_y)`` and never ``chord²·r_x·r_y``: both alternatives
-      square a spatial radius, which leaves float32 at radius 44.
+      square a spatial radius, which leaves float32 at radius ~45.
     * every norm goes through :func:`~hyperbolix.utils.math_utils.safe_norm`, whose max-scaling is
       what keeps a legitimate ``1e-34`` chord from being flushed to the ``MIN_NORM`` floor.
     * ``(u_x - u_y)`` is a difference, not a quotient of exponentials: for ``a ≈ b`` (small
@@ -628,8 +667,9 @@ def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[A
     sqrt_c = jnp.sqrt(c)
     # One reduction (:func:`_norm` = ``safe_sqrt(sum(x_s**2))``); the spatial part can be exactly
     # zero at the origin, which is why it is `safe_sqrt` rather than a plain `sqrt`. `sum(x_s**2)`
-    # overflows float32 past coordinate 1.8e19 (geodesic radius ~44 at c = 1), unreachable by a
-    # training run, and propagates as `inf` — `arcsinh(inf) = inf`, the correct limit.
+    # overflows float32 past coordinate 1.8e19 — geodesic radius ~45 at c = 1, ~139 at c = 0.1 — and
+    # a network whose points sit there is already diverging. It propagates as `inf`, the intended
+    # signal, and `arcsinh(inf) = inf` is the correct limit.
     return jnp.arcsinh(sqrt_c * _norm(x[1:])) / sqrt_c
 
 
@@ -698,18 +738,20 @@ def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Sca
     v_sqnorm = floor_at(_minkowski_inner(v, v), 0.0)
     # `safe_sqrt` + `floor_at`, not the old `sqrt(v_sqnorm + MIN_NORM**2)`. Both give sqrt a finite
     # derivative at v = 0, but the additive 1e-30 also floored the *value* at 1e-15, so a tangent
-    # vector of Minkowski norm 1e-20 was reported 1e5x too long. The floor itself has to stay, and
-    # has to be applied HERE rather than only to `denom` below: `sinh(c_norm_prod)/denom` is a
-    # sinhc, and it is 1 in the limit only while numerator and denominator are the *same* floored
-    # quantity. An unfloored `c_norm_prod = 0` against `denom = MIN_NORM` gives sinhc = 0, which
-    # zeroes the whole Jacobian of a zero-initialised gyro-bias
-    # (test_manifold_oracles.py::test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian).
+    # vector of Minkowski norm 1e-20 was reported 1e5x too long. The floor stays, and it goes on
+    # `v_norm` alone — that already makes `c_norm_prod >= sqrt(c)*MIN_NORM > 0`, normal in both
+    # dtypes. `sinh(c_norm_prod)/c_norm_prod` is a sinhc, and it is 1 in the limit only while
+    # numerator and denominator are the *same* quantity: a second `floor_at(c_norm_prod, MIN_NORM)`
+    # on the divisor alone made the ratio sqrt(c) at v = 0 for every c < 1 (spatial Jacobian
+    # sqrt(c)·I, e.g. 0.32·I at c = 0.1), attenuating the first gradient of a zero-initialised
+    # gyro-bias. Pinned by test_manifold_oracles.py::
+    # test_hyperboloid_expmap_at_the_origin_has_the_identity_jacobian and ::
+    # test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian.
     v_norm = floor_at(safe_sqrt(v_sqnorm), MIN_NORM)
     c_norm_prod = sqrt_c * v_norm
 
-    denom = floor_at(c_norm_prod, MIN_NORM)
     cosh_term = cosh(c_norm_prod) * x
-    sinh_term = sinh(c_norm_prod) / denom * v
+    sinh_term = sinh(c_norm_prod) / c_norm_prod * v
 
     res = cosh_term + sinh_term
     res = _proj(res, c)
@@ -732,14 +774,18 @@ def _expmap_0(v: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
     """
     sqrt_c = jnp.sqrt(c)
     v_sqnorm = floor_at(_minkowski_inner(v, v), 0.0)
-    # `safe_sqrt` + `floor_at`, see _expmap: the floor stays (the sinhc below needs numerator and
-    # denominator on the same floored quantity) but it is multiplicative now, so a tangent vector
-    # of Minkowski norm 1e-20 is no longer reported as 1e-15.
+    # `safe_sqrt` + `floor_at`, see _expmap: the floor stays but it is multiplicative now, so a
+    # tangent vector of Minkowski norm 1e-20 is no longer reported as 1e-15. The floor sits on
+    # `v_norm` alone, which already gives `c_norm_prod >= sqrt(c)*MIN_NORM > 0`; the sinhc below
+    # divides by that same quantity, since a second floor on the divisor alone made the ratio
+    # sqrt(c) rather than 1 at v = 0 for every c < 1 (spatial Jacobian sqrt(c)·I, e.g. 0.32·I at
+    # c = 0.1), attenuating the first gradient of a zero-initialised gyro-bias. Pinned by
+    # test_manifold_oracles.py::test_hyperboloid_expmap_at_the_origin_has_the_identity_jacobian
+    # and ::test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian.
     v_norm = floor_at(safe_sqrt(v_sqnorm), MIN_NORM)
     c_norm_prod = sqrt_c * v_norm
 
-    denom = floor_at(c_norm_prod, MIN_NORM)
-    sinh_scale = sinh(c_norm_prod) / denom
+    sinh_scale = sinh(c_norm_prod) / c_norm_prod
 
     v0 = v[0]
     v_rest = v[1:]
@@ -906,14 +952,17 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
     sqrt_c = jnp.sqrt(c)
     y_rest = y[1:]
     # ``safe_norm``, not the file's older ``sqrt(sum(y_s²) + MIN_NORM²)``: the spatial part of a
-    # float32 point at radius 45 is 1.6e19, whose sum of squares overflows to inf while the norm
+    # float32 point at radius 45 is 1.75e19, whose sum of squares overflows to inf while the norm
     # itself is perfectly representable (the old expression then returned an all-zero tangent
     # vector there, and the arcsinh form would return NaN). ``safe_norm`` gives an exact 0 with an
     # exactly-zero VJP at the origin, so the ``MIN_NORM`` floor below is forward-only — it just
     # stops ``arcsinh(u)/u`` from evaluating 0/0; the Jacobian at y = origin is the identity either
     # way. That matters for the gyro-bias path of the PLFC / Busemann FC layers, whose bias point
-    # is the origin at zero init. This site keeps the max-scaled two-pass norm: `logmap_0` measured
-    # *faster* in 1.2.0 than in 1.1.2, so there is nothing here to win back.
+    # is the origin at zero init. This site keeps the max-scaled two-pass norm. It is not free: in
+    # isolation it costs about 1.2-1.35x the one-pass form (float32 forward, A100, jax 0.9.1; no
+    # controlled H100 A/B of this site exists), about 1.05x inside a step that charts an HTC stack
+    # through `logmap_0`. The point can sit at any radius the sheet allows, so the full-range
+    # guarantee stays.
     y_rest_norm = floor_at(safe_norm(y_rest), MIN_NORM)
 
     u = sqrt_c * y_rest_norm

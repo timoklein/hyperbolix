@@ -73,8 +73,9 @@ def _proj(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     # the *untaken* `where` branch's zero cotangent as 0*inf = NaN.
     # The `floor_at` is deliberate and must stay *around* the sqrt: `norm` divides in the untaken
     # branch too, and `floor_at` under the sqrt would not stop that branch's infinite derivative.
-    # `sum(x**2)` overflows float32 past coordinate 1.8e19, which no training run reaches (`x` here
-    # is unprojected, so it is the one site where an out-of-range input is conceivable). There
+    # `sum(x**2)` overflows float32 past coordinate 1.8e19 (`x` here is unprojected, so it is the
+    # one site where an out-of-range input is conceivable); that is far outside the ball of any
+    # curvature this library is used at, so a network feeding it is already diverging. There
     # `norm = inf` and the clamp `x * (max_norm / inf)` returns the ZERO VECTOR -- the pre-1.2.0
     # behaviour, documented in the changelog rather than guarded.
     # `axis=-1, keepdims=True` is what makes the clamp broadcast against `x`: the reduction removes

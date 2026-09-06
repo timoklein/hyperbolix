@@ -112,7 +112,12 @@ line-length = 127
 # guards the case at import time. The dropped `pythonpath = "hyperbolix"` entry dates back to
 # the PyTorch removal (bc6a0ef) and is unused: no module imports `manifolds`/`utils`/... as
 # top-level names.
-addopts = "-ra -q --import-mode=importlib" # --log-cli-level=DEBUG
+# --no-header instead of -q: -q trims the same header, but a caller who adds their own -q (a
+# wrapper, a habit, `pytest -q -n auto`) then lands at quiet level 2, and level 2 drops the
+# final `N passed, M failed in Xs` line -- leaving the dot stream and the exit code as the only
+# way to read the counts. --no-header keeps the output just as short and cannot be pushed over
+# that threshold from the command line. -ra keeps the short summary of non-passing tests.
+addopts = "-ra --no-header --import-mode=importlib" # --log-cli-level=DEBUG
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 

@@ -800,7 +800,10 @@ def _hyperboloid_case(a: float, kind: str, param: float, c: float, dim: int, dty
         b, psi = a, param
     else:
         b, psi = a + 1.0, param
-    if max(a, b) > 88.0:  # cosh(88) overflows float32
+    # Conservative float32 cap, just under the first thing that leaves the dtype: the polar frame's
+    # u = x0 + r_x = e^a, which overflows past log(finfo.max) = 88.72. (cosh(a) itself survives to
+    # log(2*finfo.max) = 89.42; cosh(88) = 8.3e37 is still finite.)
+    if max(a, b) > 88.0:
         return None
 
     e1, e2 = _hyperboloid_basis(dim)
@@ -1177,7 +1180,7 @@ def _hyperboloid_point_from_spatial(x_s: np.ndarray, c: float, dtype) -> jnp.nda
     ``x_s`` is expected to be already rounded to ``dtype``; float32 -> float64 -> float32
     round-trips exactly, so the stored spatial part is bit-identical to the one handed in. The
     constraint is evaluated in float64 because ``sum(x_s²)`` overflows float32 at spatial radius
-    1.8e19 (geodesic radius ~44 at ``c = 1``) even though ``x₀`` itself is representable out to
+    1.8e19 (geodesic radius ~45 at ``c = 1``) even though ``x₀`` itself is representable out to
     3.4e38 — the same limit that stops the library's own ``proj``/``expmap_0`` there.
     """
     s_64 = np.asarray(x_s, dtype=np.float64)
@@ -1314,7 +1317,8 @@ def test_hyperboloid_dist_gradient_at_the_origin_is_the_inward_unit_direction(dt
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
-def test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian(dtype):
+@pytest.mark.parametrize("c", [0.1, 1.0])
+def test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian(dtype, c: float):
     """A zero-initialized gyro-bias must receive gradient. On 1.1.2 it received exactly none.
 
     ``x ⊕ exp_0([0, b])`` goes through ``_logmap_0``, whose ``dist_0`` carried a bitwise
@@ -1323,10 +1327,9 @@ def test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian(dtype):
     float32 and float64), freezing every origin-initialized hyperboloid gyro-bias at its init
     value — ``hyperboloid_linear.py``, ``hyperboloid_conv.py`` and both Busemann FC layers.
     With the radius read off the spatial part the guard is gone; the same Jacobian now has
-    Frobenius norm 3.2806 for the point below.
+    Frobenius norm 3.2806 for the point below at ``c = 1``.
     """
     manifold = Hyperboloid(dtype=dtype)
-    c = 1.0
     dim = 8
     rng = np.random.default_rng(0)
     direction = rng.normal(size=dim)
@@ -1347,6 +1350,34 @@ def test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian(dtype):
     for version_idx in (0, 1):
         g_A = jax.grad(lambda p, v=version_idx: manifold.dist_0(p, c, version_idx=v))(origin_A)
         assert bool(jnp.all(jnp.isfinite(g_A))), f"non-finite dist_0 gradient at the origin, slot {version_idx}"
+
+
+_EXPMAP_ORIGIN_JACOBIAN_ATOL = {jnp.float32: 1e-6, jnp.float64: 1e-12}
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", [0.1, 0.3, 1.0, 2.5])
+def test_hyperboloid_expmap_at_the_origin_has_the_identity_jacobian(dtype, c: float):
+    """``d exp_0`` at the zero tangent is the identity on the spatial block, for every curvature.
+
+    Pins the sinhc at the floored zero tangent to 1 rather than ``√c``: the divisor of
+    ``sinh(t)/t`` carried a second ``MIN_NORM`` floor that the numerator did not, so for ``c < 1``
+    the whole spatial Jacobian came out ``√c·I`` (0.32·I at ``c = 0.1``).
+    """
+    manifold = Hyperboloid(dtype=dtype)
+    dim = 5  # ambient dim 6
+    atol = _EXPMAP_ORIGIN_JACOBIAN_ATOL[dtype]
+    zero_A = jnp.zeros((dim + 1,), dtype=dtype)
+    # The time row and column are zero: `_proj` rebuilds the time slot from the spatial part, so it
+    # does not respond to a first-order spatial perturbation and ignores the tangent's time slot.
+    expected_AA = np.diag([0.0] + [1.0] * dim)
+
+    jac_AA = np.asarray(jax.jacfwd(lambda v_A: manifold.expmap_0(v_A, c))(zero_A), dtype=np.float64)
+    np.testing.assert_allclose(jac_AA, expected_AA, atol=atol)
+
+    origin_A = manifold.create_origin(c, dim)
+    jac_at_origin_AA = np.asarray(jax.jacfwd(lambda v_A: manifold.expmap(v_A, origin_A, c))(zero_A), dtype=np.float64)
+    np.testing.assert_allclose(jac_at_origin_AA, expected_AA, atol=atol)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2042,8 +2073,9 @@ def test_poincare_metric_tensor_dist_gradient_is_the_conformal_factor_at_small_s
 #     41 % at float32 radius 1e-15 (2.83e-15 returned where 2.00e-15 is correct). That defect is
 #     what the tiny-radius oracles below still gate. It is gone from every site.
 #   * the max-scaled two-reduction ``safe_norm``/``safe_hypot_norm``, which reads the data twice to
-#     buy an overflow guard that only fires past float32 coordinate 1.8e19 — geodesic radius ~44
-#     at ``c = 1``, a regime no SGD run reaches. It gave way to the single reduction only on the
+#     buy an overflow guard that only fires past float32 coordinate 1.8e19 — geodesic radius ~45
+#     at ``c = 1``, ~139 at ``c = 0.1``, where a network is already diverging and the ``inf`` is the
+#     intended signal. It gave way to the single reduction only on the
 #     hot-path sites where the second memory pass measured slower; ``logmap_0``, every
 #     ProperVelocity site, both PV isometries, the FHNN forward and the linear-attention
 #     ``focus_transform`` keep it and stay finite past that coordinate.
@@ -2110,10 +2142,13 @@ _REPRESENTABLE_RADII = [1.0, 10.0, 100.0]
 def test_hyperboloid_proj_time_slot_is_exact_at_an_enormous_radius(c: float, r: float):
     """``proj`` at spatial radius 5e19 to 1e20: ``x0 = sqrt(1/c + r²)`` to the dtype's rounding.
 
-    This guards the *algorithm*, not float32's range. The radii are far outside anything a
-    training run reaches; float64 is used so ``1/c + r²`` is representable and the assertion can be
-    an equality against the reference value. What it would catch is a time slot built by rounding
-    ``‖x_s‖`` and re-squaring it, or one that lost the ``1/c`` term.
+    This guards the *algorithm*, not float32's range. The radii are far past the float32 ceiling of
+    1.8e19 — geodesic radius ~45 at ``c = 1``, ~139 at ``c = 0.1`` — where a network is already
+    diverging; float64 is used so ``1/c + r²`` is representable and the assertion can be an
+    equality against the reference value. What it would catch is a time slot built by rounding
+    ``‖x_s‖`` and re-squaring it. It does *not* gate the ``1/c`` term: at ``r = 5e19`` that term is
+    far below one float64 ulp of ``r²`` (≈ 5e23), so a time slot that lost it would pass here
+    bit-identically. The ``_REPRESENTABLE_RADII`` control below is what gates ``1/c``.
     """
     manifold = Hyperboloid(dtype=jnp.float64)
     x_A = jnp.zeros(4, dtype=jnp.float64).at[1].set(jnp.float64(r))
