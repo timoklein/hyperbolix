@@ -44,6 +44,7 @@ After making changes, run the test files that cover the affected code:
 uv run pytest tests/<relevant_test_file>.py -x -v
 ```
 Anything larger than one or two files gets `-n auto` (pytest-xdist); never run the full suite single-process.
+On a GPU box the xdist workers must not preallocate, or they exhaust the device before any test runs — `tests/conftest.py` now defaults `XLA_PYTHON_CLIENT_PREALLOCATE=false`, so nothing extra is needed; set `JAX_PLATFORMS=cpu` instead when the GPU is busy with someone else's job.
 For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (78 of the 388 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
 
 ## Architecture

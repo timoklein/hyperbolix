@@ -7,6 +7,19 @@ interfaces with the PyTorch test fixtures but using JAX/NumPy random operations.
 from __future__ import annotations
 
 import os
+
+# Each xdist worker builds its own JAX GPU client, and each one preallocates 75% of the memory
+# still free at that moment. Past the second or third worker the leftovers are too small to run
+# on: the suite fails with `RESOURCE_EXHAUSTED: Failed to load in-memory CUBIN` /
+# `INTERNAL: Autotuning failed for HLO ... No valid config found!` / `CUDA_ERROR_OUT_OF_MEMORY`
+# (measured: 3/6 at -n 4, 26/47 at -n 12, 38/47 at -n auto on a free 40 GB A100; a
+# `RuntimeError: Bad StatusOr access` during client bring-up, before any test runs, has also been
+# seen). Allocating on demand instead lets all workers share one GPU: 76/76 pass at -n 12.
+# `setdefault`, not assignment: an explicit setting from the caller's environment
+# wins. Must be set before the first `import jax` in the process, hence its place among the
+# imports rather than further down.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 from pathlib import Path
 
 import jax
