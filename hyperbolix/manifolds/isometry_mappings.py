@@ -15,7 +15,9 @@ Provided maps (all exact, distance-preserving, mutually consistent):
     - Poincaré ↔ PV: ``poincare_to_pv`` / ``pv_to_poincare``
       (the gyro-isomorphism of PVNN Eq. 4, an isometry by their Thm 4.2).
     - Hyperboloid ↔ PV: ``hyperboloid_to_pv`` / ``pv_to_hyperboloid``
-      (direct map — PV coordinates are the space-like part of the 4-velocity).
+      (direct map — PV coordinates are the space-like part of the 4-velocity;
+      the projection Π of Ferreira 2017, Sec. 2, built on the PV gyrogroup of
+      Ungar 2005, Def. 3.40).
 
 JIT Compilation & Batching
 ---------------------------
@@ -39,6 +41,10 @@ References:
     Wikipedia: Hyperboloid model
     https://en.wikipedia.org/wiki/Hyperboloid_model#Relation_to_other_models
     Chen et al. "Proper Velocity Neural Networks." ICLR 2026 (PV ↔ Poincaré, Eq. 4).
+    Ferreira. "Harmonic Analysis on the Proper Velocity Gyrogroup." Banach J.
+    Math. Anal. 11(1), 21-49, 2017 (PV ↔ Hyperboloid projection Π, Sec. 2).
+    Ungar. "Analytic Hyperbolic Geometry: Mathematical Foundations and
+    Applications." World Scientific, 2005 (PV gyrogroup, Def. 3.40).
 """
 
 import jax.numpy as jnp
@@ -269,7 +275,12 @@ def pv_to_hyperboloid(
         True
 
     References:
-        Chen et al. "Proper Velocity Neural Networks." ICLR 2026.
+        Ferreira. "Harmonic Analysis on the Proper Velocity Gyrogroup." Banach
+        J. Math. Anal. 11(1), 21-49, 2017 — Sec. 2, the projection
+        Π(x, √(t²+‖x‖²)) = x between the hyperboloid of radius t = 1/√c and
+        PV space (t → 1/√c here).
+        Ungar. "Analytic Hyperbolic Geometry: Mathematical Foundations and
+        Applications." World Scientific, 2005 — Def. 3.40, the PV gyrogroup.
     """
     # √(1/c + ||x||²) via `safe_hypot_norm` — the same shape as `Hyperboloid._proj`, and the same
     # fix: `dot(x, x)` overflows float32 past ||x|| = 1.8e19, returning an infinite time slot for
@@ -313,7 +324,12 @@ def hyperboloid_to_pv(
         True
 
     References:
-        Chen et al. "Proper Velocity Neural Networks." ICLR 2026.
+        Ferreira. "Harmonic Analysis on the Proper Velocity Gyrogroup." Banach
+        J. Math. Anal. 11(1), 21-49, 2017 — Sec. 2, the projection
+        Π(x, √(t²+‖x‖²)) = x between the hyperboloid of radius t = 1/√c and
+        PV space (t → 1/√c here).
+        Ungar. "Analytic Hyperbolic Geometry: Mathematical Foundations and
+        Applications." World Scientific, 2005 — Def. 3.40, the PV gyrogroup.
     """
     del c  # curvature-independent: PV coords are the hyperboloid spatial part
     return x[1:]
