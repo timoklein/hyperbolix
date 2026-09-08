@@ -444,9 +444,9 @@ def test_lorentz_midpoint_angular_cloud_matches_float64(sigma_a, a):
     0.3 rad (``sigma_a = 0``), or spread in both radius and direction (``sigma_a = 0.3``); the
     normalizer sees an angular gap rather than a radial one. A pivot decomposition around one
     reference point — the ``196f5b6`` spelling — reads that gap as a difference of two
-    ``O(e^{2a})`` numbers and loses the whole answer, while the key-Gram form
-    ``-c<h,h>_L = W^2 + (c/2) sum_mn w_m w_n dd_mn`` adds only non-negative terms and never lets
-    the ``e^{2a}`` scale in.
+    ``O(e^{2a})`` numbers and loses the whole answer, while the variance form
+    ``-c<h,h>_L = c*(gap + R*V/(1 + ||m_bar||))*(gap + R*(1 + ||m_bar||))`` adds only non-negative
+    terms and never lets the ``e^{2a}`` scale in.
 
     Accuracy, not finiteness: the pivot form returns an ordinary on-manifold point in the wrong
     place, so the reference is the same call in float64 and the assertion is the geodesic distance
