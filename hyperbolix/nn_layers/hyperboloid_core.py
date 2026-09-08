@@ -461,7 +461,7 @@ def lorentz_midpoint(
     floor of the inputs themselves — a relative coordinate error ``2^-24`` is an angular error of
     the same size, which a geodesic at radius ``a`` amplifies by ``sinh a`` (6e-8 * sinh 12 =
     5e-3, i.e. the whole entry). In float64 the medians are 4e-14 (radial ``a`` = 6) to 6e-11
-    (radial ``a`` = 12), and 6e-16 to 9e-16 for every angular and mixed row.
+    (radial ``a`` = 12), and 5e-16 to 8e-16 for every angular and mixed row.
 
     Parameters
     ----------

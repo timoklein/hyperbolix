@@ -470,7 +470,7 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
 
         eps * cosh(a_q) * cosh(a_k) / (c * scale)
 
-    which with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``scale = 1``) is about 1.6e-2
+    which with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``scale = 1``) is about 4.8e-3
     at ``a = 6``, 0.26 at ``a = 8`` and 2.0 at ``a = 9``: from ``a ≈ 8`` the error
     exceeds the score spread the softmax is meant to resolve, and the weights are
     wrong while staying perfectly finite. Three remedies, cheapest first: keep the

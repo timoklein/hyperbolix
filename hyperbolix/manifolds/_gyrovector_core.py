@@ -112,8 +112,9 @@ def _mobius_denominator(
     right is non-negative and the subtraction ``1 - t`` happens *before* the square, so an O(1)
     result stops being the difference of two O(e^{2a}) terms. Measured on a radial pair 0.1 apart
     at ``c = 1`` (``logs/2026-09-08_hyperboloid_tangent_primitives/step3_equivalence.py``): at
-    geodesic radius 10 in float32 ``dist`` is 2.9e-2 wrong as-is and 4.3e-6 here; at radius 20 in
-    float64, 7.5e-2 versus 1.8e-5.
+    geodesic radius 10 in float32 ``dist`` is 2.9e-2 wrong as-is and 4.3e-6 here. At radius 20 in
+    float64, ``dist`` is 7.519e-02 wrong as-is and 5.367e-10 here
+    (``probe_poincare_mobius_ebebd09.out``, table D.i).
 
     The floor is :func:`_boundary_floor` **squared** — the analytic minimum of the denominator over
     projected points: both radii at the cap, with the directions that zero the ``‖x̂ + τŷ‖`` term

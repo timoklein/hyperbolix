@@ -86,7 +86,9 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 
 ### Float precision
 
-- Float32 reliable for hyperbolic distances < 7; float64 needed for distances > 10
+- Hyperboloid tangent primitives (`dist`, `logmap`, `sqdist`, `tangent_norm`, `expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, `egrad2rgrad`, gyro `addition`, `busemann`) are cancellation-free and accurate to the point-representation floor `eps·sinh(a)/sqrt(c)` at scaled radius `a = sqrt(c)*d` — float32 good to `a ≈ 16.6`, float64 much further
+- Poincaré pairwise `dist`/`logmap` (the factored Möbius denominator) are accurate up to the ball chart's own representation ceiling — `a ≈ 12.6` in float32, `≈ 27.7` in float64 — past which the ball cannot represent the point at all
+- Exceptions that still cancel at large radius: gyro-centering `(⊖x) ⊕ y` with `y ≈ x`, `HyperbolicFullAttention`'s GEMM-formed scores, `ProperVelocity.dist` between nearby points, and a `ptransp` step below the representation floor — see `docs/user-guide/numerical-stability.md`
 - Conformal factor lambda grows exponentially near Poincare ball boundary
 - Tests parametrize both dtypes with tolerances: `atol=4e-3` (f32), `atol=1e-7` (f64)
 - **Loud divergence over silent saturation.** A guard that maps an already non-finite input (an `inf` time coordinate, a point past the float32 manifold) onto a finite, plausible output hides the divergence; a NaN loss is the intended signal. Do not add clamps or saturations whose only remaining job is finiteness on inputs that are already non-finite, and propose removing such guards when found (the MLR `asinh` clamp inherited from the PyTorch code was removed for this reason). Guards that fix real float32 rounding on finite inputs (`floor_at` on divisors, `safe_sqrt` at zero) are a different matter and stay
