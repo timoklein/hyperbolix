@@ -37,7 +37,6 @@ from hyperbolix.utils.math_utils import (
     MIN_NORM,
     clamp_to,
     floor_at,
-    radial_perp_decomposition,
     safe_hypot,
     safe_hypot_norm,
     safe_norm,
@@ -340,8 +339,9 @@ def _lorentz_sqdist_polar(x_A: Float[Array, "... A"], p_A: Float[Array, "... A"]
     The batched, allocation-lean spelling of the hyperbolic haversine decomposition that
     ``manifolds.hyperboloid._polar_frame`` builds for a single pair — same algebra, same
     operation orderings, but only the two quantities this module needs (no ``csum``, no
-    ``cosh(θ/2)``, no ``_PolarFrame``), and it broadcasts over leading axes so the M points of a
-    Lorentz midpoint share one pivot without a ``vmap``. With ``r = ||x_s||``, ``x̂ = x_s/r``,
+    ``cosh(θ/2)``, no ``_PolarFrame``), and it broadcasts over leading axes so a Lorentz midpoint
+    gets its whole ``(M, M)`` key Gram from one call, ``x_A`` shaped ``(..., M, 1, A)`` against
+    ``p_A`` shaped ``(..., 1, M, A)``, without a ``vmap``. With ``r = ||x_s||``, ``x̂ = x_s/r``,
     ``u = x₀ + r`` and ``θ = √c·d(x, p)``::
 
         u_gap = (r_x - r_p)·(1 + (r_x + r_p)/(x₀ + p₀))
@@ -361,6 +361,12 @@ def _lorentz_sqdist_polar(x_A: Float[Array, "... A"], p_A: Float[Array, "... A"]
     The ``MIN_NORM`` floors are the same guards: on the radii they keep ``x̂`` finite at the origin
     (where ``r = 0`` makes ``q = 0`` regardless of the chord), on ``u`` and ``x₀ + p₀`` they only
     stop a fully degenerate all-zero "point" from producing ``0/0``.
+
+    On the diagonal (``x_A`` and ``p_A`` the same point, which the key Gram of
+    :func:`lorentz_midpoint` evaluates for every ``m``) the result is exactly ``0`` with an exactly
+    zero gradient: the two radii and unit directions come out of identical inputs, so ``u_gap`` and
+    ``chord`` are exact zeros, and ``safe_norm``/``safe_hypot``'s double-``where`` returns ``0``
+    without ever creating ``sqrt'(0) = inf`` inside the VJP.
 
     Reproduces :func:`~hyperbolix.manifolds.hyperboloid._sqdist` **bitwise** for finite inputs
     (measured: max relative difference exactly 0 over the attention-shaped clouds of
@@ -419,51 +425,43 @@ def lorentz_midpoint(
 
     where ``||h||_L = sqrt(-<h,h>_L)``. The Minkowski square ``<h,h>_L`` is **not** evaluated
     as the literal ``-h_0^2 + ||h_s||^2``, which subtracts two ``O(e^{2a})`` numbers (``a`` the
-    scaled geodesic radius) to reach an ``O(W^2/c)`` result and so keeps no float32 bits past
-    ``a ~ 8``. It is obtained instead from the **pivot decomposition**: with reference ``p`` the
-    input closest to the vertex, ``theta_m = sqrt(c)*d(x_m, p)``, ``W = sum_m w_m`` and
-    ``Delta = sum_m w_m (x_m - p)``, each ``x_m - p = (cosh theta_m - 1) p + (sinh theta_m/sqrt(c))
-    w_m`` with ``w_m`` a unit tangent at ``p``, so ``Delta`` splits along and across ``p`` ::
+    scaled geodesic radius ``sqrt(c)*d``) to reach an ``O(W^2/c)`` result and so keeps no float32
+    bits past ``a ~ 8``. It is obtained instead from the **key Gram**. For on-sheet points
+    ``-c*<x_m, x_n>_L = cosh theta_mn`` with ``theta_mn = sqrt(c)*d(x_m, x_n)``, and
+    ``cosh theta_mn = 1 + (c/2)*dd_mn`` with
+    ``dd_mn = <x_m - x_n, x_m - x_n>_L = (4/c)*sinh^2(theta_mn/2)``, so with ``W = sum_m w_m`` ::
 
-        A   = sum_m w_m (cosh theta_m - 1) = (c/2) * sum_m w_m <x_m - p, x_m - p>_L
-        T   = Delta - A*p                  (tangent at p; spatial part Delta_s - A*p_s)
-        h   = (W + A)*p + T
-        -c * <h,h>_L = (W + A)^2 - c*||T||^2_p
+        -c * <h,h>_L = sum_mn w_m w_n cosh theta_mn = W^2 + (c/2) * sum_mn w_m w_n dd_mn
 
-    Two rewrites carry the accuracy. (1) Each ``<x_m - p, x_m - p>_L`` is the polar form
-    ``4(P^2 + q^2)/c`` of :func:`_lorentz_sqdist_polar` — non-negative terms read off the spatial
-    radii — rather than the literal ``-delta_0^2 + ||delta_s||^2``, which cancels for a radial pair
-    exactly as the naive normalizer does (for a radial pair with gap ``theta``,
-    ``||delta_s||^2 - delta_0^2`` is ``theta^2 (cosh^2 a - sinh^2 a)/c`` to leading order: both
-    squares are ``O(theta^2 e^{2a}/c)``, the answer is ``O(theta^2/c)``).
-    (2) ``||T||^2_p = ||perp(T)||^2 + radial(T)^2/(c*p_0^2)`` comes from
-    :func:`~hyperbolix.utils.math_utils.radial_perp_decomposition`, the sum-of-non-negatives form of
-    the tangent norm at ``p`` (see ``manifolds.hyperboloid._tangent_norm``), spelled
-    ``(radial/(sqrt(c)*p_0))^2`` so ``p_0^2`` is never materialized — it overflows float32 at
-    radius ~44.
+    This is exact for arbitrary weights, and for non-negative weights every term on the right is
+    non-negative — no difference is left anywhere, so the ``O(e^{2a})`` scale never enters the
+    normalizer at all. It also shows the ``eps`` floor can only engage as ``W -> 0``, since every
+    ``cosh >= 1`` gives ``-c*<h,h>_L >= W^2``. The ``dd_mn`` come from
+    :func:`_lorentz_sqdist_polar`, whose own polar form ``4(P^2 + q^2)/c`` is a sum of squares read
+    off the *spatial* radii rather than the cancelling literal ``-delta_0^2 + ||delta_s||^2``; its
+    diagonal ``dd_mm`` is exactly 0 with an exactly-zero gradient.
 
-    What is left is the single difference ``(W + A)^2 - c*||T||^2_p``, and it cancels only to the
-    extent the cloud is *spread around its own pivot*: for one point it is exactly
-    ``cosh^2 theta - sinh^2 theta = 1``, so the surviving loss is set by ``theta``, the spread, not
-    by the absolute radius ``a``. That is the whole gain. Measured (M = 16, c = 0.5, radial cloud
-    with ``sigma = 0.3`` in scaled radius, uniform weights; geodesic error of the float32 midpoint
-    against the same spelling in float64): as-is 3.3e-3 at ``a = 6``, 0.21 at 8, 0.62 at 9, 5.1 at
-    12; this form 2.4e-5, 1.9e-4, 3.6e-4, 9.4e-3. On spread random clouds — where the pivot gap is
-    the radius and neither form has an advantage — the new form costs a little: 1.3e-5 against
-    1.9e-6 as-is.
+    Cost: ``O(M^2)`` polar squares per key set instead of ``O(M)``, the reduction being an
+    ``(M, M, D)`` chord ``||x_hat_m - x_hat_n||`` (XLA fuses it on GPU; on XLA:CPU it may
+    materialise). The measured accuracy is what buys it.
 
-    The identity holds for arbitrary weights (negative and zero included) and, in exact arithmetic,
-    is independent of which point is used as the reference — in floats it is not, hence the
-    vertex-nearest choice (see Notes).
+    Measured (probe C.i of ``logs/2026-09-08_hyperboloid_tangent_primitives``, M = 16, c = 0.5,
+    D = 16, uniform weights, 4 seeds; geodesic error of the float32 midpoint against a longdouble
+    reference, medians; "as-is" is the literal ``-h_0^2 + ||h_s||^2`` normalizer). Clouds at scaled
+    radius ``a``: *radial* = spread 0.3 in ``a`` along one direction, *angular* = spread 0.3 rad at
+    one radius, *mixed* = both ::
 
-    For non-negative weights the ``eps`` floor only engages as ``W -> 0``: expanding over the key
-    Gram gives ``-c*<h,h>_L = sum_mn w_m w_n cosh(theta_mn) >= W^2`` since every ``cosh >= 1``.
+                   a = 6      a = 8      a = 9      a = 12
+        radial     1.4e-5     1.0e-4     3.6e-4     5.7e-3     (as-is 5.2e-4, 1.1e-2, 0.41, 3.0)
+        angular    3.8e-7     4.6e-7     3.2e-7     3.1e-7     (as-is 3.6e-7, 4.6e-7, 3.6e-7, 3.6e-7)
+        mixed      3.2e-7     3.6e-7     4.2e-7     3.9e-7     (as-is 4.4e-7, 7.1e-7, 4.3e-7, 4.1e-7)
 
-    Not implemented, for a future pass: that Gram form evaluated directly,
-    ``-c*<h,h>_L = sum_mn w_m w_n (1 + 2*S_mn^2)`` with ``S_mn = sinh(theta_mn/2)`` off
-    :func:`_lorentz_sqdist_polar`, is a sum of non-negative terms with **no** remaining difference,
-    and measures 2e-7 at every radius above. It costs ``O(M^2)`` polar frames per key set instead of
-    ``O(M)``, which is why the pivot form is the one in the code.
+    The angular and mixed rows are flat in ``a`` because nothing in the normalizer grows with the
+    radius any more. The radial rows are *not* the normalizer: they are the float32 representation
+    floor of the inputs themselves — a relative coordinate error ``2^-24`` is an angular error of
+    the same size, which a geodesic at radius ``a`` amplifies by ``sinh a`` (6e-8 * sinh 12 =
+    5e-3, i.e. the whole entry). In float64 the medians are 4e-14 (radial ``a`` = 6) to 6e-11
+    (radial ``a`` = 12), and 6e-16 to 9e-16 for every angular and mixed row.
 
     Parameters
     ----------
@@ -496,51 +494,24 @@ def lorentz_midpoint(
     Consequence: the output's time coordinate is a function of its spatial part, so its gradient
     flows through the spatial components (as in every HRC/HTC layer) rather than through the input
     time coordinates directly.
-
-    The reference point ``p`` is the input with the smallest time coordinate (closest to the
-    vertex). Each ``delta_m = x_m - p`` term is only as well-conditioned as ``||delta_m||``, and this
-    choice bounds ``||delta_m|| <= ||x_m|| + ||p|| <= 2 ||x_m||``, so a point never inherits another
-    point's radius. With the old ``p = points_0`` and an extreme point *at* index 0, every ``delta_m``
-    is as large as that extreme radius and the identity's own terms cancel against each other.
     """
     # h = sum_m w_{n,m} * points_m  →  (..., N, A)
     # Pinned HIGHEST: the cancellation-free identity below only holds to O(eps) if its inputs
     # are float32-accurate; at the TF32 default the f32-vs-f64 relative error of this function
     # is 4.6e-5 … 2.6e-4 instead of 2.6e-8 … 1.6e-7 (see hyperbolix.utils.precision).
     h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
-    # Pivot decomposition (see the docstring): with delta_m = x_m - p, W = sum_m w_m and
-    # Delta = sum_m w_m delta_m = A*p + T,
-    #     A = (c/2) * sum_m w_m <delta_m, delta_m>_L,   T_s = Delta_s - A*p_s,
-    #     -c*<h,h>_L = (W + A)^2 - c*||T||^2_p.
-    # The naive -h_0^2 + ||h_s||^2 subtracts two O(e^{2a}) squares to reach an O(W^2/c) result and
-    # has no float32 bits left past a ~ 8; here the per-point squares are the polar form and the
-    # tangent norm is a sum of non-negatives, so the only difference left is the last one, and it
-    # cancels only as far as the cloud is spread around its own pivot.
-    # Reference = the input closest to the vertex (smallest time coordinate), not points_0. The
-    # identity is reference-independent in exact arithmetic, but in floats each ||delta_m|| sets that
-    # term's conditioning: with the vertex-nearest reference ||delta_m|| <= ||x_m|| + ||p|| <= 2||x_m||,
-    # so a point is only as ill-conditioned as its own radius. Using points_0 when *that* is the
-    # extreme point makes every delta as large as the extreme radius (0.5% error on the HoroPCA
-    # boundary-lift case vs 2e-5 with an ordinary reference).
-    ref_idx = jnp.argmin(points[..., 0], axis=-1)  # (..., ) over M
-    p_1A = jnp.take_along_axis(points, ref_idx[..., None, None], axis=-2)  # (..., 1, A)
-    delta_MA = points - p_1A  # (..., M, A)
-    p_s_1D = p_1A[..., 1:]  # (..., 1, D)
-    dd_M = _lorentz_sqdist_polar(points, p_1A, c)  # (..., M), >= 0 on-sheet
+    # Key Gram (see the docstring): -c*<h,h>_L = sum_mn w_m w_n cosh(theta_mn)
+    #                                         = W^2 + (c/2) * sum_mn w_m w_n dd_mn,
+    # with dd_mn = <x_m - x_n, x_m - x_n>_L = (4/c) sinh^2(theta_mn/2) from the polar form. Every
+    # term is non-negative for non-negative weights and nothing is subtracted anywhere, so the
+    # O(e^{2a}) scale never enters — unlike the naive -h_0^2 + ||h_s||^2, which differences two
+    # O(e^{2a}) squares to reach an O(W^2/c) result and keeps no float32 bits past a ~ 8.
+    dd_MM = _lorentz_sqdist_polar(points[..., :, None, :], points[..., None, :, :], c)  # (..., M, M), >= 0
     w_sum_N1 = jnp.sum(weights, axis=-1, keepdims=True)  # (..., N, 1)
     # The two remaining contractions feed the same identity; pinned HIGHEST for the same reason.
-    w_dd_N1 = jnp.einsum("...nm,...m->...n", weights, dd_M, precision=MATMUL_PRECISION)[..., None]  # (..., N, 1)
-    big_delta_NA = jnp.einsum("...nm,...ma->...na", weights, delta_MA, precision=MATMUL_PRECISION)  # (..., N, A)
-    # A = sum_m w_m (cosh theta_m - 1) = (c/2) * sum_m w_m dd_m — the p-parallel part of Delta.
-    a_coef_N1 = 0.5 * c * w_dd_N1  # (..., N, 1)
-    # T = Delta - A*p is tangent at p, so its Riemannian norm is the radial/perp sum of squares.
-    t_s_ND = big_delta_NA[..., 1:] - a_coef_N1 * p_s_1D  # (..., N, D)
-    radial_N, perp_ND = radial_perp_decomposition(t_s_ND, p_s_1D)  # (..., N), (..., N, D)
-    # radial/(sqrt(c)*p_0), never radial^2/(c*p_0^2): p_0^2 overflows float32 at radius ~44 while
-    # the quotient stays representable. sqrt(c)*p_0 = cosh(a_p) >= 1 on the upper sheet, so the
-    # floor is a no-op for every valid pivot; it only guards a degenerate all-zero "point".
-    t_norm_N = safe_hypot_norm(perp_ND, radial_N / floor_at(jnp.sqrt(c) * p_1A[..., 0], MIN_NORM))  # (..., N)
-    neg_c_mink_N1 = (w_sum_N1 + a_coef_N1) ** 2 - c * t_norm_N[..., None] ** 2  # (..., N, 1) = -c*<h,h>_L
+    w_dd_NM = jnp.einsum("...nm,...mk->...nk", weights, dd_MM, precision=MATMUL_PRECISION)  # (..., N, M)
+    w_dd_w_N = jnp.einsum("...nk,...nk->...n", w_dd_NM, weights, precision=MATMUL_PRECISION)  # (..., N)
+    neg_c_mink_N1 = w_sum_N1**2 + 0.5 * c * w_dd_w_N[..., None]  # (..., N, 1) = -c*<h,h>_L
     denom_N1 = jnp.sqrt(floor_at(jnp.abs(neg_c_mink_N1), eps))  # (..., N, 1)
     z_NA = h_NA / denom_N1  # (..., N, A)
     # The identity above assumes *exactly* on-sheet points, which float storage cannot guarantee at
