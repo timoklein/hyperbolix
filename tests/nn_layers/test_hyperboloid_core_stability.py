@@ -153,6 +153,40 @@ def _radial_cloud(seed, m, a, c, d, sigma=0.3, dtype=jnp.float64):
     return _polar_points(a_M, jnp.broadcast_to(u_D, (m, d)), c).astype(dtype)
 
 
+def _spread_directions(key, base_D, shape, sigma_rad):
+    """Unit directions at angle ``sigma_rad * N(0,1)`` from ``base_D``, on a random great circle.
+
+    ``cos(theta) base + sin(theta) perp`` with ``perp`` a unit vector orthogonal to ``base``, so
+    the angle to ``base`` is exactly ``theta`` — a spread named in radians, independent of ``D``
+    (perturbing ``base`` by ``sigma * N(0, I_D)`` and renormalizing would give an angle growing
+    like ``sigma sqrt(D)``).
+    """
+    d = base_D.shape[-1]
+    k_perp, k_ang = jax.random.split(key)
+    perp = jax.random.normal(k_perp, (*shape, d), dtype=jnp.float64)
+    perp = perp - jnp.sum(perp * base_D, axis=-1, keepdims=True) * base_D
+    perp = perp / jnp.linalg.norm(perp, axis=-1, keepdims=True)
+    theta = sigma_rad * jax.random.normal(k_ang, shape, dtype=jnp.float64)
+    return jnp.cos(theta)[..., None] * base_D + jnp.sin(theta)[..., None] * perp
+
+
+def _angular_cloud(seed, m, a, c, d, sigma_rad=0.3, sigma_a=0.0, dtype=jnp.float64):
+    """``M`` on-sheet points spread ``sigma_rad`` rad around one direction at scaled radius ``a``.
+
+    The complement of :func:`_radial_cloud`: with ``sigma_a = 0`` every point sits at the *same*
+    radius and only the direction varies, so the time components of the pairwise deltas vanish and
+    the naive Minkowski square has nothing to cancel — but a normalizer that decomposes around a
+    single pivot point reads the whole angular gap as an ``O(e^{2a})`` difference instead.
+    ``sigma_a = 0.3`` gives the mixed cloud (spread in both radius and direction).
+    """
+    k_base, k_dir, k_rad = jax.random.split(jax.random.PRNGKey(seed), 3)
+    base_D = jax.random.normal(k_base, (d,), dtype=jnp.float64)
+    base_D = base_D / jnp.linalg.norm(base_D)
+    dirs_MD = _spread_directions(k_dir, base_D, (m,), sigma_rad)
+    a_M = a + sigma_a * jax.random.normal(k_rad, (m,), dtype=jnp.float64)
+    return _polar_points(a_M, dirs_MD, c).astype(dtype)
+
+
 def _geodesic_err(got, ref, c):
     """Largest geodesic distance between corresponding points of ``got`` and ``ref`` (float64).
 
@@ -398,6 +432,44 @@ def test_lorentz_midpoint_radial_cloud_at_radius_9_matches_float64():
         assert naive > 10.0 * lib, f"seed {seed}: naive {naive:.2e} not >10x library {lib:.2e}"
 
     assert max(naive_errs) > 1e-2, f"naive geodesic error never exceeded 1e-2: {max(naive_errs):.2e}"
+
+
+@pytest.mark.parametrize("a", [9.0, 12.0])
+@pytest.mark.parametrize("sigma_a", [0.0, 0.3], ids=["angular", "mixed"])
+def test_lorentz_midpoint_angular_cloud_matches_float64(sigma_a, a):
+    """Uniform midpoint of an angular / mixed cloud at ``sqrt(c) d in {9, 12}``: geodesic accuracy.
+
+    The configuration :func:`test_lorentz_midpoint_radial_cloud_at_radius_9_matches_float64`
+    deliberately did not cover. The points sit at one common radius with their directions spread
+    0.3 rad (``sigma_a = 0``), or spread in both radius and direction (``sigma_a = 0.3``); the
+    normalizer sees an angular gap rather than a radial one. A pivot decomposition around one
+    reference point — the ``196f5b6`` spelling — reads that gap as a difference of two
+    ``O(e^{2a})`` numbers and loses the whole answer, while the key-Gram form
+    ``-c<h,h>_L = W^2 + (c/2) sum_mn w_m w_n dd_mn`` adds only non-negative terms and never lets
+    the ``e^{2a}`` scale in.
+
+    Accuracy, not finiteness: the pivot form returns an ordinary on-manifold point in the wrong
+    place, so the reference is the same call in float64 and the assertion is the geodesic distance
+    between the two. Measured (M = 16, D = 64, c = 0.5, uniform weights, seeds 0-3;
+    ``logs/2026-09-08_hyperboloid_tangent_primitives/step6c_angular_midpoint_measurements.out``),
+    worst seed per cell, library / pivot form::
+
+        angular a = 9    4.2e-07 / 2.1e+01        mixed a = 9    4.5e-07 / 4.7e-02
+        angular a = 12   5.0e-07 / 3.1e+00        mixed a = 12   3.8e-07 / 3.0e+00
+
+    The bound is 2.5e-6 — 5x the worst measured library error, and four orders below the pivot
+    form's worst, so a revert to it fails this test on every cell.
+    """
+    c, m, d, bound = 0.5, 16, 64, 2.5e-6
+    for seed in _SEEDS:
+        pts64_MA = _angular_cloud(seed, m, a, c, d, sigma_rad=0.3, sigma_a=sigma_a)
+        pts32_MA = pts64_MA.astype(jnp.float32)
+        w64_NM = jnp.full((1, m), 1.0 / m, dtype=jnp.float64)
+        w32_NM = w64_NM.astype(jnp.float32)
+
+        truth_NA = lorentz_midpoint(pts64_MA, w64_NM, c)
+        lib = _geodesic_err(lorentz_midpoint(pts32_MA, w32_NM, c), truth_NA, c)
+        assert lib < bound, f"seed {seed}: float32 midpoint {lib:.2e} geodesic from the float64 one"
 
 
 @pytest.mark.parametrize("c", [0.5, 1.0])
