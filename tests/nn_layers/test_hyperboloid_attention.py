@@ -738,3 +738,63 @@ def test_linear_attention_attend_preserves_float32(causal):
     out_BNA = layer._attend(qkv_BNHA, qkv_BNHA, qkv_BNHA, c_attn=1.0, c_out=1.0, causal=causal)
     assert out_BNA.dtype == jnp.float32
     assert jnp.all(jnp.isfinite(out_BNA))
+
+
+def _far_cluster_qk(seed, batch, seq_len, num_heads, spatial_dim, radius, c):
+    """float32 (Q, K), each ``(B, N, H, D+1)``, at geodesic radius ``radius / sqrt(c)``.
+
+    Polar form ``x = (cosh(a), sinh(a) u) / sqrt(c)`` with ``|u| = 1``: exactly on the
+    sheet, and ``sqrt(c) d(0, x) = a`` by construction. Queries and keys share one axis
+    and sit within an angle ``~e^{-a}`` of it, so the pairwise ``<Q,K>_L`` stays O(1)
+    while each of its two Minkowski terms is ``O(cosh(a)^2 / c)`` — the cancellation
+    the score floor is about.
+    """
+    rng = np.random.default_rng(seed)
+    axis_D = rng.normal(size=spatial_dim)
+    axis_D /= np.linalg.norm(axis_D)
+
+    u_ND = axis_D[None, :] + rng.normal(size=(2 * seq_len, spatial_dim)) * 0.3 * float(np.exp(-radius))
+    u_ND /= np.linalg.norm(u_ND, axis=-1, keepdims=True)
+    a_N = radius + rng.normal(size=(2 * seq_len, 1)) * 0.05  # small radial spread
+    points_NA = np.concatenate([np.cosh(a_N), np.sinh(a_N) * u_ND], axis=-1) / np.sqrt(c)  # (2N, D+1)
+
+    shape = (batch, seq_len, num_heads, spatial_dim + 1)
+    return tuple(
+        jnp.asarray(np.broadcast_to(p_NA[None, :, None, :], shape), dtype=jnp.float32)
+        for p_NA in (points_NA[:seq_len], points_NA[seq_len:])
+    )
+
+
+def test_full_attention_score_dtype_float64_island():
+    """``score_dtype=jnp.float64`` recovers the float32 score error at large radius.
+
+    At ``sqrt(c) d = 9`` the two Minkowski terms behind ``<Q,K>_L`` are each about
+    ``cosh(9)^2 / c ≈ 3.3e7`` while their O(1) difference is all the softmax sees, so a
+    float32 score carries an absolute error of ``eps cosh(a_q) cosh(a_k) / (c scale)``
+    ≈ 4 — far more than the spread the softmax resolves. Nothing overflows and the
+    weights stay normalized; they are simply wrong. This is therefore an accuracy check
+    against an all-float64 run of the same layer on the same values, not a finiteness
+    check, and it also asserts that the float32 default path *fails* that accuracy bar,
+    so the test cannot pass vacuously.
+    """
+    if jnp.zeros((), jnp.float64).dtype != jnp.float64:  # pragma: no cover - conftest enables x64
+        pytest.skip("score_dtype=float64 needs jax_enable_x64")
+
+    B, N, H, D_out, c, radius = 2, 16, 2, 8, 0.5, 9.0
+    q32_BNHA, k32_BNHA = _far_cluster_qk(0, B, N, H, D_out, radius, c)
+    q64_BNHA, k64_BNHA = q32_BNHA.astype(jnp.float64), k32_BNHA.astype(jnp.float64)
+
+    plain = HyperbolicFullAttention(D_out + 1, D_out, num_heads=H, rngs=nnx.Rngs(0))
+    island = HyperbolicFullAttention(D_out + 1, D_out, num_heads=H, rngs=nnx.Rngs(0), score_dtype=jnp.float64)
+
+    w_ref_BNHM = plain._attention_weights(q64_BNHA, k64_BNHA)  # same values, float64 throughout
+    w_f32_BNHM = plain._attention_weights(q32_BNHA, k32_BNHA)
+    w_island_BNHM = island._attention_weights(q32_BNHA, k32_BNHA)
+
+    assert w_island_BNHM.dtype == jnp.float32, "the island must cast the scores back before the softmax"
+    assert float(w_ref_BNHM.max()) < 0.9, "reference softmax collapsed to one-hot; the comparison would be vacuous"
+
+    err_island = float(jnp.max(jnp.abs(w_island_BNHM.astype(jnp.float64) - w_ref_BNHM)))
+    err_f32 = float(jnp.max(jnp.abs(w_f32_BNHM.astype(jnp.float64) - w_ref_BNHM)))
+    assert err_island <= 1e-4, f"float64 island differs from the float64 reference by {err_island:.3e}"
+    assert err_f32 > 1e-4, f"float32 default path is already accurate ({err_f32:.3e}) — raise the radius"
