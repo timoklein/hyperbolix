@@ -49,7 +49,15 @@ Ungar. "A Gyrovector Space Approach to Hyperbolic Geometry." 2022.
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt, sinh
+from ..utils.math_utils import (
+    MIN_NORM,
+    cosh,
+    floor_at,
+    radial_perp_decomposition,
+    safe_hypot_norm,
+    safe_norm,
+    sinh,
+)
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from ._gyrovector_core import _gyration
@@ -250,21 +258,22 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     ``(1+β_x)/β_x · ||dπ_x(v)|| = √g_x(v, v)`` (proved by expanding both sides
     against the Riemannian metric), which avoids dividing by ||dπ_x(v)||
     — potentially tiny — and keeps the result well-defined at v = 0.
+
+    The geodesic length ``√g_x(v, v)`` comes from :func:`_tangent_norm`, i.e. from the radial/perp
+    split, not from the literal ``⟨v, v⟩ - c·β_x²·⟨x, v⟩²``: that difference loses
+    ``cosh²(a)·eps`` of relative accuracy and had the step length for a radial tangent wrong by a
+    factor of 30 at scaled radius 10 in float32 (see :func:`_tangent_norm`). Only the ``MIN_NORM``
+    floor survives from the old block, and only because ``arg`` is the divisor of ``sinh(arg)/arg``
+    below; the ``floor_at(g_vv, 0)`` and the ``safe_sqrt`` are no longer needed — the new form is a
+    sum of two squares, so it cannot round negative, and it is exactly 0 with a finite gradient at
+    ``v = 0``.
     """
     sqrt_c = jnp.sqrt(c)
     beta_x = _beta(x, c)
 
     dpi_v = _dpi_x(x, v, c)
 
-    # g_x(v, v) = ⟨v, v⟩ - c·β_x²·⟨x, v⟩²
-    xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
-    g_vv = jnp.dot(v, v, precision=MATMUL_PRECISION) - c * beta_x**2 * xv**2
-    # `safe_sqrt` + `floor_at` rather than the old `sqrt(floor_at(g_vv, 0) + MIN_NORM**2)`: the
-    # additive 1e-30 dominated any genuinely small metric norm (a form of 1e-40 came back as
-    # 1e-15), while the multiplicative floor keeps the one property `arg` actually needs — being
-    # a nonzero divisor for `sinh(arg)/arg` below. `safe_sqrt` supplies the finite (zero)
-    # derivative at g_vv = 0 that the additive term used to provide.
-    g_norm = floor_at(safe_sqrt(floor_at(g_vv, 0.0)), MIN_NORM)
+    g_norm = floor_at(_tangent_norm(v, x, c), MIN_NORM)
     arg = sqrt_c * g_norm
 
     # sinhc(arg) = sinh(arg)/arg; the safe norm guarantees arg > 0.
@@ -373,26 +382,72 @@ def _tangent_inner(
     x: Float[Array, "dim"],
     c: ScalarCurvature,
 ) -> Float[Array, ""]:
-    """Riemannian inner product ⟨u, v⟩_x (paper Eq. 1 with K = -c).
+    """Riemannian inner product ⟨u, v⟩_x (paper Eq. 1 with K = -c), free of cancellation.
 
-    g_x(u, v) = ⟨u, v⟩ - c·β_x²·⟨x, u⟩·⟨x, v⟩
+    The literal ``g_x(u, v) = ⟨u, v⟩ - c·β_x²·⟨x, u⟩·⟨x, v⟩`` subtracts two ``O(‖u‖·‖v‖)`` terms
+    that are individually as large as ``‖x‖²·β_x²`` times the answer's radial part, so at scaled
+    geodesic radius ``a`` it loses ``cosh²(a)·eps`` of relative accuracy — exactly the failure
+    ``Hyperboloid._tangent_inner`` documents, and for the same reason: PV coordinates *are* the
+    hyperboloid spatial part, with ``β_x² = 1/(1 + c‖x‖²) = 1/(c·x₀²)``.
+
+    Splitting ``u`` and ``v`` along and across ``x`` makes the metric diagonal, hence a sum of
+    products of same-signed factors. With ``x̂ = x/‖x‖``, ``radial(u) = ⟨u, x̂⟩`` and
+    ``perp(u) = u - radial(u)·x̂``, ``⟨x, u⟩ = ‖x‖·radial(u)`` gives::
+
+        g_x(u, v) = ⟨perp(u), perp(v)⟩ + radial(u)·radial(v)·(1 - c·β_x²·‖x‖²)
+                  = ⟨perp(u), perp(v)⟩ + (β_x·radial(u))·(β_x·radial(v))
+
+    using ``1 - c‖x‖²/(1 + c‖x‖²) = β_x²``. Nothing is subtracted, and ``β_x`` is applied as a
+    *division by* ``1/β_x = √(1 + c‖x‖²)`` (:func:`_beta_inv`) rather than as a squared factor, so
+    no ``‖x‖²`` is ever materialized — it overflows float32 at ``‖x‖ = 1.8e19``, geodesic radius
+    ~45, while the quantity itself stays representable. ``1/β_x ≥ 1`` always, so it needs no floor.
+
+    The one guard is the ``MIN_NORM`` floor under ``x̂`` inside
+    :func:`~hyperbolix.utils.math_utils.radial_perp_decomposition`: at ``x = 0`` it returns the
+    exact zero vector, so ``radial = 0`` and ``perp = u`` — the right limit, where the metric is
+    the Euclidean one.
+
+    Args:
+        u: Tangent vector at x, shape (dim,)
+        v: Tangent vector at x, shape (dim,)
+        x: PV point, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Riemannian inner product ⟨u, v⟩_x, scalar
     """
-    beta_x = _beta(x, c)
-    uv = jnp.dot(u, v, precision=MATMUL_PRECISION)
-    xu = jnp.dot(x, u, precision=MATMUL_PRECISION)
-    xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
-    return uv - c * beta_x**2 * xu * xv
+    radial_u, perp_u_D = radial_perp_decomposition(u, x)
+    radial_v, perp_v_D = radial_perp_decomposition(v, x)
+    beta_inv = _beta_inv(x, c)  # 1/β_x = √(1 + c‖x‖²) ≥ 1, so no floor is needed
+    return jnp.dot(perp_u_D, perp_v_D, precision=MATMUL_PRECISION) + (radial_u / beta_inv) * (radial_v / beta_inv)
 
 
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Riemannian norm ||v||_x = √g_x(v, v).
+    """Riemannian norm ``‖v‖_x = √g_x(v, v)``, computed as a hypotenuse of two non-negative legs.
 
-    ``safe_sqrt``, not a bare ``jnp.sqrt``: at ``v = 0`` the metric form is exactly 0, where
-    ``sqrt'`` is infinite and reverse-mode AD forms ``0 * inf = NaN`` for the whole row. The
-    ``floor_at(., 0.0)`` is kept for the (rounding-only) negative side of the form.
+    The radial/perp split of :func:`_tangent_inner` applied to ``v`` twice makes the metric norm
+    ``√(‖perp(v)‖² + (β_x·radial(v))²)``, which :func:`~hyperbolix.utils.math_utils.safe_hypot_norm`
+    evaluates in one reduction without materializing either square. That replaces the old
+    ``safe_sqrt(floor_at(g_x(v, v), 0))``: the form it took the root of was the literal difference,
+    whose relative error grows like ``cosh²(a)·eps`` — measured on an *exactly unit* radial tangent
+    vector at ``c = 1``, float32, it returned a norm off by 0.59 at scaled radius ``a = 8``, 3.9 at
+    9 and 30 at 10, against ≤1.4e-5 for this form.
+
+    Both of the old guards go with it. ``floor_at(., 0.0)`` clipped a form that had rounded
+    *negative*; a sum of two squares cannot. ``safe_sqrt``'s job — a finite (zero) derivative at
+    ``v = 0``, where ``sqrt'`` is infinite and reverse-mode AD forms ``0 * inf = NaN`` — is what
+    ``safe_hypot_norm``'s own double-``where`` already provides, with an exact ``0`` forward value.
+
+    Args:
+        v: Tangent vector at x, shape (dim,)
+        x: PV point, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Riemannian norm ‖v‖_x, scalar
     """
-    inner = _tangent_inner(v, v, x, c)
-    return safe_sqrt(floor_at(inner, 0.0))
+    radial, perp_D = radial_perp_decomposition(v, x)
+    return safe_hypot_norm(perp_D, radial / _beta_inv(x, c))
 
 
 def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
