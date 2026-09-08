@@ -346,6 +346,71 @@ def test_bn_degenerate_batch_variance_floor(cfg, dtype):
     assert bn.running_var[...] >= min_var
 
 
+def test_bn_hyperboloid_float32_tracks_float64_at_scaled_radius_9():
+    """Train-mode GyroBN in float32 stays accurate at scaled geodesic radius ``a = √c·d = 9``.
+
+    Accuracy, not finiteness: on the pre-fix ``_addition`` this same configuration returns a
+    perfectly finite, plausible batch of points that is 0.56 geodesic nats away from the right
+    one (and NaN on other seeds), which is invisible to every other test in this file. Both legs
+    are handed **bit-identical** inputs — the points are rounded to float32 and then widened for
+    the float64 leg — so the only difference between them is the arithmetic precision.
+
+    Where the radius bites: ``_addition(x, y)`` is the Lorentz boost ``Λ_x y``, and it is the
+    *base point* ``x`` that sets the conditioning. GyroBN calls it twice, ``(⊖mu) ⊕ x`` and
+    ``w ⊕ x_scaled``, so a far batch is not enough on its own — 32 points in random directions at
+    ``a = 9`` have their Lorentz centroid back near the origin, and even the pre-fix spelling is
+    accurate to 4e-7 on that. The learned gyro-bias is the base point that is genuinely far here:
+    ``bias`` has spatial norm ``9/√c``, so ``w = expmap_0(bias)`` sits at ``a = 9`` and the output
+    does too (measured ``a`` range 8.77 to 9.75). That is the case the ``_addition`` docstring calls
+    the hot path of every gyro-bias in the library.
+
+    Measured max geodesic error between the two legs: 7.8e-4 (bound 4e-3, ≈ 5.1x); the pre-fix
+    spelling gives 0.56. Measured max relative error of the ``bias`` gradient: 1.5e-7 (bound 1e-5,
+    ≈ 66x); the pre-fix spelling is 15% off.
+    Evidence: ``logs/2026-09-08_hyperboloid_tangent_primitives/probe_final_configs.py``.
+    """
+    c, a, D, n_points = 0.5, 9.0, 16, 32
+    hyp32, hyp64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=jnp.float64)
+    radius = a / jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))
+
+    dirs_ND = jax.random.normal(jax.random.PRNGKey(31), (n_points, D), dtype=jnp.float64)
+    dirs_ND /= jnp.linalg.norm(dirs_ND, axis=-1, keepdims=True)
+    x_NF = jax.vmap(hyp64.expmap_0, in_axes=(0, None))(hyp64.embed_spatial_0(radius * dirs_ND), c)
+    x_NF_32 = jax.vmap(hyp32.proj, in_axes=(0, None))(x_NF.astype(jnp.float32), c)
+    x_NF_64 = x_NF_32.astype(jnp.float64)  # same numbers, wider arithmetic
+
+    radii_N = jax.vmap(hyp64.dist_0, in_axes=(0, None))(x_NF_64, c) * jnp.sqrt(c)
+    assert jnp.allclose(radii_N, a, atol=1e-3), "inputs are not at the radius the test intends"
+
+    bias_D = jax.random.normal(jax.random.PRNGKey(41), (D,), dtype=jnp.float64)
+    bias_D = radius * bias_D / jnp.linalg.norm(bias_D)  # target mean point also at a = 9
+
+    def build(dtype):
+        bn = HyperboloidGyroBatchNorm(Hyperboloid(dtype=dtype), num_features=D, param_dtype=dtype)
+        bn.bias[...] = bias_D.astype(dtype)
+        bn.gamma[...] = jnp.asarray(1.3, dtype=dtype)
+        return bn
+
+    out_NF_32 = build(jnp.float32)(x_NF_32, c=c, use_running_average=False)
+    out_NF_64 = build(jnp.float64)(x_NF_64, c=c, use_running_average=False)
+    assert jnp.all(jnp.isfinite(out_NF_32))
+
+    err_N = jax.vmap(hyp64.dist, in_axes=(0, 0, None))(out_NF_32.astype(jnp.float64), out_NF_64, c)
+    assert float(jnp.max(err_N)) < 4e-3, f"float32 output is {float(jnp.max(err_N)):.3e} nats off the float64 one"
+
+    # The gradient is the quantity that failed silently: a bias that stopped receiving a correct
+    # one looks exactly like a converged bias. ``nnx.value_and_grad``, not the merged-module
+    # ``jax.value_and_grad``, which raises on the running-statistic write.
+    def loss_fn(bn, x):
+        return jnp.sum(bn(x, c=c, use_running_average=False) ** 2)
+
+    _, g32 = nnx.value_and_grad(lambda bn: loss_fn(bn, x_NF_32))(build(jnp.float32))
+    _, g64 = nnx.value_and_grad(lambda bn: loss_fn(bn, x_NF_64))(build(jnp.float64))
+    scale = jnp.max(jnp.abs(g64.bias[...]))
+    rel = float(jnp.max(jnp.abs(g32.bias[...].astype(jnp.float64) - g64.bias[...])) / scale)
+    assert rel < 1e-5, f"float32 bias gradient is {rel:.3e} relative off the float64 one"
+
+
 # ============================================================================
 # Gyro radial RMSNorm
 # ============================================================================

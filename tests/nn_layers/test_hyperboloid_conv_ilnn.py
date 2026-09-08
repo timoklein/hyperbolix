@@ -349,3 +349,105 @@ def test_depth3_stack_preserves_spatial_norm_at_init(kernel_size):
     assert norms[0] > 0.5, f"probe input is degenerate: {norms}"
     for i, (prev, cur) in enumerate(itertools.pairwise(norms), start=1):
         assert 0.1 * prev < cur < 10.0 * prev, f"layer {i} spatial-norm gain {cur / prev:.3g} out of band: {norms}"
+
+
+# --------------------------------------------------------------------------- #
+# Far-field accuracy of the gyro-bias boost
+# --------------------------------------------------------------------------- #
+FAR_C = 1.0
+FAR_A = 9.5  # scaled geodesic radius a = sqrt(c) * d_0(x)
+FAR_A_SUB = 6.5  # subdominant output channels, ~3 nats below the radius-carrying one
+
+
+def _far_pixels_KC(n, in_channels, c, a, seed):
+    """Float64 hyperboloid points at scaled radius ``a``, random directions."""
+    dir_KI = jax.random.normal(jax.random.PRNGKey(seed), (n, in_channels - 1), dtype=jnp.float64)
+    dir_KI = dir_KI / jnp.linalg.norm(dir_KI, axis=-1, keepdims=True)
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))
+    time_K1 = jnp.full((n, 1), jnp.cosh(jnp.asarray(a, dtype=jnp.float64)) / sqrt_c)
+    return jnp.concatenate([time_K1, (jnp.sinh(jnp.asarray(a, dtype=jnp.float64)) / sqrt_c) * dir_KI], axis=-1)
+
+
+def _scaled_radius(x_A, c):
+    """``a = sqrt(c)*d_0(x) = arcsinh(sqrt(c)*||x_s||)``, read off the spatial part."""
+    return jnp.arcsinh(jnp.sqrt(c) * jnp.linalg.norm(jnp.asarray(x_A, dtype=jnp.float64)[..., 1:], axis=-1))
+
+
+def _max_rel(a32, a64):
+    """Max-abs difference normalized by the max-abs of the float64 array."""
+    a32, a64 = np.asarray(a32, dtype=np.float64), np.asarray(a64, dtype=np.float64)
+    return float(np.max(np.abs(a32 - a64)) / np.max(np.abs(a64)))
+
+
+def test_gyro_bias_far_field_matches_float64():
+    """float32 ILNN with a gyro-bias tracks float64 at scaled geodesic radius a ~ 9.5.
+
+    One receptive field (image size == kernel size, VALID), every pixel at a = 9.5, so LogCat hands
+    the PLFC a point at a = 9.4 and the kernel puts the output back at a = 9.5 — the radius at which
+    the gyro-bias boost ``y <- y (+) exp_0([0, b])`` used to lose its significant bits silently.
+    The pre-2026-09-08 spelling of that boost stays finite here and is wrong by 5.3e-2 in geodesic
+    distance and 3.0e-2 relative in the parameter gradients.
+
+    Measured float32-vs-float64 error of the current spelling (float64 reference on the same
+    float32-rounded inputs and parameters): 5.4e-4 geodesic distance, 1.6e-7 relative on the
+    kernel / bias / gyro-bias gradients
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/probe_layers_far_field5.out``).
+    """
+    c, in_channels, out_channels, kernel_size = FAR_C, 5, 9, 2
+    manifold64 = Hyperboloid(dtype=jnp.float64)
+
+    # The float64 reference must see exactly the pixels the float32 layer sees.
+    pixels_KC = _far_pixels_KC(kernel_size**2, in_channels, c, FAR_A, seed=10)
+    x32_BHWC = pixels_KC.reshape(1, kernel_size, kernel_size, in_channels).astype(jnp.float32)
+    x64_BHWC = x32_BHWC.astype(jnp.float64)
+
+    # Kernel rows scaled so the sinh-lift argument sqrt(c)*v is 9.5 on channel 0 and 6.5 on the
+    # rest: at a zero bias the PLFC score is exactly linear in the row norm, so one division per
+    # row sets it. The output point then sits at a ~ 9.5 with one dominant channel.
+    logcat_A = manifold64.log_radius_concat(x64_BHWC.reshape(kernel_size**2, in_channels), c)
+    rows_OI = jax.random.normal(jax.random.PRNGKey(11), (out_channels - 1, logcat_A.shape[0] - 1), dtype=jnp.float64)
+    rows_OI = rows_OI / jnp.linalg.norm(rows_OI, axis=-1, keepdims=True)
+    score_O = jnp.arcsinh(jnp.sqrt(c) * (logcat_A[1:] @ rows_OI.T))
+    target_O = jnp.asarray([FAR_A] + [FAR_A_SUB] * (out_channels - 2), dtype=jnp.float64)
+    kernel_OI = (target_O / score_O)[:, None] * rows_OI
+
+    gyro_O = jax.random.normal(jax.random.PRNGKey(12), (out_channels - 1,), dtype=jnp.float64)
+    gyro_O = 0.2 * gyro_O / jnp.linalg.norm(gyro_O)
+
+    def run(dtype, x_BHWC):
+        layer = HypConv2DHyperboloidILNN(
+            manifold_module=Hyperboloid(dtype=dtype),
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            rngs=nnx.Rngs(0),
+            padding="VALID",
+            use_gyro_bias=True,
+            param_dtype=dtype,
+        )
+        # Round to float32 first in both runs: the float64 reference must differ from the float32
+        # layer only in compute precision, not in the parameter values it was handed.
+        layer.kernel[...] = jnp.asarray(kernel_OI, dtype=jnp.float32).astype(dtype)
+        layer.gyro_bias[...] = jnp.asarray(gyro_O, dtype=jnp.float32).astype(dtype)
+        x_BHWC = jnp.asarray(x_BHWC, dtype=dtype)
+
+        def loss_fn(model):
+            return jnp.sum(model(x_BHWC, c=c)[..., 1:])
+
+        _, grads = nnx.value_and_grad(loss_fn)(layer)
+        return layer(x_BHWC, c=c), (grads.kernel[...], grads.bias[...], grads.gyro_bias[...])
+
+    y64_BHWC, grads64 = run(jnp.float64, x64_BHWC)
+    y32_BHWC, grads32 = run(jnp.float32, x32_BHWC)
+
+    # The regime is the test: a construction that drifted back to small radius would pass vacuously.
+    a_out = _scaled_radius(y64_BHWC, c)
+    assert 9.2 < float(jnp.min(a_out)) and float(jnp.max(a_out)) < 10.2, a_out
+
+    y32_NC = manifold64.proj_batch(y32_BHWC.astype(jnp.float64), c).reshape(-1, out_channels)
+    y64_NC = manifold64.proj_batch(y64_BHWC, c).reshape(-1, out_channels)
+    dist_N = jax.vmap(manifold64.dist, in_axes=(0, 0, None))(y32_NC, y64_NC, c)
+    assert jnp.isfinite(y32_BHWC).all()
+    assert float(jnp.max(dist_N)) < 3e-3  # measured 5.4e-4; old spelling 5.3e-2
+    for g32, g64 in zip(grads32, grads64, strict=True):
+        assert _max_rel(g32, g64) < 2e-6  # measured 1.6e-7; old spelling 3.0e-2

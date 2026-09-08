@@ -1054,3 +1054,85 @@ def test_radam_second_moment_is_the_riemannian_norm_not_the_elementwise_square()
     m2_hat = (1 - beta2) * riemannian_sq / (1 - beta2)
     expected = hyperboloid.expmap(-lr * m1_hat / (jnp.sqrt(m2_hat) + eps), x0, c)
     assert jnp.allclose(x0 + updates, expected, rtol=0, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Large-radius float32 descent (bb0a170)
+#
+# The optimizers touch four hyperboloid primitives — ``egrad2rgrad``, ``expmap``/``retraction``,
+# ``ptransp`` and (RAdam) ``tangent_inner``. Each one used to form an O(1) quantity as a
+# difference of two O(cosh² a) Minkowski terms, a = √c·d₀(x), so in float32 they lose every
+# significant bit from a ≈ 8-9 and a parameter parked out there stops descending. The spellings
+# they replaced put the whole trajectory at NaN within three steps.
+# ---------------------------------------------------------------------------
+
+_LARGE_RADIUS_STEPS = 30
+_LARGE_RADIUS_LR = 1e-2
+
+
+def _hyp_point_at_scaled_radius(a: float, c: float, dim: int, dtype) -> jnp.ndarray:
+    """Ambient point at scaled geodesic radius ``a = √c·d₀`` along the all-equal direction.
+
+    The direction has all components equal so that two points built at different radii are
+    exactly collinear in the dtype under test rather than only to within an ulp per component.
+    """
+    sqrt_c = np.sqrt(c)
+    spatial = (np.sinh(a) / sqrt_c) * np.ones(dim) / np.sqrt(dim)
+    return jnp.asarray(np.concatenate([[np.cosh(a) / sqrt_c], spatial]).astype(dtype))
+
+
+def _descend_from_large_radius(tx, dtype) -> tuple[jnp.ndarray, list[float], bool]:
+    """30 steps of ``tx`` on ``d(x, target)`` from a = 10, returning (final point, losses, finite)."""
+    c, dim = 0.5, 16
+    manifold = Hyperboloid(dtype=dtype)
+    x0 = _hyp_point_at_scaled_radius(10.0, c, dim, dtype)
+    # 0.5 nats further out along the same ray: a_target = 10 + 0.5·√c.
+    target = _hyp_point_at_scaled_radius(10.0 + 0.5 * np.sqrt(c), c, dim, dtype)
+
+    param = mark_manifold_param(nnx.Param(x0), manifold=manifold, curvature=c)
+    state = tx.init(param)
+
+    def loss_fn(z):
+        return manifold.dist(z, target, c)
+
+    losses = [float(loss_fn(param[...]))]
+    finite = True
+    for _ in range(_LARGE_RADIUS_STEPS):
+        updates, state = tx.update(jax.grad(loss_fn)(param[...]), state, param)
+        param[...] = param[...] + updates  # type: ignore[operator]
+        finite = finite and bool(jnp.all(jnp.isfinite(param[...])))
+        losses.append(float(loss_fn(param[...])))
+    return param[...], losses, finite
+
+
+@pytest.mark.parametrize(
+    "make_tx",
+    [
+        lambda: riemannian_sgd(learning_rate=_LARGE_RADIUS_LR),
+        lambda: riemannian_adam(learning_rate=_LARGE_RADIUS_LR),
+    ],
+    ids=["rsgd", "radam"],
+)
+def test_float32_descent_from_scaled_radius_10_tracks_float64(make_tx) -> None:
+    """30 float32 steps from ``√c·d₀ = 10`` descend, and land where float64 lands.
+
+    The parameter starts 0.5 nats inside a fixed target on the same ray, so the loss is a pure
+    geodesic distance with a unit-norm Riemannian gradient and 30 steps at lr = 1e-2 must remove
+    0.3 of it. Finiteness is asserted but is not the point — the discriminating assertion is that
+    the float32 trajectory ends within 1e-2 geodesic of the float64 one.
+
+    Measured: the loss goes 0.500 → 0.200 in both dtypes and the final points are 3.4e-7 (RSGD) /
+    2.1e-6 (RAdam) apart — a factor 4800-29000 of margin under the bound. With the b586169
+    spellings of ``egrad2rgrad``/``expmap``/``ptransp``/``tangent_inner`` the same run is NaN
+    from step 3 (RSGD) and step 1 (RAdam), so the finiteness leg is discriminating here too.
+    """
+    c = 0.5
+    final32, losses32, finite32 = _descend_from_large_radius(make_tx(), jnp.float32)
+    final64, losses64, _ = _descend_from_large_radius(make_tx(), jnp.float64)
+
+    assert finite32, "a float32 iterate left the manifold"
+    assert losses32[0] - losses32[-1] >= 0.2, f"no descent: {losses32[0]} -> {losses32[-1]}"
+    assert losses64[0] - losses64[-1] >= 0.2, f"float64 reference did not descend either: {losses64}"
+
+    gap = float(hyperboloid.dist(jnp.asarray(np.asarray(final32), dtype=jnp.float64), final64, c))
+    assert gap <= 1e-2, f"float32 trajectory ended {gap:.3e} away from the float64 one"

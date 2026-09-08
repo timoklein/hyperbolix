@@ -893,8 +893,12 @@ def test_hyperboloid_logmap_is_tangent_relative_to_its_own_scale(dtype, rtol: fl
     ambient components of order 1e13, so a perfectly tangent vector still shows an inner product of
     order 1e10. No correct implementation passes an absolute test.
 
-    This also pins that :func:`_logmap` does *not* call ``_tangent_proj``: that helper routes
-    through the cancelling ``_minkowski_inner`` and returns NaN here from radius ~10 (float32).
+    This also pins that :func:`_logmap` does *not* call ``_tangent_proj``. Since bb0a170 that
+    helper is ``v + c⟨x, v⟩_L·x`` — finite everywhere, no longer the division by a measured
+    ``⟨x, x⟩_L`` that returned NaN from radius ~10 (float32) — but it is still the worse
+    conditioned route: its one remaining ``_minkowski_inner`` cancels, so it can only reproduce
+    the tangency already present in its input, while the frame-built vector is tangent by
+    construction.
     """
     manifold = Hyperboloid(dtype=dtype)
     tang_rtol = 3e-7 if dtype is jnp.float32 else 5e-15
@@ -1853,6 +1857,377 @@ def test_hyperboloid_ptransp_matches_the_numpy_oracle(c: float, dim: int):
     # Non-degenerate: the transport genuinely moves the vector, so "matches" is not "is the
     # identity". At these radii the correction term is of order the vector itself.
     assert np.max(np.abs(expected_BA - v_BA)) > 0.1
+
+
+# =============================================================================================
+# The boost form of ``addition`` / ``ptransp_0``, and the float32 accuracy of the rewritten
+# tangent primitives at geodesic radius 9-14 (bb0a170).
+#
+# Every one of these operations used to form an O(1) quantity as a difference of two
+# O(cosh² a) Minkowski terms, a = √c·d₀(x). In float32 that leaves no significant bits from
+# a ≈ 8-9 — but the results stay *finite* for another two or three nats, so a finiteness
+# assertion sees nothing: the failure that motivated the rewrite was a gyro-bias whose gradient
+# was 0.4 % wrong at a = 6, garbage from a = 8, and NaN only at a ≈ 10-11. Every test below
+# therefore asserts a VALUE against a float64 or numpy-longdouble reference.
+#
+# The two float64 oracles are transcribed in ``np.longdouble`` (x86 80-bit, eps 1.1e-19) from
+# the closed forms, and every operand they read is built in NumPy, so nothing upstream of the
+# reference calls the library.
+# =============================================================================================
+
+_LD = np.longdouble
+"""x86 80-bit extended: 64-bit significand, eps 1.1e-19 — three decimal digits below float64."""
+
+_BOOST_DIMS = (2, 5, 64)
+_BOOST_DIRECTION_KINDS = ("random", "parallel", "anti_parallel", "perpendicular")
+_BOOST_RADII = ((0.3, 5.0), (5.0, 2.0), (5.0, 5.0), (1.0, 1.0))
+"""``(a, b)`` scaled radii of the two operands, all ≤ 5 — the regime where float64 is exact."""
+
+
+def _boost_direction_pair(kind: str, dim: int) -> tuple[np.ndarray, np.ndarray]:
+    """Two unit spatial directions in the named relative configuration."""
+    rng = np.random.default_rng([7, dim])
+    d1 = rng.normal(size=dim)
+    d1 /= np.linalg.norm(d1)
+    if kind == "parallel":
+        return d1, d1
+    if kind == "anti_parallel":
+        return d1, -d1
+    d2 = rng.normal(size=dim)
+    if kind == "perpendicular":
+        d2 = d2 - np.dot(d2, d1) * d1
+    return d1, d2 / np.linalg.norm(d2)
+
+
+def _ld_time_slot(x_s_D: np.ndarray, c: float) -> np.longdouble:
+    """``x₀ = sqrt(1/c + ‖x_s‖²)`` in longdouble."""
+    s = np.asarray(x_s_D, dtype=_LD)
+    return np.sqrt(_LD(1.0) / _LD(c) + np.dot(s, s))
+
+
+def _ld_lorentz_boost(x_s_D: np.ndarray, y_s_D: np.ndarray, c: float) -> np.ndarray:
+    """``Λ_x y`` — the transvection carrying the origin to ``x``, applied to ``y``, in longdouble.
+
+    ``s = √c·x_s·y₀ + y_s + c·⟨x_s, y_s⟩·x_s/(1 + √c·x₀)``, time slot rebuilt from ``s``.
+    """
+    c_ld, sqrt_c = _LD(c), np.sqrt(_LD(c))
+    x_s, y_s = np.asarray(x_s_D, dtype=_LD), np.asarray(y_s_D, dtype=_LD)
+    x0, y0 = _ld_time_slot(x_s, c), _ld_time_slot(y_s, c)
+    s_D = sqrt_c * y0 * x_s + y_s + (c_ld * np.dot(x_s, y_s) / (_LD(1.0) + sqrt_c * x0)) * x_s
+    return np.concatenate([[np.sqrt(_LD(1.0) / c_ld + np.dot(s_D, s_D))], s_D])
+
+
+def _ld_boost_differential(v_s_D: np.ndarray, y_s_D: np.ndarray, c: float) -> np.ndarray:
+    """``dΛ_y`` applied to the origin-tangent ``[0, v_s]``, in longdouble.
+
+    ``vy = ⟨v_s, y_s⟩``, ``res_s = v_s + c·vy·y_s/(1 + √c·y₀)``, ``res₀ = √c·vy``.
+    """
+    c_ld, sqrt_c = _LD(c), np.sqrt(_LD(c))
+    v_s, y_s = np.asarray(v_s_D, dtype=_LD), np.asarray(y_s_D, dtype=_LD)
+    vy = np.dot(v_s, y_s)
+    res_s_D = v_s + (c_ld * vy / (_LD(1.0) + sqrt_c * _ld_time_slot(y_s, c))) * y_s
+    return np.concatenate([[sqrt_c * vy], res_s_D])
+
+
+@pytest.mark.parametrize("kind", _BOOST_DIRECTION_KINDS)
+@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
+def test_hyperboloid_addition_matches_the_longdouble_lorentz_boost(c: float, kind: str):
+    """``x ⊕ y == Λ_x y`` to 1e-12 of the largest term in the boost sum, radii ≤ 5, float64.
+
+    The comparison scale is ``max(1, ‖Λ_x y‖∞, √c·y₀·‖x_s‖∞)`` — the size of the largest *term*
+    in the sum, not of its result. For the anti-parallel equal-radius pair ``x ⊕ (⊖x)`` is the
+    origin, so O(1e4) terms cancel to O(1) and a tolerance read off the result alone would be
+    asserting a cancellation the formula is entitled to lose bits in.
+
+    Measured worst case over the grid: 2.6e-16 (random) / 1.7e-16 (parallel) / 1.6e-15
+    (anti-parallel) / 2.4e-16 (perpendicular), i.e. 625x of margin at worst. The round-trip
+    spelling this replaced (``exp_x ∘ PT_{0→x} ∘ log_0``) is 1.1e-12 / 4.8e-12 / 4.7e-12 /
+    1.1e-14 on the same rows — over the bound even in float64 on three of the four direction
+    cases, because each of its three maps forms an O(1) quantity as a difference of O(cosh² a)
+    Minkowski terms. (The perpendicular row is the one configuration where nothing cancels, and
+    it is under the bound for either spelling.)
+    """
+    manifold = Hyperboloid(dtype=F64)
+    sqrt_c = np.sqrt(c)
+    n_checked = 0
+    for dim in _BOOST_DIMS:
+        d1_D, d2_D = _boost_direction_pair(kind, dim)
+        for a, b in _BOOST_RADII:
+            x_s_D = (np.sinh(a) / sqrt_c) * d1_D
+            y_s_D = (np.sinh(b) / sqrt_c) * d2_D
+            x_A = _hyperboloid_point_from_spatial(x_s_D, c, np.float64)
+            y_A = _hyperboloid_point_from_spatial(y_s_D, c, np.float64)
+            expected_A = _ld_lorentz_boost(x_s_D, y_s_D, c)
+            term = sqrt_c * float(y_A[0]) * float(np.max(np.abs(x_s_D)))
+            scale = max(1.0, float(np.max(np.abs(expected_A))), term)
+            got_A = np.asarray(manifold.addition(x_A, y_A, c), dtype=_LD)
+            err = float(np.max(np.abs(got_A - expected_A))) / scale
+            assert err <= 1e-12, f"c={c} {kind} dim={dim} a={a} b={b}: {err:.3e}"
+            n_checked += 1
+    assert n_checked == len(_BOOST_DIMS) * len(_BOOST_RADII)
+
+
+@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
+@pytest.mark.parametrize("dim", _BOOST_DIMS)
+def test_hyperboloid_ptransp_0_matches_the_longdouble_boost_differential(c: float, dim: int):
+    """``PT_{0→y}`` is the boost differential, to 1e-12, and its output is exactly tangent.
+
+    The tangency identity ``⟨y_s, res_s⟩ = y₀·res₀`` holds *identically* for the closed form
+    (it is ``‖y_s‖² = y₀² - 1/c`` rearranged), so the second assertion pins that the result needs
+    no projection — which is what let the closing ``_tangent_proj``, and its division by the
+    measured ``⟨y, y⟩_L``, be dropped.
+
+    Measured worst case: 1.0e-15 against the oracle and 5.5e-16 on the tangency identity. The
+    spelling this replaced is 3.4e-12 against the same oracle — over the bound in float64.
+    """
+    manifold = Hyperboloid(dtype=F64)
+    sqrt_c = np.sqrt(c)
+    rng = np.random.default_rng([11, dim, round(1000 * c)])
+    for a in (0.3, 2.0, 5.0):
+        d_D = rng.normal(size=dim)
+        y_s_D = (np.sinh(a) / sqrt_c) * (d_D / np.linalg.norm(d_D))
+        v_s_D = rng.normal(size=dim)
+        y_A = _hyperboloid_point_from_spatial(y_s_D, c, np.float64)
+        v_A = jnp.asarray(np.concatenate([[0.0], v_s_D]))
+        expected_A = _ld_boost_differential(v_s_D, y_s_D, c)
+        scale = np.maximum(_LD(1.0), np.abs(expected_A))
+        got_A = np.asarray(manifold.ptransp_0(v_A, y_A, c), dtype=_LD)
+        assert float(np.max(np.abs(got_A - expected_A) / scale)) <= 1e-12, f"c={c} dim={dim} a={a}"
+
+        # ⟨y_s, res_s⟩ = y₀·res₀, relative to the size of either side.
+        lhs = float(np.dot(np.asarray(got_A[1:], dtype=np.float64), y_s_D))
+        rhs = float(y_A[0]) * float(got_A[0])
+        assert abs(lhs - rhs) <= 1e-12 * max(abs(rhs), 1.0), f"c={c} dim={dim} a={a}: not tangent"
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+@pytest.mark.parametrize("a", [0.5, 2.0, 3.0])
+def test_hyperboloid_tangent_inner_equals_the_minkowski_inner_of_tangent_vectors(c: float, a: float):
+    """``⟨u, v⟩_x == ⟨u, v⟩_L`` for tangent ``u``, ``v``, to 1e-12 of ``‖u‖_x·‖v‖_x``, float64.
+
+    ``u`` and ``v`` come from ``logmap``, so they are tangent by construction rather than by
+    projection. The reference is the ambient ``-u₀v₀ + ⟨u_s, v_s⟩`` of the *stored* float64
+    vectors, evaluated in longdouble; the scale is the Cauchy-Schwarz one, since a nearly
+    orthogonal pair has no relative accuracy of its own.
+
+    This is a value oracle for the radial/perpendicular split, not a large-radius test: at
+    ``a ≤ 3`` the ambient spelling it replaced is equally accurate (measured 1.4e-14 against
+    7.6e-14 here). The base radius is capped at 3 because the identity itself only holds for
+    *exactly* tangent vectors, and float64 ``logmap`` output is tangent only to O(eps·cosh² a) —
+    at ``a = 5`` that residue alone is 2.9e-12, above the bound, for either spelling. The
+    large-radius behaviour is pinned by
+    ::test_hyperboloid_tangent_inner_of_a_unit_radial_vector_is_one_in_float32 instead.
+    Measured worst case here: 7.6e-14, i.e. 13x of margin.
+    """
+    manifold = Hyperboloid(dtype=F64)
+    sqrt_c = np.sqrt(c)
+    for dim in _BOOST_DIMS:
+        rng = np.random.default_rng([13, dim, round(1000 * c)])
+        direction_D = rng.normal(size=dim)
+        x_A = _hyperboloid_point_from_spatial((np.sinh(a) / sqrt_c) * direction_D / np.linalg.norm(direction_D), c, np.float64)
+        targets_A = [
+            _hyperboloid_point(r, c, d_D / np.linalg.norm(d_D), np.float64)
+            for r, d_D in ((3.0, rng.normal(size=dim)), (4.0, rng.normal(size=dim)))
+        ]
+        u_A, v_A = (manifold.logmap(t_A, x_A, c) for t_A in targets_A)
+        u_ld, v_ld = np.asarray(u_A, dtype=_LD), np.asarray(v_A, dtype=_LD)
+        expected = float(-u_ld[0] * v_ld[0] + np.dot(u_ld[1:], v_ld[1:]))
+        scale = float(manifold.tangent_norm(u_A, x_A, c)) * float(manifold.tangent_norm(v_A, x_A, c))
+        got = float(manifold.tangent_inner(u_A, v_A, x_A, c))
+        assert abs(got - expected) <= 1e-12 * scale, f"c={c} dim={dim} a={a}: {got} vs {expected}"
+
+
+# ---------------------------------------------------------------------------------------------
+# float32 at geodesic radius 9-14. ``c = 0.5`` throughout, so the scaled radius √c·d and the
+# geodesic distance differ by a factor √2 and a dropped √c cannot hide.
+# ---------------------------------------------------------------------------------------------
+
+_LARGE_RADIUS_C = 0.5
+_F32_EPS = float(np.finfo(np.float32).eps)
+
+
+def _f32_pair_at(a: float, c: float, direction_D: np.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(x_f32, x_f64)`` carrying the SAME stored spatial part, at scaled radius ``a``.
+
+    Rounding the spatial part once and completing ``x₀`` from it in each dtype keeps the two
+    points the same *point*, so what the comparison measures is the operation's float32
+    arithmetic and not the rounding of its input.
+    """
+    x_s_D = np.asarray((np.sinh(a) / np.sqrt(c)) * direction_D, dtype=np.float32)
+    return (
+        _hyperboloid_point_from_spatial(x_s_D, c, np.float32),
+        _hyperboloid_point_from_spatial(x_s_D, c, np.float64),
+    )
+
+
+def _representation_floor(a: float, c: float) -> float:
+    """``eps·sinh(a)/√c`` — one float32 ulp of the ambient spatial radius at scaled radius ``a``.
+
+    No operation reading only the ambient coordinates can place a point more accurately than
+    this, so it is the natural unit for a large-radius geodesic tolerance.
+    """
+    return _F32_EPS * np.sinh(a) / np.sqrt(c)
+
+
+@pytest.mark.parametrize("a", [9.0, 10.0, 12.0])
+def test_hyperboloid_addition_is_float32_accurate_at_radius_9_to_12(a: float):
+    """``x ⊕ exp_0(b)`` at ``√c·d`` in 9-12: the point within 4 representation floors of float64,
+    and its ``jax.grad`` w.r.t. ``b`` within 1e-5 relative.
+
+    This is the gyro-bias hot path: every hyperboloid bias in the library is one ``⊕``, and a
+    bias that has stopped receiving a correct gradient looks exactly like one that has converged.
+
+    Measured (D = 64, ‖b‖ = 0.5): geodesic error 2.7e-4 / 7.6e-4 / 4.4e-3 at a = 9 / 10 / 12,
+    against a bound of 2.7e-3 / 7.4e-3 / 5.5e-2 — a factor 10-13 of margin. The gradient is
+    within 3.4e-7 relative at every radius. The round-trip spelling this replaced is
+    9.2e-2 / 1.6e-1 / 8.7e-2 in geodesic error and 0.31 / 2.0 / 0.93 in relative gradient error:
+    finite, plausible, and useless.
+    """
+    c, dim = _LARGE_RADIUS_C, 64
+    manifold32, manifold64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=F64)
+    rng = np.random.default_rng([17, dim])
+    direction_D = rng.normal(size=dim)
+    direction_D /= np.linalg.norm(direction_D)
+    b_D = rng.normal(size=dim)
+    b_D = 0.5 * b_D / np.linalg.norm(b_D)
+    w_D = rng.normal(size=dim)
+    w_D /= np.linalg.norm(w_D)
+    x32_A, x64_A = _f32_pair_at(a, c, direction_D)
+
+    def biased(b_D, manifold, x_A):
+        """``x ⊕ exp_0([0, b])`` — the gyro-bias of a hyperboloid layer."""
+        v_A = jnp.concatenate([jnp.zeros((1,), dtype=b_D.dtype), b_D])
+        return manifold.addition(x_A, manifold.expmap_0(v_A, c), c)
+
+    got_A = biased(jnp.asarray(b_D, dtype=jnp.float32), manifold32, x32_A)
+    expected_A = biased(jnp.asarray(b_D), manifold64, x64_A)
+    geodesic = float(manifold64.dist(jnp.asarray(np.asarray(got_A), dtype=F64), expected_A, c))
+    assert geodesic <= 4.0 * _representation_floor(a, c), f"a={a}: {geodesic:.3e}"
+
+    def loss(b_D, manifold, x_A, w_D):
+        return jnp.dot(biased(b_D, manifold, x_A)[1:], w_D)
+
+    grad32_D = np.asarray(
+        jax.grad(loss)(jnp.asarray(b_D, dtype=jnp.float32), manifold32, x32_A, jnp.asarray(w_D, dtype=jnp.float32)),
+        dtype=np.float64,
+    )
+    grad64_D = np.asarray(jax.grad(loss)(jnp.asarray(b_D), manifold64, x64_A, jnp.asarray(w_D)), dtype=np.float64)
+    rel = float(np.max(np.abs(grad32_D - grad64_D)) / np.max(np.abs(grad64_D)))
+    assert rel <= 1e-5, f"a={a}: gradient off by {rel:.3e}"
+
+
+@pytest.mark.parametrize("a", [9.0, 12.0])
+def test_hyperboloid_egrad2rgrad_is_float32_accurate_at_large_radius(a: float):
+    """``egrad2rgrad`` within 1e-4 relative of float64 at ``√c·d`` in {9, 12}.
+
+    The projector is ``g_L + c⟨x, g_L⟩_L·x``: on the sheet ``⟨x, x⟩_L = -1/c`` exactly, so it
+    needs no division by the measured Lorentz norm — the quantity with no significant bits left
+    past ``a ≈ 9`` in float32. Measured 3.9e-7 / 1.4e-6 (a factor 70-260 of margin); the spelling
+    this replaced, which renormalised ``x`` by that measured norm and divided by it, is 0.70 at
+    a = 9 and 1.00 at a = 12.
+    """
+    c, dim = _LARGE_RADIUS_C, 16
+    manifold32, manifold64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=F64)
+    e1_D, _ = _hyperboloid_basis(dim)
+    x32_A, x64_A = _f32_pair_at(a, c, e1_D)
+    grad_A = np.random.default_rng([19, dim]).normal(size=dim + 1)
+
+    got_A = np.asarray(manifold32.egrad2rgrad(jnp.asarray(grad_A, dtype=jnp.float32), x32_A, c), dtype=np.float64)
+    expected_A = np.asarray(manifold64.egrad2rgrad(jnp.asarray(grad_A), x64_A, c), dtype=np.float64)
+    rel = float(np.max(np.abs(got_A - expected_A)) / np.max(np.abs(expected_A)))
+    assert rel <= 1e-4, f"a={a}: {rel:.3e}"
+
+
+@pytest.mark.parametrize("a", [9.0, 12.0])
+def test_hyperboloid_tangent_inner_of_a_unit_radial_vector_is_one_in_float32(a: float):
+    """``⟨e_rad, e_rad⟩_x == 1`` in float32 at ``√c·d`` in {9, 12}, built analytically.
+
+    The tolerance carries an explicit input-resolution term. A nominally radial ambient vector
+    rounded to float32 at radius ``a`` keeps a perpendicular residue of ~``eps·√c·x₀`` (measured
+    0.0205 at a = 12, where ``eps·cosh(12) = 0.0097``), and ``tangent_inner`` adds its **square**
+    to the result — that is the chart's own resolution, not the algorithm's, so the bound is
+    ``1e-4 + 20·(eps·√c·x₀)²`` = 1.05e-4 at a = 9 and 1.98e-3 at a = 12.
+
+    Measured |value - 1|: 9.5e-7 and 4.2e-4, i.e. 110x and 4.7x of margin. The literal ambient
+    ``-u₀v₀ + ⟨u_s, v_s⟩`` this replaced returns **exactly 0** at both radii — a 100 % error, with
+    the metric silently reporting a unit vector as null.
+    """
+    c, dim = _LARGE_RADIUS_C, 16
+    manifold = Hyperboloid(dtype=jnp.float32)
+    sqrt_c = np.sqrt(c)
+    e1_D, _ = _hyperboloid_basis(dim)
+    x_A, _ = _f32_pair_at(a, c, e1_D)
+    # ⟨e_rad, e_rad⟩_L = c·(x₀² - r²) = 1 exactly, so this needs no oracle.
+    e_rad_A = -sqrt_c * np.concatenate([[np.sinh(a) / sqrt_c], (np.cosh(a) / sqrt_c) * e1_D])
+    v_A = jnp.asarray(e_rad_A.astype(np.float32))
+
+    resolution = _F32_EPS * sqrt_c * float(x_A[0])
+    got = float(manifold.tangent_inner(v_A, v_A, x_A, c))
+    assert abs(got - 1.0) <= 1e-4 + 20.0 * resolution**2, f"a={a}: {got}"
+
+
+@pytest.mark.parametrize("a", [9.0, 12.0])
+def test_hyperboloid_ptransp_preserves_the_tangent_norm_in_float32_at_large_radius(a: float):
+    """``‖PT_{x→y} v‖_y / ‖v‖_x`` within 1e-4 of 1 in float32, ``y`` one 0.05-nat step from ``x``.
+
+    ``v`` is the unit angular tangent ``[0, e2]`` (exactly tangent, since ``⟨x_s, e2⟩ = 0``) and
+    the step is angular too, so the transport is non-degenerate: it moves ``v`` by 143 (a = 9) /
+    2906 (a = 12) in ambient components. ``y`` is built by the float64 ``expmap`` and cast, so the
+    pair is a well-defined float32 pair and only the transport is under test.
+
+    Measured |ratio - 1|: 1.6e-6 at a = 9 and 2.2e-5 at a = 12 (62x / 4.5x of margin). The
+    literal ``v + ⟨v, y⟩_L/(1/c - ⟨x, y⟩_L)·(x + y)`` followed by the old ``_tangent_proj`` gives
+    9.8e-4 at a = 9 and NaN at a = 12, where that projection divided by a measured ``⟨y, y⟩_L``
+    of exactly 0.
+    """
+    c, dim = _LARGE_RADIUS_C, 16
+    manifold32, manifold64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=F64)
+    e1_D, e2_D = _hyperboloid_basis(dim)
+    x32_A, x64_A = _f32_pair_at(a, c, e1_D)
+    e_ang_A = np.concatenate([[0.0], e2_D])
+    y64_A = manifold64.expmap(jnp.asarray(0.05 * e_ang_A), x64_A, c)
+    y32_A = jnp.asarray(np.asarray(y64_A), dtype=jnp.float32)
+    v_A = jnp.asarray(e_ang_A.astype(np.float32))
+
+    transported_A = manifold32.ptransp(v_A, x32_A, y32_A, c)
+    ratio = float(manifold32.tangent_norm(transported_A, y32_A, c)) / float(manifold32.tangent_norm(v_A, x32_A, c))
+    assert abs(ratio - 1.0) <= 1e-4, f"a={a}: ratio {ratio}"
+    # Non-degenerate: a transport that returned its input would pass the ratio test trivially.
+    assert float(np.max(np.abs(np.asarray(transported_A, dtype=np.float64) - e_ang_A))) > 1.0
+
+
+@pytest.mark.parametrize("a", [9.0, 11.0, 12.0, 14.0])
+def test_hyperboloid_expmap_lands_at_the_tangent_norm_in_float32_at_large_radius(a: float):
+    """``d(x, exp_x(v)) == ‖v‖_x`` in float32 for a radial ``v`` of Riemannian length 0.1.
+
+    The geodesic length ``exp`` steps along comes from ``tangent_norm``. The literal
+    ``sqrt(⟨v, v⟩_L)`` it replaced subtracts two numbers of size ``(cosh(a)·‖v‖)²``: it returns
+    **exactly 0** here at every radius on this grid, so ``sinh(0)/0 → 1`` and the map degenerates
+    into the finite, plausible ``x + v`` — a first-order retraction wearing an exponential map's
+    name. That silent degeneracy is what this test exists to catch; the old spelling lands
+    3.7e-2 relative away from ‖v‖_x at all four radii, 37x the bound.
+
+    Both sides are read in float64 off the float32 result: the float32 ``dist`` costs 2.2e-3 of
+    its own at a = 12, and at a = 14 a 0.1-nat *angular* separation would be 1.6 float32 ulps of
+    an ambient coordinate (the step here is radial, which is the well-conditioned direction).
+    Measured: 1.1e-7 / 8.6e-7 / 6.4e-7 / 5.1e-4 at a = 9 / 11 / 12 / 14. The a = 14 row has only
+    2x of margin under the 1e-3 bound — it sits at the float32 chart's own resolution limit, and
+    is kept because a = 14 is where ``tangent_norm``'s own float32 error starts to be visible
+    (0.68 % on this vector) while the map still lands correctly.
+    """
+    c, dim = _LARGE_RADIUS_C, 16
+    manifold32, manifold64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=F64)
+    sqrt_c = np.sqrt(c)
+    e1_D, _ = _hyperboloid_basis(dim)
+    x32_A, x64_A = _f32_pair_at(a, c, e1_D)
+    e_rad_A = -sqrt_c * np.concatenate([[np.sinh(a) / sqrt_c], (np.cosh(a) / sqrt_c) * e1_D])
+    v32_A = jnp.asarray((0.1 * e_rad_A).astype(np.float32))
+    v64_A = jnp.asarray(np.asarray(v32_A, dtype=np.float64))
+
+    landed_A = jnp.asarray(np.asarray(manifold32.expmap(v32_A, x32_A, c), dtype=np.float64))
+    landing = float(manifold64.dist(x64_A, landed_A, c))
+    expected = float(manifold64.tangent_norm(v64_A, x64_A, c))
+    assert abs(landing - expected) <= 1e-3 * expected, f"a={a}: {landing} vs {expected}"
 
 
 # ---------------------------------------------------------------------------------------------
