@@ -1257,17 +1257,47 @@ _MOBIUS_ETA_RATIOS = (0.01, 0.1, 0.5, 0.9, 0.99, 1.0, 1.01, 1.1, 2.0, 10.0)
 _MOBIUS_ILL_CONDITIONED = (0.9, 0.99, 1.0, 1.01, 1.1)
 
 
+def _mobius_boundary_floor(dtype: jnp.dtype, c: float) -> float:
+    """``_boundary_floor``'s value, recomputed from the documented formula (as ``_mobius_eps_grid`` does).
+
+    ``1 - c‖x‖²`` at the ``_proj`` ceiling ``1/√c - eps**0.75``. Its **square** is the analytic
+    minimum of the Möbius denominator, and therefore the floor that denominator now carries.
+    """
+    e_mach = float(jnp.finfo(dtype).eps)
+    # `float(...)`, not the bare numpy scalar: a np.float64 is *not* weakly typed, so under
+    # `jax_enable_x64` it would promote a float32 expression it is compared against to float64 —
+    # and with it `_proj`'s ceiling, which is read from the dtype.
+    return float(2.0 * np.sqrt(c) * e_mach**0.75 - c * e_mach**1.5)
+
+
+def _mobius_denominator_reference(x_D: jnp.ndarray, y_D: jnp.ndarray, c: float) -> jnp.ndarray:
+    """``1 + 2c⟨x,y⟩ + c²‖x‖²‖y‖²`` re-derived as the implementation now spells it (``c > 0``).
+
+    The factored identity ``(1 - c·r_x·r_y)² + c·r_x·r_y·‖x̂ + ŷ‖²``, floored at
+    ``_boundary_floor²``. This replica moved with the code on 2026-09-08; before that it was the
+    literal difference floored at ``MIN_NORM``, which in float64 clamped legitimate near-boundary
+    pairs eight orders of magnitude too early.
+    """
+    r_x = jnp.maximum(jnp.sqrt(jnp.dot(x_D, x_D)), poincare_impl.MIN_NORM)
+    r_y = jnp.maximum(jnp.sqrt(jnp.dot(y_D, y_D)), poincare_impl.MIN_NORM)
+    t = c * r_x * r_y
+    w_D = x_D / r_x + y_D / r_y
+    return jnp.maximum((1 - t) ** 2 + t * jnp.sum(w_D**2), _mobius_boundary_floor(x_D.dtype, c) ** 2)
+
+
 def _addition_reference(x_D: jnp.ndarray, y_D: jnp.ndarray, c: float) -> jnp.ndarray:
-    """The pre-change ``_gyrovector_core._addition``, written out verbatim as the reference.
+    """The pre-change ``_gyrovector_core._addition`` numerator, over the current denominator.
 
     ``num = A·x + B·y`` followed by the ``_proj`` boundary clamp on the ``(dim,)`` result —
-    deliberately independent of the implementation under test.
+    deliberately independent of the implementation under test. The denominator is the factored
+    one (re-derived, not imported), so that what these tests compare is the *numerator* grouping,
+    which is what they are about.
     """
     x2 = jnp.dot(x_D, x_D)
     y2 = jnp.dot(y_D, y_D)
     xy = jnp.dot(x_D, y_D)
     num_D = (1 + 2 * c * xy + c * y2) * x_D + (1 - c * x2) * y_D
-    denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, poincare_impl.MIN_NORM)
+    denom = _mobius_denominator_reference(x_D, y_D, c)
     return poincare_impl._proj(num_D / denom, c)
 
 
@@ -1341,15 +1371,27 @@ def _mobius_eps_grid(dtype: jnp.dtype, c: float) -> tuple[float, ...]:
 
 
 def _mobius_ref_f64(x_ND: jnp.ndarray, y_ND: jnp.ndarray, c: float, max_norm: float) -> np.ndarray:
-    """float64 reference, clamped at the ceiling of the dtype under test."""
+    """float64 reference, clamped at the ceiling of the dtype under test.
+
+    The denominator is the factored form with the ``_boundary_floor²`` floor of the dtype under
+    test — this replica moved with the code on 2026-09-08. Keeping ``MIN_NORM`` here would have
+    made the reference itself wrong by up to eight orders of magnitude on the float64 rows of the
+    ``eps`` grid, where the true denominator is 1.3e-23.
+    """
     x = np.asarray(x_ND, dtype=np.float64)
     y = np.asarray(y_ND, dtype=np.float64)
     x2 = np.sum(x * x, axis=1, keepdims=True)
     y2 = np.sum(y * y, axis=1, keepdims=True)
-    xy = np.sum(x * y, axis=1, keepdims=True)
     s = x + y
     s2 = np.sum(s * s, axis=1, keepdims=True)
-    denom = np.maximum(1 + 2 * c * xy + c**2 * x2 * y2, poincare_impl.MIN_NORM)
+    r_x = np.maximum(np.sqrt(x2), poincare_impl.MIN_NORM)
+    r_y = np.maximum(np.sqrt(y2), poincare_impl.MIN_NORM)
+    t = c * r_x * r_y
+    w = x / r_x + y / r_y
+    denom = np.maximum(
+        (1.0 - t) ** 2 + t * np.sum(w * w, axis=1, keepdims=True),
+        _mobius_boundary_floor(x_ND.dtype, c) ** 2,
+    )
     out = ((1.0 - c * x2) * s + (c * s2) * x) / denom
     nrm = np.linalg.norm(out, axis=1, keepdims=True)
     return np.where(nrm > max_norm, out * (max_norm / np.maximum(nrm, 1e-300)), out)
@@ -1507,14 +1549,18 @@ def test_poincare_mobius_add_leaves_unclamped_rows_untouched(dtype: jnp.dtype, c
         pytest.skip("bit-equality across two separately compiled reduction trees is CPU-only")
 
     def unclamped(x_D, y_D):
-        """``B·(x+y) + c‖x+y‖²·x`` over ``denom`` — the documented numerator, no clamp."""
+        """``B·(x+y) + c‖x+y‖²·x`` over ``denom`` — the documented numerator, no clamp.
+
+        The denominator comes from ``_mobius_denominator`` rather than being re-derived: what this
+        test pins is that ``scale`` is a literal 1.0, and bit-equality only says that if the two
+        sides divide by the same bits. Re-deriving it here (as this replica did before 2026-09-08)
+        would pin the *spelling* of the denominator instead, which is what changed.
+        """
         x2 = jnp.dot(x_D, x_D)
-        y2 = jnp.dot(y_D, y_D)
-        xy = jnp.dot(x_D, y_D)
         s_D = x_D + y_D
         s2 = jnp.dot(s_D, s_D)
         num_D = (1 - c * x2) * s_D + (c * s2) * x_D
-        return num_D / jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, poincare_impl.MIN_NORM)
+        return num_D / poincare_impl._mobius_denominator(x_D, y_D, c, sign=1)
 
     max_norm = _mobius_max_norm(dtype, c)
     x_ND, y_ND = _mobius_random_pairs(dtype, c, seed=4242)

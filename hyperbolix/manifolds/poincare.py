@@ -71,10 +71,12 @@ from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
+    _boundary_floor,
     _conformal_factor,
     _conformal_factor_batch,
     _gyration,
     _max_norm,
+    _mobius_denominator,
     _proj,
     _proj_batch,
 )
@@ -135,8 +137,6 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
 def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Direct Möbius distance formula (fastest)."""
     sqrt_c = jnp.sqrt(c)
-    x2y2 = jnp.dot(x, x, precision=MATMUL_PRECISION) * jnp.dot(y, y, precision=MATMUL_PRECISION)
-    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
     # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
     # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
     # unreachable here. `safe_sqrt`'s double-`where` supplies the same finite (zero) derivative
@@ -144,7 +144,12 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Scala
     # This is a numerator, not a divisor, so no floor is needed: the old `+ MIN_NORM**2` was purely
     # the sqrt-gradient guard and it cost a 1e-15 floor on every genuinely small separation.
     num = safe_sqrt(jnp.sum((y - x) ** 2))
-    denom = jnp.sqrt(floor_at(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
+    # The denominator is `1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²` = `(1 - c·r_x·r_y)² + c·r_x·r_y·‖x̂ - ŷ‖²`;
+    # spelled the first way it is an O(ε²) difference of O(1) terms and float32 has no bits left
+    # for it past geodesic radius ≈ 8 (measured on a radial pair 0.1 apart at radius 10, c = 1:
+    # 2.9e-2 nats wrong as-is, 4.3e-6 factored). Same three reductions either way — `⟨x,y⟩` is
+    # traded for the chord. See `_gyrovector_core._mobius_denominator`.
+    denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1))
     xysum_norm = num / denom
     dist_c = atanh(sqrt_c * xysum_norm)
     return 2 * dist_c / sqrt_c
@@ -464,13 +469,13 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sub = _addition(-x, y, c)
-    x2y2 = jnp.dot(x, x, precision=MATMUL_PRECISION) * jnp.dot(y, y, precision=MATMUL_PRECISION)
-    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
     # `safe_sqrt`: exact 0 and exactly-zero VJP at x == y. Identical quantity and form to
     # _dist_mobius_direct's num -- keep the two consistent. No floor here: `c_norm_prod` below
     # already carries the explicit divisor floor.
     num = safe_sqrt(jnp.sum((y - x) ** 2))
-    denom = jnp.sqrt(floor_at(1 - 2 * c * xy + c**2 * x2y2, MIN_NORM))
+    # Same factored denominator as `_dist_mobius_direct` -- the two must stay consistent, since
+    # `sub_norm` is exactly that function's `xysum_norm`.
+    denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1))
     sub_norm = num / denom
     c_norm_prod = floor_at(jnp.sqrt(c) * sub_norm, MIN_NORM)
     lambda_x = _conformal_factor(x, c)
@@ -795,7 +800,12 @@ def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature
     """
     sqrt_c = jnp.sqrt(c)
     num = jnp.sum((v - sqrt_c * x) ** 2)
-    denom = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), MIN_NORM)
+    # `_boundary_floor`, not `MIN_NORM`: this is the `1 - c‖x‖²` of `_conformal_factor`, and the
+    # docstring above has always claimed the same floor. `MIN_NORM = 1e-15` sits below the analytic
+    # minimum of this quantity in both dtypes (1.3e-5 float32 / 3.6e-12 float64 at c = 1), so it
+    # never bit: a float32 point at the ball ceiling could reach the divisor with pure rounding
+    # noise and return a Busemann coordinate tens of nats too large.
+    denom = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), _boundary_floor(x, c))
     return jnp.log(num / denom) / sqrt_c
 
 
