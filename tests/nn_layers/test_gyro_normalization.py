@@ -482,6 +482,76 @@ def test_bn_hyperboloid_float32_tracks_float64_on_a_tight_cluster_at_scaled_radi
     assert rel < 1e-2, f"float32 bias gradient is {rel:.3e} relative off the float64 one"
 
 
+def test_bn_pv_float32_tracks_float64_on_a_tight_cluster_at_scaled_radius_9():
+    """The PV twin of the hyperboloid tight-cluster test above -- the centering's hard case.
+
+    PV gyroaddition *is* the spatial part of the Lorentz boost (see
+    ``ProperVelocity._addition``), so a clustered far batch puts
+    ``ProperVelocityGyroBatchNorm``'s centering in exactly the regime the hyperboloid one is in:
+    the log-Euclidean batch mean lands *among* the points, both operands sit at ``a = 9`` and the
+    result is ``O(1)``, where the boost's three ``O(e^{2a})`` terms cancel identically.
+    ``ProperVelocityGyroBatchNorm`` therefore centres with
+    :meth:`ProperVelocity.gyro_difference`.
+
+    Accuracy, not finiteness -- the ambient spelling returns a perfectly plausible batch here.
+    Both legs get **bit-identical** inputs (rounded to float32, then widened), so the only
+    difference is the arithmetic precision.
+
+    Measured on this configuration (mean pairwise separation 1.84): max geodesic error between the
+    legs 6.3e-4 on the CPU / 5.7e-4 on an A100, against a bound of 2.6e-3 (4.1x); max relative
+    error of ``∂loss/∂bias`` 4.9e-4 / 4.7e-4 against a bound of 2e-3 (4.0x)
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_new_test_measurements{,_gpu}.out``,
+    section 4). With the base class's ambient centering the same configuration gives 2.75 nats and
+    a bias gradient 6.7 relative off at ``a = 9``, and 10.9 nats / 2.9e+4 at ``a = 12``; the
+    spread batch (random directions, mean back near the origin) is 3.4e-7 either way, which is why
+    a far batch alone does not see this
+    (``step2c_pv_gyro_difference_accuracy.out``, section B).
+    """
+    c, a, D, n_points, target_sep = 0.5, 9.0, 16, 32, 1.0
+    pv64 = ProperVelocity(dtype=jnp.float64)
+
+    # theta = sqrt(2(cosh(sep) - 1))/sinh(a) is the angular spread giving that geodesic separation.
+    theta = jnp.sqrt(2.0 * (jnp.cosh(jnp.asarray(target_sep, dtype=jnp.float64)) - 1.0)) / jnp.sinh(a)
+    k_dir, k_jitter = jax.random.split(jax.random.PRNGKey(53))
+    u_D = jax.random.normal(k_dir, (D,), dtype=jnp.float64)
+    u_D /= jnp.linalg.norm(u_D)
+    w_ND = u_D[None, :] + (theta / jnp.sqrt(D)) * jax.random.normal(k_jitter, (n_points, D), dtype=jnp.float64)
+    w_ND /= jnp.linalg.norm(w_ND, axis=-1, keepdims=True)
+
+    # PV coordinates: scaled radius a means ||x|| = sinh(a)/sqrt(c).
+    x_ND = (jnp.sinh(jnp.asarray(a, dtype=jnp.float64)) / jnp.sqrt(c)) * w_ND
+    x_ND_32 = x_ND.astype(jnp.float32)
+    x_ND_64 = x_ND_32.astype(jnp.float64)  # same numbers, wider arithmetic
+
+    radii_N = jax.vmap(pv64.dist_0, in_axes=(0, None))(x_ND_64, c) * jnp.sqrt(c)
+    assert jnp.allclose(radii_N, a, atol=1e-3), "inputs are not at the radius the test intends"
+    seps_NN = jax.vmap(lambda p: jax.vmap(pv64.dist, in_axes=(0, None, None))(x_ND_64, p, c))(x_ND_64)
+    assert 1.0 < float(jnp.mean(seps_NN)) < 3.0, "the batch is not the tight cluster the test intends"
+
+    bias_D = 0.2 * jax.random.normal(jax.random.PRNGKey(61), (D,), dtype=jnp.float64)
+
+    def build(dtype):
+        bn = ProperVelocityGyroBatchNorm(ProperVelocity(dtype=dtype), num_features=D, param_dtype=dtype)
+        bn.bias[...] = bias_D.astype(dtype)
+        bn.gamma[...] = jnp.asarray(1.3, dtype=dtype)
+        return bn
+
+    out_ND_32 = build(jnp.float32)(x_ND_32, c=c, use_running_average=False)
+    out_ND_64 = build(jnp.float64)(x_ND_64, c=c, use_running_average=False)
+    assert jnp.all(jnp.isfinite(out_ND_32))
+
+    err_N = jax.vmap(pv64.dist, in_axes=(0, 0, None))(out_ND_32.astype(jnp.float64), out_ND_64, c)
+    assert float(jnp.max(err_N)) < 2.6e-3, f"float32 output is {float(jnp.max(err_N)):.3e} nats off the float64 one"
+
+    def loss_fn(bn, x):
+        return jnp.sum(bn(x, c=c, use_running_average=False) ** 2)
+
+    _, g32 = nnx.value_and_grad(lambda bn: loss_fn(bn, x_ND_32))(build(jnp.float32))
+    _, g64 = nnx.value_and_grad(lambda bn: loss_fn(bn, x_ND_64))(build(jnp.float64))
+    rel = float(jnp.max(jnp.abs(g32.bias[...].astype(jnp.float64) - g64.bias[...])) / jnp.max(jnp.abs(g64.bias[...])))
+    assert rel < 2e-3, f"float32 bias gradient is {rel:.3e} relative off the float64 one"
+
+
 # ============================================================================
 # Gyro radial RMSNorm
 # ============================================================================

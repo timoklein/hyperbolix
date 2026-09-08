@@ -291,18 +291,47 @@ class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
     centroid, so the batch mean is the closed-form **log-Euclidean** mean
     ``expmap_0(mean_i logmap_0(x_i))`` (the GyroBN reference's ``use_euclid_stats``
     mode): no iteration, fully vmap/JIT-clean.
+
+    Centering goes through :meth:`ProperVelocity.gyro_difference`, not
+    ``addition(scalar_mul(-1, mu), x)``, for exactly the reason
+    :class:`HyperboloidGyroBatchNorm` does: PV gyroaddition *is* the spatial part of the Lorentz
+    boost, so on a batch whose mean sits among its points — both operands far out, the result
+    ``O(1)`` — the same three ``O(e^{2a})`` terms cancel and the centered batch comes back finite,
+    plausible and wrong. Measured on 64 points at ``c = 0.5``, ``D = 16``, float32 against float64
+    on bit-identical inputs, by batch shape — max geodesic error of the layer output, and the max
+    relative error of ``∂loss/∂bias`` beside it::
+
+        a = 9   spread (mean separation 24.0)   ambient 3.4e-7 nats (3.9e-7)   this 3.8e-7 (1.6e-7)
+        a = 9   cluster (mean separation 1.80)  ambient 2.75  nats (6.7)       this 1.1e-3 (8.0e-4)
+        a = 12  spread (mean separation 32.4)   ambient 3.9e-7 nats (2.4e-7)   this 4.0e-7 (2.8e-7)
+        a = 12  cluster (mean separation 1.82)  ambient 10.9  nats (2.9e+4)    this 1.4e-2 (5.3e-3)
+
+    A batch spread over random directions has its log-Euclidean mean back near the origin, so the
+    centering never cancels there and the two spellings are indistinguishable; the clustered batch
+    is the case that separates them. Evidence:
+    ``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_gyro_difference_accuracy.out``,
+    section B.
+
+    The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
+    :meth:`ProperVelocity.addition`: their result is as far from the origin as their base point,
+    which is the regime the boost is good at.
     """
 
     _time_dims = 0
 
     def __init__(self, manifold_module: ProperVelocity, num_features: int, **kwargs):
-        validate_pv_manifold(manifold_module, required_methods=_GYRO_BN_METHODS)
+        validate_pv_manifold(manifold_module, required_methods=(*_GYRO_BN_METHODS, "gyro_difference"))
         super().__init__(manifold_module, num_features, **kwargs)
 
     def _batch_mean(self, x_NF: Float[Array, "N F"], c: float) -> Float[Array, "F"]:
         v_NF = jax.vmap(self.manifold.logmap_0, in_axes=(0, None))(x_NF, c)
         v_mean_F = jnp.mean(v_NF, axis=0)
         return self.manifold.expmap_0(v_mean_F, c)
+
+    def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
+        """``(⊖mu) ⊕ x`` off the polar frame — see the class docstring for why not the boost."""
+        gyro_difference = cast("ProperVelocity", self.manifold).gyro_difference
+        return jax.vmap(gyro_difference, in_axes=(None, 0, None))(mu_F, x_NF, c)
 
 
 # ======================================================================================
