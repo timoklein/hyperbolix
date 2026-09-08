@@ -192,18 +192,21 @@ limited to radius ~7-9 in float32. Radii below are the **scaled geodesic radius*
 `a = √c·d`. Measurements are 4-seed medians, float32 unless noted, from
 `logs/2026-09-08_hyperboloid_tangent_primitives/`.
 
-`tangent_norm`/`tangent_inner` are exact to `a ≈ 15` (float32) / `a ≈ 25` (float64) — one power
-of `cosh` better than the ambient chart's own point-representation floor, `eps·sinh(a)/√c`, which
-sits at `a ≈ 16.6` in float32 (measured B.iv: `|⟨v,v⟩-1|` on an exactly-unit radial tangent goes
-from 1.100e+01 as-is to 1.132e-06 fixed at `a = 10`, and the ProperVelocity twin from 8.000e+00
-to 1.132e-06). Origin-chart operations (`dist_0`, `logmap_0`, `expmap_0`) never routed through the
+`tangent_norm`/`tangent_inner` are measured cancellation-free through `a = 12`, the largest radius
+either probe reaches (measured B.iv: `|⟨v,v⟩-1|` on an exactly-unit radial tangent goes from
+1.100e+01 as-is to 1.132e-06 fixed at `a = 10`, and the ProperVelocity twin from 8.000e+00 to
+1.132e-06; measured C.iv at `a = 12`, ProperVelocity twin: `|⟨v,v⟩-1|` median 5.192e-05,
+`|‖v‖-1|` median 2.593e-05). One power of `cosh` above the ambient chart's own
+point-representation floor, `eps·sinh(a)/√c` — `a ≈ 16.6` in float32, much further in float64 —
+**predicts, but does not measure,** exactness through `a ≈ 15` (float32) / `a ≈ 25` (float64).
+Origin-chart operations (`dist_0`, `logmap_0`, `expmap_0`) never routed through the
 Minkowski inner product, so none of this applies to them; they had a different problem at the
 *small*-radius end, fixed separately and described next.
 
 **Gyro-addition and the PLFC gyro-bias.** `x ⊕ exp_0(b)` at `c = 0.5`, `‖b‖ = 0.5`
 (`probe_addition_{46abd2b,ebebd09}.out`, table A.1a): forward geodesic error 4.181e-04 → 1.366e-05
 at `a = 6`, 1.527e-02 → 9.767e-05 at `a = 8`, 6.557e-02 → 6.802e-04 at `a = 10`, 5.670e-01 →
-4.565e-03 at `a = 12`; 4 of 32 float32 seeds were non-finite as-is across the table, none are
+4.565e-03 at `a = 12`; 5 of 32 float32 seeds were non-finite as-is across the table, none are
 fixed. Gradients improve further: `d/db` relative error 7.496e-02 → 1.315e-06 at `a = 8`,
 8.467e-01 → 4.616e-07 at `a = 10`; `d/dx` 2.164e-02 → 9.752e-08 at `a = 8`, 4.752e+00 → 8.233e-08
 at `a = 12`.
@@ -211,8 +214,8 @@ at `a = 12`.
 **Transport, tangent projection, gradient conversion, and expmap.** End-to-end
 `riemannian_adam` on a `ManifoldParam`, 30 steps (`probe_optimizer_*.out`, table B.i): as-is loses
 both seeds to NaN by `a = 9` (first non-finite step between 1 and 9 of 30); fixed stays finite
-through `a = 16`, descending the expected loss ~0.29 through `a = 14` (0.290 at `a=9`, 0.291 at
-`a=12`, 0.305 at `a=14`). The parallel-transport isometry `‖PT v‖_y/‖v‖_x` (table B.ii) goes from
+through `a = 16`, descending the expected loss ~0.29 through `a = 14` (2-seed medians: 0.290 at
+`a=9`, 0.289 at `a=12`, 0.305 at `a=14`). The parallel-transport isometry `‖PT v‖_y/‖v‖_x` (table B.ii) goes from
 non-finite on 1-2 of 4 seeds from `a = 9` on (max residual 6.6e+14 at `a=10`) to finite everywhere,
 `|ratio-1|` at 1.192e-07 (`a=6`), 1.132e-06 (`a=8`), 7.557e-05 (`a=12`), 1.333e-04 (`a=14`).
 `egrad2rgrad` (table B.iii) goes from a relative error that reaches 1.0 (the whole gradient lost,
@@ -1018,16 +1021,18 @@ sit flat, and it is not the normalizer: a relative coordinate error of $2^{-24}$
 error of the same size, and a geodesic at radius $a$ amplifies that by $\sinh a$ —
 $6\text{e-}8 \cdot \sinh 12 \approx 5\text{e-}3$ is the whole $a = 12$ radial entry, i.e. the
 float32 representation floor of the *inputs*, not the aggregation. In float64 the medians run
-4.142e-14 (radial $a=6$) to 6.355e-11 (radial $a=12$), and 5.7e-16 to 7.8e-16 for every angular and
-mixed row. Cost is linear in the point count; the exact throughput numbers arrive with the cost
-tables in a later pass.
+4.142e-14 (radial $a=6$) to 6.355e-11 (radial $a=12$), and 5.7e-16 to 8.870e-16 (mixed $d=6$) for
+every angular and mixed row. Cost is linear in the point count; the exact throughput numbers arrive
+with the cost tables in a later pass.
 
 The residual's own identity is unaffected by the angular-cloud regression the pivot form hit — with
 only two points there is no third point to reintroduce that cancellation — so its measured float32
 error against float64 at $\lVert s\rVert = 10^4$ stays $\approx 2\times10^{-5}$ on the value and
-$\approx 6\times10^{-4}$ on the gradient, and the limit that remains for it is the difference
-$x - y$ itself: when two points share a direction at $\lVert s\rVert \gtrsim 10^4$, float32
-rounding swallows the subtraction before the formula sees it, and that regime needs float64.
+$\approx 6\times10^{-4}$ on the gradient (`c = 0.1`, $x \approx y$;
+`logs/2026-08-24_lorentz_minkowski_cancellation/PR_BODY.md`), and the limit that remains for it is
+the difference $x - y$ itself: when two points share a direction at $\lVert s\rVert \gtrsim 10^4$,
+float32 rounding swallows the subtraction before the formula sees it, and that regime needs
+float64.
 
 !!! note "The rest of the hyperboloid is covered too"
     `Hyperboloid.dist`'s two slots, the remaining tangent-space and two-point primitives
@@ -1243,13 +1248,16 @@ Measured (`step2c_pv_accuracy.out`, $c = 0.5$, dim 16, a radial step of true Rie
 landing point computed in float64, coordinate-axis direction): old `dist` 5.988811e-02 /
 4.382994e+00 / 1.056287e+01 at $a = 8/10/12$ (true value 0.1 in every case), new relative error
 9.54e-07 / 8.05e-07 / 4.62e-07 — inside the float32 storage floor of the same input pairs,
-9.24e-07 / 7.22e-07 / 4.92e-07. The full float32 chain (`expmap` in float32 too, so its own error
-is included) used to return 3.167524e-01 at $a = 8$ and 4.369660e+00 at $a = 10$ for a true step of
-0.1; it now returns 1.000014e-01 and 9.999371e-02.
+9.24e-07 / 7.22e-07 / 4.92e-07. This coordinate-axis direction is the favourable case: on the same
+probe's PRNGKey(3) direction, the worst new relative error over $a \in \{8, 10\}$ is 1.13e-04 at
+$a = 10$, against that pair's own storage floor of 1.41e-05. The full float32 chain (`expmap` in
+float32 too, so its own error is included) used to return 3.167524e-01 at $a = 8$ and 4.369660e+00
+at $a = 10$ for a true step of 0.1; it now returns 1.000014e-01 and 9.999371e-02.
 
 Equivalence (`step2c_pv_equivalence.out`): float64 new vs old at $a \le 3$ (random, parallel,
 antiparallel, perpendicular, coincident pairs) agree to 8.09e-14 max; against an 80-bit reference at
-$a \le 6$, new is 7.11e-15 max against old's 3.64e-11; `dist(x, x)` and `logmap(x, x)` are exactly 0
+$a \le 6$, `dist` is 7.11e-15 max against old's 3.64e-11, and `logmap` is 4.39e-14 max relative
+error and 1.26e-12 max $\lVert\mathrm{err}\rVert_x$; `dist(x, x)` and `logmap(x, x)` are exactly 0
 in both dtypes, with a finite gradient there.
 
 Callers that inherit the fix with no change of their own: `utils.helpers.compute_pairwise_distances`,
@@ -1268,8 +1276,8 @@ and proper-velocity primitives and the HoroPCA/Fréchet items), points at geodes
 forward and `nnx.value_and_grad` forward+backward. CPU is XLA:CPU on the development box; GPU is an
 A100-PCIE-40GB (device 0) with `XLA_FLAGS=--xla_gpu_autotune_level=0` and
 `XLA_PYTHON_CLIENT_PREALLOCATE=false`. A third, never-released intermediate, **key-Gram** (`900f054`,
-the `O(M²)` pairwise-Gram `lorentz_midpoint` normalizer), is in the full source summary but dropped
-from the tables below — see the note after them.
+library files identical to `4f8057a`; the `O(M²)` pairwise-Gram `lorentz_midpoint` normalizer), is in
+the full source summary but dropped from the tables below — see the note after them.
 
 `os.getloadavg()` at the start and end of each run, `(1 min, 5 min, 15 min)`:
 
@@ -1353,17 +1361,22 @@ Busemann rows names the revision that produced each column: `@b586169` in the as
 Total wall time: as-is 25.0 s, new 24.9 s.
 
 The key-Gram intermediate (`900f054`) is dropped from both tables above to keep them readable; its
-cost shows in one number alone — `GyroBatchNorm(train) fwd` measured 1343.1408 ms CPU against
-9.0924 ms as-is.
+cost shows in more than one row — CPU `GyroBatchNorm(train)
+fwd` 1343.1408 ms against 9.0924 ms as-is, CPU `GyroBatchNorm(train) fwd+bwd` 1317.4855 ms against
+13.4201 ms as-is, CPU `frechet_mean` 193.4177 ms against 73.4981 ms as-is, GPU `GyroBatchNorm(train)
+fwd` 7.9182 ms against 0.5463 ms as-is, GPU `GyroBatchNorm(train) fwd+bwd` 7.0382 ms against 0.7203
+ms as-is, and GPU `PLFC gyro-bias fwd+bwd` 2.4144 ms against 0.6084 ms as-is.
 
 Reading the tables:
 
-(a) Every consumer of the gyro-addition is about 2x faster on CPU and unchanged on GPU, and
-`GyroBatchNorm` is below as-is on both, so the key-Gram intermediate's 148x (CPU) / 14.5x (GPU)
-never reached a release (the numbers in the key-Gram column of the full source summary). The
-consumers are `PLFC gyro-bias` (CPU ratio 0.370 forward / 0.456 forward+backward, GPU 0.980 / 1.03)
-and `GyroBatchNorm(train)` (CPU 0.609 / 0.571, GPU 0.880 / 0.779), both of which route through the
-fixed polar-frame gyro-addition / `gyro_difference` instead of the boost.
+(a) Every consumer of the gyro-addition is about 2x faster on CPU and unchanged on GPU.
+`GyroBatchNorm` is 0.57–0.61x as-is on CPU; on the A100 it measured 0.78–0.88x in one run and
+0.96–0.97x on the repeat, i.e. unchanged within GPU noise — so the key-Gram intermediate's 148x
+(CPU) / 14.5x (GPU) never reached a release (the numbers in the key-Gram column of the full source
+summary). The consumers are `PLFC gyro-bias` (CPU ratio 0.370 forward / 0.456 forward+backward, GPU
+0.980 / 1.03) and `GyroBatchNorm(train)` (CPU 0.609 / 0.571, GPU 0.880 / 0.779 primary run, 0.959 /
+0.967 repeat), both of which route through the fixed polar-frame gyro-addition / `gyro_difference`
+instead of the boost.
 
 (b) The rows above 1.5x and why: attention and the `lorentz_midpoint` primitive on CPU because
 XLA:CPU materialises the variance form's `(…, N, M, D)` difference (Mflop only 1.3x for attention)
