@@ -53,9 +53,9 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 
 A common confusion: surely learnable curvature needs Riemannian optimization?
 No. The `LearnableCurvature` module stores a plain Euclidean `nnx.Param`
-that is reparameterized at call time — via `"softplus"` (default,
-`c = softplus(raw)`), `"log"` (`c = exp(raw)`, scale-invariant gradient), or
-`"identity"` (`c = raw`, an unconstrained **signed** curvature for the
+that is reparameterized at call time — via `"log"` (default,
+`c = exp(raw)`, scale-invariant gradient), `"softplus"` (`c = softplus(raw)`,
+bounded gradient near zero), or `"identity"` (`c = raw`, an unconstrained **signed** curvature for the
 `Stereographic` manifold) — to produce the curvature value. It gets a normal
 Euclidean gradient and a normal Adam update — there's nothing to project,
 nothing on a manifold.

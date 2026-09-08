@@ -103,7 +103,7 @@ distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(
 )
 ```
 
-**Learnable curvature:** Use the `LearnableCurvature` module — assign one instance per distinct curvature in your model and call it to obtain a positive (optionally clamped) value. The manifold itself stays a fixed plain Python class, which keeps it out of the NNX state pytree (safe to share the same instance across layers and inside `nnx.scan` / `nnx.fori_loop`). The default clamp `[0.1, 10.0]` matches published reference ranges; pass `c_min=None, c_max=None` to disable. Use `parameterization="log"` (MERU-style) when `c` may span orders of magnitude or for long compiled training loops; the default `"softplus"` matches van Spengler 2023.
+**Learnable curvature:** Use the `LearnableCurvature` module — assign one instance per distinct curvature in your model and call it to obtain a positive (optionally clamped) value. The manifold itself stays a fixed plain Python class, which keeps it out of the NNX state pytree (safe to share the same instance across layers and inside `nnx.scan` / `nnx.fori_loop`). The default clamp `[0.1, 10.0]` matches published reference ranges; pass `c_min=None, c_max=None` to disable. The default `parameterization="log"` (MERU-style) is scale-invariant and preferred when `c` may span orders of magnitude or for long compiled training loops; `parameterization="softplus"` gives a bounded gradient near zero instead — the reparameterization geoopt's `Stereographic`/`PoincareBall` use, and also the code default in the van Spengler et al. 2023 Poincare ResNet reference implementation (their reported curvature experiments use a fixed `c`, not this learnable scheme).
 
 ```python
 from hyperbolix import LearnableCurvature

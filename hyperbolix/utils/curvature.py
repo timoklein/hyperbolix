@@ -81,13 +81,19 @@ class LearnableCurvature(nnx.Module):
             must also satisfy ``c_min <= init_c <= c_max``.
         parameterization: Reparameterization scheme.
 
-            - ``"softplus"`` (default): ``c = softplus(raw)`` — strictly positive.
-              Gradient bounded by ``sigmoid(raw) in (0, 1)``; smooth near zero;
-              matches the van Spengler et al. 2023 Poincare ResNet convention.
-            - ``"log"``: ``c = exp(raw)`` — strictly positive. Scale-invariant
+            - ``"log"`` (default): ``c = exp(raw)`` — strictly positive. Scale-invariant
               gradient (``dc/draw = c``); preferred when ``c`` may span orders of
               magnitude or for long compiled RL training loops. Matches the
               MERU convention.
+            - ``"softplus"``: ``c = softplus(raw)`` — strictly positive. Gradient
+              bounded by ``sigmoid(raw) in (0, 1)``; smooth near zero. The
+              reparameterization itself (``raw`` = inverse-softplus of ``c``) is
+              geoopt's ``Stereographic``/``PoincareBall`` convention, and is the
+              code default (``learnable=True``) in the van Spengler et al. 2023
+              Poincare ResNet reference implementation, which builds its manifold
+              on geoopt. Note the paper's own reported curvature experiments
+              (Sec. 4.2) sweep fixed values ``c in {1, 0.1, 0.01}`` and settle on
+              ``c=0.1`` — not this learnable scheme.
             - ``"identity"``: ``c = raw`` — **signed**. Spans hyperbolic (``c>0``),
               Euclidean (``c=0``), and spherical (``c<0``) curvature for the
               :class:`~hyperbolix.manifolds.Stereographic` manifold; ``dc/draw = 1``,
@@ -155,7 +161,7 @@ class LearnableCurvature(nnx.Module):
         self,
         init_c: float = 1.0,
         *,
-        parameterization: Parameterization = "softplus",
+        parameterization: Parameterization = "log",
         c_min: float | None | _Auto = _AUTO,
         c_max: float | None | _Auto = _AUTO,
         straight_through_clamp: bool = False,

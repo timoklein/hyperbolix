@@ -101,8 +101,8 @@ optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 
 | Parameterization | Formula | Range | Gradient w.r.t. raw | When to prefer |
 |---|---|---|---|---|
-| `"softplus"` (default) | `c = softplus(raw)` | `c > 0` | `sigmoid(raw) ∈ (0, 1)` — bounded | Supervised training; van Spengler 2023 convention |
-| `"log"` | `c = exp(raw)` | `c > 0` | `c` — scale-invariant | RL/compiled loops; `c` spans orders of magnitude; MERU convention |
+| `"log"` (default) | `c = exp(raw)` | `c > 0` | `c` — scale-invariant | RL/compiled loops; `c` spans orders of magnitude; MERU convention |
+| `"softplus"` | `c = softplus(raw)` | `c > 0` | `sigmoid(raw) ∈ (0, 1)` — bounded | geoopt `Stereographic`/`PoincareBall` convention; also the code default in the van Spengler et al. 2023 Poincare ResNet reference implementation |
 | `"identity"` | `c = raw` | **signed** (`c ⋛ 0`) | `1` — crosses zero | `Stereographic` manifold: learn hyperbolic/Euclidean/spherical from data |
 
 ```python
@@ -125,10 +125,12 @@ recovered `c` (not the raw parameter), giving a hard stability guard.
 | `ProperVelocity` | Stable | Unconstrained $\mathbb{R}^n$; PV's safe-norm formulation tolerates wide ranges |
 | `Poincare` | **Often too aggressive for deep nets** | Conformal factor $\lambda = 2/(1 - c\|x\|^2)$ collapses near boundary, killing MLR signal |
 
-For Poincaré in deep networks, the **van Spengler et al. (2023)** convention
-is `init_c=0.1` with learnable per-layer curvatures (one `LearnableCurvature`
-per layer — do **not** share a single instance across layers, see the
-compiled-loops note below):
+For Poincaré in deep networks, **van Spengler et al. (2023)** report `c=0.1`
+as their best *fixed* curvature (Sec. 4.2 sweeps `c ∈ {1, 0.1, 0.01}`); their
+released code instead defaults to a *learnable* per-layer curvature via
+geoopt's softplus reparameterization. To reproduce that learnable-curvature
+setup at the same scale (one `LearnableCurvature` per layer — do **not**
+share a single instance across layers, see the compiled-loops note below):
 
 ```python
 from hyperbolix import LearnableCurvature
