@@ -203,55 +203,19 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
 def _gyro_difference(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """PV gyro-difference ``(⊖x) ⊕ y``, as the spatial part of the hyperboloid gyro-difference.
 
-    **The identity.** ``⊖x = (-1) ⊗ x = -x`` in PV, so this is mathematically
-    ``addition(scalar_mul(-1, x), y)`` — the gyrovector from ``x`` to ``y``, whose norm is
-    ``sinh(√c·d(x, y))/√c`` and whose direction is the transported log map. **That spelling is not
-    evaluated here.**
-
-    **Why the ambient spelling cancels.** :func:`_addition` is the Lorentz boost ``Λ_{⊖x} y``, a sum
-    of three terms each of size ``e^{2a}/√c`` at scaled radius ``a = √c·d(0, x)``; at ``y = x`` they
-    cancel *identically* to the origin. So the absolute error of the ambient form is
-    ``eps·cosh²(a)/√c`` regardless of how close ``y`` is to ``x``, and it is exactly the
-    near-identity regime — centering a batch on its own mean — that this operation exists for. The
-    boost is the accurate spelling for the *other* regime, ``x ⊕ exp_0(b)``, whose result is as far
-    out as its base point; :func:`_addition` therefore keeps it.
-
-    **The lift is exact.** ``pv_to_hyperboloid`` sends ``x ↦ X = (√(1/c + ‖x‖²), x)`` without
-    cancellation of its own, and it is an isometry of gyrovector spaces: the PV gyrogroup *is* the
-    spatial part of the Lorentz-boost gyrogroup (see :func:`_addition`, where the two spellings are
-    shown to agree coefficient by coefficient). Both ``⊖`` and ``⊕`` therefore commute with the
-    lift, and
+    ``⊖x = (-1) ⊗ x = -x`` in PV, so the result is mathematically identical to
+    ``addition(scalar_mul(-1, x), y)``. That ambient boost spelling can lose the small
+    difference of two far points, so it is not evaluated here. The exact isometry
+    ``x ↦ X = (√(1/c + ‖x‖²), x)`` gives
 
         (⊖x) ⊕_U y = ((⊖X) ⊕_H Y)[1:]
 
-    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._gyro_difference` evaluates the right
-    side as ``Λ_X^{-1} Y`` off the un-normalized polar frame — one radial and one perpendicular
-    term, both individually bounded, with the ``sinh θ`` scale cancelling both frame denominators
-    outright — so nothing of ``O(e^{2a})`` is ever materialised.
-
-    **Measured.** Float32 geodesic error against a float64 leg fed the *same float32 numbers*,
-    ``c = 0.5``, dim 16, ``y`` a random-direction geodesic step from ``x``, worst over 4 seeds
-    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_gyro_difference_accuracy.out``,
-    section A)::
-
-        a    step   true d   ambient    this      float32 storage floor of the pair
-        8    0.1    0.100    0.77       2.0e-4    2.5e-4
-        9    0.1    0.100    1.39       3.2e-4    6.8e-4
-        10   0.1    0.100    5.06       1.8e-3    1.9e-3
-        12   0.1    0.100    11.1       9.7e-3    1.4e-2
-
-    The floor is ``eps32·sinh(a)/√c``, one float32 ulp of the operands' own coordinates. Propagated
-    through to the result, this form's error is 0.14x to 0.54x of it across ``a ∈ {8, 9, 10, 12}``
-    and separations 0.1 to 1, i.e. limited by how the pair is stored, not by the arithmetic; the
-    ambient form's absolute error is set by ``a`` alone and is 0.75 to 11 nats on the same grid.
-
-    In float64 the two agree to 2.6e-14 relative at ``a ≤ 3`` over ``c ∈ {0.1, 0.5, 1, 3}``, dims
-    2/5/64 and five pair geometries, which pins this to a re-spelling. Against an 80-bit
-    ``np.longdouble`` boost on the same grid this form is 4.0e-15 and the ambient one 2.6e-14 at
-    ``a ≤ 3``, 2.0e-14 against 2.5e-12 at ``a ≤ 6`` — the gap is the parallel pair, where the
-    result is nearest the origin. At ``y = x`` exactly this returns the origin *bit-exactly* in
-    float64, where the boost leaves 3.3e-14 at ``a ≤ 3`` and 1.0e-11 at ``a ≤ 6``
-    (``step2c_pv_gyro_difference_equivalence.out``).
+    exactly. The lifted hyperboloid operation uses its Cartesian inverse-boost
+    expression whenever ``min(√c·‖X_s‖, √c·‖Y_s‖) <= 1`` and the stable polar
+    frame when both endpoints lie outside that chart. The Cartesian branch
+    preserves the base-point derivative at the origin; the earlier value-only
+    origin fallback erased it. PV inherits both branches and their derivatives
+    through the lift.
 
     Args:
         x: PV point, shape (dim,) — the point subtracted
@@ -475,13 +439,18 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
 
         log^PV_x(y) = log^H_X(Y)[1:]
 
-    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._logmap` builds that vector in an
-    orthonormal geodesic frame at ``X`` out of individually bounded ratios of the polar frame, never
-    from an ambient difference. Its ``r_x == 0`` branch is :func:`~hyperbolix.manifolds.hyperboloid._logmap_0`,
-    whose spatial part is exactly this module's :func:`_logmap_0`, so the PV origin keeps the value
-    and the gradient it had.
+    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._logmap` keeps the
+    stable polar-frame forward value. Its derivative rule switches to an equivalent
+    Cartesian expression whenever ``min(√c·‖X_s‖, √c·‖Y_s‖) <= 1``; above that
+    threshold it differentiates the polar frame directly. This repairs
+    the base-point derivative at the origin while leaving the forward calculation
+    unchanged. The inherited origin defect predates both the preceding
+    hyperboloid polar-frame sweep and the PV lift; the lift merely exposed the
+    lost base-point derivative in PV.
 
-    Measured at ``c = 0.5``, dim 16, on two points a true 0.1 apart along a coordinate axis, float32
+    Historical measurements of the preceding lift and forward-value repair, before
+    the Cartesian origin-derivative rule: at ``c = 0.5``, dim 16, on two points a
+    true 0.1 apart along a coordinate axis, float32
     ``‖log_x(y)‖_x``: the old spelling returned **0.0599 at a = 8**, **4.383 at a = 10** and
     **10.56 at a = 12**; this one is within **≤1.0e-6 relative** at all three, against a float32
     storage floor of 9.2e-7 (``step2c_pv_accuracy.out``). In float64 the two agree to ≤8.1e-14 in
@@ -492,7 +461,8 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     ``‖log_x(y)‖_x = d(x, y)`` now holds by construction rather than by two independent asinh
     evaluations agreeing: both read the same polar frame. Measured ≤1.3e-15 relative in float64.
 
-    **The collinear gradient.** When ``x`` and ``y`` lie on *exactly* the same ray through the
+    **Historical collinear-gradient repair.** This repair also preceded the
+    Cartesian origin-derivative rule. When ``x`` and ``y`` lie on *exactly* the same ray through the
     origin, the angular unit vector ``n̂ = normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)`` that
     :func:`~hyperbolix.manifolds.hyperboloid._logmap_direction` used to build normalized a vector
     that is zero up to rounding, so its derivative was arbitrary; multiplied by a ``sin φ`` that is
@@ -562,23 +532,25 @@ def _ptransp(
 
         PT^PV_{x→y}(v) = PT^H_{X→Y}(V)[1:]
 
-    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._ptransp` evaluates the right side in
-    the geodesic frame of :func:`~hyperbolix.manifolds.hyperboloid._polar_frame`, where the scale in
-    front of ``(X + Y)`` is a product of individually bounded factors (``tanh(θ/2)·cos φ`` and a
-    perpendicular term divided by ``cosh²(θ/2)``) rather than a ratio of two cancelling Minkowski
-    products, and where ``x`` at the origin falls back to its own exact
-    :func:`~hyperbolix.manifolds.hyperboloid._ptransp_0` through a ``where`` whose branches are both
-    finite.
+    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._ptransp` uses the
+    Cartesian closed form whenever ``min(√c·‖X_s‖, √c·‖Y_s‖) <= 1``. That branch
+    reconstructs the input tangent time from its spatial part,
+    ``V₀ = ⟨X_s,V_s⟩/X₀``, then evaluates
+    ``V + β(X + Y)`` with ``β = ⟨V,Y⟩_L/(1/c - ⟨X,Y⟩_L)``. It needs no
+    cleanup projection. When both endpoints lie outside the Cartesian chart, the
+    operation retains the stable geodesic frame. The earlier origin fallback had
+    the correct value but erased derivatives with respect to the base point.
 
-    Unlike :func:`_expmap`, the hyperboloid transport *does* read ``V₀``: its result is
-    ``V + scale·(X + Y)``, so the time slot enters the sum and dropping it would return a vector
-    that is not tangent at ``Y``. It is spelled out for that reason as well as for the lift's own
-    definition.
+    The PV wrapper constructs ``V₀`` for the exact lift. The Cartesian
+    hyperboloid branch reconstructs the same value internally from ``V_s``; the
+    polar branch uses the supplied tangent as before.
 
     :func:`_ptransp_0` is untouched: ``PT_{0→y}(v) = v + c·β_y/(1+β_y)·⟨y, v⟩·y`` never forms
     ``dπ_x`` and is a sum of two same-sign terms, so it has no cancellation to remove.
 
-    **Measured.** Float32 isometry defect ``|‖PT v‖_y/‖v‖_x - 1|`` on random-direction operands,
+    **Historical measurement.** These results cover the preceding lift and
+    polar-frame repair, before the current Cartesian origin branch. Float32
+    isometry defect ``|‖PT v‖_y/‖v‖_x - 1|`` on random-direction operands,
     ``c = 0.5``, dim 16, transport step 0.05 and 1 nat, worst over 4 seeds and both ``v``
     geometries; the transported *direction* is the angle to a float64 leg fed the same float32
     numbers, taken in the PV metric at ``y``
@@ -875,7 +847,9 @@ class ProperVelocity(ManifoldBase):
 
         Mathematically identical to ``addition(scalar_mul(-1, x), y)``; use this whenever the
         result is expected much closer to the origin than the operands (centering a batch,
-        differences of two far points). See :func:`_gyro_difference`.
+        differences of two far points). The exact hyperboloid lift uses a Cartesian
+        inverse boost when either endpoint has scaled spatial radius at most 1 and
+        the stable polar frame otherwise. See :func:`_gyro_difference`.
         """
         return _gyro_difference(self._cast(x), self._cast(y), c)
 
@@ -914,7 +888,12 @@ class ProperVelocity(ManifoldBase):
         return _expmap_0(self._cast(v), c)
 
     def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-        """Logarithmic map at x."""
+        """Logarithmic map at x through the exact hyperboloid lift.
+
+        The forward value uses the stable polar frame. Its derivative uses the
+        equivalent Cartesian rule when either endpoint has scaled spatial radius
+        at most 1, preserving the base-point derivative at the origin.
+        """
         return _logmap(self._cast(y), self._cast(x), c)
 
     def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -934,7 +913,12 @@ class ProperVelocity(ManifoldBase):
         y: Float[Array, "dim"],
         c: ScalarCurvature,
     ) -> Float[Array, "dim"]:
-        """Parallel transport v from T_x PV to T_y PV."""
+        """Parallel transport v from T_x PV to T_y PV through the exact lift.
+
+        The lifted hyperboloid transport uses its Cartesian closed form when either
+        endpoint has scaled spatial radius at most 1 and the stable polar frame
+        otherwise.
+        """
         return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
 
     def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:

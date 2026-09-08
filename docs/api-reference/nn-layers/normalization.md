@@ -35,7 +35,11 @@ above); the per-sample radial RMSNorm covers all three.
   Fréchet standard deviation, *biases* with a learned manifold point, and keeps
   running statistics for evaluation (`use_running_average`). The Hyperboloid batch
   mean is the closed-form Lorentz centroid; the PV mean is the closed-form
-  log-Euclidean mean. Use for faithful hyperbolic ResNets.
+  log-Euclidean mean. Both center with `gyro_difference`: the Hyperboloid operation
+  uses a Cartesian inverse boost when either endpoint has scaled spatial radius at
+  most 1 and the stable polar frame otherwise, while the PV operation inherits both
+  branches through its exact Hyperboloid lift. This also preserves derivatives with
+  respect to an origin mean. Use for faithful hyperbolic ResNets.
 - **Gyro radial RMSNorm** (`HyperboloidGyroRMSNorm`, `ProperVelocityGyroRMSNorm`,
   `PoincareGyroRMSNorm`) — a *per-sample*, batch-independent normalizer (no running
   statistics, identical in train and eval, valid at batch size 1 — the properties RL

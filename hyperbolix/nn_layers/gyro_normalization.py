@@ -244,27 +244,18 @@ class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
     (HELM, Chen et al. 2024) via :func:`lorentz_midpoint` — exact and JIT-friendly,
     matching the estimator the ILNN GyroBN reference uses in practice.
 
-    Centering goes through :meth:`Hyperboloid.gyro_difference`, not
-    ``addition(scalar_mul(-1, mu), x)``: on a tightly clustered batch the mean sits among
-    the points, so both operands of the centering are far out while the result is ``O(1)``,
-    the ambient boost's three ``O(e^{2a})`` terms cancel, and the centered batch comes back
-    finite, plausible and wrong. Measured on 32 points at scaled radius ``a = 9``,
-    ``c = 0.5``, ``D = 16``, float32 against float64 on bit-identical inputs — max geodesic
-    error of the layer output, by mean pairwise separation of the batch::
-
-        separation   1.80    0.56
-        ambient      2.14    5.22    nats  (bias gradient 2.1 / 28 relative)
-        this         9.0e-4  4.0e-3  nats  (bias gradient 1.3e-3 / 4.1e-3 relative)
-
-    The spread-out far batch of ``tests/nn_layers/test_gyro_normalization.py``'s
-    ``..._at_scaled_radius_9`` does not see this: 32 points in random directions at ``a = 9``
-    have their Lorentz centroid back near the origin, so the centering never cancels there.
-    ``..._on_a_tight_cluster_at_scaled_radius_9`` is the case that does.
+    Centering uses :meth:`Hyperboloid.gyro_difference`. The general spelling
+    ``addition(scalar_mul(-1, mu), x)`` is an ambient Lorentz boost whose large
+    terms cancel when a far-away mean lies close to its batch points. The dedicated
+    difference uses a Cartesian inverse boost when either endpoint has scaled
+    spatial radius at most 1, including the origin, and the stable polar frame when
+    both endpoints lie outside that chart. The Cartesian branch preserves the
+    derivative with respect to an origin mean; the earlier value-only origin
+    fallback did not.
 
     The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
     :meth:`Hyperboloid.addition`: their base point is the learned bias and their result is
-    genuinely far from the origin, which is the regime the boost is good at. Evidence:
-    ``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_gyro_bn_centering.out``.
+    generally far from the origin, where the boost is well conditioned.
     """
 
     _time_dims = 1
@@ -279,7 +270,7 @@ class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
         return lorentz_midpoint(x_NF, weights_1N, c)[0]
 
     def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
-        """``(⊖mu) ⊕ x`` off the polar frame — see the class docstring for why not the boost."""
+        """Center with the dedicated Cartesian/polar gyro-difference."""
         gyro_difference = cast("Hyperboloid", self.manifold).gyro_difference
         return jax.vmap(gyro_difference, in_axes=(None, 0, None))(mu_F, x_NF, c)
 
@@ -292,25 +283,13 @@ class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
     ``expmap_0(mean_i logmap_0(x_i))`` (the GyroBN reference's ``use_euclid_stats``
     mode): no iteration, fully vmap/JIT-clean.
 
-    Centering goes through :meth:`ProperVelocity.gyro_difference`, not
-    ``addition(scalar_mul(-1, mu), x)``, for exactly the reason
-    :class:`HyperboloidGyroBatchNorm` does: PV gyroaddition *is* the spatial part of the Lorentz
-    boost, so on a batch whose mean sits among its points — both operands far out, the result
-    ``O(1)`` — the same three ``O(e^{2a})`` terms cancel and the centered batch comes back finite,
-    plausible and wrong. Measured on 64 points at ``c = 0.5``, ``D = 16``, float32 against float64
-    on bit-identical inputs, by batch shape — max geodesic error of the layer output, and the max
-    relative error of ``∂loss/∂bias`` beside it::
-
-        a = 9   spread (mean separation 24.0)   ambient 3.4e-7 nats (3.9e-7)   this 3.8e-7 (1.6e-7)
-        a = 9   cluster (mean separation 1.80)  ambient 2.75  nats (6.7)       this 1.1e-3 (8.0e-4)
-        a = 12  spread (mean separation 32.4)   ambient 3.9e-7 nats (2.4e-7)   this 4.0e-7 (2.8e-7)
-        a = 12  cluster (mean separation 1.82)  ambient 10.9  nats (2.9e+4)    this 1.4e-2 (5.3e-3)
-
-    A batch spread over random directions has its log-Euclidean mean back near the origin, so the
-    centering never cancels there and the two spellings are indistinguishable; the clustered batch
-    is the case that separates them. Evidence:
-    ``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_gyro_difference_accuracy.out``,
-    section B.
+    Centering uses :meth:`ProperVelocity.gyro_difference`. PV gyroaddition is the
+    spatial part of a Lorentz boost, so the general inverse-addition spelling can
+    lose the small difference between a far-away mean and a nearby batch point.
+    The dedicated PV operation lifts both points exactly to the hyperboloid. It
+    inherits the Cartesian inverse-boost branch when either endpoint has scaled
+    spatial radius at most 1 and the stable polar frame otherwise, including the
+    repaired derivative with respect to an origin mean.
 
     The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
     :meth:`ProperVelocity.addition`: their result is as far from the origin as their base point,
@@ -329,7 +308,7 @@ class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
         return self.manifold.expmap_0(v_mean_F, c)
 
     def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
-        """``(⊖mu) ⊕ x`` off the polar frame — see the class docstring for why not the boost."""
+        """Center through PV's exact lift to the Cartesian/polar gyro-difference."""
         gyro_difference = cast("ProperVelocity", self.manifold).gyro_difference
         return jax.vmap(gyro_difference, in_axes=(None, 0, None))(mu_F, x_NF, c)
 
