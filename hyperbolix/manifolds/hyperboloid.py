@@ -314,7 +314,8 @@ def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: S
 
         s = √c·x_s·y₀ + y_s + c·⟨x_s, y_s⟩·x_s/(1 + gamma)
 
-    and the time slot is rebuilt from ``s`` by :func:`_proj`. Every term is read off the spatial
+    and the time slot is rebuilt from ``s`` by :func:`_time_slot`, the same
+    ``sqrt(1/c + ‖s‖²)`` reduction :func:`_proj` performs. Every term is read off the spatial
     parts and the (positive) time coordinates; the one divisor ``1 + gamma ≥ 2`` is a sum of
     positives. The round-trip spelling instead chained three maps that each formed an ``O(1)``
     quantity as a difference of ``O(cosh² a)`` Minkowski terms, so its float32 accuracy collapsed
@@ -328,6 +329,24 @@ def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: S
     its ``jax.grad`` w.r.t. ``b`` is within 1.4e-7 relative, where the previous spelling's gradient
     was off by 0.53 at ``a = 8`` and 1.9 at ``a = 10``.
     (``logs/2026-09-08_hyperboloid_tangent_primitives/step1_equivalence.out``.)
+
+    Calling :func:`_time_slot` directly rather than ``_proj(concatenate([0, s]))`` is a spelling
+    choice with a measured GPU cost behind it, not a tidy-up. Under ``vmap`` + reverse-mode the
+    dummy zero slot leaves a ``pad``/``slice`` pair in the backward, and with it XLA:GPU schedules
+    the *shared* operand's cotangent — ``∂L/∂y₀``, a full sum over a ``(B, D)`` tensor — as a
+    batch-axis **column** reduction ``f32[4096,64] -> f32[64]``, then makes that reduction the root
+    of the multi-output fusion that also emits the seven ``(B, D)`` cotangents of the layer around
+    it. XLA's column-reduction emitter tiles that whole fusion, and the one kernel costs 1770 µs
+    against 88 µs for the same fusion rooted in a row reduction. Without the round trip the root is
+    the ``f32[512]`` first stage of a flat sum and the kernel is fast again. Measured on an A100
+    (jax 0.9.1, float32, ``c = 0.5``, ``B = 4096``, ``D = 64``, radius ~3) on
+    ``HypLinearHyperboloidPLFC(65, 65, use_gyro_bias=True)`` forward+backward: 2.41 ms -> 0.58 ms,
+    against 0.61 ms for the pre-boost round-trip spelling; the forward is unchanged at ~0.21 ms.
+    Bit-identical output and bit-identical ``∂L/∂gyro_bias`` (max relative deviation 0.0 on both),
+    so nothing numerical rides on it. Evidence (the ``logs/`` tree is gitignored and local):
+    ``logs/2026-09-08_hyperboloid_tangent_primitives/diag_plfc_ablations2_900f054.out`` (the
+    spelling battery), ``diag_plfc_kernels_{900f054,b586169}.out`` (the per-kernel profile that
+    attributes the cost) and ``diag_plfc_gpu_{900f054,b586169}.out``.
 
     Args:
         x: Hyperboloid point, shape (dim+1,)
@@ -348,8 +367,13 @@ def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: S
     xy = jnp.dot(x_s_D, y_s_D, precision=MATMUL_PRECISION)
     # 1 + gamma ≥ 2 on the upper sheet — a sum of positives, so no floor.
     res_s_D = sqrt_c * y[0] * x_s_D + y_s_D + (c * xy / (1.0 + gamma)) * x_s_D
-    # Time slot from the spatial part, the file's standard reconstruction; `_proj` ignores slot 0.
-    return _proj(jnp.concatenate([jnp.zeros((1,), dtype=x.dtype), res_s_D]), c)
+    # Time slot from the spatial part: `_time_slot` is exactly the reduction `_proj` performs,
+    # called on `res_s_D` directly instead of through `_proj(concatenate([0, res_s_D]))`. Same two
+    # ops, bit-identical value and gradient — `_proj` slices the dummy slot-0 zero straight back
+    # off — minus a dead `concatenate`/`slice` round trip. See the GPU note below for why the
+    # round trip was not free.
+    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    return jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
 
 
 def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
