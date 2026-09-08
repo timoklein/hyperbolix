@@ -1256,6 +1256,134 @@ Callers that inherit the fix with no change of their own: `utils.helpers.compute
 `decomposition/frechet.py`, `nn_layers/poincare_batchnorm.py` (when built with a PV manifold), and
 `manifolds/product.py`.
 
+## Cost of the Cancellation-Free Spellings {#numerics-cost}
+
+Step 5c performance probe (`logs/2026-09-08_hyperboloid_tangent_primitives/`): two revisions of the
+library — **as-is** `b586169` ("update learnable curvature") and **new** `5b756df` ("Un-normalized
+geodesic frame: fix the collinear log-map gradient") — measured end to end with the same script at
+each revision. AOT-compiled executables (`compiled = jax.jit(f).lower(*args).compile()`, timing
+`compiled(*args)` directly rather than the `jax.jit` wrapper, so no per-call cache lookup is in the
+number), float32, batch 4096, $c = 0.5$ for every hyperboloid workload ($c = 1.0$ for the Poincaré
+and proper-velocity primitives and the HoroPCA/Fréchet items), points at geodesic radius $\approx 3$,
+forward and `nnx.value_and_grad` forward+backward. CPU is XLA:CPU on the development box; GPU is an
+A100-PCIE-40GB (device 0) with `XLA_FLAGS=--xla_gpu_autotune_level=0` and
+`XLA_PYTHON_CLIENT_PREALLOCATE=false`. A third, never-released intermediate, **key-Gram** (`900f054`,
+the `O(M²)` pairwise-Gram `lorentz_midpoint` normalizer), is in the full source summary but dropped
+from the tables below — see the note after them.
+
+`os.getloadavg()` at the start and end of each run, `(1 min, 5 min, 15 min)`:
+
+| run | `.out` | start | end |
+|---|---|---|---|
+| CPU new | `probe_cost_5b756df.out` | (3.5, 5.3369140625, 4.45849609375) | (3.52783203125, 5.111328125, 4.42431640625) |
+| CPU as-is | `probe_cost_b586169.out` | (4.048828125, 4.35009765625, 7.4306640625) | (4.77294921875, 4.44970703125, 7.34765625) |
+| GPU new | `probe_cost_gpu_5b756df.out` | (2.46044921875, 4.73193359375, 4.31640625) | (2.041015625, 4.4482421875, 4.232421875) |
+| GPU as-is | `probe_cost_gpu_b586169.out` | (3.013671875, 4.037109375, 7.025390625) | (2.45654296875, 3.82373046875, 6.875) |
+| GPU new (repeat) | `probe_cost_gpu_5b756df_rep2.out` | (1.87744140625, 4.3740234375, 4.20947265625) | (1.64501953125, 4.11865234375, 4.12841796875) |
+
+Two forward passes that compile to byte-identical optimized HLO at `b586169` and the never-released
+`900f054` — `HypLinearPoincarePP` and `HypRegressionPoincarePP` — calibrate the noise floor of the
+CPU table: about ±6% on a workload known to be unchanged.
+
+### CPU
+
+`probe_cost_b586169.out` (as-is) vs `probe_cost_5b756df.out` (new).
+
+| workload | as-is fusions | as-is Mflop | as-is ms | new fusions | new Mflop | new ms | ratio |
+|---|---|---|---|---|---|---|---|
+| PLFC gyro-bias fwd | 48 | 56.010 | 6.2048 | 24 | 44.359 | 2.2965 | 0.370 |
+| PLFC gyro-bias fwd+bwd | 156 | 148.578 | 13.8245 | 89 | 120.035 | 6.3049 | 0.456 |
+| GyroBatchNorm(train) fwd | 117 | 24.514 | 9.0924 | 86 | 21.088 | 5.5412 | 0.609 |
+| GyroBatchNorm(train) fwd+bwd | 231 | 53.586 | 13.4201 | 141 | 33.451 | 7.6611 | 0.571 |
+| HyperboloidGyroRMSNorm fwd | 16 | 5.087 | 2.2426 | 16 | 5.087 | 2.2973 | 1.02 |
+| HyperboloidGyroRMSNorm fwd+bwd | 40 | 13.550 | 3.5352 | 40 | 13.550 | 3.5132 | 0.994 |
+| HyperbolicFullAttention fwd | 72 | 322.554 | 12.0482 | 86 | 426.546 | 89.9417 | 7.47 |
+| HyperbolicFullAttention fwd+bwd | 208 | 863.546 | 31.1128 | 259 | 1118.311 | 139.1628 | 4.47 |
+| LorentzResidual fwd | 8 | 2.421 | 0.8921 | 21 | 6.599 | 2.0828 | 2.33 |
+| LorentzResidual fwd+bwd | 29 | 5.165 | 1.7535 | 49 | 10.084 | 3.0969 | 1.77 |
+| Busemann head fwd | 10 | 140.630 | 2.1609 | 22 | 208.480 | 98.2874 | 45.5 |
+| Busemann head fwd+bwd | 26 | 286.534 | 4.4315 | 41 | 419.794 | 131.7908 | 29.7 |
+| riemannian_adam one step | 88 | 54.010 | 21.2513 | 117 | 76.014 | 21.7737 | 1.02 |
+| Poincare.dist (vmap) | 4 | 4.997 | 5.2551 | 8 | 7.258 | 2.1213 | 0.404 |
+| Poincare.addition (vmap) | 5 | 8.872 | 4.5814 | 10 | 10.756 | 5.3327 | 1.16 |
+| Poincare.logmap (vmap) | 10 | 14.983 | 8.5312 | 19 | 19.079 | 7.9924 | 0.937 |
+| HypLinearPoincarePP fwd | 28 | 49.678 | 3.4088 | 28 | 49.678 | 3.3689 | 0.988 |
+| HypRegressionPoincarePP fwd | 15 | 38.326 | 1.3978 | 15 | 38.326 | 1.3604 | 0.973 |
+| PoincareGyroRMSNorm fwd | 16 | 3.592 | 1.0773 | 16 | 3.592 | 1.0963 | 1.02 |
+| PoincareGyroRMSNorm fwd+bwd | 41 | 9.597 | 2.1686 | 41 | 9.597 | 2.2260 | 1.03 |
+| HypLinearPV fwd | 17 | 41.578 | 1.3097 | 17 | 41.578 | 1.2538 | 0.957 |
+| ProperVelocity.expmap (vmap) | 17 | 21.340 | 5.8779 | 29 | 28.467 | 6.7439 | 1.15 |
+| horo_projection (vmap, K=3) | 52 | 18.630 | 5.8367 | 66 | 22.894 | 7.2006 | 1.23 |
+| frechet_mean (max_iters=100) | 82 | 3.650 | 73.4981 | 75 | 3.007 | 52.3895 | 0.713 |
+| prim Hyperboloid.addition fwd | 24 | 17.539 | 9.4171 | 7 | 4.235 | 2.7026 | 0.287 |
+| prim Hyperboloid.addition value_and_grad(both) | 81 | 64.700 | 17.3033 | 15 | 13.836 | 3.4826 | 0.201 |
+| prim Hyperboloid.tangent_proj | 7 | 4.850 | 5.8666 | 3 | 2.146 | 2.0845 | 0.355 |
+| prim Hyperboloid.egrad2rgrad | 9 | 4.882 | 5.9710 | 5 | 2.179 | 2.5501 | 0.427 |
+| prim Hyperboloid.ptransp_0 | 10 | 7.561 | 7.9804 | 4 | 2.138 | 1.7538 | 0.220 |
+| prim Hyperboloid.expmap | 8 | 5.767 | 2.8512 | 21 | 13.509 | 4.9346 | 1.73 |
+| prim Hyperboloid.tangent_inner | 3 | 1.073 | 1.9195 | 11 | 8.618 | 6.7360 | 3.51 |
+| prim Hyperboloid.ptransp | 11 | 8.626 | 9.7918 | 37 | 26.763 | 8.8648 | 0.905 |
+| prim lorentz_midpoint | 14 | 281.261 | 3.9228 | 21 | 487.023 | 111.3655 | 28.4 |
+
+Total wall time: as-is 35.2 s, new 45.4 s.
+
+### GPU (A100-PCIE-40GB, device 0)
+
+`probe_cost_gpu_b586169.out` (as-is) vs `probe_cost_gpu_5b756df.out` (new). The `@REV` marker in the
+Busemann rows names the revision that produced each column: `@b586169` in the as-is columns,
+`@5b756df` in the new.
+
+| workload | as-is fusions | as-is Mflop | as-is ms | new fusions | new Mflop | new ms | ratio |
+|---|---|---|---|---|---|---|---|
+| (a) library `_busemann_score` @REV K=256 fwd | 5 | 5.885 | 0.1976 | 9 | 207.867 | 0.4121 | 2.09 |
+| (a) library `_busemann_score` @REV K=256 fwd+bwd | 11 | 20.501 | 0.3418 | 19 | 626.689 | 0.8373 | 2.45 |
+| (b) float64-island GEMM K=256 fwd | 5 | 7.434 | 0.1816 | 5 | 7.434 | 0.2526 | 1.39 |
+| (b) float64-island GEMM K=256 fwd+bwd | 13 | 19.203 | 0.3693 | 13 | 19.203 | 0.3451 | 0.934 |
+| (a) library `_busemann_score` @REV K=1000 fwd | 6 | 21.465 | 0.2595 | 9 | 802.458 | 1.0685 | 4.12 |
+| (a) library `_busemann_score` @REV K=1000 fwd+bwd | 11 | 76.238 | 0.5406 | 19 | 2416.393 | 2.3974 | 4.43 |
+| (b) float64-island GEMM K=1000 fwd | 5 | 25.908 | 0.3267 | 5 | 25.908 | 0.2895 | 0.886 |
+| (b) float64-island GEMM K=1000 fwd+bwd | 13 | 65.477 | 0.7621 | 13 | 65.477 | 0.6421 | 0.843 |
+| PLFC gyro-bias fwd | 17 | 16.587 | 0.2561 | 8 | 7.653 | 0.2510 | 0.980 |
+| PLFC gyro-bias fwd+bwd | 41 | 70.943 | 0.6084 | 29 | 30.104 | 0.6258 | 1.03 |
+| HyperbolicFullAttention fwd | 44 | 119.604 | 0.6080 | 46 | 225.923 | 0.9836 | 1.62 |
+| HyperbolicFullAttention fwd+bwd | 100 | 252.674 | 1.4532 | 111 | 576.520 | 2.1561 | 1.48 |
+| GyroBatchNorm(train) fwd | 47 | 34.770 | 0.5463 | 35 | 23.865 | 0.4806 | 0.880 |
+| GyroBatchNorm(train) fwd+bwd | 76 | 59.214 | 0.7203 | 53 | 38.095 | 0.5613 | 0.779 |
+
+Total wall time: as-is 25.0 s, new 24.9 s.
+
+The key-Gram intermediate (`900f054`) is dropped from both tables above to keep them readable; its
+cost shows in one number alone — `GyroBatchNorm(train) fwd` measured 1343.1408 ms CPU against
+9.0924 ms as-is.
+
+Reading the tables:
+
+(a) Every consumer of the gyro-addition is about 2x faster on CPU and unchanged on GPU, and
+`GyroBatchNorm` is below as-is on both, so the key-Gram intermediate's 148x (CPU) / 14.5x (GPU)
+never reached a release (the numbers in the key-Gram column of the full source summary). The
+consumers are `PLFC gyro-bias` (CPU ratio 0.370 forward / 0.456 forward+backward, GPU 0.980 / 1.03)
+and `GyroBatchNorm(train)` (CPU 0.609 / 0.571, GPU 0.880 / 0.779), both of which route through the
+fixed polar-frame gyro-addition / `gyro_difference` instead of the boost.
+
+(b) The rows above 1.5x and why: attention and the `lorentz_midpoint` primitive on CPU because
+XLA:CPU materialises the variance form's `(…, N, M, D)` difference (Mflop only 1.3x for attention)
+while XLA:GPU fuses it (attention 1.62x / 1.48x on the A100), `LorentzResidual` on CPU for its
+pairwise polar frame, the Busemann head (CPU streaming of the exact broadcast-reduce; 2.1–4.4x on
+the A100 at 0.41–2.40 ms absolute, the decided trade), `prim Hyperboloid.expmap` and `tangent_inner`
+(three reductions instead of one; only the Riemannian optimizer's second moment and `frechet_mean`
+call them, and the optimizer step is 1.02x). Those two primitives are individually 1.73x and 3.51x
+slower on CPU in isolation, but `frechet_mean` — their other call site — comes out at 0.713x, faster
+overall, since the primitive call is a small fraction of its 100 iterations.
+
+(c) GPU repeatability from the repeat run `probe_cost_gpu_5b756df_rep2.out`: worst 39.4% on the
+float64-island GEMM K=1000 fwd row, 24.1% on `GyroBatchNorm` fwd+bwd, so GPU ratios inside ±1.3x are
+noise. That noise band is wider than the CPU table's ±6% identity-row floor, so a GPU ratio needs a
+bigger gap from 1x before it means anything.
+
+The Busemann float64-island GEMM rows — (b) in the GPU table above — are the documented float64-island
+recipe from [Busemann Coordinates at Large Radius](#busemann-large-radius), not a shipped library
+option.
+
 ## Version Parameters
 
 ### Purpose
