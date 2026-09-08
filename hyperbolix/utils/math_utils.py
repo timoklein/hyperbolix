@@ -12,6 +12,8 @@ import jax.numpy as jnp
 from jax.typing import ArrayLike
 from jaxtyping import Array, Float
 
+from .precision import MATMUL_PRECISION
+
 
 def _jit[**P, R](fun: Callable[P, R], **jit_kwargs) -> Callable[P, R]:
     """``jax.jit`` with the wrapped function's declared return type kept intact.
@@ -494,6 +496,51 @@ def safe_normalize(v: Float[Array, "... n"]) -> Float[Array, "... n"]:
     sq = jnp.sum(scaled**2, axis=-1, keepdims=True)
     sq_safe = jnp.where(is_zero, jnp.ones_like(sq), sq)
     return jnp.where(is_zero, jnp.zeros_like(v), scaled / jnp.sqrt(sq_safe))
+
+
+@_jit
+def radial_perp_decomposition(
+    v_s_BD: Float[Array, "... n"], x_s_BD: Float[Array, "... n"]
+) -> tuple[Float[Array, "..."], Float[Array, "... n"]]:
+    """Split ``v_s`` into the component along ``x_s`` and the remainder orthogonal to it.
+
+    Dimension key:
+        B: leading (batch) axes, any number including none    D: spatial dim (the reduced axis)
+
+    With ``x̂ = x_s/‖x_s‖``::
+
+        radial = ⟨v_s, x̂⟩            perp = v_s - radial·x̂
+
+    This is the one decomposition every cancellation-free hyperboloid tangent formula is written
+    in. On the upper sheet a tangent vector's time slot is determined by its radial part alone
+    (``v₀·x₀ = ⟨v_s, x_s⟩``), so once ``v_s`` is split this way every Minkowski quadratic form
+    becomes a sum of non-negative terms — the radial and the perpendicular contribution — instead
+    of the difference of two ``O(cosh² a)`` numbers that loses float32 at geodesic radius ~9. Its
+    callers are ``Hyperboloid``'s ``tangent_norm`` / ``tangent_inner`` / ``ptransp``, the Lorentz
+    midpoint and the proper-velocity metric.
+
+    Operates on the **last** axis and broadcasts over leading axes, so batched callers need no
+    ``vmap``. The reduction is pinned to :data:`~hyperbolix.utils.precision.MATMUL_PRECISION`, like
+    every other dot product that computes geometry.
+
+    ``x_s = 0`` (the base point at the origin, where no radial direction exists) is handled by the
+    same ``floor_at(‖x_s‖, MIN_NORM)`` guard the hyperboloid's ``tangent_norm`` has always used:
+    ``x̂`` is then the exact zero vector, giving ``radial = 0`` and ``perp = v_s``, which is the
+    right limit — at the origin the whole of ``v_s`` is "perpendicular" and the radial term of the
+    metric drops out. The floor is on the divisor only; ``safe_norm`` itself returns an exact 0
+    with an exactly-zero VJP there, so nothing differentiates through a ``0/0``.
+
+    Args:
+        v_s_BD: Spatial vector(s) to decompose, reduced over the last axis
+        x_s_BD: Spatial part of the base point, broadcast against ``v_s_BD``
+
+    Returns:
+        ``(radial, perp)`` with shapes ``v_s_BD.shape[:-1]`` and ``v_s_BD.shape``
+    """
+    x_hat_BD = x_s_BD / floor_at(safe_norm(x_s_BD), MIN_NORM)[..., None]
+    radial_B = jnp.einsum("...d,...d->...", v_s_BD, x_hat_BD, precision=MATMUL_PRECISION)
+    perp_BD = v_s_BD - radial_B[..., None] * x_hat_BD
+    return radial_B, perp_BD
 
 
 @_jit

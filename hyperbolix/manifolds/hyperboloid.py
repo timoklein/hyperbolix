@@ -64,6 +64,7 @@ from ..utils.math_utils import (
     MIN_NORM,
     cosh,
     floor_at,
+    radial_perp_decomposition,
     safe_hypot,
     safe_norm,
     safe_normalize,
@@ -305,6 +306,29 @@ def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: S
     inverse ``⊖x = (-1) ⊙ x = [x₀, -x_s]`` (see ``_scalar_mul``). Under the stereographic
     isometry it coincides with Möbius addition on the Poincaré ball.
 
+    **Evaluated as the Lorentz boost** ``x ⊕ y = Λ_x y``, where ``Λ_x`` is the transvection carrying
+    the origin to ``x`` (:func:`_lorentz_boost` with ``v → -v``). The two definitions are the same
+    map: transvections along the geodesic ``0 → x`` *realise* parallel transport along it, so
+    boosting ``y`` performs the ``Log_0 → PT_{0→x} → Exp_x`` round trip in one step. With
+    ``gamma = √c·x₀ = cosh(√c·d₀(x))`` the spatial part is::
+
+        s = √c·x_s·y₀ + y_s + c·⟨x_s, y_s⟩·x_s/(1 + gamma)
+
+    and the time slot is rebuilt from ``s`` by :func:`_proj`. Every term is read off the spatial
+    parts and the (positive) time coordinates; the one divisor ``1 + gamma ≥ 2`` is a sum of
+    positives. The round-trip spelling instead chained three maps that each formed an ``O(1)``
+    quantity as a difference of ``O(cosh² a)`` Minkowski terms, so its float32 accuracy collapsed
+    from geodesic radius ~8 — a long finite-but-wrong phase before the eventual 0/0, which is the
+    hard part: this is the hot path of every gyro-bias in the library, and a bias that has stopped
+    receiving a correct gradient looks exactly like one that has converged. Measured: in float64
+    the two spellings agree to 3.7e-16 relative at radius ≤ 1
+    and 1.0e-9 relative at radius ≤ 5 (the growth is the *old* form's ``eps·cosh²(a)``
+    conditioning); in float32 at ``c = 0.5``, ``D = 64``, ``a ∈ {8, 10, 12}``, ``x ⊕ exp_0(b)``
+    with ``‖b‖ = 0.5`` is 9.7e-5 / 7.8e-4 / 8.0e-3 in geodesic error against the float64 result and
+    its ``jax.grad`` w.r.t. ``b`` is within 1.4e-7 relative, where the previous spelling's gradient
+    was off by 0.53 at ``a = 8`` and 1.9 at ``a = 10``.
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step1_equivalence.out``.)
+
     Args:
         x: Hyperboloid point, shape (dim+1,)
         y: Hyperboloid point, shape (dim+1,)
@@ -317,10 +341,15 @@ def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: S
         Chen et al. "Hyperbolic neural networks: gyrovector operations on the Lorentz model." 2025b.
         Shi et al. "Intrinsic Lorentz Neural Network." ICLR 2026, Eq. (1).
     """
-    v0 = _logmap_0(y, c)  # tangent vector at the origin (first component 0)
-    vx = _ptransp_0(v0, x, c)  # parallel transport origin → x; result is tangent at x
-    res = _expmap(vx, x, c)  # geodesic step from x (already re-projected onto the manifold)
-    return res
+    sqrt_c = jnp.sqrt(c)
+    x_s_D, y_s_D = x[1:], y[1:]
+    gamma = sqrt_c * x[0]  # Lorentz factor cosh(√c·d₀(x)) ≥ 1
+
+    xy = jnp.dot(x_s_D, y_s_D, precision=MATMUL_PRECISION)
+    # 1 + gamma ≥ 2 on the upper sheet — a sum of positives, so no floor.
+    res_s_D = sqrt_c * y[0] * x_s_D + y_s_D + (c * xy / (1.0 + gamma)) * x_s_D
+    # Time slot from the spatial part, the file's standard reconstruction; `_proj` ignores slot 0.
+    return _proj(jnp.concatenate([jnp.zeros((1,), dtype=x.dtype), res_s_D]), c)
 
 
 def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
@@ -723,8 +752,22 @@ def _dist_0(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, version_idx: int 
 def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Exponential map: map tangent vector v at point x to manifold.
 
+    The geodesic length ``‖v‖_x`` comes from :func:`_tangent_norm`, which eliminates ``v₀``
+    through the tangency assumption and returns a sum of two non-negative terms. The literal
+    ``sqrt(⟨v, v⟩_L)`` it replaced subtracts two numbers of size ``(cosh(a)·‖v‖)²``, so it loses one
+    power of ``x₀`` more than the chart itself imposes. Measured in float32 at ``c = 1`` on the
+    exact unit radial tangent scaled to Riemannian norm 1e-3 (float64 reference 1e-3): the literal
+    form returns 1.000353e-3 at ``a = 5``, 8.457e-4 at ``a = 8``, and **exactly 0** from ``a = 11``
+    on — where the map silently degenerates into the finite, plausible ``x + v``, which is the
+    failure this rewrite exists to remove. :func:`_tangent_norm` returns 1.000000e-3 at every one of
+    those radii (evidence: ``logs/2026-09-08_hyperboloid_tangent_primitives/``).
+
+    ``v₀`` is consequently never read: :func:`_tangent_norm` ignores it, and the ``sinh``-term's
+    contribution to the time slot is discarded by the closing :func:`_proj`, which rebuilds ``res₀``
+    from the spatial part.
+
     Args:
-        v: Tangent vector at x, shape (dim+1,)
+        v: Tangent vector at x, shape (dim+1,); the time slot is ignored
         x: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
 
@@ -735,19 +778,18 @@ def _expmap(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Sca
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     sqrt_c = jnp.sqrt(c)
-    v_sqnorm = floor_at(_minkowski_inner(v, v), 0.0)
-    # `safe_sqrt` + `floor_at`, not the old `sqrt(v_sqnorm + MIN_NORM**2)`. Both give sqrt a finite
-    # derivative at v = 0, but the additive 1e-30 also floored the *value* at 1e-15, so a tangent
-    # vector of Minkowski norm 1e-20 was reported 1e5x too long. The floor stays, and it goes on
-    # `v_norm` alone — that already makes `c_norm_prod >= sqrt(c)*MIN_NORM > 0`, normal in both
-    # dtypes. `sinh(c_norm_prod)/c_norm_prod` is a sinhc, and it is 1 in the limit only while
-    # numerator and denominator are the *same* quantity: a second `floor_at(c_norm_prod, MIN_NORM)`
-    # on the divisor alone made the ratio sqrt(c) at v = 0 for every c < 1 (spatial Jacobian
-    # sqrt(c)·I, e.g. 0.32·I at c = 0.1), attenuating the first gradient of a zero-initialised
-    # gyro-bias. Pinned by test_manifold_oracles.py::
-    # test_hyperboloid_expmap_at_the_origin_has_the_identity_jacobian and ::
-    # test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian.
-    v_norm = floor_at(safe_sqrt(v_sqnorm), MIN_NORM)
+    # The floor goes on `v_norm` alone — that already makes `c_norm_prod >= sqrt(c)*MIN_NORM > 0`,
+    # normal in both dtypes. `sinh(c_norm_prod)/c_norm_prod` is a sinhc, and it is 1 in the limit
+    # only while numerator and denominator are the *same* quantity: a second
+    # `floor_at(c_norm_prod, MIN_NORM)` on the divisor alone made the ratio sqrt(c) at v = 0 for
+    # every c < 1 (spatial Jacobian sqrt(c)·I, e.g. 0.32·I at c = 0.1), attenuating the first
+    # gradient of a zero-initialised gyro-bias. Pinned by test_manifold_oracles.py::
+    # test_hyperboloid_expmap_at_the_origin_has_the_identity_jacobian, whose Jacobian is
+    # **bit-identical** under this norm and the Minkowski one it replaced (0 of 36 entries differ,
+    # both dtypes, c ∈ {0.1, 1}), and by ::test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_
+    # jacobian, which also routes through the rewritten `_addition` and so moves by a few ulps
+    # while staying finite and non-zero.
+    v_norm = floor_at(_tangent_norm(v, x, c), MIN_NORM)
     c_norm_prod = sqrt_c * v_norm
 
     cosh_term = cosh(c_norm_prod) * x
@@ -819,6 +861,39 @@ def _retraction(
     return res
 
 
+def _logmap_direction(frame: _PolarFrame) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, "dim"]]:
+    """``(cos φ, sin φ, n̂)`` — the unit direction from ``x`` toward ``y`` in the geodesic frame.
+
+    ``φ`` is the angle between the geodesic ``x → y`` and the *inward* radial direction ``e_rad``;
+    ``n̂`` is the unit angular direction, the component of ``ŷ_s`` orthogonal to ``x̂_s``. Together
+    they give the unit tangent ``w = cos φ · e_rad + sin φ · e_ang`` that :func:`_logmap` scales by
+    ``d(x, y)`` and :func:`_ptransp` contracts against ``v``. See :func:`_logmap` for the derivation
+    and for why each factor below is individually bounded.
+
+    Args:
+        frame: The shared :func:`_polar_frame` decomposition of the pair ``(x, y)``
+
+    Returns:
+        ``(cos φ, sin φ, n̂)``, the last of shape ``(dim,)``
+    """
+    # S = 0 exactly at x == y, where the direction is arbitrary; floor the denominator so the
+    # discarded ratios stay finite (in `_logmap` they are multiplied by dist_xy = 0 anyway).
+    sinh_half_pos = floor_at(frame.sinh_half, MIN_NORM)
+    cos_phi = (frame.sinh_half_gap / sinh_half_pos) * (
+        safe_hypot(jnp.ones_like(frame.sinh_half_gap), frame.sinh_half_gap) / frame.cosh_half
+    ) + (frame.q_angular / sinh_half_pos) * (frame.q_angular / frame.cosh_half) * (frame.x_time / frame.r_x_pos)
+    sin_phi = (
+        (frame.q_angular / sinh_half_pos)
+        * (frame.csum / 2.0)
+        * jnp.sqrt(frame.r_y_pos)
+        / (jnp.sqrt(frame.r_x_pos) * frame.cosh_half)
+    )
+    # Unit angular direction: the component of ŷ_s orthogonal to x̂_s. Exactly the zero vector when
+    # the two points share a ray (ψ = 0 or π), which is also where sin φ = 0.
+    n_hat_D = safe_normalize(frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D, precision=MATMUL_PRECISION) * frame.x_hat_D)
+    return cos_phi, sin_phi, n_hat_D
+
+
 def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map: map point y to tangent space at **x** (the second argument is the base point).
 
@@ -850,11 +925,13 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Sca
     ``O(1)``; writing it as the ratio product above (rather than forming ``q²`` first) is what keeps
     it from overflowing at large radius, where ``q`` alone is ~1e18 in float32.
 
-    The result is **not** passed through :func:`_tangent_proj`: that helper routes through
-    :func:`_minkowski_inner` and would reintroduce exactly the NaN this rewrite removes. It is not
-    needed — the frame is tangent by construction, with a measured relative residual
-    ``|⟨u, x⟩_L|/(‖u‖∞·‖x‖∞)`` of ≤2.3e-7 (float32) / ≤2.9e-16 (float64). For the same reason
-    ``‖log_x(y)‖_x = d(x, y)`` holds by construction: ``d`` is taken from the same frame.
+    The result is **not** passed through :func:`_tangent_proj`, because it does not need to be: the
+    frame is tangent by construction, with a measured relative residual
+    ``|⟨u, x⟩_L|/(‖u‖∞·‖x‖∞)`` of ≤2.3e-7 (float32) / ≤2.9e-16 (float64) — at the rounding floor of
+    the ambient chart. Projecting would replace that with the accuracy of a ``⟨x, u⟩_L`` formed
+    from the two large ambient vectors, which is worse conditioned than the vector it is meant to
+    correct. For the same reason ``‖log_x(y)‖_x = d(x, y)`` holds by construction: ``d`` is taken
+    from the same frame.
 
     At ``x`` exactly at the origin the radial leg degenerates (``r_x = 0`` ⇒ ``e_rad = 0``), so the
     result falls back to :func:`_logmap_0`, which is exact there. Both branches of the ``where`` are
@@ -873,25 +950,12 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Sca
     """
     frame = _polar_frame(x, y, c)
     dist_xy = 2.0 * jnp.arcsinh(frame.sinh_half) / frame.sqrt_c
-
-    # S = 0 exactly at x == y, where the direction is arbitrary; floor the denominator so the
-    # discarded ratios stay finite (they are multiplied by dist_xy = 0 anyway).
-    sinh_half_pos = floor_at(frame.sinh_half, MIN_NORM)
-    cos_phi = (frame.sinh_half_gap / sinh_half_pos) * (
-        safe_hypot(jnp.ones_like(frame.sinh_half_gap), frame.sinh_half_gap) / frame.cosh_half
-    ) + (frame.q_angular / sinh_half_pos) * (frame.q_angular / frame.cosh_half) * (frame.x_time / frame.r_x_pos)
-    sin_phi = (
-        (frame.q_angular / sinh_half_pos)
-        * (frame.csum / 2.0)
-        * jnp.sqrt(frame.r_y_pos)
-        / (jnp.sqrt(frame.r_x_pos) * frame.cosh_half)
-    )
+    cos_phi, sin_phi, n_hat_D = _logmap_direction(frame)
 
     # Inward unit radial direction, exactly tangent at x.
     e_rad_A = -frame.sqrt_c * jnp.concatenate([frame.r_x[None], frame.x_time * frame.x_hat_D])
-    # Unit angular direction: the component of ŷ_s orthogonal to x̂_s. Exactly the zero vector when
-    # the two points share a ray (ψ = 0 or π), which is also where sin φ = 0.
-    n_hat_D = safe_normalize(frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D, precision=MATMUL_PRECISION) * frame.x_hat_D)
+    # n̂ carries an O(1) spurious component along x̂ when x and y are nearly parallel; here it is
+    # multiplied by `sin φ · d`, so that error stays bounded by the angular displacement.
     e_ang_A = jnp.concatenate([jnp.zeros(1, dtype=x.dtype), n_hat_D])
 
     res = dist_xy * (cos_phi * e_rad_A + sin_phi * e_ang_A)
@@ -912,10 +976,12 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
 
     ``version_idx`` is intentionally not threaded through: there is nothing to switch on any more.
 
-    The result is **not** passed through :func:`_tangent_proj`. At the origin that projection is
-    the identity on a vector whose time component is already 0 (verified bitwise over magnitudes
-    1e-20…1e10, with an identity VJP), and it routes through :func:`_minkowski_inner`, which turns
-    an ``inf`` spatial input into an all-NaN result instead of leaving the time slot intact.
+    The result is **not** passed through :func:`_tangent_proj`, because it is tangent by
+    construction: at the origin the tangent space *is* the ``v₀ = 0`` hyperplane, and this returns
+    an exact 0 there. The projection would be the identity on such a vector (verified bitwise over
+    magnitudes 1e-20…1e10, with an identity VJP) while being worse conditioned than the vector it
+    corrects — it routes through :func:`_minkowski_inner`, which turns an ``inf`` spatial input into
+    an all-NaN result instead of leaving the time slot intact.
 
     **An infinitely far point maps to an infinite tangent vector, not to NaN.** ``safe_norm``
     deliberately passes an ``inf`` spatial entry through as ``inf`` (see its docstring), which made
@@ -981,10 +1047,43 @@ def _ptransp(
     y: Float[Array, "dim_plus_1"],
     c: ScalarCurvature,
 ) -> Float[Array, "dim_plus_1"]:
-    """Parallel transport tangent vector v from point x to point y.
+    """Parallel transport tangent vector v from point x to point y, in the geodesic frame.
+
+    The closed form is ``PT_{x→y}(v) = v + ⟨v, y⟩_L/(1/c - ⟨x, y⟩_L)·(x + y)``, and it is the
+    *scale* in front of ``(x + y)`` that is hard: both of its Minkowski inner products cancel down
+    to ``O(1)`` from ``O(cosh² a)`` operands, so the literal spelling loses float32 from geodesic
+    radius ~8 and returns NaN past ~9 (the closing :func:`_tangent_proj` divided by the measured
+    ``⟨y, y⟩_L``, which is exactly 0 there). The frame of :func:`_polar_frame` /
+    :func:`_logmap_direction` gives the same scale as a product of individually bounded factors.
+
+    Writing ``w`` for the unit tangent at ``x`` pointing toward ``y`` and ``θ = √c·d(x, y)``, the
+    geodesic is ``y = cosh(θ)·x + sinh(θ)/√c·w``, so for tangent ``v`` (``⟨v, x⟩_L = 0``)::
+
+        ⟨v, y⟩_L        = sinh(θ)/√c · ⟨v, w⟩_x
+        1/c - ⟨x, y⟩_L  = (1 + cosh θ)/c = 2·cosh²(θ/2)/c
+        scale           = √c·tanh(θ/2)·⟨v, w⟩_x = √c·(S/C)·⟨v, w⟩_x
+
+    with ``S = sinh(θ/2)``, ``C = cosh(θ/2) ≥ 1`` straight off the frame — no cancellation, no
+    floor. The remaining contraction is read off the same radial/perpendicular split
+    :func:`_tangent_norm` uses (``e_rad`` and ``e_ang`` are the frame's two legs)::
+
+        ⟨v, w⟩_x = -cos φ · radial(v)/(√c·x₀) + sin φ · ⟨n̂, perp(v)⟩
+
+    (the minus sign is ``e_rad``'s inward orientation; ``⟨v, e_rad⟩_L = -radial(v)/(√c·x₀)`` follows
+    from eliminating ``v₀`` through tangency). ``v₀`` is therefore never read here either.
+
+    At ``x`` exactly at the origin the radial leg degenerates and the result falls back to
+    :func:`_ptransp_0`, which is exact there. Both branches of the ``where`` are finite, so its VJP
+    is NaN-free. Measured on a unit tangent vector transported one 0.05-nat step, float32,
+    ``c = 1``, ``D = 16``: the isometry ratio ``‖PT v‖_y/‖v‖_x`` is within 4.1e-6 of 1 through
+    geodesic radius 12 and 4.2e-4 at radius 14, where the previous spelling gave 0.750 at radius 8,
+    1.830 at 10 and 0.500 at 12 — a transported momentum with the wrong length and, at radius 10,
+    the wrong sign of correction. It also still satisfies the 1e-12 float64 NumPy oracle in
+    ``tests/test_manifold_oracles.py::test_hyperboloid_ptransp_matches_the_numpy_oracle``.
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step1_large_radius_claims.out``.)
 
     Args:
-        v: Tangent vector at x, shape (dim+1,)
+        v: Tangent vector at x, shape (dim+1,); the time slot is used only in the ``v + …`` sum
         x: Hyperboloid point, shape (dim+1,)
         y: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
@@ -996,28 +1095,54 @@ def _ptransp(
         Aaron Lou, et al. "Differentiating through the fréchet mean."
             International conference on machine learning (2020).
     """
-    # Compute Minkowski inner products
-    vy = _minkowski_inner(v, y)  # ⟨v, y⟩_L
-    xy = _minkowski_inner(x, y)  # ⟨x, y⟩_L
+    frame = _polar_frame(x, y, c)
+    cos_phi, sin_phi, n_hat_D = _logmap_direction(frame)
+    radial_v, perp_v_D = radial_perp_decomposition(v[1:], x[1:])
 
-    # denom = 1/c - ⟨x, y⟩_L
-    denom = 1.0 / c - xy
-    denom = floor_at(denom, MIN_NORM)  # Numerical stability
+    # n̂ MUST meet `perp(v)`, never `v_s`: it is normalized from ŷ_s - ⟨x̂_s, ŷ_s⟩x̂_s, and when the
+    # two directions agree to below the dtype's resolution that difference is pure rounding, so n̂
+    # carries an O(1) spurious component along x̂. Dotted against v's *radial* part that component
+    # injected a 923-unit error into the transported momentum — flipping it and tripling its norm
+    # on every optimizer step. `perp(v)` is orthogonal to x̂ by construction, so it cannot happen.
+    angular_v = jnp.dot(perp_v_D, n_hat_D, precision=MATMUL_PRECISION)
+    # √c·x₀ = cosh a >= 1 on the upper sheet; the floor only guards a degenerate x (x₀ = 0).
+    v_dot_w = -cos_phi * radial_v / floor_at(frame.sqrt_c * frame.x_time, MIN_NORM) + sin_phi * angular_v
 
-    # scale = ⟨v, y⟩_L / denom
-    scale = vy / denom
-
-    # res = v + scale * (x + y)
+    # C = cosh(θ/2) >= 1, so S/C = tanh(θ/2) needs no floor.
+    scale = frame.sqrt_c * (frame.sinh_half / frame.cosh_half) * v_dot_w
     res = v + scale * (x + y)
-    res = _tangent_proj(res, y, c)
-    return res
+    return jnp.where(frame.r_x > 0, res, _ptransp_0(v, y, c))
 
 
 def _ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
-    """Parallel transport tangent vector v from origin to point y.
+    """Parallel transport a tangent vector from the origin to ``y`` — the differential of the boost.
+
+    Transport along the geodesic ``0 → y`` *is* the Lorentz boost that carries the origin to ``y``
+    (:func:`_lorentz_boost` with ``v → -v``), and its differential acts on the purely spatial
+    tangent vector ``v = [0, v_s]`` as::
+
+        vy = ⟨v_s, y_s⟩
+        res_s = v_s + c·vy·y_s/(1 + √c·y₀)
+        res₀   = √c·vy
+
+    which is the closed form ``v + ⟨v, y⟩_L/(1/c - ⟨0, y⟩_L)·(y + origin)`` with the ``origin`` and
+    the ``1/c`` terms collected analytically. Written this way it reads **only the spatial parts**:
+    no Minkowski inner product, no division by a difference of ``O(cosh² a)`` numbers, and no final
+    :func:`_tangent_proj` — the result is exactly tangent at ``y`` by construction (``⟨y_s, res_s⟩ =
+    y₀·res₀`` holds identically, using ``‖y_s‖² = y₀² - 1/c``). The previous spelling divided the
+    projection by the *measured* ``⟨y, y⟩_L``, which is exactly 0 in float32 past geodesic radius
+    ~9, so the whole transport was NaN there.
+
+    The remaining divisor ``1 + √c·y₀ ≥ 2`` needs no floor: it is a sum of positive numbers, bounded
+    away from zero on the whole upper sheet.
+
+    A non-zero ``v₀`` is **ignored**: the spatial part is the source of truth, the same convention
+    :func:`_dist_0` and :func:`_logmap_0` follow. For a genuinely origin-tangent input ``v₀`` is 0
+    anyway, and the old spelling's use of it (through ``⟨v, y⟩_L = -v₀y₀ + ⟨v_s, y_s⟩``) is where
+    the transport picked up the base point's cancellation.
 
     Args:
-        v: Tangent vector at origin, shape (dim+1,)
+        v: Tangent vector at origin, shape (dim+1,); the time slot is ignored
         y: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
 
@@ -1028,35 +1153,40 @@ def _ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: 
         Aaron Lou, et al. "Differentiating through the fréchet mean."
             International conference on machine learning (2020).
     """
-    # Create origin point [1/√c, 0, ..., 0]
     sqrt_c = jnp.sqrt(c)
-    y0 = y[0]
+    y_s_D = y[1:]
+    v_s_D = v[1:]
 
-    # Build origin vector
-    origin = _create_origin(c, y.shape[0] - 1, y.dtype)
-
-    # Compute Minkowski inner products
-    vy = _minkowski_inner(v, y)  # ⟨v, y⟩_L
-
-    # denom = 1/c + y0/√c (from ⟨origin, y⟩_L = -y0/√c and denom = 1/c - ⟨origin, y⟩_L)
-    denom = 1.0 / c + y0 / sqrt_c
-    denom = floor_at(denom, MIN_NORM)  # Numerical stability
-
-    # scale = ⟨v, y⟩_L / denom
-    scale = vy / denom
-
-    # res = v + scale * (y + origin)
-    res = v + scale * (y + origin)
-    res = _tangent_proj(res, y, c)
-    return res
+    vy = jnp.dot(v_s_D, y_s_D, precision=MATMUL_PRECISION)
+    # 1 + √c·y₀ = 1 + cosh(a) ≥ 2 on the upper sheet — a sum of positives, so no floor.
+    res_s_D = v_s_D + (c * vy / (1.0 + sqrt_c * y[0])) * y_s_D
+    res0 = sqrt_c * vy
+    return jnp.concatenate([res0[None], res_s_D])
 
 
 def _tangent_inner(
     u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, ""]:
-    """Compute inner product of tangent vectors u and v at point x.
+    """Riemannian inner product ``⟨u, v⟩_x`` of two vectors **assumed tangent at x**.
 
-    Uses the Minkowski inner product restricted to tangent space.
+    The polarised form of :func:`_tangent_norm`, built on the same radial/perpendicular split and
+    for the same reason. Eliminating the time slots through tangency (``u₀·x₀ = ⟨u_s, x_s⟩``)
+    gives, with ``radial(u) = ⟨u_s, x̂_s⟩`` and ``perp(u) = u_s - radial(u)·x̂_s``::
+
+        ⟨u, v⟩_L = ⟨perp(u), perp(v)⟩ + radial(u)·radial(v)·(x₀² - r²)/x₀²
+                 = ⟨perp(u), perp(v)⟩ + radial(u)·radial(v)/(c·x₀²)
+
+    using ``x₀² - ‖x_s‖² = 1/c`` on the sheet. The literal ambient ``-u₀v₀ + ⟨u_s, v_s⟩`` instead
+    subtracts two numbers of size ``cosh²(a)·‖u‖·‖v‖`` to obtain an ``O(‖u‖·‖v‖)`` result, so its
+    relative error grows like ``c·x₀²·eps`` and it is worthless past geodesic radius ~9 in float32
+    — the same failure :func:`_tangent_norm` documents, one power of ``x₀`` worse than what the
+    chart itself imposes.
+
+    ``1/(c·x₀²)`` is applied as two divisions by ``√c·x₀`` rather than one by its square: the
+    square overflows float32 at radius ~44 while the quantity itself stays representable. The two
+    guards are :func:`_tangent_norm`'s: the ``MIN_NORM`` floor under ``x̂_s`` (inside
+    :func:`~hyperbolix.utils.math_utils.radial_perp_decomposition`) and under ``√c·x₀``, both no-ops
+    for every valid base point.
 
     Args:
         u: Tangent vector at x, shape (dim+1,)
@@ -1067,7 +1197,14 @@ def _tangent_inner(
     Returns:
         Riemannian inner product ⟨u, v⟩_x, scalar
     """
-    return _minkowski_inner(u, v)
+    sqrt_c = jnp.sqrt(c)
+    x_s_D = x[1:]
+    radial_u, perp_u_D = radial_perp_decomposition(u[1:], x_s_D)
+    radial_v, perp_v_D = radial_perp_decomposition(v[1:], x_s_D)
+    # √c·x₀ = cosh a >= 1 on the upper sheet, so the floor is a no-op for every valid base point;
+    # it only keeps a degenerate x (x₀ = 0) from dividing by zero.
+    time_scale = floor_at(sqrt_c * x[0], MIN_NORM)
+    return jnp.dot(perp_u_D, perp_v_D, precision=MATMUL_PRECISION) + (radial_u / time_scale) * (radial_v / time_scale)
 
 
 def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -1105,12 +1242,11 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
         Riemannian norm ||v||_x, scalar
     """
     sqrt_c = jnp.sqrt(c)
-    x_s_D = x[1:]
-    v_s_D = v[1:]
-    x_hat_D = x_s_D / floor_at(safe_norm(x_s_D), MIN_NORM)
-
-    radial = jnp.dot(v_s_D, x_hat_D, precision=MATMUL_PRECISION)
-    perp_norm = safe_norm(v_s_D - radial * x_hat_D)
+    # The radial/perp split is shared with `_tangent_inner` and `_ptransp` (and, outside this
+    # module, with the Lorentz midpoint and the proper-velocity metric); it carries the same
+    # `floor_at(‖x_s‖, MIN_NORM)` guard on x̂ this function has always used.
+    radial, perp_D = radial_perp_decomposition(v[1:], x[1:])
+    perp_norm = safe_norm(perp_D)
     # √c·x₀ = cosh a >= 1 on the upper sheet, so the floor is a no-op for every valid base point;
     # it only keeps a degenerate x (x₀ = 0) from dividing by zero.
     return safe_hypot(perp_norm, radial / floor_at(sqrt_c * x[0], MIN_NORM))
@@ -1119,13 +1255,21 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
 def _egrad2rgrad(
     grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, "dim_plus_1"]:
-    """Convert Euclidean gradient to Riemannian gradient.
+    """Convert Euclidean gradient to Riemannian gradient: ``g_L + c·⟨x, g_L⟩_L·x``.
 
-    Projects Euclidean gradient onto tangent space.
+    ``g_L`` is the Euclidean gradient with its time component sign-flipped (raising the index with
+    the Minkowski metric ``J = diag(-1, 1, …, 1)``, which is what makes it a *vector* rather than a
+    covector); the second term is the tangent projection of :func:`_tangent_proj`, written out
+    here for the same reason it is written out there — on the sheet ``⟨x, x⟩_L = -1/c`` exactly, so
+    the projector needs no division by the measured Lorentz norm, which is the quantity that has no
+    significant bits left past geodesic radius ~9 in float32.
+
+    This is the NumPy oracle in ``tests/test_manifold_oracles.py::
+    test_hyperboloid_egrad2rgrad_equals_minkowski_projection``, verbatim.
 
     Args:
         grad: Euclidean gradient, shape (dim+1,)
-        x: Hyperboloid point, shape (dim+1,)
+        x: Hyperboloid point **on the sheet**, shape (dim+1,)
         c: Curvature (positive)
 
     Returns:
@@ -1137,58 +1281,82 @@ def _egrad2rgrad(
     # In Lorentzian signature the temporal component carries a negative sign.
     # Flip it before projecting so we project the Riemannian gradient, matching PyTorch.
     grad_lorentz = grad.at[0].set(-grad[0])
-
-    # Orthogonally project the Lorentzian gradient onto the tangent space.
-    inner_xx = _minkowski_inner(x, x)
-    scale = jnp.sqrt(floor_at(-c * inner_xx, MIN_NORM))
-    x_normed = x / scale
-
-    denom = _minkowski_inner(x_normed, x_normed)
-    coeff = _minkowski_inner(x_normed, grad_lorentz) / denom
-    return grad_lorentz - coeff * x_normed
+    return grad_lorentz + c * _minkowski_inner(x, grad_lorentz) * x
 
 
 def _tangent_proj(
     v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, "dim_plus_1"]:
-    """Project vector v onto tangent space at point x.
+    """Project vector v onto the tangent space at x: ``v + c·⟨x, v⟩_L·x``.
+
+    **Assumes x is on the sheet**, where ``⟨x, x⟩_L = -1/c`` exactly, so the analytic projector
+    ``v - ⟨x, v⟩_L/⟨x, x⟩_L·x`` is the expression above with no division at all. The spelling this
+    replaced divided by the *measured* ``⟨x, x⟩_L``, and that divisor is the file's worst
+    cancellation: ``-x₀² + ‖x_s‖²`` subtracts two numbers of size ``cosh²(a)/c`` to get ``1/c``, so
+    it has no significant bits left at geodesic radius ``a ≈ 9`` (float32) / ``19`` (float64), and
+    once it collapses the projection is a division by (the floor under) zero. Measured: with the
+    previous spelling the chain ``egrad2rgrad → expmap → ptransp`` returns NaN at ``a = 10`` in
+    float32, where the new one preserves the transport isometry to 1.3e-6
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step1_equivalence.out``). Renormalising ``x``
+    by that same measured norm first cannot help — it is the division that fails, not the scale.
+
+    One ``_minkowski_inner`` remains, on ``⟨x, v⟩_L``. That one cancels too, but only down to the
+    *input's own* accuracy: for a ``v`` that is already nearly tangent the true value is ``O(eps·
+    cosh²(a)·‖v‖)`` — the normal contamination sitting in ``v``'s time slot, not an artifact of this
+    spelling — and the projection removes exactly that. Callers that need a tangent vector at large
+    radius should build it tangent by construction (``_logmap``, ``_ptransp``) rather than project
+    a contaminated one; this helper is for the ambient-gradient and public-API cases where the
+    input genuinely is off the tangent space.
+
+    No caller inside this module remains: ``_logmap``/``_logmap_0`` return tangent vectors by
+    construction and ``_ptransp``/``_ptransp_0`` now do too. The remaining users are the public
+    :meth:`Hyperboloid.tangent_proj` and, through it, ``ProductManifold.tangent_proj``; the
+    Riemannian optimizers go through :func:`_egrad2rgrad` instead, which carries the same projector
+    inline. ``ProperVelocity._egrad2rgrad`` is the in-repo precedent for this spelling.
 
     Args:
         v: Vector to project, shape (dim+1,)
-        x: Hyperboloid point, shape (dim+1,)
+        x: Hyperboloid point **on the sheet**, shape (dim+1,)
         c: Curvature (positive)
 
     Returns:
         Projected vector onto tangent space, shape (dim+1,)
     """
-    # Normalize x w.r.t. measured Lorentz norm (robust in float32)
-    inner_xx = _minkowski_inner(x, x)
-    scale = jnp.sqrt(floor_at(-c * inner_xx, MIN_NORM))
-    x_normed = x / scale
-
-    denom = _minkowski_inner(x_normed, x_normed)
-    coeff = _minkowski_inner(x_normed, v) / denom
-    return v - coeff * x_normed
+    return v + c * _minkowski_inner(x, v) * x
 
 
 def _is_in_manifold(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: float | None = None) -> Array:
-    """Check if point x lies on hyperboloid.
+    """Check if point x lies on hyperboloid: the stored ``x₀`` against ``√(1/c + ‖x_s‖²)``.
+
+    **The residual is on the time slot, not on the Lorentz form.** The old check compared
+    ``⟨x, x⟩_L`` against ``-1/c``, i.e. a residual of ``x₀² - x₀(x_s)² ≈ 2·x₀·(x₀ - x₀(x_s))``: it
+    scaled the honest time-slot discrepancy by ``2·x₀ = 2·cosh(a)/√c`` *and* obtained it as the
+    difference of two ``O(cosh² a)`` numbers, so a perfectly on-sheet point stopped passing an
+    absolute tolerance from geodesic radius ~7 (float32) / ~11 (float64) — the caveat
+    :func:`~hyperbolix.manifolds._base.default_atol` documents. Comparing the time slot against the
+    spatial part directly removes both factors, and makes the check exact on anything :func:`_proj`
+    produced (``_proj`` computes precisely this reference through :func:`_time_slot`).
+
+    The tolerance is applied as *both* ``rtol`` and ``atol`` — the quantity compared now grows like
+    ``cosh(a)``, so a purely absolute slack would have the same radius ceiling in a milder form.
+    ``isfinite(x₀)`` is explicit because ``isclose(inf, inf)`` is true: an overflowed time slot must
+    fail the check, not pass it.
 
     Args:
         x: Point to check, shape (dim+1,)
         c: Curvature (positive)
-        atol: Absolute tolerance on the Lorentz-norm residual. ``None`` resolves to
-            :func:`~hyperbolix.manifolds._base.default_atol` for ``x.dtype``.
+        atol: Tolerance on the time-slot residual, used as both ``rtol`` and ``atol``. ``None``
+            resolves to :func:`~hyperbolix.manifolds._base.default_atol` for ``x.dtype``.
 
     Returns:
-        True if -x₀² + ||x_rest||² = -1/c (within ``atol``) and x₀ > 0
+        True if x₀ = √(1/c + ‖x_s‖²) (within tolerance), x₀ > 0 and x₀ is finite
     """
-    lorentz_norm = _minkowski_inner(x, x)
     tol = default_atol(x.dtype) if atol is None else atol
-    target = -1.0 / c
+    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    x0_ref = _time_slot(x[1:], inv_c)
 
-    valid_constraint = jnp.isclose(lorentz_norm, target, atol=tol, rtol=0.0)
-    valid_x0 = x[0] > 0
+    valid_constraint = jnp.isclose(x[0], x0_ref, rtol=tol, atol=tol)
+    valid_x0 = jnp.isfinite(x[0]) & (x[0] > 0)
 
     return jnp.logical_and(valid_constraint, valid_x0)
 
@@ -1196,23 +1364,40 @@ def _is_in_manifold(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: flo
 def _is_in_tangent_space(
     v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: float | None = None
 ) -> Array:
-    """Check if vector v lies in tangent space at point x.
+    """Check if vector v lies in tangent space at point x: ``v₀`` against ``⟨x_s, v_s⟩/x₀``.
 
-    Tangent space is orthogonal to x in Minkowski metric: ⟨v, x⟩_L = 0
+    Tangency is ``⟨v, x⟩_L = 0``, i.e. ``v₀·x₀ = ⟨v_s, x_s⟩``. **The residual is taken on the time
+    slot**, dividing that identity by ``x₀`` instead of comparing the Lorentz form itself. The old
+    check tested ``|⟨v, x⟩_L| < atol`` absolutely; both of its terms are ``O(cosh(a)·‖v‖)``, so the
+    residual of an *exactly* tangent vector still grows like ``cosh(a)`` and a valid vector stopped
+    passing from geodesic radius ~7-9. Dividing by ``x₀`` removes that growth, and the reference
+    ``⟨x_s, v_s⟩/x₀`` is the same "spatial part is the source of truth" convention
+    :func:`_dist_0`, :func:`_proj` and :func:`_ptransp_0` follow — the vectors those return satisfy
+    it exactly rather than to a tolerance.
+
+    The tolerance is applied as ``rtol`` plus an ``atol`` scaled by ``max(1, ‖v_s‖)``: the check has
+    to stay scale-free in ``v`` (tangency is a homogeneous condition), while a ``v`` of norm well
+    below 1 must not be held to a tighter absolute bound than one of norm 1. A non-finite ``v₀`` or
+    ``v_s`` fails, since ``isclose`` is false against NaN and against a mismatched ``inf``.
 
     Args:
         v: Vector to check, shape (dim+1,)
         x: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
-        atol: Absolute tolerance on ⟨v, x⟩_L. ``None`` resolves to
+        atol: Tolerance on the time-slot residual, used as ``rtol`` and (scaled by
+            ``max(1, ‖v_s‖)``) as ``atol``. ``None`` resolves to
             :func:`~hyperbolix.manifolds._base.default_atol` for ``v.dtype``.
 
     Returns:
-        True if ⟨v, x⟩_L ≈ 0
+        True if v₀ ≈ ⟨x_s, v_s⟩/x₀
     """
+    del c
     tol = default_atol(v.dtype) if atol is None else atol
-    mink_inner = _minkowski_inner(v, x)
-    return jnp.abs(mink_inner) < tol
+    v_s_D = v[1:]
+    # No floor on x₀: on the upper sheet it is ≥ 1/√c > 0, and a degenerate x₀ = 0 should make the
+    # check fail loudly (inf/NaN reference) rather than be rescued by a 1e-15 constant.
+    v0_ref = jnp.dot(x[1:], v_s_D, precision=MATMUL_PRECISION) / x[0]
+    return jnp.isclose(v[0], v0_ref, rtol=tol, atol=tol * floor_at(safe_norm(v_s_D), 1.0))
 
 
 def _hcat(
@@ -1402,6 +1587,48 @@ def _compute_mlr(
     return res_BP
 
 
+def _busemann_arg(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """``x₀ - ⟨x_s, v⟩`` for unit ``v``, written as a sum of two non-negative terms.
+
+    This is the argument of the Busemann log (:func:`_busemann`) and of the horospherical
+    projection that reuses it. Written literally it is a difference of two ``O(sinh a)`` numbers
+    whose result is ``O(e^{-a})`` for the aligned direction — the worst case *is* the interesting
+    one, since it is the point the horosphere is most confident about. With ``r = ‖x_s‖`` and
+    ``x̂ = x_s/r``::
+
+        x₀ - ⟨x_s, v⟩ = (x₀ - r) + r·(1 - cos ψ) = 1/(c·(x₀ + r)) + r·‖x̂ - v‖²/2
+
+    using ``x₀ - r = (x₀² - r²)/(x₀ + r) = 1/(c·(x₀ + r))`` on the sheet and
+    ``1 - cos ψ = ‖x̂ - v‖²/2`` for unit ``x̂``, ``v``. Both terms are non-negative and each is a
+    quotient or product of positive quantities, so nothing cancels. Measured in float32 against the
+    same point and direction in float64 (``c = 1``, ``D = 16``; the aligned direction is the hard
+    one — off-axis directions never cancel and both forms sit at 4e-8): relative error of
+    ``_busemann`` ≤1e-7 through ``a = 10``, 3.4e-6 at ``a = 12`` and 1.7e-4 at ``a = 14``, against
+    1.1e-2 / 0.31 / 1.9 for the literal difference at ``a = 8`` / 10 / 12. Past that the literal
+    form saturated on the old ``MIN_NORM`` floor at ``log(1e-15)/√c = -34.5/√c``, with an
+    exactly-zero gradient for the points the horosphere is most confident about.
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step1_large_radius_claims.out``.)
+
+    No floor: the value is analytically positive, and a non-finite input stays loud. At ``r = 0``
+    (the origin) ``safe_normalize`` returns the exact zero vector and the second term is ``0·1 = 0``,
+    leaving ``1/(c·x₀) = 1/√c`` — correct, and ``B^v(origin) = log(1)/√c = 0``.
+
+    Args:
+        x: Hyperboloid point, shape (dim+1,)
+        v: Unit ideal direction (spatial), shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        ``x₀ - ⟨x_s, v⟩``, scalar and non-negative
+    """
+    x_s_D = x[1:]
+    r = safe_norm(x_s_D)
+    x_hat_D = safe_normalize(x_s_D)
+    # `_sqnorm`, not `safe_norm(...)**2`: the chord is bounded by 2 for two unit vectors, so there
+    # is nothing to rescale, and squaring a rounded norm would throw away an ulp of the sum.
+    return 1.0 / (c * (x[0] + r)) + 0.5 * r * _sqnorm(x_hat_D - v)
+
+
 def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Closed-form Lorentz Busemann function ``B^v(x)`` (point-to-horosphere coordinate).
 
@@ -1414,7 +1641,8 @@ def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCu
     with ``x_t = x[0]``, ``x_s = x[1:]``. The argument ``x_t - ⟨x_s, v⟩`` equals ``-⟨x, ω⟩_L``
     for the null lift ``ω = (1, v)`` and is strictly positive on the upper sheet
     (Cauchy-Schwarz: ``x_t = √(1/c + ‖x_s‖²) ≥ ‖x_s‖ ≥ ⟨x_s, v⟩``); it → 0 only as ``x``
-    runs off to the ideal point ``v``, so the log argument is floored at ``MIN_NORM``.
+    runs off to the ideal point ``v``. It is evaluated by :func:`_busemann_arg` as a sum of two
+    non-negative terms, so the ``MIN_NORM`` floor the literal difference needed is gone.
     ``B^v(origin) = 0`` for unit ``v``.
 
     ``v`` is assumed unit-norm and is **not** normalized here — callers (the BMLR/BFC layers,
@@ -1432,9 +1660,7 @@ def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCu
         Chen, Schölkopf, and Sebe. "Hyperbolic Busemann Neural Networks." 2026, Eq. 4.
     """
     sqrt_c = jnp.sqrt(c)
-    # = -sqrt_c * minkowski_inner(x, [1, v]); > 0 on the upper sheet
-    arg = sqrt_c * (x[0] - jnp.dot(x[1:], v, precision=MATMUL_PRECISION))
-    return jnp.log(floor_at(arg, MIN_NORM)) / sqrt_c
+    return jnp.log(sqrt_c * _busemann_arg(x, v, c)) / sqrt_c
 
 
 def _lorentz_boost(mu: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
