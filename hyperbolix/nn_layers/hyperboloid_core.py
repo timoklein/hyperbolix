@@ -36,12 +36,14 @@ from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
 from hyperbolix.utils.math_utils import (
     MIN_NORM,
     clamp_to,
+)
+from hyperbolix.utils.math_utils import cosh as safe_cosh
+from hyperbolix.utils.math_utils import (
     floor_at,
     safe_hypot,
     safe_hypot_norm,
     safe_norm,
 )
-from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 from hyperbolix.utils.precision import MATMUL_PRECISION as MATMUL_PRECISION  # re-export
 
@@ -425,84 +427,48 @@ def lorentz_midpoint(
         ``h = weights @ points``  (weighted sum)
         ``mu = h / (sqrt(c) * ||h||_L)``
 
-    where ``||h||_L = sqrt(-<h,h>_L)``. The Minkowski square ``<h,h>_L`` is **not** evaluated
-    as the literal ``-h_0^2 + ||h_s||^2``, which subtracts two ``O(e^{2a})`` numbers (``a`` the
-    scaled geodesic radius ``sqrt(c)*d``) to reach an ``O(W^2/c)`` result and so keeps no float32
-    bits past ``a ~ 8``. It is obtained instead from the **variance form**, which factors that
-    difference of squares and assembles each factor out of small non-negative pieces. Write
-    ``r_m = ||x_{m,s}||``, ``x_hat_m = x_{m,s}/r_m``, ``u_m = x_{m,0} + r_m``, and ::
+    where ``||h||_L = sqrt(-<h,h>_L)``. The literal Lorentz square subtracts
+    two large terms for a tight cloud far from the origin. Instead, set
+    ``t_m = x_{m,0}``, ``z_m = x_{m,s}/t_m``, ``T = h_0`` and ``z_bar = h_s/T``::
 
-        R       = sum_m w_m r_m                          (weighted spatial radius)
-        omega_m = w_m r_m / R                            (sums to 1)
-        m_bar   = sum_m omega_m x_hat_m                  ( = h_s / R,  ||m_bar|| <= 1)
-        V       = sum_m omega_m ||x_hat_m - m_bar||^2    ( = 1 - ||m_bar||^2, direction variance)
+        D² = T * sum_m w_m * (1/t_m + c*t_m*||z_m - z_bar||²)
+        mu_s = h_s / sqrt(max(abs(D²), eps))
 
-    The last equality is the variance identity, exact for any weights summing to 1 and any unit
-    ``x_hat_m``. On-sheet ``x_{m,0} - r_m = 1/(c*u_m)``, so with ``W = sum_m w_m`` ::
+    On-sheet, ``1 - ||z_m||² = 1/(c*t_m²)``. Expanding the weighted variance
+    therefore gives ``D² = c*(T² - ||h_s||²)`` exactly. The variance is evaluated
+    directly as squared coordinate differences, without expanding the cancelling
+    squares. For non-negative weights every summand is non-negative. Unlike a
+    radius/unit-direction factorization, ``z_m`` is smooth at the origin, so
+    gradients through an origin point in a mixed cloud retain its contribution.
 
-        gap   = sum_m w_m/(c*u_m)          = h_0 - R           (a sum of positives)
-        small = gap + R*V/(1 + ||m_bar||)  = h_0 - ||h_s||
-        big   = gap + R*(1 + ||m_bar||)    = h_0 + ||h_s||
-        -c * <h,h>_L = c * small * big
+    ``weights`` must be non-negative; negative weights are unsupported. An
+    all-zero weight row returns the origin, preserving the existing convention.
+    Its division by ``T`` is guarded. That value convention does not prescribe a
+    weight derivative: the normalized mean has no continuous extension at zero
+    weights. The existing ``abs`` and ``eps`` normalization remains in effect.
 
-    using ``h_0 = gap + R``, ``||h_s|| = R*||m_bar||`` and ``1 - ||m_bar|| = V/(1 + ||m_bar||)``.
-    Every quantity on the right is non-negative, nothing is subtracted anywhere, and the
-    ``O(e^{2a})`` scale never enters the normalizer at all. The form still equals the key Gram
-    ``sum_mn w_m w_n cosh theta_mn``, so the ``eps`` floor can only engage as ``W -> 0``:
-    ``c*small*big >= W^2``. With every point at the origin ``R = V = 0`` and
-    ``small = big = W/sqrt(c)``, which is exact.
+    Cost is ``O(N*M*D)``: the direct variance uses one ``(..., N, M, D)``
+    broadcast and reduction. For batch means and head averages, ``N = 1`` and
+    this is linear in the number of points. All contractions use HIGHEST
+    precision. Output time is reconstructed from the normalized spatial part.
 
-    ``V`` is computed as the literal variance sum written above — a ``(..., N, M, D)`` broadcast
-    difference against ``m_bar``, squared and reduced over ``D`` — and **never** by expanding it to
-    ``1 - 2*x_hat.m_bar + ||m_bar||^2``, which puts the cancellation straight back: for a cluster
-    whose directions agree to float32 rounding the expanded form returns ``~eps`` where the true
-    value is ``~eps^2`` (measured 1.2e-7 against 8.4e-15, check (d) of
-    ``logs/2026-09-08_hyperboloid_tangent_primitives/step2d_equivalence.py``).
+    Historical measurements of the preceding radius/direction variance form
+    (probe C.i in ``logs/2026-09-08_hyperboloid_tangent_primitives``, M = 16,
+    D = 16, c = 0.5, uniform weights, four seeds) reported median geodesic
+    errors against a longdouble reference::
 
-    .. warning::
-        ``weights`` must be **non-negative** — as they are at every call site in the library
-        (attention softmax, uniform head/batch/Fréchet averages). The product ``small*big`` is
-        ``h_0^2 - ||h_s||^2`` for any weights with ``R != 0`` (``R^2*||m_bar||^2 = ||h_s||^2``
-        whatever the sign of ``R``), so the identity is algebraically exact regardless; what a
-        negative weight costs is the sum-of-positives property, hence the accuracy the form exists
-        for — ``gap`` and ``R`` can then cancel internally, and ``||m_bar||`` can exceed 1 and make
-        ``V`` negative. This is the same contract :func:`lorentz_residual` states for its ``w_y``,
-        and for the same reason: callers must not expose these weights as unconstrained learnable
-        parameters.
+                       a = 6      a = 8      a = 9      a = 12
+        radial         1.5e-5     1.0e-4     3.2e-4     5.0e-3
+        angular        3.6e-7     4.6e-7     3.6e-7     3.5e-7
+        mixed          3.2e-7     3.6e-7     3.6e-7     3.7e-7
 
-    Accuracy: which of the two positive terms in ``small`` carries the answer depends on the cloud.
-    On a radial cluster (directions equal to float32 rounding) ``V`` lands at ``~eps^2`` and
-    ``gap ~ W*e^{-a}/sqrt(c)`` is all of ``small``, computed to relative ``eps``. On a
-    common-radius angular cloud of spread ``psi`` the same ``gap`` is dwarfed by
-    ``R*V ~ W*sinh(a)*psi^2``, and ``V``'s summands are known to relative ``eps/psi`` (the stored
-    directions round at absolute ``eps``), so ``small`` again carries relative ``eps`` for an
-    ``O(1)`` spread — ``~7 eps`` at the 0.3 rad of the table below. Mixed clouds add two positive
-    terms and inherit the better of the two. What is left is the input representation floor,
-    ``eps*sinh(a)/sqrt(c)`` of geodesic error, exactly as for the key Gram form.
-
-    Cost: ``O(N*M*D)``, one ``(..., N, M, D)`` broadcast-reduce (XLA fuses it on GPU; on XLA:CPU it
-    may materialise) in place of the key Gram's ``(..., M, M, D)`` chord and its ``O(M^2)`` polar
-    squares per key set. For the ``N = 1`` callers — GyroBN's batch mean, the attention head
-    average, pooling, the Fréchet-mean initialisation — that is ``O(M*D)``, the same order as the
-    literal spelling it replaces, so a batch mean is again linear in the batch.
-
-    Measured (probe C.i of ``logs/2026-09-08_hyperboloid_tangent_primitives``, M = 16, c = 0.5,
-    D = 16, uniform weights, 4 seeds; geodesic error of the float32 midpoint against a longdouble
-    reference, medians; "as-is" is the literal ``-h_0^2 + ||h_s||^2`` normalizer). Clouds at scaled
-    radius ``a = sqrt(c)*d``: *radial* = spread 0.3 in ``a`` along one direction, *angular* =
-    spread 0.3 rad at one radius, *mixed* = both ::
-
-                   a = 6      a = 8      a = 9      a = 12
-        radial     1.5e-5     1.0e-4     3.2e-4     5.0e-3     (as-is 5.2e-4, 1.1e-2, 0.41, 3.0)
-        angular    3.6e-7     4.6e-7     3.6e-7     3.5e-7     (as-is 3.6e-7, 4.6e-7, 3.6e-7, 3.6e-7)
-        mixed      3.2e-7     3.6e-7     3.6e-7     3.7e-7     (as-is 4.4e-7, 7.1e-7, 4.3e-7, 4.1e-7)
-
-    The angular and mixed rows are flat in ``a`` because nothing in the normalizer grows with the
-    radius any more. The radial rows are *not* the normalizer: they are the float32 representation
-    floor of the inputs themselves — a relative coordinate error ``2^-24`` is an angular error of
-    the same size, which a geodesic at radius ``a`` amplifies by ``sinh a`` (6e-8 * sinh 12 =
-    5e-3, i.e. the whole entry). In float64 the medians are 4e-14 (radial ``a`` = 6) to 6e-11
-    (radial ``a`` = 12), and 5e-16 to 8e-16 for every angular and mixed row.
+    Here ``a = sqrt(c)*d``; radial clouds have spread 0.3 in ``a``, angular
+    clouds have spread 0.3 radians at one radius, and mixed clouds have both.
+    These are historical value measurements, not derivative or timing guarantees
+    for this implementation. Rounding a direction by ``delta`` can cause a
+    geodesic error of order ``sinh(a)*delta``. A comparison with unrounded inputs
+    includes that storage error as well as arithmetic error; it cannot identify
+    either component by itself.
 
     Parameters
     ----------
@@ -541,32 +507,16 @@ def lorentz_midpoint(
     # are float32-accurate; at the TF32 default the f32-vs-f64 relative error of this function
     # is 4.6e-5 … 2.6e-4 instead of 2.6e-8 … 1.6e-7 (see hyperbolix.utils.precision).
     h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
-    # Variance form (see the docstring): -c*<h,h>_L = c * (h_0 - ||h_s||) * (h_0 + ||h_s||), with
-    # both factors assembled out of non-negative pieces — the radial gap sum_m w_m/(c*u_m), the
-    # weighted spatial radius R = sum_m w_m r_m, and the direction variance V = 1 - ||m_bar||^2.
-    # Nothing is subtracted anywhere, so the O(e^{2a}) scale never enters — unlike the naive
-    # -h_0^2 + ||h_s||^2, which differences two O(e^{2a}) squares to reach an O(W^2/c) result and
-    # keeps no float32 bits past a ~ 8.
-    points_s_MD = points[..., 1:]  # (..., M, D)
-    r_M = safe_norm(points_s_MD)  # (..., M), spatial radii, >= 0
-    x_hat_MD = points_s_MD / floor_at(r_M, MIN_NORM)[..., None]  # (..., M, D), unit directions
-    # On-sheet, x_0 - r = (1/c)/u with u = x_0 + r, so the radial gap is a sum of positives and
-    # never the cancelling x_0 - r itself.
-    inv_u_M = 1.0 / floor_at(points[..., 0] + r_M, MIN_NORM)  # (..., M)
-    # The weight contractions feed the same identity; pinned HIGHEST for the same reason.
-    gap_N = jnp.einsum("...nm,...m->...n", weights, inv_u_M, precision=MATMUL_PRECISION) / c  # (..., N)
-    R_N = jnp.einsum("...nm,...m->...n", weights, r_M, precision=MATMUL_PRECISION)  # (..., N), = ||h_s||/||m_bar||
-    omega_NM = weights * r_M[..., None, :] / floor_at(R_N, MIN_NORM)[..., None]  # (..., N, M), sums to 1
-    m_bar_ND = jnp.einsum("...nm,...md->...nd", omega_NM, x_hat_MD, precision=MATMUL_PRECISION)  # (..., N, D) = h_s/R
-    # V = 1 - ||m_bar||^2 read off as the *direct* variance sum, never as 1 - 2 x_hat.m_bar +
-    # ||m_bar||^2 (which puts the cancellation straight back). The sum over D is a jnp.sum and not
-    # an einsum on purpose: a HIGHEST-pinned per-row dot can lower to a batched GEMM on GPU.
-    dev_sq_NM = jnp.sum((x_hat_MD[..., None, :, :] - m_bar_ND[..., :, None, :]) ** 2, axis=-1)  # (..., N, M)
-    var_N = jnp.einsum("...nm,...nm->...n", omega_NM, dev_sq_NM, precision=MATMUL_PRECISION)  # (..., N)
-    one_plus_N = 1.0 + safe_norm(m_bar_ND)  # (..., N), = 1 + ||m_bar||, in [1, 2]
-    small_N = gap_N + R_N * var_N / one_plus_N  # (..., N) = h_0 - ||h_s||, sum of non-negatives
-    big_N = gap_N + R_N * one_plus_N  # (..., N) = h_0 + ||h_s||, sum of non-negatives
-    neg_c_mink_N1 = (c * small_N * big_N)[..., None]  # (..., N, 1) = -c*<h,h>_L
+    time_M = points[..., 0]  # (..., M), positive on the upper sheet
+    velocity_MD = points[..., 1:] / time_M[..., None]  # (..., M, D)
+    time_N = h_NA[..., 0]  # (..., N)
+    safe_time_N = jnp.where(time_N != 0, time_N, 1.0)
+    mean_ND = h_NA[..., 1:] / safe_time_N[..., None]  # (..., N, D)
+    # Direct variance: expanding these squares reintroduces large-radius cancellation.
+    dev_sq_NM = jnp.sum((velocity_MD[..., None, :, :] - mean_ND[..., :, None, :]) ** 2, axis=-1)
+    terms_NM = 1.0 / time_M[..., None, :] + c * time_M[..., None, :] * dev_sq_NM
+    weighted_N = jnp.einsum("...nm,...nm->...n", weights, terms_NM, precision=MATMUL_PRECISION)
+    neg_c_mink_N1 = (time_N * weighted_N)[..., None]  # (..., N, 1), = -c*<h,h>_L
     denom_N1 = jnp.sqrt(floor_at(jnp.abs(neg_c_mink_N1), eps))  # (..., N, 1)
     z_NA = h_NA / denom_N1  # (..., N, A)
     # The identity above assumes *exactly* on-sheet points, which float storage cannot guarantee at
