@@ -969,7 +969,11 @@ V = \sum_m \omega_m \lVert \hat x_m - \bar m\rVert^2 = 1 - \lVert\bar m\rVert^2 
 $$
 
 the last equality the variance identity, exact for any weights summing to 1 and any unit
-$\hat x_m$. On the sheet $x_{m,0} - r_m = 1/(c\,u_m)$, so with $W = \sum_m w_m$:
+$\hat x_m$. The identity is used only in the derivation above: the code evaluates $V$ as the
+direct weighted sum over the $(\ldots, N, M, D)$ differences $\hat x_m - \bar m$, never as
+$1 - \lVert\bar m\rVert^2$, which cancels for a tight cluster — measured max $V$ 1.19e-07 for that
+spelling against 8.42e-15 for the direct sum on a radial float32 cluster (`step2d_equivalence.out`).
+On the sheet $x_{m,0} - r_m = 1/(c\,u_m)$, so with $W = \sum_m w_m$:
 
 $$
 \mathrm{gap} = \sum_m \frac{w_m}{c\,u_m} = h_0 - R, \qquad
@@ -1142,6 +1146,77 @@ $c \in \{0.1, 0.5, 1, 3\}$ and random/parallel/anti-parallel/perpendicular/degen
 pairs: worst relative disagreement 2.34e-15; against a `np.longdouble` reference the result stays
 inside the float64 representation floor of its own radius (worst 0.62×)
 (`step2c_gyro_difference_equivalence.out`).
+
+### The Geodesic Frame Has No Normalize {#geodesic-frame}
+
+`_polar_frame`'s angular leg used to come from a helper, `_logmap_direction`, that normalized a
+vector which is exactly zero on the whole collinear set — a pair $(x, y)$ sharing a ray, $\psi = 0$
+or $\pi$, $y = x$ included. It returned $(\cos\varphi, \sin\varphi, \hat n)$ with
+$\hat n = \mathrm{normalize}(\hat y_s - \langle \hat x_s, \hat y_s\rangle\, \hat x_s)$; on a
+collinear pair that argument is zero up to rounding, so the normalization's derivative is
+arbitrary, and multiplied by a $\sin\varphi$ that is itself only $O(\text{rounding})$ rather than
+exactly 0, it left an $O(1)$ error in the *gradient* of every consumer while the forward value
+stayed correct. Four public functions share the helper and inherited the defect:
+`Hyperboloid.logmap`, `.ptransp`, `.gyro_difference`, and, through the exact lift onto the
+hyperboloid, `ProperVelocity.logmap`. Pre-existing since the polar-frame `logmap` of 1.1.2
+(2026-08-25).
+
+**The fix.** `_logmap_direction` now returns $(S\cos\varphi, \mathrm{perp}_y)$ with no $1/S$ and no
+$1/\lVert\mathrm{perp}_y\rVert$ anywhere:
+
+$$
+\mathrm{perp}_y = r_y\Big[\tfrac{\mathrm{csum}^2}{4}(\hat y_s - \hat x_s) +
+\tfrac{\mathrm{chord}^2}{4}(\hat x_s + \hat y_s)\Big],
+$$
+
+with $\mathrm{chord}$ and $\mathrm{csum}$ the frame's own norms of $\hat y_s - \hat x_s$ and
+$\hat x_s + \hat y_s$. Each consumer's own prefactor cancels the remaining $S$:
+
+$$
+\log_x(y) = \mathrm{asinhc}(S)\cdot\tfrac{2}{\sqrt c}\cdot(S\cos\varphi)\cdot e_{\mathrm{rad}} +
+\tfrac{\mathrm{asinhc}(S)}{C}\cdot(0, \mathrm{perp}_y), \qquad
+\mathrm{asinhc}(S) = \frac{\mathrm{arcsinh}(S)}{S},
+$$
+
+$$
+\mathrm{ptransp\ scale} = -\frac{S\cos\varphi}{C}\cdot\frac{\mathrm{radial}(v)}{x_0} +
+\frac{c}{2}\cdot\frac{\langle \mathrm{perp}_y, \mathrm{perp}(v)\rangle}{C^2}, \qquad
+(\ominus x)\oplus y = -\frac{2}{\sqrt c}\cdot C\cdot(S\cos\varphi)\cdot\hat x + \mathrm{perp}_y .
+$$
+
+**Two design points.**
+
+- $S\cos\varphi$ is formed as a sum of individually bounded ratios —
+  $P\cdot\mathrm{hypot}(1,P)/C + q\cdot(q/C)\cdot(x_0/r_x)$ — never as the unbounded product $q^2$
+  first, since at large radius $q$ alone is $\sim 10^{18}$ in float32. This keeps the float32 worst
+  case at $a \in \{9, 12\}$ to 1.7e-7 against 2.3e-7 for the previous spelling
+  (`step2e_equivalence.out`).
+- $\mathrm{perp}_y$ is spelled as the non-negative combination of the two orthogonal vectors
+  $\hat y_s - \hat x_s$ and $\hat x_s + \hat y_s$ above, not as
+  $r_y(\hat y_s - \langle\hat x_s,\hat y_s\rangle\hat x_s)$: the dot-product form loses
+  $\mathrm{eps}/\sin\psi$, while the orthogonal-vector form is exactly zero on both degenerate rays
+  ($\psi = 0$ zeroes $\hat y_s - \hat x_s$ and $\mathrm{chord}$ together, $\psi = \pi$ zeroes
+  $\hat x_s + \hat y_s$ and $\mathrm{csum}$ together) and cannot cancel at any other $\psi$.
+
+**Measured** (`step2e_gradients.out`, $a \le 3$, old $\to$ new):
+
+| quantity | dtype | old | new |
+|---|---|---|---|
+| $\nabla\lVert\log_x(y)\rVert^2$ / $\nabla\langle w,\log\rangle$, collinear + $y=x$ | float64 | 2.81 | 1.8e-10 |
+| Jacobian of $\log_x(\cdot)$ at $y=x$ vs. the identity | float64 | 1.00 | 5.0e-16 |
+| `ptransp` $\nabla\langle w, \mathrm{PT}\,v\rangle$, f32-vs-f64 relative error | float32/64 | 3.29 | 4.0e-6 |
+| `gyro_difference` gradient, f32-vs-f64 relative error | float32/64 | 5.94 | 9.6e-7 |
+| PV $\nabla\lVert\log\rVert^2$, collinear | float32 | 4.1e-5 | 2.2e-5 |
+| PV $\nabla\lVert\log\rVert^2$, collinear | float64 | 3.3e-10 | 3.3e-10 |
+
+The PV float32 row is 1.9× better than even the pre-lift ambient PV spelling on the same reference,
+and the float64 row is unchanged either way. Every gradient in this table is finite in both
+dtypes at every radius tested, before and after the fix.
+
+Forward values are unaffected: float64 new-vs-old equivalence at $a \le 6$ over dims 2/5/64,
+$c \in \{0.1, 0.5, 1, 3\}$, 5 geometries, 5 seeds — `logmap` 4.7e-16, `ptransp` 5.8e-14,
+`gyro_difference` 3.2e-15, PV `logmap` 1.5e-15, all against a 1e-12 budget
+(`step2e_equivalence.out`); `dist`, `sqdist` and `_polar_frame` are bitwise unchanged.
 
 ### ProperVelocity's Tangent-Space Metric at Large Radius {#pv-tangent-metric}
 
