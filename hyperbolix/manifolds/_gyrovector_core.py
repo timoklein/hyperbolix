@@ -126,7 +126,6 @@ def _mobius_denominator(
     numerator hand them over; the chord/sum is then the only extra reduction this costs.
     """
     c_arr = jnp.asarray(c)
-    abs_c = jnp.abs(c_arr)
     if x_sqnorm is None:
         x_sqnorm = jnp.dot(x_D, x_D, precision=MATMUL_PRECISION)
     if y_sqnorm is None:
@@ -139,17 +138,27 @@ def _mobius_denominator(
     # instead of collapsing to 0 (the value there is 1 ∓ O(1e-15·|c|·r_y), i.e. 1 in float32).
     r_x = floor_at(safe_sqrt(x_sqnorm), MIN_NORM)
     r_y = floor_at(safe_sqrt(y_sqnorm), MIN_NORM)
-    tau = jnp.where(c_arr > 0, sign, -sign)
-    w_D = x_D / r_x + tau * (y_D / r_y)  # x̂ + τ·ŷ, one (dim,) elementwise op
-    # `(r_x * r_y)` must keep its parentheses: `abs_c * r_x * r_y` associates as
-    # `(abs_c * r_x) * r_y`, which is *not* invariant under swapping x and y, and `1 - t` turns
+    x_hat_D = x_D / r_x
+    y_hat_D = y_D / r_y
+    # `(r_x * r_y)` must keep its parentheses: `c_arr * r_x * r_y` associates as
+    # `(c_arr * r_x) * r_y`, which is *not* invariant under swapping x and y, and `1 - t` turns
     # that 1-ulp asymmetry into a relative one of eps/(1 - t) — enough to break `d(x, y) ==
     # d(y, x)` in float32 past geodesic radius ~5 (test_dist_properties). Everything else here is
     # already swap-symmetric: `r_x*r_y` and `x̂ + ŷ` are commutative, `x̂ - ŷ` is the exact
     # negation of `ŷ - x̂`, and the floor reads only the dtype.
-    t = abs_c * (r_x * r_y)
-    gap = 1.0 - t
-    denom = gap * gap + t * jnp.sum(w_D**2)
+    # Keep both factorizations directly in signed `c`. Besides avoiding cancellation at either sign,
+    # this gives both branches the literal origin slope d(denom)/dc = 2·sign·⟨x,y⟩. Using
+    # `abs(c)` plus a sign-selected direction has the same values away from zero but differentiates
+    # with the wrong one-sided sign at exactly c = 0.
+    signed_t = c_arr * (r_x * r_y)
+    positive_gap = 1.0 - signed_t
+    positive_w_D = x_hat_D + sign * y_hat_D
+    positive_denom = positive_gap * positive_gap + signed_t * jnp.sum(positive_w_D**2)
+
+    negative_gap = 1.0 + signed_t
+    negative_w_D = x_hat_D - sign * y_hat_D
+    negative_denom = negative_gap * negative_gap - signed_t * jnp.sum(negative_w_D**2)
+    denom = jnp.where(c_arr > 0, positive_denom, negative_denom)
     return floor_at(denom, jnp.where(c_arr > 0, _boundary_floor(x_D, c) ** 2, MIN_NORM))
 
 
