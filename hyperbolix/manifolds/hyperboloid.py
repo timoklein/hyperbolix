@@ -348,6 +348,10 @@ def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: S
     spelling battery), ``diag_plfc_kernels_{900f054,b586169}.out`` (the per-kernel profile that
     attributes the cost) and ``diag_plfc_gpu_{900f054,b586169}.out``.
 
+    The one configuration no ambient spelling can serve is the **gyro-difference** ``(⊖x) ⊕ y``
+    with ``y`` close to ``x``, where the boost's three ``O(e^{2a})`` terms cancel identically —
+    use :func:`_gyro_difference` there, which reads the same result off the polar frame.
+
     Args:
         x: Hyperboloid point, shape (dim+1,)
         y: Hyperboloid point, shape (dim+1,)
@@ -374,6 +378,101 @@ def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: S
     # round trip was not free.
     inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
     return jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
+
+
+def _gyro_difference(
+    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
+) -> Float[Array, "dim_plus_1"]:
+    """Gyro-difference ``(⊖x) ⊕ y`` on the Hyperboloid, free of the ambient cancellation.
+
+    ``Λ_x^{-1}`` — the transvection carrying ``x`` back to the origin — is an isometry whose
+    differential along the geodesic ``x → 0`` *is* parallel transport, so exactly::
+
+        (⊖x) ⊕ y = Λ_x^{-1} y = Exp_0( PT_{x→0}( Log_x(y) ) )
+
+    and in the polar frame of :func:`_polar_frame` the transport is free. Writing
+    ``θ = √c·d(x, y)`` and ``Log_x(y) = d·(cos φ·e_rad + sin φ·e_ang)`` as :func:`_logmap` does
+    (``e_rad`` the *inward* unit radial tangent at ``x``, ``e_ang = (0, n̂)`` the in-plane angular
+    one), transport along the radial geodesic sends ``e_rad`` to the outward direction continuing
+    that geodesic past the origin, ``-x̂``, and leaves ``n̂`` alone. So the spatial part is just::
+
+        s = (sinh θ / √c)·(-cos φ·x̂ + sin φ·n̂),      sinh θ = 2·sinh(θ/2)·cosh(θ/2)
+
+    with the time slot rebuilt on-sheet by :func:`_proj`. Every input is a small, accurate
+    quantity read straight off :func:`_polar_frame` / :func:`_logmap_direction`; no transcendental
+    beyond the frame's own, and ``2·S·C`` overflows exactly where the result's own spatial radius
+    does, not sooner.
+
+    **When to use it instead of** ``addition(neg(x), y)``: whenever the result is expected much
+    closer to the origin than the operands — centering a batch on its mean, differences of two far
+    points, distances built from a difference. There the boost ``Λ_{⊖x} y`` forms an ``O(1)``
+    result as a sum of three ``O(e^{2a})`` terms that cancel *identically* at ``y = x``, so its
+    absolute error is ``eps·cosh²(a)/√c`` no matter how close ``y`` is to ``x``. Measured at
+    ``c = 0.5``, ``D = 64``, ``a = 9``, float32, over 4 seeds with ``y`` a ψ-radian rotation of
+    ``x`` — median absolute error of the boost, worst of this spelling::
+
+        psi        true result      boost      this
+        1e-2       10.5 nats        0.89       3.2e-4     (10 % vs 3.1e-5 relative)
+        1e-6       5.7e-3 nats      2.05       1.0e-3     (57 500 % vs 18 % relative)
+
+    **The floor.** What limits this is not the arithmetic but the operands: two float32 points
+    whose directions are ψ radians apart pin the *direction* of their difference only to
+    ``eps32·√D/ψ`` relative, so that is the accuracy of the result. At ``D = 64`` that is 9.5e-5 at
+    ψ = 1e-2 and 0.95 at ψ = 1e-6 — the ψ = 1e-6 column above is entirely this floor, not a defect
+    of the formula. When the result is *far* from the origin the binding floor is instead one
+    float32 ulp of its own spatial radius, ``eps32·sinh(√c·d₀)/√c``. Over ``a ∈ {9, 12}`` and
+    ψ ∈ {1e-2, 1e-4, 1e-6} the measured error is 0.13x to 0.54x the larger of the two floors, i.e.
+    input-limited everywhere.
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_gyro_difference_accuracy.out``.)
+
+    The general :func:`_addition` deliberately keeps the ambient boost: for the ordinary gyro-bias
+    ``x ⊕ exp_0(b)``, whose result is as far out as its base point, the boost is the accurate
+    spelling and needs no frame.
+
+    Cases, all reached without a branch on the value: ``y = x`` gives ``θ = 0`` hence the origin;
+    ``y`` at the origin gives ``θ = a``, ``cos φ = 1`` hence ``⊖x = (x₀, -x_s)``; ``x`` at the
+    origin falls back to ``y`` through the same ``where`` :func:`_logmap` and :func:`_ptransp` use.
+
+    Verified against ``addition(neg(x), y)`` in float64 over dims 2/5/64, ``c ∈ {0.1, 0.5, 1, 3}``,
+    random / parallel / anti-parallel / perpendicular operand pairs and the three degenerate cases:
+    worst relative disagreement 2.3e-15 on the committed oracle's scale, and against a
+    ``np.longdouble`` reference the result is always inside the float64 representation floor of its
+    own radius (worst 0.62x). ``jax.grad`` w.r.t. both operands is finite in both dtypes at ``y = x``
+    and agrees to 3.6e-7 relative between them.
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_gyro_difference_equivalence.out``.)
+
+    Args:
+        x: Hyperboloid point, shape (dim+1,) — the point subtracted
+        y: Hyperboloid point, shape (dim+1,)
+        c: Curvature (positive)
+
+    Returns:
+        Gyrovector difference ``(⊖x) ⊕ y``, shape (dim+1,)
+
+    References:
+        Chen et al. "Hyperbolic neural networks: gyrovector operations on the Lorentz model." 2025b.
+        Shi et al. "Intrinsic Lorentz Neural Network." ICLR 2026, Eq. (1).
+    """
+    frame = _polar_frame(x, y, c)
+    cos_phi, sin_phi, n_hat_D = _logmap_direction(frame)
+
+    # sinh θ = 2·sinh(θ/2)·cosh(θ/2), both factors read off the frame's non-negative haversine
+    # terms. Never `sinh(2·arcsinh(S))` and never `2S·hypot(1, S)` re-derived here: the product of
+    # the two stored factors is the same number without a second transcendental, and it overflows
+    # exactly where the result's own spatial radius does, not sooner.
+    sinh_theta = 2.0 * frame.sinh_half * frame.cosh_half
+
+    # PT_{x→0} in the polar frame: the inward radial leg `e_rad` of `_logmap` transports to the
+    # *outward* unit spatial direction at the origin continuing the same geodesic, i.e. `-x̂`,
+    # while `n̂` (orthogonal to x̂_s, so untouched by a boost in the (t, x̂) plane) is unchanged.
+    dir_D = -cos_phi * frame.x_hat_D + sin_phi * n_hat_D
+    res_s_D = (sinh_theta / frame.sqrt_c) * dir_D
+
+    res = _proj(jnp.concatenate([jnp.zeros((1,), dtype=x.dtype), res_s_D]), c)
+    # x at the origin: ⊖x = 0 and 0 ⊕ y = y, while the radial leg degenerates (x̂_s = 0). Same
+    # `where` fallback `_logmap` / `_ptransp` use, and both branches are finite so its VJP is
+    # NaN-free.
+    return jnp.where(frame.r_x > 0, res, y)
 
 
 def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
@@ -1790,6 +1889,17 @@ class Hyperboloid(ManifoldBase):
         stereographic isometry. ``scalar_mul`` provides the companion gyro scaling (Eq. 2).
         """
         return _addition(self._cast(x), self._cast(y), c)
+
+    def gyro_difference(
+        self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
+    ) -> Float[Array, "dim_plus_1"]:
+        """Gyro-difference ``(⊖x) ⊕ y``, evaluated without the ambient cancellation.
+
+        Mathematically identical to ``addition(scalar_mul(-1, x), y)``; use this whenever the
+        result is expected much closer to the origin than the operands (centering a batch,
+        differences, distances between far points). See :func:`_gyro_difference`.
+        """
+        return _gyro_difference(self._cast(x), self._cast(y), c)
 
     def scalar_mul(
         self, r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature

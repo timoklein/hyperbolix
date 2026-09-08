@@ -1967,6 +1967,64 @@ def test_hyperboloid_addition_matches_the_longdouble_lorentz_boost(c: float, kin
     assert n_checked == len(_BOOST_DIMS) * len(_BOOST_RADII)
 
 
+@pytest.mark.parametrize("kind", _BOOST_DIRECTION_KINDS)
+@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
+def test_hyperboloid_gyro_difference_equals_the_addition_of_the_gyro_inverse(c: float, kind: str):
+    """``gyro_difference(x, y) == addition(⊖x, y)`` to 1e-12 of the largest boost term, float64.
+
+    Same grid, same comparison scale and same reason for that scale as the sibling
+    ``test_hyperboloid_addition_matches_the_longdouble_lorentz_boost``: for a parallel equal-radius
+    pair the difference *is* the origin, so O(1e4) terms cancel to O(1) and a tolerance read off the
+    result alone would be asserting a cancellation the boost is entitled to lose bits in — which is
+    the very thing ``gyro_difference`` exists to avoid.
+
+    This is an identity check, not an accuracy claim: it pins that the polar-frame spelling computes
+    the same map, signs included (the transported radial leg is ``-x̂``, not ``x̂``). Its accuracy
+    claim is ``test_hyperboloid_gyro_difference_is_float32_accurate_at_radius_9_and_12``.
+
+    Measured worst over the grid: 7.8e-16, i.e. 1280x of margin. Against a ``np.longdouble``
+    reference on a wider grid (c = 0.5 and scaled radii up to 6 as well) the two arms are 2.3e-15
+    apart on this scale, and ``gyro_difference`` is always inside the float64 representation floor
+    of the result's own radius while ``addition(⊖x, y)`` is up to 21x outside it — on exactly the
+    cancelling rows. Evidence:
+    ``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_gyro_difference_equivalence.out``.
+    """
+    manifold = Hyperboloid(dtype=F64)
+    sqrt_c = np.sqrt(c)
+    n_checked = 0
+    for dim in _BOOST_DIMS:
+        d1_D, d2_D = _boost_direction_pair(kind, dim)
+        for a, b in _BOOST_RADII:
+            x_s_D = (np.sinh(a) / sqrt_c) * d1_D
+            y_s_D = (np.sinh(b) / sqrt_c) * d2_D
+            x_A = _hyperboloid_point_from_spatial(x_s_D, c, np.float64)
+            y_A = _hyperboloid_point_from_spatial(y_s_D, c, np.float64)
+            neg_x_A = jnp.concatenate([x_A[:1], -x_A[1:]])
+            expected_A = np.asarray(manifold.addition(neg_x_A, y_A, c), dtype=_LD)
+            term = sqrt_c * float(y_A[0]) * float(np.max(np.abs(x_s_D)))
+            scale = max(1.0, float(np.max(np.abs(expected_A))), term)
+            got_A = np.asarray(manifold.gyro_difference(x_A, y_A, c), dtype=_LD)
+            err = float(np.max(np.abs(got_A - expected_A))) / scale
+            assert err <= 1e-12, f"c={c} {kind} dim={dim} a={a} b={b}: {err:.3e}"
+            n_checked += 1
+    assert n_checked == len(_BOOST_DIMS) * len(_BOOST_RADII)
+
+    # The three degenerate cases, against their closed forms rather than against ``addition``:
+    # y = x -> origin, y = origin -> ⊖x, x = origin -> y.
+    dim = 5
+    d_D, _ = _boost_direction_pair("random", dim)
+    x_A = _hyperboloid_point_from_spatial((np.sinh(3.0) / sqrt_c) * d_D, c, np.float64)
+    origin_A = manifold.create_origin(c, dim)
+    neg_x_A = jnp.concatenate([x_A[:1], -x_A[1:]])
+    for label, xx_A, yy_A, want_A in (
+        ("y = x", x_A, x_A, origin_A),
+        ("y = origin", x_A, origin_A, neg_x_A),
+        ("x = origin", origin_A, x_A, x_A),
+    ):
+        got_A = manifold.gyro_difference(xx_A, yy_A, c)
+        assert float(manifold.dist(got_A, want_A, c)) <= 1e-12, f"c={c} {label}"
+
+
 @pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
 @pytest.mark.parametrize("dim", _BOOST_DIMS)
 def test_hyperboloid_ptransp_0_matches_the_longdouble_boost_differential(c: float, dim: int):
@@ -2114,6 +2172,58 @@ def test_hyperboloid_addition_is_float32_accurate_at_radius_9_to_12(a: float):
     grad64_D = np.asarray(jax.grad(loss)(jnp.asarray(b_D), manifold64, x64_A, jnp.asarray(w_D)), dtype=np.float64)
     rel = float(np.max(np.abs(grad32_D - grad64_D)) / np.max(np.abs(grad64_D)))
     assert rel <= 1e-5, f"a={a}: gradient off by {rel:.3e}"
+
+
+@pytest.mark.parametrize(("a", "bound"), [(9.0, 1.5e-4), (12.0, 8.0e-3)])
+def test_hyperboloid_gyro_difference_is_float32_accurate_at_radius_9_and_12(a: float, bound: float):
+    """``(⊖x) ⊕ y`` with ``y`` one 1e-2-rad rotation of ``x``, both at ``√c·d`` in {9, 12}.
+
+    The configuration no ambient spelling can serve. ``addition(⊖x, y)`` is the Lorentz boost, and
+    at ``y = x`` its three ``O(e^{2a})`` terms cancel *identically*, so its absolute error is
+    ``eps·cosh²(a)/√c`` however close ``y`` is to ``x``. ``gyro_difference`` reads the same result
+    off the polar frame, where every factor is small and accurate.
+
+    Measured error relative to the true result's geodesic radius, over the 4 seeds below at
+    ``D = 64``: 2.8e-5 at ``a = 9`` and 1.5e-3 at ``a = 12``, against the bounds below — a factor
+    5.2-5.3 of margin. ``addition(⊖x, y)`` on the same inputs is 0.11 and 0.90 relative, i.e. 1.1
+    and 17 nats absolute.
+
+    **Why the two bounds differ by 50x.** At ``a = 12`` and this rotation the true result is not
+    near the origin at all — it sits at geodesic radius 19 — so what binds is one float32 ulp of the
+    *result's own* spatial radius, ``_representation_floor(√c·19, c) = 5.6e-2`` nats = 2.9e-3
+    relative, and the measured 2.9e-2 nats is 0.52x of it. At ``a = 9`` the result is at radius 10.5
+    and the binding floor is instead the operands' angular resolution ``eps32·√D/ψ = 9.5e-5``
+    relative = 1.0e-3 nats, of which the measured 3.0e-4 is 0.30x. Over the wider probe grid
+    (``ψ ∈ {1e-2, 1e-4, 1e-6}``) the error is 0.13x to 0.54x the larger of those two floors at every
+    cell, i.e. input-limited rather than algorithm-limited. Evidence:
+    ``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_gyro_difference_accuracy.out`` and
+    ``step2c_committed_configs.out`` (this configuration exactly).
+    """
+    c, dim, psi = _LARGE_RADIUS_C, 64, 1e-2
+    manifold32, manifold64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=F64)
+    worst = 0.0
+    for seed in range(4):
+        rng = np.random.default_rng([29, seed])
+        e_D = rng.normal(size=dim)
+        e_D /= np.linalg.norm(e_D)
+        f_D = rng.normal(size=dim)
+        f_D -= np.dot(f_D, e_D) * e_D
+        f_D /= np.linalg.norm(f_D)
+
+        radius = np.sinh(a) / np.sqrt(c)
+        x_s_D = np.asarray(radius * e_D, dtype=np.float32)
+        y_s_D = np.asarray(radius * (np.cos(psi) * e_D + np.sin(psi) * f_D), dtype=np.float32)
+        x32_A = _hyperboloid_point_from_spatial(x_s_D, c, np.float32)
+        y32_A = _hyperboloid_point_from_spatial(y_s_D, c, np.float32)
+
+        # Reference: the longdouble boost Λ_{⊖x} y, fed exactly the float32 spatial parts stored
+        # above, then read back in float64 (its own geodesic floor here is ~1e-13 nats).
+        expected_A = jnp.asarray(np.asarray(_ld_lorentz_boost(-x_s_D, y_s_D, c), dtype=np.float64))
+        got_A = jnp.asarray(np.asarray(manifold32.gyro_difference(x32_A, y32_A, c), dtype=np.float64))
+        geodesic = float(manifold64.dist(got_A, expected_A, c))
+        true_radius = float(manifold64.dist_0(expected_A, c))
+        worst = max(worst, geodesic / true_radius)
+    assert worst <= bound, f"a={a}: {worst:.3e} relative to the true result radius"
 
 
 @pytest.mark.parametrize("a", [9.0, 12.0])

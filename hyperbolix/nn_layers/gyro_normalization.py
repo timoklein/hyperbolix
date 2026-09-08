@@ -177,6 +177,11 @@ class _GyroBatchNormBase(nnx.Module):
         """Ambient tangent-at-origin -> spatial vector (drops the time coordinate)."""
         return v_F[..., self._time_dims :]
 
+    def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
+        """Centering step ``(⊖mu) ⊕ x``, one point at a time. Overridden per manifold."""
+        inv_mu_F = self.manifold.scalar_mul(-1.0, mu_F, c)
+        return jax.vmap(self.manifold.addition, in_axes=(None, 0, None))(inv_mu_F, x_NF, c)
+
     # -- forward -------------------------------------------------------------------
 
     def __call__(
@@ -217,8 +222,7 @@ class _GyroBatchNormBase(nnx.Module):
             self.running_var[...] = jax.lax.stop_gradient(new_var).astype(self.running_var[...].dtype)
 
         # Center: (⊖mu) ⊕ x  (gyro-inverse via reflection through the origin).
-        inv_mu_F = self.manifold.scalar_mul(-1.0, mu_F, c)
-        x_cent_NF = jax.vmap(self.manifold.addition, in_axes=(None, 0, None))(inv_mu_F, x_NF, c)
+        x_cent_NF = self._center(mu_F, x_NF, c)
 
         # Scale: (gamma / sqrt(var + eps)) ⊗ x_centered.
         factor = self.gamma[...] / jnp.sqrt(var + self.eps)
@@ -239,18 +243,45 @@ class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
     spatial dimension ``D``. The batch mean is the closed-form Lorentz centroid
     (HELM, Chen et al. 2024) via :func:`lorentz_midpoint` — exact and JIT-friendly,
     matching the estimator the ILNN GyroBN reference uses in practice.
+
+    Centering goes through :meth:`Hyperboloid.gyro_difference`, not
+    ``addition(scalar_mul(-1, mu), x)``: on a tightly clustered batch the mean sits among
+    the points, so both operands of the centering are far out while the result is ``O(1)``,
+    the ambient boost's three ``O(e^{2a})`` terms cancel, and the centered batch comes back
+    finite, plausible and wrong. Measured on 32 points at scaled radius ``a = 9``,
+    ``c = 0.5``, ``D = 16``, float32 against float64 on bit-identical inputs — max geodesic
+    error of the layer output, by mean pairwise separation of the batch::
+
+        separation   1.80    0.56
+        ambient      2.14    5.22    nats  (bias gradient 2.1 / 28 relative)
+        this         9.0e-4  4.0e-3  nats  (bias gradient 1.3e-3 / 4.1e-3 relative)
+
+    The spread-out far batch of ``tests/nn_layers/test_gyro_normalization.py``'s
+    ``..._at_scaled_radius_9`` does not see this: 32 points in random directions at ``a = 9``
+    have their Lorentz centroid back near the origin, so the centering never cancels there.
+    ``..._on_a_tight_cluster_at_scaled_radius_9`` is the case that does.
+
+    The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
+    :meth:`Hyperboloid.addition`: their base point is the learned bias and their result is
+    genuinely far from the origin, which is the regime the boost is good at. Evidence:
+    ``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_gyro_bn_centering.out``.
     """
 
     _time_dims = 1
 
     def __init__(self, manifold_module: Hyperboloid, num_features: int, **kwargs):
-        validate_hyperboloid_manifold(manifold_module, required_methods=_GYRO_BN_METHODS)
+        validate_hyperboloid_manifold(manifold_module, required_methods=(*_GYRO_BN_METHODS, "gyro_difference"))
         super().__init__(manifold_module, num_features, **kwargs)
 
     def _batch_mean(self, x_NF: Float[Array, "N F"], c: float) -> Float[Array, "F"]:
         n = x_NF.shape[0]
         weights_1N = jnp.full((1, n), 1.0 / n, dtype=x_NF.dtype)  # uniform centroid
         return lorentz_midpoint(x_NF, weights_1N, c)[0]
+
+    def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
+        """``(⊖mu) ⊕ x`` off the polar frame — see the class docstring for why not the boost."""
+        gyro_difference = cast("Hyperboloid", self.manifold).gyro_difference
+        return jax.vmap(gyro_difference, in_axes=(None, 0, None))(mu_F, x_NF, c)
 
 
 class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
