@@ -61,6 +61,9 @@ from ..utils.math_utils import (
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from ._gyrovector_core import _gyration
+from .hyperboloid import _dist_stable as _hyperboloid_dist
+from .hyperboloid import _logmap as _hyperboloid_logmap
+from .isometry_mappings import pv_to_hyperboloid
 from .protocol import ScalarCurvature
 
 # Version selection constant. PV currently has a single canonical implementation,
@@ -111,12 +114,13 @@ def _safe_norm(x: Float[Array, "dim"]) -> Float[Array, ""]:
     """Euclidean norm floored at ``MIN_NORM``, for the sites that divide by it.
 
     ``floor_at(safe_norm(x), MIN_NORM)``, not the old ``sqrt(sum(x**2) + MIN_NORM**2)``. The floor
-    is what the callers need -- ``_scalar_mul``, ``_expmap_0``, ``_logmap_0`` and ``_logmap`` all
-    form an ``f(arg)/arg`` whose limit is 1 only while the two are the same floored quantity --
+    is what the callers need -- ``_scalar_mul``, ``_expmap_0`` and ``_logmap_0`` all form an
+    ``f(arg)/arg`` whose limit is 1 only while the two are the same floored quantity --
     but making it multiplicative removes the old spelling's two defects: ``sum(x**2)`` overflowed
     float32 above coordinate 1.8e19, and the additive ``1e-30`` perturbed every value between
-    ``MIN_NORM`` and ``10·MIN_NORM``. ``_dist``/``_dist_0`` do not divide by the norm and use the
-    unfloored ``safe_norm`` directly.
+    ``MIN_NORM`` and ``10·MIN_NORM``. ``_dist_0`` does not divide by the norm and uses the
+    unfloored ``safe_norm`` directly; ``_dist`` and ``_logmap`` take no norm of their own at all
+    (they defer to the hyperboloid polar frame, see there).
 
     Returns the norm with the last axis **reduced away**. The callers that divide a ``(..., dim)``
     vector by it re-add the axis with ``[..., None]``, which is a no-op in value for the single
@@ -177,25 +181,44 @@ def _scalar_mul(t: Float[Array, ""] | float, x: Float[Array, "dim"], c: ScalarCu
 
 
 def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Geodesic distance d(x, y) on PV (paper Eq. 13, asinh form).
+    """Geodesic distance d(x, y) on PV (paper Eq. 13), evaluated through the exact hyperboloid lift.
 
-    The atanh form ``(2/√c)·atanh(√c·||π(-x⊕y)||)`` is algebraically equal to
-    ``(1/√c)·asinh(√c·||-x⊕y||)`` (both follow from the tanh/sinh half-angle
-    identities). We use the asinh form because jnp.asinh is stable over all
-    of R while atanh requires boundary clamping.
+    Paper Eq. 13 is ``(1/√c)·asinh(√c·‖z‖)`` with the gyro-difference ``z = (⊖x) ⊕ y``,
+    algebraically equal to the atanh form ``(2/√c)·atanh(√c·‖π(z)‖)`` by the sinh/tanh half-angle
+    identity. **Neither is evaluated here.**
 
-    The norm is :func:`~hyperbolix.utils.math_utils.safe_norm`, not ``jnp.linalg.norm``: at
-    ``x == y == 0`` the gyro-difference ``-x ⊕ y`` is exactly the zero vector, where
-    ``linalg.norm``'s VJP is ``0/0 = NaN``. ``safe_norm`` returns an exact ``0`` there with an
-    exactly-zero gradient — the correct subgradient choice at the distance's non-smooth point.
-    It is used in preference to the module's floored ``_safe_norm`` because the norm is not a
-    divisor here, so ``d(x, y) == 0`` is now exact instead of ``MIN_NORM``-floored, and a
-    genuinely small separation is no longer rounded up to ``1e-15``.
+    **Why the gyro-difference form cancels.** ``z = -x + y + {(1/β_y - 1) + c·β_x/(1+β_x)·⟨-x, y⟩}·(-x)``
+    is a sum of three terms each of size ``e^(a+b)/√c`` -- with ``a = √c·d(0, x)``, ``b = √c·d(0, y)``
+    -- that has to cancel down to ``sinh(θ)/√c``, ``θ = √c·d(x, y)``. The surviving significand is
+    ``e^(a + b - θ)`` times smaller than the operands, i.e. twice the Gromov product, so all
+    precision is gone once ``a + b - θ`` passes ``ln(1/eps)``: 15.9 in float32, 36.0 in float64.
+    This is the same failure :func:`~hyperbolix.manifolds.hyperboloid._polar_frame` documents for
+    ``⟨x, y⟩_L``, and it is the same failure for a concrete reason: PV coordinates *are* the
+    hyperboloid spatial part. Measured at ``c = 0.5``, dim 16, on two points a true 0.1 apart along
+    a coordinate axis (which survives the float32 cast exactly, so only the arithmetic is measured),
+    float32 returned **0.0599 at a = 8**, **4.383 at a = 10** and **10.56 at a = 12**.
+
+    **Why the lift is exact.** ``pv_to_hyperboloid`` is an isometry that appends the on-sheet time
+    slot ``√(1/c + ‖x‖²)`` -- a sum of positives, no cancellation of its own -- and leaves the
+    coordinates alone, so ``d_PV(x, y) = d_H(X, Y)`` holds *exactly*, not to some tolerance. The
+    hyperboloid distance runs in the polar (haversine) frame, where ``sinh²(θ/2)`` is a sum of two
+    non-negative terms. Same construction, same points: **≤1.0e-6 relative at all three radii**,
+    against a float32 *storage* floor for the pair itself of 9.2e-7 -- there is nothing left to win
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_accuracy.out``).
+
+    In float64 the new and old spellings agree to ≤8.1e-14 absolute at ``a ≤ 3`` over dims 2/5/64
+    and ``c ∈ {0.1, 0.5, 1, 3}``, which pins the change to a re-spelling rather than a redefinition.
+    At ``a ≤ 6`` they part by up to 3.6e-11, and an 80-bit reference attributes all of it to the old
+    arm: against it the new form is within 7.1e-15 everywhere on that grid, the old within 3.6e-11
+    (``step2c_pv_equivalence.out``, section B).
+
+    ``d(x, y) == 0`` stays *exactly* zero at ``x == y`` with an exactly-zero gradient, for the same
+    structural reason it did before: identical inputs give identical spatial radii and an identical
+    unit direction, so the frame's radial gap and chord are both exactly 0 and
+    ``2·arcsinh(hypot(0, 0))/√c`` is 0 through a ``safe_hypot`` whose VJP at the origin is zero.
+    No coincidence ``where`` is needed on either side.
     """
-    sqrt_c = jnp.sqrt(c)
-    z = _addition(-x, y, c)
-    z_norm = safe_norm(z)
-    return jnp.asinh(sqrt_c * z_norm) / sqrt_c
+    return _hyperboloid_dist(pv_to_hyperboloid(x, c), pv_to_hyperboloid(y, c), c)
 
 
 def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -284,32 +307,52 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
 
 
 def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-    """Logarithmic map at x (paper Eq. 11 with K = -c).
+    """Logarithmic map at x (paper Eq. 11 with K = -c), as the spatial part of the hyperboloid log.
 
-    Uses the simplified form
+    Paper Eq. 11, simplified with the half-angle identity
+    ``2·atanh(√c·‖π(z)‖) = asinh(√c·‖z‖)``, reads
+    ``log_x(y) = asinhc(√c·‖z‖)·(z + (β_x·c/(1+β_x))·⟨x, z⟩·x)`` with ``z = (⊖x) ⊕ y`` and
+    ``asinhc(t) = asinh(t)/t``. **That form is not evaluated here**: it is built on the same
+    ``z`` as :func:`_dist`, so it inherits the same three-way ``O(e^(a+b))`` cancellation described
+    there in full, once in ``‖z‖`` and once in the direction vector.
 
-        log_x(y) = asinhc(√c·||z||) · (z + (β_x·c / (1+β_x)) · ⟨x, z⟩ · x)
+    **The lift.** ``pv_to_hyperboloid`` lifts ``x ↦ X = (√(1/c + ‖x‖²), x)`` and its differential is
+    the identity on spatial parts (``dX = (⟨x, dx⟩/X₀, dx)``), so the hyperboloid tangent vector at
+    ``X`` carries the PV tangent vector as its spatial part and
 
-    with z = -x ⊕ y and asinhc(t) = asinh(t)/t. This follows from the
-    identity ``2·atanh(√c·||π(z)||) = asinh(√c·||z||)`` (tanh/sinh half-angle
-    identity applied to ``β_z/(1+β_z)·√c·||z||``), which collapses the paper's
-    sigma, tau coefficients into a single scalar scaling applied after a vector
-    combination. Avoids explicitly computing π(z).
+        log^PV_x(y) = log^H_X(Y)[1:]
+
+    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._logmap` builds that vector in an
+    orthonormal geodesic frame at ``X`` out of individually bounded ratios of the polar frame, never
+    from an ambient difference. Its ``r_x == 0`` branch is :func:`~hyperbolix.manifolds.hyperboloid._logmap_0`,
+    whose spatial part is exactly this module's :func:`_logmap_0`, so the PV origin keeps the value
+    and the gradient it had.
+
+    Measured at ``c = 0.5``, dim 16, on two points a true 0.1 apart along a coordinate axis, float32
+    ``‖log_x(y)‖_x``: the old spelling returned **0.0599 at a = 8**, **4.383 at a = 10** and
+    **10.56 at a = 12**; this one is within **≤1.0e-6 relative** at all three, against a float32
+    storage floor of 9.2e-7 (``step2c_pv_accuracy.out``). In float64 the two agree to ≤8.1e-14 in
+    PV tangent norm at ``a ≤ 3``, dims 2/5/64, ``c ∈ {0.1, 0.5, 1, 3}``, and against an 80-bit
+    reference at ``a ≤ 6`` the new form is within 4.4e-14 *relative* and the old within 2.7e-11
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_equivalence.out``).
+
+    ``‖log_x(y)‖_x = d(x, y)`` now holds by construction rather than by two independent asinh
+    evaluations agreeing: both read the same polar frame. Measured ≤1.3e-15 relative in float64.
+
+    **Known defect, inherited and not introduced here.** When ``x`` and ``y`` lie on *exactly* the
+    same ray through the origin, the angular unit vector
+    ``n̂ = normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)`` inside
+    :func:`~hyperbolix.manifolds.hyperboloid._logmap_direction` normalizes a vector that is zero up
+    to rounding, so its derivative is arbitrary; multiplied by a ``sin φ`` that is itself only
+    ``O(rounding)`` rather than exactly 0, it leaves an ``O(1)`` error in the *gradient*. The
+    forward value is unaffected (≤1e-15 relative there). Measured on ``∇ ‖log_x(y)‖²`` against an
+    80-bit finite difference: 0.12 relative in float64 and 11 in float32 for a same-ray pair, versus
+    2.5e-11 / 4.2e-6 for the old spelling. The bad set is the exactly-collinear one -- at an angle
+    of 1e-12 rad the float64 gradient is already back to 6.7e-13 -- and ``Hyperboloid.logmap``
+    returns the identical figure on the same points, so the fix belongs there, not here
+    (``step2c_pv_equivalence.out``, section F).
     """
-    sqrt_c = jnp.sqrt(c)
-    beta_x = _beta(x, c)
-
-    z = _addition(-x, y, c)
-    xz = jnp.dot(x, z, precision=MATMUL_PRECISION)
-    z_norm = _safe_norm(z)[..., None]
-    arg = sqrt_c * z_norm
-
-    # asinhc(arg) = asinh(arg)/arg, limit 1 as arg → 0.
-    asinhc = jnp.asinh(arg) / arg
-
-    coef_x = beta_x * c / (1.0 + beta_x)
-    direction = z + coef_x * xz * x
-    return asinhc * direction
+    return _hyperboloid_logmap(pv_to_hyperboloid(y, c), pv_to_hyperboloid(x, c), c)[1:]
 
 
 def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:

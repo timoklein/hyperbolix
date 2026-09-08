@@ -746,6 +746,112 @@ def test_pv_expmap_step_length_matches_the_tangent_norm_at_large_radius(a: float
 
 
 # ---------------------------------------------------------------------------
+# dist / logmap through the exact hyperboloid lift
+# ---------------------------------------------------------------------------
+
+
+def _pair_at_scaled_radius(kind: str, a_x: float, a_y: float, c: float, dim: int) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Two float64 PV points at scaled geodesic radii ``a_x``, ``a_y`` in the named relative position.
+
+    ``d(0, x) = asinh(√c‖x‖)/√c``, so ``√c·d(0, x) = a`` means ``‖x‖ = sinh(a)/√c``. The four
+    geometries are the ones the polar frame treats differently: a generic pair, the two degenerate
+    angles (same ray and opposite rays, where the angular leg of ``sinh²(θ/2)`` vanishes), and a
+    right angle.
+    """
+    gen = np.random.default_rng([41, dim])
+    u_D = np.zeros(dim)
+    u_D[0] = 1.0
+    w_D = np.zeros(dim)
+    w_D[1] = 1.0
+    scale_x, scale_y = np.sinh(a_x) / np.sqrt(c), np.sinh(a_y) / np.sqrt(c)
+    if kind == "random":
+        d_D = gen.normal(size=dim)
+        v_D = d_D / np.linalg.norm(d_D)
+    elif kind == "parallel":
+        v_D = u_D
+    elif kind == "antiparallel":
+        v_D = -u_D
+    elif kind == "perpendicular":
+        v_D = w_D
+    else:
+        raise ValueError(kind)
+    return (
+        jnp.asarray(scale_x * u_D, dtype=jnp.float64),
+        jnp.asarray(scale_y * v_D, dtype=jnp.float64),
+    )
+
+
+@pytest.mark.parametrize(("a_max", "round_trip_bound"), [(3.0, 1e-12), (6.0, 1e-8)])
+def test_pv_logmap_carries_the_distance_and_inverts_expmap_in_float64(a_max: float, round_trip_bound: float) -> None:
+    """``‖log_x(y)‖_x == d(x, y)`` and ``exp_x(log_x(y)) == y``, float64, scaled radius ≤ ``a_max``.
+
+    These are the two identities that make the log map *the* inverse of the exponential map rather
+    than merely a vector of about the right size, and they are what the change to the exact
+    hyperboloid lift has to preserve. ``dist`` and ``logmap`` now read the same
+    ``hyperboloid._polar_frame``, so the first identity holds by construction; asserting it is what
+    would catch a lift that dropped a ``√c`` or transported into the wrong tangent space.
+
+    Measured over ``c ∈ {0.1, 0.5, 1, 3}``, dims 2/5/64 and four pair geometries: ``|‖log‖_x - d|``
+    ≤ 5.3e-15 at ``a ≤ 3`` and ≤1.8e-14 at ``a ≤ 6``.
+
+    The round trip is bounded separately and much more loosely at ``a = 6`` because its accuracy
+    floor is ``_expmap``'s own gyro-``_addition`` -- untouched by this change and still carrying the
+    ``O(e^(a+b))`` three-term cancellation that ``dist`` and ``logmap`` just shed. Measured: 1.6e-13
+    at ``a ≤ 3``, 1.1e-12 at 4, 1.8e-11 at 5 and 2.4e-10 at 6, i.e. the ``eps·e^(2a)`` growth of that
+    cancellation and not a property of the log map.
+    """
+    pv64 = ProperVelocity(dtype=jnp.float64)
+    worst_identity, worst_round_trip = 0.0, 0.0
+    for c in (0.1, 0.5, 1.0, 3.0):
+        for dim in (2, 5, 64):
+            for kind in ("random", "parallel", "antiparallel", "perpendicular"):
+                x_D, y_D = _pair_at_scaled_radius(kind, a_max, 0.6 * a_max, c, dim)
+                d = float(pv64.dist(x_D, y_D, c))
+                log_D = pv64.logmap(y_D, x_D, c)
+                worst_identity = max(worst_identity, abs(float(pv64.tangent_norm(log_D, x_D, c)) - d))
+                worst_round_trip = max(worst_round_trip, float(pv64.dist(pv64.expmap(log_D, x_D, c), y_D, c)))
+
+    assert worst_identity <= 1e-12
+    assert worst_round_trip <= round_trip_bound
+
+
+@pytest.mark.parametrize("a", [8.0, 10.0])
+def test_pv_dist_and_logmap_resolve_a_short_step_at_large_radius_in_float32(a: float) -> None:
+    """``d(x, y)`` and ``‖log_x(y)‖_x`` for two points 0.1 apart at ``√c·d`` ∈ {8, 10}, in float32.
+
+    Both used to be built on the gyro-difference ``z = (⊖x) ⊕ y``, a sum of three terms of size
+    ``e^(a+b)/√c`` cancelling down to ``sinh(θ)/√c``. The surviving significand is ``e^(a+b-θ)``
+    times smaller than the operands, so float32 (``ln(1/eps) = 15.9``) has nothing left at these
+    radii. The outputs were finite and plausible -- a distance, positive, of the right units -- which
+    is why this asserts accuracy against a float64 oracle rather than finiteness.
+
+    Measured with the pre-fix spelling on this construction: 0.0599 at ``a = 8`` (40 % low) and
+    4.383 at ``a = 10`` (4280 % high), against ≤1.1e-6 relative for the current one -- which is the
+    float32 *storage* floor of the pair itself (9.2e-7), so there is nothing further to win. The
+    bound below is ~10x the measured error.
+
+    The direction is a coordinate axis, as in :func:`_radial_unit_tangent` and for the same reason:
+    with a generic direction the float32 cast leaves a perpendicular residue of ~eps in each unit
+    vector, which the polar frame reads as a real angle and which moves the *true* distance of the
+    stored pair by 1.4e-5 relative at ``a = 10``. That is a property of the stored points, not of
+    the arithmetic, and it would be all this test measured.
+    """
+    c, dim, step = 0.5, 16, 0.1
+    pv32, pv64 = ProperVelocity(dtype=jnp.float32), ProperVelocity(dtype=jnp.float64)
+    x64_D, unit_v64_D = _radial_unit_tangent(a, c, dim)
+    y64_D = pv64.expmap(step * unit_v64_D, x64_D, c)
+
+    # The oracle's own claim, checked before it is used as the reference.
+    d_true = float(pv64.dist(x64_D, y64_D, c))
+    assert d_true == pytest.approx(step, rel=1e-9)
+
+    x32_D, y32_D = x64_D.astype(jnp.float32), y64_D.astype(jnp.float32)
+    assert float(pv32.dist(x32_D, y32_D, c)) == pytest.approx(d_true, rel=1e-5)
+    log32_D = pv32.logmap(y32_D, x32_D, c)
+    assert float(pv32.tangent_norm(log32_D, x32_D, c)) == pytest.approx(d_true, rel=1e-5)
+
+
+# ---------------------------------------------------------------------------
 # Gradients at the non-smooth points of the distance (audit D1)
 # ---------------------------------------------------------------------------
 
