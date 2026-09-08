@@ -721,10 +721,17 @@ def test_pv_radial_unit_tangent_keeps_its_norm_in_float32(a: float) -> None:
 def test_pv_expmap_step_length_matches_the_tangent_norm_at_large_radius(a: float) -> None:
     """``d(x, exp_x(v)) = ‖v‖_x`` for a radial ``v`` of length 0.1 at ``√c·d`` ∈ {8, 10}.
 
-    ``_expmap`` takes its geodesic length from ``_tangent_norm``, so the cancellation above
-    landed the float32 step at the wrong distance: measured 0.0849 instead of 0.1 at ``a = 8``
-    and 4.28 instead of 0.1 at ``a = 10`` with the pre-fix spelling, against 1.3e-5 / 1.0e-4
-    relative for the current one.
+    ``_expmap`` lands through the exact hyperboloid lift ``exp^H_X(V)[1:]``, so neither the step's
+    length nor its direction cancels. Two earlier spellings did. The one before ``_tangent_norm``
+    was rewritten took its geodesic *length* from the literal metric form and landed at 0.0849
+    instead of 0.1 at ``a = 8`` and 4.28 at ``a = 10``. The ambient one after it had the length
+    right but built the *direction* from ``dπ_x(v)``, whose two terms cancel by a factor
+    ``β_x ≈ e^{-a}`` on a radial tangent, and then landed through the gyro-addition on top of that:
+    measured 0.100011573 at ``a = 8`` (1.2e-4 relative, both backends) and 0.099952025 on the CPU /
+    0.099870228 on an A100 at ``a = 10`` (4.8e-4 and 1.3e-3 — the second is 1.3x this assert's
+    bound, which is how it surfaced). The current form is 2.0e-7 (CPU) / 1.3e-7 (GPU) at ``a = 8``
+    and 5.7e-7 at ``a = 10`` on both
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_expmap_test_margins_{cpu,gpu}.out``).
 
     The yardstick is deliberately float64: ``ProperVelocity.dist`` between two points 0.1 apart
     at this radius is *itself* a float32 cancellation (it returns 0.315 for a true 0.1 at
@@ -781,7 +788,7 @@ def _pair_at_scaled_radius(kind: str, a_x: float, a_y: float, c: float, dim: int
     )
 
 
-@pytest.mark.parametrize(("a_max", "round_trip_bound"), [(3.0, 1e-12), (6.0, 1e-8)])
+@pytest.mark.parametrize(("a_max", "round_trip_bound"), [(3.0, 1e-12), (6.0, 3e-9)])
 def test_pv_logmap_carries_the_distance_and_inverts_expmap_in_float64(a_max: float, round_trip_bound: float) -> None:
     """``‖log_x(y)‖_x == d(x, y)`` and ``exp_x(log_x(y)) == y``, float64, scaled radius ≤ ``a_max``.
 
@@ -794,11 +801,17 @@ def test_pv_logmap_carries_the_distance_and_inverts_expmap_in_float64(a_max: flo
     Measured over ``c ∈ {0.1, 0.5, 1, 3}``, dims 2/5/64 and four pair geometries: ``|‖log‖_x - d|``
     ≤ 5.3e-15 at ``a ≤ 3`` and ≤1.8e-14 at ``a ≤ 6``.
 
-    The round trip is bounded separately and much more loosely at ``a = 6`` because its accuracy
-    floor is ``_expmap``'s own gyro-``_addition`` -- untouched by this change and still carrying the
-    ``O(e^(a+b))`` three-term cancellation that ``dist`` and ``logmap`` just shed. Measured: 1.6e-13
-    at ``a ≤ 3``, 1.1e-12 at 4, 1.8e-11 at 5 and 2.4e-10 at 6, i.e. the ``eps·e^(2a)`` growth of that
-    cancellation and not a property of the log map.
+    The round trip is bounded separately and more loosely at ``a = 6``, but not because of anything
+    either map spells. ``_expmap`` is now the same exact lift and cancels nowhere, and feeding this
+    very float64 log map into an 80-bit exponential map still leaves 2.2e-13 there, so neither arm
+    of the composition is the floor. What is left is the conditioning of ``exp_x(v)`` for a *long*
+    step: ``‖log_x(y)‖_x`` reaches 30 at ``c = 0.1`` on this grid, and
+    ``cosh(√c‖v‖_x)·X + sinhc(√c‖v‖_x)·V`` then combines two terms of size ``e^(a_x + √c‖v‖_x)``
+    into a point of size ``e^(a_y)``. Measured 1.6e-13 at ``a ≤ 3`` and 7.5e-10 at ``a ≤ 6``,
+    identical on the CPU and on an A100, against 2.5e-13 / 6.5e-10 for the ambient ``_expmap`` this
+    replaced -- the bound is 4x the measured value
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_expmap_landing_{cpu,gpu}.out``,
+    section 2).
     """
     pv64 = ProperVelocity(dtype=jnp.float64)
     worst_identity, worst_round_trip = 0.0, 0.0
