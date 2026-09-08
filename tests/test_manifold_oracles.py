@@ -2818,3 +2818,90 @@ def test_safe_sqrt_is_exact_and_zero_gradient_at_zero(dtype):
     # Away from zero it is the ordinary derivative.
     g1 = float(jax.grad(lambda v: safe_sqrt(v))(jnp.asarray(4.0, dtype=dtype)))
     assert g1 == pytest.approx(0.25, rel=1e-6)
+
+
+_COLLINEAR_SCALES = (1.0, 2.0, 1.7, 0.3)
+"""``r_y/r_x`` along the shared ray. ``1.0`` on the same ray is ``y = x`` exactly."""
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, F64], ids=["f32", "f64"])
+@pytest.mark.parametrize(("kind", "sign"), [("same_ray", 1.0), ("anti_ray", -1.0)])
+def test_hyperboloid_logmap_squared_norm_gradient_is_exact_on_the_collinear_set(kind, sign, dtype):
+    """``∇_{y_s} ‖log_x(y)‖²_x`` against its closed form when ``x`` and ``y`` share a ray.
+
+    ``‖log_x(y)‖_x = d(x, y)`` by construction, so the reference is the closed form of ``∇d²``,
+    evaluated in 80-bit from the *stored* spatial parts with the time slots rebuilt there::
+
+        u = c·(x₀y₀ - ⟨x_s, y_s⟩),   d = arccosh(u)/√c,
+        ∇_{y_s} d² = 2·d·√c·(x₀·y_s/y₀ - x_s)/√(u² - 1)
+
+    It assumes nothing about the pair's geometry, which matters here: rounding ``λ·x_s`` to the dtype
+    scatters ``y_s`` off the ray by an angle ``ψ ~ eps``, and a reference that assumed exact
+    collinearity would charge the code for the resulting (genuine) transverse gradient. At ``y = x``
+    exactly, ``d = 0`` and the gradient is identically zero — the ``arccosh`` form is not used there,
+    since ``u`` is only ``1`` to within one rounding of ``cosh²(a)``.
+
+    The comparison scale is the reference's own max-norm, floored at ``1/(√c·y₀)`` = ``∂d²/∂r_y``
+    per unit ``d``, so the ``y = x`` cell still has a physical scale to divide by.
+
+    This is the configuration where the geodesic frame's angular leg used to be
+    ``normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)``: that argument is zero up to rounding, so the
+    normalization's derivative was arbitrary, and multiplied by a ``sin φ`` that was itself only
+    ``O(rounding)`` it left an **O(1)** error in the gradient while the forward value stayed right.
+    :func:`~hyperbolix.manifolds.hyperboloid._logmap_direction` now returns the unnormalized
+    ``perp_y``, which is smooth across the whole collinear set.
+
+    Measured worst over the grid: 3.8e-15 (float64) and 1.4e-6 (float32), against the bounds below —
+    5.2x and 4.4x of margin. The spelling this replaced is **6.3e-1 (float64) and 1.1 (float32)** on
+    exactly this grid: on a collinear pair its gradient was wrong by 63 % and 114 %, in both dtypes,
+    at every radius.
+
+    **Why the radii stop at 2.** The transverse part of the true ``∇d²`` at a rounding-level ``ψ`` is
+    ``ψ·sinh(a)·cosh(b)/sinh θ`` relative to the radial part, and ``ψ`` is itself only pinned to one
+    ``eps`` by the stored coordinates — so above ``a ≈ 3`` no implementation reading those
+    coordinates can resolve it. The per-radius table in
+    ``logs/2026-09-08_hyperboloid_tangent_primitives/step2e_test_bounds.out`` shows that floor
+    entering: this spelling runs 2.2e-15 / 3.8e-15 / 2.5e-14 / 1.4e-12 in float64 at
+    ``a = 0.5 / 2 / 3 / 5`` while the previous one stays at 3.6e-1 throughout.
+    """
+    bound = 2e-14 if dtype is F64 else 6e-6
+    manifold = Hyperboloid(dtype=dtype)
+
+    def logsq(y_s_D, x_A, cc):
+        # Differentiate w.r.t. the SPATIAL part with the time slot rebuilt on-sheet: that is the
+        # gradient of the function restricted to the manifold. A raw ``jax.grad`` w.r.t. the ambient
+        # point would split the radial support between ``y₀`` and ``y_s`` (see ``_polar_frame``).
+        y_A = manifold.proj(jnp.concatenate([jnp.zeros(1, dtype=y_s_D.dtype), y_s_D]), cc)
+        return manifold.tangent_norm(manifold.logmap(y_A, x_A, cc), x_A, cc) ** 2
+
+    for c in CURVATURES:
+        c_ld, sqrt_c_ld = _LD(c), np.sqrt(_LD(c))
+        for dim in (5, 64):
+            rng = np.random.default_rng([97, dim])
+            e_D = rng.normal(size=dim)
+            e_D /= np.linalg.norm(e_D)
+            for a in (0.5, 1.0, 2.0):
+                x_s_D = np.asarray((np.sinh(a) / np.sqrt(c)) * e_D, dtype=dtype)
+                for scale in _COLLINEAR_SCALES:
+                    coincident = kind == "same_ray" and scale == 1.0
+                    y_s_D = x_s_D if coincident else np.asarray(sign * scale * x_s_D, dtype=dtype)
+                    x_A = _hyperboloid_point_from_spatial(x_s_D, c, dtype)
+
+                    x_ld = np.asarray(x_s_D, dtype=_LD)
+                    y_ld = np.asarray(y_s_D, dtype=_LD)
+                    x0 = np.sqrt(_LD(1.0) / c_ld + np.sum(x_ld * x_ld))
+                    y0 = np.sqrt(_LD(1.0) / c_ld + np.sum(y_ld * y_ld))
+                    if coincident:
+                        expected_D = np.zeros(dim, dtype=np.float64)
+                    else:
+                        u = c_ld * (x0 * y0 - np.sum(x_ld * y_ld))
+                        d_ld = np.arccosh(max(u, _LD(1.0))) / sqrt_c_ld
+                        expected_D = np.asarray(
+                            (2.0 * d_ld * sqrt_c_ld / np.sqrt(u * u - _LD(1.0))) * (x0 * y_ld / y0 - x_ld),
+                            dtype=np.float64,
+                        )
+                    comparison = max(float(np.max(np.abs(expected_D))), float(1.0 / (sqrt_c_ld * y0)))
+
+                    got_D = np.asarray(jax.grad(logsq)(jnp.asarray(y_s_D), x_A, c), dtype=np.float64)
+                    err = float(np.max(np.abs(got_D - expected_D))) / comparison
+                    assert err <= bound, f"c={c} dim={dim} a={a} r_y/r_x={sign * scale}: {err:.3e}"

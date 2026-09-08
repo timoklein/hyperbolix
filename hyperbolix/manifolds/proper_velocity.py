@@ -339,18 +339,20 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     ``‖log_x(y)‖_x = d(x, y)`` now holds by construction rather than by two independent asinh
     evaluations agreeing: both read the same polar frame. Measured ≤1.3e-15 relative in float64.
 
-    **Known defect, inherited and not introduced here.** When ``x`` and ``y`` lie on *exactly* the
-    same ray through the origin, the angular unit vector
-    ``n̂ = normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)`` inside
-    :func:`~hyperbolix.manifolds.hyperboloid._logmap_direction` normalizes a vector that is zero up
-    to rounding, so its derivative is arbitrary; multiplied by a ``sin φ`` that is itself only
-    ``O(rounding)`` rather than exactly 0, it leaves an ``O(1)`` error in the *gradient*. The
-    forward value is unaffected (≤1e-15 relative there). Measured on ``∇ ‖log_x(y)‖²`` against an
-    80-bit finite difference: 0.12 relative in float64 and 11 in float32 for a same-ray pair, versus
-    2.5e-11 / 4.2e-6 for the old spelling. The bad set is the exactly-collinear one -- at an angle
-    of 1e-12 rad the float64 gradient is already back to 6.7e-13 -- and ``Hyperboloid.logmap``
-    returns the identical figure on the same points, so the fix belongs there, not here
-    (``step2c_pv_equivalence.out``, section F).
+    **The collinear gradient.** When ``x`` and ``y`` lie on *exactly* the same ray through the
+    origin, the angular unit vector ``n̂ = normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)`` that
+    :func:`~hyperbolix.manifolds.hyperboloid._logmap_direction` used to build normalized a vector
+    that is zero up to rounding, so its derivative was arbitrary; multiplied by a ``sin φ`` that is
+    itself only ``O(rounding)`` rather than exactly 0, it left an ``O(1)`` error in the *gradient*
+    while the forward value stayed correct. Measured on ``∇ ‖log_x(y)‖²`` against an 80-bit finite
+    difference, that spelling was 0.12 relative in float64 and 11 in float32 on a same-ray pair,
+    against 2.5e-11 / 4.2e-6 for the pre-lift PV form (``step2c_pv_equivalence.out``, section F).
+    The helper now returns the unnormalized ``perp_y`` instead, which is smooth on the whole
+    collinear set. Re-measured with both arms against the *same* 80-bit reference on the same grid
+    (``c ∈ {0.5, 1}``, dims 5/64, ``a ≤ 3``, same-ray and anti-ray): the lift is **3.3e-10** in
+    float64 and **2.2e-5** in float32, the pre-lift ambient form 3.3e-10 and 4.1e-5 — identical in
+    float64, where both sit on the reference's own floor, and 1.9x better in float32
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2e_gradients.out``, section J).
     """
     return _hyperboloid_logmap(pv_to_hyperboloid(y, c), pv_to_hyperboloid(x, c), c)[1:]
 

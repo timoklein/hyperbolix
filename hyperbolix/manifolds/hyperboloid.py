@@ -398,10 +398,16 @@ def _gyro_difference(
 
         s = (sinh θ / √c)·(-cos φ·x̂ + sin φ·n̂),      sinh θ = 2·sinh(θ/2)·cosh(θ/2)
 
-    with the time slot rebuilt on-sheet by :func:`_proj`. Every input is a small, accurate
-    quantity read straight off :func:`_polar_frame` / :func:`_logmap_direction`; no transcendental
-    beyond the frame's own, and ``2·S·C`` overflows exactly where the result's own spatial radius
-    does, not sooner.
+    and with the unnormalized returns of :func:`_logmap_direction` — ``S·cos φ`` and
+    ``sin φ·n̂ = (√c/(2·S·C))·perp_y`` — the ``sinh θ = 2·S·C`` cancels both denominators outright::
+
+        s = -(2/√c)·C·(S·cos φ)·x̂ + perp_y
+
+    with the time slot rebuilt on-sheet from ``s``. No transcendental beyond the frame's own, no
+    normalization, and ``2·S·C·cos φ/√c = sinh(θ)·cos φ/√c`` overflows exactly where the result's
+    own spatial radius ``sinh(θ)/√c`` does, not sooner. Cases: ``y`` at the origin gives
+    ``S·C·cos φ = sinh(a)/2`` and ``perp_y = 0``, hence ``s = -x_s``; ``y = x`` gives ``S·cos φ = 0``
+    and ``perp_y = 0`` exactly, hence the origin exactly.
 
     **When to use it instead of** ``addition(neg(x), y)``: whenever the result is expected much
     closer to the origin than the operands — centering a batch on its mean, differences of two far
@@ -429,9 +435,8 @@ def _gyro_difference(
     ``x ⊕ exp_0(b)``, whose result is as far out as its base point, the boost is the accurate
     spelling and needs no frame.
 
-    Cases, all reached without a branch on the value: ``y = x`` gives ``θ = 0`` hence the origin;
-    ``y`` at the origin gives ``θ = a``, ``cos φ = 1`` hence ``⊖x = (x₀, -x_s)``; ``x`` at the
-    origin falls back to ``y`` through the same ``where`` :func:`_logmap` and :func:`_ptransp` use.
+    Every case above is reached without a branch on the value; ``x`` at the origin falls back to
+    ``y`` through the same ``where`` :func:`_logmap` and :func:`_ptransp` use.
 
     Verified against ``addition(neg(x), y)`` in float64 over dims 2/5/64, ``c ∈ {0.1, 0.5, 1, 3}``,
     random / parallel / anti-parallel / perpendicular operand pairs and the three degenerate cases:
@@ -454,21 +459,24 @@ def _gyro_difference(
         Shi et al. "Intrinsic Lorentz Neural Network." ICLR 2026, Eq. (1).
     """
     frame = _polar_frame(x, y, c)
-    cos_phi, sin_phi, n_hat_D = _logmap_direction(frame)
-
-    # sinh θ = 2·sinh(θ/2)·cosh(θ/2), both factors read off the frame's non-negative haversine
-    # terms. Never `sinh(2·arcsinh(S))` and never `2S·hypot(1, S)` re-derived here: the product of
-    # the two stored factors is the same number without a second transcendental, and it overflows
-    # exactly where the result's own spatial radius does, not sooner.
-    sinh_theta = 2.0 * frame.sinh_half * frame.cosh_half
+    s_cos_phi, perp_y_D = _logmap_direction(frame)
 
     # PT_{x→0} in the polar frame: the inward radial leg `e_rad` of `_logmap` transports to the
-    # *outward* unit spatial direction at the origin continuing the same geodesic, i.e. `-x̂`,
-    # while `n̂` (orthogonal to x̂_s, so untouched by a boost in the (t, x̂) plane) is unchanged.
-    dir_D = -cos_phi * frame.x_hat_D + sin_phi * n_hat_D
-    res_s_D = (sinh_theta / frame.sqrt_c) * dir_D
+    # *outward* unit spatial direction at the origin continuing the same geodesic, i.e. `-x̂`, while
+    # the angular leg (orthogonal to x̂_s, so untouched by a boost in the (t, x̂) plane) is
+    # unchanged. `sinh θ = 2·S·C` cancels against `_logmap_direction`'s own denominators, leaving
+    # `sinh(θ)·cos φ = 2·C·(S·cos φ)` — no second transcendental, and it overflows exactly where the
+    # result's own spatial radius does, not sooner.
+    res_s_D = ((-2.0 / frame.sqrt_c) * frame.cosh_half * s_cos_phi) * frame.x_hat_D + perp_y_D
 
-    res = _proj(jnp.concatenate([jnp.zeros((1,), dtype=x.dtype), res_s_D]), c)
+    # Time slot from the spatial part: `_time_slot` is exactly the reduction `_proj` performs,
+    # called on `res_s_D` directly instead of through `_proj(concatenate([0, res_s_D]))`.
+    # Bit-identical value and gradient — `_proj` slices the dummy slot-0 zero straight back off —
+    # minus a dead `concatenate`/`slice` round trip, whose cost in the vmapped backward is the one
+    # `_addition` documents. `HyperboloidGyroBatchNorm` vmaps this with a shared unbatched `mu`,
+    # which is that exact configuration.
+    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    res = jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
     # x at the origin: ⊖x = 0 and 0 ⊕ y = y, while the radial leg degenerates (x̂_s = 0). Same
     # `where` fallback `_logmap` / `_ptransp` use, and both branches are finite so its VJP is
     # NaN-free.
@@ -984,37 +992,105 @@ def _retraction(
     return res
 
 
-def _logmap_direction(frame: _PolarFrame) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, "dim"]]:
-    """``(cos φ, sin φ, n̂)`` — the unit direction from ``x`` toward ``y`` in the geodesic frame.
+def _asinhc(s: Float[Array, "..."]) -> Float[Array, "..."]:
+    """``arcsinh(S)/S`` — smooth, even, with value ``1`` and slope ``0`` at ``S = 0``.
 
-    ``φ`` is the angle between the geodesic ``x → y`` and the *inward* radial direction ``e_rad``;
-    ``n̂`` is the unit angular direction, the component of ``ŷ_s`` orthogonal to ``x̂_s``. Together
-    they give the unit tangent ``w = cos φ · e_rad + sin φ · e_ang`` that :func:`_logmap` scales by
-    ``d(x, y)`` and :func:`_ptransp` contracts against ``v``. See :func:`_logmap` for the derivation
-    and for why each factor below is individually bounded.
+    The geodesic-frame primitives all carry a factor ``d(x, y)/(2·sinh(θ/2)) = arcsinh(S)/(√c·S)``
+    that their own ``1/S`` denominators used to cancel against. Evaluating the ratio *as one
+    function* is what removes those denominators: the quotient is analytic at the origin, so both
+    the value and the derivative are right at ``S = 0`` and no floor is needed.
+
+    Below ``(336·eps/15)^(1/6)`` — 4.1e-3 in float64, 0.118 in float32 — the two-term Maclaurin
+    series ``1 - S²/6 + 3S⁴/40`` is used. That threshold is where the first dropped term,
+    ``15·S⁶/336``, falls under one rounding, and it is also low enough that the direct branch never
+    has to differentiate through its own cancellation: ``d/dS (arcsinh S/S)`` is formed as
+    ``1/(S·√(1+S²)) - arcsinh(S)/S²``, a difference of two ``O(1/S)`` terms whose ``O(S/3)`` result
+    carries a relative error ``~3·eps/S²``. At the threshold that is 3.9e-11 (float64) / 2.6e-5
+    (float32) on a term whose weight in the total derivative is only ``O(S)``.
+
+    Args:
+        s: ``S = sinh(θ/2)``, any shape
+
+    Returns:
+        ``arcsinh(S)/S``
+    """
+    threshold = (336.0 / 15.0 * float(jnp.finfo(s.dtype).eps)) ** (1.0 / 6.0)
+    small = jnp.abs(s) < threshold
+    # Double `where`: the direct branch is 0/0 = NaN at S = 0 and its derivative is NaN there too,
+    # which `where`'s VJP would multiply by a zero cotangent. Sanitising the *argument* — not just
+    # the output — keeps the NaN from ever being created.
+    s_safe = jnp.where(small, jnp.ones_like(s), s)
+    s_sq = s * s
+    series = 1.0 - s_sq / 6.0 + 0.075 * s_sq * s_sq
+    return jnp.where(small, series, jnp.arcsinh(s_safe) / s_safe)
+
+
+def _logmap_direction(frame: _PolarFrame) -> tuple[Float[Array, ""], Float[Array, "dim"]]:
+    """``(S·cos φ, perp_y)`` — the *unnormalized* geodesic direction data from ``x`` toward ``y``.
+
+    Dimension key:
+        D: spatial dim
+
+    ``φ`` is the angle between the geodesic ``x → y`` and the *inward* radial direction ``e_rad``
+    of :func:`_logmap`, and ``ψ`` the angle between the two spatial directions ``x̂_s`` and ``ŷ_s``.
+    Writing ``A := S·C·cos φ`` for the law of cosines in half-angle form, the two returns are
+
+    * ``A/C = S·cos φ``, with ``P``, ``q``, ``S = sinh(θ/2)`` and ``C = cosh(θ/2)`` read off
+      :func:`_polar_frame`. Since ``A = P·cosh((a - b)/2) + q²·coth a``, this is
+      ``P·(hypot(1, P)/C) + q·(q/C)·(x₀/r_x)`` — the same product of individually bounded ratios the
+      previous ``cos φ`` used, minus its ``1/S`` factors.
+    * ``perp_y := y_s - ⟨x̂_s, y_s⟩·x̂_s``, the component of ``y_s`` orthogonal to ``x̂_s``, whose
+      norm is ``r_y·sin ψ``.
+
+    Every consumer's own prefactor cancels the remaining ``S``, so neither return needs one (see
+    :func:`_logmap`, :func:`_ptransp`, :func:`_gyro_difference`). By the hyperbolic law of sines
+    ``sin φ/sinh b = sin ψ/sinh θ``, so the angular leg of the frame is::
+
+        sin φ · n̂ = (√c·r_y/(2·S·C))·(ŷ_s - cos ψ·x̂_s) = (√c/(2·S·C))·perp_y
+
+    **Why nothing is normalized.** The previous spelling returned ``(cos φ, sin φ, n̂)`` with
+    ``n̂ = normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)``. On a pair that shares a ray (``ψ = 0`` or ``π``,
+    ``y = x`` included) that argument is zero up to rounding, so the normalization's derivative is
+    arbitrary — ``O(1/‖·‖)`` on a direction that is pure rounding — and multiplied by a ``sin φ``
+    that is itself only ``O(rounding)`` rather than exactly 0, it left an ``O(1)`` error in the
+    *gradient* of every consumer while the forward value stayed correct. Returning the
+    unnormalized ``perp_y`` removes the ratio: the map from ``(x, y)`` to ``perp_y`` is smooth
+    everywhere, including on the whole collinear set.
+
+    ``perp_y`` is **not** spelled ``r_y·(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)``. ``ŷ_s - x̂_s`` and ``x̂_s + ŷ_s``
+    are orthogonal (both operands are unit), and in that basis::
+
+        ŷ_s - cos ψ·x̂_s = (csum²/4)·(ŷ_s - x̂_s) + (chord²/4)·(x̂_s + ŷ_s)
+
+    is a **non-negative** combination of two orthogonal vectors, so it cannot cancel: one rounding
+    of relative accuracy at every ``ψ``, where the dot-product form loses ``eps/sin ψ``. Both
+    degenerate rays come out exactly zero, because ``ŷ_s - x̂_s`` and ``chord`` vanish together at
+    ``ψ = 0`` and ``x̂_s + ŷ_s`` and ``csum`` at ``ψ = π``. With ``P = 0`` and ``q = 0`` making
+    ``S·cos φ`` exactly zero as well, ``log_x(x)`` is then exactly the zero vector.
 
     Args:
         frame: The shared :func:`_polar_frame` decomposition of the pair ``(x, y)``
 
     Returns:
-        ``(cos φ, sin φ, n̂)``, the last of shape ``(dim,)``
+        ``(S·cos φ, perp_y)``, the second of shape ``(dim,)``
     """
-    # S = 0 exactly at x == y, where the direction is arbitrary; floor the denominator so the
-    # discarded ratios stay finite (in `_logmap` they are multiplied by dist_xy = 0 anyway).
-    sinh_half_pos = floor_at(frame.sinh_half, MIN_NORM)
-    cos_phi = (frame.sinh_half_gap / sinh_half_pos) * (
-        safe_hypot(jnp.ones_like(frame.sinh_half_gap), frame.sinh_half_gap) / frame.cosh_half
-    ) + (frame.q_angular / sinh_half_pos) * (frame.q_angular / frame.cosh_half) * (frame.x_time / frame.r_x_pos)
-    sin_phi = (
-        (frame.q_angular / sinh_half_pos)
-        * (frame.csum / 2.0)
-        * jnp.sqrt(frame.r_y_pos)
-        / (jnp.sqrt(frame.r_x_pos) * frame.cosh_half)
+    # A/C = S·cos φ. Every ratio is formed before the multiplication, never `q²` first: at large
+    # radius q alone is ~1e18 in float32, while q/C <= 1 and the surviving q is bounded by S. It
+    # also keeps the ratios *correlated*: past float32 radius ~9 the frame's q, S and C agree to
+    # below one ulp, so `q/C` and `hypot(1,P)/C` round to exactly 1 and cos φ carries no error of
+    # its own. `x₀/r_x = coth a` is the one unbounded factor, and it meets `q·(q/C) = O(r_x)`.
+    cos_phi_gap = safe_hypot(jnp.ones_like(frame.sinh_half_gap), frame.sinh_half_gap) / frame.cosh_half
+    s_cos_phi = frame.sinh_half_gap * cos_phi_gap + frame.q_angular * (frame.q_angular / frame.cosh_half) * (
+        frame.x_time / frame.r_x_pos
     )
-    # Unit angular direction: the component of ŷ_s orthogonal to x̂_s. Exactly the zero vector when
-    # the two points share a ray (ψ = 0 or π), which is also where sin φ = 0.
-    n_hat_D = safe_normalize(frame.y_hat_D - jnp.dot(frame.x_hat_D, frame.y_hat_D, precision=MATMUL_PRECISION) * frame.x_hat_D)
-    return cos_phi, sin_phi, n_hat_D
+
+    # perp_y = r_y·[(csum²/4)·(ŷ_s - x̂_s) + (chord²/4)·(x̂_s + ŷ_s)], the cancellation-free form:
+    # `chord` and `csum` are the frame's own norms of exactly these two orthogonal vectors, so a
+    # ray-degenerate pair zeroes a whole term instead of cancelling one against the other.
+    diff_D = frame.y_hat_D - frame.x_hat_D
+    sum_D = frame.x_hat_D + frame.y_hat_D
+    perp_y_D = frame.r_y_pos * ((0.25 * frame.csum * frame.csum) * diff_D + (0.25 * frame.chord * frame.chord) * sum_D)
+    return s_cos_phi, perp_y_D
 
 
 def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
@@ -1029,7 +1105,7 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Sca
     The frame is exactly tangent and exactly orthonormal *analytically*::
 
         e_rad = -√c·(r_x, x₀·x̂_s)         unit, Minkowski-orthogonal to x, pointing at the origin
-        e_ang = (0, n̂),  n̂ = normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)
+        e_ang = (0, n̂),  n̂ the unit angular direction at x in the plane of the geodesic
         log_x(y) = d·(cos φ · e_rad + sin φ · e_ang)
 
     (``⟨e_rad, e_rad⟩_L = c·(x₀² - r_x²) = 1`` and ``⟨e_rad, x⟩_L = 0`` are exact identities on the
@@ -1037,21 +1113,31 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Sca
 
         cos φ·sinh θ = 2P·cosh((a - b)/2) + 2q²·coth a,   sin φ·sinh θ = sin ψ·sinh b
 
-    which, using ``sinh θ = 2·S·C`` and ``sin ψ = chord·csum/2``, factor into products of
-    **individually bounded** ratios of :func:`_polar_frame` quantities::
+    **Neither is formed as a ratio to a length.** With ``sinh θ = 2·S·C``, ``S·cos φ`` and
+    ``perp_y := y_s - ⟨x̂_s, y_s⟩·x̂_s`` — both returned by :func:`_logmap_direction`, neither
+    divided by ``S`` nor by ``‖perp_y‖`` — the whole map is
 
-        cos φ = (P/S)·(hypot(1, P)/C) + (q/S)·(q/C)·(x₀/r_x)
-        sin φ = (q/S)·(csum/2)·√r_y/(√r_x·C)
+        log_x(y) = asinhc(S)·(2/√c)·(S·cos φ)·e_rad + (asinhc(S)/C)·(0, perp_y),
 
-    with ``|P/S| ≤ 1``, ``q/S ≤ 1``, ``q/C ≤ 1``, ``hypot(1, P)/C ≤ 1`` and ``csum/2 ≤ 1``. The one
-    unbounded factor, ``coth a = x₀/r_x``, is multiplied by ``q² = O(r_x)``, so the product is
-    ``O(1)``; writing it as the ratio product above (rather than forming ``q²`` first) is what keeps
-    it from overflowing at large radius, where ``q`` alone is ~1e18 in float32.
+    ``asinhc(S) = arcsinh(S)/S`` (:func:`_asinhc`). This is the same vector: ``d = 2·arcsinh(S)/√c``
+    supplies one ``1/S`` and the law of sines supplies the other, ``sin φ·n̂ = (√c/(2·S·C))·perp_y``.
+    Both coefficients are bounded — ``asinhc(S)·(S·cos φ) = arcsinh(S)·cos φ = (θ/2)·cos φ`` and
+    ``asinhc(S)/C ≤ 1`` — so no intermediate exceeds the result's own scale.
+
+    Removing the two ratios is what fixes the **gradient** on the collinear set; see
+    :func:`_logmap_direction` for what the ``normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)`` it replaced did to
+    it. The forward value is unchanged to 4.7e-16 relative over dims 2/5/64,
+    ``c ∈ {0.1, 0.5, 1, 3}``, random / parallel / anti-parallel / perpendicular / coincident pairs at
+    ``a ≤ 6`` in float64, and in float32 at ``a ∈ {9, 12}`` the worst deviation from the float64
+    result over that grid is 1.7e-7 against 2.3e-7 for the previous spelling
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2e_equivalence.out``).
 
     The result is **not** passed through :func:`_tangent_proj`, because it does not need to be: the
     frame is tangent by construction, with a measured relative residual
     ``|⟨u, x⟩_L|/(‖u‖∞·‖x‖∞)`` of ≤2.3e-7 (float32) / ≤2.9e-16 (float64) — at the rounding floor of
-    the ambient chart. Projecting would replace that with the accuracy of a ``⟨x, u⟩_L`` formed
+    the ambient chart; the un-normalized frame moves that residual by at most 1.02x (2.31e-6 vs
+    2.34e-6 float32 and 6.90e-16 vs 7.28e-16 float64 on step2e's wider ``a ≤ 6`` grid). Projecting
+    would replace it with the accuracy of a ``⟨x, u⟩_L`` formed
     from the two large ambient vectors, which is worse conditioned than the vector it is meant to
     correct. For the same reason ``‖log_x(y)‖_x = d(x, y)`` holds by construction: ``d`` is taken
     from the same frame.
@@ -1072,16 +1158,20 @@ def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: Sca
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
     frame = _polar_frame(x, y, c)
-    dist_xy = 2.0 * jnp.arcsinh(frame.sinh_half) / frame.sqrt_c
-    cos_phi, sin_phi, n_hat_D = _logmap_direction(frame)
+    s_cos_phi, perp_y_D = _logmap_direction(frame)
+    asinhc_s = _asinhc(frame.sinh_half)
 
     # Inward unit radial direction, exactly tangent at x.
     e_rad_A = -frame.sqrt_c * jnp.concatenate([frame.r_x[None], frame.x_time * frame.x_hat_D])
-    # n̂ carries an O(1) spurious component along x̂ when x and y are nearly parallel; here it is
-    # multiplied by `sin φ · d`, so that error stays bounded by the angular displacement.
-    e_ang_A = jnp.concatenate([jnp.zeros(1, dtype=x.dtype), n_hat_D])
+    # perp_y is orthogonal to x̂_s analytically, so this leg is tangent at x for the same reason the
+    # normalized one was; unlike n̂ it is never rescaled by an O(rounding) length.
+    perp_A = jnp.concatenate([jnp.zeros(1, dtype=x.dtype), perp_y_D])
 
-    res = dist_xy * (cos_phi * e_rad_A + sin_phi * e_ang_A)
+    # d·cos φ = asinhc(S)·(2/√c)·(S·cos φ), grouped so that `asinhc(S)·S·cos φ = arcsinh(S)·cos φ` —
+    # a quantity bounded by θ/2 — is formed before it meets e_rad's O(cosh a) entries.
+    radial_coeff = (asinhc_s * (2.0 / frame.sqrt_c)) * s_cos_phi
+    # d·sin φ·n̂ = (asinhc(S)/C)·perp_y, both factors bounded by 1.
+    res = radial_coeff * e_rad_A + (asinhc_s / frame.cosh_half) * perp_A
     return jnp.where(frame.r_x > 0, res, _logmap_0(y, c))
 
 
@@ -1195,6 +1285,15 @@ def _ptransp(
     (the minus sign is ``e_rad``'s inward orientation; ``⟨v, e_rad⟩_L = -radial(v)/(√c·x₀)`` follows
     from eliminating ``v₀`` through tangency). ``v₀`` is therefore never read here either.
 
+    Substituting the unnormalized returns of :func:`_logmap_direction` — ``S·cos φ`` and
+    ``sin φ·n̂ = (√c/(2·S·C))·perp_y`` — collapses the ``√c·(S/C)`` prefactor onto both terms and
+    leaves **no** ``S`` denominator and **no** normalization::
+
+        scale = [ -(S·cos φ/C)·radial(v)/x₀ ] + (c/2)·⟨perp_y, perp(v)⟩/C²
+
+    ``S·cos φ/C = tanh(θ/2)·cos φ`` is bounded by 1, and the angular term takes its two divisions by
+    ``C`` separately, so neither ``C²`` nor a product with ``sinh θ`` is ever materialised.
+
     At ``x`` exactly at the origin the radial leg degenerates and the result falls back to
     :func:`_ptransp_0`, which is exact there. Both branches of the ``where`` are finite, so its VJP
     is NaN-free. Measured on a unit tangent vector transported one 0.05-nat step, float32,
@@ -1219,20 +1318,22 @@ def _ptransp(
             International conference on machine learning (2020).
     """
     frame = _polar_frame(x, y, c)
-    cos_phi, sin_phi, n_hat_D = _logmap_direction(frame)
+    s_cos_phi, perp_y_D = _logmap_direction(frame)
     radial_v, perp_v_D = radial_perp_decomposition(v[1:], x[1:])
 
-    # n̂ MUST meet `perp(v)`, never `v_s`: it is normalized from ŷ_s - ⟨x̂_s, ŷ_s⟩x̂_s, and when the
-    # two directions agree to below the dtype's resolution that difference is pure rounding, so n̂
-    # carries an O(1) spurious component along x̂. Dotted against v's *radial* part that component
-    # injected a 923-unit error into the transported momentum — flipping it and tripling its norm
-    # on every optimizer step. `perp(v)` is orthogonal to x̂ by construction, so it cannot happen.
-    angular_v = jnp.dot(perp_v_D, n_hat_D, precision=MATMUL_PRECISION)
-    # √c·x₀ = cosh a >= 1 on the upper sheet; the floor only guards a degenerate x (x₀ = 0).
-    v_dot_w = -cos_phi * radial_v / floor_at(frame.sqrt_c * frame.x_time, MIN_NORM) + sin_phi * angular_v
+    # `perp_y` MUST meet `perp(v)`, never `v_s`: it is built from ŷ_s - cos ψ·x̂_s, and when the two
+    # directions agree to below the dtype's resolution that difference is pure rounding, so `perp_y`
+    # carries a spurious component along x̂ that is O(1) *relative to its own length*. Dotted against
+    # v's *radial* part, the same component of the normalized n̂ this replaced injected a 923-unit
+    # error into the transported momentum — flipping it and tripling its norm on every optimizer
+    # step. `perp(v)` is orthogonal to x̂ by construction, so it cannot happen.
+    angular_v = jnp.dot(perp_v_D, perp_y_D, precision=MATMUL_PRECISION)
+    # x₀ = cosh(a)/√c >= 1/√c on the upper sheet; the floor only guards a degenerate x (x₀ = 0).
+    x_time_pos = floor_at(frame.x_time, MIN_NORM)
 
-    # C = cosh(θ/2) >= 1, so S/C = tanh(θ/2) needs no floor.
-    scale = frame.sqrt_c * (frame.sinh_half / frame.cosh_half) * v_dot_w
+    # C = cosh(θ/2) >= 1, so neither division needs a floor, and A/C² = tanh(θ/2)·cos φ is bounded.
+    cos_phi_tanh = s_cos_phi / frame.cosh_half
+    scale = -cos_phi_tanh * radial_v / x_time_pos + (0.5 * c) * (angular_v / frame.cosh_half) / frame.cosh_half
     res = v + scale * (x + y)
     return jnp.where(frame.r_x > 0, res, _ptransp_0(v, y, c))
 
