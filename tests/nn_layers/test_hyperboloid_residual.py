@@ -2,11 +2,13 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from flax import nnx
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.nn_layers import LorentzResidual, lorentz_scale
+from hyperbolix.nn_layers.hyperboloid_core import lorentz_residual
 
 
 def get_hyperboloid(dtype: jnp.dtype) -> Hyperboloid:
@@ -261,3 +263,93 @@ def test_residual_init_validation():
         LorentzResidual(learnable_weight=True, init_w_y=0.0)
     with pytest.raises(ValueError):
         LorentzResidual(init_gamma=0.0)
+
+
+# --------------------------------------------------------------------------- #
+# Large scaled radius: accuracy against float64, never finiteness
+#
+# Dimension key: A ambient dim (= D + 1)   D spatial dim
+# --------------------------------------------------------------------------- #
+
+
+def _polar_point(a, u_D, c, dtype=jnp.float64):
+    """On-sheet point ``x = (cosh a, sinh a * u)/sqrt(c)``, ``||u|| = 1``, built in float64.
+
+    Exactly on the sheet by construction and ``sqrt(c) d(0, x) = a``, so a test can place a
+    point at a named scaled geodesic radius rather than at a spatial norm.
+    """
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))
+    a = jnp.asarray(a, dtype=jnp.float64)
+    return jnp.concatenate([(jnp.cosh(a) / sqrt_c)[None], (jnp.sinh(a) / sqrt_c) * u_D]).astype(dtype)
+
+
+def _unit(seed, d):
+    """Unit float64 direction, shape (D,)."""
+    u_D = jax.random.normal(jax.random.PRNGKey(seed), (d,), dtype=jnp.float64)
+    return u_D / jnp.linalg.norm(u_D)
+
+
+def _geodesic(p_A, q_A, c):
+    """Geodesic distance between two hyperboloid points, evaluated in float64."""
+    return float(get_hyperboloid(jnp.float64).dist(jnp.asarray(p_A, jnp.float64), jnp.asarray(q_A, jnp.float64), c))
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3])
+def test_lorentz_residual_radial_pair_at_radius_9_matches_float64(seed):
+    """Two points on one geodesic ray at ``sqrt(c) d = 9``, 0.3 nats apart: geodesic accuracy.
+
+    A radial pair is where ``<x - y, x - y>_L`` cancels hardest: the two points share a
+    direction, so the whole Minkowski square is carried by the radial gap and the literal
+    ``-d_0^2 + ||d_s||^2`` reads it off two ``O(e^{2a})`` squares. The failure it produced was
+    finite and plausible -- an ordinary hyperboloid point in the wrong place -- so the assertion
+    is on the geodesic distance to the float64 result, not on finiteness.
+
+    Measured (c = 0.5, D = 64, seeds 0-3): 2.5e-4 ... 3.1e-4. The pre-fix spelling of the same
+    function is 1.6e-2 ... 6.1e-2 on these inputs.
+
+    The ``LorentzResidual`` module is checked on the same inputs: it is a thin wrapper, and the
+    point is that the layer a user actually calls inherits the accuracy.
+    """
+    c, d, a, gap = 0.5, 64, 9.0, 0.3
+    u_D = _unit(seed, d)
+    x64_A, y64_A = _polar_point(a, u_D, c), _polar_point(a + gap, u_D, c)
+    x32_A, y32_A = x64_A.astype(jnp.float32), y64_A.astype(jnp.float32)
+
+    err = _geodesic(lorentz_residual(x32_A, y32_A, 1.0, c), lorentz_residual(x64_A, y64_A, 1.0, c), c)
+    assert err < 1e-3, f"float32 residual {err:.2e} geodesic from the float64 one"
+
+    module = LorentzResidual(learnable_weight=False, init_w_y=1.0)
+    mod_err = _geodesic(module(x32_A, y32_A, c=c), module(x64_A, y64_A, c=c), c)
+    assert mod_err < 1e-3, f"float32 LorentzResidual {mod_err:.2e} geodesic from the float64 one"
+
+
+@pytest.mark.parametrize("w_y", [0.5, 1.0, 2.0])
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_lorentz_residual_matches_literal_definition_float64(c, w_y):
+    """float64 ``lorentz_residual`` equals the literal definition, computed in NumPy.
+
+    Definition pin rather than an accuracy pin: ``ave = x + w_y y``, then
+    ``z = ave / sqrt(c |<ave, ave>_L|)`` with the time slot rebuilt from the spatial part (what
+    ``spatial_to_hyperboloid`` does). It fixes what the function *means* independently of how
+    the normalizer is spelled, so a future rewrite of the normalizer has to keep reproducing it.
+
+    Generic directions and radii at or below 3, so the literal reference is itself accurate:
+    its cancellation is ``eps64 * cosh^2(a)``, which for a radial pair at ``a = 9`` is 4e-9 and
+    would make the *reference* the inaccurate side. Measured: at or below 1.1e-15.
+    """
+    d = 5
+    k_a, k_u = jax.random.split(jax.random.PRNGKey(int(10 * c) + int(10 * w_y)))
+    a_2 = jax.random.uniform(k_a, (2,), minval=0.5, maxval=3.0, dtype=jnp.float64)
+    u_2D = jax.random.normal(k_u, (2, d), dtype=jnp.float64)
+    u_2D = u_2D / jnp.linalg.norm(u_2D, axis=-1, keepdims=True)
+    x_A, y_A = _polar_point(a_2[0], u_2D[0], c), _polar_point(a_2[1], u_2D[1], c)
+
+    got_A = lorentz_residual(x_A, y_A, w_y, c)
+
+    ave_A = np.asarray(x_A, np.float64) + w_y * np.asarray(y_A, np.float64)
+    mink = -(ave_A[0] ** 2) + np.sum(ave_A[1:] ** 2)
+    z_s_D = ave_A[1:] / np.sqrt(c * abs(mink))
+    ref_A = jnp.asarray(np.concatenate([[np.sqrt(np.sum(z_s_D**2) + 1.0 / c)], z_s_D]))
+
+    err = _geodesic(got_A, ref_A, c)
+    assert err < 1e-12, f"c={c}, w_y={w_y}: residual {err:.2e} geodesic from the literal definition"

@@ -798,3 +798,69 @@ def test_full_attention_score_dtype_float64_island():
     err_f32 = float(jnp.max(jnp.abs(w_f32_BNHM.astype(jnp.float64) - w_ref_BNHM)))
     assert err_island <= 1e-4, f"float64 island differs from the float64 reference by {err_island:.3e}"
     assert err_f32 > 1e-4, f"float32 default path is already accurate ({err_f32:.3e}) — raise the radius"
+
+
+def _polar_points(a_arr, u_arr, c):
+    """On-sheet points ``x = (cosh a, sinh a * u)/sqrt(c)``, ``||u|| = 1``, in float64.
+
+    Exactly on the sheet by construction and ``sqrt(c) d(0, x) = a``, so the caller can place
+    the values at a *named* scaled geodesic radius rather than at a spatial norm.
+    """
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))
+    return jnp.concatenate([(jnp.cosh(a_arr) / sqrt_c)[..., None], (jnp.sinh(a_arr) / sqrt_c)[..., None] * u_arr], -1)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_full_attention_aggregates_far_values_accurately(seed):
+    """Values at ``sqrt(c) d = 9`` aggregate to within 3e-3 geodesic of the float64 run.
+
+    The score path is deliberately kept out of the way — queries and keys sit at scaled radius
+    ~1, where the float32 score floor documented on ``HyperbolicFullAttention`` is inactive
+    (measured softmax weight error 4e-7) — so what this test measures is the *aggregation*: the
+    two ``lorentz_midpoint`` calls in ``_attend``, one over the sequence and one over the heads.
+    ``_attend`` is called directly, as ``test_full_attention_score_dtype_float64_island`` calls
+    ``_attention_weights`` directly, so the projections do not move the values off the cloud.
+
+    The values form one radial cloud: a single geodesic ray, shared by every batch element and
+    every head, with the scaled radii spread by 0.3 along the sequence axis. Sharing the ray
+    across heads is deliberate — with a different ray per head the head-averaging midpoint is a
+    cancellation in its *numerator* (two ``O(6e3)`` spatial vectors summing to an ``O(1)`` one
+    near the origin), an unrelated float32 limit that no normalizer can fix.
+
+    Accuracy, not finiteness: the pre-fix midpoint returned ordinary, finite, on-manifold points
+    0.63 / 1.8 / 12.0 nats away from the float64 answer on these three seeds. Measured for the
+    library: 3.8e-4 ... 5.8e-4.
+    """
+    B, N, H, D, c = 2, 16, 2, 8, 0.5
+    k_q, k_k, k_u, k_a = jax.random.split(jax.random.PRNGKey(seed), 4)
+
+    def _near_origin(key):
+        u_BNHD = jax.random.normal(key, (B, N, H, D), dtype=jnp.float64)
+        u_BNHD = u_BNHD / jnp.linalg.norm(u_BNHD, axis=-1, keepdims=True)
+        a_BNH = 1.0 + 0.3 * jax.random.normal(key, (B, N, H), dtype=jnp.float64)
+        return _polar_points(a_BNH, u_BNHD, c)
+
+    query_BNHA, key_BNHA = _near_origin(k_q), _near_origin(k_k)
+    ray_D = jax.random.normal(k_u, (D,), dtype=jnp.float64)
+    ray_D = ray_D / jnp.linalg.norm(ray_D)
+    a_v_BNH = 9.0 + 0.3 * jax.random.normal(k_a, (B, N, H), dtype=jnp.float64)
+    value_BNHA = _polar_points(a_v_BNH, jnp.broadcast_to(ray_D, (B, N, H, D)), c)
+
+    layer = HyperbolicFullAttention(D + 1, D, num_heads=H, rngs=nnx.Rngs(0))
+    ref_BNA = layer._attend(query_BNHA, key_BNHA, value_BNHA, c_attn=c, c_out=c)
+    got_BNA = layer._attend(*(x.astype(jnp.float32) for x in (query_BNHA, key_BNHA, value_BNHA)), c_attn=c, c_out=c)
+
+    # Sanity: the scores themselves are float32-accurate, so any output gap is the aggregation's.
+    w_err = float(
+        jnp.max(
+            jnp.abs(
+                layer._attention_weights(query_BNHA.astype(jnp.float32), key_BNHA.astype(jnp.float32)).astype(jnp.float64)
+                - layer._attention_weights(query_BNHA, key_BNHA)
+            )
+        )
+    )
+    assert w_err < 1e-5, f"softmax weights already differ by {w_err:.2e}; the scores, not the midpoint, dominate"
+
+    dist_fn = jax.vmap(hyperboloid_f64.dist, in_axes=(0, 0, None))
+    err = float(jnp.max(dist_fn(got_BNA.astype(jnp.float64).reshape(-1, D + 1), ref_BNA.reshape(-1, D + 1), c)))
+    assert err < 3e-3, f"float32 attention output {err:.2e} geodesic from the float64 run"

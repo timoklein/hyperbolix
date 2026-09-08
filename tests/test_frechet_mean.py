@@ -211,6 +211,64 @@ def test_frechet_mean_iteration_knobs_change_the_result():
     assert float(H.dist(frechet_mean(x_NR, H, c, tol=1e-14, max_iters=200), converged_R, c)) < 1e-6
 
 
+def _radial_cloud(seed: int, m: int, a: float, c: float, dim: int, sigma: float = 0.3, dtype=jnp.float64):
+    """``m`` on-sheet points on ONE geodesic ray, scaled radii spread by ``sigma`` around ``a``.
+
+    Polar form ``x = (cosh a_i, sinh a_i · u)/√c`` with ``‖u‖ = 1``: exactly on the sheet, and
+    ``√c·d(0, x_i) = a_i`` by construction, so the cloud sits at a *named* scaled geodesic radius.
+    The radial spread is what makes it hard — a cloud at one common radius has vanishing time
+    components in its differences and does not cancel.
+    """
+    k_dir, k_rad = jax.random.split(jax.random.PRNGKey(seed))
+    u_D = jax.random.normal(k_dir, (dim,), dtype=jnp.float64)
+    u_D = u_D / jnp.linalg.norm(u_D)
+    a_M = a + sigma * jax.random.normal(k_rad, (m,), dtype=jnp.float64)
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))
+    time_M1 = (jnp.cosh(a_M) / sqrt_c)[:, None]
+    space_MD = (jnp.sinh(a_M) / sqrt_c)[:, None] * u_D[None, :]
+    return jnp.concatenate([time_M1, space_MD], axis=-1).astype(dtype)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3])
+def test_frechet_mean_radial_cloud_at_radius_9_matches_float64(seed):
+    """Fréchet mean of a cloud at ``√c·d = 9`` stays within 2e-3 geodesic of the float64 answer.
+
+    Every other item in this file samples wrapped normals with ``sigma ≤ 0.9`` around the origin,
+    i.e. inside the float32-reliable regime; this one is the large-radius guard. It asserts
+    accuracy against the float64 run rather than finiteness on purpose: the failure mode the
+    hyperboloid work was chasing is a long finite-but-wrong phase (an ordinary on-manifold point
+    in the wrong place) that only later turns into a NaN.
+
+    Measured (M = 16, c = 0.5, D = 16, seeds 0-3): 8.6e-5 … 3.1e-4 geodesic.
+
+    Scope, so the bound is not read as more than it is: ``frechet_mean`` consumes
+    ``lorentz_midpoint`` only as its closed-form *initial* estimate, and the Karcher loop is a
+    contraction that repairs a bad init — with a deliberately inaccurate midpoint substituted for
+    the init the converged answer moves by less than 3e-4, at ``max_iters`` 1 as well as 300. So
+    this pins the iteration and the hyperboloid primitives it calls at large radius, not the
+    accuracy of the initial estimate.
+    """
+    c, m, dim, a = 0.5, 16, 16, 9.0
+    H64, H32 = Hyperboloid(dtype=jnp.float64), Hyperboloid(dtype=jnp.float32)
+    x64_MA = _radial_cloud(seed, m, a, c, dim)
+    x32_MA = x64_MA.astype(jnp.float32)
+
+    mean64_A = frechet_mean(x64_MA, H64, c, max_iters=300)
+    mean32_A = frechet_mean(x32_MA, H32, c, max_iters=300)
+    assert bool(jnp.all(jnp.isfinite(mean32_A)))
+
+    err = float(H64.dist(mean32_A.astype(jnp.float64), mean64_A, c))
+    assert err < 2e-3, f"seed {seed}: float32 Fréchet mean {err:.2e} geodesic from the float64 one"
+
+    # Consistency band against the closed-form oracle this file already uses for the two-point
+    # case. The two functionals coincide *exactly* only for two points, so this is a band and not
+    # an identity: the float64 mean is itself 6.8e-5 … 2.8e-3 from the float64 midpoint here.
+    weights_1M = jnp.full((1, m), 1.0 / m, dtype=jnp.float64)
+    midpoint64_A = lorentz_midpoint(x64_MA, weights_1M, c)[0]
+    gap = float(H64.dist(mean32_A.astype(jnp.float64), midpoint64_A, c))
+    assert gap < 1e-2, f"seed {seed}: float32 Fréchet mean {gap:.2e} geodesic from the float64 Lorentz midpoint"
+
+
 def test_frechet_mean_is_not_reverse_mode_differentiable():
     """Reverse-mode AD through the Karcher loop raises — the documented ``while_loop`` limit.
 

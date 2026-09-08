@@ -666,6 +666,86 @@ def test_pv_dpi_norm_identity(curvature: float, pv_points: jnp.ndarray, pv_tange
 
 
 # ---------------------------------------------------------------------------
+# Radial tangents at large scaled geodesic radius
+# ---------------------------------------------------------------------------
+
+
+def _radial_unit_tangent(a: float, c: float, dim: int) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """A point at scaled geodesic radius ``a`` and an *exactly* unit radial tangent there (f64).
+
+    Derivation. ``dist_0(x) = asinh(√c‖x‖)/√c``, so ``√c·d(0, x) = a`` means
+    ``‖x‖ = sinh(a)/√c`` and ``1/β_x = √(1 + c‖x‖²) = cosh(a)``. For a purely radial
+    ``v = x̂·(1/β_x)`` the radial/perp split gives ``perp(v) = 0`` and ``radial(v) = 1/β_x``, so
+    ``g_x(v, v) = (β_x·radial(v))² = 1``: the reference norm is exactly 1, no oracle needed.
+
+    ``1/β_x`` comes from the module's own ``_beta_inv`` rather than from ``cosh(a)`` so the
+    construction cannot drift from the implementation's own conventions.
+
+    The direction is a coordinate axis (as in ``test_pv_stability_at_large_norms``) so that the
+    float32 cast keeps ``v`` exactly radial. With a generic direction the cast leaves a
+    perpendicular residue of ``‖v‖·eps``, whose ``(‖v‖·eps)²/2`` contribution to the norm is a
+    float32 *storage* floor — measured 4.4e-5 at ``a = 12`` — that no arithmetic can remove.
+    """
+    u_D = jnp.zeros(dim, dtype=jnp.float64).at[0].set(1.0)
+    x_D = (jnp.sinh(jnp.asarray(a, dtype=jnp.float64)) / jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))) * u_D
+    return x_D, u_D * pv_impl._beta_inv(x_D, c)
+
+
+@pytest.mark.parametrize("a", [8.0, 10.0, 12.0])
+def test_pv_radial_unit_tangent_keeps_its_norm_in_float32(a: float) -> None:
+    """‖v‖_x = 1 for an exactly-unit radial tangent at ``√c·d`` ∈ {8, 10, 12}, in float32.
+
+    The metric form ``⟨v, v⟩ - c·β_x²·⟨x, v⟩²`` is, for a radial ``v``, the difference of two
+    terms of size ``cosh²(a)·‖v‖²`` reaching an answer of size ``‖v‖²``: at ``a = 8`` that
+    amplification is 2e6, well past float32's ~1e7 of headroom. The output was finite and
+    plausible throughout — a *norm*, positive, of the right order — which is why this asserts
+    accuracy against the known value 1 rather than finiteness.
+
+    Measured (c = 0.5, D = 16): ``|‖v‖_x - 1|`` ≤ 1.2e-7 and ``|g_x(v, v) - 1|`` ≤ 2.4e-7 at all
+    three radii. The pre-fix spelling returns 1.118 (a = 8) and exactly 0 (a = 10 and 12, the
+    form having rounded negative and been clipped), with ``g_x(v, v)`` off by 0.25, 1.0 and 1.5e3.
+    """
+    c, dim = 0.5, 16
+    pv32, pv64 = ProperVelocity(dtype=jnp.float32), ProperVelocity(dtype=jnp.float64)
+    x64_D, v64_D = _radial_unit_tangent(a, c, dim)
+
+    # The construction's own claim, checked before it is used as the reference.
+    assert float(pv64.tangent_norm(v64_D, x64_D, c)) == pytest.approx(1.0, abs=1e-12)
+
+    x32_D, v32_D = x64_D.astype(jnp.float32), v64_D.astype(jnp.float32)
+    assert float(pv32.tangent_norm(v32_D, x32_D, c)) == pytest.approx(1.0, abs=1e-5)
+    assert float(pv32.tangent_inner(v32_D, v32_D, x32_D, c)) == pytest.approx(1.0, abs=1e-5)
+
+
+@pytest.mark.parametrize("a", [8.0, 10.0])
+def test_pv_expmap_step_length_matches_the_tangent_norm_at_large_radius(a: float) -> None:
+    """``d(x, exp_x(v)) = ‖v‖_x`` for a radial ``v`` of length 0.1 at ``√c·d`` ∈ {8, 10}.
+
+    ``_expmap`` takes its geodesic length from ``_tangent_norm``, so the cancellation above
+    landed the float32 step at the wrong distance: measured 0.0849 instead of 0.1 at ``a = 8``
+    and 4.28 instead of 0.1 at ``a = 10`` with the pre-fix spelling, against 1.3e-5 / 1.0e-4
+    relative for the current one.
+
+    The yardstick is deliberately float64: ``ProperVelocity.dist`` between two points 0.1 apart
+    at this radius is *itself* a float32 cancellation (it returns 0.315 for a true 0.1 at
+    ``a = 8``), which this change does not address, so a float32 distance would measure that
+    instead. The float32 *storage* of the landing point is not the issue — a relative coordinate
+    perturbation of 6e-8 is a geodesic perturbation of the same order, five orders below the step.
+    """
+    c, dim = 0.5, 16
+    pv32, pv64 = ProperVelocity(dtype=jnp.float32), ProperVelocity(dtype=jnp.float64)
+    x64_D, unit_v64_D = _radial_unit_tangent(a, c, dim)
+    v64_D = 0.1 * unit_v64_D
+    x32_D, v32_D = x64_D.astype(jnp.float32), v64_D.astype(jnp.float32)
+
+    step = float(pv32.tangent_norm(v32_D, x32_D, c))
+    landed_D = pv32.expmap(v32_D, x32_D, c)
+    landing = float(pv64.dist(x64_D, landed_D.astype(jnp.float64), c))
+
+    assert landing == pytest.approx(step, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
 # Gradients at the non-smooth points of the distance (audit D1)
 # ---------------------------------------------------------------------------
 
