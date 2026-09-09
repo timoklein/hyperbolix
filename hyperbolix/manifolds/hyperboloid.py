@@ -384,6 +384,17 @@ def _pair_has_origin(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"
     return jnp.all(x[1:] == 0) | jnp.all(y[1:] == 0)
 
 
+def _pair_near_origin(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Array:
+    """Use the regular chart where polar-direction derivatives amplify float32 rounding.
+
+    The scaled spatial radius is sqrt(c)*||x_s|| (not the geodesic radius).
+    A 1e-1 neighborhood protects small nonzero endpoints while retaining the polar
+    chart for close pairs at ordinary radii. Both endpoints need this protection.
+    """
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
+    return sqrt_c * jnp.minimum(safe_norm(x[1:]), safe_norm(y[1:])) <= 1e-1
+
+
 def _gyro_difference_cartesian(
     x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, "dim_plus_1"]:
@@ -457,8 +468,8 @@ def _gyro_difference(
     ``x ⊕ exp_0(b)``, whose result is as far out as its base point, the boost is the accurate
     spelling and needs no frame.
 
-    At either exact origin the inverse boost supplies the regular Cartesian derivative. When both
-    spatial endpoints are nonzero, the polar frame preserves precision near coincidence, including
+    When either scaled spatial radius is at most 1e-1, the inverse boost supplies well-conditioned
+    Cartesian derivatives. Outside that neighborhood, the polar frame preserves precision near coincidence, including
     small radii.
 
     The preceding all-polar-frame implementation was verified against ``addition(neg(x), y)`` in
@@ -480,7 +491,7 @@ def _gyro_difference(
         Chen et al. "Hyperbolic neural networks: gyrovector operations on the Lorentz model." 2025b.
         Shi et al. "Intrinsic Lorentz Neural Network." ICLR 2026, Eq. (1).
     """
-    use_cartesian = _pair_has_origin(x, y)
+    use_cartesian = _pair_near_origin(x, y, c)
     origin = _create_origin(c, x.shape[0] - 1, dtype=x.dtype)
     # Keep the unused ambient calculation finite for reverse mode at large radii.
     cartesian_x = jnp.where(use_cartesian, x, origin)
@@ -1307,7 +1318,7 @@ def _ptransp_cartesian(
     y: Float[Array, "dim_plus_1"],
     c: ScalarCurvature,
 ) -> Float[Array, "dim_plus_1"]:
-    """Closed-form transport in the regular Cartesian chart at either endpoint's origin."""
+    """Closed-form transport in the regular Cartesian chart near either endpoint's origin."""
     v_s_D = v[1:]
     v0 = jnp.dot(x[1:] / x[0], v_s_D, precision=MATMUL_PRECISION)
     v_tangent_A = jnp.concatenate([v0[None], v_s_D])
@@ -1381,8 +1392,8 @@ def _ptransp(
     ``C`` separately, so neither ``C²`` nor a product with ``sinh θ`` is ever materialised.
 
     Both charts reconstruct ``v0 = dot(x_s / x0, v_s)`` from the spatial tangent. The Cartesian
-    chart supplies the natural derivative at either exact origin; the polar frame is used whenever
-    both spatial endpoints are nonzero. For the polar-frame scale, a preceding revision measured a
+    chart supplies well-conditioned derivatives when either scaled spatial radius is at most 1e-1;
+    the polar frame is used outside this neighborhood. For the polar-frame scale, a preceding revision measured a
     unit tangent vector transported one 0.05-nat step, float32,
     ``c = 1``, ``D = 16``: the isometry ratio ``‖PT v‖_y/‖v‖_x`` is within 4.1e-6 of 1 through
     geodesic radius 12 and 4.2e-4 at radius 14, where the previous spelling gave 0.750 at radius 8,
@@ -1404,7 +1415,7 @@ def _ptransp(
         Aaron Lou, et al. "Differentiating through the fréchet mean."
             International conference on machine learning (2020).
     """
-    use_cartesian = _pair_has_origin(x, y)
+    use_cartesian = _pair_near_origin(x, y, c)
     origin = _create_origin(c, x.shape[0] - 1, dtype=x.dtype)
     cartesian_x = jnp.where(use_cartesian, x, origin)
     cartesian_y = jnp.where(use_cartesian, y, origin)

@@ -1,6 +1,6 @@
 """Origin and chart-switch derivatives for Hyperboloid maps and their PV lifts.
 
-Dimension key: D spatial dimension; A ambient dimension (D + 1); B batch size.
+Dimension key: D spatial dimension; A ambient dimension (D + 1); B batch size; P paired spatial width (2*D).
 References use NumPy longdouble geometry or converged float64 finite differences.
 """
 
@@ -682,6 +682,54 @@ def _ld_inverse_boost(stored_x_D: np.ndarray, stored_y_D: np.ndarray, c: float) 
     return np.concatenate((np.asarray([np.sqrt(ld(1.0) / c_ld + np.dot(result_D, result_D))]), result_D))
 
 
+@pytest.mark.parametrize("operation", ["difference", "ptransp"])
+@pytest.mark.parametrize("c", [0.1, 1.0])
+@pytest.mark.parametrize("dim", [2, 64])
+def test_small_radius_chart_values_and_gradients_match_independent_fd(operation: str, c: float, dim: int) -> None:
+    """Check both endpoints near zero and on both sides of the scaled-spatial-radius switch."""
+    rng = np.random.default_rng(42)
+    direction_D = rng.normal(size=dim)
+    direction_D /= np.linalg.norm(direction_D)
+    fixed_D = rng.normal(size=dim)
+    fixed_D *= 0.7 / (np.sqrt(c) * np.linalg.norm(fixed_D))
+    w_D = rng.normal(size=dim)
+    w_D /= np.linalg.norm(w_D)
+    cotangent_A = rng.normal(size=dim + 1)
+    cotangent_A /= np.linalg.norm(cotangent_A)
+    pairs = []
+    for radius in (0.0, 1e-8, 1e-6, 1e-4, 0.0099, 0.0101, 0.099, 0.101):
+        small_D = radius * direction_D / np.sqrt(c)
+        pairs.extend((np.concatenate((small_D, fixed_D)), np.concatenate((fixed_D, small_D))))
+    # Round once: float32 and the independent reference see identical spatial coordinates.
+    stored_BP = np.asarray(pairs, dtype=np.float32)
+
+    def numpy_fn(z_P: np.ndarray, curvature: float) -> np.ndarray:
+        z_P = np.asarray(z_P, dtype=np.float64)
+        return _numpy_map(operation, z_P[:dim], z_P[dim:], w_D, curvature)
+
+    expected_BA = np.stack([numpy_fn(z_P, c) for z_P in stored_BP])
+    expected_grad_BP = np.stack([_fd_jacobian(lambda z: np.dot(numpy_fn(z, c), cotangent_A), z_P) for z_P in stored_BP])
+    expected_dc_B = np.asarray(
+        [_fd_scalar(lambda curvature, z_P=z_P: np.dot(numpy_fn(z_P, curvature), cotangent_A), c) for z_P in stored_BP]
+    )
+    for dtype in (jnp.float32, jnp.float64):
+        typed_w_D = jnp.asarray(w_D, dtype=dtype)
+        typed_cotangent_A = jnp.asarray(cotangent_A, dtype=dtype)
+
+        def evaluate(
+            z_P: jax.Array, curvature: jax.Array, typed_w_D=typed_w_D, typed_cotangent_A=typed_cotangent_A
+        ) -> tuple[jax.Array, jax.Array]:
+            value_A = _hyperboloid_map(operation, z_P[:dim], z_P[dim:], typed_w_D, curvature)
+            return jnp.dot(value_A, typed_cotangent_A), value_A
+
+        evaluate_batch = jax.jit(jax.vmap(jax.value_and_grad(evaluate, argnums=(0, 1), has_aux=True), in_axes=(0, None)))
+        (_, values_BA), (grad_BP, dc_B) = evaluate_batch(jnp.asarray(stored_BP, dtype=dtype), jnp.asarray(c, dtype=dtype))
+        rtol, atol = (2e-5, 2e-6) if dtype == jnp.float32 else (2e-7, 2e-8)
+        np.testing.assert_allclose(values_BA, expected_BA, rtol=rtol, atol=atol)
+        np.testing.assert_allclose(grad_BP, expected_grad_BP, rtol=rtol, atol=atol)
+        np.testing.assert_allclose(dc_B, expected_dc_B, rtol=rtol, atol=atol)
+
+
 @pytest.mark.parametrize("step", [1e-4, 1e-6])
 @pytest.mark.parametrize("kind", ["radial", "angular"])
 def test_float32_near_coincident_gyro_difference_matches_longdouble_stored_inputs(step: float, kind: str) -> None:
@@ -696,9 +744,34 @@ def test_float32_near_coincident_gyro_difference_matches_longdouble_stored_input
     got_A = np.asarray(manifold.gyro_difference(_j_lift(jnp.asarray(stored_x_D), c), _j_lift(jnp.asarray(stored_y_D), c), c))
     expected_A = _ld_inverse_boost(stored_x_D, stored_y_D, c)
     np.testing.assert_allclose(got_A, expected_A, rtol=3e-5, atol=3e-7)
-    # A fixed ambient tolerance would hide a centering error comparable to the entire update.
+    # GPU reciprocal-multiply normalization can give collinear stored points a false chord.
+    # Budget eps*radius absolute error for this arithmetic, plus relative error in the update.
+    # This is a bound for the evaluated chart, not an error in the long-double stored-input oracle.
     spatial_error = np.linalg.norm(got_A[1:] - expected_A[1:])
-    assert spatial_error <= 3e-5 * np.linalg.norm(expected_A[1:])
+    rounding_bound = np.finfo(np.float32).eps * max(np.linalg.norm(stored_x_D), np.linalg.norm(stored_y_D))
+    assert spatial_error <= rounding_bound + 3e-5 * np.linalg.norm(expected_A[1:])
+
+
+@pytest.mark.parametrize("c", [0.1, 1.0])
+@pytest.mark.parametrize("radius", [0.005, 0.0099, 0.0101, 0.099, 0.101])
+@pytest.mark.parametrize("step", [1e-4, 1e-6])
+@pytest.mark.parametrize("kind", ["radial", "angular"])
+def test_small_radius_centering_of_rounded_points(c: float, radius: float, step: float, kind: str) -> None:
+    """Independently round points made by float64 radial/angular moves around the chart switch."""
+    direction_D = np.array([0.6, 0.8])
+    x_D = radius * direction_D / np.sqrt(c)
+    if kind == "radial":
+        y_D = np.sinh(np.arcsinh(radius) + step) * direction_D / np.sqrt(c)
+    else:
+        y_D = radius * (np.cos(step) * direction_D + np.sin(step) * np.array([-0.8, 0.6])) / np.sqrt(c)
+    stored_x_D, stored_y_D = np.asarray(x_D, dtype=np.float32), np.asarray(y_D, dtype=np.float32)
+    manifold = Hyperboloid(dtype=jnp.float32)
+    evaluate = jax.jit(lambda x, y: manifold.gyro_difference(_j_lift(x, c), _j_lift(y, c), c))
+    got_A = np.asarray(evaluate(jnp.asarray(stored_x_D), jnp.asarray(stored_y_D)))
+    expected_A = _ld_inverse_boost(stored_x_D, stored_y_D, c)
+    rounding_bound = 2 * np.finfo(np.float32).eps * max(np.linalg.norm(stored_x_D), np.linalg.norm(stored_y_D))
+    assert np.linalg.norm(got_A[1:] - expected_A[1:]) <= rounding_bound + 3e-5 * np.linalg.norm(expected_A[1:])
+    np.testing.assert_allclose(got_A[0], expected_A[0], rtol=2e-7)
 
 
 def _np_transport_from_stored_ambient(v_A: np.ndarray, x_A: np.ndarray, y_A: np.ndarray, c: float) -> np.ndarray:
