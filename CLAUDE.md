@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install
 uv sync --locked --dev
 
-# Run all tests (4,071 items across 963 test functions) on all cores (pytest-xdist; ~11 min on 12 workers,
+# Run all tests (4,446 items across 1,029 test functions) on all cores (pytest-xdist; ~11 min on 12 workers,
 # hours single-process: the suite is JAX-compile-heavy)
 uv run pytest -n auto
 
@@ -18,7 +18,7 @@ uv run pytest tests/test_manifolds.py -v
 # Run a single test function
 uv run pytest tests/test_manifolds.py::test_dist -v
 
-# Run the dim-2 float32 slice of the dim-parametrized suites (78/388 in test_manifolds.py)
+# Run the dim-2 float32 slice of the dim-parametrized suites (78/390 in test_manifolds.py)
 # The parametrization ids spell the dimension as a bare number, e.g. [PoincareBall-c1-2-float32-10]
 uv run pytest -k "2-float32"
 
@@ -45,7 +45,7 @@ uv run pytest tests/<relevant_test_file>.py -x -v
 ```
 Anything larger than one or two files gets `-n auto` (pytest-xdist); never run the full suite single-process.
 On a GPU box the xdist workers must not preallocate, or they exhaust the device before any test runs — `tests/conftest.py` now defaults `XLA_PYTHON_CLIENT_PREALLOCATE=false`, so nothing extra is needed; set `JAX_PLATFORMS=cpu` instead when the GPU is busy with someone else's job.
-For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (78 of the 388 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
+For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (78 of the 390 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
 
 ## Architecture
 

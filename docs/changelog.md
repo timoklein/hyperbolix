@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-09
+
 ### Changed
 - **`LearnableCurvature`'s default `parameterization` is now `"log"` (was `"softplus"`).** The softplus docstring's attribution to "the van Spengler et al. 2023 Poincare ResNet convention" didn't hold up: that paper's own reported curvature experiments (Sec. 4.2) sweep fixed values `c ∈ {1, 0.1, 0.01}` and settle on `c=0.1`, not a learnable softplus-reparameterized curvature — the `softplus(raw)` mechanism itself is geoopt's `Stereographic`/`PoincareBall` convention, which the released Poincare ResNet code happens to default to (`learnable=True`) since its manifold is built on geoopt. `"softplus"` remains available and its docstring now cites geoopt with the code-default note. **Breaking for call sites relying on the implicit default** — pass `parameterization="softplus"` explicitly to keep the old behavior
 
@@ -431,7 +433,9 @@ versioning.
 ### References
 - Based on research by Ganea et al. (2018), Bécigneul & Ganea (2019), Bdeir et al. (2023)
 
-[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/timoklein/hyperbolix/compare/v1.2.1...v1.3.0
+[1.2.1]: https://github.com/timoklein/hyperbolix/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/timoklein/hyperbolix/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/timoklein/hyperbolix/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/timoklein/hyperbolix/compare/v1.1.0...v1.1.1
