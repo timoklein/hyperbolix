@@ -1211,7 +1211,8 @@ def _logmap_impl(
     sinh_half_sq = floor_at(0.5 * (alpha - 1.0), 0.0)
     scale = _asinhc(safe_sqrt(sinh_half_sq)) / jnp.sqrt(1.0 + sinh_half_sq)
     u_s_D = scale * (cartesian_y[1:] - alpha * cartesian_x[1:])
-    u0 = jnp.dot(cartesian_x[1:], u_s_D, precision=MATMUL_PRECISION) / cartesian_x[0]
+    # Divide first: the unscaled dot product can overflow even when the tangent is representable.
+    u0 = jnp.dot(cartesian_x[1:] / cartesian_x[0], u_s_D, precision=MATMUL_PRECISION)
     cartesian = jnp.concatenate([u0[None], u_s_D])
     return jnp.where(use_cartesian, cartesian, _logmap_frame(y, x, c))
 

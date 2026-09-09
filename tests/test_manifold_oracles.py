@@ -1155,9 +1155,9 @@ def test_hyperboloid_dist_and_logmap_to_the_origin_match_the_origin_variants(dty
     u = np.asarray(manifold.logmap(origin_A, x_A, c), dtype=np.float64)
     assert np.allclose(u, d * e_rad_A, rtol=max(rtol, 1e-6) * 10.0, atol=0.0)
 
-    # ...and the reverse direction falls back to logmap_0, which is exact at the origin.
+    # The reverse direction uses an equivalent Cartesian chart, with independent rounding.
     u0 = np.asarray(manifold.logmap(x_A, origin_A, c), dtype=np.float64)
-    assert np.allclose(u0, np.asarray(manifold.logmap_0(x_A, c), dtype=np.float64), rtol=1e-12, atol=0.0)
+    assert np.allclose(u0, np.asarray(manifold.logmap_0(x_A, c), dtype=np.float64), rtol=max(rtol, 1e-12), atol=0.0)
 
 
 # ---------------------------------------------------------------------------------------------
