@@ -1318,7 +1318,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#130-2026-09-09" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.3.0 - 2026-09-09
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.3.0 - 2026-09-09">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1374,12 +1385,12 @@
   <a href="#121-2026-09-06" class="md-nav__link">
     <span class="md-ellipsis">
       
-        [1.2.1] - 2026-09-06
+        1.2.1 - 2026-09-06
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="[1.2.1] - 2026-09-06">
+    <nav class="md-nav" aria-label="1.2.1 - 2026-09-06">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2451,7 +2462,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#130-2026-09-09" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.3.0 - 2026-09-09
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.3.0 - 2026-09-09">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2507,12 +2529,12 @@
   <a href="#121-2026-09-06" class="md-nav__link">
     <span class="md-ellipsis">
       
-        [1.2.1] - 2026-09-06
+        1.2.1 - 2026-09-06
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="[1.2.1] - 2026-09-06">
+    <nav class="md-nav" aria-label="1.2.1 - 2026-09-06">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -3565,7 +3587,8 @@
 <p>All notable changes to Hyperbolix will be documented in this file.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
-<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.2.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.3.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="130-2026-09-09"><a href="https://github.com/timoklein/hyperbolix/compare/v1.2.1...v1.3.0">1.3.0</a> - 2026-09-09<a class="headerlink" href="#130-2026-09-09" title="Permanent link">&para;</a></h2>
 <h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong><code>LearnableCurvature</code>'s default <code>parameterization</code> is now <code>"log"</code> (was <code>"softplus"</code>).</strong> The softplus docstring's attribution to "the van Spengler et al. 2023 Poincare ResNet convention" didn't hold up: that paper's own reported curvature experiments (Sec. 4.2) sweep fixed values <code>c ∈ {1, 0.1, 0.01}</code> and settle on <code>c=0.1</code>, not a learnable softplus-reparameterized curvature — the <code>softplus(raw)</code> mechanism itself is geoopt's <code>Stereographic</code>/<code>PoincareBall</code> convention, which the released Poincare ResNet code happens to default to (<code>learnable=True</code>) since its manifold is built on geoopt. <code>"softplus"</code> remains available and its docstring now cites geoopt with the code-default note. <strong>Breaking for call sites relying on the implicit default</strong> — pass <code>parameterization="softplus"</code> explicitly to keep the old behavior</li>
@@ -3859,7 +3882,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong><code>HyperbolicFullAttention(score_dtype=...)</code>.</strong> An opt-in float64 island for the Lorentzian similarity score: the two einsums and the <code>2 + 2⟨Q,K⟩_L</code> / scale / bias / causal-mask arithmetic run in <code>score_dtype</code> and are cast back to the working dtype before the softmax. <code>score_dtype=None</code> (the default) leaves the score path unchanged op for op. The GEMM-formed score has no cancellation-free spelling — any matrix product of the ambient coordinates returns the Gram matrix to absolute <code>eps</code> — so past <code>a ≈ 8</code> (<code>c=1</code>, <code>scale=1</code>) the absolute score error <code>eps·cosh(a_q)·cosh(a_k)/(c·scale)</code> exceeds what softmax can resolve; <code>score_dtype=jnp.float64</code> fixes the arithmetic but not float32 storage of the activations themselves — see <code>docs/user-guide/numerical-stability.md</code>.</li>
 <li><strong><code>Hyperboloid.gyro_difference(x, y, c)</code></strong> — <code>(⊖x) ⊕ y</code> for centering a batch on its mean and differences expected to lie closer to the origin than their operands. It is mathematically identical to <code>addition(scalar_mul(-1, x), y)</code>, using a Cartesian inverse boost when either endpoint is exactly the origin and the stable polar frame otherwise. The historical equivalence measurements in <code>step2c_gyro_difference_equivalence.out</code> predate the Cartesian origin repair. <code>HyperboloidGyroBatchNorm</code> uses this method for centering.</li>
 </ul>
-<h2 id="121-2026-09-06">[1.2.1] - 2026-09-06<a class="headerlink" href="#121-2026-09-06" title="Permanent link">&para;</a></h2>
+<h2 id="121-2026-09-06"><a href="https://github.com/timoklein/hyperbolix/compare/v1.2.0...v1.2.1">1.2.1</a> - 2026-09-06<a class="headerlink" href="#121-2026-09-06" title="Permanent link">&para;</a></h2>
 <h3 id="fixed_1">Fixed<a class="headerlink" href="#fixed_1" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>The origin Jacobian of <code>Hyperboloid.expmap</code> / <code>expmap_0</code> was <code>√c·I</code> instead of <code>I</code> for every <code>c &lt; 1</code>.</strong> It bit whenever the tangent vector satisfied <code>‖v‖ ≲ 1e-15/√c</code>, the zero tangent included: the divisor of the <code>sinh(t)/t</code> ratio carried a second <code>MIN_NORM</code> floor (<code>denom = floor_at(√c·‖v‖, MIN_NORM)</code>) that the numerator did not, so at <code>v = 0</code> the ratio evaluated to <code>√c·1e-15 / 1e-15 = √c</code> rather than 1 and the whole spatial Jacobian came out scaled by <code>√c</code> — a zero-initialised gyro-bias saw its first gradient scaled by 0.32 at <code>c = 0.1</code>, 0.55 at <code>c = 0.3</code>, in both dtypes (<code>c ≥ 1</code> was unaffected, since the floor is inactive there). Found by an independent numerics review. The divisor is now the same floored <code>t = √c·‖v‖</code>, which is <code>≥ √c·1e-15 &gt; 0</code> and normal in both dtypes, so <code>sinh(t)/t</code> is exactly 1 there; the Poincaré, stereographic and proper-velocity exponential maps already divided by a single floored quantity and are unchanged. <code>test_hyperboloid_expmap_at_the_origin_has_the_identity_jacobian</code> pins the identity at <code>c ∈ {0.1, 0.3, 1, 2.5}</code> in both dtypes, and <code>test_hyperboloid_gyro_bias_at_the_origin_has_a_nonzero_jacobian</code> now runs at <code>c = 0.1</code> as well as <code>c = 1</code>.</li>
