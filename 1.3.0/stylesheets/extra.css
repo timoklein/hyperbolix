@@ -1,0 +1,25 @@
+/* Custom styles for Hyperbolix documentation */
+
+/* Improve code block visibility */
+.highlight {
+  border-radius: 4px;
+}
+
+/* Better math rendering spacing */
+.arithmatex {
+  margin: 0.5em 0;
+}
+
+/* Improve table readability */
+table {
+  border-collapse: collapse;
+}
+
+table th {
+  font-weight: 600;
+}
+
+/* Admonition styling tweaks */
+.admonition {
+  margin: 1em 0;
+}
