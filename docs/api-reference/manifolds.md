@@ -166,12 +166,11 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
     - `log_radius_concat`: log-radius–preserving concatenation (digamma-scaled `hcat`; Shi et al. 2026, Sec. 4.3)
 
 !!! note "Origin derivatives"
-    `gyro_difference` and `ptransp` use Cartesian formulas when either endpoint has
-    scaled spatial radius at most 1, and retain the stable polar frame when both
-    endpoints lie outside that chart. `logmap` keeps its polar-frame forward value
-    and uses an equivalent Cartesian derivative rule over the same low-radius
-    region. This preserves derivatives with respect to an origin endpoint; earlier
-    value-only origin fallbacks erased them. `busemann` uses a projected-coordinate
+    `gyro_difference` and `ptransp` use Cartesian formulas when either endpoint is
+    exactly the origin, and retain the stable polar frame otherwise. `logmap` uses
+    the regular Cartesian expression at an exact origin endpoint and the stable
+    polar frame otherwise. Ordinary autodiff preserves derivatives with respect to
+    an origin endpoint; earlier value-only origin fallbacks erased them. `busemann` uses a projected-coordinate
     branch whose value and constrained first derivative agree at its branch surface.
     See [Origin derivatives and the Cartesian chart](
     ../user-guide/numerical-stability.md#origin-derivatives).
@@ -203,8 +202,8 @@ The Proper Velocity (PV) model — an **unconstrained** $\mathbb{R}^n$ represent
     $x\mapsto(\sqrt{1/c+\lVert x\rVert^2},x)$. For tangent operations,
     $v\in T_x$ lifts to $(\langle x,v\rangle/X_0,v)$. The PV result is the
     spatial part of the hyperboloid result; no Poincaré chart conversion is used.
-    `gyro_difference`, `ptransp`, and the derivative of `logmap` inherit the
-    hyperboloid's Cartesian low-radius branch and its repaired origin derivatives.
+    `gyro_difference`, `ptransp`, and `logmap` inherit the hyperboloid's exact-origin
+    Cartesian branch and its repaired origin derivatives.
     `ProperVelocityGyroBatchNorm` centers with `gyro_difference`. See
     [ProperVelocity operation bridges](
     ../user-guide/numerical-stability.md#pv-operation-lifts).

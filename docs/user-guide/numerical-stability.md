@@ -1093,9 +1093,8 @@ from 8.170e-02 to 8.836e-05 at $a = 8$ and from 7.731e-02 to 1.575e-04 at $a = 1
 
 ### Gyro-Difference and GyroBatchNorm Centering at Large Radius {#gyro-difference}
 
-The current operation uses a Cartesian inverse boost when either endpoint has
-scaled spatial radius at most 1 and the stable polar frame when both endpoints
-lie outside that chart. The measurements in this section describe the preceding
+The current operation uses a Cartesian inverse boost when either endpoint is
+exactly the origin and the stable polar frame otherwise. The measurements in this section describe the preceding
 high-radius value and collinear-gradient repairs, before the Cartesian origin
 branch; they are not measurements of the current origin derivative rule.
 
@@ -1115,7 +1114,7 @@ $$
 (\ominus x) \oplus y = \Lambda_x^{-1} y = \mathrm{Exp}_0\big(\mathrm{PT}_{x\to 0}(\mathrm{Log}_x y)\big) .
 $$
 
-When both endpoints lie outside the Cartesian chart, transport in the polar frame is free: the inward radial leg of $\mathrm{Log}_x y$ transports to
+Away from an exact-origin endpoint, transport in the polar frame is free: the inward radial leg of $\mathrm{Log}_x y$ transports to
 the outward direction $-\hat x$ continuing the same geodesic past the origin, and the in-plane
 angular leg is untouched, so the result is read straight off the frame with no cancellation and no
 transcendental beyond the frame's own.
@@ -1167,17 +1166,17 @@ inside the float64 representation floor of its own radius (worst 0.62×)
 
 ### Origin derivatives and the Cartesian chart {#origin-derivatives}
 
-`gyro_difference` and `ptransp` use Cartesian formulas whenever
-$\min(\sqrt c\lVert x_s\rVert,\sqrt c\lVert y_s\rVert)\le1$, including either
-origin endpoint. The difference is the inverse Lorentz boost with reconstructed
+`gyro_difference` and `ptransp` use Cartesian formulas when either endpoint is
+exactly the origin. The difference is the inverse Lorentz boost with reconstructed
 time. Transport uses the closed-form geodesic transport and derives the input
 tangent time as $v_0=\langle x_s,v_s\rangle/x_0$, without a cleanup projection.
-Above that threshold both retain the stable geodesic frame.
+Otherwise both retain the stable geodesic frame.
 
-`logmap` keeps its stable forward calculation. A private `custom_jvp` differentiates
-an equivalent Cartesian expression below the same threshold and retains native
-frame differentiation above it. The rule includes both endpoints and curvature,
-and supports forward and reverse autodiff. Through spatial lifts, coincidence
+`logmap` uses the regular Cartesian expression when either endpoint is exactly the
+origin and the stable polar frame otherwise. For close pairs, the frame's separation
+$S=\sinh(\sqrt c\,d(x,y)/2)$ enters the equivalent spatial displacement
+$\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}$ when $S\le0.5$.
+Ordinary autodiff follows the selected expression. Through spatial lifts, coincidence
 Jacobians are $+I$ for the target and $-I$ for the base. The log-map origin defect
 predates the preceding polar-frame sweep and the PV bridges; neither introduced
 it. The sweep's collinear-gradient repair did not cover every origin endpoint,

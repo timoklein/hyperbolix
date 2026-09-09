@@ -210,12 +210,11 @@ def _gyro_difference(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCu
 
         (⊖x) ⊕_U y = ((⊖X) ⊕_H Y)[1:]
 
-    exactly. The lifted hyperboloid operation uses its Cartesian inverse-boost
-    expression whenever ``min(√c·‖X_s‖, √c·‖Y_s‖) <= 1`` and the stable polar
-    frame when both endpoints lie outside that chart. The Cartesian branch
-    preserves the base-point derivative at the origin; the earlier value-only
-    origin fallback erased it. PV inherits both branches and their derivatives
-    through the lift.
+    exactly. The lifted hyperboloid operation uses its Cartesian inverse boost
+    when either endpoint is exactly the origin and the stable polar frame
+    otherwise. The Cartesian branch preserves the base-point derivative at the
+    origin; the earlier value-only origin fallback erased it. PV inherits both
+    branches and their derivatives through the lift.
 
     Args:
         x: PV point, shape (dim,) — the point subtracted
@@ -439,17 +438,16 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
 
         log^PV_x(y) = log^H_X(Y)[1:]
 
-    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._logmap` keeps the
-    stable polar-frame forward value. Its derivative rule switches to an equivalent
-    Cartesian expression whenever ``min(√c·‖X_s‖, √c·‖Y_s‖) <= 1``; above that
-    threshold it differentiates the polar frame directly. This repairs
-    the base-point derivative at the origin while leaving the forward calculation
-    unchanged. The inherited origin defect predates both the preceding
+    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._logmap` uses a
+    regular Cartesian expression when either endpoint is exactly the origin and
+    the stable polar frame otherwise. Ordinary autodiff follows the selected
+    expression, repairing the base-point derivative at the origin. The inherited
+    origin defect predates both the preceding
     hyperboloid polar-frame sweep and the PV lift; the lift merely exposed the
     lost base-point derivative in PV.
 
     Historical measurements of the preceding lift and forward-value repair, before
-    the Cartesian origin-derivative rule: at ``c = 0.5``, dim 16, on two points a
+    the Cartesian origin rule: at ``c = 0.5``, dim 16, on two points a
     true 0.1 apart along a coordinate axis, float32
     ``‖log_x(y)‖_x``: the old spelling returned **0.0599 at a = 8**, **4.383 at a = 10** and
     **10.56 at a = 12**; this one is within **≤1.0e-6 relative** at all three, against a float32
@@ -533,12 +531,12 @@ def _ptransp(
         PT^PV_{x→y}(v) = PT^H_{X→Y}(V)[1:]
 
     holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._ptransp` uses the
-    Cartesian closed form whenever ``min(√c·‖X_s‖, √c·‖Y_s‖) <= 1``. That branch
+    Cartesian closed form when either endpoint is exactly the origin. That branch
     reconstructs the input tangent time from its spatial part,
     ``V₀ = ⟨X_s,V_s⟩/X₀``, then evaluates
     ``V + β(X + Y)`` with ``β = ⟨V,Y⟩_L/(1/c - ⟨X,Y⟩_L)``. It needs no
-    cleanup projection. When both endpoints lie outside the Cartesian chart, the
-    operation retains the stable geodesic frame. The earlier origin fallback had
+    cleanup projection. Otherwise the operation retains the stable geodesic frame.
+    The earlier origin fallback had
     the correct value but erased derivatives with respect to the base point.
 
     The PV wrapper constructs ``V₀`` for the exact lift. The Cartesian
@@ -848,8 +846,8 @@ class ProperVelocity(ManifoldBase):
         Mathematically identical to ``addition(scalar_mul(-1, x), y)``; use this whenever the
         result is expected much closer to the origin than the operands (centering a batch,
         differences of two far points). The exact hyperboloid lift uses a Cartesian
-        inverse boost when either endpoint has scaled spatial radius at most 1 and
-        the stable polar frame otherwise. See :func:`_gyro_difference`.
+        inverse boost at an exact origin endpoint and the stable polar frame
+        otherwise. See :func:`_gyro_difference`.
         """
         return _gyro_difference(self._cast(x), self._cast(y), c)
 
@@ -890,9 +888,9 @@ class ProperVelocity(ManifoldBase):
     def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map at x through the exact hyperboloid lift.
 
-        The forward value uses the stable polar frame. Its derivative uses the
-        equivalent Cartesian rule when either endpoint has scaled spatial radius
-        at most 1, preserving the base-point derivative at the origin.
+        A regular Cartesian expression is used when either endpoint is exactly the
+        origin; otherwise the stable polar frame is used. Ordinary autodiff
+        preserves the base-point derivative at the origin.
         """
         return _logmap(self._cast(y), self._cast(x), c)
 
@@ -915,9 +913,8 @@ class ProperVelocity(ManifoldBase):
     ) -> Float[Array, "dim"]:
         """Parallel transport v from T_x PV to T_y PV through the exact lift.
 
-        The lifted hyperboloid transport uses its Cartesian closed form when either
-        endpoint has scaled spatial radius at most 1 and the stable polar frame
-        otherwise.
+        The lifted hyperboloid transport uses its Cartesian closed form at an exact
+        origin endpoint and the stable polar frame otherwise.
         """
         return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
 

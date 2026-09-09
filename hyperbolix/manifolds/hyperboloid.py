@@ -83,7 +83,7 @@ def _create_origin(c: ScalarCurvature, dim: int, dtype=jnp.float32) -> Float[Arr
     """Create hyperboloid origin [1/√c, 0, ..., 0]."""
     sqrt_c = jnp.sqrt(c)
     origin = jnp.zeros(dim + 1, dtype=dtype)
-    origin = origin.at[0].set(1.0 / sqrt_c)
+    origin = origin.at[0].set(jnp.asarray(1.0 / sqrt_c, dtype=dtype))
     return origin
 
 
@@ -379,25 +379,16 @@ def _addition(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: S
     return jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
 
 
-def _use_cartesian_pair(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Array:
-    """Select the regular Cartesian chart while either endpoint has dimensionless radius at most one."""
-    sqrt_c = jnp.sqrt(c)
-    x_radius = sqrt_c * safe_norm(x[1:])
-    y_radius = sqrt_c * safe_norm(y[1:])
-    return jnp.minimum(x_radius, y_radius) <= jnp.asarray(1.0, dtype=x.dtype)
+def _pair_has_origin(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"]) -> Array:
+    """The polar directions are undefined exactly when either spatial endpoint is zero."""
+    return jnp.all(x[1:] == 0) | jnp.all(y[1:] == 0)
 
 
 def _gyro_difference_cartesian(
     x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, "dim_plus_1"]:
     """Inverse Lorentz boost for ``(ominus x) oplus y`` in the regular Cartesian chart."""
-    sqrt_c = jnp.sqrt(c)
-    x_s_D, y_s_D = x[1:], y[1:]
-    gamma = sqrt_c * x[0]
-    xy = jnp.dot(x_s_D, y_s_D, precision=MATMUL_PRECISION)
-    res_s_D = y_s_D - sqrt_c * y[0] * x_s_D + (c * xy / (1.0 + gamma)) * x_s_D
-    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
-    return jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
+    return _addition(x.at[1:].multiply(-1), y, c)
 
 
 def _gyro_difference_frame(
@@ -466,9 +457,9 @@ def _gyro_difference(
     ``x ⊕ exp_0(b)``, whose result is as far out as its base point, the boost is the accurate
     spelling and needs no frame.
 
-    At dimensionless radius ``min(sqrt(c) * ||x_s||, sqrt(c) * ||y_s||) <= 1`` the inverse boost is
-    regular and supplies the natural Cartesian derivative at either origin. Above that threshold the
-    cancellation-free polar frame remains the value and derivative path.
+    At either exact origin the inverse boost supplies the regular Cartesian derivative. When both
+    spatial endpoints are nonzero, the polar frame preserves precision near coincidence, including
+    small radii.
 
     The preceding all-polar-frame implementation was verified against ``addition(neg(x), y)`` in
     float64 over dims 2/5/64, ``c ∈ {0.1, 0.5, 1, 3}``, random / parallel / anti-parallel /
@@ -489,12 +480,13 @@ def _gyro_difference(
         Chen et al. "Hyperbolic neural networks: gyrovector operations on the Lorentz model." 2025b.
         Shi et al. "Intrinsic Lorentz Neural Network." ICLR 2026, Eq. (1).
     """
-    return lax.cond(
-        _use_cartesian_pair(x, y, c),
-        lambda _: _gyro_difference_cartesian(x, y, c),
-        lambda _: _gyro_difference_frame(x, y, c),
-        operand=None,
-    )
+    use_cartesian = _pair_has_origin(x, y)
+    origin = _create_origin(c, x.shape[0] - 1, dtype=x.dtype)
+    # Keep the unused ambient calculation finite for reverse mode at large radii.
+    cartesian_x = jnp.where(use_cartesian, x, origin)
+    cartesian_y = jnp.where(use_cartesian, y, origin)
+    cartesian = _gyro_difference_cartesian(cartesian_x, cartesian_y, c)
+    return jnp.where(use_cartesian, cartesian, _gyro_difference_frame(x, y, c))
 
 
 def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
@@ -1107,7 +1099,7 @@ def _logmap_direction(frame: _PolarFrame) -> tuple[Float[Array, ""], Float[Array
     return s_cos_phi, perp_y_D
 
 
-def _logmap_impl(
+def _logmap_frame(
     y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, "dim_plus_1"]:
     """Logarithmic map: map point y to tangent space at **x** (the second argument is the base point).
@@ -1158,11 +1150,13 @@ def _logmap_impl(
     correct. For the same reason ``‖log_x(y)‖_x = d(x, y)`` holds by construction: ``d`` is taken
     from the same frame.
 
-    At ``x`` exactly at the origin the radial leg degenerates (``r_x = 0`` ⇒ ``e_rad = 0``), so this
-    forward implementation falls back to :func:`_logmap_0`, which is exact there. :func:`_logmap`
-    preserves this value and supplies the low-chart derivative from the equivalent Cartesian form
-    ``u_s = asinhc(S) / sqrt(1 + S**2) * (y_s - (1 + 2*S**2) * x_s)``. Thus coincidence has the
-    exact spatial derivative ``dy_s - dx_s`` even when one or both endpoints are at the origin.
+    At either exact origin the polar direction is undefined. :func:`_logmap` selects the equivalent
+    regular Cartesian formula there, for both values and derivatives.
+
+    For close pairs (``S <= 0.5``), the same frame supplies the separation for the equivalent
+    spatial displacement ``asinhc(S)/sqrt(1+S²) * ((y_s-x_s) - 2S²*x_s)``. Keeping ``y_s-x_s``
+    explicit preserves the exact signed identity Jacobians at coincidence. The time component
+    is reconstructed from tangency; larger separations retain the bounded frame coefficients.
 
     Args:
         y: Hyperboloid point to map, shape (dim+1,)
@@ -1190,61 +1184,41 @@ def _logmap_impl(
     radial_coeff = (asinhc_s * (2.0 / frame.sqrt_c)) * s_cos_phi
     # d·sin φ·n̂ = (asinhc(S)/C)·perp_y, both factors bounded by 1.
     res = radial_coeff * e_rad_A + (asinhc_s / frame.cosh_half) * perp_A
-    return jnp.where(frame.r_x > 0, res, _logmap_0(y, c))
+    # For close pairs, keep the displacement explicit: at coincidence its spatial Jacobian
+    # is exactly the identity. S comes from the stable frame, never an ambient inner product.
+    # Restrict this spelling to small separation so 2*S**2*x cannot overflow or cancel at
+    # large separation. Sanitize the inactive coefficient before squaring it under vmap.
+    close_pair = frame.sinh_half <= 0.5
+    small_s = jnp.where(close_pair, frame.sinh_half, 0.0)
+    close_scale = _asinhc(small_s) / jnp.sqrt(1.0 + small_s**2)
+    close_s_D = close_scale * ((y[1:] - x[1:]) - (2.0 * small_s**2) * x[1:])
+    close_time = jnp.dot(x[1:] / x[0], close_s_D, precision=MATMUL_PRECISION)
+    close_A = jnp.concatenate([close_time[None], close_s_D])
+    return jnp.where(close_pair, close_A, res)
 
 
-@jax.custom_jvp
-def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
-    """Logarithmic map with the unchanged polar-frame value and an origin-regular JVP."""
-    return _logmap_impl(y, x, c)
-
-
-@_logmap.defjvp
-def _logmap_jvp(
-    primals: tuple[Array, Array, ScalarCurvature], tangents: tuple[Array, Array, ScalarCurvature]
-) -> tuple[Array, Array]:
-    y, x, c = primals
-    dy, dx, dc = tangents
-    primal_out = _logmap_impl(y, x, c)
-    use_cartesian = _use_cartesian_pair(x, y, c)
-    # Reverse mode transposes both evaluated JVP branches: keep the inactive Cartesian coefficients
-    # finite so its zero cotangents cannot multiply an overflow into NaNs.
+def _logmap_impl(
+    y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
+) -> Float[Array, "dim_plus_1"]:
+    """Logarithmic map with a regular Cartesian chart at either exact origin."""
+    use_cartesian = _pair_has_origin(x, y)
+    # Keep inactive Cartesian coefficients finite: reverse mode must not multiply zero by overflow.
     origin = _create_origin(c, x.shape[0] - 1, dtype=x.dtype)
     cartesian_y = jnp.where(use_cartesian, y, origin)
     cartesian_x = jnp.where(use_cartesian, x, origin)
-    cartesian_dy = jnp.where(use_cartesian, dy, jnp.zeros_like(dy))
-    cartesian_dx = jnp.where(use_cartesian, dx, jnp.zeros_like(dx))
-    cartesian_dc = jnp.where(use_cartesian, dc, jnp.zeros_like(dc))
+    alpha = c * (cartesian_x[0] * cartesian_y[0] - jnp.dot(cartesian_x[1:], cartesian_y[1:], precision=MATMUL_PRECISION))
+    # The regular chart avoids differentiating a polar direction at zero, including in Hessians.
+    sinh_half_sq = floor_at(0.5 * (alpha - 1.0), 0.0)
+    scale = _asinhc(safe_sqrt(sinh_half_sq)) / jnp.sqrt(1.0 + sinh_half_sq)
+    u_s_D = scale * (cartesian_y[1:] - alpha * cartesian_x[1:])
+    u0 = jnp.dot(cartesian_x[1:], u_s_D, precision=MATMUL_PRECISION) / cartesian_x[0]
+    cartesian = jnp.concatenate([u0[None], u_s_D])
+    return jnp.where(use_cartesian, cartesian, _logmap_frame(y, x, c))
 
-    def cartesian_jvp(_):
-        sinh_half, dsinh_half = jax.jvp(
-            lambda yy, xx, cc: _polar_frame(xx, yy, cc).sinh_half,
-            (cartesian_y, cartesian_x, c),
-            (cartesian_dy, cartesian_dx, cartesian_dc),
-        )
-        alpha = 1.0 + 2.0 * sinh_half * sinh_half
-        dalpha = 4.0 * sinh_half * dsinh_half
-        scale, dscale = jax.jvp(
-            lambda s: _asinhc(s) / safe_hypot(jnp.ones_like(s), s),
-            (sinh_half,),
-            (dsinh_half,),
-        )
-        delta_s_D = cartesian_y[1:] - alpha * cartesian_x[1:]
-        ddelta_s_D = cartesian_dy[1:] - dalpha * cartesian_x[1:] - alpha * cartesian_dx[1:]
-        u_s_D = scale * delta_s_D
-        du_s_D = dscale * delta_s_D + scale * ddelta_s_D
 
-        xu = jnp.dot(cartesian_x[1:], u_s_D, precision=MATMUL_PRECISION)
-        dxu = jnp.dot(cartesian_dx[1:], u_s_D, precision=MATMUL_PRECISION) + jnp.dot(
-            cartesian_x[1:], du_s_D, precision=MATMUL_PRECISION
-        )
-        du0 = dxu / cartesian_x[0] - xu * cartesian_dx[0] / (cartesian_x[0] * cartesian_x[0])
-        return jnp.concatenate([du0[None], du_s_D])
-
-    cartesian_tangent = cartesian_jvp(None)
-    frame_tangent: Array = jax.jvp(_logmap_impl, (y, x, c), (dy, dx, dc))[1]
-    tangent_out = jnp.where(use_cartesian, cartesian_tangent, frame_tangent)
-    return primal_out, tangent_out
+def _logmap(y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
+    """Logarithmic map with ordinary autodiff through its selected coordinate chart."""
+    return _logmap_impl(y, x, c)
 
 
 def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
@@ -1332,9 +1306,9 @@ def _ptransp_cartesian(
     y: Float[Array, "dim_plus_1"],
     c: ScalarCurvature,
 ) -> Float[Array, "dim_plus_1"]:
-    """Closed-form transport in the regular Cartesian chart near either endpoint's origin."""
+    """Closed-form transport in the regular Cartesian chart at either endpoint's origin."""
     v_s_D = v[1:]
-    v0 = jnp.dot(x[1:], v_s_D, precision=MATMUL_PRECISION) / x[0]
+    v0 = jnp.dot(x[1:] / x[0], v_s_D, precision=MATMUL_PRECISION)
     v_tangent_A = jnp.concatenate([v0[None], v_s_D])
     xy = jnp.dot(x[1:], y[1:], precision=MATMUL_PRECISION)
     vy = -v0 * y[0] + jnp.dot(v_s_D, y[1:], precision=MATMUL_PRECISION)
@@ -1360,7 +1334,9 @@ def _ptransp_frame(
     x_time_pos = floor_at(frame.x_time, MIN_NORM)
     cos_phi_tanh = s_cos_phi / frame.cosh_half
     scale = -cos_phi_tanh * radial_v / x_time_pos + (0.5 * c) * (angular_v / frame.cosh_half) / frame.cosh_half
-    return v + scale * (x + y)
+    v0 = jnp.dot(x[1:] / x[0], v[1:], precision=MATMUL_PRECISION)
+    v_tangent_A = jnp.concatenate([v0[None], v[1:]])
+    return v_tangent_A + scale * (x + y)
 
 
 def _ptransp(
@@ -1403,11 +1379,10 @@ def _ptransp(
     ``S·cos φ/C = tanh(θ/2)·cos φ`` is bounded by 1, and the angular term takes its two divisions by
     ``C`` separately, so neither ``C²`` nor a product with ``sinh θ`` is ever materialised.
 
-    At dimensionless radius ``min(sqrt(c) * ||x_s||, sqrt(c) * ||y_s||) <= 1`` the closed-form
-    Cartesian chart reconstructs ``v0 = dot(x_s, v_s) / x0`` and supplies the natural derivative at
-    either origin. Above that threshold the cancellation-free polar frame remains in use. For that
-    preserved polar-frame formula, a preceding revision measured a unit tangent vector transported
-    one 0.05-nat step, float32,
+    Both charts reconstruct ``v0 = dot(x_s / x0, v_s)`` from the spatial tangent. The Cartesian
+    chart supplies the natural derivative at either exact origin; the polar frame is used whenever
+    both spatial endpoints are nonzero. For the polar-frame scale, a preceding revision measured a
+    unit tangent vector transported one 0.05-nat step, float32,
     ``c = 1``, ``D = 16``: the isometry ratio ``‖PT v‖_y/‖v‖_x`` is within 4.1e-6 of 1 through
     geodesic radius 12 and 4.2e-4 at radius 14, where the previous spelling gave 0.750 at radius 8,
     1.830 at 10 and 0.500 at 12 — a transported momentum with the wrong length and, at radius 10,
@@ -1416,7 +1391,7 @@ def _ptransp(
     (``logs/2026-09-08_hyperboloid_tangent_primitives/step1_large_radius_claims.out``.)
 
     Args:
-        v: Tangent vector at x, shape (dim+1,); the time slot is used only in the ``v + …`` sum
+        v: Tangent vector at x, shape (dim+1,); the time slot is ignored and rebuilt from tangency
         x: Hyperboloid point, shape (dim+1,)
         y: Hyperboloid point, shape (dim+1,)
         c: Curvature (positive)
@@ -1428,12 +1403,13 @@ def _ptransp(
         Aaron Lou, et al. "Differentiating through the fréchet mean."
             International conference on machine learning (2020).
     """
-    return lax.cond(
-        _use_cartesian_pair(x, y, c),
-        lambda _: _ptransp_cartesian(v, x, y, c),
-        lambda _: _ptransp_frame(v, x, y, c),
-        operand=None,
-    )
+    use_cartesian = _pair_has_origin(x, y)
+    origin = _create_origin(c, x.shape[0] - 1, dtype=x.dtype)
+    cartesian_x = jnp.where(use_cartesian, x, origin)
+    cartesian_y = jnp.where(use_cartesian, y, origin)
+    cartesian_v = jnp.where(use_cartesian, v, jnp.zeros_like(v))
+    cartesian = _ptransp_cartesian(cartesian_v, cartesian_x, cartesian_y, c)
+    return jnp.where(use_cartesian, cartesian, _ptransp_frame(v, x, y, c))
 
 
 def _ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:

@@ -247,10 +247,9 @@ class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
     Centering uses :meth:`Hyperboloid.gyro_difference`. The general spelling
     ``addition(scalar_mul(-1, mu), x)`` is an ambient Lorentz boost whose large
     terms cancel when a far-away mean lies close to its batch points. The dedicated
-    difference uses a Cartesian inverse boost when either endpoint has scaled
-    spatial radius at most 1, including the origin, and the stable polar frame when
-    both endpoints lie outside that chart. The Cartesian branch preserves the
-    derivative with respect to an origin mean; the earlier value-only origin
+    difference uses a Cartesian inverse boost when either endpoint is exactly the
+    origin and the stable polar frame otherwise. The Cartesian branch preserves
+    the derivative with respect to an origin mean; the earlier value-only origin
     fallback did not.
 
     The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
@@ -270,7 +269,7 @@ class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
         return lorentz_midpoint(x_NF, weights_1N, c)[0]
 
     def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
-        """Center with the dedicated Cartesian/polar gyro-difference."""
+        """Center with the dedicated origin-Cartesian/polar gyro-difference."""
         gyro_difference = cast("Hyperboloid", self.manifold).gyro_difference
         return jax.vmap(gyro_difference, in_axes=(None, 0, None))(mu_F, x_NF, c)
 
@@ -287,9 +286,9 @@ class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
     spatial part of a Lorentz boost, so the general inverse-addition spelling can
     lose the small difference between a far-away mean and a nearby batch point.
     The dedicated PV operation lifts both points exactly to the hyperboloid. It
-    inherits the Cartesian inverse-boost branch when either endpoint has scaled
-    spatial radius at most 1 and the stable polar frame otherwise, including the
-    repaired derivative with respect to an origin mean.
+    inherits the Cartesian inverse-boost branch when either endpoint is exactly
+    the origin and the stable polar frame otherwise, including the repaired
+    derivative with respect to an origin mean.
 
     The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
     :meth:`ProperVelocity.addition`: their result is as far from the origin as their base point,
@@ -308,7 +307,7 @@ class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
         return self.manifold.expmap_0(v_mean_F, c)
 
     def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
-        """Center through PV's exact lift to the Cartesian/polar gyro-difference."""
+        """Center through PV's exact lift to the origin-Cartesian/polar gyro-difference."""
         gyro_difference = cast("ProperVelocity", self.manifold).gyro_difference
         return jax.vmap(gyro_difference, in_axes=(None, 0, None))(mu_F, x_NF, c)
 

@@ -644,3 +644,178 @@ def test_busemann_mixed_jit_vmap_pins_zero_unused_denominator_derivatives(dtype)
                 np.testing.assert_array_equal(got_s_BBD[row, other], 0.0)
                 np.testing.assert_array_equal(got_raw_v_BBD[row, other], 0.0)
                 np.testing.assert_array_equal(got_c_BB[row, other], 0.0)
+
+
+@pytest.mark.parametrize("operation", ["difference", "ptransp"])
+@pytest.mark.parametrize("endpoint", ["base", "target"])
+def test_coincidence_endpoint_derivatives_match_independent_fd(operation: str, endpoint: str) -> None:
+    """At nonzero y=x, compare frame derivatives with independent inverse-boost derivatives."""
+    c = 1.0
+    coincident_D = np.array([0.9, -0.1])
+    w_D = np.array([0.3, -0.2])
+
+    def jax_fn(z_D):
+        if endpoint == "base":
+            return _hyperboloid_map(operation, z_D, jnp.asarray(coincident_D), jnp.asarray(w_D), c)
+        return _hyperboloid_map(operation, jnp.asarray(coincident_D), z_D, jnp.asarray(w_D), c)
+
+    def numpy_fn(z_D):
+        if endpoint == "base":
+            return _numpy_map(operation, z_D, coincident_D, w_D, c)
+        return _numpy_map(operation, coincident_D, z_D, w_D, c)
+
+    expected_AD = _fd_jacobian(numpy_fn, coincident_D)
+    np.testing.assert_allclose(jax.jacfwd(jax_fn)(jnp.asarray(coincident_D)), expected_AD, rtol=8e-6, atol=8e-7)
+    np.testing.assert_allclose(jax.jacrev(jax_fn)(jnp.asarray(coincident_D)), expected_AD, rtol=8e-6, atol=8e-7)
+
+
+def _ld_inverse_boost(stored_x_D: np.ndarray, stored_y_D: np.ndarray, c: float) -> np.ndarray:
+    """Long-double inverse boost from the exact stored spatial operands."""
+    ld = np.longdouble
+    x_D = np.asarray(stored_x_D, dtype=ld)
+    y_D = np.asarray(stored_y_D, dtype=ld)
+    c_ld = ld(c)
+    x0 = np.sqrt(ld(1.0) / c_ld + np.dot(x_D, x_D))
+    y0 = np.sqrt(ld(1.0) / c_ld + np.dot(y_D, y_D))
+    gamma = np.sqrt(c_ld) * x0
+    result_D = y_D - np.sqrt(c_ld) * y0 * x_D + c_ld * np.dot(x_D, y_D) * x_D / (ld(1.0) + gamma)
+    return np.concatenate((np.asarray([np.sqrt(ld(1.0) / c_ld + np.dot(result_D, result_D))]), result_D))
+
+
+@pytest.mark.parametrize("step", [1e-4, 1e-6])
+@pytest.mark.parametrize("kind", ["radial", "angular"])
+def test_float32_near_coincident_gyro_difference_matches_longdouble_stored_inputs(step: float, kind: str) -> None:
+    """At radius 0.9, centering must preserve small radial and angular differences."""
+    c = 1.0
+    stored_x_D = np.asarray([0.9, 0.0], dtype=np.float32)
+    if kind == "radial":
+        stored_y_D = np.asarray([0.9 + step, 0.0], dtype=np.float32)
+    else:
+        stored_y_D = np.asarray(0.9 * np.array([np.cos(step), np.sin(step)]), dtype=np.float32)
+    manifold = Hyperboloid(dtype=jnp.float32)
+    got_A = np.asarray(manifold.gyro_difference(_j_lift(jnp.asarray(stored_x_D), c), _j_lift(jnp.asarray(stored_y_D), c), c))
+    expected_A = _ld_inverse_boost(stored_x_D, stored_y_D, c)
+    np.testing.assert_allclose(got_A, expected_A, rtol=3e-5, atol=3e-7)
+    # A fixed ambient tolerance would hide a centering error comparable to the entire update.
+    spatial_error = np.linalg.norm(got_A[1:] - expected_A[1:])
+    assert spatial_error <= 3e-5 * np.linalg.norm(expected_A[1:])
+
+
+def _np_transport_from_stored_ambient(v_A: np.ndarray, x_A: np.ndarray, y_A: np.ndarray, c: float) -> np.ndarray:
+    """Closed-form transport using the caller's stored ambient coordinates and curvature."""
+    x_A = np.asarray(x_A, dtype=np.float64)
+    y_A = np.asarray(y_A, dtype=np.float64)
+    v_A = np.asarray(v_A, dtype=np.float64)
+    v0 = np.dot(x_A[1:] / x_A[0], v_A[1:])
+    tangent_A = np.concatenate(([v0], v_A[1:]))
+    lorentz_vy = -v0 * y_A[0] + np.dot(v_A[1:], y_A[1:])
+    denominator = 1.0 / c + x_A[0] * y_A[0] - np.dot(x_A[1:], y_A[1:])
+    return tangent_A + lorentz_vy / denominator * (x_A + y_A)
+
+
+def _np_lift_as_float32(s_D: np.ndarray, c: float) -> np.ndarray:
+    """Match a float32 sheet input constructed before a float64-curvature call."""
+    stored_s_D = np.asarray(s_D, dtype=np.float32)
+    stored_c = np.asarray(c, dtype=np.float32)
+    stored_time = np.asarray(np.sqrt(np.float32(1.0) / stored_c + np.dot(stored_s_D, stored_s_D)), dtype=np.float32)
+    return np.concatenate((stored_time[None], stored_s_D))
+
+
+def test_ptransp_mixed_point_and_curvature_precision_matches_independent_transforms() -> None:
+    """A float32 point with float64 curvature keeps the caller's curvature under every transform."""
+    c = jnp.asarray(0.7, dtype=jnp.float64)
+    x_D = jnp.asarray([0.75, -0.35], dtype=jnp.float32)
+    y_D = jnp.asarray([0.9, -0.15], dtype=jnp.float32)
+    w_D = jnp.asarray([0.2, -0.3], dtype=jnp.float32)
+    direction_D = jnp.asarray([-0.11, 0.07], dtype=jnp.float32)
+    manifold = Hyperboloid(dtype=jnp.float32)
+
+    def transport(y_spatial_D):
+        x_A = _j_lift(x_D, c)
+        y_A = _j_lift(y_spatial_D, c)
+        return manifold.ptransp(_j_tangent(x_D, w_D, c), x_A, y_A, c)
+
+    x_A = np.asarray(_j_lift(x_D, c))
+    y_A = np.asarray(_j_lift(y_D, c))
+    v_A = np.asarray(_j_tangent(x_D, w_D, c))
+    assert x_A.dtype == y_A.dtype == v_A.dtype == np.float32
+    expected_A = _np_transport_from_stored_ambient(v_A, x_A, y_A, float(c))
+
+    def reference_directional_derivative(step: float) -> np.ndarray:
+        y_plus_D = np.asarray(y_D, dtype=np.float64) + step * np.asarray(direction_D, dtype=np.float64)
+        y_minus_D = np.asarray(y_D, dtype=np.float64) - step * np.asarray(direction_D, dtype=np.float64)
+        plus_A = _np_transport_from_stored_ambient(v_A, x_A, _np_lift_as_float32(y_plus_D, float(c)), float(c))
+        minus_A = _np_transport_from_stored_ambient(v_A, x_A, _np_lift_as_float32(y_minus_D, float(c)), float(c))
+        return (plus_A - minus_A) / (2.0 * step)
+
+    expected_jvp_A = reference_directional_derivative(2e-3)
+    np.testing.assert_allclose(expected_jvp_A, reference_directional_derivative(1e-3), rtol=3e-3, atol=3e-4)
+
+    eager_A = transport(y_D)
+    compiled_A = jax.jit(transport)(y_D)
+    batched_BA = jax.jit(jax.vmap(transport))(jnp.stack([y_D, y_D]))
+    jvp_A = jax.jvp(transport, (y_D,), (direction_D,))[1]
+    tolerance = 3e-6
+    np.testing.assert_allclose(eager_A, expected_A, rtol=tolerance, atol=tolerance)
+    np.testing.assert_allclose(compiled_A, expected_A, rtol=tolerance, atol=tolerance)
+    np.testing.assert_allclose(batched_BA[0], expected_A, rtol=tolerance, atol=tolerance)
+    np.testing.assert_allclose(batched_BA[1], expected_A, rtol=tolerance, atol=tolerance)
+    np.testing.assert_allclose(jvp_A, expected_jvp_A, rtol=3e-3, atol=3e-4)
+
+
+@pytest.mark.parametrize("radius", [0.9, 1.2])
+def test_ptransp_ignores_caller_tangent_time_at_small_and_large_radius(radius: float) -> None:
+    """Transport defines the tangent time from x and spatial components, never caller garbage."""
+    c = 1.0
+    x_D = jnp.asarray([radius, 0.0], dtype=jnp.float64)
+    y_D = jnp.asarray([radius + 0.15, -0.2], dtype=jnp.float64)
+    w_D = jnp.asarray([0.2, -0.3], dtype=jnp.float64)
+    x_A, y_A = _j_lift(x_D, c), _j_lift(y_D, c)
+    tangent_A = _j_tangent(x_D, w_D, c)
+    altered_A = tangent_A.at[0].set(tangent_A[0] + 17.0)
+    manifold = Hyperboloid(dtype=jnp.float64)
+    expected_A = _np_transport_from_stored_ambient(np.asarray(tangent_A), np.asarray(x_A), np.asarray(y_A), c)
+    np.testing.assert_allclose(manifold.ptransp(tangent_A, x_A, y_A, c), expected_A, rtol=2e-12, atol=2e-12)
+    np.testing.assert_allclose(manifold.ptransp(altered_A, x_A, y_A, c), expected_A, rtol=2e-12, atol=2e-12)
+
+
+def _np_logmap_squared_spatial_norm(target_D: np.ndarray, base_D: np.ndarray, c: float) -> float:
+    """Squared spatial norm of the closed-form logmap, evaluated outside JAX."""
+    x_A = _np_lift(base_D, c)
+    y_A = _np_lift(target_D, c)
+    alpha = c * (x_A[0] * y_A[0] - np.dot(x_A[1:], y_A[1:]))
+    theta = np.arccosh(alpha)
+    spatial_D = theta * (y_A[1:] - alpha * x_A[1:]) / np.sqrt(alpha * alpha - 1.0)
+    return float(np.dot(spatial_D, spatial_D))
+
+
+def _np_scalar_hessian(fn: Callable[[np.ndarray], float], x_D: np.ndarray, step: float) -> np.ndarray:
+    x_D = np.asarray(x_D, dtype=np.float64)
+    eye_DD = np.eye(x_D.size)
+    hessian_DD = np.empty((x_D.size, x_D.size))
+    for i in range(x_D.size):
+        for j in range(x_D.size):
+            ei_D, ej_D = step * eye_DD[i], step * eye_DD[j]
+            hessian_DD[i, j] = (
+                fn(x_D + ei_D + ej_D) - fn(x_D + ei_D - ej_D) - fn(x_D - ei_D + ej_D) + fn(x_D - ei_D - ej_D)
+            ) / (4.0 * step**2)
+    return hessian_DD
+
+
+@pytest.mark.parametrize("target_D", [np.array([0.0, 0.0]), np.array([0.3, -0.2]), np.array([1.0, 0.5])])
+def test_origin_log_squared_spatial_norm_hessian_matches_independent_scalar_reference(target_D: np.ndarray) -> None:
+    """The Cartesian origin derivative covers the second-order loss through logmap."""
+    c = 1.0
+    manifold = Hyperboloid(dtype=jnp.float64)
+
+    def loss(base_D):
+        return jnp.sum(manifold.logmap(_j_lift(jnp.asarray(target_D), c), _j_lift(base_D, c), c)[1:] ** 2)
+
+    got_DD = np.asarray(jax.hessian(loss)(jnp.zeros(2, dtype=jnp.float64)))
+    if np.all(target_D == 0.0):
+        expected_DD = 2.0 * np.eye(2)
+    else:
+        expected_DD = _np_scalar_hessian(
+            lambda base_D: _np_logmap_squared_spatial_norm(target_D, base_D, c), np.zeros(2), 1e-4
+        )
+    np.testing.assert_allclose(got_DD, expected_DD, rtol=1e-6, atol=1e-6)
