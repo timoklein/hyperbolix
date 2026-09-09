@@ -300,10 +300,6 @@ def _conformal_factor_batch(x: Float[Array, "... dim"], c: ScalarCurvature) -> F
     """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)`` over arbitrary leading dims (for the NN layers)."""
     dtype = x.dtype
     c_arr = jnp.asarray(c, dtype=dtype)
-    max_norm_eps = jnp.asarray(float(jnp.finfo(dtype).eps ** 0.75), dtype=dtype)
     x2 = jnp.sum(x**2, axis=-1, keepdims=True)  # (..., 1)
-    abs_c = jnp.abs(c_arr)
-    sqrt_abs_c = jnp.sqrt(floor_at(abs_c, MIN_NORM))
-    boundary_floor = 2.0 * sqrt_abs_c * max_norm_eps - abs_c * max_norm_eps**2
-    denom = floor_at(jnp.asarray(1.0, dtype=dtype) - c_arr * x2, jnp.where(c_arr > 0, boundary_floor, MIN_NORM))
+    denom = floor_at(jnp.asarray(1.0, dtype=dtype) - c_arr * x2, jnp.where(c_arr > 0, _boundary_floor(x, c_arr), MIN_NORM))
     return 2.0 / denom
