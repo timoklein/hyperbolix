@@ -461,7 +461,9 @@ def _gyro_difference(
     of the formula. When the result is *far* from the origin the binding floor is instead one
     float32 ulp of its own spatial radius, ``eps32·sinh(√c·d₀)/√c``. Over ``a ∈ {9, 12}`` and
     ψ ∈ {1e-2, 1e-4, 1e-6} the measured error is 0.13x to 0.54x the larger of the two floors, i.e.
-    input-limited everywhere.
+    input-limited everywhere. This table describes the polar frame only; inside the near-origin
+    neighborhood below (scaled spatial radius ≤ 1e-1) the Cartesian chart is used instead, where
+    accuracy is limited to one float32 ulp of the operand radius, not this relative floor.
     (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_gyro_difference_accuracy.out``.)
 
     The general :func:`_addition` deliberately keeps the ambient boost: for the ordinary gyro-bias
@@ -1211,7 +1213,13 @@ def _logmap_frame(
 def _logmap_impl(
     y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, "dim_plus_1"]:
-    """Logarithmic map with a regular Cartesian chart at either exact origin."""
+    """Logarithmic map with a regular Cartesian chart at either exact origin.
+
+    Unlike :func:`_gyro_difference` and :func:`_ptransp`, this stays on the exact-origin switch
+    rather than the 1e-1 scaled-radius neighborhood: the polar frame's gradients here are already
+    accurate at every small nonzero radius (measured relative error at rounding level through
+    scaled radius 1e-8), so widening the switch would buy nothing.
+    """
     use_cartesian = _pair_has_origin(x, y)
     # Keep inactive Cartesian coefficients finite: reverse mode must not multiply zero by overflow.
     origin = _create_origin(c, x.shape[0] - 1, dtype=x.dtype)
