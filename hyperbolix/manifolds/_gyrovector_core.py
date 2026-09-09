@@ -10,9 +10,11 @@ Every function is curvature-generic (one formula at any sign of ``c``); ``_confo
 ``c > 0`` branch is exactly the historical Poincaré expression, bit-for-bit. The only theoretical
 departure there is a ``√|c|`` floor at ``√MIN_NORM``: for ``0 < c < 1e-15`` (a Poincaré ball of radius
 ``1/√c > 3e7`` — never used) the boundary floor is marginally more conservative than a bare ``√c``.
-``_addition`` is the one function that is *not* bit-for-bit the historical expression: it regroups the
-numerator and clamps on a scalar (see its implementation notes), which changes the last ulps and is
-strictly more accurate near the ball boundary.
+``_addition`` and ``_gyration`` are *not* bit-for-bit the historical expressions: ``_addition`` regroups
+the numerator and clamps on a scalar (see its implementation notes), and both take their denominator
+from :func:`_mobius_denominator`, which forms ``1 ± 2c⟨x,y⟩ + c²‖x‖²‖y‖²`` as a sum of non-negative
+terms instead of a cancelling difference. Both changes move the last ulps and are strictly more
+accurate near the ball boundary.
 
 All operations act on a single point of shape ``(dim,)``; batch with :func:`jax.vmap`. The
 ``_conformal_factor_batch`` helper is the exception — it broadcasts over arbitrary leading dims for the NN
@@ -49,6 +51,33 @@ def _max_norm(x: Float[Array, "..."], c: ScalarCurvature) -> Float[Array, ""]:
     return jnp.where(jnp.asarray(c) > 0, (1.0 / sqrt_abs_c) - max_norm_eps, jnp.asarray(1e15, dtype=x.dtype))
 
 
+def _boundary_floor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """Smallest value ``1 - c‖x‖²`` can take on a :func:`_proj`-projected point, for ``c > 0``.
+
+    ``_proj`` caps the radius at ``max_norm = 1/√c - eps**0.75`` (:func:`_max_norm`), so
+    ``1 - c‖x‖² ≥ 1 - c·max_norm² = 2√c·eps**0.75 - c·eps**1.5`` — that is this expression. It is
+    the *analytic* minimum of the quantity, so anything below it on a projected point is rounding
+    noise, and that is what makes it the right floor rather than a dtype-blind constant. At
+    ``c = 1`` it is 1.3e-5 (float32) / 3.6e-12 (float64); ``MIN_NORM = 1e-15`` sits below both (it
+    corresponds to geodesic radius 36/√c, which no float64 ball point reaches), so on this
+    quantity the old floor never bit and a float32 cancellation could reach the divisor.
+
+    The direction flips once the value is **squared** into the Möbius denominator: 1.6e-10
+    (float32) is above ``MIN_NORM`` but 1.3e-23 (float64) is eight orders below it, so there the
+    old floor was the one clamping legitimate pairs — from radius ≈ 18/√c, well inside the 27.7/√c
+    where the float64 chart itself ends. See :func:`_mobius_denominator`.
+
+    Only ``x``'s dtype is read, never its values. Factored out of :func:`_conformal_factor`, whose
+    historical spelling this is verbatim; :func:`_mobius_denominator` uses its square and the
+    Poincaré-only sites — ``poincare._busemann``, ``isometry_mappings.poincare_to_hyperboloid`` /
+    ``poincare_to_pv`` — use it directly.
+    """
+    max_norm_eps = _get_max_norm_eps(x)
+    abs_c = jnp.abs(jnp.asarray(c))
+    sqrt_abs_c = jnp.sqrt(floor_at(abs_c, MIN_NORM))
+    return 2.0 * sqrt_abs_c * max_norm_eps - abs_c * max_norm_eps**2
+
+
 def _conformal_factor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)``.
 
@@ -56,12 +85,81 @@ def _conformal_factor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array
     historical Poincaré behavior); for ``c ≤ 0`` the denominator is ``≥ 1`` and the floor never bites.
     """
     x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
-    max_norm_eps = _get_max_norm_eps(x)
-    abs_c = jnp.abs(jnp.asarray(c))
-    sqrt_abs_c = jnp.sqrt(floor_at(abs_c, MIN_NORM))
-    boundary_floor = 2.0 * sqrt_abs_c * max_norm_eps - abs_c * max_norm_eps**2
-    denom = floor_at(1.0 - c * x2, jnp.where(jnp.asarray(c) > 0, boundary_floor, MIN_NORM))
+    denom = floor_at(1.0 - c * x2, jnp.where(jnp.asarray(c) > 0, _boundary_floor(x, c), MIN_NORM))
     return 2.0 / denom
+
+
+def _mobius_denominator(
+    x_D: Float[Array, "dim"],
+    y_D: Float[Array, "dim"],
+    c: ScalarCurvature,
+    sign: int,
+    x_sqnorm: Float[Array, ""] | None = None,
+    y_sqnorm: Float[Array, ""] | None = None,
+) -> Float[Array, ""]:
+    """The Möbius denominator ``1 + sign·2c⟨x,y⟩ + c²‖x‖²‖y‖²``, formed without cancellation.
+
+    ``sign`` is a **static** Python ``+1``/``-1``: ``+1`` is the denominator of ``⊕`` and of
+    ``gyr[x,y]``, ``-1`` the one under ``dist``/``logmap``'s ``(-x) ⊕ y``.
+
+    Why not the literal spelling: with ``r_x = ‖x‖``, ``r_y = ‖y‖`` and ``x̂``, ``ŷ`` the unit
+    directions, ``2(1 ± cos) = ‖x̂ ± ŷ‖²`` and ``1 + t² = (1 - t)² + 2t`` give, for ``t = |c|r_x r_y``::
+
+        1 + sign·2c⟨x,y⟩ + c²r_x²r_y² = (1 - t)² + t·‖x̂ + τ·ŷ‖²,   τ = sign·sgn(c)
+
+    (for ``c > 0`` the ``-`` denominator takes the chord ``‖x̂ - ŷ‖`` and the ``+`` denominator the
+    sum ``‖x̂ + ŷ‖``; for ``c < 0`` the two swap, which is what ``τ`` encodes). Every term on the
+    right is non-negative and the subtraction ``1 - t`` happens *before* the square, so an O(1)
+    result stops being the difference of two O(e^{2a}) terms. Measured on a radial pair 0.1 apart
+    at ``c = 1`` (``logs/2026-09-08_hyperboloid_tangent_primitives/step3_equivalence.py``): at
+    geodesic radius 10 in float32 ``dist`` is 2.9e-2 wrong as-is and 4.3e-6 here. At radius 20 in
+    float64, ``dist`` is 7.519e-02 wrong as-is and 5.367e-10 here
+    (``probe_poincare_mobius_ebebd09.out``, table D.i).
+
+    The floor is :func:`_boundary_floor` **squared** — the analytic minimum of the denominator over
+    projected points: both radii at the cap, with the directions that zero the ``‖x̂ + τŷ‖`` term
+    (``x = y`` for the ``-`` denominator, antipodal for the ``+`` one). At ``c = 1`` that is 1.6e-10
+    (float32) / 1.3e-23 (float64). For ``c ≤ 0`` the denominator legitimately reaches 0 (the
+    sphere's antipode), so ``MIN_NORM`` is kept there.
+
+    ``x_sqnorm``/``y_sqnorm`` let a caller that already reduced ``⟨x,x⟩``/``⟨y,y⟩`` for its
+    numerator hand them over; the chord/sum is then the only extra reduction this costs.
+    """
+    c_arr = jnp.asarray(c)
+    if x_sqnorm is None:
+        x_sqnorm = jnp.dot(x_D, x_D, precision=MATMUL_PRECISION)
+    if y_sqnorm is None:
+        y_sqnorm = jnp.dot(y_D, y_D, precision=MATMUL_PRECISION)
+    # `floor_at(safe_sqrt(·), MIN_NORM)`, the `_proj` idiom: the floor sits *outside* the sqrt
+    # because `r_x` divides below, and `safe_sqrt` supplies the finite derivative at an exact 0
+    # that the floor alone would not. The floored value is deliberately used for the product `t`
+    # as well: at `x = 0` the 1e-15 in `t` cancels the 1e15 the normalization puts into
+    # `d‖x̂ + τŷ‖²/dx`, so the gradient of the denominator at the origin stays the exact `2·sign·c·y`
+    # instead of collapsing to 0 (the value there is 1 ∓ O(1e-15·|c|·r_y), i.e. 1 in float32).
+    r_x = floor_at(safe_sqrt(x_sqnorm), MIN_NORM)
+    r_y = floor_at(safe_sqrt(y_sqnorm), MIN_NORM)
+    x_hat_D = x_D / r_x
+    y_hat_D = y_D / r_y
+    # `(r_x * r_y)` must keep its parentheses: `c_arr * r_x * r_y` associates as
+    # `(c_arr * r_x) * r_y`, which is *not* invariant under swapping x and y, and `1 - t` turns
+    # that 1-ulp asymmetry into a relative one of eps/(1 - t) — enough to break `d(x, y) ==
+    # d(y, x)` in float32 past geodesic radius ~5 (test_dist_properties). Everything else here is
+    # already swap-symmetric: `r_x*r_y` and `x̂ + ŷ` are commutative, `x̂ - ŷ` is the exact
+    # negation of `ŷ - x̂`, and the floor reads only the dtype.
+    # Keep both factorizations directly in signed `c`. Besides avoiding cancellation at either sign,
+    # this gives both branches the literal origin slope d(denom)/dc = 2·sign·⟨x,y⟩. Using
+    # `abs(c)` plus a sign-selected direction has the same values away from zero but differentiates
+    # with the wrong one-sided sign at exactly c = 0.
+    signed_t = c_arr * (r_x * r_y)
+    positive_gap = 1.0 - signed_t
+    positive_w_D = x_hat_D + sign * y_hat_D
+    positive_denom = positive_gap * positive_gap + signed_t * jnp.sum(positive_w_D**2)
+
+    negative_gap = 1.0 + signed_t
+    negative_w_D = x_hat_D - sign * y_hat_D
+    negative_denom = negative_gap * negative_gap - signed_t * jnp.sum(negative_w_D**2)
+    denom = jnp.where(c_arr > 0, positive_denom, negative_denom)
+    return floor_at(denom, jnp.where(c_arr > 0, _boundary_floor(x_D, c) ** 2, MIN_NORM))
 
 
 def _proj(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -121,7 +219,6 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
     """
     x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
     y2 = jnp.dot(y, y, precision=MATMUL_PRECISION)
-    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
     # s = x + y is one extra (dim,)-sized elementwise op; ``s2`` and ``xs`` are the two extra
     # *input* reductions that make ‖num‖ computable without ever touching the (dim,) output. That
     # is the whole point: the old `_proj(num/denom, c)` re-reduced the op's own result, which under
@@ -138,7 +235,11 @@ def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
     coef_b = 1 - c * x2  # B
     coef_g = c * s2  # A - B
     num_D = coef_b * s_D + coef_g * x
-    denom = floor_at(1 + 2 * c * xy + c**2 * x2 * y2, MIN_NORM)
+    # `_mobius_denominator` replaces `1 + 2c·xy + c²·x2·y2`: near-antipodal boundary operands make
+    # that an O(ε²) difference of O(1) terms, which float32 cannot resolve at all (the whole value
+    # is rounding noise from geodesic radius ≈ 8). It reuses `x2`/`y2` and drops the `xy` reduction
+    # in exchange for the chord/sum one, so the op still costs five reductions over the inputs.
+    denom = _mobius_denominator(x, y, c, sign=1, x_sqnorm=x2, y_sqnorm=y2)
 
     # ‖num‖² expanded in the same two coefficients that built `num_D`, so the clamp decision is
     # consistent with the vector it is applied to (an independently derived norm, e.g. the equally
@@ -188,7 +289,9 @@ def _gyration(
     coeff_x = -c2 * xz * y_sqnorm + c * yz + 2 * c2 * xy * yz  # scalar
     coeff_y = -c2 * yz * x_sqnorm - c * xz  # scalar
     num_D = 2 * (coeff_x * x + coeff_y * y)  # (dim,)
-    denom = floor_at(1 + 2 * c * xy + c2 * x_sqnorm * y_sqnorm, MIN_NORM)  # scalar
+    # Same denominator, and the same cancellation, as `_addition`; `xy` is kept because `coeff_x`
+    # needs it, so the factored form costs one extra reduction here. See `_mobius_denominator`.
+    denom = _mobius_denominator(x, y, c, sign=1, x_sqnorm=x_sqnorm, y_sqnorm=y_sqnorm)  # scalar
 
     return z + num_D / denom
 
@@ -197,10 +300,6 @@ def _conformal_factor_batch(x: Float[Array, "... dim"], c: ScalarCurvature) -> F
     """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)`` over arbitrary leading dims (for the NN layers)."""
     dtype = x.dtype
     c_arr = jnp.asarray(c, dtype=dtype)
-    max_norm_eps = jnp.asarray(float(jnp.finfo(dtype).eps ** 0.75), dtype=dtype)
     x2 = jnp.sum(x**2, axis=-1, keepdims=True)  # (..., 1)
-    abs_c = jnp.abs(c_arr)
-    sqrt_abs_c = jnp.sqrt(floor_at(abs_c, MIN_NORM))
-    boundary_floor = 2.0 * sqrt_abs_c * max_norm_eps - abs_c * max_norm_eps**2
-    denom = floor_at(jnp.asarray(1.0, dtype=dtype) - c_arr * x2, jnp.where(c_arr > 0, boundary_floor, MIN_NORM))
+    denom = floor_at(jnp.asarray(1.0, dtype=dtype) - c_arr * x2, jnp.where(c_arr > 0, _boundary_floor(x, c_arr), MIN_NORM))
     return 2.0 / denom

@@ -1257,17 +1257,47 @@ _MOBIUS_ETA_RATIOS = (0.01, 0.1, 0.5, 0.9, 0.99, 1.0, 1.01, 1.1, 2.0, 10.0)
 _MOBIUS_ILL_CONDITIONED = (0.9, 0.99, 1.0, 1.01, 1.1)
 
 
+def _mobius_boundary_floor(dtype: jnp.dtype, c: float) -> float:
+    """``_boundary_floor``'s value, recomputed from the documented formula (as ``_mobius_eps_grid`` does).
+
+    ``1 - c‖x‖²`` at the ``_proj`` ceiling ``1/√c - eps**0.75``. Its **square** is the analytic
+    minimum of the Möbius denominator, and therefore the floor that denominator now carries.
+    """
+    e_mach = float(jnp.finfo(dtype).eps)
+    # `float(...)`, not the bare numpy scalar: a np.float64 is *not* weakly typed, so under
+    # `jax_enable_x64` it would promote a float32 expression it is compared against to float64 —
+    # and with it `_proj`'s ceiling, which is read from the dtype.
+    return float(2.0 * np.sqrt(c) * e_mach**0.75 - c * e_mach**1.5)
+
+
+def _mobius_denominator_reference(x_D: jnp.ndarray, y_D: jnp.ndarray, c: float) -> jnp.ndarray:
+    """``1 + 2c⟨x,y⟩ + c²‖x‖²‖y‖²`` re-derived as the implementation now spells it (``c > 0``).
+
+    The factored identity ``(1 - c·r_x·r_y)² + c·r_x·r_y·‖x̂ + ŷ‖²``, floored at
+    ``_boundary_floor²``. This replica moved with the code on 2026-09-08; before that it was the
+    literal difference floored at ``MIN_NORM``, which in float64 clamped legitimate near-boundary
+    pairs eight orders of magnitude too early.
+    """
+    r_x = jnp.maximum(jnp.sqrt(jnp.dot(x_D, x_D)), poincare_impl.MIN_NORM)
+    r_y = jnp.maximum(jnp.sqrt(jnp.dot(y_D, y_D)), poincare_impl.MIN_NORM)
+    t = c * r_x * r_y
+    w_D = x_D / r_x + y_D / r_y
+    return jnp.maximum((1 - t) ** 2 + t * jnp.sum(w_D**2), _mobius_boundary_floor(x_D.dtype, c) ** 2)
+
+
 def _addition_reference(x_D: jnp.ndarray, y_D: jnp.ndarray, c: float) -> jnp.ndarray:
-    """The pre-change ``_gyrovector_core._addition``, written out verbatim as the reference.
+    """The pre-change ``_gyrovector_core._addition`` numerator, over the current denominator.
 
     ``num = A·x + B·y`` followed by the ``_proj`` boundary clamp on the ``(dim,)`` result —
-    deliberately independent of the implementation under test.
+    deliberately independent of the implementation under test. The denominator is the factored
+    one (re-derived, not imported), so that what these tests compare is the *numerator* grouping,
+    which is what they are about.
     """
     x2 = jnp.dot(x_D, x_D)
     y2 = jnp.dot(y_D, y_D)
     xy = jnp.dot(x_D, y_D)
     num_D = (1 + 2 * c * xy + c * y2) * x_D + (1 - c * x2) * y_D
-    denom = jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, poincare_impl.MIN_NORM)
+    denom = _mobius_denominator_reference(x_D, y_D, c)
     return poincare_impl._proj(num_D / denom, c)
 
 
@@ -1341,15 +1371,27 @@ def _mobius_eps_grid(dtype: jnp.dtype, c: float) -> tuple[float, ...]:
 
 
 def _mobius_ref_f64(x_ND: jnp.ndarray, y_ND: jnp.ndarray, c: float, max_norm: float) -> np.ndarray:
-    """float64 reference, clamped at the ceiling of the dtype under test."""
+    """float64 reference, clamped at the ceiling of the dtype under test.
+
+    The denominator is the factored form with the ``_boundary_floor²`` floor of the dtype under
+    test — this replica moved with the code on 2026-09-08. Keeping ``MIN_NORM`` here would have
+    made the reference itself wrong by up to eight orders of magnitude on the float64 rows of the
+    ``eps`` grid, where the true denominator is 1.3e-23.
+    """
     x = np.asarray(x_ND, dtype=np.float64)
     y = np.asarray(y_ND, dtype=np.float64)
     x2 = np.sum(x * x, axis=1, keepdims=True)
     y2 = np.sum(y * y, axis=1, keepdims=True)
-    xy = np.sum(x * y, axis=1, keepdims=True)
     s = x + y
     s2 = np.sum(s * s, axis=1, keepdims=True)
-    denom = np.maximum(1 + 2 * c * xy + c**2 * x2 * y2, poincare_impl.MIN_NORM)
+    r_x = np.maximum(np.sqrt(x2), poincare_impl.MIN_NORM)
+    r_y = np.maximum(np.sqrt(y2), poincare_impl.MIN_NORM)
+    t = c * r_x * r_y
+    w = x / r_x + y / r_y
+    denom = np.maximum(
+        (1.0 - t) ** 2 + t * np.sum(w * w, axis=1, keepdims=True),
+        _mobius_boundary_floor(x_ND.dtype, c) ** 2,
+    )
     out = ((1.0 - c * x2) * s + (c * s2) * x) / denom
     nrm = np.linalg.norm(out, axis=1, keepdims=True)
     return np.where(nrm > max_norm, out * (max_norm / np.maximum(nrm, 1e-300)), out)
@@ -1507,14 +1549,18 @@ def test_poincare_mobius_add_leaves_unclamped_rows_untouched(dtype: jnp.dtype, c
         pytest.skip("bit-equality across two separately compiled reduction trees is CPU-only")
 
     def unclamped(x_D, y_D):
-        """``B·(x+y) + c‖x+y‖²·x`` over ``denom`` — the documented numerator, no clamp."""
+        """``B·(x+y) + c‖x+y‖²·x`` over ``denom`` — the documented numerator, no clamp.
+
+        The denominator comes from ``_mobius_denominator`` rather than being re-derived: what this
+        test pins is that ``scale`` is a literal 1.0, and bit-equality only says that if the two
+        sides divide by the same bits. Re-deriving it here (as this replica did before 2026-09-08)
+        would pin the *spelling* of the denominator instead, which is what changed.
+        """
         x2 = jnp.dot(x_D, x_D)
-        y2 = jnp.dot(y_D, y_D)
-        xy = jnp.dot(x_D, y_D)
         s_D = x_D + y_D
         s2 = jnp.dot(s_D, s_D)
         num_D = (1 - c * x2) * s_D + (c * s2) * x_D
-        return num_D / jnp.maximum(1 + 2 * c * xy + c**2 * x2 * y2, poincare_impl.MIN_NORM)
+        return num_D / poincare_impl._mobius_denominator(x_D, y_D, c, sign=1)
 
     max_norm = _mobius_max_norm(dtype, c)
     x_ND, y_ND = _mobius_random_pairs(dtype, c, seed=4242)
@@ -1524,6 +1570,83 @@ def test_poincare_mobius_add_leaves_unclamped_rows_untouched(dtype: jnp.dtype, c
     keep = np.linalg.norm(np.asarray(raw_ND, dtype=np.float64), axis=1) < max_norm * (1.0 - 1e-4)
     assert int(np.sum(keep)) > 0, "no unclamped rows on this grid"
     assert jnp.array_equal(out_ND[keep], raw_ND[keep])
+
+
+# ---------------------------------------------------------------------------
+# The factored Möbius denominator at large geodesic radius (7ce51f9)
+#
+# ``1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²`` is O(ε²) for a near-boundary pair — written literally it is a
+# difference of O(1) terms, so float32 has no bits left for it past geodesic radius ~8 and
+# float64 past ~18. It is now ``(1 - c·r_x·r_y)² + c·r_x·r_y·‖x̂ - ŷ‖²``, in which the
+# subtraction happens before the square and every remaining term is non-negative.
+# ---------------------------------------------------------------------------
+
+_RADIAL_PAIR_GAP = 0.1
+"""Geodesic separation of the two points, in nats. The quantity all three assertions read."""
+
+
+def _radial_ball_pair(d0: float, c: float, dim: int, dtype: jnp.dtype) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Two ball points on one ray, at geodesic radius ``d0`` and ``d0 + 0.1`` from the origin.
+
+    ``dim`` is chosen so ``1/sqrt(dim)`` is a power of two, which makes the shared direction
+    exactly representable and the two points exactly collinear in the dtype under test. Scaling
+    one vector twice does not do that — each product is rounded independently, and at radius 10
+    the resulting one-ulp angle is worth more than the separation being measured (the same
+    failure ``tests/test_manifold_oracles.py::_hyperboloid_basis`` documents).
+    """
+    sqrt_c = np.sqrt(c)
+    direction_D = np.ones(dim) / np.sqrt(dim)
+    radii = [np.tanh(sqrt_c * d / 2.0) / sqrt_c for d in (d0, d0 + _RADIAL_PAIR_GAP)]
+    return tuple(jnp.asarray((r * direction_D).astype(np.dtype(dtype).name)) for r in radii)  # type: ignore[return-value]
+
+
+def _mobius_longdouble_reference(x_D: jnp.ndarray, y_D: jnp.ndarray, c: float) -> tuple[float, np.ndarray]:
+    """``((-x) ⊕ y, d(x, y))`` from the STORED coordinates, in numpy longdouble.
+
+    The factored denominator and ``d = 2·atanh(√c‖(-x) ⊕ y‖)/√c``, evaluated at eps 1.1e-19 —
+    three decimal digits below float64, so it resolves the ``1 - c·r_x·r_y ≈ 8e-9`` of the
+    float64 row with 11 digits to spare.
+    """
+    ld = np.longdouble
+    x = -np.asarray(np.asarray(x_D, dtype=np.float64), dtype=ld)
+    y = np.asarray(np.asarray(y_D, dtype=np.float64), dtype=ld)
+    c_ld, sqrt_c = ld(c), np.sqrt(ld(c))
+    x_sqnorm = np.dot(x, x)
+    r_x, r_y = np.sqrt(x_sqnorm), np.sqrt(np.dot(y, y))
+    t = c_ld * r_x * r_y
+    w_D = x / r_x + y / r_y
+    denom = (ld(1.0) - t) ** 2 + t * np.dot(w_D, w_D)
+    s_D = x + y
+    mobius_D = ((ld(1.0) - c_ld * x_sqnorm) * s_D + (c_ld * np.dot(s_D, s_D)) * x) / denom
+    dist = ld(2.0) * np.arctanh(sqrt_c * np.sqrt(np.dot(mobius_D, mobius_D))) / sqrt_c
+    return float(dist), mobius_D
+
+
+@pytest.mark.parametrize(("dtype", "d0"), [(jnp.float32, 10.0), (jnp.float64, 20.0)], ids=["f32-d10", "f64-d20"])
+def test_poincare_radial_pair_at_large_radius_matches_the_longdouble_reference(dtype: jnp.dtype, d0: float) -> None:
+    """``dist``, ``‖logmap‖_x`` and ``(-x) ⊕ y`` within 1e-3 of longdouble for a 0.1-nat pair.
+
+    All three route through the same Möbius denominator, and its literal spelling is the whole
+    difference: measured absolute error in ``dist`` is 4.3e-6 (float32 at d = 10) and 2.0e-10
+    (float64 at d = 20) here, against 2.9e-2 and 7.5e-2 for ``1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²`` — the
+    old value is 29 % and 75 % wrong on a distance of 0.1, finite and plausible throughout.
+
+    Measured against the 1e-3 bound: ``dist`` 4.3e-6 / 2.0e-10, ``‖logmap‖_x`` 3.9e-6 / 1.8e-10,
+    and ``(-x) ⊕ y`` 1.9e-5 / 8.8e-10 relative to its own norm — a factor 50 to 5e6 of margin.
+    The reference reads the *stored* coordinates, so what is measured is the arithmetic and not
+    the rounding of the input radii.
+    """
+    manifold = hj.manifolds.Poincare(dtype=dtype)
+    c = 1.0
+    x_D, y_D = _radial_ball_pair(d0, c, 4, dtype)
+    dist_ref, mobius_ref_D = _mobius_longdouble_reference(x_D, y_D, c)
+    mobius_norm = float(np.sqrt(np.dot(mobius_ref_D, mobius_ref_D)))
+
+    assert abs(float(manifold.dist(x_D, y_D, c)) - dist_ref) <= 1e-3
+    tangent_D = manifold.logmap(y_D, x_D, c)
+    assert abs(float(manifold.tangent_norm(tangent_D, x_D, c)) - dist_ref) <= 1e-3
+    mobius_D = np.asarray(manifold.addition(-x_D, y_D, c), dtype=np.float64)
+    assert np.max(np.abs(mobius_D - np.asarray(mobius_ref_D, dtype=np.float64))) <= 1e-3 * mobius_norm
 
 
 def test_ptransp_is_an_isometry_and_round_trips(
@@ -1766,26 +1889,35 @@ def test_default_atol_is_sqrt_eps_and_dtype_aware() -> None:
 
 @pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
 def test_hyperboloid_is_in_manifold_honours_an_explicit_atol(c: float) -> None:
-    """A point off the sheet by exactly ``R`` is accepted iff ``atol > R``.
+    """A point off the sheet by exactly ``R`` is accepted iff ``atol`` clears ``R``.
 
-    Constructed so the Lorentz-norm residual is *exact*: replacing ``x₀`` by ``sqrt(x₀² - R)``
-    makes ``⟨x, x⟩_L = -1/c + R`` identically. float64 throughout so ``R = 1e-6`` is far above
-    the arithmetic noise.
+    **The residual is the time-slot one since bb0a170**: the predicate compares the stored ``x₀``
+    against ``sqrt(1/c + ‖x_s‖²)`` with the tolerance used as both ``rtol`` and ``atol``, i.e. it
+    rejects when ``R > atol·(1 + x₀)``. The previous version of this test built its off-sheet
+    point so the *Lorentz-form* residual ``⟨x, x⟩_L + 1/c`` was exactly 1e-6; that residual is
+    the time-slot one scaled by ``2·x₀``, so at ``c = 0.3`` (``x₀ = 2.006``) the same point is
+    only 2.5e-7 off on the time slot and the ``atol=1e-7`` call correctly accepted it.
 
-    This is the test the old implementation fails: ``_is_in_manifold`` opened with
-    ``tol = max(atol, 1e-4)``, so the ``atol=1e-7`` call below accepted the point (1e-6 < 1e-4)
-    and no caller could ever tighten the check. It also pins that the floor's *removal* did not
-    turn into "ignore atol entirely" — the loose call must still accept.
+    Constructed so the time-slot residual is exact instead: ``x₀' = x₀·(1 + δ)`` puts it at
+    ``δ·x₀``, and ``δ`` is chosen per curvature to make that residual exactly ``1e-6·(1 + x₀)`` —
+    a factor 10 clear of the ``atol=1e-7`` rejection threshold and a factor 10 inside the
+    ``atol=1e-5`` acceptance one, at every ``c``.
+
+    The purpose is unchanged: an explicit ``atol`` is honoured with no hidden floor under it.
+    The implementation this pins against opened with ``tol = max(atol, 1e-4)``, so the tight
+    call accepted the point and no caller could ever tighten the check; the loose call pins that
+    removing that floor did not turn into "ignore ``atol`` entirely".
     """
     manifold = hj.manifolds.Hyperboloid(dtype=jnp.float64)
-    residual = 1e-6
 
     on_sheet = manifold.proj(jnp.array([0.0, 0.4, -0.7, 0.2], dtype=jnp.float64), c)
-    off_sheet = on_sheet.at[0].set(jnp.sqrt(on_sheet[0] ** 2 - residual))
+    x0 = float(on_sheet[0])
+    residual = 1e-6 * (1.0 + x0)
+    off_sheet = on_sheet.at[0].multiply(1.0 + residual / x0)
 
-    # The construction is exact: verify the residual before relying on it.
-    lorentz = float(manifold.minkowski_inner(off_sheet, off_sheet))
-    assert lorentz == pytest.approx(-1.0 / c + residual, abs=1e-12)
+    # The construction is exact: verify the time-slot residual before relying on it.
+    x0_ref = float(jnp.sqrt(1.0 / c + jnp.dot(on_sheet[1:], on_sheet[1:])))
+    assert float(off_sheet[0]) - x0_ref == pytest.approx(residual, rel=1e-9)
 
     assert bool(manifold.is_in_manifold(off_sheet, c, atol=1e-5)), "atol > residual must accept"
     assert not bool(manifold.is_in_manifold(off_sheet, c, atol=1e-7)), "atol < residual must reject"

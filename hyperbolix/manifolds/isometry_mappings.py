@@ -52,6 +52,7 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, floor_at, safe_hypot_norm
 from ..utils.precision import MATMUL_PRECISION
+from ._gyrovector_core import _boundary_floor
 from .protocol import ScalarCurvature
 
 
@@ -140,7 +141,10 @@ def poincare_to_hyperboloid(
     # Curvature-aware inverse stereographic projection. The spatial part scales
     # by the Poincaré conformal factor 1/(1 - c·||y||²); only the time component
     # carries the extra 1/√c, so the two denominators differ.
-    one_minus = floor_at(1.0 - c * y_sqnorm, MIN_NORM)
+    # `_boundary_floor` is the same dtype-aware floor `_conformal_factor` puts on this quantity —
+    # the analytic minimum over projected points, below which any value is rounding noise.
+    # `MIN_NORM = 1e-15` sits below that minimum in both dtypes, so it never bit.
+    one_minus = floor_at(1.0 - c * y_sqnorm, _boundary_floor(y, c))
 
     t = (1.0 + c * y_sqnorm) / (one_minus * sqrt_c)
     x_spatial = 2.0 * y / one_minus
@@ -213,7 +217,8 @@ def poincare_to_pv(
     where λ(y) = 2/(1 - c·||y||²) is the Poincaré conformal factor. As y
     approaches the ball boundary (||y||² → 1/c) the image grows without bound —
     expected, since PV is the *unconstrained* R^n model. The denominator is
-    guarded by ``MIN_NORM`` to avoid division by zero at the boundary.
+    floored at ``_boundary_floor(y, c)`` — the smallest value it can take on a
+    projected ball point — to avoid division by zero at the boundary.
 
     Args:
         y: Point in the Poincaré ball, shape (dim,). Should satisfy ||y||² < 1/c.
@@ -234,7 +239,9 @@ def poincare_to_pv(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    denominator = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), MIN_NORM)
+    # `_boundary_floor`: the dtype-aware floor `_conformal_factor` puts on `1 - c‖y‖²`; see
+    # :func:`poincare_to_hyperboloid`.
+    denominator = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), _boundary_floor(y, c))
     return 2.0 * y / denominator
 
 

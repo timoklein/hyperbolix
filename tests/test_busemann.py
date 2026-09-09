@@ -153,3 +153,75 @@ def test_busemann_jit_vmap_finite_dtype(dtype, manifold_cls, is_lorentz):
     # Gradient w.r.t. the input point is finite.
     g = jax.grad(lambda xi: M.busemann(xi, v[0], c))(x[0])
     assert jnp.isfinite(g).all()
+
+
+# ---------------------------------------------------------------------------
+# The log argument at large radius, on the direction the horosphere is most confident about
+# (bb0a170).
+#
+# ``x₀ - ⟨x_s, v⟩`` is O(e^{-a}) for the aligned direction and a difference of two O(sinh a)
+# numbers if written literally, so float32 loses it entirely from a ≈ 8 — and the old spelling
+# then saturated on a ``MIN_NORM`` floor, returning log(1e-15)/√c with an exactly zero gradient
+# for exactly the points a Busemann layer is most certain about. It is now the sum of positives
+# ``1/(c(x₀ + r)) + r‖x̂ - v‖²/2``.
+# ---------------------------------------------------------------------------
+
+_LD = np.longdouble
+"""x86 80-bit extended: eps 1.1e-19, three decimal digits below float64."""
+
+
+def _busemann_longdouble(x_A: jnp.ndarray, v_D: jnp.ndarray, c: float) -> float:
+    """``log(√c·(1/(c(x₀ + r)) + r‖x̂ - v‖²/2))/√c`` from the STORED coordinates, in longdouble."""
+    x_s = np.asarray(np.asarray(x_A, dtype=np.float64)[1:], dtype=_LD)
+    v = np.asarray(np.asarray(v_D, dtype=np.float64), dtype=_LD)
+    c_ld, sqrt_c = _LD(c), np.sqrt(_LD(c))
+    r = np.sqrt(np.dot(x_s, x_s))
+    x0 = np.sqrt(_LD(1.0) / c_ld + np.dot(x_s, x_s))
+    chord = x_s / r - v
+    arg = _LD(1.0) / (c_ld * (x0 + r)) + _LD(0.5) * r * np.dot(chord, chord)
+    return float(np.log(sqrt_c * arg) / sqrt_c)
+
+
+@pytest.mark.parametrize("angle", [0.0, 1e-3], ids=["aligned", "1e-3rad"])
+def test_busemann_is_float32_accurate_at_radius_10_toward_its_own_ideal_point(angle: float):
+    """``B^v(x)`` within 1e-5 relative of a longdouble reference at ``√c·d₀ = 10``, c = 1.
+
+    The aligned direction is the hard case: ``x₀ - ⟨x_s, v⟩`` is then 1/(c(x₀ + r)) ≈ 4.5e-5 while
+    both of its terms are 1.1e4, so the literal difference has no bits left. Measured relative
+    error: 1.9e-7 (aligned) and 4.5e-8 (1e-3 rad off), i.e. 50-220x of margin. The pre-bb0a170
+    spelling is 2.5 (250 %) aligned and 6.8e-2 at 1e-3 rad: it hit the ``MIN_NORM`` floor and
+    returned log(1e-15)/√c = -34.5 for a true value of -10.0.
+
+    The gradient leg is what a Busemann layer actually consumes. Measured 4.3e-6 (aligned) /
+    2.1e-5 (1e-3 rad) relative to the float64 gradient, against a 1e-3 bound; the old spelling's
+    aligned gradient is **exactly zero** — the floor is flat — and its 1e-3-rad gradient is off
+    by a factor 500.
+    """
+    c, dim, a = 1.0, 16, 10.0
+    manifold32, manifold64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=jnp.float64)
+    e1_D = np.ones(dim) / np.sqrt(dim)
+    e2_D = np.zeros(dim)
+    e2_D[0], e2_D[1] = 1.0, -1.0
+    e2_D /= np.linalg.norm(e2_D)
+
+    x_s_D = np.asarray((np.sinh(a) / np.sqrt(c)) * e1_D, dtype=np.float32)
+    x0 = np.sqrt(1.0 / c + float(np.dot(x_s_D.astype(np.float64), x_s_D.astype(np.float64))))
+    x_A = np.concatenate([[x0], x_s_D.astype(np.float64)])
+    v_D = np.cos(angle) * e1_D + np.sin(angle) * e2_D
+    v_D /= np.linalg.norm(v_D)
+
+    x32_A, x64_A = jnp.asarray(x_A.astype(np.float32)), jnp.asarray(x_A)
+    v32_D, v64_D = jnp.asarray(v_D.astype(np.float32)), jnp.asarray(v_D)
+
+    expected = _busemann_longdouble(x32_A, v32_D, c)
+    got = float(manifold32.busemann(x32_A, v32_D, c))
+    assert abs(got - expected) <= 1e-5 * abs(expected), f"angle={angle}: {got} vs {expected}"
+
+    def grad_wrt_spatial(manifold, x_A, v_D):
+        return jax.grad(lambda x_s: manifold.busemann(jnp.concatenate([x_A[:1], x_s]), v_D, c))(x_A[1:])
+
+    grad32_D = np.asarray(grad_wrt_spatial(manifold32, x32_A, v32_D), dtype=np.float64)
+    grad64_D = np.asarray(grad_wrt_spatial(manifold64, x64_A, v64_D), dtype=np.float64)
+    assert np.max(np.abs(grad32_D)) > 0.0, "the log argument saturated: zero gradient"
+    rel = float(np.max(np.abs(grad32_D - grad64_D)) / np.max(np.abs(grad64_D)))
+    assert rel <= 1e-3, f"angle={angle}: gradient off by {rel:.3e}"

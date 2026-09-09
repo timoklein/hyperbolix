@@ -28,6 +28,7 @@ from fractions import Fraction
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 # tests/conftest.py enables x64 at import time, but ``seed_jax`` is not autouse, so set it
@@ -121,6 +122,81 @@ def _near_points(seed, d, c, snorm, m):
 def _softmax_weights(seed, n, m):
     """(N, M) row-stochastic float64 weights, as an attention layer would supply."""
     return jax.nn.softmax(jax.random.normal(jax.random.PRNGKey(seed), (n, m), dtype=jnp.float64), axis=-1)
+
+
+def _polar_points(a_arr, u_arr, c):
+    """On-sheet points from the polar form ``x = (cosh a, sinh a * u) / sqrt(c)``, ``||u|| = 1``.
+
+    Exactly on the sheet by construction (``-cosh^2 + sinh^2 = -1``) and ``sqrt(c) d(0, x) = a``,
+    so a test can place a point at a *named* scaled geodesic radius rather than at a spatial norm.
+    Built in float64 and cast by the caller, like ``_onsheet``.
+    """
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))
+    time_ = (jnp.cosh(a_arr) / sqrt_c)[..., None]
+    space = (jnp.sinh(a_arr) / sqrt_c)[..., None] * u_arr
+    return jnp.concatenate([time_, space], axis=-1)
+
+
+def _radial_cloud(seed, m, a, c, d, sigma=0.3, dtype=jnp.float64):
+    """``M`` on-sheet points on ONE geodesic ray, scaled radii spread by ``sigma`` around ``a``.
+
+    This is the configuration in which the naive Minkowski square loses everything: the points
+    share a direction, so the angular part of ``<x_i - x_j, x_i - x_j>_L`` vanishes and the whole
+    value is carried by the radial gap, which the literal ``-delta_0^2 + ||delta_s||^2`` reads as
+    the difference of two ``O(e^{2a})`` squares. A cloud at one *common* radius does not cancel
+    (the time components of the deltas vanish), hence the radial spread.
+    """
+    k_dir, k_rad = jax.random.split(jax.random.PRNGKey(seed))
+    u_D = jax.random.normal(k_dir, (d,), dtype=jnp.float64)
+    u_D = u_D / jnp.linalg.norm(u_D)
+    a_M = a + sigma * jax.random.normal(k_rad, (m,), dtype=jnp.float64)
+    return _polar_points(a_M, jnp.broadcast_to(u_D, (m, d)), c).astype(dtype)
+
+
+def _spread_directions(key, base_D, shape, sigma_rad):
+    """Unit directions at angle ``sigma_rad * N(0,1)`` from ``base_D``, on a random great circle.
+
+    ``cos(theta) base + sin(theta) perp`` with ``perp`` a unit vector orthogonal to ``base``, so
+    the angle to ``base`` is exactly ``theta`` — a spread named in radians, independent of ``D``
+    (perturbing ``base`` by ``sigma * N(0, I_D)`` and renormalizing would give an angle growing
+    like ``sigma sqrt(D)``).
+    """
+    d = base_D.shape[-1]
+    k_perp, k_ang = jax.random.split(key)
+    perp = jax.random.normal(k_perp, (*shape, d), dtype=jnp.float64)
+    perp = perp - jnp.sum(perp * base_D, axis=-1, keepdims=True) * base_D
+    perp = perp / jnp.linalg.norm(perp, axis=-1, keepdims=True)
+    theta = sigma_rad * jax.random.normal(k_ang, shape, dtype=jnp.float64)
+    return jnp.cos(theta)[..., None] * base_D + jnp.sin(theta)[..., None] * perp
+
+
+def _angular_cloud(seed, m, a, c, d, sigma_rad=0.3, sigma_a=0.0, dtype=jnp.float64):
+    """``M`` on-sheet points spread ``sigma_rad`` rad around one direction at scaled radius ``a``.
+
+    The complement of :func:`_radial_cloud`: with ``sigma_a = 0`` every point sits at the *same*
+    radius and only the direction varies, so the time components of the pairwise deltas vanish and
+    the naive Minkowski square has nothing to cancel — but a normalizer that decomposes around a
+    single pivot point reads the whole angular gap as an ``O(e^{2a})`` difference instead.
+    ``sigma_a = 0.3`` gives the mixed cloud (spread in both radius and direction).
+    """
+    k_base, k_dir, k_rad = jax.random.split(jax.random.PRNGKey(seed), 3)
+    base_D = jax.random.normal(k_base, (d,), dtype=jnp.float64)
+    base_D = base_D / jnp.linalg.norm(base_D)
+    dirs_MD = _spread_directions(k_dir, base_D, (m,), sigma_rad)
+    a_M = a + sigma_a * jax.random.normal(k_rad, (m,), dtype=jnp.float64)
+    return _polar_points(a_M, dirs_MD, c).astype(dtype)
+
+
+def _geodesic_err(got, ref, c):
+    """Largest geodesic distance between corresponding points of ``got`` and ``ref`` (float64).
+
+    Geodesic, not coordinate, error: at ``sqrt(c) d = 9`` the ambient coordinates are ``O(6e3)``,
+    so a coordinate difference says nothing about how far apart the two points actually are.
+    """
+    manifold = Hyperboloid(dtype=jnp.float64)
+    got_KA = jnp.asarray(got, dtype=jnp.float64).reshape(-1, got.shape[-1])
+    ref_KA = jnp.asarray(ref, dtype=jnp.float64).reshape(-1, ref.shape[-1])
+    return float(jnp.max(jax.vmap(manifold.dist, in_axes=(0, 0, None))(got_KA, ref_KA, c)))
 
 
 # ---------------------------------------------------------------------------------------
@@ -318,6 +394,119 @@ def test_lorentz_midpoint_float32_accuracy():
         assert lib_grad < 3e-3, f"seed {seed}: library float32 gradient rel. error {lib_grad:.2e}"
 
     assert max(naive_errs) > 1e-3, f"naive float32 forward rel. error never exceeded 1e-3: {max(naive_errs):.2e}"
+
+
+# ---------------------------------------------------------------------------------------
+# 5b. Large scaled radius: accuracy against float64, never finiteness
+# ---------------------------------------------------------------------------------------
+
+
+def test_lorentz_midpoint_radial_cloud_at_radius_9_matches_float64():
+    """Uniform midpoint of a radial cloud at ``sqrt(c) d = 9``: geodesic accuracy, not finiteness.
+
+    The failure this pins is a long finite-but-wrong phase, not a NaN: the naive normalizer
+    returns a perfectly ordinary hyperboloid point that is simply in the wrong place, so a
+    finiteness assertion passes through the whole regime. The reference is therefore the same
+    call in float64, and the assertion is on the geodesic distance between the two.
+
+    Measured (M = 16, sigma = 0.3, uniform weights, c = 0.5, D = 64, seeds 0-3): library
+    3.5e-4 ... 4.3e-4, naive form 8.1e-3 ... 1.8. The naive error is luck-dependent per seed
+    (it depends on how the radial gap happens to round), so the anti-reversion pin is the
+    two-part form used elsewhere in this file: every seed at least 10x worse, worst seed
+    above 1e-2 outright.
+    """
+    c, m, d, a = 0.5, 16, 64, 9.0
+    naive_errs = []
+    for seed in _SEEDS:
+        pts64_MA = _radial_cloud(seed, m, a, c, d)
+        pts32_MA = pts64_MA.astype(jnp.float32)
+        w64_NM = jnp.full((1, m), 1.0 / m, dtype=jnp.float64)
+        w32_NM = w64_NM.astype(jnp.float32)
+
+        truth_NA = lorentz_midpoint(pts64_MA, w64_NM, c)
+        lib = _geodesic_err(lorentz_midpoint(pts32_MA, w32_NM, c), truth_NA, c)
+        naive = _geodesic_err(_naive_lorentz_midpoint(pts32_MA, w32_NM, c), truth_NA, c)
+        naive_errs.append(naive)
+
+        assert lib < 1e-3, f"seed {seed}: float32 midpoint {lib:.2e} geodesic from the float64 one"
+        assert naive > 10.0 * lib, f"seed {seed}: naive {naive:.2e} not >10x library {lib:.2e}"
+
+    assert max(naive_errs) > 1e-2, f"naive geodesic error never exceeded 1e-2: {max(naive_errs):.2e}"
+
+
+@pytest.mark.parametrize("a", [9.0, 12.0])
+@pytest.mark.parametrize("sigma_a", [0.0, 0.3], ids=["angular", "mixed"])
+def test_lorentz_midpoint_angular_cloud_matches_float64(sigma_a, a):
+    """Uniform midpoint of an angular / mixed cloud at ``sqrt(c) d in {9, 12}``: geodesic accuracy.
+
+    The configuration :func:`test_lorentz_midpoint_radial_cloud_at_radius_9_matches_float64`
+    deliberately did not cover. The points sit at one common radius with their directions spread
+    0.3 rad (``sigma_a = 0``), or spread in both radius and direction (``sigma_a = 0.3``); the
+    normalizer sees an angular gap rather than a radial one. A pivot decomposition around one
+    reference point — the ``196f5b6`` spelling — reads that gap as a difference of two
+    ``O(e^{2a})`` numbers and loses the whole answer, while the variance form
+    ``-c<h,h>_L = c*(gap + R*V/(1 + ||m_bar||))*(gap + R*(1 + ||m_bar||))`` adds only non-negative
+    terms and never lets the ``e^{2a}`` scale in.
+
+    Accuracy, not finiteness: the pivot form returns an ordinary on-manifold point in the wrong
+    place, so the reference is the same call in float64 and the assertion is the geodesic distance
+    between the two. Measured (M = 16, D = 64, c = 0.5, uniform weights, seeds 0-3;
+    ``logs/2026-09-08_hyperboloid_tangent_primitives/step6c_angular_midpoint_measurements.out``),
+    worst seed per cell, library / pivot form::
+
+        angular a = 9    4.2e-07 / 2.1e+01        mixed a = 9    4.5e-07 / 4.7e-02
+        angular a = 12   5.0e-07 / 3.1e+00        mixed a = 12   3.8e-07 / 3.0e+00
+
+    The bound is 2.5e-6 — 5x the worst measured library error, and four orders below the pivot
+    form's worst, so a revert to it fails this test on every cell.
+    """
+    c, m, d, bound = 0.5, 16, 64, 2.5e-6
+    for seed in _SEEDS:
+        pts64_MA = _angular_cloud(seed, m, a, c, d, sigma_rad=0.3, sigma_a=sigma_a)
+        pts32_MA = pts64_MA.astype(jnp.float32)
+        w64_NM = jnp.full((1, m), 1.0 / m, dtype=jnp.float64)
+        w32_NM = w64_NM.astype(jnp.float32)
+
+        truth_NA = lorentz_midpoint(pts64_MA, w64_NM, c)
+        lib = _geodesic_err(lorentz_midpoint(pts32_MA, w32_NM, c), truth_NA, c)
+        assert lib < bound, f"seed {seed}: float32 midpoint {lib:.2e} geodesic from the float64 one"
+
+
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_lorentz_midpoint_batched_matches_literal_definition_float64(c):
+    """Attention-shaped float64 midpoint equals the literal definition, computed in NumPy.
+
+    Definition pin rather than an accuracy pin: ``mu = h / sqrt(-c <h,h>_L)`` with
+    ``h = sum_m w_m x_m`` and the time slot rebuilt from the spatial part (what
+    ``spatial_to_hyperboloid`` does). It fixes what the batched broadcast *means* — which axis
+    of the ``(B, H, N, M)`` weights contracts against which axis of the ``(B, H, M, A)`` points
+    — independently of how the normalizer is spelled, so a future rewrite of the normalizer has
+    to keep reproducing this.
+
+    Radii stay at or below 6 so the literal reference is itself accurate: its cancellation is
+    ``eps64 * cosh^2(a)``, which at ``a = 9`` would be 4e-9 and would make the *reference* the
+    inaccurate side. Measured: 1.4e-15 (c = 0.5), 4.5e-15 (c = 1).
+    """
+    b, h, m, n, d = 2, 2, 8, 4, 5
+    k_a, k_u, k_w = jax.random.split(jax.random.PRNGKey(int(100 * c)), 3)
+    a_BHM = jax.random.uniform(k_a, (b, h, m), minval=0.5, maxval=6.0, dtype=jnp.float64)
+    u_BHMD = jax.random.normal(k_u, (b, h, m, d), dtype=jnp.float64)
+    u_BHMD = u_BHMD / jnp.linalg.norm(u_BHMD, axis=-1, keepdims=True)
+    pts_BHMA = _polar_points(a_BHM, u_BHMD, c)
+    w_BHNM = jax.nn.softmax(jax.random.normal(k_w, (b, h, n, m), dtype=jnp.float64), axis=-1)
+
+    got_BHNA = lorentz_midpoint(pts_BHMA, w_BHNM, c)
+    assert got_BHNA.shape == (b, h, n, d + 1)
+
+    pts_np, w_np = np.asarray(pts_BHMA, dtype=np.float64), np.asarray(w_BHNM, dtype=np.float64)
+    h_BHNA = np.einsum("bhnm,bhma->bhna", w_np, pts_np)
+    mink_BHN = -(h_BHNA[..., 0] ** 2) + np.sum(h_BHNA[..., 1:] ** 2, axis=-1)
+    mu_s_BHND = h_BHNA[..., 1:] / np.sqrt(-c * mink_BHN)[..., None]
+    mu_0_BHN = np.sqrt(np.sum(mu_s_BHND**2, axis=-1) + 1.0 / c)
+    ref_BHNA = jnp.asarray(np.concatenate([mu_0_BHN[..., None], mu_s_BHND], axis=-1))
+
+    err = _geodesic_err(got_BHNA, ref_BHNA, c)
+    assert err < 1e-12, f"c={c}: batched midpoint {err:.2e} geodesic from the literal definition"
 
 
 # ---------------------------------------------------------------------------------------

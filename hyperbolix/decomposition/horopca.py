@@ -48,7 +48,7 @@ from ..manifolds.hyperboloid import (
 from ..manifolds.isometry_mappings import hyperboloid_to_poincare, poincare_to_hyperboloid
 from ..manifolds.protocol import ScalarCurvature
 from ..utils.helpers import compute_pairwise_distances
-from ..utils.math_utils import MIN_NORM, floor_at
+from ..utils.math_utils import MIN_NORM, floor_at, safe_norm, safe_normalize
 from ..utils.precision import MATMUL_PRECISION
 from .frechet import frechet_mean
 
@@ -113,6 +113,36 @@ def horo_projection(
       spine pointing toward the origin (orthogonal to the ideal span); (3) walk a geodesic of
       length ``d(x, spine)`` along it.
 
+    Numerics of the ``K ≥ 2`` branch. Both quantities that carry the point's radius are formed
+    without a difference of ``O(x₀)`` terms. Write ``r = ‖x_s‖``, ``x̂ = x_s/r`` and
+    ``g_k = ⟨q_k, x̂⟩`` (the ``q_k`` are Euclidean-orthonormal unit vectors, so the ``g_k`` are
+    ``O(1)`` dots of unit vectors).
+
+    * **Sherman-Morrison coefficients.** The two steps
+      ``by_k = -x₀ + r·g_k`` then ``c_k = by_k + Σ_j by_j/(1 - K)`` cancel an ``O(x₀)`` term against
+      an ``O(x₀)`` term to leave an ``O(1)`` result. Combined analytically they are
+      ``c_k = x₀/(K - 1) + r·(g_k - Σ_j g_j/(K - 1))``, which at the origin is exactly
+      ``1/(√c·(K - 1))``.
+    * **Spine normalizer.** ``n = x - mp`` is Minkowski-orthogonal to ``span(p_k)``, so
+      ``n₀ = ⟨q_k, n_s⟩`` for *every* k and the component of ``n_s`` outside the span is the
+      component of ``x_s`` outside it. Hence ``‖n_s‖² = K·n₀² + ‖x_s^⊥‖²`` and, using
+      ``⟨mp, mp⟩_L = ⟨x, x⟩_L - ⟨n, n⟩_L``::
+
+          -c·⟨mp, mp⟩_L = 1 + c·(‖x_s^⊥‖² + (K - 1)·n₀²)
+          x_s^⊥ = x_s - Σ_k g_k·r·q_k,   n₀ = -[1/(c·(x₀ + r)) + r·(1 - Σ_k g_k)]/(K - 1)
+
+      with ``1/(c·(x₀ + r)) = x₀ - r`` on the sheet — the same cancellation-free spelling
+      :func:`~hyperbolix.manifolds.hyperboloid._busemann_arg` uses for its own radial term. Every
+      term is non-negative, so the result is ``≥ 1`` analytically and the ``MIN_NORM`` floor the
+      literal ``_minkowski_inner`` needed is gone (a non-finite input now stays loud).
+
+    Measured, ``c = 1``, ``D = 16``, a point 1e-3 rad off ``q_1`` — geodesic error of the float32
+    projection against the same call in float64, as-is → this form: 7.9e-3 → 1.0e-4 at ``a = 8``,
+    0.18 to 0.31 → 3.8e-4 at 9, 0.58 → 6.7e-4 at 10, 2.5 → 2.6e-3 at 12, 9.2 → 2.8e-2 at 14. The
+    Busemann coordinates the projection is supposed to preserve come back to ≤1.5e-4 (as-is 4e-2 to
+    0.17). Steps (2) and (3) are untouched: the unit tangent is built at origin scale and the
+    geodesic walk goes through ``_dist``/``_expmap``, both already cancellation-free.
+
     Args:
         x_A: Hyperboloid point, shape (A,), A = D + 1.
         q_ortho_KD: Row-orthonormal ideal directions, shape (K, D).
@@ -135,18 +165,36 @@ def horo_projection(
         return _proj(_expmap_0(tangent_A, c), c)
 
     p_KA = lift_ideals(q_ortho_KD)  # null lifts [1, q_k], shape (K, A)
+    km1 = num_components - 1.0  # K - 1 >= 1 in this branch
 
-    def _span_coeffs(y_A: Float[Array, "A"]) -> Float[Array, "K"]:
-        # Minkowski inner products ⟨y, p_k⟩_L = -y_0 + q_k · y_s, then apply the closed-form
-        # inverse of the null-lift Gram G = I - 𝟙𝟙ᵀ: G⁻¹ = I + 𝟙𝟙ᵀ/(1-K) (Sherman-Morrison).
-        by_K = -y_A[0] + jnp.matmul(q_ortho_KD, y_A[1:], precision=MATMUL_PRECISION)  # (K,)
-        return by_K + (jnp.sum(by_K) / (1.0 - num_components)) * jnp.ones(num_components, dtype=dtype)
+    def _radial_split(y_A: Float[Array, "A"]) -> tuple[Float[Array, ""], Float[Array, "K"]]:
+        # Radius and the K direction cosines g_k = ⟨q_k, ŷ_s⟩ — dots of unit vectors, so O(1).
+        # `safe_normalize` returns the exact zero vector at y_s = 0 (the origin), where every
+        # g_k is 0 and the coefficient below collapses to y_0/(K-1) = 1/(√c(K-1)). Correct.
+        r = safe_norm(y_A[1:])
+        g_K = jnp.matmul(q_ortho_KD, safe_normalize(y_A[1:]), precision=MATMUL_PRECISION)  # (K,)
+        return r, g_K
+
+    def _span_coeffs(y_A: Float[Array, "A"], r: Float[Array, ""], g_K: Float[Array, "K"]) -> Float[Array, "K"]:
+        # ⟨y, p_k⟩_L = -y_0 + r·g_k, then the closed-form inverse of the null-lift Gram
+        # G = I - 𝟙𝟙ᵀ: G⁻¹ = I + 𝟙𝟙ᵀ/(1-K) (Sherman-Morrison). Written out, the two steps cancel
+        # y_0 against y_0 to leave an O(1) result; combined analytically they do not:
+        #     c_k = y_0/(K-1) + r·(g_k - Σ_j g_j/(K-1)).
+        # See the numerics note in the docstring.
+        return y_A[0] / km1 + r * (g_K - jnp.sum(g_K) / km1)
 
     # (1) Minkowski projection of x onto span(p_k), normalized onto the manifold (the spine).
-    coeffs_K = _span_coeffs(x_A)
+    r_x, g_K = _radial_split(x_A)
+    coeffs_K = _span_coeffs(x_A, r_x, g_K)
     mp_A = jnp.matmul(coeffs_K, p_KA, precision=MATMUL_PRECISION)  # (A,) projection of x onto the ideal span
-    mp_inner = _minkowski_inner(mp_A, mp_A)  # < 0 (timelike) for a valid spine
-    spine_A = mp_A / jnp.sqrt(floor_at(-c * mp_inner, MIN_NORM))
+    # -c⟨mp, mp⟩_L in closed form: 1 + c(‖x_s^⊥‖² + (K-1)·n₀²) with n = x - mp ⊥_L span(p_k).
+    # Every term is non-negative and the value is ≥ 1, so no floor: an already non-finite input
+    # stays loud instead of being mapped onto a plausible finite spine.
+    x_perp_D = x_A[1:] - jnp.matmul(r_x * g_K, q_ortho_KD, precision=MATMUL_PRECISION)  # (D,)
+    # 1/(c(x₀ + r)) is x₀ - r on the sheet — the cancellation-free spelling `_busemann_arg` uses.
+    n0 = -(1.0 / (c * (x_A[0] + r_x)) + r_x * (1.0 - jnp.sum(g_K))) / km1
+    neg_c_mp_inner = 1.0 + c * (safe_norm(x_perp_D) ** 2 + km1 * n0**2)
+    spine_A = mp_A / jnp.sqrt(neg_c_mp_inner)
     # Sheet hygiene BEFORE _proj: _proj rebuilds a positive time from the spatial part and
     # cannot itself flip a lower-sheet point back up, so reflect first (spine_0 != 0).
     spine_A = spine_A * jnp.sign(spine_A[0])
@@ -154,7 +202,7 @@ def horo_projection(
 
     # (2) Unit tangent at the spine pointing toward the origin (⊥ span(P) ⇒ tangent at spine).
     origin_A = _create_origin(c, dim, dtype)
-    origin_coeffs_K = _span_coeffs(origin_A)
+    origin_coeffs_K = _span_coeffs(origin_A, *_radial_split(origin_A))
     # projection of the origin onto the ideal span
     proj_span_o_A = jnp.matmul(origin_coeffs_K, p_KA, precision=MATMUL_PRECISION)
     tangent_A = origin_A - proj_span_o_A  # spacelike, ⊥ span(P)

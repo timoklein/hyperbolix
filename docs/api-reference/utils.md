@@ -109,7 +109,7 @@ class Model(nnx.Module):
         self.manifold = Hyperboloid(c=1.0)               # static, shared
         self.curvature = LearnableCurvature(             # one per distinct c
             init_c=1.0,
-            parameterization="softplus",                 # or "log" (MERU)
+            parameterization="log",                      # default; or "softplus"
             c_min=0.1, c_max=10.0,                       # default clamp
         )
         self.fc = HypLinearHyperboloidPLFC(self.manifold, 33, 65, rngs=rngs)

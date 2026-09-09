@@ -115,6 +115,14 @@ A single constant-curvature manifold spanning **hyperbolic, Euclidean, and spher
 !!! warning "The Euclidean limit carries a factor of 2"
     The conformal factor is $\lambda^\kappa_x = 2/(1 - c\lVert x\rVert^2)$, so $\lambda^\kappa_0 = 2$ and the metric at $c = 0$ is $4\cdot I$, **not** $I$. As $c \to 0$: `addition`/`expmap`/`logmap` reduce to the *bare* Euclidean $x{+}y$ / $x{+}v$ / $y{-}x$, but `dist` $\to 2\lVert x-y\rVert$ and `tangent_norm` $\to 2\lVert v\rVert$ (paper Thm. 3). This matches Poincaré's own `dist_0` $\to 2\lVert x\rVert$, and therefore does **not** equal the separate `Euclidean` manifold's `dist` (bare metric $I$). Use `Euclidean` for un-scaled flat geometry; use `Stereographic` at $c=0$ only as the *continuous limit* of the curved family.
 
+!!! note "Curvature derivatives at zero"
+    The shared Möbius denominator evaluates separate signed factorizations on the
+    $c>0$ and $c\le0$ sides. For nonzero operands they match the literal
+    polynomial value and curvature derivative at $c=0$; an exactly zero operand
+    retains only the bounded residual from the existing `MIN_NORM` radial floor.
+    The previous `abs(c)` factorization selected the wrong one-sided denominator
+    slope at zero, affecting signed-curvature gradients through Möbius operations.
+
 !!! note "Scope of this release"
     Provides the complete core Riemannian manifold — the `Manifold` protocol plus `conformal_factor`, `gyration`, `geodesic`, `geodesic_unit`, and `antipode`. The $\kappa$-GCN neural-network layers and building blocks (`mobius_matvec`, weighted gyromidpoint, `dist2plane`, `sproj`/`inv_sproj`) are not yet included. Signed learnable curvature — spanning hyperbolic/Euclidean/spherical — is available via `LearnableCurvature(parameterization="identity")` (with a symmetric default clamp around zero); the `softplus`/`log` parameterizations remain positive-only. Double precision (`dtype=jnp.float64`) is strongly recommended, per Bachmann et al.
 
@@ -130,14 +138,14 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
 !!! note "Distance Versions"
     The Hyperboloid `dist` method has a `version_idx` parameter selecting between 2 formulations:
 
-    - `VERSION_DEFAULT` (0): cancellation-free hyperbolic-haversine distance (default, accurate at
-      any representable radius)
+    - `VERSION_DEFAULT` (0): cancellation-free hyperbolic-haversine distance (default; see the
+      measured range and remaining input-representation limits in the numerical-stability guide)
     - `VERSION_SMOOTHENED` (1): same evaluation, with a strictly-positive floor at coincidence
 
     The same two slots select an arm of `dist_0`, which is a separate implementation:
 
-    - `VERSION_DEFAULT` (0): `arcsinh(√c·‖x_s‖)/√c`, read off the spatial part (default, exact at
-      every radius, no domain clamp)
+    - `VERSION_DEFAULT` (0): `arcsinh(√c·‖x_s‖)/√c`, read off the spatial part (default,
+      with no domain clamp)
     - `VERSION_SMOOTHENED` (1): the same with `‖x_s‖` floored in quadrature, giving a floor of
       `arcsinh(20·eps)/√c` (≈2.4e-6/√c float32, ≈4.4e-15/√c float64)
 
@@ -156,6 +164,16 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
     - `distance_rescale`: Distance-based rescaling
     - `hcat`: Lorentz direct concatenation for convolutions
     - `log_radius_concat`: log-radius–preserving concatenation (digamma-scaled `hcat`; Shi et al. 2026, Sec. 4.3)
+
+!!! note "Origin derivatives"
+    `gyro_difference` and `ptransp` use Cartesian formulas when either endpoint is
+    exactly the origin, and retain the stable polar frame otherwise. `logmap` uses
+    the regular Cartesian expression at an exact origin endpoint and the stable
+    polar frame otherwise. Ordinary autodiff preserves derivatives with respect to
+    an origin endpoint; earlier value-only origin fallbacks erased them. `busemann` uses a projected-coordinate
+    branch whose value and constrained first derivative agree at its branch surface.
+    See [Origin derivatives and the Cartesian chart](
+    ../user-guide/numerical-stability.md#origin-derivatives).
 
 ::: hyperbolix.manifolds.hyperboloid.Hyperboloid
     options:
@@ -177,6 +195,18 @@ The Proper Velocity (PV) model — an **unconstrained** $\mathbb{R}^n$ represent
 
 !!! info "Convention"
     The paper uses curvature $K < 0$ with $\beta_x = 1/\sqrt{1 - K\|x\|^2}$. Hyperbolix keeps the $c > 0$ convention (sectional curvature $-c$), substituting $K = -c$, so $\beta_x = 1/\sqrt{1 + c\|x\|^2}$.
+
+!!! note "Exact hyperboloid bridges"
+    `dist`, `logmap`, `expmap`, gyro `addition`, `gyro_difference`, and `ptransp`
+    evaluate through the direct isometry
+    $x\mapsto(\sqrt{1/c+\lVert x\rVert^2},x)$. For tangent operations,
+    $v\in T_x$ lifts to $(\langle x,v\rangle/X_0,v)$. The PV result is the
+    spatial part of the hyperboloid result; no Poincaré chart conversion is used.
+    `gyro_difference`, `ptransp`, and `logmap` inherit the hyperboloid's exact-origin
+    Cartesian branch and its repaired origin derivatives.
+    `ProperVelocityGyroBatchNorm` centers with `gyro_difference`. See
+    [ProperVelocity operation bridges](
+    ../user-guide/numerical-stability.md#pv-operation-lifts).
 
 ::: hyperbolix.manifolds.proper_velocity.ProperVelocity
     options:

@@ -12,7 +12,14 @@ Hyperbolic geometry presents unique numerical challenges due to the exponential 
     - **Hyperbolic function overflow**: cosh/sinh overflow for large arguments
     - **Division by near-zero**: Operations involving 1 - c||x||² near the boundary
 
-    These challenges are specific to the Poincaré ball; see [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode) below for operations that are accurate at any representable radius in float32.
+    These challenges are specific to the Poincaré ball; see [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode) below for operations that are stable over the measured radius ranges in float32.
+
+!!! note "Archived numerical evidence"
+    Historical `logs/...` paths and bare probe filenames cited on this page are
+    members of the immutable `numerics_logs/numerics_logs.zip` archive. The complete
+    member list is recorded in
+    `logs/2026-09-08_origin_derivative_fixes/supplied_archive_inventory.txt`; those
+    older directories are not duplicated in the working tree.
 
 ## Float Precision: Float32 vs Float64
 
@@ -54,7 +61,7 @@ dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
 | 5 ≤ d < 10 | Moderate (< 3% error) | float64 for critical ops |
 | d ≥ 10 | Poor (> 3% error) | **float64 required** |
 
-*Table scoped to the Poincaré ball. `Hyperboloid.dist`/`logmap`/`sqdist`/`tangent_norm` under `VERSION_DEFAULT` are accurate at any radius in float32 — see [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode) below.*
+*Table scoped to the Poincaré ball. `Hyperboloid.dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/`tangent_inner`/`egrad2rgrad`/gyro `addition`/`busemann` under `VERSION_DEFAULT` are evaluated with stable formulas whose tested accuracy is described below — see [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode) below.*
 
 !!! tip "Quick Check"
     If your embeddings have distances from the origin > 7, switch to float64:
@@ -172,30 +179,109 @@ case in practice.
 
 As of this fix, `dist`, `logmap`, `sqdist`, and `tangent_norm` under the default `version_idx`
 (`VERSION_DEFAULT` / `VERSION_SMOOTHENED`) are evaluated through a cancellation-free "hyperbolic
-haversine" decomposition and are accurate at any representable radius — see
+haversine" decomposition and are stable over the measured radius ranges — see
 [Hyperboloid Distance Versions](#hyperboloid-distance-versions) below for the version constants,
-and [Known Limitations](#hyperboloid-known-limitations) for the operations that still route
-through the Minkowski inner product and remain unsafe past the threshold above.
+and [Known Limitations](#hyperboloid-known-limitations) for the remaining two-point primitives —
+which are now also cancellation-free — and the handful of places that still lose accuracy at
+large radius for other reasons.
 
 #### Known Limitations {#hyperboloid-known-limitations}
 
-The two-point cancellation fix covers `dist`, `logmap`, `sqdist`, and `tangent_norm`. The
-following Hyperboloid operations still route through the Minkowski inner product and remain
-unsafe past the `ln(1/eps)` threshold above:
+The two-point cancellation fix originally covered `dist`, `logmap`, `sqdist`, and `tangent_norm`.
+A second pass extended the same pattern — read the radius off the spatial part, subtract before
+squaring, write the result as a sum of non-negative terms — to the remaining two-point and
+tangent-space primitives: `expmap` (the two-point form), `ptransp`/`ptransp_0`, `tangent_proj`,
+`tangent_inner`, `egrad2rgrad`, the gyro `addition` (the Lorentz boost — this is what
+`Hyperboloid.scalar_mul` and a `use_gyro_bias=True` gyro-bias on `HypLinearHyperboloidPLFC`,
+`HypConv2DHyperboloidILNN`, and `HypLinearHyperboloidBusemann` call), and `busemann`. None of
+these route through the literal `⟨x,y⟩_L = -x_0 y_0 + ⟨x_s,y_s⟩` any more, and none of them are
+limited to radius ~7-9 in float32. Radii below are the **scaled geodesic radius**
+`a = √c·d`. Measurements are 4-seed medians, float32 unless noted, from
+`logs/2026-09-08_hyperboloid_tangent_primitives/`.
 
-- `expmap` (the two-point form — `expmap_0` is unaffected)
-- `ptransp`
-- `tangent_proj`
-- `tangent_inner`
-- `egrad2rgrad`
-- `is_in_manifold`
-
-`tangent_norm` is exact to radius ~15 (float32) / ~25 (float64) — one power of `cosh` better than
-before this fix (was accurate only to radius ~8 float32 / ~20 float64, then floored to ~0 past
-that on exactly-unit tangent vectors), but not unlimited like `dist`/`logmap`/`sqdist`.
-Origin-chart operations (`dist_0`, `logmap_0`, `expmap_0`) never routed through the Minkowski
-inner product, so the threshold above does not apply to them. They had a different problem at the
+`tangent_norm`/`tangent_inner` are measured cancellation-free through `a = 12`, the largest radius
+either probe reaches (measured B.iv: `|⟨v,v⟩-1|` on an exactly-unit radial tangent goes from
+1.100e+01 as-is to 1.132e-06 fixed at `a = 10`, and the ProperVelocity twin from 8.000e+00 to
+1.132e-06; measured C.iv at `a = 12`, ProperVelocity twin: `|⟨v,v⟩-1|` median 5.192e-05,
+`|‖v‖-1|` median 2.593e-05). One power of `cosh` above the ambient chart's own
+point-representation floor, `eps·sinh(a)/√c` — `a ≈ 16.6` in float32, much further in float64 —
+**predicts, but does not measure,** exactness through `a ≈ 15` (float32) / `a ≈ 25` (float64).
+Origin-chart operations (`dist_0`, `logmap_0`, `expmap_0`) never routed through the
+Minkowski inner product, so none of this applies to them; they had a different problem at the
 *small*-radius end, fixed separately and described next.
+
+**Gyro-addition and the PLFC gyro-bias.** `x ⊕ exp_0(b)` at `c = 0.5`, `‖b‖ = 0.5`
+(`probe_addition_{46abd2b,ebebd09}.out`, table A.1a): forward geodesic error 4.181e-04 → 1.366e-05
+at `a = 6`, 1.527e-02 → 9.767e-05 at `a = 8`, 6.557e-02 → 6.802e-04 at `a = 10`, 5.670e-01 →
+4.565e-03 at `a = 12`; 5 of 32 float32 seeds were non-finite as-is across the table, none are
+fixed. Gradients improve further: `d/db` relative error 7.496e-02 → 1.315e-06 at `a = 8`,
+8.467e-01 → 4.616e-07 at `a = 10`; `d/dx` 2.164e-02 → 9.752e-08 at `a = 8`, 4.752e+00 → 8.233e-08
+at `a = 12`.
+
+**Transport, tangent projection, gradient conversion, and expmap.** End-to-end
+`riemannian_adam` on a `ManifoldParam`, 30 steps (`probe_optimizer_*.out`, table B.i): as-is loses
+both seeds to NaN by `a = 9` (first non-finite step between 1 and 9 of 30); fixed stays finite
+through `a = 16`, descending the expected loss ~0.29 through `a = 14` (2-seed medians: 0.290 at
+`a=9`, 0.289 at `a=12`, 0.305 at `a=14`). The parallel-transport isometry `‖PT v‖_y/‖v‖_x` (table B.ii) goes from
+non-finite on 1-2 of 4 seeds from `a = 9` on (max residual 6.6e+14 at `a=10`) to finite everywhere,
+`|ratio-1|` at 1.192e-07 (`a=6`), 1.132e-06 (`a=8`), 7.557e-05 (`a=12`), 1.333e-04 (`a=14`).
+`egrad2rgrad` (table B.iii) goes from a relative error that reaches 1.0 (the whole gradient lost,
+non-finite on half the seeds) at `a = 14` to a flat ~5e-8 with no radius dependence through
+`a = 14` — it needs no division by a measured quantity at all, since `⟨x,x⟩_L = -1/c` holds
+exactly on the sheet, so it is not floor-limited the way the others are.
+
+`expmap`'s landing accuracy (`dist(x, expmap(v,x))/‖v‖_x`, table B.v) is the one cell in this pass
+that is not a clean win: the `a = 12` outlier is gone (max geodesic landing error 1.651e-01 →
+5.312e-03), but at `a = 14` the fixed landing error is *worse* than as-is — 3.500e-02 vs 2.410e-02
+median (1.45×), 4.571e-02 vs 2.917e-02 max (1.57×). Both revisions are within the `tangent_norm`
+floor's own uncertainty at that radius, so this reads as the `tangent_norm` floor showing through
+the exponential map rather than a new cancellation.
+
+**`is_in_manifold` / `is_in_tangent_space`.** Both now compare the stored `x₀` (or `v₀`) directly
+against the value the spatial part implies, instead of testing the Lorentz form against `-1/c` (or
+`0`). The old residual was the honest time-slot discrepancy scaled by `2·x₀ = 2·cosh(a)/√c` *and*
+obtained as a difference of two `O(cosh²a)` numbers; reading the time slot directly removes both
+factors, so a genuinely on-sheet point now passes a fixed `atol` far past the `a ≈ 7` (float32) /
+`a ≈ 11` (float64) ceiling the old check imposed — see [The `atol` Convention](#the-atol-convention).
+
+#### Known limits
+
+Three places still lose accuracy at large radius, for reasons the fix above does not remove:
+
+1. **`ptransp`'s direction below the float32 angular resolution.** A transported direction that
+   differs from the identity by less than the point-representation floor `eps·sinh(a)/√c` is
+   input-limited: the two endpoints do not disagree by more than storage rounding, so no formula
+   recovers a direction that was never represented in the first place. This is a different limit
+   from the transport *isometry* fixed above (table B.ii), which holds the vector's length, not
+   the smallest resolvable direction.
+2. **Attention scores through a GEMM.** The Lorentzian similarity score behind
+   `HyperbolicFullAttention` still forms `2 + 2⟨Q,K⟩_L` from a matrix product, and a GEMM cannot be
+   made cancellation-free the way a single pairwise `dist` can — see
+   [Full Attention's Float32 Score Floor](#attention-score-floor) below.
+3. **The wrapped-normal `log_prob` on the hyperboloid.** Its density involves the same
+   `⟨x,x⟩_L`-style terms, so float32 and float64 diverge by roughly `eps·cosh(a)·‖v‖²/σ²` at large
+   radius — qualitative, no probe in this pass isolates it.
+
+Two more items that used to be on this list — gyro-centering with a near-identity partner, and
+`ProperVelocity.dist`/`logmap` between nearby points — were fixed in a later pass; see
+[Gyro-Difference and GyroBatchNorm Centering at Large Radius](#gyro-difference) and
+[ProperVelocity `dist`/`logmap` Through the Exact Lift](#pv-dist-lift) below.
+
+#### Full Attention's Float32 Score Floor {#attention-score-floor}
+
+`HyperbolicFullAttention`'s scores are `2 + 2⟨Q,K⟩_L`, a difference of two Minkowski terms each of
+size `cosh(a_q)·cosh(a_k)/c`. Unlike the primitives above, there is no GEMM-compatible
+cancellation-free spelling for it: any matrix product of the ambient coordinates returns the Gram
+matrix to absolute `eps`, so the angular term alone already carries an error of
+`eps·sinh(a_q)·sinh(a_k)/c`, the same order as the literal form. The absolute error on one score is
+therefore `eps·cosh(a_q)·cosh(a_k)/(c·scale)`, which with float32's `eps ≈ 1.19e-7` (`c = 1`,
+`scale = 1`) is about 4.8e-3 at `a = 6`, 0.26 at `a = 8`, and 2.0 at `a = 9`: from `a ≈ 8` the error
+exceeds the score spread softmax is meant to resolve, and the weights come out wrong while staying
+perfectly finite. The remedy is `score_dtype=jnp.float64`, which runs the similarity and the
+`2 + 2⟨Q,K⟩_L` / scale / bias / causal-mask arithmetic as a float64 island and casts back before
+the softmax; it fixes the arithmetic only, so activations that are themselves stored in float32
+past `a ≈ 8` still carry a floor of the same order, and a `HyperboloidGyroRMSNorm` in front of the
+layer (or a smaller `c`) is the cheaper first remedy.
 
 ### The Hyperboloid Origin Chart {#hyperboloid-origin-chart}
 
@@ -561,6 +647,30 @@ under ~3e5 (float32) / ~1e12 (float64), and it still leaves twice the radius the
 used elsewhere allow. If your embeddings need larger radii, switch to the hyperboloid or to
 `ProperVelocity` rather than shrinking the margin.
 
+### The Factored Möbius Denominator {#factored-mobius-denominator}
+
+Every gyrovector op that needs $x \oplus y$ — `dist`, `logmap`, `addition`, `gyr` — divides by the
+Möbius denominator $1 + \mathrm{sign}\cdot 2c\langle x,y\rangle + c^2\lVert x\rVert^2\lVert
+y\rVert^2$, and the literal spelling is a difference of two terms that both grow like the ball
+chart's own ceiling squared as $x, y$ approach the boundary. `_mobius_denominator` instead uses
+$1 + t^2 = (1-t)^2 + 2t$ with $t = \lvert c\rvert\,r_x r_y$: the subtraction $1 - t$ happens
+*before* the square, so an $O(1)$ result stops being the difference of two large numbers. This is
+what a pairwise `dist`/`logmap` on the Poincaré ball uses at every radius; it is what the
+[chart ceiling](#poincare-roundtrip-ceiling) above ultimately bounds. Radii below are the geodesic
+distance from the origin ($c = 1$, so $a = d$).
+
+Measured on a radial pair with a geodesic gap of 0.1 (`probe_poincare_mobius_ebebd09.out`, table
+D.i, medians over 4 seeds): in float32, `dist` error goes from 2.816e-03 to 2.086e-06 at $d = 8$,
+6.506e-02 to 1.958e-05 at $d = 10$, and 1.423e+01 to 1.044e-04 at $d = 12$ (the as-is value at
+$d = 12$ is the whole geodesic gap, lost); `‖logmap‖` error goes from 5.523e-03 to 8.799e-07 at
+$d = 8$ and 2.866e-01 to 3.206e-04 at $d = 12$. In float64, `dist` error goes from 1.101e-03 to
+1.584e-10 at $d = 18$, 7.519e-02 to 5.367e-10 at $d = 20$, and 9.664e-02 to 2.105e-09 at $d = 22$
+(again, the as-is value at $d = 20$ is essentially the whole 0.1 gap); `‖logmap‖` error goes from
+2.187e-03 to 2.324e-10 at $d = 18$ and 9.384e-02 to 1.243e-09 at $d = 20$. Both dtypes' fixed
+columns are still climbing as $d$ approaches the chart ceiling from below — the factoring removes
+the denominator's own cancellation, not the ball's inability to represent a point past
+$12.65/\sqrt{c}$ (float32) / $27.7/\sqrt{c}$ (float64) at all.
+
 ### Float32 Accuracy Near the Origin Depends on the Backend
 
 XLA's float32 transcendental kernels are a few ulps off, and near the origin that is the whole
@@ -731,8 +841,8 @@ x_rec = pv.expmap_0(y, c)      # round-trips to x_large
 ### Choosing a Manifold for Stability
 
 - **Poincaré ball**: compact, bounded — fine for small distances ($<5$) and visualization; clamp or use float64 past that.
-- **Hyperboloid**: unbounded radius, and `dist`/`logmap`/`sqdist`/`tangent_norm` are now cancellation-free at any representable radius (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)). The constraint $\langle x, x\rangle_L = -1/c$ must still be maintained and can drift under Euclidean updates, and `expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, and `egrad2rgrad` still route through the Minkowski inner product — see [Known Limitations](#hyperboloid-known-limitations).
-- **Proper Velocity**: unconstrained $\mathbb{R}^n$, stable at large radii, exact Euclidean retraction (plain `optax.adam` / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large.
+- **Hyperboloid**: unbounded radius, and `dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/`tangent_inner`/`egrad2rgrad`/gyro `addition`/`busemann` are all cancellation-free, designed to avoid the identified cancellation, with accuracy limited by the operation and stored inputs (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)). The constraint $\langle x, x\rangle_L = -1/c$ must still be maintained and can drift under Euclidean updates — see [The `atol` Convention](#the-atol-convention) — and a handful of places still lose accuracy for reasons the fix does not remove, listed under [Known Limitations](#hyperboloid-known-limitations).
+- **Proper Velocity**: unconstrained $\mathbb{R}^n$, stable at large radii, exact Euclidean retraction (plain `optax.adam` / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large. Its tangent-space metric shares the hyperboloid's fix (see [below](#pv-tangent-metric)), and `PV.dist`/`logmap` between two nearby points at large radius now go through the exact hyperboloid lift — see [below](#pv-dist-lift).
 - **κ-Stereographic**: identical numerics to the Poincaré ball for $c > 0$ (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near $c = 0$ — see the [dedicated section below](#stereographic-near-zero-curvature).
 
 !!! note "Training PV layers"
@@ -756,6 +866,18 @@ The curvature-generalized trig functions ($\tan_\kappa$, $\tan_\kappa^{-1}$) use
 In float32 the *values* stay accurate well below $10^{-5}$; it is $\partial(\cdot)/\partial c$ computed through the closed forms that degrades. The wider float32 window trades a small seam error (worst-case measured relative error of the curvature gradient just above the cutover: ~2.4%, sign always correct) for finite, well-behaved gradients everywhere.
 
 The Taylor branch is additionally gated on its convergence region $\lvert\kappa\rvert\,\lVert x\rVert^2 < 0.01$: points at extreme chart radii ($\lVert x\rVert \sim 1/\sqrt{\lvert\kappa\rvert}$, e.g. spherical points far from the chart origin) always keep the exact closed form, no matter how small $\lvert\kappa\rvert$ is.
+
+### Möbius Denominators at Exactly Zero Curvature
+
+The stable Möbius denominator has separate signed factorizations for $c>0$
+and $c\le0$. Both equal the literal polynomial
+$1+2s c\langle x,y\rangle+c^2\lVert x\rVert^2\lVert y\rVert^2$, where $s$
+is the operation's sign. For nonzero operands the selected branch has the literal
+curvature slope $2s\langle x,y\rangle$ at $c=0$. If an operand is exactly zero,
+the existing `MIN_NORM` radial floors leave a bounded residual instead of a
+machine-exact identity. The earlier `abs(c)` factorization gave the wrong
+one-sided slope at zero, which could send a signed learnable curvature in the
+wrong direction on its flat step even though fixed-curvature values looked correct.
 
 ### Spherical Regime ($c < 0$) Cautions
 
@@ -858,33 +980,482 @@ $$
 \langle h,h\rangle_L = -\frac{(1+w)^2}{c} - w\,\langle x-y,\; x-y\rangle_L .
 $$
 
-For the midpoint of points $x_1,\dots,x_M$ with weights $w_1,\dots,w_M$, taking the first
-point $p = x_1$ as reference and setting $\delta_m = x_m - p$, $W = \sum_m w_m$,
-$\Delta = \sum_m w_m \delta_m$:
+For the midpoint of $M$ points, write $h=\sum_m w_m x_m$, $t_m=x_{m,0}$,
+$z_m=x_{m,s}/t_m$, $T=h_0$, and $\bar z=h_s/T$. The current normalizer uses
 
 $$
-\langle h,h\rangle_L = -\frac{W^2}{c} - W \sum_m w_m \langle \delta_m, \delta_m\rangle_L
-+ \langle \Delta, \Delta\rangle_L .
+D^2 = T\sum_m w_m\left(\frac{1}{t_m}+c\,t_m\lVert z_m-\bar z\rVert^2\right)
+     = c\left(T^2-\lVert h_s\rVert^2\right).
 $$
 
-Every rounded quantity is now a difference between nearby points, of size
-$O(\lVert x-y\rVert^2)$ rather than $O(\lVert s\rVert^2)$, so both operations are
-radius-agnostic in float32: the measured float32 error against float64 at
-$\lVert s\rVert = 10^4$ is $\approx 2\times10^{-5}$ on the value and $\approx 6\times10^{-4}$
-on the gradient. The one limit that remains is the difference $x - y$ itself: when two
-points share a direction at $\lVert s\rVert \gtrsim 10^4$, float32 rounding swallows the
-subtraction before either formula sees it — neither the old nor the new form is
-trustworthy there, and that regime needs float64.
+The equality follows from the sheet identity $1-\lVert z_m\rVert^2=1/(c t_m^2)$.
+The implementation evaluates the variance directly, using coordinate differences;
+expanding the squares would reintroduce cancellation. All terms are non-negative
+for non-negative weights, and the cost remains $O(NMD)$ for $N$ weight rows.
+Contractions retain HIGHEST precision. Spatial coordinates are normalized with the
+existing `sqrt(max(abs(D²), eps))`, and output time is reconstructed from them.
 
-!!! warning "The rest of the hyperboloid is still radius-limited"
-    This buys accuracy in these two operations only. `Hyperboloid.dist`'s two slots
-    (`VERSION_DEFAULT`/`VERSION_SMOOTHENED`) use the same cancellation-free hyperbolic-haversine
-    form and stay accurate at any representable radius, but the operations listed under
-    [Known Limitations](#hyperboloid-known-limitations) still route through the Minkowski inner
-    product and lose digits past hyperbolic distance ~7 in float32 (see the
-    [precision table](#precision-requirements-by-distance)), and merely *storing* a point
-    past distance ~11 accumulates more Lorentz residual than the float64 default
-    tolerance allows — see [The `atol` Convention](#the-atol-convention).
+This replaces the preceding radius/unit-direction variance form. That form kept
+large-radius values accurate but lost the derivative of an origin point with a
+nonzero weight in a mixed cloud. Dividing by positive $t_m$, instead of a spatial
+radius that can vanish, preserves that derivative. Negative weights remain
+unsupported. An all-zero weight row returns the origin; division by $T=0$ is guarded.
+This is a value convention, not a promise of a weight derivative: normalized means
+approached along different positive weight rays have different limits.
+
+The historical radial/angular/mixed measurements in
+`probe_midpoint_horopca_busemann_pv_fd0c1d7.out` describe the preceding variance
+implementation, not this derivative repair. Current regression coverage compares
+the value with a high-precision literal Lorentz mean and checks the origin-point
+Jacobian independently.
+
+Rounding a stored direction by $\delta$ can cause geodesic error of order
+$\sinh(a)\delta$. Comparing with unrounded generated inputs includes both this
+storage error and arithmetic error. The new evidence records both comparisons;
+matching the magnitude of a storage estimate alone does not establish the cause
+of an observed error.
+
+The residual's own identity is unaffected by the angular-cloud regression the pivot form hit — with
+only two points there is no third point to reintroduce that cancellation — so its measured float32
+error against float64 at $\lVert s\rVert = 10^4$ stays $\approx 2\times10^{-5}$ on the value and
+$\approx 6\times10^{-4}$ on the gradient (`c = 0.1`, $x \approx y$;
+`logs/2026-08-24_lorentz_minkowski_cancellation/PR_BODY.md`), and the limit that remains for it is
+the difference $x - y$ itself: when two points share a direction at $\lVert s\rVert \gtrsim 10^4$,
+float32 rounding swallows the subtraction before the formula sees it, and that regime needs
+float64.
+
+!!! note "Scope of the preceding large-radius sweep"
+    The preceding sweep covered `Hyperboloid.dist`'s two slots and the remaining
+    tangent-space and two-point primitives
+    (`expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, `egrad2rgrad`, gyro `addition`,
+    `gyro_difference`, `busemann`) with cancellation-free large-radius value
+    formulas. It did not establish every origin derivative. The current midpoint,
+    Busemann, and Cartesian origin-derivative repairs are documented in their
+    sections here. Remaining accuracy is limited by the operation and stored inputs — see
+    [Known Limitations](#hyperboloid-known-limitations) for the handful of places that still lose
+    accuracy for other reasons, and [The `atol` Convention](#the-atol-convention) for why merely
+    *storing* a point past distance ~11 in float64 can already need an explicit `atol` on
+    `is_in_manifold`.
+
+### Busemann Coordinates at Large Radius {#busemann-large-radius}
+
+`Hyperboloid.busemann(x, v, c)` (the horosphere coordinate behind
+`HypLinearHyperboloidBusemann`/`HypRegressionHyperboloidBusemann` and HoroPCA) is
+`log(√c·arg)/√c` with `arg = x_0 - ⟨x_s, v⟩`. Along the branch aligned with the ideal
+direction $v$, `x_0` and `⟨x_s,v⟩` are both $O(\cosh a)$ and nearly equal, so the literal
+subtraction can cancel. For a unit direction, set $q=\langle x_s,v\rangle$ and
+$p=x_s-qv$. The current evaluation is
+
+$$
+\mathrm{arg}=\begin{cases}
+(1/c+\lVert p\rVert^2)/(x_0+q),&q\ge0,\\
+x_0-q,&q<0.
+\end{cases}
+$$
+
+The unused positive-branch denominator is evaluated as
+`x_0 + where(q >= 0, q, 0)`, so a batched reverse pass cannot divide by a rounded
+zero at an anti-aligned point. Both branches agree in value and constrained
+first derivative at $q=0$. At the origin the spatial Busemann gradient is exactly
+$-v$ in exact arithmetic. Learned directions must be normalized before the call;
+the public function continues to require a unit direction.
+
+The earlier spatial-radius/direction formula had correct large-radius values
+but erased this origin gradient. Measurements in
+`probe_midpoint_horopca_busemann_pv_9093ea7.out` describe that earlier value repair,
+not the current derivative rule. The current derivative checks use valid spatial
+lifts and normalized directions and test both sides of the $q=0$ branch.
+
+The batched attention-style head, `nn_layers.busemann_core._busemann_score` (and the vmapped
+`busemann` it shares with the Busemann MLR/FC layers), uses the same projected-coordinate formula.
+Historical measurements of the preceding formula, on a batch where every point sits within 1e-3 rad of one of $K = 4$ directions,
+$a = 10$ (table C.iii(b)): the median relative error is unchanged at 3.509e-08 (only the
+near-aligned pairs cancel at all), but the max drops from 4.006e-02 to 5.366e-06 — 7,470× — since
+it is exactly those near-aligned pairs that the old form lost. For a use case that needs float64
+throughout without paying for it everywhere, the recipe is a float64 island around just the score:
+cast $\hat x$ and the class directions to float64, run the one similarity GEMM there,
+compute $\mathrm{arg} = 1/(c(x_0+r)) + r(1-g)$ and its `log` in float64, then cast back — this is a
+documented pattern, not a library option; `HyperbolicFullAttention`'s `score_dtype` (see
+[above](#attention-score-floor)) is the shipped version of the same idea for the Lorentzian
+similarity score.
+
+### HoroPCA Projection at Large Radius
+
+`horo_projection`, the ideal-point projection behind `hyperbolix.decomposition.horopca`, inherits
+the same Busemann cancellation: it is defined to preserve every Busemann coordinate of its input
+exactly, so any drift in `busemann` itself shows up as drift in the projected point. The following
+historical measurement describes the preceding Busemann value repair. Measured
+(`probe_midpoint_horopca_busemann_pv_9093ea7.out`, table C.ii; a point 1e-3 rad off the first ideal
+direction, $K$ ideal directions, `proj err` against the library's own float64 `horo_projection`):
+at $K = 2$ the projection error goes from 1.413e-01 to 1.086e-04 at $a = 8$ and from 3.660e+00 to
+8.633e-03 at $a = 12$; Busemann-coordinate preservation (`|dB|`, the true value of which is 0) goes
+from 8.170e-02 to 8.836e-05 at $a = 8$ and from 7.731e-02 to 1.575e-04 at $a = 12$.
+
+### Gyro-Difference and GyroBatchNorm Centering at Large Radius {#gyro-difference}
+
+The current operation uses a Cartesian inverse boost when either endpoint is
+exactly the origin and the stable polar frame otherwise. The measurements in this section describe the preceding
+high-radius value and collinear-gradient repairs, before the Cartesian origin
+branch; they are not measurements of the current origin derivative rule.
+
+`Hyperboloid.gyro_difference(x, y, c)` computes $(\ominus x)\oplus y$, the operation
+`HyperboloidGyroBatchNorm` needs to center a batch on its mean and any layer needs for a difference
+of two far points. The general gyro-addition `addition(neg(x), y)` (the Lorentz boost
+$\Lambda_{\ominus x}\,y$ — see [above](#the-hyperboloids-two-point-cancellation-failure-mode)) is
+accurate almost everywhere *except* here: at $y \approx x$ the boost's spatial part is a sum of
+three terms, each $O(e^{2a})$, that cancel identically at $y = x$, so its absolute error is
+`eps·cosh²(a)/√c` no matter how close $y$ is to $x$ — the near-identity gyro-addition has no
+ambient-spelling fix.
+
+`gyro_difference` instead uses the isometry $\Lambda_x^{-1}$, the transvection carrying $x$ back to
+the origin, whose differential along the geodesic $x \to 0$ *is* parallel transport:
+
+$$
+(\ominus x) \oplus y = \Lambda_x^{-1} y = \mathrm{Exp}_0\big(\mathrm{PT}_{x\to 0}(\mathrm{Log}_x y)\big) .
+$$
+
+Away from an exact-origin endpoint, transport in the polar frame is free: the inward radial leg of $\mathrm{Log}_x y$ transports to
+the outward direction $-\hat x$ continuing the same geodesic past the origin, and the in-plane
+angular leg is untouched, so the result is read straight off the frame with no cancellation and no
+transcendental beyond the frame's own.
+
+**The floor.** What limits `gyro_difference` at $y \approx x$ is not the arithmetic but the
+operands: two float32 points whose directions are $\psi$ radians apart pin the *direction* of their
+difference only to `eps32·√D/ψ` relative — that is the accuracy of the result regardless of
+formula. When the result is instead far from the origin, the binding floor is one float32 ulp of
+its own spatial radius, `eps32·sinh(√c·d₀)/√c`.
+
+Measured (`step2c_gyro_difference_accuracy.out`; $c = 0.5$, $D = 64$, $a \in \{9, 12\}$, $y$ a
+$\psi$-radian rotation of $x$, medians/maxima over 4 seeds; `true d0` is the true radius of the
+result):
+
+| $a$ | $\psi$ | true $d_0$ | boost abs err (med) | `gyro_difference` abs err (max) | direction floor | radius floor |
+|---|---|---|---|---|---|---|
+| 9 | 1e-2 | 1.047e+01 | 8.904e-01 | 3.203e-04 | 9.987e-04 | 1.385e-04 |
+| 9 | 1e-4 | 5.691e-01 | 2.560e+00 | 7.147e-04 | 5.428e-03 | 6.969e-08 |
+| 9 | 1e-6 | 5.748e-03 | 2.053e+00 | 1.047e-03 | 5.482e-03 | 6.852e-10 |
+| 12 | 1e-2 | 1.896e+01 | 1.593e+01 | 2.986e-02 | 1.808e-03 | 5.582e-02 |
+| 12 | 1e-4 | 5.972e+00 | 1.704e+01 | 7.407e-03 | 5.695e-02 | 5.748e-06 |
+| 12 | 1e-6 | 1.150e-01 | 1.072e+01 | 1.916e-02 | 1.097e-01 | 1.372e-08 |
+
+`gyro_difference`'s worst error over these six cells is 0.535× the larger of the two floors —
+input-limited everywhere — against the boost's absolute error, which tracks $a$ and not $\psi$ at
+all: 0.89 to 2.05 nats whether the true answer is 10.5 nats from the origin or 5.7e-3.
+
+`HyperboloidGyroBatchNorm` now centers with `gyro_difference`. Measured on 32 points at $a = 9$,
+$c = 0.5$, $D = 16$, $\gamma = 1.3$ (`step2c_gyro_bn_centering.out`, float32 vs float64 on
+bit-identical inputs; `err` = max geodesic distance between the two legs' layer output; `grad rel` =
+max relative error of $\partial\text{loss}/\partial\text{bias}$):
+
+| target sep | mean sep | before err | after err | ratio | before grad | after grad |
+|---|---|---|---|---|---|---|
+| 0.3 | 0.556 | 5.220e+00 | 3.996e-03 | 1306.3× | 2.835e+01 | 4.133e-03 |
+| 0.6 | 1.101 | 3.960e+00 | 1.869e-03 | 2118.5× | 1.329e+01 | 2.073e-03 |
+| 1.0 | 1.797 | 2.142e+00 | 8.996e-04 | 2381.4× | 2.099e+00 | 1.278e-03 |
+| 2.0 | 3.388 | 4.218e-01 | 4.766e-04 | 884.9× | 7.551e-02 | 2.193e-04 |
+| 4.0 | 6.250 | 6.311e-02 | 1.052e-04 | 600.0× | 4.921e-02 | 8.333e-05 |
+| 8.0 | 11.749 | 1.525e-03 | 1.791e-05 | 85.2× | 2.384e-04 | 2.172e-05 |
+
+The `before` column is finite and plausible at every row — that is the failure mode, not a NaN.
+
+`gyro_difference` is verified against `addition(neg(x), y)` in float64 over dims 2/5/64,
+$c \in \{0.1, 0.5, 1, 3\}$ and random/parallel/anti-parallel/perpendicular/degenerate operand
+pairs: worst relative disagreement 2.34e-15; against a `np.longdouble` reference the result stays
+inside the float64 representation floor of its own radius (worst 0.62×)
+(`step2c_gyro_difference_equivalence.out`).
+
+### Origin derivatives and the Cartesian chart {#origin-derivatives}
+
+`gyro_difference` and `ptransp` use Cartesian formulas when either endpoint is
+exactly the origin. The difference is the inverse Lorentz boost with reconstructed
+time. Transport uses the closed-form geodesic transport and derives the input
+tangent time as $v_0=\langle x_s,v_s\rangle/x_0$, without a cleanup projection.
+Otherwise both retain the stable geodesic frame.
+
+`logmap` uses the regular Cartesian expression when either endpoint is exactly the
+origin and the stable polar frame otherwise. For close pairs, the frame's separation
+$S=\sinh(\sqrt c\,d(x,y)/2)$ enters the equivalent spatial displacement
+$\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}$ when $S\le0.5$.
+Ordinary autodiff follows the selected expression. Through spatial lifts, coincidence
+Jacobians are $+I$ for the target and $-I$ for the base. The log-map origin defect
+predates the preceding polar-frame sweep and the PV bridges; neither introduced
+it. The sweep's collinear-gradient repair did not cover every origin endpoint,
+even where a zero forward value and finite gradients passed.
+
+PV `logmap`, `gyro_difference`, and `ptransp` inherit these repairs through their
+existing exact lifts. `lorentz_residual` is unchanged: its first origin derivative
+passes an independent analytic check. Consumers include zero embeddings, residual
+branches, masked points, normalization, attention, Busemann layers, and HoroPCA;
+their acceptance checks compare against analytic or finite-difference references,
+rather than checking finiteness alone.
+
+### The Geodesic Frame Has No Normalize {#geodesic-frame}
+
+This section records the preceding collinear-gradient repair and its historical
+measurements. It did not cover the value-only origin fallbacks; the current
+Cartesian derivative repair is described immediately above.
+
+`_polar_frame`'s angular leg used to come from a helper, `_logmap_direction`, that normalized a
+vector which is exactly zero on the whole collinear set — a pair $(x, y)$ sharing a ray, $\psi = 0$
+or $\pi$, $y = x$ included. It returned $(\cos\varphi, \sin\varphi, \hat n)$ with
+$\hat n = \mathrm{normalize}(\hat y_s - \langle \hat x_s, \hat y_s\rangle\, \hat x_s)$; on a
+collinear pair that argument is zero up to rounding, so the normalization's derivative is
+arbitrary, and multiplied by a $\sin\varphi$ that is itself only $O(\text{rounding})$ rather than
+exactly 0, it left an $O(1)$ error in the *gradient* of every consumer while the forward value
+stayed correct. Four public functions share the helper and inherited the defect:
+`Hyperboloid.logmap`, `.ptransp`, `.gyro_difference`, and, through the exact lift onto the
+hyperboloid, `ProperVelocity.logmap`. Pre-existing since the polar-frame `logmap` of 1.1.2
+(2026-08-25).
+
+**The fix.** `_logmap_direction` now returns $(S\cos\varphi, \mathrm{perp}_y)$ with no $1/S$ and no
+$1/\lVert\mathrm{perp}_y\rVert$ anywhere:
+
+$$
+\mathrm{perp}_y = r_y\Big[\tfrac{\mathrm{csum}^2}{4}(\hat y_s - \hat x_s) +
+\tfrac{\mathrm{chord}^2}{4}(\hat x_s + \hat y_s)\Big],
+$$
+
+with $\mathrm{chord}$ and $\mathrm{csum}$ the frame's own norms of $\hat y_s - \hat x_s$ and
+$\hat x_s + \hat y_s$. Each consumer's own prefactor cancels the remaining $S$:
+
+$$
+\log_x(y) = \mathrm{asinhc}(S)\cdot\tfrac{2}{\sqrt c}\cdot(S\cos\varphi)\cdot e_{\mathrm{rad}} +
+\tfrac{\mathrm{asinhc}(S)}{C}\cdot(0, \mathrm{perp}_y), \qquad
+\mathrm{asinhc}(S) = \frac{\mathrm{arcsinh}(S)}{S},
+$$
+
+$$
+\mathrm{ptransp\ scale} = -\frac{S\cos\varphi}{C}\cdot\frac{\mathrm{radial}(v)}{x_0} +
+\frac{c}{2}\cdot\frac{\langle \mathrm{perp}_y, \mathrm{perp}(v)\rangle}{C^2}, \qquad
+(\ominus x)\oplus y = -\frac{2}{\sqrt c}\cdot C\cdot(S\cos\varphi)\cdot\hat x + \mathrm{perp}_y .
+$$
+
+**Two design points.**
+
+- $S\cos\varphi$ is formed as a sum of individually bounded ratios —
+  $P\cdot\mathrm{hypot}(1,P)/C + q\cdot(q/C)\cdot(x_0/r_x)$ — never as the unbounded product $q^2$
+  first, since at large radius $q$ alone is $\sim 10^{18}$ in float32. This keeps the float32 worst
+  case at $a \in \{9, 12\}$ to 1.7e-7 against 2.3e-7 for the previous spelling
+  (`step2e_equivalence.out`).
+- $\mathrm{perp}_y$ is spelled as the non-negative combination of the two orthogonal vectors
+  $\hat y_s - \hat x_s$ and $\hat x_s + \hat y_s$ above, not as
+  $r_y(\hat y_s - \langle\hat x_s,\hat y_s\rangle\hat x_s)$: the dot-product form loses
+  $\mathrm{eps}/\sin\psi$, while the orthogonal-vector form is exactly zero on both degenerate rays
+  ($\psi = 0$ zeroes $\hat y_s - \hat x_s$ and $\mathrm{chord}$ together, $\psi = \pi$ zeroes
+  $\hat x_s + \hat y_s$ and $\mathrm{csum}$ together) and cannot cancel at any other $\psi$.
+
+**Measured** (`step2e_gradients.out`, $a \le 3$, old $\to$ new):
+
+| quantity | dtype | old | new |
+|---|---|---|---|
+| $\nabla\lVert\log_x(y)\rVert^2$ / $\nabla\langle w,\log\rangle$, collinear + $y=x$ | float64 | 2.81 | 1.8e-10 |
+| Jacobian of $\log_x(\cdot)$ at $y=x$ vs. the identity | float64 | 1.00 | 5.0e-16 |
+| `ptransp` $\nabla\langle w, \mathrm{PT}\,v\rangle$, f32-vs-f64 relative error | float32/64 | 3.29 | 4.0e-6 |
+| `gyro_difference` gradient, f32-vs-f64 relative error | float32/64 | 5.94 | 9.6e-7 |
+| PV $\nabla\lVert\log\rVert^2$, collinear | float32 | 4.1e-5 | 2.2e-5 |
+| PV $\nabla\lVert\log\rVert^2$, collinear | float64 | 3.3e-10 | 3.3e-10 |
+
+The PV float32 row is 1.9× better than even the pre-lift ambient PV spelling on the same reference,
+and the float64 row is unchanged either way. Every gradient in this table is finite in both
+dtypes at every radius tested, before and after the fix.
+
+Forward values are unaffected: float64 new-vs-old equivalence at $a \le 6$ over dims 2/5/64,
+$c \in \{0.1, 0.5, 1, 3\}$, 5 geometries, 5 seeds — `logmap` 4.7e-16, `ptransp` 5.8e-14,
+`gyro_difference` 3.2e-15, PV `logmap` 1.5e-15, all against a 1e-12 budget
+(`step2e_equivalence.out`); `dist`, `sqdist` and `_polar_frame` are bitwise unchanged.
+
+### ProperVelocity's Tangent-Space Metric at Large Radius {#pv-tangent-metric}
+
+The proper-velocity `tangent_inner`/`tangent_norm` share the hyperboloid's
+`radial_perp_decomposition` helper and its fix. Measured on the exactly-unit radial tangent, $c =
+0.5$ (`probe_midpoint_horopca_busemann_pv_9093ea7.out`, table C.iv): $\lvert\langle v,v\rangle -
+1\rvert$ goes from 6.250e-01 to 2.384e-07 at $a = 8$ and from 1.536e+03 to 5.192e-05 at $a = 12$;
+the library's own float64 path on the same input goes from 9.313e-10 to 2.220e-16 at $a = 8$.
+
+### ProperVelocity `dist`/`logmap` Through the Exact Lift {#pv-dist-lift}
+
+`ProperVelocity._dist` and `_logmap` go through the exact lift onto the hyperboloid,
+
+$$
+X = \Big(\sqrt{1/c + \lVert x\rVert^2},\; x\Big) ,
+$$
+
+and then the hyperboloid's own cancellation-free polar-frame `dist`/`logmap` — PV coordinates *are*
+the hyperboloid's spatial part, so the lift is exact, not an approximation. This closes the gap the
+tangent-space metric fix above did not reach: `PV.dist`/`logmap` between two nearby points at large
+radius used to cancel the same way the ambient hyperboloid primitives did before their own fix.
+
+Measured (`step2c_pv_accuracy.out`, $c = 0.5$, dim 16, a radial step of true Riemannian length 0.1,
+landing point computed in float64, coordinate-axis direction): old `dist` 5.988811e-02 /
+4.382994e+00 / 1.056287e+01 at $a = 8/10/12$ (true value 0.1 in every case), new relative error
+9.54e-07 / 8.05e-07 / 4.62e-07 — inside the float32 storage floor of the same input pairs,
+9.24e-07 / 7.22e-07 / 4.92e-07. This coordinate-axis direction is the favourable case: on the same
+probe's PRNGKey(3) direction, the worst new relative error over $a \in \{8, 10\}$ is 1.13e-04 at
+$a = 10$, against that pair's own storage floor of 1.41e-05. The full float32 chain (`expmap` in
+float32 too, so its own error is included) used to return 3.167524e-01 at $a = 8$ and 4.369660e+00
+at $a = 10$ for a true step of 0.1; it now returns 1.000014e-01 and 9.999371e-02.
+
+Equivalence (`step2c_pv_equivalence.out`): float64 new vs old at $a \le 3$ (random, parallel,
+antiparallel, perpendicular, coincident pairs) agree to 8.09e-14 max; against an 80-bit reference at
+$a \le 6$, `dist` is 7.11e-15 max against old's 3.64e-11, and `logmap` is 4.39e-14 max relative
+error and 1.26e-12 max $\lVert\mathrm{err}\rVert_x$; `dist(x, x)` and `logmap(x, x)` are exactly 0
+in both dtypes, with a finite gradient there.
+
+Callers that inherit the fix with no change of their own: `utils.helpers.compute_pairwise_distances`,
+`decomposition/frechet.py`, `nn_layers/poincare_batchnorm.py` (when built with a PV manifold), and
+`manifolds/product.py`.
+
+### ProperVelocity exponential, addition, difference, and transport bridges {#pv-operation-lifts}
+
+PV `expmap` and gyro `addition` use the exact hyperboloid lift (baseline bridge
+commit `8e77147`). `gyro_difference` and `ptransp` use it as of `757a910`, and
+`ProperVelocityGyroBatchNorm` centers with `gyro_difference`. A PV tangent lifts
+as $(\langle x,v\rangle/X_0,v)$ at $X=(\sqrt{1/c+\lVert x\rVert^2},x)$;
+the spatial part of the hyperboloid result is the PV result. No Poincare chart
+conversion is needed. The lift carries the hyperboloid primitive's accuracy and
+its remaining limitations, including transport of directions below float32
+angular resolution; it does not remove those limitations.
+
+## Historical Cost of the Cancellation-Free Spellings {#numerics-cost}
+
+These tables compare `b586169` with `5b756df`, before the post-PV baseline
+`757a910` and the origin derivative repairs. They measure forward or
+forward/backward functions, not complete optimizer updates, and use the archived
+settings stated below. They are historical observations, not current speed or
+convergence guarantees. No long-training or time-to-quality conclusion is made
+from them.
+
+Step 5c performance probe (`logs/2026-09-08_hyperboloid_tangent_primitives/`): two revisions of the
+library — **as-is** `b586169` ("update learnable curvature") and **new** `5b756df` ("Un-normalized
+geodesic frame: fix the collinear log-map gradient") — measured with the same forward/backward script at
+each revision. AOT-compiled executables (`compiled = jax.jit(f).lower(*args).compile()`, timing
+`compiled(*args)` directly rather than the `jax.jit` wrapper, so no per-call cache lookup is in the
+number), float32, batch 4096, $c = 0.5$ for every hyperboloid workload ($c = 1.0$ for the Poincaré
+and proper-velocity primitives and the HoroPCA/Fréchet items), points at geodesic radius $\approx 3$,
+forward and `nnx.value_and_grad` forward+backward. CPU is XLA:CPU on the development box; GPU is an
+A100-PCIE-40GB (device 0) with `XLA_FLAGS=--xla_gpu_autotune_level=0` and
+`XLA_PYTHON_CLIENT_PREALLOCATE=false`. A third, never-released intermediate, **key-Gram** (`900f054`,
+library files identical to `4f8057a`; the `O(M²)` pairwise-Gram `lorentz_midpoint` normalizer), is in
+the full source summary but dropped from the tables below — see the note after them.
+
+`os.getloadavg()` at the start and end of each run, `(1 min, 5 min, 15 min)`:
+
+| run | `.out` | start | end |
+|---|---|---|---|
+| CPU new | `probe_cost_5b756df.out` | (3.5, 5.3369140625, 4.45849609375) | (3.52783203125, 5.111328125, 4.42431640625) |
+| CPU as-is | `probe_cost_b586169.out` | (4.048828125, 4.35009765625, 7.4306640625) | (4.77294921875, 4.44970703125, 7.34765625) |
+| GPU new | `probe_cost_gpu_5b756df.out` | (2.46044921875, 4.73193359375, 4.31640625) | (2.041015625, 4.4482421875, 4.232421875) |
+| GPU as-is | `probe_cost_gpu_b586169.out` | (3.013671875, 4.037109375, 7.025390625) | (2.45654296875, 3.82373046875, 6.875) |
+| GPU new (repeat) | `probe_cost_gpu_5b756df_rep2.out` | (1.87744140625, 4.3740234375, 4.20947265625) | (1.64501953125, 4.11865234375, 4.12841796875) |
+
+Two forward passes that compile to byte-identical optimized HLO at `b586169` and the never-released
+`900f054` — `HypLinearPoincarePP` and `HypRegressionPoincarePP` — calibrate the noise floor of the
+CPU table: about ±6% on a workload known to be unchanged.
+
+### CPU
+
+`probe_cost_b586169.out` (as-is) vs `probe_cost_5b756df.out` (new).
+
+| workload | as-is fusions | as-is Mflop | as-is ms | new fusions | new Mflop | new ms | ratio |
+|---|---|---|---|---|---|---|---|
+| PLFC gyro-bias fwd | 48 | 56.010 | 6.2048 | 24 | 44.359 | 2.2965 | 0.370 |
+| PLFC gyro-bias fwd+bwd | 156 | 148.578 | 13.8245 | 89 | 120.035 | 6.3049 | 0.456 |
+| GyroBatchNorm(train) fwd | 117 | 24.514 | 9.0924 | 86 | 21.088 | 5.5412 | 0.609 |
+| GyroBatchNorm(train) fwd+bwd | 231 | 53.586 | 13.4201 | 141 | 33.451 | 7.6611 | 0.571 |
+| HyperboloidGyroRMSNorm fwd | 16 | 5.087 | 2.2426 | 16 | 5.087 | 2.2973 | 1.02 |
+| HyperboloidGyroRMSNorm fwd+bwd | 40 | 13.550 | 3.5352 | 40 | 13.550 | 3.5132 | 0.994 |
+| HyperbolicFullAttention fwd | 72 | 322.554 | 12.0482 | 86 | 426.546 | 89.9417 | 7.47 |
+| HyperbolicFullAttention fwd+bwd | 208 | 863.546 | 31.1128 | 259 | 1118.311 | 139.1628 | 4.47 |
+| LorentzResidual fwd | 8 | 2.421 | 0.8921 | 21 | 6.599 | 2.0828 | 2.33 |
+| LorentzResidual fwd+bwd | 29 | 5.165 | 1.7535 | 49 | 10.084 | 3.0969 | 1.77 |
+| Busemann head fwd | 10 | 140.630 | 2.1609 | 22 | 208.480 | 98.2874 | 45.5 |
+| Busemann head fwd+bwd | 26 | 286.534 | 4.4315 | 41 | 419.794 | 131.7908 | 29.7 |
+| riemannian_adam one step | 88 | 54.010 | 21.2513 | 117 | 76.014 | 21.7737 | 1.02 |
+| Poincare.dist (vmap) | 4 | 4.997 | 5.2551 | 8 | 7.258 | 2.1213 | 0.404 |
+| Poincare.addition (vmap) | 5 | 8.872 | 4.5814 | 10 | 10.756 | 5.3327 | 1.16 |
+| Poincare.logmap (vmap) | 10 | 14.983 | 8.5312 | 19 | 19.079 | 7.9924 | 0.937 |
+| HypLinearPoincarePP fwd | 28 | 49.678 | 3.4088 | 28 | 49.678 | 3.3689 | 0.988 |
+| HypRegressionPoincarePP fwd | 15 | 38.326 | 1.3978 | 15 | 38.326 | 1.3604 | 0.973 |
+| PoincareGyroRMSNorm fwd | 16 | 3.592 | 1.0773 | 16 | 3.592 | 1.0963 | 1.02 |
+| PoincareGyroRMSNorm fwd+bwd | 41 | 9.597 | 2.1686 | 41 | 9.597 | 2.2260 | 1.03 |
+| HypLinearPV fwd | 17 | 41.578 | 1.3097 | 17 | 41.578 | 1.2538 | 0.957 |
+| ProperVelocity.expmap (vmap) | 17 | 21.340 | 5.8779 | 29 | 28.467 | 6.7439 | 1.15 |
+| horo_projection (vmap, K=3) | 52 | 18.630 | 5.8367 | 66 | 22.894 | 7.2006 | 1.23 |
+| frechet_mean (max_iters=100) | 82 | 3.650 | 73.4981 | 75 | 3.007 | 52.3895 | 0.713 |
+| prim Hyperboloid.addition fwd | 24 | 17.539 | 9.4171 | 7 | 4.235 | 2.7026 | 0.287 |
+| prim Hyperboloid.addition value_and_grad(both) | 81 | 64.700 | 17.3033 | 15 | 13.836 | 3.4826 | 0.201 |
+| prim Hyperboloid.tangent_proj | 7 | 4.850 | 5.8666 | 3 | 2.146 | 2.0845 | 0.355 |
+| prim Hyperboloid.egrad2rgrad | 9 | 4.882 | 5.9710 | 5 | 2.179 | 2.5501 | 0.427 |
+| prim Hyperboloid.ptransp_0 | 10 | 7.561 | 7.9804 | 4 | 2.138 | 1.7538 | 0.220 |
+| prim Hyperboloid.expmap | 8 | 5.767 | 2.8512 | 21 | 13.509 | 4.9346 | 1.73 |
+| prim Hyperboloid.tangent_inner | 3 | 1.073 | 1.9195 | 11 | 8.618 | 6.7360 | 3.51 |
+| prim Hyperboloid.ptransp | 11 | 8.626 | 9.7918 | 37 | 26.763 | 8.8648 | 0.905 |
+| prim lorentz_midpoint | 14 | 281.261 | 3.9228 | 21 | 487.023 | 111.3655 | 28.4 |
+
+Total wall time: as-is 35.2 s, new 45.4 s.
+
+### GPU (A100-PCIE-40GB, device 0)
+
+`probe_cost_gpu_b586169.out` (as-is) vs `probe_cost_gpu_5b756df.out` (new). The `@REV` marker in the
+Busemann rows names the revision that produced each column: `@b586169` in the as-is columns,
+`@5b756df` in the new.
+
+| workload | as-is fusions | as-is Mflop | as-is ms | new fusions | new Mflop | new ms | ratio |
+|---|---|---|---|---|---|---|---|
+| (a) library `_busemann_score` @REV K=256 fwd | 5 | 5.885 | 0.1976 | 9 | 207.867 | 0.4121 | 2.09 |
+| (a) library `_busemann_score` @REV K=256 fwd+bwd | 11 | 20.501 | 0.3418 | 19 | 626.689 | 0.8373 | 2.45 |
+| (b) float64-island GEMM K=256 fwd | 5 | 7.434 | 0.1816 | 5 | 7.434 | 0.2526 | 1.39 |
+| (b) float64-island GEMM K=256 fwd+bwd | 13 | 19.203 | 0.3693 | 13 | 19.203 | 0.3451 | 0.934 |
+| (a) library `_busemann_score` @REV K=1000 fwd | 6 | 21.465 | 0.2595 | 9 | 802.458 | 1.0685 | 4.12 |
+| (a) library `_busemann_score` @REV K=1000 fwd+bwd | 11 | 76.238 | 0.5406 | 19 | 2416.393 | 2.3974 | 4.43 |
+| (b) float64-island GEMM K=1000 fwd | 5 | 25.908 | 0.3267 | 5 | 25.908 | 0.2895 | 0.886 |
+| (b) float64-island GEMM K=1000 fwd+bwd | 13 | 65.477 | 0.7621 | 13 | 65.477 | 0.6421 | 0.843 |
+| PLFC gyro-bias fwd | 17 | 16.587 | 0.2561 | 8 | 7.653 | 0.2510 | 0.980 |
+| PLFC gyro-bias fwd+bwd | 41 | 70.943 | 0.6084 | 29 | 30.104 | 0.6258 | 1.03 |
+| HyperbolicFullAttention fwd | 44 | 119.604 | 0.6080 | 46 | 225.923 | 0.9836 | 1.62 |
+| HyperbolicFullAttention fwd+bwd | 100 | 252.674 | 1.4532 | 111 | 576.520 | 2.1561 | 1.48 |
+| GyroBatchNorm(train) fwd | 47 | 34.770 | 0.5463 | 35 | 23.865 | 0.4806 | 0.880 |
+| GyroBatchNorm(train) fwd+bwd | 76 | 59.214 | 0.7203 | 53 | 38.095 | 0.5613 | 0.779 |
+
+Total wall time: as-is 25.0 s, new 24.9 s.
+
+The key-Gram intermediate (`900f054`) is dropped from both tables above to keep them readable; its
+cost shows in more than one row — CPU `GyroBatchNorm(train)
+fwd` 1343.1408 ms against 9.0924 ms as-is, CPU `GyroBatchNorm(train) fwd+bwd` 1317.4855 ms against
+13.4201 ms as-is, CPU `frechet_mean` 193.4177 ms against 73.4981 ms as-is, GPU `GyroBatchNorm(train)
+fwd` 7.9182 ms against 0.5463 ms as-is, GPU `GyroBatchNorm(train) fwd+bwd` 7.0382 ms against 0.7203
+ms as-is, and GPU `PLFC gyro-bias fwd+bwd` 2.4144 ms against 0.6084 ms as-is.
+
+Reading the tables:
+
+(a) Every consumer of the gyro-addition is about 2x faster on CPU and unchanged on GPU.
+`GyroBatchNorm` is 0.57–0.61x as-is on CPU; on the A100 it measured 0.78–0.88x in one run and
+0.96–0.97x on the repeat, i.e. unchanged within GPU noise — so the key-Gram intermediate's 148x
+(CPU) / 14.5x (GPU) never reached a release (the numbers in the key-Gram column of the full source
+summary). The consumers are `PLFC gyro-bias` (CPU ratio 0.370 forward / 0.456 forward+backward, GPU
+0.980 / 1.03) and `GyroBatchNorm(train)` (CPU 0.609 / 0.571, GPU 0.880 / 0.779 primary run, 0.959 /
+0.967 repeat), both of which used the then-current stable gyro-addition /
+`gyro_difference` implementation instead of the ambient boost. These rows predate
+the Cartesian origin branch.
+
+(b) The rows above 1.5x and why: attention and the `lorentz_midpoint` primitive on CPU because
+XLA:CPU materialises the variance form's `(…, N, M, D)` difference (Mflop only 1.3x for attention)
+while XLA:GPU fuses it (attention 1.62x / 1.48x on the A100), `LorentzResidual` on CPU for its
+pairwise polar frame, the Busemann head (CPU streaming of the exact broadcast-reduce; 2.1–4.4x on
+the A100 at 0.41–2.40 ms absolute, the decided trade), `prim Hyperboloid.expmap` and `tangent_inner`
+(three reductions instead of one; only the Riemannian optimizer's second moment and `frechet_mean`
+call them, and the optimizer step is 1.02x). Those two primitives are individually 1.73x and 3.51x
+slower on CPU in isolation, but `frechet_mean` — their other call site — comes out at 0.713x, faster
+overall, since the primitive call is a small fraction of its 100 iterations.
+
+(c) GPU repeatability from the repeat run `probe_cost_gpu_5b756df_rep2.out`: worst 39.4% on the
+float64-island GEMM K=1000 fwd row, 24.1% on `GyroBatchNorm` fwd+bwd, so GPU ratios inside ±1.3x are
+noise. That noise band is wider than the CPU table's ±6% identity-row floor, so a GPU ratio needs a
+bigger gap from 1x before it means anything.
+
+The Busemann float64-island GEMM rows — (b) in the GPU table above — are the documented float64-island
+recipe from [Busemann Coordinates at Large Radius](#busemann-large-radius), not a shipped library
+option.
 
 ## Version Parameters
 
@@ -1005,7 +1576,7 @@ Möbius addition (independent of the formula under test), $c = 1$, dim 8, before
 **Special cases**:
 - **Near-boundary points** (||x|| > 0.9): Use `Poincare(dtype=jnp.float64)`, or convert to the
   hyperboloid via `isometry_mappings.poincare_to_hyperboloid` and use `Hyperboloid.dist` —
-  `dist`/`logmap` are now genuinely safe there at any representable radius (see [above](
+  `dist`/`logmap` are now covered by the measured two-point accuracy checks (see [above](
   #the-hyperboloids-two-point-cancellation-failure-mode)). The contrast that motivates this
   advice: the Poincaré ball itself cannot even *represent* a point past $d_0 \approx 12.65/\sqrt{c}$
   (float32) / $27.7/\sqrt{c}$ (float64) — `proj`'s boundary clamp saturates there — while the
@@ -1045,8 +1616,9 @@ d1 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_SMOOTHENED)
 
 **When to use which**:
 
-- `VERSION_DEFAULT` — the default, and the right choice for new code. Accurate at any
-  representable radius (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)).
+- `VERSION_DEFAULT` — the default, and the right choice for new code. It avoids the
+  identified cancellation over the measured range; stored-input and chart ceilings
+  still apply (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)).
 - `VERSION_SMOOTHENED` — same numerics, but coincident points return a small positive distance
   with a well-defined gradient instead of exactly 0. Useful when a downstream `1/dist` or `log
   dist` would otherwise divide by zero. The floor is tiny: $2\,\mathrm{arcsinh}(10\epsilon)/\sqrt{c}
@@ -1298,7 +1870,11 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
 ## Best Practices Summary
 
 !!! success "Numerical Stability Checklist"
-    - ✅ **Use float32 for distances < 7, float64 for larger**
+    - ✅ **On the Poincaré ball, use float32 for distances < 7, float64 for larger; on the
+      hyperboloid, `dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/
+      `tangent_inner`/`egrad2rgrad`/gyro `addition`/`busemann` are accurate to the
+      point-representation floor at any radius in float32 — see
+      [Known Limitations](#hyperboloid-known-limitations) for the exceptions**
     - ✅ **Project after operations that might violate constraints**
     - ✅ **Keep points away from boundary** (max norm < 0.9/√c)
     - ✅ **Use conservative learning rates** (< 1e-3 for Poincaré, < 5e-4 for Hyperboloid)

@@ -33,8 +33,17 @@ from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
-from hyperbolix.utils.math_utils import clamp_to, floor_at, safe_hypot_norm
+from hyperbolix.utils.math_utils import (
+    MIN_NORM,
+    clamp_to,
+)
 from hyperbolix.utils.math_utils import cosh as safe_cosh
+from hyperbolix.utils.math_utils import (
+    floor_at,
+    safe_hypot,
+    safe_hypot_norm,
+    safe_norm,
+)
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 from hyperbolix.utils.precision import MATMUL_PRECISION as MATMUL_PRECISION  # re-export
 
@@ -324,6 +333,84 @@ def sinh_lift_to_hyperboloid(
     return spatial_to_hyperboloid(res_rem_BO, c_in=c, c_out=c, eps=eps)
 
 
+def _lorentz_sqdist_polar(x_A: Float[Array, "... A"], p_A: Float[Array, "... A"], c: ScalarCurvature) -> Float[Array, "..."]:
+    """``<x - p, x - p>_L = (4/c)·sinh²(θ/2)`` for on-sheet points, without cancellation.
+
+    Dimension key: D = spatial dim, A = ambient dim (D + 1, time slot first).
+
+    The batched, allocation-lean spelling of the hyperbolic haversine decomposition that
+    ``manifolds.hyperboloid._polar_frame`` builds for a single pair — same algebra, same
+    operation orderings, but only the two quantities this module needs (no ``csum``, no
+    ``cosh(θ/2)``, no ``_PolarFrame``), and it broadcasts over leading axes, so
+    :func:`lorentz_residual` gets the whole batch of ``<x - y, x - y>_L`` it needs from one call —
+    and an ``(M, M)`` pair table, ``x_A`` shaped ``(..., M, 1, A)`` against ``p_A`` shaped
+    ``(..., 1, M, A)``, would come from one call too — without a ``vmap``. With ``r = ||x_s||``,
+    ``x̂ = x_s/r``, ``u = x₀ + r`` and ``θ = √c·d(x, p)``::
+
+        u_gap = (r_x - r_p)·(1 + (r_x + r_p)/(x₀ + p₀))
+        P     = ½·u_gap/(√u_x·√u_p)                    = sinh((a - b)/2)
+        q     = ½·√c·||x̂ - p̂||·√r_x·√r_p               (angular leg)
+        <δ, δ>_L = 4·(P² + q²)/c                       = (4/c)·sinh²(θ/2)
+
+    The literal ``-δ₀² + ||δ_s||²`` it replaces is a difference of two ``O(e^{2a})`` numbers whose
+    value is ``O(e^{2θ})``, so it keeps only the bits past the Gromov product and returns noise for
+    a radial pair once ``a`` exceeds ~8 in float32. Every term above is non-negative and reads the
+    radial gap off the **spatial** radii, which is the coordinate that still resolves it.
+
+    The orderings are load-bearing for exactly the reasons ``_polar_frame`` documents: ``√u_x`` and
+    ``√u_p`` separately (their product overflows float32 at ``a + b > 88``), ``√r_x·√r_p`` never
+    ``√(r_x·r_p)`` (which squares a spatial radius), the gap between the radii rather than between
+    the ``u``'s (Sterbenz-exact when the radii are close), and every norm through ``safe_norm``.
+    The ``MIN_NORM`` floors are the same guards: on the radii they keep ``x̂`` finite at the origin
+    (where ``r = 0`` makes ``q = 0`` regardless of the chord), on ``u`` and ``x₀ + p₀`` they only
+    stop a fully degenerate all-zero "point" from producing ``0/0``.
+
+    On the diagonal (``x_A`` and ``p_A`` the same point — :func:`lorentz_residual` with ``x == y``,
+    and every ``m`` of such a pair table) the result is exactly ``0`` with an exactly zero
+    gradient: the two radii and unit directions come
+    out of identical inputs, so ``u_gap`` and ``chord`` are exact zeros, and
+    ``safe_norm``/``safe_hypot``'s double-``where`` returns ``0`` without ever creating
+    ``sqrt'(0) = inf`` inside the VJP.
+
+    Reproduces :func:`~hyperbolix.manifolds.hyperboloid._sqdist` **bitwise** for finite inputs
+    (measured: max relative difference exactly 0 over the attention-shaped clouds of
+    ``logs/2026-09-08_hyperboloid_tangent_primitives/step2_equivalence.py``, float64). The one
+    deliberate omission is ``_polar_frame``'s ``isfinite`` branch, which turns the ``inf/inf`` of an
+    already-overflowed time coordinate into ``±inf``; here such an input stays NaN, i.e. loud.
+
+    Args:
+        x_A: Hyperboloid point(s), shape (..., A), time coordinate first.
+        p_A: Second hyperboloid point(s), broadcast against ``x_A``.
+        c: Curvature (positive).
+
+    Returns:
+        ``<x - p, x - p>_L``, shape ``broadcast(x_A, p_A)[:-1]``, non-negative on-sheet.
+    """
+    sqrt_c = jnp.sqrt(c)
+    x_time, p_time = x_A[..., 0], p_A[..., 0]
+    x_s_D, p_s_D = x_A[..., 1:], p_A[..., 1:]
+
+    r_x = safe_norm(x_s_D)
+    r_p = safe_norm(p_s_D)
+    r_x_pos = floor_at(r_x, MIN_NORM)
+    r_p_pos = floor_at(r_p, MIN_NORM)
+    x_hat_D = x_s_D / r_x_pos[..., None]
+    p_hat_D = p_s_D / r_p_pos[..., None]
+
+    # e^a = √c·u, so P = sinh((a-b)/2) = (u_x - u_p)/(2·√u_x·√u_p) — the √c cancels. The numerator
+    # comes from the radii alone via the on-sheet identity x₀ - p₀ = (r_x² - r_p²)/(x₀ + p₀).
+    u_x = floor_at(x_time + r_x, MIN_NORM)
+    u_p = floor_at(p_time + r_p, MIN_NORM)
+    time_sum = floor_at(x_time + p_time, MIN_NORM)
+    u_gap = (r_x - r_p) * (1.0 + (r_x + r_p) / time_sum)
+    sinh_half_gap = 0.5 * u_gap / (jnp.sqrt(u_x) * jnp.sqrt(u_p))
+
+    chord = safe_norm(x_hat_D - p_hat_D)  # 2·sin(ψ/2)
+    q_angular = (0.5 * sqrt_c * chord) * (jnp.sqrt(r_x_pos) * jnp.sqrt(r_p_pos))
+    # safe_hypot, not P**2 + q**2: the two legs straddle the exponent range at large radius.
+    return 4.0 * safe_hypot(sinh_half_gap, q_angular) ** 2 / c
+
+
 def lorentz_midpoint(
     points: Float[Array, "... M A"],
     weights: Float[Array, "... N M"],
@@ -340,23 +427,48 @@ def lorentz_midpoint(
         ``h = weights @ points``  (weighted sum)
         ``mu = h / (sqrt(c) * ||h||_L)``
 
-    where ``||h||_L = sqrt(-<h,h>_L)``. The Minkowski square ``<h,h>_L`` is **not** evaluated
-    as the literal ``-h_0^2 + ||h_s||^2``: for on-sheet ``points`` (``<x_m,x_m>_L = -1/c``) it
-    is obtained from the exact, cancellation-free identity — with reference ``p`` the input closest
-    to the vertex, ``delta_m = x_m - p``, ``W = sum_m w_m`` and ``Delta = sum_m w_m delta_m`` ::
+    where ``||h||_L = sqrt(-<h,h>_L)``. The literal Lorentz square subtracts
+    two large terms for a tight cloud far from the origin. Instead, set
+    ``t_m = x_{m,0}``, ``z_m = x_{m,s}/t_m``, ``T = h_0`` and ``z_bar = h_s/T``::
 
-        <h,h>_L = -W^2/c - W * sum_m w_m <delta_m, delta_m>_L + <Delta, Delta>_L
+        D² = T * sum_m w_m * (1/t_m + c*t_m*||z_m - z_bar||²)
+        mu_s = h_s / sqrt(max(abs(D²), eps))
 
-    The naive form subtracts two ``O(||s||^2)`` squares to reach an ``O(W^2/c)`` result, so its
-    float32 relative error grows like ``eps * c * ||s||^2``; every term above is
-    ``O(||delta||^2)`` instead, so the normalizer itself never cancels catastrophically at any radius. The
-    identity holds for arbitrary weights (negative and zero included) and, in exact arithmetic, is
-    independent of which point is used as the reference — in floats it is not, hence the
-    vertex-nearest choice (see Notes).
+    On-sheet, ``1 - ||z_m||² = 1/(c*t_m²)``. Expanding the weighted variance
+    therefore gives ``D² = c*(T² - ||h_s||²)`` exactly. The variance is evaluated
+    directly as squared coordinate differences, without expanding the cancelling
+    squares. For non-negative weights every summand is non-negative. Unlike a
+    radius/unit-direction factorization, ``z_m`` is smooth at the origin, so
+    gradients through an origin point in a mixed cloud retain its contribution.
 
-    For non-negative weights the ``eps`` floor only engages as ``W -> 0``: the identity is
-    equivalently ``<h,h>_L = -W^2/c - 1/2 sum_ij w_i w_j <x_i - x_j, x_i - x_j>_L`` with every
-    difference spacelike (``<x_i - x_j, x_i - x_j>_L >= 0``), hence ``c * |<h,h>_L| >= W^2``.
+    ``weights`` must be non-negative; negative weights are unsupported. An
+    all-zero weight row returns the origin, preserving the existing convention.
+    Its division by ``T`` is guarded. That value convention does not prescribe a
+    weight derivative: the normalized mean has no continuous extension at zero
+    weights. The existing ``abs`` and ``eps`` normalization remains in effect.
+
+    Cost is ``O(N*M*D)``: the direct variance uses one ``(..., N, M, D)``
+    broadcast and reduction. For batch means and head averages, ``N = 1`` and
+    this is linear in the number of points. All contractions use HIGHEST
+    precision. Output time is reconstructed from the normalized spatial part.
+
+    Historical measurements of the preceding radius/direction variance form
+    (probe C.i in ``logs/2026-09-08_hyperboloid_tangent_primitives``, M = 16,
+    D = 16, c = 0.5, uniform weights, four seeds) reported median geodesic
+    errors against a longdouble reference::
+
+                       a = 6      a = 8      a = 9      a = 12
+        radial         1.5e-5     1.0e-4     3.2e-4     5.0e-3
+        angular        3.6e-7     4.6e-7     3.6e-7     3.5e-7
+        mixed          3.2e-7     3.6e-7     3.6e-7     3.7e-7
+
+    Here ``a = sqrt(c)*d``; radial clouds have spread 0.3 in ``a``, angular
+    clouds have spread 0.3 radians at one radius, and mixed clouds have both.
+    These are historical value measurements, not derivative or timing guarantees
+    for this implementation. Rounding a direction by ``delta`` can cause a
+    geodesic error of order ``sinh(a)*delta``. A comparison with unrounded inputs
+    includes that storage error as well as arithmetic error; it cannot identify
+    either component by itself.
 
     Parameters
     ----------
@@ -389,40 +501,23 @@ def lorentz_midpoint(
     Consequence: the output's time coordinate is a function of its spatial part, so its gradient
     flows through the spatial components (as in every HRC/HTC layer) rather than through the input
     time coordinates directly.
-
-    The reference point ``p`` is the input with the smallest time coordinate (closest to the
-    vertex). Each ``delta_m = x_m - p`` term is only as well-conditioned as ``||delta_m||``, and this
-    choice bounds ``||delta_m|| <= ||x_m|| + ||p|| <= 2 ||x_m||``, so a point never inherits another
-    point's radius. With the old ``p = points_0`` and an extreme point *at* index 0, every ``delta_m``
-    is as large as that extreme radius and the identity's own terms cancel against each other.
     """
     # h = sum_m w_{n,m} * points_m  →  (..., N, A)
     # Pinned HIGHEST: the cancellation-free identity below only holds to O(eps) if its inputs
     # are float32-accurate; at the TF32 default the f32-vs-f64 relative error of this function
     # is 4.6e-5 … 2.6e-4 instead of 2.6e-8 … 1.6e-7 (see hyperbolix.utils.precision).
     h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
-    # Exact for on-sheet points (reference p = points_0, delta_m = x_m - p, W = sum_m w_m,
-    # Delta = sum_m w_m delta_m):
-    #     <h,h>_L = -W^2/c - W * sum_m w_m <delta_m, delta_m>_L + <Delta, Delta>_L.
-    # The naive -h_0^2 + ||h_s||^2 subtracts two O(||s||^2) squares to reach an O(W^2/c) result
-    # (float32 rel. error ~ eps*c*||s||^2); here every rounded term is O(||delta||^2) instead.
-    # Reference = the input closest to the vertex (smallest time coordinate), not points_0. The
-    # identity is reference-independent in exact arithmetic, but in floats each ||delta_m|| sets that
-    # term's conditioning: with the vertex-nearest reference ||delta_m|| <= ||x_m|| + ||p|| <= 2||x_m||,
-    # so a point is only as ill-conditioned as its own radius. Using points_0 when *that* is the
-    # extreme point makes every delta as large as the extreme radius (0.5% error on the HoroPCA
-    # boundary-lift case vs 2e-5 with an ordinary reference).
-    ref_idx = jnp.argmin(points[..., 0], axis=-1)  # (..., ) over M
-    p_1A = jnp.take_along_axis(points, ref_idx[..., None, None], axis=-2)  # (..., 1, A)
-    delta_MA = points - p_1A  # (..., M, A)
-    dd_M = -(delta_MA[..., 0] ** 2) + jnp.sum(delta_MA[..., 1:] ** 2, axis=-1)  # (..., M), >= 0 on-sheet
-    w_sum_N1 = jnp.sum(weights, axis=-1, keepdims=True)  # (..., N, 1)
-    # The two remaining contractions feed the same identity; pinned HIGHEST for the same reason.
-    w_dd_N1 = jnp.einsum("...nm,...m->...n", weights, dd_M, precision=MATMUL_PRECISION)[..., None]  # (..., N, 1)
-    big_delta_NA = jnp.einsum("...nm,...ma->...na", weights, delta_MA, precision=MATMUL_PRECISION)  # (..., N, A)
-    big_dd_N1 = -(big_delta_NA[..., 0:1] ** 2) + jnp.sum(big_delta_NA[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., N, 1)
-    mink_N1 = -(w_sum_N1**2) / c - w_sum_N1 * w_dd_N1 + big_dd_N1  # (..., N, 1)
-    denom_N1 = jnp.sqrt(floor_at(c * jnp.abs(mink_N1), eps))  # (..., N, 1)
+    time_M = points[..., 0]  # (..., M), positive on the upper sheet
+    velocity_MD = points[..., 1:] / time_M[..., None]  # (..., M, D)
+    time_N = h_NA[..., 0]  # (..., N)
+    safe_time_N = jnp.where(time_N != 0, time_N, 1.0)
+    mean_ND = h_NA[..., 1:] / safe_time_N[..., None]  # (..., N, D)
+    # Direct variance: expanding these squares reintroduces large-radius cancellation.
+    dev_sq_NM = jnp.sum((velocity_MD[..., None, :, :] - mean_ND[..., :, None, :]) ** 2, axis=-1)
+    terms_NM = 1.0 / time_M[..., None, :] + c * time_M[..., None, :] * dev_sq_NM
+    weighted_N = jnp.einsum("...nm,...nm->...n", weights, terms_NM, precision=MATMUL_PRECISION)
+    neg_c_mink_N1 = (time_N * weighted_N)[..., None]  # (..., N, 1), = -c*<h,h>_L
+    denom_N1 = jnp.sqrt(floor_at(jnp.abs(neg_c_mink_N1), eps))  # (..., N, 1)
     z_NA = h_NA / denom_N1  # (..., N, A)
     # The identity above assumes *exactly* on-sheet points, which float storage cannot guarantee at
     # large radius (eps*x_0^2 > 1/c beyond ||s|| ~ 3e3 in float32 / ~1e8 in float64): for such inputs
@@ -492,11 +587,16 @@ def lorentz_residual(
     The naive ``-ave_0^2 + ||ave_s||^2`` subtracts two ``O(||s||^2)`` squares to reach an
     ``O(1/c)`` result, so its float32 relative error grows like ``eps * c * ||s||^2`` and the
     computed value flips sign above ``||s|| ~ 1e4`` — where the ``abs()`` hides the flip and the
-    ``eps`` floor silently inflates the output. Every term of the identity in the formula block
-    is ``O(||x - y||^2)`` instead, so the normalizer itself never cancels catastrophically at any radius.
-    The one float32 limit that remains is the difference ``x - y`` itself: once two points share
-    a direction at ``||s|| >~ 1e4`` the subtraction is dominated by rounding before either form
-    sees it, and float64 is required (the naive form is no better there).
+    ``eps`` floor silently inflates the output. Both terms of the identity in the formula block are
+    non-positive for ``w_y >= 0``, so combining them adds magnitudes rather than cancelling, and the
+    accuracy of the normalizer is the accuracy of the single term ``<x - y, x - y>_L``. That term is
+    evaluated by :func:`_lorentz_sqdist_polar` as ``4(P^2 + q^2)/c`` — the hyperbolic haversine form,
+    a sum of non-negatives read off the spatial radii — and **not** as the literal
+    ``-d_0^2 + ||d_s||^2``, which is itself a difference of two ``O(e^{2a})`` squares (``a`` the
+    scaled geodesic radius) and returns noise for a radial pair once ``a`` exceeds ~8 in float32.
+    The one float32 limit that remains is the *direction* the two points share: past ``||s|| ~ 1e4``
+    the chord ``||x_hat - y_hat||`` is dominated by rounding before either form sees it, and float64
+    is required (the naive form is no better there).
 
     For ``w_y >= 0`` the ``abs()`` and the ``eps`` floor are provably inactive: the difference of
     two on-sheet points is spacelike (``<x - y, x - y>_L >= 0``), so
@@ -525,10 +625,12 @@ def lorentz_residual(
     ave_A = x + w_y * y  # (..., A) where A = d+1
     # Exact for on-sheet x, y:  <x + w y, x + w y>_L = -(1+w)^2/c - w <x-y, x-y>_L.
     # The naive -ave_0^2 + ||ave_s||^2 subtracts two O(||s||^2) squares to reach an O(1/c) result
-    # (float32 rel. error ~ eps*c*||s||^2, sign flip above ||s|| ~ 1e4); here every rounded term is
-    # O(||x-y||^2) instead, so the normalizer itself never cancels catastrophically at any radius.
-    d_A = x - y  # (..., A)
-    dd_1 = -(d_A[..., 0:1] ** 2) + jnp.sum(d_A[..., 1:] ** 2, axis=-1, keepdims=True)  # (..., 1), >= 0 on-sheet
+    # (float32 rel. error ~ eps*c*||s||^2, sign flip above ||s|| ~ 1e4); both terms below are
+    # non-positive for w >= 0, so the combination itself adds magnitudes instead of cancelling.
+    # <x-y, x-y>_L is the polar form 4(P^2 + q^2)/c, not the literal -d_0^2 + ||d_s||^2, which is
+    # itself a difference of two O(e^{2a}) squares and keeps no float32 bits for a radial pair
+    # past a ~ 8 — the accuracy of the whole normalizer is the accuracy of this one term.
+    dd_1 = _lorentz_sqdist_polar(x, y, c)[..., None]  # (..., 1), >= 0 on-sheet
     mink_1 = -((1.0 + w_y) ** 2) / c - w_y * dd_1  # (..., 1)
     denom_1 = jnp.sqrt(floor_at(c * jnp.abs(mink_1), eps))  # (..., 1)
     z_A = ave_A / denom_1  # (..., A)

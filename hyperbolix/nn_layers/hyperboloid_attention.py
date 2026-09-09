@@ -456,6 +456,32 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
     Uses the Lorentzian inner product for similarity and weighted Lorentzian
     midpoint for aggregation — operating on full hyperboloid points throughout.
 
+    Float32 score floor
+    -------------------
+    The scores are ``2 + 2<Q,K>_L`` with ``<Q,K>_L = -Q_0 K_0 + <Q_s, K_s>``, a
+    difference of two Minkowski terms each of size ``cosh(a_q) cosh(a_k) / c`` —
+    writing ``a = sqrt(c) d`` for the geodesic radius of a point in nats — whose O(1)
+    difference is the only part the softmax sees. Unlike the other cancellations in
+    the library this one has **no GEMM-compatible cancellation-free spelling**: any
+    matrix product of the ambient coordinates returns the Gram matrix to absolute
+    ``eps``, so the angular term alone already carries an error of
+    ``eps sinh(a_q) sinh(a_k) / c``, the same order as the literal form. The absolute
+    error on one score is therefore
+
+        eps * cosh(a_q) * cosh(a_k) / (c * scale)
+
+    which with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``scale = 1``) is about 4.8e-3
+    at ``a = 6``, 0.26 at ``a = 8`` and 2.0 at ``a = 9``: from ``a ≈ 8`` the error
+    exceeds the score spread the softmax is meant to resolve, and the weights are
+    wrong while staying perfectly finite. Three remedies, cheapest first: keep the
+    radius down (a :class:`HyperboloidGyroRMSNorm` in front of the layer), use a
+    smaller ``c``, or pass ``score_dtype=jnp.float64`` to run the score computation as
+    a float64 island. The island fixes the *arithmetic* only — float32 *storage* of
+    the ambient coordinates carries a floor of the same order at large radius, so
+    beyond ``a ≈ 8`` the activations themselves want float64 as well. The exact
+    pairwise polar-frame evaluation, which would remove the cancellation outright, is
+    O(N·M·D) in memory and is not implemented here.
+
     Parameters
     ----------
     in_features : int
@@ -474,6 +500,12 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         Storage dtype of the trainable parameters (default: jnp.float32).
         This layer takes no ``manifold_module``, so compute precision follows the
         input array's dtype (the parameters are cast to it).
+    score_dtype : DTypeLike or None
+        When set, the Lorentzian similarity and the ``2 + 2<Q,K>_L`` score are
+        computed in this dtype and the scores are cast back before the softmax — an
+        opt-in float64 island against the floor above (``jnp.float64`` needs
+        ``jax.config.update("jax_enable_x64", True)``); ``None`` (the default) leaves
+        the score path in the working dtype, unchanged op for op.
     rngs : nnx.Rngs
         Random number generators.
     """
@@ -487,6 +519,7 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         init_bound: float | None = None,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
+        score_dtype: DTypeLike | None = None,
         rngs: nnx.Rngs,
     ):
         super().__init__(
@@ -498,14 +531,35 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
             param_dtype=param_dtype,
             rngs=rngs,
         )
+        self.score_dtype = score_dtype
         self.scale = nnx.Param(jnp.array(1.0, dtype=param_dtype))
         self.attn_bias = nnx.Param(jnp.array(0.0, dtype=param_dtype))
 
-    def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
-        eps = self.eps
-        B, N, H, _A = value_BNHA.shape
+    def _attention_weights(
+        self,
+        query_BNHA: Float[Array, "B N H A"],
+        key_BNHA: Float[Array, "B N H A"],
+        causal: bool = False,
+    ) -> Float[Array, "B N H M"]:
+        """Softmax weights of the Lorentzian similarity score ``2 + 2<Q,K>_L``.
 
-        # 1. Pairwise Lorentzian similarity: <Q,K>_L = -Q_0 K_0 + Q_s · K_s
+        Carries the float32 score floor documented on the class: the absolute error on
+        a score is ``eps * cosh(a_q) * cosh(a_k) / (c * scale)``, which crosses the
+        softmax's resolution around a geodesic radius of ``sqrt(c) d ≈ 8``. With
+        ``self.score_dtype`` set, the two einsums and the ``2 + 2<Q,K>_L`` /
+        scale / bias / causal-mask arithmetic run in that dtype and the scores are cast
+        back to the working dtype before the softmax, so only this step changes
+        precision; with ``score_dtype=None`` the path is the working dtype throughout,
+        op for op.
+        """
+        eps = self.eps
+        score_dtype = self.score_dtype
+        if score_dtype is not None:
+            work_dtype = query_BNHA.dtype
+            query_BNHA = query_BNHA.astype(score_dtype)
+            key_BNHA = key_BNHA.astype(score_dtype)
+
+        # Pairwise Lorentzian similarity: <Q,K>_L = -Q_0 K_0 + Q_s · K_s
         # This is the exact cancellation `_polar_frame` was written to avoid, with both halves
         # produced by a matmul — under TF32 the subtraction would amplify a ~1e-3 relative input
         # error instead of float32's ~1e-7. Both dots are therefore pinned HIGHEST: this is the
@@ -520,9 +574,20 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         attn_bias = self.attn_bias[...].astype(lorentz_inner_BNHM.dtype)
         scores_BNHM = (2.0 + 2.0 * lorentz_inner_BNHM) / (scale + eps) + attn_bias
         if causal:
+            N = scores_BNHM.shape[1]
             mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
             scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, -1e9)
-        attn_weights_BNHM = jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
+
+        if score_dtype is not None:
+            scores_BNHM = scores_BNHM.astype(work_dtype)
+        return jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
+
+    def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
+        eps = self.eps
+        B, N, H, _A = value_BNHA.shape
+
+        # 1. Pairwise Lorentzian similarity → softmax weights
+        attn_weights_BNHM = self._attention_weights(query_BNHA, key_BNHA, causal)  # (B, N, H, M)
 
         # 2. Weighted Lorentzian midpoint per head
         #    Transpose to (B, H, ...) layout for lorentz_midpoint which expects (..., M, A) and (..., N, M)

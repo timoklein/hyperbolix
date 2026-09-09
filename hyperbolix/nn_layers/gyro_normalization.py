@@ -177,6 +177,11 @@ class _GyroBatchNormBase(nnx.Module):
         """Ambient tangent-at-origin -> spatial vector (drops the time coordinate)."""
         return v_F[..., self._time_dims :]
 
+    def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
+        """Centering step ``(⊖mu) ⊕ x``, one point at a time. Overridden per manifold."""
+        inv_mu_F = self.manifold.scalar_mul(-1.0, mu_F, c)
+        return jax.vmap(self.manifold.addition, in_axes=(None, 0, None))(inv_mu_F, x_NF, c)
+
     # -- forward -------------------------------------------------------------------
 
     def __call__(
@@ -217,8 +222,7 @@ class _GyroBatchNormBase(nnx.Module):
             self.running_var[...] = jax.lax.stop_gradient(new_var).astype(self.running_var[...].dtype)
 
         # Center: (⊖mu) ⊕ x  (gyro-inverse via reflection through the origin).
-        inv_mu_F = self.manifold.scalar_mul(-1.0, mu_F, c)
-        x_cent_NF = jax.vmap(self.manifold.addition, in_axes=(None, 0, None))(inv_mu_F, x_NF, c)
+        x_cent_NF = self._center(mu_F, x_NF, c)
 
         # Scale: (gamma / sqrt(var + eps)) ⊗ x_centered.
         factor = self.gamma[...] / jnp.sqrt(var + self.eps)
@@ -239,18 +243,35 @@ class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
     spatial dimension ``D``. The batch mean is the closed-form Lorentz centroid
     (HELM, Chen et al. 2024) via :func:`lorentz_midpoint` — exact and JIT-friendly,
     matching the estimator the ILNN GyroBN reference uses in practice.
+
+    Centering uses :meth:`Hyperboloid.gyro_difference`. The general spelling
+    ``addition(scalar_mul(-1, mu), x)`` is an ambient Lorentz boost whose large
+    terms cancel when a far-away mean lies close to its batch points. The dedicated
+    difference uses a Cartesian inverse boost when either endpoint is exactly the
+    origin and the stable polar frame otherwise. The Cartesian branch preserves
+    the derivative with respect to an origin mean; the earlier value-only origin
+    fallback did not.
+
+    The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
+    :meth:`Hyperboloid.addition`: their base point is the learned bias and their result is
+    generally far from the origin, where the boost is well conditioned.
     """
 
     _time_dims = 1
 
     def __init__(self, manifold_module: Hyperboloid, num_features: int, **kwargs):
-        validate_hyperboloid_manifold(manifold_module, required_methods=_GYRO_BN_METHODS)
+        validate_hyperboloid_manifold(manifold_module, required_methods=(*_GYRO_BN_METHODS, "gyro_difference"))
         super().__init__(manifold_module, num_features, **kwargs)
 
     def _batch_mean(self, x_NF: Float[Array, "N F"], c: float) -> Float[Array, "F"]:
         n = x_NF.shape[0]
         weights_1N = jnp.full((1, n), 1.0 / n, dtype=x_NF.dtype)  # uniform centroid
         return lorentz_midpoint(x_NF, weights_1N, c)[0]
+
+    def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
+        """Center with the dedicated origin-Cartesian/polar gyro-difference."""
+        gyro_difference = cast("Hyperboloid", self.manifold).gyro_difference
+        return jax.vmap(gyro_difference, in_axes=(None, 0, None))(mu_F, x_NF, c)
 
 
 class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
@@ -260,18 +281,35 @@ class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
     centroid, so the batch mean is the closed-form **log-Euclidean** mean
     ``expmap_0(mean_i logmap_0(x_i))`` (the GyroBN reference's ``use_euclid_stats``
     mode): no iteration, fully vmap/JIT-clean.
+
+    Centering uses :meth:`ProperVelocity.gyro_difference`. PV gyroaddition is the
+    spatial part of a Lorentz boost, so the general inverse-addition spelling can
+    lose the small difference between a far-away mean and a nearby batch point.
+    The dedicated PV operation lifts both points exactly to the hyperboloid. It
+    inherits the Cartesian inverse-boost branch when either endpoint is exactly
+    the origin and the stable polar frame otherwise, including the repaired
+    derivative with respect to an origin mean.
+
+    The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
+    :meth:`ProperVelocity.addition`: their result is as far from the origin as their base point,
+    which is the regime the boost is good at.
     """
 
     _time_dims = 0
 
     def __init__(self, manifold_module: ProperVelocity, num_features: int, **kwargs):
-        validate_pv_manifold(manifold_module, required_methods=_GYRO_BN_METHODS)
+        validate_pv_manifold(manifold_module, required_methods=(*_GYRO_BN_METHODS, "gyro_difference"))
         super().__init__(manifold_module, num_features, **kwargs)
 
     def _batch_mean(self, x_NF: Float[Array, "N F"], c: float) -> Float[Array, "F"]:
         v_NF = jax.vmap(self.manifold.logmap_0, in_axes=(0, None))(x_NF, c)
         v_mean_F = jnp.mean(v_NF, axis=0)
         return self.manifold.expmap_0(v_mean_F, c)
+
+    def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
+        """Center through PV's exact lift to the origin-Cartesian/polar gyro-difference."""
+        gyro_difference = cast("ProperVelocity", self.manifold).gyro_difference
+        return jax.vmap(gyro_difference, in_axes=(None, 0, None))(mu_F, x_NF, c)
 
 
 # ======================================================================================

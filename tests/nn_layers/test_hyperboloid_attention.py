@@ -738,3 +738,206 @@ def test_linear_attention_attend_preserves_float32(causal):
     out_BNA = layer._attend(qkv_BNHA, qkv_BNHA, qkv_BNHA, c_attn=1.0, c_out=1.0, causal=causal)
     assert out_BNA.dtype == jnp.float32
     assert jnp.all(jnp.isfinite(out_BNA))
+
+
+def _far_cluster_qk(seed, batch, seq_len, num_heads, spatial_dim, radius, c):
+    """float32 (Q, K), each ``(B, N, H, D+1)``, at geodesic radius ``radius / sqrt(c)``.
+
+    Polar form ``x = (cosh(a), sinh(a) u) / sqrt(c)`` with ``|u| = 1``: exactly on the
+    sheet, and ``sqrt(c) d(0, x) = a`` by construction. Queries and keys share one axis
+    and sit within an angle ``~e^{-a}`` of it, so the pairwise ``<Q,K>_L`` stays O(1)
+    while each of its two Minkowski terms is ``O(cosh(a)^2 / c)`` — the cancellation
+    the score floor is about.
+    """
+    rng = np.random.default_rng(seed)
+    axis_D = rng.normal(size=spatial_dim)
+    axis_D /= np.linalg.norm(axis_D)
+
+    u_ND = axis_D[None, :] + rng.normal(size=(2 * seq_len, spatial_dim)) * 0.3 * float(np.exp(-radius))
+    u_ND /= np.linalg.norm(u_ND, axis=-1, keepdims=True)
+    a_N = radius + rng.normal(size=(2 * seq_len, 1)) * 0.05  # small radial spread
+    points_NA = np.concatenate([np.cosh(a_N), np.sinh(a_N) * u_ND], axis=-1) / np.sqrt(c)  # (2N, D+1)
+
+    shape = (batch, seq_len, num_heads, spatial_dim + 1)
+    return tuple(
+        jnp.asarray(np.broadcast_to(p_NA[None, :, None, :], shape), dtype=jnp.float32)
+        for p_NA in (points_NA[:seq_len], points_NA[seq_len:])
+    )
+
+
+def test_full_attention_score_dtype_float64_island():
+    """``score_dtype=jnp.float64`` recovers the float32 score error at large radius.
+
+    At ``sqrt(c) d = 9`` the two Minkowski terms behind ``<Q,K>_L`` are each about
+    ``cosh(9)^2 / c ≈ 3.3e7`` while their O(1) difference is all the softmax sees, so a
+    float32 score carries an absolute error of ``eps cosh(a_q) cosh(a_k) / (c scale)``
+    ≈ 4 — far more than the spread the softmax resolves. Nothing overflows and the
+    weights stay normalized; they are simply wrong. This is therefore an accuracy check
+    against an all-float64 run of the same layer on the same values, not a finiteness
+    check, and it also asserts that the float32 default path *fails* that accuracy bar,
+    so the test cannot pass vacuously.
+    """
+    if jnp.zeros((), jnp.float64).dtype != jnp.float64:  # pragma: no cover - conftest enables x64
+        pytest.skip("score_dtype=float64 needs jax_enable_x64")
+
+    B, N, H, D_out, c, radius = 2, 16, 2, 8, 0.5, 9.0
+    q32_BNHA, k32_BNHA = _far_cluster_qk(0, B, N, H, D_out, radius, c)
+    q64_BNHA, k64_BNHA = q32_BNHA.astype(jnp.float64), k32_BNHA.astype(jnp.float64)
+
+    plain = HyperbolicFullAttention(D_out + 1, D_out, num_heads=H, rngs=nnx.Rngs(0))
+    island = HyperbolicFullAttention(D_out + 1, D_out, num_heads=H, rngs=nnx.Rngs(0), score_dtype=jnp.float64)
+
+    w_ref_BNHM = plain._attention_weights(q64_BNHA, k64_BNHA)  # same values, float64 throughout
+    w_f32_BNHM = plain._attention_weights(q32_BNHA, k32_BNHA)
+    w_island_BNHM = island._attention_weights(q32_BNHA, k32_BNHA)
+
+    assert w_island_BNHM.dtype == jnp.float32, "the island must cast the scores back before the softmax"
+    assert float(w_ref_BNHM.max()) < 0.9, "reference softmax collapsed to one-hot; the comparison would be vacuous"
+
+    err_island = float(jnp.max(jnp.abs(w_island_BNHM.astype(jnp.float64) - w_ref_BNHM)))
+    err_f32 = float(jnp.max(jnp.abs(w_f32_BNHM.astype(jnp.float64) - w_ref_BNHM)))
+    assert err_island <= 1e-4, f"float64 island differs from the float64 reference by {err_island:.3e}"
+    assert err_f32 > 1e-4, f"float32 default path is already accurate ({err_f32:.3e}) — raise the radius"
+
+
+def _polar_points(a_arr, u_arr, c):
+    """On-sheet points ``x = (cosh a, sinh a * u)/sqrt(c)``, ``||u|| = 1``, in float64.
+
+    Exactly on the sheet by construction and ``sqrt(c) d(0, x) = a``, so the caller can place
+    the values at a *named* scaled geodesic radius rather than at a spatial norm.
+    """
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))
+    return jnp.concatenate([(jnp.cosh(a_arr) / sqrt_c)[..., None], (jnp.sinh(a_arr) / sqrt_c)[..., None] * u_arr], -1)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_full_attention_aggregates_far_values_accurately(seed):
+    """Values at ``sqrt(c) d = 9`` aggregate to within 3e-3 geodesic of the float64 run.
+
+    The score path is deliberately kept out of the way — queries and keys sit at scaled radius
+    ~1, where the float32 score floor documented on ``HyperbolicFullAttention`` is inactive
+    (measured softmax weight error 4e-7) — so what this test measures is the *aggregation*: the
+    two ``lorentz_midpoint`` calls in ``_attend``, one over the sequence and one over the heads.
+    ``_attend`` is called directly, as ``test_full_attention_score_dtype_float64_island`` calls
+    ``_attention_weights`` directly, so the projections do not move the values off the cloud.
+
+    The values form one radial cloud: a single geodesic ray, shared by every batch element and
+    every head, with the scaled radii spread by 0.3 along the sequence axis. Sharing the ray
+    across heads is deliberate — with a different ray per head the head-averaging midpoint is a
+    cancellation in its *numerator* (two ``O(6e3)`` spatial vectors summing to an ``O(1)`` one
+    near the origin), an unrelated float32 limit that no normalizer can fix.
+
+    Accuracy, not finiteness: the pre-fix midpoint returned ordinary, finite, on-manifold points
+    0.63 / 1.8 / 12.0 nats away from the float64 answer on these three seeds. Measured for the
+    library: 3.8e-4 ... 5.8e-4.
+    """
+    B, N, H, D, c = 2, 16, 2, 8, 0.5
+    k_q, k_k, k_u, k_a = jax.random.split(jax.random.PRNGKey(seed), 4)
+
+    def _near_origin(key):
+        u_BNHD = jax.random.normal(key, (B, N, H, D), dtype=jnp.float64)
+        u_BNHD = u_BNHD / jnp.linalg.norm(u_BNHD, axis=-1, keepdims=True)
+        a_BNH = 1.0 + 0.3 * jax.random.normal(key, (B, N, H), dtype=jnp.float64)
+        return _polar_points(a_BNH, u_BNHD, c)
+
+    query_BNHA, key_BNHA = _near_origin(k_q), _near_origin(k_k)
+    ray_D = jax.random.normal(k_u, (D,), dtype=jnp.float64)
+    ray_D = ray_D / jnp.linalg.norm(ray_D)
+    a_v_BNH = 9.0 + 0.3 * jax.random.normal(k_a, (B, N, H), dtype=jnp.float64)
+    value_BNHA = _polar_points(a_v_BNH, jnp.broadcast_to(ray_D, (B, N, H, D)), c)
+
+    layer = HyperbolicFullAttention(D + 1, D, num_heads=H, rngs=nnx.Rngs(0))
+    ref_BNA = layer._attend(query_BNHA, key_BNHA, value_BNHA, c_attn=c, c_out=c)
+    got_BNA = layer._attend(*(x.astype(jnp.float32) for x in (query_BNHA, key_BNHA, value_BNHA)), c_attn=c, c_out=c)
+
+    # Sanity: the scores themselves are float32-accurate, so any output gap is the aggregation's.
+    w_err = float(
+        jnp.max(
+            jnp.abs(
+                layer._attention_weights(query_BNHA.astype(jnp.float32), key_BNHA.astype(jnp.float32)).astype(jnp.float64)
+                - layer._attention_weights(query_BNHA, key_BNHA)
+            )
+        )
+    )
+    assert w_err < 1e-5, f"softmax weights already differ by {w_err:.2e}; the scores, not the midpoint, dominate"
+
+    dist_fn = jax.vmap(hyperboloid_f64.dist, in_axes=(0, 0, None))
+    err = float(jnp.max(dist_fn(got_BNA.astype(jnp.float64).reshape(-1, D + 1), ref_BNA.reshape(-1, D + 1), c)))
+    assert err < 3e-3, f"float32 attention output {err:.2e} geodesic from the float64 run"
+
+
+def _spread_directions(key, base_D, shape, sigma_rad):
+    """Unit directions at angle ``sigma_rad * N(0,1)`` from ``base_D``, on a random great circle.
+
+    ``cos(theta) base + sin(theta) perp`` with ``perp`` a unit vector orthogonal to ``base``, so
+    the angle to ``base`` is exactly ``theta`` — a spread named in radians, independent of ``D``.
+    """
+    d = base_D.shape[-1]
+    k_perp, k_ang = jax.random.split(key)
+    perp = jax.random.normal(k_perp, (*shape, d), dtype=jnp.float64)
+    perp = perp - jnp.sum(perp * base_D, axis=-1, keepdims=True) * base_D
+    perp = perp / jnp.linalg.norm(perp, axis=-1, keepdims=True)
+    theta = sigma_rad * jax.random.normal(k_ang, shape, dtype=jnp.float64)
+    return jnp.cos(theta)[..., None] * base_D + jnp.sin(theta)[..., None] * perp
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_full_attention_head_averages_far_values_on_different_rays_accurately(seed):
+    """Head averaging over a *different* value ray per head at ``sqrt(c) d = 9``: geodesic accuracy.
+
+    ``test_full_attention_aggregates_far_values_accurately`` shares one ray across heads, so its
+    head-averaging midpoint never sees an angular gap. Here each of the ``H = 4`` heads gets its
+    own ray, and the second ``lorentz_midpoint`` in ``_attend`` — the uniform average over heads —
+    aggregates four far points that differ in *direction*. That is the configuration a normalizer
+    built on a pivot decomposition around one reference point gets wrong: it reads the angular gap
+    as a difference of two ``O(cosh(9)^2/c)`` numbers.
+
+    The four rays are drawn 0.3 rad apart around a common base direction rather than
+    independently. Independent directions in ``D = 8`` are near-orthogonal, and the head average of
+    four far points pointing every which way lands near the origin — a cancellation in the
+    midpoint's *numerator*, which is the unrelated float32 limit the sibling test's docstring
+    names and which no normalizer can fix. At 0.3 rad the average stays out at radius ~9 and what
+    is measured is the normalizer. The rest of the construction is the sibling test's: queries and
+    keys near the origin so the score path stays out of the way (asserted below), values with the
+    same 0.3 radial spread, ``_attend`` called directly.
+
+    Accuracy, not finiteness. Measured (``logs/2026-09-08_hyperboloid_tangent_primitives/
+    step6c_angular_midpoint_measurements.out``, seeds 0-2, pairwise ray separations 0.02-0.48 rad):
+    library 5.3e-07 / 1.2e-06 / 8.6e-07, against 5.0e-01 / 1.1e-01 / 4.1e-01 for the pivot form.
+    The bound is 5e-6, above 4x the worst library value and five orders below the pivot form's.
+    """
+    B, N, H, D, c = 2, 16, 4, 8, 0.5
+    k_q, k_k, k_base, k_rays, k_rad = jax.random.split(jax.random.PRNGKey(seed), 5)
+
+    def _near_origin(key):
+        k_u, k_a = jax.random.split(key)
+        u_BNHD = jax.random.normal(k_u, (B, N, H, D), dtype=jnp.float64)
+        u_BNHD = u_BNHD / jnp.linalg.norm(u_BNHD, axis=-1, keepdims=True)
+        a_BNH = 1.0 + 0.3 * jax.random.normal(k_a, (B, N, H), dtype=jnp.float64)
+        return _polar_points(a_BNH, u_BNHD, c)
+
+    query_BNHA, key_BNHA = _near_origin(k_q), _near_origin(k_k)
+    base_D = jax.random.normal(k_base, (D,), dtype=jnp.float64)
+    base_D = base_D / jnp.linalg.norm(base_D)
+    rays_HD = _spread_directions(k_rays, base_D, (H,), 0.3)  # one ray per head, 0.3 rad apart
+    a_v_BNH = 9.0 + 0.3 * jax.random.normal(k_rad, (B, N, H), dtype=jnp.float64)
+    value_BNHA = _polar_points(a_v_BNH, jnp.broadcast_to(rays_HD, (B, N, H, D)), c)
+
+    layer = HyperbolicFullAttention(D + 1, D, num_heads=H, rngs=nnx.Rngs(0))
+    ref_BNA = layer._attend(query_BNHA, key_BNHA, value_BNHA, c_attn=c, c_out=c)
+    got_BNA = layer._attend(*(x.astype(jnp.float32) for x in (query_BNHA, key_BNHA, value_BNHA)), c_attn=c, c_out=c)
+
+    # Sanity: the scores themselves are float32-accurate, so any output gap is the aggregation's.
+    w_err = float(
+        jnp.max(
+            jnp.abs(
+                layer._attention_weights(query_BNHA.astype(jnp.float32), key_BNHA.astype(jnp.float32)).astype(jnp.float64)
+                - layer._attention_weights(query_BNHA, key_BNHA)
+            )
+        )
+    )
+    assert w_err < 1e-5, f"softmax weights already differ by {w_err:.2e}; the scores, not the midpoint, dominate"
+
+    dist_fn = jax.vmap(hyperboloid_f64.dist, in_axes=(0, 0, None))
+    err = float(jnp.max(dist_fn(got_BNA.astype(jnp.float64).reshape(-1, D + 1), ref_BNA.reshape(-1, D + 1), c)))
+    assert err < 5e-6, f"float32 head average {err:.2e} geodesic from the float64 run"

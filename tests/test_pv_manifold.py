@@ -119,6 +119,41 @@ def test_pv_gyroaddition_inverse(
     assert jnp.allclose(rhs + 1.0, zero + 1.0, atol=atol, rtol=rtol)
 
 
+def test_pv_gyro_difference_matches_the_ambient_gyroaddition(
+    pv_manifold: ProperVelocity,
+    curvature: float,
+    tolerance: tuple[float, float],
+    pv_points: jnp.ndarray,
+) -> None:
+    """``gyro_difference(x, y) == addition(scalar_mul(-1, x), y)`` on the 256-point fixture.
+
+    ``gyro_difference`` reads ``(⊖x) ⊕ y`` off the hyperboloid polar frame instead of forming the
+    ambient Lorentz boost. The two are the same map, which is what this pins: at the fixture's
+    radius (Gaussian coordinates, scaled radius ≲ 2) neither form cancels, so any disagreement
+    beyond rounding would be a wrong lift, not a conditioning difference.
+
+    Measured worst ``|new - ambient|`` on this grid: 1.8e-14 in float64 and 9.5e-6 in float32
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_new_test_measurements.out``,
+    section 2), against the fixture tolerances of 1e-7 and 4e-3. The large-radius separation the
+    change is actually for is measured in
+    :func:`test_pv_gyro_difference_is_accurate_at_large_radius_in_float32`.
+    """
+    atol, rtol = tolerance
+    gyro_difference = jax.vmap(pv_manifold.gyro_difference, in_axes=(0, 0, None))
+    add = jax.vmap(pv_manifold.addition, in_axes=(0, 0, None))
+    neg = jax.vmap(pv_manifold.scalar_mul, in_axes=(None, 0, None))
+
+    x, y = _split(pv_points, 2)
+
+    lhs = gyro_difference(x, y, curvature)
+    rhs = add(neg(-1.0, x, curvature), y, curvature)
+    assert jnp.allclose(lhs, rhs, atol=atol, rtol=rtol)
+
+    # ``(⊖x) ⊕ x`` is the origin: the case the boost reaches by cancelling three O(e^{2a}) terms.
+    coincident = gyro_difference(x, x, curvature)
+    assert jnp.allclose(coincident + 1.0, jnp.ones_like(coincident), atol=atol, rtol=rtol)
+
+
 # ---------------------------------------------------------------------------
 # Scalar multiplication
 # ---------------------------------------------------------------------------
@@ -663,6 +698,308 @@ def test_pv_dpi_norm_identity(curvature: float, pv_points: jnp.ndarray, pv_tange
     rhs = jnp.sum(pv_tangent_vectors**2, axis=-1) - curvature * beta**2 * xv**2
 
     assert jnp.allclose(lhs, rhs, atol=1e-4, rtol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Radial tangents at large scaled geodesic radius
+# ---------------------------------------------------------------------------
+
+
+def _radial_unit_tangent(a: float, c: float, dim: int) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """A point at scaled geodesic radius ``a`` and an *exactly* unit radial tangent there (f64).
+
+    Derivation. ``dist_0(x) = asinh(√c‖x‖)/√c``, so ``√c·d(0, x) = a`` means
+    ``‖x‖ = sinh(a)/√c`` and ``1/β_x = √(1 + c‖x‖²) = cosh(a)``. For a purely radial
+    ``v = x̂·(1/β_x)`` the radial/perp split gives ``perp(v) = 0`` and ``radial(v) = 1/β_x``, so
+    ``g_x(v, v) = (β_x·radial(v))² = 1``: the reference norm is exactly 1, no oracle needed.
+
+    ``1/β_x`` comes from the module's own ``_beta_inv`` rather than from ``cosh(a)`` so the
+    construction cannot drift from the implementation's own conventions.
+
+    The direction is a coordinate axis (as in ``test_pv_stability_at_large_norms``) so that the
+    float32 cast keeps ``v`` exactly radial. With a generic direction the cast leaves a
+    perpendicular residue of ``‖v‖·eps``, whose ``(‖v‖·eps)²/2`` contribution to the norm is a
+    float32 *storage* floor — measured 4.4e-5 at ``a = 12`` — that no arithmetic can remove.
+    """
+    u_D = jnp.zeros(dim, dtype=jnp.float64).at[0].set(1.0)
+    x_D = (jnp.sinh(jnp.asarray(a, dtype=jnp.float64)) / jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))) * u_D
+    return x_D, u_D * pv_impl._beta_inv(x_D, c)
+
+
+@pytest.mark.parametrize("a", [8.0, 10.0, 12.0])
+def test_pv_radial_unit_tangent_keeps_its_norm_in_float32(a: float) -> None:
+    """‖v‖_x = 1 for an exactly-unit radial tangent at ``√c·d`` ∈ {8, 10, 12}, in float32.
+
+    The metric form ``⟨v, v⟩ - c·β_x²·⟨x, v⟩²`` is, for a radial ``v``, the difference of two
+    terms of size ``cosh²(a)·‖v‖²`` reaching an answer of size ``‖v‖²``: at ``a = 8`` that
+    amplification is 2e6, well past float32's ~1e7 of headroom. The output was finite and
+    plausible throughout — a *norm*, positive, of the right order — which is why this asserts
+    accuracy against the known value 1 rather than finiteness.
+
+    Measured (c = 0.5, D = 16): ``|‖v‖_x - 1|`` ≤ 1.2e-7 and ``|g_x(v, v) - 1|`` ≤ 2.4e-7 at all
+    three radii. The pre-fix spelling returns 1.118 (a = 8) and exactly 0 (a = 10 and 12, the
+    form having rounded negative and been clipped), with ``g_x(v, v)`` off by 0.25, 1.0 and 1.5e3.
+    """
+    c, dim = 0.5, 16
+    pv32, pv64 = ProperVelocity(dtype=jnp.float32), ProperVelocity(dtype=jnp.float64)
+    x64_D, v64_D = _radial_unit_tangent(a, c, dim)
+
+    # The construction's own claim, checked before it is used as the reference.
+    assert float(pv64.tangent_norm(v64_D, x64_D, c)) == pytest.approx(1.0, abs=1e-12)
+
+    x32_D, v32_D = x64_D.astype(jnp.float32), v64_D.astype(jnp.float32)
+    assert float(pv32.tangent_norm(v32_D, x32_D, c)) == pytest.approx(1.0, abs=1e-5)
+    assert float(pv32.tangent_inner(v32_D, v32_D, x32_D, c)) == pytest.approx(1.0, abs=1e-5)
+
+
+@pytest.mark.parametrize("a", [8.0, 10.0])
+def test_pv_expmap_step_length_matches_the_tangent_norm_at_large_radius(a: float) -> None:
+    """``d(x, exp_x(v)) = ‖v‖_x`` for a radial ``v`` of length 0.1 at ``√c·d`` ∈ {8, 10}.
+
+    ``_expmap`` lands through the exact hyperboloid lift ``exp^H_X(V)[1:]``, so neither the step's
+    length nor its direction cancels. Two earlier spellings did. The one before ``_tangent_norm``
+    was rewritten took its geodesic *length* from the literal metric form and landed at 0.0849
+    instead of 0.1 at ``a = 8`` and 4.28 at ``a = 10``. The ambient one after it had the length
+    right but built the *direction* from ``dπ_x(v)``, whose two terms cancel by a factor
+    ``β_x ≈ e^{-a}`` on a radial tangent, and then landed through the gyro-addition on top of that:
+    measured 0.100011573 at ``a = 8`` (1.2e-4 relative, both backends) and 0.099952025 on the CPU /
+    0.099870228 on an A100 at ``a = 10`` (4.8e-4 and 1.3e-3 — the second is 1.3x this assert's
+    bound, which is how it surfaced). The current form is 2.0e-7 (CPU) / 1.3e-7 (GPU) at ``a = 8``
+    and 5.7e-7 at ``a = 10`` on both
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_expmap_test_margins_{cpu,gpu}.out``).
+
+    The yardstick is deliberately float64: ``ProperVelocity.dist`` between two points 0.1 apart
+    at this radius is *itself* a float32 cancellation (it returns 0.315 for a true 0.1 at
+    ``a = 8``), which this change does not address, so a float32 distance would measure that
+    instead. The float32 *storage* of the landing point is not the issue — a relative coordinate
+    perturbation of 6e-8 is a geodesic perturbation of the same order, five orders below the step.
+    """
+    c, dim = 0.5, 16
+    pv32, pv64 = ProperVelocity(dtype=jnp.float32), ProperVelocity(dtype=jnp.float64)
+    x64_D, unit_v64_D = _radial_unit_tangent(a, c, dim)
+    v64_D = 0.1 * unit_v64_D
+    x32_D, v32_D = x64_D.astype(jnp.float32), v64_D.astype(jnp.float32)
+
+    step = float(pv32.tangent_norm(v32_D, x32_D, c))
+    landed_D = pv32.expmap(v32_D, x32_D, c)
+    landing = float(pv64.dist(x64_D, landed_D.astype(jnp.float64), c))
+
+    assert landing == pytest.approx(step, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# dist / logmap through the exact hyperboloid lift
+# ---------------------------------------------------------------------------
+
+
+def _pair_at_scaled_radius(kind: str, a_x: float, a_y: float, c: float, dim: int) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Two float64 PV points at scaled geodesic radii ``a_x``, ``a_y`` in the named relative position.
+
+    ``d(0, x) = asinh(√c‖x‖)/√c``, so ``√c·d(0, x) = a`` means ``‖x‖ = sinh(a)/√c``. The four
+    geometries are the ones the polar frame treats differently: a generic pair, the two degenerate
+    angles (same ray and opposite rays, where the angular leg of ``sinh²(θ/2)`` vanishes), and a
+    right angle.
+    """
+    gen = np.random.default_rng([41, dim])
+    u_D = np.zeros(dim)
+    u_D[0] = 1.0
+    w_D = np.zeros(dim)
+    w_D[1] = 1.0
+    scale_x, scale_y = np.sinh(a_x) / np.sqrt(c), np.sinh(a_y) / np.sqrt(c)
+    if kind == "random":
+        d_D = gen.normal(size=dim)
+        v_D = d_D / np.linalg.norm(d_D)
+    elif kind == "parallel":
+        v_D = u_D
+    elif kind == "antiparallel":
+        v_D = -u_D
+    elif kind == "perpendicular":
+        v_D = w_D
+    else:
+        raise ValueError(kind)
+    return (
+        jnp.asarray(scale_x * u_D, dtype=jnp.float64),
+        jnp.asarray(scale_y * v_D, dtype=jnp.float64),
+    )
+
+
+@pytest.mark.parametrize(("a_max", "round_trip_bound"), [(3.0, 1e-12), (6.0, 3e-9)])
+def test_pv_logmap_carries_the_distance_and_inverts_expmap_in_float64(a_max: float, round_trip_bound: float) -> None:
+    """``‖log_x(y)‖_x == d(x, y)`` and ``exp_x(log_x(y)) == y``, float64, scaled radius ≤ ``a_max``.
+
+    These are the two identities that make the log map *the* inverse of the exponential map rather
+    than merely a vector of about the right size, and they are what the change to the exact
+    hyperboloid lift has to preserve. ``dist`` and ``logmap`` now read the same
+    ``hyperboloid._polar_frame``, so the first identity holds by construction; asserting it is what
+    would catch a lift that dropped a ``√c`` or transported into the wrong tangent space.
+
+    Measured over ``c ∈ {0.1, 0.5, 1, 3}``, dims 2/5/64 and four pair geometries: ``|‖log‖_x - d|``
+    ≤ 5.3e-15 at ``a ≤ 3`` and ≤1.8e-14 at ``a ≤ 6``.
+
+    The round trip is bounded separately and more loosely at ``a = 6``, but not because of anything
+    either map spells. ``_expmap`` is now the same exact lift and cancels nowhere, and feeding this
+    very float64 log map into an 80-bit exponential map still leaves 2.2e-13 there, so neither arm
+    of the composition is the floor. What is left is the conditioning of ``exp_x(v)`` for a *long*
+    step: ``‖log_x(y)‖_x`` reaches 30 at ``c = 0.1`` on this grid, and
+    ``cosh(√c‖v‖_x)·X + sinhc(√c‖v‖_x)·V`` then combines two terms of size ``e^(a_x + √c‖v‖_x)``
+    into a point of size ``e^(a_y)``. Measured 1.6e-13 at ``a ≤ 3`` and 7.5e-10 at ``a ≤ 6``,
+    identical on the CPU and on an A100, against 2.5e-13 / 6.5e-10 for the ambient ``_expmap`` this
+    replaced -- the bound is 4x the measured value
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_expmap_landing_{cpu,gpu}.out``,
+    section 2).
+    """
+    pv64 = ProperVelocity(dtype=jnp.float64)
+    worst_identity, worst_round_trip = 0.0, 0.0
+    for c in (0.1, 0.5, 1.0, 3.0):
+        for dim in (2, 5, 64):
+            for kind in ("random", "parallel", "antiparallel", "perpendicular"):
+                x_D, y_D = _pair_at_scaled_radius(kind, a_max, 0.6 * a_max, c, dim)
+                d = float(pv64.dist(x_D, y_D, c))
+                log_D = pv64.logmap(y_D, x_D, c)
+                worst_identity = max(worst_identity, abs(float(pv64.tangent_norm(log_D, x_D, c)) - d))
+                worst_round_trip = max(worst_round_trip, float(pv64.dist(pv64.expmap(log_D, x_D, c), y_D, c)))
+
+    assert worst_identity <= 1e-12
+    assert worst_round_trip <= round_trip_bound
+
+
+@pytest.mark.parametrize("a", [8.0, 10.0])
+def test_pv_dist_and_logmap_resolve_a_short_step_at_large_radius_in_float32(a: float) -> None:
+    """``d(x, y)`` and ``‖log_x(y)‖_x`` for two points 0.1 apart at ``√c·d`` ∈ {8, 10}, in float32.
+
+    Both used to be built on the gyro-difference ``z = (⊖x) ⊕ y``, a sum of three terms of size
+    ``e^(a+b)/√c`` cancelling down to ``sinh(θ)/√c``. The surviving significand is ``e^(a+b-θ)``
+    times smaller than the operands, so float32 (``ln(1/eps) = 15.9``) has nothing left at these
+    radii. The outputs were finite and plausible -- a distance, positive, of the right units -- which
+    is why this asserts accuracy against a float64 oracle rather than finiteness.
+
+    Measured with the pre-fix spelling on this construction: 0.0599 at ``a = 8`` (40 % low) and
+    4.383 at ``a = 10`` (4280 % high), against ≤1.1e-6 relative for the current one -- which is the
+    float32 *storage* floor of the pair itself (9.2e-7), so there is nothing further to win. The
+    bound below is ~10x the measured error.
+
+    The direction is a coordinate axis, as in :func:`_radial_unit_tangent` and for the same reason:
+    with a generic direction the float32 cast leaves a perpendicular residue of ~eps in each unit
+    vector, which the polar frame reads as a real angle and which moves the *true* distance of the
+    stored pair by 1.4e-5 relative at ``a = 10``. That is a property of the stored points, not of
+    the arithmetic, and it would be all this test measured.
+    """
+    c, dim, step = 0.5, 16, 0.1
+    pv32, pv64 = ProperVelocity(dtype=jnp.float32), ProperVelocity(dtype=jnp.float64)
+    x64_D, unit_v64_D = _radial_unit_tangent(a, c, dim)
+    y64_D = pv64.expmap(step * unit_v64_D, x64_D, c)
+
+    # The oracle's own claim, checked before it is used as the reference.
+    d_true = float(pv64.dist(x64_D, y64_D, c))
+    assert d_true == pytest.approx(step, rel=1e-9)
+
+    x32_D, y32_D = x64_D.astype(jnp.float32), y64_D.astype(jnp.float32)
+    assert float(pv32.dist(x32_D, y32_D, c)) == pytest.approx(d_true, rel=1e-5)
+    log32_D = pv32.logmap(y32_D, x32_D, c)
+    assert float(pv32.tangent_norm(log32_D, x32_D, c)) == pytest.approx(d_true, rel=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# gyro-difference / parallel transport through the exact hyperboloid lift
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("a", [9.0, 12.0])
+def test_pv_gyro_difference_is_accurate_at_large_radius_in_float32(a: float) -> None:
+    """``(⊖x) ⊕ y`` for two points 0.1 apart at ``√c·d`` ∈ {9, 12}, in float32.
+
+    This is the ``ProperVelocityGyroBatchNorm`` centering case: both operands far out, the result
+    ``O(1)``. The ambient ``addition(scalar_mul(-1, x), y)`` is the Lorentz boost ``Λ_{⊖x} y``,
+    three terms of size ``e^{2a}/√c`` that cancel *identically* at ``y = x``, so float32 has
+    nothing left there — and it returns a perfectly plausible point, which is why this asserts
+    accuracy against float64 rather than finiteness. Measured geodesic error of the ambient form on
+    this construction: **2.39 nats at a = 9** and **10.2 at a = 12**, for a true separation of 0.1.
+
+    The bound is 4x the float32 *storage* floor of the operands, ``eps32·sinh(a)/√c`` — the
+    accuracy at which the pair can be held at all, 6.8e-4 at ``a = 9`` and 1.4e-2 at ``a = 12``.
+    The new form measures 2.2e-9 / 7.6e-9 on the CPU and 7.3e-4 / 2.2e-8 on an A100, i.e. at or
+    below that floor on both backends; the CPU's near-exactness at ``a = 9`` is the coordinate-axis
+    construction, not something to assert
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_new_test_measurements{,_gpu}.out``,
+    section 1; the random-direction sweep over ``a ∈ {8, 9, 10, 12}`` and separations 0.1 to 1 is
+    ``step2c_pv_gyro_difference_accuracy.out``, section A, where the new form sits at 0.14x to
+    0.54x the same floor propagated to the result and the ambient one at 0.75 to 11 nats).
+
+    The direction is a coordinate axis, as in :func:`_radial_unit_tangent` and for the same reason:
+    a generic direction's float32 cast moves the *true* separation of the stored pair, which is a
+    property of the points rather than of the arithmetic.
+    """
+    c, dim, step = 0.5, 16, 0.1
+    pv32, pv64 = ProperVelocity(dtype=jnp.float32), ProperVelocity(dtype=jnp.float64)
+    x64_D, unit_v64_D = _radial_unit_tangent(a, c, dim)
+    y64_D = pv64.expmap(step * unit_v64_D, x64_D, c)
+
+    # The oracle's own claim, checked before it is used as the reference.
+    assert float(pv64.dist(x64_D, y64_D, c)) == pytest.approx(step, rel=1e-9)
+
+    x32_D, y32_D = x64_D.astype(jnp.float32), y64_D.astype(jnp.float32)
+    ref_D = pv64.gyro_difference(x32_D.astype(jnp.float64), y32_D.astype(jnp.float64), c)
+    got_D = pv32.gyro_difference(x32_D, y32_D, c)
+
+    floor = float(np.finfo(np.float32).eps) * float(np.sinh(a)) / float(np.sqrt(c))
+    err = float(pv64.dist(got_D.astype(jnp.float64), ref_D, c))
+    assert err < 4.0 * floor, f"float32 gyro_difference is {err:.3e} nats off, floor is {floor:.3e}"
+
+
+@pytest.mark.parametrize("a", [10.0, 14.0])
+def test_pv_ptransp_is_an_isometry_at_large_radius_in_float32(a: float) -> None:
+    """``‖PT_{x→y} v‖_y = ‖v‖_x`` and the transported direction, at ``√c·d`` ∈ {10, 14}, float32.
+
+    ``_ptransp`` used paper Eq. 12, which routes ``v`` through ``_dpi_x`` — whose two terms cancel
+    to a factor ``β_x ≈ e^{-a}`` of the operands on a radial ``v`` — and then multiplies the
+    survivor back up by ``(1+β_x)/β_x ≈ e^{a}``. It now transports the exact hyperboloid lift
+    instead. Measured isometry defect ``|‖PT v‖_y/‖v‖_x - 1|`` of the old spelling on random-direction
+    operands at ``c = 0.5``, ``D = 16``: **0.34 at a = 8, 22.8 at a = 10, 782 at a = 12 and 7047 at
+    a = 14**, with the transported direction flipped outright (angle π in the PV metric) at
+    ``a ∈ {10, 12}`` — a momentum with the wrong length *and* the wrong sign, still finite and
+    still plausible, which is why this asserts accuracy and not finiteness. The new form is
+    9.4e-6 / 4.2e-5 / 4.8e-4 / 1.8e-3 on the same grid
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_ptransp_accuracy.out``).
+
+    On the coordinate-axis construction used here both quantities are 4.0e-8 or below, identical
+    on the CPU and on an A100, so the direction bound is 1.6e-7 = 4x the worst observed
+    (``step2c_pv_new_test_measurements{,_gpu}.out``, section 3). The isometry bound is the looser
+    1e-4: what remains at ``a = 14`` is ``Hyperboloid.ptransp``'s own float32 behaviour near the
+    representation floor, measured at 1.803e-3 on the lifted operands against 1.804e-3 here
+    (``step2c_pv_ptransp_accuracy.out``, section D), so this construction should not be tightened
+    to the axis-aligned value.
+
+    In float64 the new and old spellings agree to 1.2e-14 relative over ``c ∈ {0.1, 0.5, 1, 3}``,
+    dims 2/5/64, four pair and three tangent geometries at ``a ≤ 3``, which pins the rewrite to a
+    re-spelling (``step2c_pv_ptransp_equivalence.out``).
+    """
+    c, dim, step = 0.5, 16, 0.05
+    pv32, pv64 = ProperVelocity(dtype=jnp.float32), ProperVelocity(dtype=jnp.float64)
+    x64_D, radial_v64_D = _radial_unit_tangent(a, c, dim)
+
+    gen = np.random.default_rng([151, dim])
+    generic_v64_D = jnp.asarray(gen.normal(size=dim), dtype=jnp.float64)
+    generic_v64_D = generic_v64_D / pv64.tangent_norm(generic_v64_D, x64_D, c)
+    t64_D = jnp.asarray(gen.normal(size=dim), dtype=jnp.float64)
+    t64_D = t64_D / pv64.tangent_norm(t64_D, x64_D, c)
+    y64_D = pv64.expmap(step * t64_D, x64_D, c)
+
+    x32_D, y32_D = x64_D.astype(jnp.float32), y64_D.astype(jnp.float32)
+    xw_D, yw_D = x32_D.astype(jnp.float64), y32_D.astype(jnp.float64)
+
+    for v64_D in (radial_v64_D, generic_v64_D):
+        v32_D = v64_D.astype(jnp.float32)
+        vw_D = v32_D.astype(jnp.float64)
+        # The float64 leg is fed the same float32 numbers, so only the precision differs.
+        ref_D = pv64.ptransp(vw_D, xw_D, yw_D, c)
+        got_D = pv32.ptransp(v32_D, x32_D, y32_D, c).astype(jnp.float64)
+
+        src = float(pv64.tangent_norm(vw_D, xw_D, c))
+        iso = abs(float(pv64.tangent_norm(got_D, yw_D, c)) / src - 1.0)
+        assert iso < 1e-4, f"transport is {iso:.3e} off being an isometry at a = {a}"
+
+        direction = float(pv64.tangent_norm(got_D - ref_D, yw_D, c)) / float(pv64.tangent_norm(ref_D, yw_D, c))
+        assert direction < 1.6e-7, f"transported vector is {direction:.3e} relative off float64"
 
 
 # ---------------------------------------------------------------------------

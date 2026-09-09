@@ -49,10 +49,24 @@ Ungar. "A Gyrovector Space Approach to Hyperbolic Geometry." 2022.
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, cosh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt, sinh
+from ..utils.math_utils import (
+    MIN_NORM,
+    cosh,
+    floor_at,
+    radial_perp_decomposition,
+    safe_hypot_norm,
+    safe_norm,
+    sinh,
+)
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
-from ._gyrovector_core import _gyration
+from .hyperboloid import _addition as _hyperboloid_addition
+from .hyperboloid import _dist_stable as _hyperboloid_dist
+from .hyperboloid import _expmap as _hyperboloid_expmap
+from .hyperboloid import _gyro_difference as _hyperboloid_gyro_difference
+from .hyperboloid import _logmap as _hyperboloid_logmap
+from .hyperboloid import _ptransp as _hyperboloid_ptransp
+from .isometry_mappings import pv_to_hyperboloid
 from .protocol import ScalarCurvature
 
 # Version selection constant. PV currently has a single canonical implementation,
@@ -103,12 +117,13 @@ def _safe_norm(x: Float[Array, "dim"]) -> Float[Array, ""]:
     """Euclidean norm floored at ``MIN_NORM``, for the sites that divide by it.
 
     ``floor_at(safe_norm(x), MIN_NORM)``, not the old ``sqrt(sum(x**2) + MIN_NORM**2)``. The floor
-    is what the callers need -- ``_scalar_mul``, ``_expmap_0``, ``_logmap_0`` and ``_logmap`` all
-    form an ``f(arg)/arg`` whose limit is 1 only while the two are the same floored quantity --
+    is what the callers need -- ``_scalar_mul``, ``_expmap_0`` and ``_logmap_0`` all form an
+    ``f(arg)/arg`` whose limit is 1 only while the two are the same floored quantity --
     but making it multiplicative removes the old spelling's two defects: ``sum(x**2)`` overflowed
     float32 above coordinate 1.8e19, and the additive ``1e-30`` perturbed every value between
-    ``MIN_NORM`` and ``10·MIN_NORM``. ``_dist``/``_dist_0`` do not divide by the norm and use the
-    unfloored ``safe_norm`` directly.
+    ``MIN_NORM`` and ``10·MIN_NORM``. ``_dist_0`` does not divide by the norm and uses the
+    unfloored ``safe_norm`` directly; ``_dist`` and ``_logmap`` take no norm of their own at all
+    (they defer to the hyperboloid polar frame, see there).
 
     Returns the norm with the last axis **reduced away**. The callers that divide a ``(..., dim)``
     vector by it re-add the axis with ``[..., None]``, which is a no-op in value for the single
@@ -121,6 +136,14 @@ def _dpi_x(x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature) -
     """Differential of π: PV → Poincaré (paper Eq. 7 with K = -c).
 
     dπ_x(v) = β_x/(1+β_x)·v - c·β_x³/(1+β_x)²·⟨x, v⟩·x
+
+    **No longer on any transport or exponential path.** For a radial ``v`` the two terms' radial
+    coefficients cancel down to a factor ``β_x ≈ e^{-a}`` of the operands, so the relative error of
+    the result grows like ``eps·e^{a}`` (quantified at :func:`_expmap`). :func:`_expmap` and
+    :func:`_ptransp` both went through it and now go through the exact hyperboloid lift instead.
+    What is left is the chart map's own differential, which is what
+    ``tests/test_pv_manifold.py::test_pv_dpi_norm_identity`` pins: ``‖dπ_x(v)‖`` is the Poincaré
+    image of the PV tangent norm, an identity of the chart, not a step anything takes.
     """
     beta_x = _beta(x, c)
     xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
@@ -136,18 +159,72 @@ def _dpi_x(x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature) -
 
 
 def _addition(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-    """PV gyroaddition x ⊕_U y (paper Eq. 2 with K = -c).
+    """PV gyroaddition ``x ⊕_U y`` (paper Eq. 2 with K = -c), as the spatial part of the Lorentz boost.
 
-    x ⊕ y = x + y + {(1 - β_y)/β_y + c·β_x/(1+β_x)·⟨x, y⟩}·x
+    **The identity.** Ungar builds the proper-velocity gyrogroup out of the Lorentz boosts, and the
+    two spellings are the same expression term for term, not merely the same map. Paper Eq. 2 is
+    ``x ⊕ y = x + y + {(1/β_y - 1) + c·β_x/(1+β_x)·⟨x, y⟩}·x``;
+    :func:`~hyperbolix.manifolds.hyperboloid._addition` is the transvection ``Λ_X Y``, whose spatial
+    part is ``√c·x·Y₀ + y + c·⟨x, y⟩/(1 + √c·X₀)·x``. On the exact lift
+    ``X = pv_to_hyperboloid(x, c) = (√(1/c + ‖x‖²), x)`` (see :func:`_expmap`) one has
+    ``√c·X₀ = √(1 + c‖x‖²) = 1/β_x`` and ``√c·Y₀ = 1/β_y``, so the two agree coefficient by
+    coefficient; the ambient form only splits ``(1/β_y)·x`` into ``x + (1/β_y - 1)·x``. Measured in
+    float64 over ``c ∈ {0.1, 0.5, 1, 3}``, dims 2/5/64, five pair geometries and 5 seeds:
+    ≤1.4e-13 relative at ``a ≤ 3`` and ≤5.8e-12 at ``a ≤ 6`` — the two forms' own rounding on the
+    anti-parallel case, not a difference of law
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_addition_is_the_boost.out``).
+
+    **Why the boost.** It is the same result read off the hyperboloid, so the PV gyro-ops and
+    :func:`_dist`/:func:`_logmap`/:func:`_expmap` now all speak through one lift instead of two
+    parallel ambient spellings, and :func:`_expmap` needs the lift anyway; the boost's own
+    conditioning is documented at :func:`~hyperbolix.manifolds.hyperboloid._addition`. Accuracy is
+    a wash to slightly better: against an 80-bit ``np.longdouble`` reference on the same grid the
+    worst case is the anti-parallel pair, 8.8e-14 for this form against 1.6e-13 for the ambient one
+    at ``a ≤ 3`` and 2.4e-11 against 2.9e-11 at ``a ≤ 6``; every other geometry is at 1e-15 for both
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_expmap_equivalence.out``,
+    sections A and B).
+
+    ``x ⊕ 0`` and ``0 ⊕ y`` stay exact up to one ulp: with ``y = 0`` the boost's second and third
+    terms vanish and the first is ``(√c·Y₀)·x`` with ``√c·Y₀ = √c·√(1/c)``, which is 1 only to
+    within the curvature round trip — measured 0 ulp in float64 and 1 ulp in float32 over
+    ``c ∈ {0.1, 0.5, 1, 3}``, against 0 ulp for the ambient form, which reached ``x`` by adding an
+    exactly-zero coefficient. With ``x = 0`` every term carrying ``x_s`` is exactly zero and the
+    result is ``y`` bit for bit in both dtypes.
+
+    **The near-identity limit is not covered here.** ``(⊖x) ⊕ y`` with ``y ≈ x`` cancels the boost's
+    three ``O(e^{2a})`` terms identically — the configuration
+    :func:`~hyperbolix.manifolds.hyperboloid._gyro_difference` exists for. The ambient PV spelling
+    cancels in exactly the same place, so this is unchanged by the rewrite; :func:`_gyro_difference`
+    is the spelling to reach for there, and it is what ``ProperVelocityGyroBatchNorm`` centres with.
     """
-    beta_x = _beta(x, c)
-    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
+    return _hyperboloid_addition(pv_to_hyperboloid(x, c), pv_to_hyperboloid(y, c), c)[1:]
 
-    # Numerically robust form for (1 - β_y)/β_y = 1/β_y - 1 = √(1+c||y||²) - 1.
-    # This avoids catastrophic cancellation for ||y|| ≈ 0.
-    beta_y_inv_minus_one = _beta_inv(y, c) - 1.0
-    coef = beta_y_inv_minus_one + c * beta_x / (1.0 + beta_x) * xy
-    return x + y + coef * x
+
+def _gyro_difference(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
+    """PV gyro-difference ``(⊖x) ⊕ y``, as the spatial part of the hyperboloid gyro-difference.
+
+    ``⊖x = (-1) ⊗ x = -x`` in PV, so the result is mathematically identical to
+    ``addition(scalar_mul(-1, x), y)``. That ambient boost spelling can lose the small
+    difference of two far points, so it is not evaluated here. The exact isometry
+    ``x ↦ X = (√(1/c + ‖x‖²), x)`` gives
+
+        (⊖x) ⊕_U y = ((⊖X) ⊕_H Y)[1:]
+
+    exactly. The lifted hyperboloid operation uses its Cartesian inverse boost
+    when either endpoint is exactly the origin and the stable polar frame
+    otherwise. The Cartesian branch preserves the base-point derivative at the
+    origin; the earlier value-only origin fallback erased it. PV inherits both
+    branches and their derivatives through the lift.
+
+    Args:
+        x: PV point, shape (dim,) — the point subtracted
+        y: PV point, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Gyrovector difference ``(⊖x) ⊕ y``, shape (dim,)
+    """
+    return _hyperboloid_gyro_difference(pv_to_hyperboloid(x, c), pv_to_hyperboloid(y, c), c)[1:]
 
 
 def _scalar_mul(t: Float[Array, ""] | float, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -169,25 +246,44 @@ def _scalar_mul(t: Float[Array, ""] | float, x: Float[Array, "dim"], c: ScalarCu
 
 
 def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Geodesic distance d(x, y) on PV (paper Eq. 13, asinh form).
+    """Geodesic distance d(x, y) on PV (paper Eq. 13), evaluated through the exact hyperboloid lift.
 
-    The atanh form ``(2/√c)·atanh(√c·||π(-x⊕y)||)`` is algebraically equal to
-    ``(1/√c)·asinh(√c·||-x⊕y||)`` (both follow from the tanh/sinh half-angle
-    identities). We use the asinh form because jnp.asinh is stable over all
-    of R while atanh requires boundary clamping.
+    Paper Eq. 13 is ``(1/√c)·asinh(√c·‖z‖)`` with the gyro-difference ``z = (⊖x) ⊕ y``,
+    algebraically equal to the atanh form ``(2/√c)·atanh(√c·‖π(z)‖)`` by the sinh/tanh half-angle
+    identity. **Neither is evaluated here.**
 
-    The norm is :func:`~hyperbolix.utils.math_utils.safe_norm`, not ``jnp.linalg.norm``: at
-    ``x == y == 0`` the gyro-difference ``-x ⊕ y`` is exactly the zero vector, where
-    ``linalg.norm``'s VJP is ``0/0 = NaN``. ``safe_norm`` returns an exact ``0`` there with an
-    exactly-zero gradient — the correct subgradient choice at the distance's non-smooth point.
-    It is used in preference to the module's floored ``_safe_norm`` because the norm is not a
-    divisor here, so ``d(x, y) == 0`` is now exact instead of ``MIN_NORM``-floored, and a
-    genuinely small separation is no longer rounded up to ``1e-15``.
+    **Why the gyro-difference form cancels.** ``z = -x + y + {(1/β_y - 1) + c·β_x/(1+β_x)·⟨-x, y⟩}·(-x)``
+    is a sum of three terms each of size ``e^(a+b)/√c`` -- with ``a = √c·d(0, x)``, ``b = √c·d(0, y)``
+    -- that has to cancel down to ``sinh(θ)/√c``, ``θ = √c·d(x, y)``. The surviving significand is
+    ``e^(a + b - θ)`` times smaller than the operands, i.e. twice the Gromov product, so all
+    precision is gone once ``a + b - θ`` passes ``ln(1/eps)``: 15.9 in float32, 36.0 in float64.
+    This is the same failure :func:`~hyperbolix.manifolds.hyperboloid._polar_frame` documents for
+    ``⟨x, y⟩_L``, and it is the same failure for a concrete reason: PV coordinates *are* the
+    hyperboloid spatial part. Measured at ``c = 0.5``, dim 16, on two points a true 0.1 apart along
+    a coordinate axis (which survives the float32 cast exactly, so only the arithmetic is measured),
+    float32 returned **0.0599 at a = 8**, **4.383 at a = 10** and **10.56 at a = 12**.
+
+    **Why the lift is exact.** ``pv_to_hyperboloid`` is an isometry that appends the on-sheet time
+    slot ``√(1/c + ‖x‖²)`` -- a sum of positives, no cancellation of its own -- and leaves the
+    coordinates alone, so ``d_PV(x, y) = d_H(X, Y)`` holds *exactly*, not to some tolerance. The
+    hyperboloid distance runs in the polar (haversine) frame, where ``sinh²(θ/2)`` is a sum of two
+    non-negative terms. Same construction, same points: **≤1.0e-6 relative at all three radii**,
+    against a float32 *storage* floor for the pair itself of 9.2e-7 -- there is nothing left to win
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_accuracy.out``).
+
+    In float64 the new and old spellings agree to ≤8.1e-14 absolute at ``a ≤ 3`` over dims 2/5/64
+    and ``c ∈ {0.1, 0.5, 1, 3}``, which pins the change to a re-spelling rather than a redefinition.
+    At ``a ≤ 6`` they part by up to 3.6e-11, and an 80-bit reference attributes all of it to the old
+    arm: against it the new form is within 7.1e-15 everywhere on that grid, the old within 3.6e-11
+    (``step2c_pv_equivalence.out``, section B).
+
+    ``d(x, y) == 0`` stays *exactly* zero at ``x == y`` with an exactly-zero gradient, for the same
+    structural reason it did before: identical inputs give identical spatial radii and an identical
+    unit direction, so the frame's radial gap and chord are both exactly 0 and
+    ``2·arcsinh(hypot(0, 0))/√c`` is 0 through a ``safe_hypot`` whose VJP at the origin is zero.
+    No coincidence ``where`` is needed on either side.
     """
-    sqrt_c = jnp.sqrt(c)
-    z = _addition(-x, y, c)
-    z_norm = safe_norm(z)
-    return jnp.asinh(sqrt_c * z_norm) / sqrt_c
+    return _hyperboloid_dist(pv_to_hyperboloid(x, c), pv_to_hyperboloid(y, c), c)
 
 
 def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -240,67 +336,146 @@ def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
 
 
 def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-    """Exponential map at x (paper Eq. 10 with K = -c).
+    """Exponential map at x (paper Eq. 10 with K = -c), as the spatial part of the hyperboloid map.
 
-    Uses the simplified form
+    Paper Eq. 10, simplified with ``(1+β_x)/β_x·‖dπ_x(v)‖ = √g_x(v, v)``, reads
+    ``exp_x(v) = x ⊕ ((1+β_x)/β_x · sinhc(√c·‖v‖_x) · dπ_x(v))`` with ``sinhc(t) = sinh(t)/t``.
+    **That form is not evaluated here.** Its geodesic *length* was already cancellation-free (it
+    comes from :func:`_tangent_norm`), but the *direction* is not: for a radial ``v`` the two terms
+    of ``dπ_x(v) = β_x/(1+β_x)·v - c·β_x³/(1+β_x)²·⟨x, v⟩·x`` have radial coefficients
+    ``β_x/(1+β_x)`` and ``β_x(1-β_x)/(1+β_x)``, which cancel down to ``β_x²/(1+β_x)`` — a factor
+    ``β_x ≈ e^{-a}`` of the operands, so the relative error of the direction grows like ``eps·e^a``.
+    The landing ``x ⊕ ·`` then adds its own ``eps·e^{2a}`` (the boost's three-term conditioning,
+    see :func:`_addition`). Measured at ``c = 0.5``, dim 16, on a radial step of true length 0.1:
+    the ambient spelling's ``dπ`` is 5.9e-5 relative off at ``a = 8`` and 5.9e-4 at ``a = 10`` in
+    float32 (``logs/2026-09-08_hyperboloid_tangent_primitives/step6b_pv_expmap_isolation.out``), and
+    the step it landed measured 0.100011573 at ``a = 8``, 0.099952025 on the CPU and 0.099870228 on
+    an A100 at ``a = 10``, and 0.098831346 at ``a = 12`` — the ``a = 10`` figure is 1.3x the
+    ``rel=1e-3`` bound of
+    ``test_pv_expmap_step_length_matches_the_tangent_norm_at_large_radius[10.0]``, which is how the
+    cancellation surfaced. The output stayed finite and plausible — a step length, positive, of the
+    right order — so the assert is on accuracy against float64, not on finiteness.
 
-        exp_x(v) = x ⊕ ((1+β_x)/β_x · sinhc(√c·√g_x(v,v)) · dπ_x(v))
+    **The lift.** ``pv_to_hyperboloid`` sends ``x ↦ X = (√(1/c + ‖x‖²), x)``, exactly and without
+    cancellation of its own, and a PV tangent vector ``v`` at ``x`` lifts to the unique hyperboloid
+    tangent ``V = (⟨x, v⟩/X₀, v)`` — the time slot is forced by ``⟨V, X⟩_L = -X₀V₀ + ⟨x, v⟩ = 0``.
+    The lift is an isometry and its differential is exact on spatial parts, so
 
-    with sinhc(t) = sinh(t)/t. This exploits the identity
-    ``(1+β_x)/β_x · ||dπ_x(v)|| = √g_x(v, v)`` (proved by expanding both sides
-    against the Riemannian metric), which avoids dividing by ||dπ_x(v)||
-    — potentially tiny — and keeps the result well-defined at v = 0.
+        exp^PV_x(v) = exp^H_X(V)[1:]
+
+    holds *exactly*, and :func:`~hyperbolix.manifolds.hyperboloid._expmap` lands
+    ``cosh(√c‖V‖_X)·X + sinhc(√c‖V‖_X)·V`` — a two-term combination of the base point and the
+    tangent vector, with no ``O(e^{a})`` cancellation in the direction — before rebuilding the time
+    slot with :func:`~hyperbolix.manifolds.hyperboloid._proj`. Its ``‖V‖_X`` is
+    :func:`~hyperbolix.manifolds.hyperboloid._tangent_norm`, which reads the same radial/perp split
+    as this module's :func:`_tangent_norm` with ``√c·X₀ = 1/β_x``, so the step *length* is the one
+    this map already had.
+
+    ``V₀`` does not reach the output: ``_tangent_norm`` eliminates ``v₀`` through tangency and the
+    closing ``_proj`` rebuilds the time slot from the spatial part, so a zero time slot returns a
+    bit-identical answer (measured 0 ulp over ``c ∈ {0.1, 0.5, 1, 3}``, dims 2/5/64, both dtypes,
+    radii ≤ 6 and step lengths 1e-3…50). XLA does not eliminate it for us — the optimized HLO keeps
+    the extra ``dot`` — and it is paid for: ``vmap(expmap)`` over 8192 float32 points at dim 64
+    costs 4.27 ms with the exact slot against 3.47 ms with a zero one, both under the 5.14 ms of the
+    ambient spelling this replaces (``step2c_pv_expmap_time_slot.out``). It is spelled out anyway,
+    because ``V₀ = ⟨x, v⟩/X₀`` is what makes ``V`` *the* lift of ``v`` rather than an arbitrary
+    extension of it, and because the ``v₀``-blind contract is the hyperboloid map's to keep, not
+    this one's to assume.
+
+    **Measured.** Float32 landing error ``|d(x, exp_x(v)) - ‖v‖_x| / ‖v‖_x`` against a float64
+    yardstick, ``c = 0.5``, dim 16, radial tangent of Riemannian length 0.1, worst over 4 random
+    base directions per radius, CPU / A100 (``step2c_pv_expmap_landing_{cpu,gpu}.out``)::
+
+        a       ambient            this form          float32 storage floor of the pair
+        8       3.4e-4 / 2.3e-4    3.2e-7 / 3.2e-7    2.5e-7
+        10      1.2e-3 / 4.9e-4    2.7e-5 / 3.1e-5    2.8e-5
+        12      1.5e-2 / 6.1e-3    1.7e-3 / 1.4e-3    6.0e-4
+
+    The floor is the geodesic error of the float32-*stored* exact landing point, which no arithmetic
+    can remove; this form sits within 2.9x of it at every radius, where the ambient one was 25x to
+    1400x above it. On a *generic* tangent direction the two are indistinguishable (both at the
+    floor): the ``dπ_x`` cancellation is radial-only, and a generic step's storage floor is ``e^a``
+    times larger relative to the step, so it swamps the arithmetic.
+
+    In float64 the new and old spellings agree to ≤3.2e-14 relative at ``a ≤ 3`` over
+    ``c ∈ {0.1, 0.5, 1, 3}``, dims 2/5/64, five tangent geometries and step lengths 1e-3…1, which
+    pins this to a re-spelling; at ``a ≤ 6`` an 80-bit reference puts this form at 6.0e-15 and the
+    ambient one at 3.9e-14 (``step2c_pv_expmap_equivalence.out``, sections A and B). Its float32
+    gradients track float64 to ≤1.3e-6 relative with no non-finite entry, against ≤6.4e-6 for the
+    ambient form (``step2c_pv_expmap_gradients.out``).
+
+    The float64 round trip ``exp_x(log_x(y)) = y`` is *not* what this improves: 1.6e-13 at ``a ≤ 3``
+    and 7.5e-10 at ``a ≤ 6``, against 2.5e-13 and 6.5e-10 for the ambient form. That composition is
+    limited by neither map's spelling but by the conditioning of ``exp_x`` for a *long* step, and
+    the same 80-bit check leaves 2.2e-13 when the exponential map is taken out of it — see
+    ``tests/test_pv_manifold.py::test_pv_logmap_carries_the_distance_and_inverts_expmap_in_float64``.
+
+    ``exp_x(0) = x`` stays bit-exact (measured 0 ulp, both dtypes): ``‖V‖_X`` is floored at
+    ``MIN_NORM``, ``cosh(√c·1e-15)`` is exactly 1 in both dtypes and the ``sinhc`` term is
+    multiplied by an exactly-zero ``V``, so the spatial part is ``1.0·x`` and ``_proj`` leaves it
+    alone.
     """
-    sqrt_c = jnp.sqrt(c)
-    beta_x = _beta(x, c)
-
-    dpi_v = _dpi_x(x, v, c)
-
-    # g_x(v, v) = ⟨v, v⟩ - c·β_x²·⟨x, v⟩²
-    xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
-    g_vv = jnp.dot(v, v, precision=MATMUL_PRECISION) - c * beta_x**2 * xv**2
-    # `safe_sqrt` + `floor_at` rather than the old `sqrt(floor_at(g_vv, 0) + MIN_NORM**2)`: the
-    # additive 1e-30 dominated any genuinely small metric norm (a form of 1e-40 came back as
-    # 1e-15), while the multiplicative floor keeps the one property `arg` actually needs — being
-    # a nonzero divisor for `sinh(arg)/arg` below. `safe_sqrt` supplies the finite (zero)
-    # derivative at g_vv = 0 that the additive term used to provide.
-    g_norm = floor_at(safe_sqrt(floor_at(g_vv, 0.0)), MIN_NORM)
-    arg = sqrt_c * g_norm
-
-    # sinhc(arg) = sinh(arg)/arg; the safe norm guarantees arg > 0.
-    sinhc = sinh(arg) / arg
-
-    coef = (1.0 + beta_x) / beta_x * sinhc
-    return _addition(x, coef * dpi_v, c)
+    x_H = pv_to_hyperboloid(x, c)
+    # Tangency ⟨V, X⟩_L = -X₀·V₀ + ⟨x, v⟩ = 0 fixes the time slot; X₀ ≥ 1/√c > 0, so no floor.
+    v0 = jnp.dot(x, v, precision=MATMUL_PRECISION) / x_H[0]
+    v_H = jnp.concatenate([v0[None], v])
+    return _hyperboloid_expmap(v_H, x_H, c)[1:]
 
 
 def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-    """Logarithmic map at x (paper Eq. 11 with K = -c).
+    """Logarithmic map at x (paper Eq. 11 with K = -c), as the spatial part of the hyperboloid log.
 
-    Uses the simplified form
+    Paper Eq. 11, simplified with the half-angle identity
+    ``2·atanh(√c·‖π(z)‖) = asinh(√c·‖z‖)``, reads
+    ``log_x(y) = asinhc(√c·‖z‖)·(z + (β_x·c/(1+β_x))·⟨x, z⟩·x)`` with ``z = (⊖x) ⊕ y`` and
+    ``asinhc(t) = asinh(t)/t``. **That form is not evaluated here**: it is built on the same
+    ``z`` as :func:`_dist`, so it inherits the same three-way ``O(e^(a+b))`` cancellation described
+    there in full, once in ``‖z‖`` and once in the direction vector.
 
-        log_x(y) = asinhc(√c·||z||) · (z + (β_x·c / (1+β_x)) · ⟨x, z⟩ · x)
+    **The lift.** ``pv_to_hyperboloid`` lifts ``x ↦ X = (√(1/c + ‖x‖²), x)`` and its differential is
+    the identity on spatial parts (``dX = (⟨x, dx⟩/X₀, dx)``), so the hyperboloid tangent vector at
+    ``X`` carries the PV tangent vector as its spatial part and
 
-    with z = -x ⊕ y and asinhc(t) = asinh(t)/t. This follows from the
-    identity ``2·atanh(√c·||π(z)||) = asinh(√c·||z||)`` (tanh/sinh half-angle
-    identity applied to ``β_z/(1+β_z)·√c·||z||``), which collapses the paper's
-    sigma, tau coefficients into a single scalar scaling applied after a vector
-    combination. Avoids explicitly computing π(z).
+        log^PV_x(y) = log^H_X(Y)[1:]
+
+    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._logmap` uses a
+    regular Cartesian expression when either endpoint is exactly the origin and
+    the stable polar frame otherwise. Ordinary autodiff follows the selected
+    expression, repairing the base-point derivative at the origin. The inherited
+    origin defect predates both the preceding
+    hyperboloid polar-frame sweep and the PV lift; the lift merely exposed the
+    lost base-point derivative in PV.
+
+    Historical measurements of the preceding lift and forward-value repair, before
+    the Cartesian origin rule: at ``c = 0.5``, dim 16, on two points a
+    true 0.1 apart along a coordinate axis, float32
+    ``‖log_x(y)‖_x``: the old spelling returned **0.0599 at a = 8**, **4.383 at a = 10** and
+    **10.56 at a = 12**; this one is within **≤1.0e-6 relative** at all three, against a float32
+    storage floor of 9.2e-7 (``step2c_pv_accuracy.out``). In float64 the two agree to ≤8.1e-14 in
+    PV tangent norm at ``a ≤ 3``, dims 2/5/64, ``c ∈ {0.1, 0.5, 1, 3}``, and against an 80-bit
+    reference at ``a ≤ 6`` the new form is within 4.4e-14 *relative* and the old within 2.7e-11
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_equivalence.out``).
+
+    ``‖log_x(y)‖_x = d(x, y)`` now holds by construction rather than by two independent asinh
+    evaluations agreeing: both read the same polar frame. Measured ≤1.3e-15 relative in float64.
+
+    **Historical collinear-gradient repair.** This repair also preceded the
+    Cartesian origin-derivative rule. When ``x`` and ``y`` lie on *exactly* the same ray through the
+    origin, the angular unit vector ``n̂ = normalize(ŷ_s - ⟨x̂_s, ŷ_s⟩·x̂_s)`` that
+    :func:`~hyperbolix.manifolds.hyperboloid._logmap_direction` used to build normalized a vector
+    that is zero up to rounding, so its derivative was arbitrary; multiplied by a ``sin φ`` that is
+    itself only ``O(rounding)`` rather than exactly 0, it left an ``O(1)`` error in the *gradient*
+    while the forward value stayed correct. Measured on ``∇ ‖log_x(y)‖²`` against an 80-bit finite
+    difference, that spelling was 0.12 relative in float64 and 11 in float32 on a same-ray pair,
+    against 2.5e-11 / 4.2e-6 for the pre-lift PV form (``step2c_pv_equivalence.out``, section F).
+    The helper now returns the unnormalized ``perp_y`` instead, which is smooth on the whole
+    collinear set. Re-measured with both arms against the *same* 80-bit reference on the same grid
+    (``c ∈ {0.5, 1}``, dims 5/64, ``a ≤ 3``, same-ray and anti-ray): the lift is **3.3e-10** in
+    float64 and **2.2e-5** in float32, the pre-lift ambient form 3.3e-10 and 4.1e-5 — identical in
+    float64, where both sit on the reference's own floor, and 1.9x better in float32
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2e_gradients.out``, section J).
     """
-    sqrt_c = jnp.sqrt(c)
-    beta_x = _beta(x, c)
-
-    z = _addition(-x, y, c)
-    xz = jnp.dot(x, z, precision=MATMUL_PRECISION)
-    z_norm = _safe_norm(z)[..., None]
-    arg = sqrt_c * z_norm
-
-    # asinhc(arg) = asinh(arg)/arg, limit 1 as arg → 0.
-    asinhc = jnp.asinh(arg) / arg
-
-    coef_x = beta_x * c / (1.0 + beta_x)
-    direction = z + coef_x * xz * x
-    return asinhc * direction
+    return _hyperboloid_logmap(pv_to_hyperboloid(y, c), pv_to_hyperboloid(x, c), c)[1:]
 
 
 def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -335,31 +510,84 @@ def _ptransp(
     y: Float[Array, "dim"],
     c: ScalarCurvature,
 ) -> Float[Array, "dim"]:
-    """Parallel transport from T_x PV to T_y PV (paper Eq. 12 with K = -c).
+    """Parallel transport from T_x PV to T_y PV, as the spatial part of the hyperboloid transport.
 
-    PT_{x→y}(v) = (1+β_x)/β_x · ṽ + c·(1+β_x)·β_y/((1+β_y)·β_x) · ⟨y, ṽ⟩ · y
+    Paper Eq. 12 with ``K = -c`` reads
+    ``PT_{x→y}(v) = (1+β_x)/β_x · ṽ + c·(1+β_x)·β_y/((1+β_y)·β_x) · ⟨y, ṽ⟩ · y``
+    with ``ṽ = gyr_M[ȳ, -x̄](dπ_x(v))`` the Möbius gyration in the Poincaré ball acting on
+    ``dπ_x(v)``, ``x̄ = β_x/(1+β_x)·x`` and ``ȳ = β_y/(1+β_y)·y``. **That form is not evaluated
+    here.** It routes the tangent vector through :func:`_dpi_x`, whose two terms cancel to a factor
+    ``β_x ≈ e^{-a}`` of the operands on a radial ``v`` (see :func:`_expmap` for the same
+    cancellation on the exponential map's direction), and the ``(1+β_x)/β_x ≈ e^{a}`` prefactor then
+    multiplies the surviving error back up; the Möbius gyration in between is evaluated in the
+    Poincaré chart, whose own conformal factor grows like ``e^{a}``.
 
-    where ṽ = gyr_M[ȳ, -x̄](dπ_x(v)) is the Möbius gyration in the Poincaré
-    ball acting on dπ_x(v), with x̄ = β_x/(1+β_x)·x and ȳ = β_y/(1+β_y)·y.
+    **The lift.** ``pv_to_hyperboloid`` sends ``x ↦ X = (√(1/c + ‖x‖²), x)``, exactly, and a PV
+    tangent vector ``v`` at ``x`` lifts to the unique hyperboloid tangent ``V = (⟨x, v⟩/X₀, v)`` —
+    the time slot forced by ``⟨V, X⟩_L = -X₀V₀ + ⟨x, v⟩ = 0`` (the same lift :func:`_expmap` takes,
+    see there). The lift is an isometry and its differential is the identity on spatial parts, so
+    parallel transport commutes with it and
+
+        PT^PV_{x→y}(v) = PT^H_{X→Y}(V)[1:]
+
+    holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._ptransp` uses the
+    Cartesian closed form when either endpoint is exactly the origin. That branch
+    reconstructs the input tangent time from its spatial part,
+    ``V₀ = ⟨X_s,V_s⟩/X₀``, then evaluates
+    ``V + β(X + Y)`` with ``β = ⟨V,Y⟩_L/(1/c - ⟨X,Y⟩_L)``. It needs no
+    cleanup projection. Otherwise the operation retains the stable geodesic frame.
+    The earlier origin fallback had
+    the correct value but erased derivatives with respect to the base point.
+
+    The PV wrapper constructs ``V₀`` for the exact lift. The Cartesian
+    hyperboloid branch reconstructs the same value internally from ``V_s``; the
+    polar branch uses the supplied tangent as before.
+
+    :func:`_ptransp_0` is untouched: ``PT_{0→y}(v) = v + c·β_y/(1+β_y)·⟨y, v⟩·y`` never forms
+    ``dπ_x`` and is a sum of two same-sign terms, so it has no cancellation to remove.
+
+    **Historical measurement.** These results cover the preceding lift and
+    polar-frame repair, before the current Cartesian origin branch. Float32
+    isometry defect ``|‖PT v‖_y/‖v‖_x - 1|`` on random-direction operands,
+    ``c = 0.5``, dim 16, transport step 0.05 and 1 nat, worst over 4 seeds and both ``v``
+    geometries; the transported *direction* is the angle to a float64 leg fed the same float32
+    numbers, taken in the PV metric at ``y``
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_ptransp_accuracy.out``)::
+
+        a     ambient isometry    this      ambient direction    this
+        8     3.4e-1              9.4e-6    1.2e-1 rad           4.0e-5 rad
+        10    2.3e+1              4.2e-5    3.10 rad             3.3e-4 rad
+        12    7.8e+2              4.8e-4    3.11 rad             2.4e-3 rad
+        14    7.0e+3              1.5e-3    2.49 rad             1.5e-2 rad
+
+    An angle of π is a transported momentum pointing backwards: the ambient spelling returned one
+    at ``a ∈ {10, 12}``, finite and of a plausible magnitude. The defect is radial-only, as the
+    ``dπ_x`` cancellation is — on a generic ``v`` the two spellings differ by at most 2x. What is
+    left at ``a = 14`` is not the lift: transporting the same lifted operands with
+    :func:`~hyperbolix.manifolds.hyperboloid._ptransp` directly measures 1.803e-3 against this
+    map's 1.804e-3, so the residue is the hyperboloid primitive's own float32 behaviour near the
+    representation floor (same file, section D).
+
+    In float64 the new and old spellings agree to 1.2e-14 relative at ``a ≤ 3`` over
+    ``c ∈ {0.1, 0.5, 1, 3}``, dims 2/5/64, four pair and three tangent geometries, and
+    ``ptransp(v, 0, y)`` matches :func:`_ptransp_0` to 2.0e-16
+    (``step2c_pv_ptransp_equivalence.out``).
+
+    Args:
+        v: PV tangent vector at x, shape (dim,)
+        x: PV point, shape (dim,)
+        y: PV point, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Parallel transported tangent vector at y, shape (dim,)
     """
-    beta_x = _beta(x, c)
-    beta_y = _beta(y, c)
-
-    # Poincaré-ball images of x and y under π.
-    x_bar = (beta_x / (1.0 + beta_x)) * x
-    y_bar = (beta_y / (1.0 + beta_y)) * y
-
-    # Differential of π at x applied to v.
-    dpi_v = _dpi_x(x, v, c)
-
-    # Möbius gyration in the Poincaré ball (the shared curvature-generic gyrovector core).
-    v_tilde = _gyration(y_bar, -x_bar, dpi_v, c)
-
-    # Eq. 12 (K = -c flips the sign of the second term).
-    yv = jnp.dot(y, v_tilde, precision=MATMUL_PRECISION)
-    coef1 = (1.0 + beta_x) / beta_x
-    coef2 = c * (1.0 + beta_x) * beta_y / ((1.0 + beta_y) * beta_x)
-    return coef1 * v_tilde + coef2 * yv * y
+    x_H = pv_to_hyperboloid(x, c)
+    y_H = pv_to_hyperboloid(y, c)
+    # Tangency ⟨V, X⟩_L = -X₀·V₀ + ⟨x, v⟩ = 0 fixes the time slot; X₀ ≥ 1/√c > 0, so no floor.
+    v0 = jnp.dot(x, v, precision=MATMUL_PRECISION) / x_H[0]
+    v_H = jnp.concatenate([v0[None], v])
+    return _hyperboloid_ptransp(v_H, x_H, y_H, c)[1:]
 
 
 # ---------------------------------------------------------------------------
@@ -373,26 +601,72 @@ def _tangent_inner(
     x: Float[Array, "dim"],
     c: ScalarCurvature,
 ) -> Float[Array, ""]:
-    """Riemannian inner product ⟨u, v⟩_x (paper Eq. 1 with K = -c).
+    """Riemannian inner product ⟨u, v⟩_x (paper Eq. 1 with K = -c), free of cancellation.
 
-    g_x(u, v) = ⟨u, v⟩ - c·β_x²·⟨x, u⟩·⟨x, v⟩
+    The literal ``g_x(u, v) = ⟨u, v⟩ - c·β_x²·⟨x, u⟩·⟨x, v⟩`` subtracts two ``O(‖u‖·‖v‖)`` terms
+    that are individually as large as ``‖x‖²·β_x²`` times the answer's radial part, so at scaled
+    geodesic radius ``a`` it loses ``cosh²(a)·eps`` of relative accuracy — exactly the failure
+    ``Hyperboloid._tangent_inner`` documents, and for the same reason: PV coordinates *are* the
+    hyperboloid spatial part, with ``β_x² = 1/(1 + c‖x‖²) = 1/(c·x₀²)``.
+
+    Splitting ``u`` and ``v`` along and across ``x`` makes the metric diagonal, hence a sum of
+    products of same-signed factors. With ``x̂ = x/‖x‖``, ``radial(u) = ⟨u, x̂⟩`` and
+    ``perp(u) = u - radial(u)·x̂``, ``⟨x, u⟩ = ‖x‖·radial(u)`` gives::
+
+        g_x(u, v) = ⟨perp(u), perp(v)⟩ + radial(u)·radial(v)·(1 - c·β_x²·‖x‖²)
+                  = ⟨perp(u), perp(v)⟩ + (β_x·radial(u))·(β_x·radial(v))
+
+    using ``1 - c‖x‖²/(1 + c‖x‖²) = β_x²``. Nothing is subtracted, and ``β_x`` is applied as a
+    *division by* ``1/β_x = √(1 + c‖x‖²)`` (:func:`_beta_inv`) rather than as a squared factor, so
+    no ``‖x‖²`` is ever materialized — it overflows float32 at ``‖x‖ = 1.8e19``, geodesic radius
+    ~45, while the quantity itself stays representable. ``1/β_x ≥ 1`` always, so it needs no floor.
+
+    The one guard is the ``MIN_NORM`` floor under ``x̂`` inside
+    :func:`~hyperbolix.utils.math_utils.radial_perp_decomposition`: at ``x = 0`` it returns the
+    exact zero vector, so ``radial = 0`` and ``perp = u`` — the right limit, where the metric is
+    the Euclidean one.
+
+    Args:
+        u: Tangent vector at x, shape (dim,)
+        v: Tangent vector at x, shape (dim,)
+        x: PV point, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Riemannian inner product ⟨u, v⟩_x, scalar
     """
-    beta_x = _beta(x, c)
-    uv = jnp.dot(u, v, precision=MATMUL_PRECISION)
-    xu = jnp.dot(x, u, precision=MATMUL_PRECISION)
-    xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
-    return uv - c * beta_x**2 * xu * xv
+    radial_u, perp_u_D = radial_perp_decomposition(u, x)
+    radial_v, perp_v_D = radial_perp_decomposition(v, x)
+    beta_inv = _beta_inv(x, c)  # 1/β_x = √(1 + c‖x‖²) ≥ 1, so no floor is needed
+    return jnp.dot(perp_u_D, perp_v_D, precision=MATMUL_PRECISION) + (radial_u / beta_inv) * (radial_v / beta_inv)
 
 
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Riemannian norm ||v||_x = √g_x(v, v).
+    """Riemannian norm ``‖v‖_x = √g_x(v, v)``, computed as a hypotenuse of two non-negative legs.
 
-    ``safe_sqrt``, not a bare ``jnp.sqrt``: at ``v = 0`` the metric form is exactly 0, where
-    ``sqrt'`` is infinite and reverse-mode AD forms ``0 * inf = NaN`` for the whole row. The
-    ``floor_at(., 0.0)`` is kept for the (rounding-only) negative side of the form.
+    The radial/perp split of :func:`_tangent_inner` applied to ``v`` twice makes the metric norm
+    ``√(‖perp(v)‖² + (β_x·radial(v))²)``, which :func:`~hyperbolix.utils.math_utils.safe_hypot_norm`
+    evaluates in one reduction without materializing either square. That replaces the old
+    ``safe_sqrt(floor_at(g_x(v, v), 0))``: the form it took the root of was the literal difference,
+    whose relative error grows like ``cosh²(a)·eps`` — measured on an *exactly unit* radial tangent
+    vector at ``c = 1``, float32, it returned a norm off by 0.59 at scaled radius ``a = 8``, 3.9 at
+    9 and 30 at 10, against ≤1.4e-5 for this form.
+
+    Both of the old guards go with it. ``floor_at(., 0.0)`` clipped a form that had rounded
+    *negative*; a sum of two squares cannot. ``safe_sqrt``'s job — a finite (zero) derivative at
+    ``v = 0``, where ``sqrt'`` is infinite and reverse-mode AD forms ``0 * inf = NaN`` — is what
+    ``safe_hypot_norm``'s own double-``where`` already provides, with an exact ``0`` forward value.
+
+    Args:
+        v: Tangent vector at x, shape (dim,)
+        x: PV point, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Riemannian norm ‖v‖_x, scalar
     """
-    inner = _tangent_inner(v, v, x, c)
-    return safe_sqrt(floor_at(inner, 0.0))
+    radial, perp_D = radial_perp_decomposition(v, x)
+    return safe_hypot_norm(perp_D, radial / _beta_inv(x, c))
 
 
 def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -566,6 +840,17 @@ class ProperVelocity(ManifoldBase):
         """PV gyroaddition x ⊕_U y."""
         return _addition(self._cast(x), self._cast(y), c)
 
+    def gyro_difference(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
+        """PV gyro-difference ``(⊖x) ⊕ y``, evaluated without the ambient cancellation.
+
+        Mathematically identical to ``addition(scalar_mul(-1, x), y)``; use this whenever the
+        result is expected much closer to the origin than the operands (centering a batch,
+        differences of two far points). The exact hyperboloid lift uses a Cartesian
+        inverse boost at an exact origin endpoint and the stable polar frame
+        otherwise. See :func:`_gyro_difference`.
+        """
+        return _gyro_difference(self._cast(x), self._cast(y), c)
+
     def scalar_mul(self, r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """PV scalar multiplication r ⊗_U x."""
         x = self._cast(x)
@@ -601,7 +886,12 @@ class ProperVelocity(ManifoldBase):
         return _expmap_0(self._cast(v), c)
 
     def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-        """Logarithmic map at x."""
+        """Logarithmic map at x through the exact hyperboloid lift.
+
+        A regular Cartesian expression is used when either endpoint is exactly the
+        origin; otherwise the stable polar frame is used. Ordinary autodiff
+        preserves the base-point derivative at the origin.
+        """
         return _logmap(self._cast(y), self._cast(x), c)
 
     def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -621,7 +911,11 @@ class ProperVelocity(ManifoldBase):
         y: Float[Array, "dim"],
         c: ScalarCurvature,
     ) -> Float[Array, "dim"]:
-        """Parallel transport v from T_x PV to T_y PV."""
+        """Parallel transport v from T_x PV to T_y PV through the exact lift.
+
+        The lifted hyperboloid transport uses its Cartesian closed form at an exact
+        origin endpoint and the stable polar frame otherwise.
+        """
         return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
 
     def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:

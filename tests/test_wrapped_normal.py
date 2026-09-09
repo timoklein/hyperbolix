@@ -957,3 +957,64 @@ def test_sigma_to_cov_rejects_mismatched_dimensions() -> None:
         sigma_to_cov(jnp.asarray([0.1, 0.2], dtype=_F64), 3, _F64)
     with pytest.raises(ValueError, match=r"Covariance matrix must be \(3, 3\)"):
         sigma_to_cov(jnp.eye(2, dtype=_F64), 3, _F64)
+
+
+# =============================================================================================
+# float32 accuracy far from the origin
+# =============================================================================================
+
+
+def test_sample_hyperboloid_float32_tracks_float64_at_scaled_radius_10() -> None:
+    """``sample`` in float32 stays accurate with the mean at scaled geodesic radius ``√c·d = 10``.
+
+    Accuracy, not finiteness: ``sample`` is ``exp_mu(PT_{0→mu}([0, v]))``, and the pre-fix
+    ``_ptransp_0`` divided the transport by the *measured* ``⟨mu, mu⟩_L``, which is exactly 0 in
+    float32 once ``mu₀`` is this large. Every draw came back NaN, but the interesting part of the
+    failure is the finite, wrong band below that radius, so this asserts a distance instead.
+
+    Two setup points make the comparison mean what it says.
+
+    * The mean is rounded to float32 and then widened for the float64 leg, so both legs are handed
+      bit-identical numbers and the only difference between them is the arithmetic precision.
+    * ``dtype=_F64`` on both calls fixes the *tangent noise*, not the arithmetic: ``jax.random``
+      consumes a different number of bits per dtype, so the same key does **not** give the same
+      Gaussian draw in float32 and float64 (measured max coordinate gap 1.06, i.e. two unrelated
+      samples). The manifold instance is what sets the compute precision — ``Hyperboloid(float32)``
+      casts every operand — so the float32 leg still runs the whole transport/expmap chain in
+      float32 and returns float32, as the dtype assertion below pins.
+
+    Measured max geodesic error between the two legs: 1.2e-3 (bound 5e-3, ≈ 4.1x). The pre-fix
+    spelling returns NaN for all 64 draws.
+    Evidence: ``logs/2026-09-08_hyperboloid_tangent_primitives/probe_final_configs.py``.
+
+    There is deliberately no ``log_prob`` leg: at this radius the float32 ``log_prob`` is finite
+    and the float64 one is finite for all 64 draws, but they differ by up to 6.1e-3 — the
+    ambient chart's own resolution, ``eps·cosh(10)·‖v‖²/σ² ≈ 6e-3``, not an implementation defect
+    (a tangent vector's ambient components are ``cosh(a)`` times its Riemannian length, so one
+    float32 ulp already costs that much). No configuration at ``a = 10`` reaches the 1e-3 that
+    leg would need.
+    """
+    c, n, n_draw, sigma = 0.5, 3, 64, 0.3
+    a = 10.0
+    hyp32, hyp64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=_F64)
+    key = jax.random.PRNGKey(0)
+
+    direction_D = jnp.asarray([0.4, -0.7, 0.6], dtype=_F64)
+    direction_D /= jnp.linalg.norm(direction_D)
+    mu_A = hyp64.expmap_0(hyp64.embed_spatial_0(direction_D * (a / jnp.sqrt(c))), c)
+    mu_A_32 = hyp32.proj(mu_A.astype(jnp.float32), c)
+    mu_A_64 = mu_A_32.astype(_F64)  # same numbers, wider arithmetic
+    assert float(hyp64.dist_0(mu_A_64, c)) * np.sqrt(c) == pytest.approx(a, abs=1e-4)
+
+    z_NA_32 = wrapped_normal_hyperboloid.sample(key, mu_A_32, sigma, c, (n_draw,), dtype=_F64, manifold_module=hyp32)
+    z_NA_64 = wrapped_normal_hyperboloid.sample(key, mu_A_64, sigma, c, (n_draw,), dtype=_F64, manifold_module=hyp64)
+    assert z_NA_32.dtype == jnp.float32, "the float32 leg did not run in float32"
+    assert bool(jnp.all(jnp.isfinite(z_NA_32)))
+
+    # The draws must actually leave the mean, or the comparison is mu against mu.
+    spread_N = jax.vmap(hyp64.dist, in_axes=(0, None, None))(z_NA_64, mu_A_64, c)
+    assert float(jnp.min(spread_N)) > 0.02
+
+    err_N = jax.vmap(hyp64.dist, in_axes=(0, 0, None))(z_NA_32.astype(_F64), z_NA_64, c)
+    assert float(jnp.max(err_N)) < 5e-3, f"float32 samples are {float(jnp.max(err_N)):.3e} nats off the float64 ones"
+    assert z_NA_32.shape == (n_draw, n + 1)

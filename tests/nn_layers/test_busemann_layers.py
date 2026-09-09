@@ -134,3 +134,177 @@ def test_bfc_activation(layer_cls, manifold_fn, in_dim, make_pts):
     assert y.shape == (6, 6)
     assert jnp.isfinite(y).all()
     assert jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(y, C).all()
+
+
+# --------------------------------------------------------------------------- #
+# Far-field accuracy of the Lorentz Busemann layers
+# --------------------------------------------------------------------------- #
+FAR_A = 9.5  # scaled geodesic radius a = sqrt(c) * d_0(x)
+FAR_A_SUB = 6.5  # subdominant output channels, ~3 nats below the radius-carrying one
+FAR_THETA = 1e-3  # angle between the near-aligned direction v_0 and the input point direction
+
+
+def _far_points_BAi(a_B, in_dim, dtype, seed, one_ray, c=C):
+    """Hyperboloid points at the scaled radii ``a_B = sqrt(c)*d``, built in closed form.
+
+    ``one_ray``: every point shares a direction (one geodesic ray); otherwise the directions are
+    drawn independently. Built directly rather than through ``expmap_0`` so the radius is exact.
+    """
+    key = jax.random.PRNGKey(seed)
+    if one_ray:
+        dir_BI = jax.random.normal(key, (in_dim - 1,), dtype=jnp.float64)[None, :]
+    else:
+        dir_BI = jax.random.normal(key, (len(a_B), in_dim - 1), dtype=jnp.float64)
+    dir_BI = dir_BI / jnp.linalg.norm(dir_BI, axis=-1, keepdims=True)
+    a_B = jnp.asarray(a_B, dtype=jnp.float64)
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))
+    time_B1 = (jnp.cosh(a_B) / sqrt_c)[:, None]
+    return jnp.concatenate([time_B1, (jnp.sinh(a_B)[:, None] / sqrt_c) * dir_BI], axis=-1).astype(dtype)
+
+
+def _tilted_rows_KI(seed, n_out, in_spatial, x_hat_I, theta):
+    """Unit direction rows; row 0 is rotated to sit ``theta`` radians from ``x_hat_I``."""
+    rows_KI = jax.random.normal(jax.random.PRNGKey(seed), (n_out, in_spatial), dtype=jnp.float64)
+    rows_KI = rows_KI / jnp.linalg.norm(rows_KI, axis=-1, keepdims=True)
+    perp_I = rows_KI[0] - jnp.dot(rows_KI[0], x_hat_I) * x_hat_I
+    perp_I = perp_I / jnp.linalg.norm(perp_I)
+    v0_I = jnp.cos(theta) * x_hat_I + jnp.sin(theta) * perp_I
+    return rows_KI.at[0].set(v0_I / jnp.linalg.norm(v0_I))
+
+
+def _scaled_radius(x_BA, c=C):
+    """``a = sqrt(c)*d_0(x) = arcsinh(sqrt(c)*||x_s||)``, read off the spatial part."""
+    return jnp.arcsinh(jnp.sqrt(c) * jnp.linalg.norm(jnp.asarray(x_BA, dtype=jnp.float64)[..., 1:], axis=-1))
+
+
+def _max_rel(a32, a64):
+    """Max-abs difference normalized by the max-abs of the float64 array."""
+    a32, a64 = np.asarray(a32, dtype=np.float64), np.asarray(a64, dtype=np.float64)
+    return float(np.max(np.abs(a32 - a64)) / np.max(np.abs(a64)))
+
+
+def test_bfc_hyperboloid_far_field_matches_float64():
+    """float32 Lorentz BFC with a gyro-bias tracks float64 at scaled geodesic radius a ~ 9.5.
+
+    Two rewritten primitives meet here: ``busemann`` reads the input at a = 9.5 (channel 0 points
+    within 1e-3 rad of the input direction, where ``x_t - <x_s, v>`` is a cancelling difference of
+    two numbers of size cosh(a)), and the gyro-bias boosts the output point, also at a ~ 9.5. The
+    pre-2026-09-08 spelling of ``busemann`` — the literal difference, floored at ``MIN_NORM`` —
+    stays finite and is wrong by 9.9e-1 in geodesic distance and 1.3e-1 relative in the kernel
+    gradient; the old ``addition`` returns NaN at this radius.
+
+    Measured float32-vs-float64 error of the current spelling (float64 reference on the same
+    float32-rounded inputs and parameters): 1.3e-3 geodesic distance, 1.5e-5 relative on the
+    kernel gradient (the other three parameters are at 8e-7)
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/probe_layers_far_field5.out``).
+    """
+    in_dim, out_dim = 17, 9
+    manifold64 = get_hyperboloid(jnp.float64)
+
+    # The float64 reference must see exactly the points the float32 layer sees, so it runs on the
+    # float32-rounded values cast back up: only the compute precision differs.
+    x32_BAi = _far_points_BAi([9.5, 9.4, 9.3], in_dim, jnp.float32, seed=20, one_ray=True)
+    x64_BAi = x32_BAi.astype(jnp.float64)
+
+    x_hat_I = x64_BAi[0, 1:] / jnp.linalg.norm(x64_BAi[0, 1:])
+    kernel_OI = _tilted_rows_KI(21, out_dim - 1, in_dim - 1, x_hat_I, FAR_THETA)
+    busemann_O = jax.vmap(manifold64.busemann, in_axes=(None, 0, None))(x64_BAi[0], kernel_OI, C)
+    # ``u_k = -alpha_k * B^{v_k}(x)`` is linear in ``alpha_k = exp(log_scale_k) > 0``, so one
+    # division per channel puts sqrt(c)*|u_k| at a chosen target. Channel 1 (a generic direction)
+    # carries the output radius; the near-aligned channel 0 is kept subdominant, since its output
+    # coordinate is the one whose float32 error is transverse to the output direction.
+    target_O = jnp.asarray([3.0, FAR_A] + [FAR_A_SUB] * (out_dim - 3), dtype=jnp.float64)
+    log_scale_O = jnp.log(target_O / (jnp.sqrt(C) * jnp.abs(busemann_O)))
+
+    gyro_O = jax.random.normal(jax.random.PRNGKey(22), (out_dim - 1,), dtype=jnp.float64)
+    gyro_O = 0.2 * gyro_O / jnp.linalg.norm(gyro_O)
+
+    def run(dtype, x_BAi):
+        layer = HypLinearHyperboloidBusemann(
+            get_hyperboloid(dtype), in_dim=in_dim, out_dim=out_dim, rngs=nnx.Rngs(0), use_gyro_bias=True, param_dtype=dtype
+        )
+        # Round to float32 first in both runs: the float64 reference must differ from the float32
+        # layer only in compute precision, not in the parameter values it was handed.
+        layer.kernel[...] = jnp.asarray(kernel_OI, dtype=jnp.float32).astype(dtype)
+        layer.log_scale[...] = jnp.asarray(log_scale_O, dtype=jnp.float32).astype(dtype)
+        layer.gyro_bias[...] = jnp.asarray(gyro_O, dtype=jnp.float32).astype(dtype)
+        x_BAi = jnp.asarray(x_BAi, dtype=dtype)
+
+        def loss_fn(model):
+            return jnp.sum(model(x_BAi, c=C)[:, 1:])
+
+        _, grads = nnx.value_and_grad(loss_fn)(layer)
+        return layer(x_BAi, c=C), (grads.kernel[...], grads.log_scale[...], grads.bias[...], grads.gyro_bias[...])
+
+    y64_BAo, grads64 = run(jnp.float64, x64_BAi)
+    y32_BAo, grads32 = run(jnp.float32, x32_BAi)
+
+    # The regime is the test: a construction that drifted back to small radius would pass vacuously.
+    a_out_B = _scaled_radius(y64_BAo)
+    assert 9.0 < float(jnp.min(a_out_B)) and float(jnp.max(a_out_B)) < 10.0, a_out_B
+
+    dist_B = jax.vmap(manifold64.dist, in_axes=(0, 0, None))(
+        manifold64.proj_batch(y32_BAo.astype(jnp.float64), C), manifold64.proj_batch(y64_BAo, C), C
+    )
+    assert jnp.isfinite(y32_BAo).all()
+    assert float(jnp.max(dist_B)) < 6e-3  # measured 1.3e-3; old busemann 9.9e-1, old addition NaN
+    for g32, g64 in zip(grads32, grads64, strict=True):
+        assert _max_rel(g32, g64) < 1e-4  # measured 1.5e-5; old busemann 1.3e-1
+
+
+def test_bmlr_hyperboloid_far_field_matches_float64():
+    """float32 Lorentz BMLR logits and cross-entropy gradients track float64 at a ~ 9.5.
+
+    Class 0's ideal direction sits ``1e-3`` rad from the input point direction, the cancelling case
+    for the Busemann argument ``x_t - <x_s, v>``: at a = 9.5 both terms are of size cosh(a) ~ 6.7e3
+    and their difference is ~3e-3, so the literal float32 subtraction keeps no significant digits.
+    The pre-2026-09-08 spelling stays finite and is wrong by 3.7e-3 relative in the logits and
+    7.1e-2 relative in the kernel gradient. The labels avoid class 0 on purpose: with it as the
+    target the softmax saturates and the cancelling row receives no gradient at all.
+
+    Measured float32-vs-float64 error of the current spelling (float64 reference on the same
+    float32-rounded inputs and parameters): 1.1e-7 relative on the logits, 2.3e-5 relative on the
+    kernel gradient (log_scale and bias are at 1.4e-7)
+    (``logs/2026-09-08_hyperboloid_tangent_primitives/probe_layers_far_field5.out``).
+    """
+    in_dim, out_dim, batch = 17, 8, 4
+
+    x32_BAi = _far_points_BAi([FAR_A] * batch, in_dim, jnp.float32, seed=30, one_ray=False)
+    x64_BAi = x32_BAi.astype(jnp.float64)
+
+    x_hat_I = x64_BAi[0, 1:] / jnp.linalg.norm(x64_BAi[0, 1:])
+    dir_KI = _tilted_rows_KI(31, out_dim, in_dim - 1, x_hat_I, FAR_THETA)
+    # Reference parameterization: alpha_k = ||kernel_k||, i.e. log_scale_k = log ||kernel_k||.
+    norm_K1 = jnp.abs(jax.random.normal(jax.random.PRNGKey(32), (out_dim, 1), dtype=jnp.float64)) + 0.5
+    kernel_KI = norm_K1 * dir_KI
+    log_scale_K = jnp.log(jnp.linalg.norm(kernel_KI, axis=-1))
+    label_B = (jnp.arange(batch) + 1) % out_dim
+
+    def run(dtype, x_BAi):
+        layer = HypRegressionHyperboloidBusemann(
+            get_hyperboloid(dtype), in_dim=in_dim, out_dim=out_dim, rngs=nnx.Rngs(0), param_dtype=dtype
+        )
+        # Round to float32 first in both runs: the float64 reference must differ from the float32
+        # layer only in compute precision, not in the parameter values it was handed.
+        layer.kernel[...] = jnp.asarray(kernel_KI, dtype=jnp.float32).astype(dtype)
+        layer.log_scale[...] = jnp.asarray(log_scale_K, dtype=jnp.float32).astype(dtype)
+        x_BAi = jnp.asarray(x_BAi, dtype=dtype)
+
+        def loss_fn(model):
+            logits_BK = model(x_BAi, c=C)
+            return -jnp.mean(jax.nn.log_softmax(logits_BK, axis=-1)[jnp.arange(batch), label_B])
+
+        _, grads = nnx.value_and_grad(loss_fn)(layer)
+        return layer(x_BAi, c=C), (grads.kernel[...], grads.log_scale[...], grads.bias[...])
+
+    logits64_BK, grads64 = run(jnp.float64, x64_BAi)
+    logits32_BK, grads32 = run(jnp.float32, x32_BAi)
+
+    # The regime is the test: a construction that drifted back to small radius would pass vacuously.
+    a_in_B = _scaled_radius(x64_BAi)
+    assert np.allclose(np.asarray(a_in_B), FAR_A, atol=1e-6), a_in_B
+
+    assert jnp.isfinite(logits32_BK).all()
+    assert _max_rel(logits32_BK, logits64_BK) < 1e-6  # measured 1.1e-7; old busemann 3.7e-3
+    for g32, g64 in zip(grads32, grads64, strict=True):
+        assert _max_rel(g32, g64) < 2e-4  # measured 2.3e-5; old busemann 7.1e-2

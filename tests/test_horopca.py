@@ -225,6 +225,59 @@ def test_horo_projection_k1(dtype, c):
     assert jnp.allclose(ortho, 0.0, atol=atol)
 
 
+# --- 14b. large scaled radius: accuracy against float64 --------------------------------
+def _point_off_first_ideal(q_KD, a: float, c: float, seed: int, angle: float = 1e-3):
+    """On-sheet float64 point at scaled radius ``a``, ``angle`` radians off ``q_1``.
+
+    Polar form ``x = (cosh a, sinh a · u)/√c`` with ``‖u‖ = 1``, so ``√c·d(0, x) = a`` exactly.
+    ``u`` is tilted out of the ideal span by ``angle`` — dead on ``q_1`` the projection is the
+    identity and the test would be vacuous, while a generic direction puts the point far from the
+    spine and the projection's own step dominates.
+    """
+    dim = q_KD.shape[1]
+    w_D = jax.random.normal(jax.random.PRNGKey(seed), (dim,), dtype=jnp.float64)
+    w_D = w_D - q_KD.T @ (q_KD @ w_D)  # orthogonal to the whole ideal span
+    w_D = w_D / jnp.linalg.norm(w_D)
+    u_D = jnp.cos(angle) * q_KD[0] + jnp.sin(angle) * w_D
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=jnp.float64))
+    a = jnp.asarray(a, dtype=jnp.float64)
+    return jnp.concatenate([(jnp.cosh(a) / sqrt_c)[None], (jnp.sinh(a) / sqrt_c) * u_D])
+
+
+@pytest.mark.parametrize("k", [2, 3])
+@pytest.mark.parametrize("a,atol", [(9.0, 1e-3), (12.0, 1e-2)])
+def test_horo_projection_large_radius_matches_float64(k, a, atol):
+    """K ≥ 2 projection at ``√c·d`` = 9 and 12: geodesic accuracy against the float64 call.
+
+    The K ≥ 2 spine goes through the Sherman-Morrison coefficients and the ``⟨mp, mp⟩_L``
+    normalizer, both of which used to carry the point's radius as a difference of ``O(x₀)``
+    terms. The failure was silent: the projection stayed finite, stayed on the manifold, and
+    landed in the wrong place, taking the Busemann coordinates it exists to preserve with it.
+    So both assertions are accuracy assertions — against the same call in float64, and against
+    the independent ``Hyperboloid.busemann`` oracle this file uses elsewhere.
+
+    Measured (c = 1, D = 8, 1e-3 rad off ``q_1``): geodesic 2.4e-4 at a = 9 and 2.8e-3 (K = 2) /
+    6.0e-3 (K = 3) at a = 12; Busemann drift at or below 8.9e-5. The pre-fix spelling of the same
+    branch: geodesic 6.9e-2 at a = 9 and 2.4 … 2.5 at a = 12, Busemann drift 1.7e-2 … 4.3e-2.
+    """
+    c, dim = 1.0, 8
+    H = Hyperboloid(dtype=jnp.float64)
+    q64_KD = _ortho_q(7, k, dim, jnp.float64)
+    x64_A = _point_off_first_ideal(q64_KD, a, c, seed=80)
+
+    ref_A = horo_projection(x64_A, q64_KD, c, VERSION_DEFAULT)
+    got_A = horo_projection(x64_A.astype(jnp.float32), q64_KD.astype(jnp.float32), c, VERSION_DEFAULT)
+
+    err = float(H.dist(got_A.astype(jnp.float64), ref_A, c))
+    assert err < atol, f"K={k}, a={a}: float32 projection {err:.2e} geodesic from the float64 one"
+
+    # The defining invariant, evaluated on the float32 output with the float64 oracle.
+    b_x_K = _busemann_coords(H, x64_A[None], q64_KD, c)[0]
+    b_proj_K = _busemann_coords(H, got_A.astype(jnp.float64)[None], q64_KD, c)[0]
+    drift = float(jnp.max(jnp.abs(b_proj_K - b_x_K)))
+    assert drift < 1e-3, f"K={k}, a={a}: Busemann coordinates moved by {drift:.2e}"
+
+
 # --- 15. loss gradients finite (incl. coincident pair) and loss decreases --------------
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("k", [1, 2, 3])
