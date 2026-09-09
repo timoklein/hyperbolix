@@ -1955,18 +1955,18 @@ in your model:</p>
 </thead>
 <tbody>
 <tr>
-<td><code>"softplus"</code> (default)</td>
-<td><code>c = softplus(raw)</code></td>
-<td><code>c &gt; 0</code></td>
-<td><code>sigmoid(raw) ∈ (0, 1)</code> — bounded</td>
-<td>Supervised training; van Spengler 2023 convention</td>
-</tr>
-<tr>
-<td><code>"log"</code></td>
+<td><code>"log"</code> (default)</td>
 <td><code>c = exp(raw)</code></td>
 <td><code>c &gt; 0</code></td>
 <td><code>c</code> — scale-invariant</td>
 <td>RL/compiled loops; <code>c</code> spans orders of magnitude; MERU convention</td>
+</tr>
+<tr>
+<td><code>"softplus"</code></td>
+<td><code>c = softplus(raw)</code></td>
+<td><code>c &gt; 0</code></td>
+<td><code>sigmoid(raw) ∈ (0, 1)</code> — bounded</td>
+<td>geoopt <code>Stereographic</code>/<code>PoincareBall</code> convention; also the code default in the van Spengler et al. 2023 Poincare ResNet reference implementation</td>
 </tr>
 <tr>
 <td><code>"identity"</code></td>
@@ -2013,10 +2013,12 @@ recovered <code>c</code> (not the raw parameter), giving a hard stability guard.
 </tr>
 </tbody>
 </table>
-<p>For Poincaré in deep networks, the <strong>van Spengler et al. (2023)</strong> convention
-is <code>init_c=0.1</code> with learnable per-layer curvatures (one <code>LearnableCurvature</code>
-per layer — do <strong>not</strong> share a single instance across layers, see the
-compiled-loops note below):</p>
+<p>For Poincaré in deep networks, <strong>van Spengler et al. (2023)</strong> report <code>c=0.1</code>
+as their best <em>fixed</em> curvature (Sec. 4.2 sweeps <code>c ∈ {1, 0.1, 0.01}</code>); their
+released code instead defaults to a <em>learnable</em> per-layer curvature via
+geoopt's softplus reparameterization. To reproduce that learnable-curvature
+setup at the same scale (one <code>LearnableCurvature</code> per layer — do <strong>not</strong>
+share a single instance across layers, see the compiled-loops note below):</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix</span><span class="w"> </span><span class="kn">import</span> <span class="n">LearnableCurvature</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">HypResNetBlock</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>

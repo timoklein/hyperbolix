@@ -1900,9 +1900,8 @@ Instantiate one per distinct curvature in your model and call it at runtime:</p>
 </span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="n">c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span><span class="p">()</span>                             <span class="c1"># positive, clamped to [0.1, 10.0]</span>
 </span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="n">c</span><span class="p">)</span>
 </span></code></pre></div>
-<p>Pick <code>parameterization="log"</code> for compiled RL loops or when <code>c</code> spans
-orders of magnitude; the default <code>"softplus"</code> is best for supervised
-training, and <code>"identity"</code> gives a signed curvature for the <code>Stereographic</code>
+<p>The default is <code>parameterization="log"</code>. You can select <code>"softplus"</code>
+explicitly, while <code>"identity"</code> gives a signed curvature for the <code>Stereographic</code>
 manifold. See the <a href="user-guide/manifolds/#choosing-a-parameterization">Manifolds guide</a>
 for details.</p>
 <h3 id="mixed-curvature-product-spaces">Mixed-Curvature Product Spaces<a class="headerlink" href="#mixed-curvature-product-spaces" title="Permanent link">&para;</a></h3>

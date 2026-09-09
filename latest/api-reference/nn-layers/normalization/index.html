@@ -2361,7 +2361,11 @@ above); the per-sample radial RMSNorm covers all three.</p>
   Fréchet standard deviation, <em>biases</em> with a learned manifold point, and keeps
   running statistics for evaluation (<code>use_running_average</code>). The Hyperboloid batch
   mean is the closed-form Lorentz centroid; the PV mean is the closed-form
-  log-Euclidean mean. Use for faithful hyperbolic ResNets.</li>
+  log-Euclidean mean. Both center with <code>gyro_difference</code>: the Hyperboloid operation
+  uses a Cartesian inverse boost when either endpoint has scaled spatial radius at
+  most 1 and the stable polar frame otherwise, while the PV operation inherits both
+  branches through its exact Hyperboloid lift. This also preserves derivatives with
+  respect to an origin mean. Use for faithful hyperbolic ResNets.</li>
 <li><strong>Gyro radial RMSNorm</strong> (<code>HyperboloidGyroRMSNorm</code>, <code>ProperVelocityGyroRMSNorm</code>,
   <code>PoincareGyroRMSNorm</code>) — a <em>per-sample</em>, batch-independent normalizer (no running
   statistics, identical in train and eval, valid at batch size 1 — the properties RL
@@ -2400,6 +2404,16 @@ above); the per-sample radial RMSNorm covers all three.</p>
 spatial dimension <code>D</code>. The batch mean is the closed-form Lorentz centroid
 (HELM, Chen et al. 2024) via :func:<code>lorentz_midpoint</code> — exact and JIT-friendly,
 matching the estimator the ILNN GyroBN reference uses in practice.</p>
+<p>Centering uses :meth:<code>Hyperboloid.gyro_difference</code>. The general spelling
+<code>addition(scalar_mul(-1, mu), x)</code> is an ambient Lorentz boost whose large
+terms cancel when a far-away mean lies close to its batch points. The dedicated
+difference uses a Cartesian inverse boost when either endpoint is exactly the
+origin and the stable polar frame otherwise. The Cartesian branch preserves
+the derivative with respect to an origin mean; the earlier value-only origin
+fallback did not.</p>
+<p>The bias <code>w ⊕ x</code> and the <code>scalar_mul</code> scaling keep the general
+:meth:<code>Hyperboloid.addition</code>: their base point is the learned bias and their result is
+generally far from the origin, where the boost is well conditioned.</p>
 
 
 
@@ -2410,11 +2424,11 @@ matching the estimator the ILNN GyroBN reference uses in practice.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/gyro_normalization.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-246">246</a></span>
-<span class="normal"><a href="#__codelineno-0-247">247</a></span>
-<span class="normal"><a href="#__codelineno-0-248">248</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-246"><a id="__codelineno-0-246" name="__codelineno-0-246"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Hyperboloid</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-</span><span id="__span-0-247"><a id="__codelineno-0-247" name="__codelineno-0-247"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_BN_METHODS</span><span class="p">)</span>
-</span><span id="__span-0-248"><a id="__codelineno-0-248" name="__codelineno-0-248"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-262">262</a></span>
+<span class="normal"><a href="#__codelineno-0-263">263</a></span>
+<span class="normal"><a href="#__codelineno-0-264">264</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-262"><a id="__codelineno-0-262" name="__codelineno-0-262"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Hyperboloid</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="__span-0-263"><a id="__codelineno-0-263" name="__codelineno-0-263"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="p">(</span><span class="o">*</span><span class="n">_GYRO_BN_METHODS</span><span class="p">,</span> <span class="s2">&quot;gyro_difference&quot;</span><span class="p">))</span>
+</span><span id="__span-0-264"><a id="__codelineno-0-264" name="__codelineno-0-264"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -2466,6 +2480,16 @@ matching the estimator the ILNN GyroBN reference uses in practice.</p>
 centroid, so the batch mean is the closed-form <strong>log-Euclidean</strong> mean
 <code>expmap_0(mean_i logmap_0(x_i))</code> (the GyroBN reference's <code>use_euclid_stats</code>
 mode): no iteration, fully vmap/JIT-clean.</p>
+<p>Centering uses :meth:<code>ProperVelocity.gyro_difference</code>. PV gyroaddition is the
+spatial part of a Lorentz boost, so the general inverse-addition spelling can
+lose the small difference between a far-away mean and a nearby batch point.
+The dedicated PV operation lifts both points exactly to the hyperboloid. It
+inherits the Cartesian inverse-boost branch when either endpoint is exactly
+the origin and the stable polar frame otherwise, including the repaired
+derivative with respect to an origin mean.</p>
+<p>The bias <code>w ⊕ x</code> and the <code>scalar_mul</code> scaling keep the general
+:meth:<code>ProperVelocity.addition</code>: their result is as far from the origin as their base point,
+which is the regime the boost is good at.</p>
 
 
 
@@ -2476,11 +2500,11 @@ mode): no iteration, fully vmap/JIT-clean.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/gyro_normalization.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-267">267</a></span>
-<span class="normal"><a href="#__codelineno-0-268">268</a></span>
-<span class="normal"><a href="#__codelineno-0-269">269</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-267"><a id="__codelineno-0-267" name="__codelineno-0-267"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">ProperVelocity</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-</span><span id="__span-0-268"><a id="__codelineno-0-268" name="__codelineno-0-268"></a>    <span class="n">validate_pv_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_BN_METHODS</span><span class="p">)</span>
-</span><span id="__span-0-269"><a id="__codelineno-0-269" name="__codelineno-0-269"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-300">300</a></span>
+<span class="normal"><a href="#__codelineno-0-301">301</a></span>
+<span class="normal"><a href="#__codelineno-0-302">302</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-300"><a id="__codelineno-0-300" name="__codelineno-0-300"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">ProperVelocity</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="__span-0-301"><a id="__codelineno-0-301" name="__codelineno-0-301"></a>    <span class="n">validate_pv_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="p">(</span><span class="o">*</span><span class="n">_GYRO_BN_METHODS</span><span class="p">,</span> <span class="s2">&quot;gyro_difference&quot;</span><span class="p">))</span>
+</span><span id="__span-0-302"><a id="__codelineno-0-302" name="__codelineno-0-302"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -2539,11 +2563,11 @@ mode): no iteration, fully vmap/JIT-clean.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/gyro_normalization.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-359">359</a></span>
-<span class="normal"><a href="#__codelineno-0-360">360</a></span>
-<span class="normal"><a href="#__codelineno-0-361">361</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-359"><a id="__codelineno-0-359" name="__codelineno-0-359"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Hyperboloid</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-</span><span id="__span-0-360"><a id="__codelineno-0-360" name="__codelineno-0-360"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_RMS_METHODS</span><span class="p">)</span>
-</span><span id="__span-0-361"><a id="__codelineno-0-361" name="__codelineno-0-361"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-397">397</a></span>
+<span class="normal"><a href="#__codelineno-0-398">398</a></span>
+<span class="normal"><a href="#__codelineno-0-399">399</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-397"><a id="__codelineno-0-397" name="__codelineno-0-397"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Hyperboloid</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="__span-0-398"><a id="__codelineno-0-398" name="__codelineno-0-398"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_RMS_METHODS</span><span class="p">)</span>
+</span><span id="__span-0-399"><a id="__codelineno-0-399" name="__codelineno-0-399"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -2602,11 +2626,11 @@ mode): no iteration, fully vmap/JIT-clean.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/gyro_normalization.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-370">370</a></span>
-<span class="normal"><a href="#__codelineno-0-371">371</a></span>
-<span class="normal"><a href="#__codelineno-0-372">372</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-370"><a id="__codelineno-0-370" name="__codelineno-0-370"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">ProperVelocity</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-</span><span id="__span-0-371"><a id="__codelineno-0-371" name="__codelineno-0-371"></a>    <span class="n">validate_pv_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_RMS_METHODS</span><span class="p">)</span>
-</span><span id="__span-0-372"><a id="__codelineno-0-372" name="__codelineno-0-372"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-408">408</a></span>
+<span class="normal"><a href="#__codelineno-0-409">409</a></span>
+<span class="normal"><a href="#__codelineno-0-410">410</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-408"><a id="__codelineno-0-408" name="__codelineno-0-408"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">ProperVelocity</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="__span-0-409"><a id="__codelineno-0-409" name="__codelineno-0-409"></a>    <span class="n">validate_pv_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_RMS_METHODS</span><span class="p">)</span>
+</span><span id="__span-0-410"><a id="__codelineno-0-410" name="__codelineno-0-410"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -2671,11 +2695,11 @@ in train and eval.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/gyro_normalization.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-390">390</a></span>
-<span class="normal"><a href="#__codelineno-0-391">391</a></span>
-<span class="normal"><a href="#__codelineno-0-392">392</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-390"><a id="__codelineno-0-390" name="__codelineno-0-390"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Poincare</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-</span><span id="__span-0-391"><a id="__codelineno-0-391" name="__codelineno-0-391"></a>    <span class="n">validate_poincare_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_RMS_METHODS</span><span class="p">)</span>
-</span><span id="__span-0-392"><a id="__codelineno-0-392" name="__codelineno-0-392"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-428">428</a></span>
+<span class="normal"><a href="#__codelineno-0-429">429</a></span>
+<span class="normal"><a href="#__codelineno-0-430">430</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-428"><a id="__codelineno-0-428" name="__codelineno-0-428"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Poincare</span><span class="p">,</span> <span class="n">num_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+</span><span id="__span-0-429"><a id="__codelineno-0-429" name="__codelineno-0-429"></a>    <span class="n">validate_poincare_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">_GYRO_RMS_METHODS</span><span class="p">)</span>
+</span><span id="__span-0-430"><a id="__codelineno-0-430" name="__codelineno-0-430"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 

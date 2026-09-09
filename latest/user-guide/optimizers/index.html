@@ -1606,9 +1606,9 @@ correctly.</p>
 <h2 id="learnable-curvature-is-also-euclidean">Learnable Curvature Is Also Euclidean<a class="headerlink" href="#learnable-curvature-is-also-euclidean" title="Permanent link">&para;</a></h2>
 <p>A common confusion: surely learnable curvature needs Riemannian optimization?
 No. The <code>LearnableCurvature</code> module stores a plain Euclidean <code>nnx.Param</code>
-that is reparameterized at call time — via <code>"softplus"</code> (default,
-<code>c = softplus(raw)</code>), <code>"log"</code> (<code>c = exp(raw)</code>, scale-invariant gradient), or
-<code>"identity"</code> (<code>c = raw</code>, an unconstrained <strong>signed</strong> curvature for the
+that is reparameterized at call time — via <code>"log"</code> (default,
+<code>c = exp(raw)</code>, scale-invariant gradient), <code>"softplus"</code> (<code>c = softplus(raw)</code>,
+bounded gradient near zero), or <code>"identity"</code> (<code>c = raw</code>, an unconstrained <strong>signed</strong> curvature for the
 <code>Stereographic</code> manifold) — to produce the curvature value. It gets a normal
 Euclidean gradient and a normal Adam update — there's nothing to project,
 nothing on a manifold.</p>
