@@ -247,10 +247,10 @@ class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
     Centering uses :meth:`Hyperboloid.gyro_difference`. The general spelling
     ``addition(scalar_mul(-1, mu), x)`` is an ambient Lorentz boost whose large
     terms cancel when a far-away mean lies close to its batch points. The dedicated
-    difference uses a Cartesian inverse boost when either endpoint is exactly the
-    origin and the stable polar frame otherwise. The Cartesian branch preserves
-    the derivative with respect to an origin mean; the earlier value-only origin
-    fallback did not.
+    difference uses a Cartesian inverse boost when either endpoint's scaled spatial
+    radius is at most 1e-1 and the stable polar frame otherwise. The Cartesian branch
+    preserves the derivative with respect to an origin mean; the earlier value-only
+    origin fallback did not.
 
     The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
     :meth:`Hyperboloid.addition`: their base point is the learned bias and their result is
@@ -286,9 +286,9 @@ class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
     spatial part of a Lorentz boost, so the general inverse-addition spelling can
     lose the small difference between a far-away mean and a nearby batch point.
     The dedicated PV operation lifts both points exactly to the hyperboloid. It
-    inherits the Cartesian inverse-boost branch when either endpoint is exactly
-    the origin and the stable polar frame otherwise, including the repaired
-    derivative with respect to an origin mean.
+    inherits the Cartesian inverse-boost branch when either endpoint's scaled
+    spatial radius is at most 1e-1 and the stable polar frame otherwise, including
+    the repaired derivative with respect to an origin mean.
 
     The bias ``w ⊕ x`` and the ``scalar_mul`` scaling keep the general
     :meth:`ProperVelocity.addition`: their result is as far from the origin as their base point,

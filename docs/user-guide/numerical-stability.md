@@ -1093,10 +1093,11 @@ from 8.170e-02 to 8.836e-05 at $a = 8$ and from 7.731e-02 to 1.575e-04 at $a = 1
 
 ### Gyro-Difference and GyroBatchNorm Centering at Large Radius {#gyro-difference}
 
-The current operation uses a Cartesian inverse boost when either endpoint is
-exactly the origin and the stable polar frame otherwise. The measurements in this section describe the preceding
-high-radius value and collinear-gradient repairs, before the Cartesian origin
-branch; they are not measurements of the current origin derivative rule.
+The current operation uses a Cartesian inverse boost when either endpoint's
+scaled spatial radius is at most 1e-1 and the stable polar frame otherwise. The
+measurements in this section describe the preceding high-radius value and
+collinear-gradient repairs, before the Cartesian origin branch; they are not
+measurements of the current origin derivative rule.
 
 `Hyperboloid.gyro_difference(x, y, c)` computes $(\ominus x)\oplus y$, the operation
 `HyperboloidGyroBatchNorm` needs to center a batch on its mean and any layer needs for a difference
@@ -1166,9 +1167,9 @@ inside the float64 representation floor of its own radius (worst 0.62×)
 
 ### Origin derivatives and the Cartesian chart {#origin-derivatives}
 
-`gyro_difference` and `ptransp` use Cartesian formulas when either endpoint is
-exactly the origin. The difference is the inverse Lorentz boost with reconstructed
-time. Transport uses the closed-form geodesic transport and derives the input
+`gyro_difference` and `ptransp` use Cartesian formulas when either endpoint's
+scaled spatial radius is at most 1e-1. The difference is the inverse Lorentz boost
+with reconstructed time. Transport uses the closed-form geodesic transport and derives the input
 tangent time as $v_0=\langle x_s,v_s\rangle/x_0$, without a cleanup projection.
 Otherwise both retain the stable geodesic frame.
 

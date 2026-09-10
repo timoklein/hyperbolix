@@ -166,10 +166,10 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
     - `log_radius_concat`: log-radius–preserving concatenation (digamma-scaled `hcat`; Shi et al. 2026, Sec. 4.3)
 
 !!! note "Origin derivatives"
-    `gyro_difference` and `ptransp` use Cartesian formulas when either endpoint is
-    exactly the origin, and retain the stable polar frame otherwise. `logmap` uses
-    the regular Cartesian expression at an exact origin endpoint and the stable
-    polar frame otherwise. Ordinary autodiff preserves derivatives with respect to
+    `gyro_difference` and `ptransp` use Cartesian formulas when either endpoint's
+    scaled spatial radius is at most 1e-1, and retain the stable polar frame
+    otherwise. `logmap` uses the regular Cartesian expression at an exact origin
+    endpoint and the stable polar frame otherwise. Ordinary autodiff preserves derivatives with respect to
     an origin endpoint; earlier value-only origin fallbacks erased them. `busemann` uses a projected-coordinate
     branch whose value and constrained first derivative agree at its branch surface.
     See [Origin derivatives and the Cartesian chart](
