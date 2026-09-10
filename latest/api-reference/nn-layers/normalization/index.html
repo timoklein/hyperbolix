@@ -2363,7 +2363,7 @@ above); the per-sample radial RMSNorm covers all three.</p>
   mean is the closed-form Lorentz centroid; the PV mean is the closed-form
   log-Euclidean mean. Both center with <code>gyro_difference</code>: the Hyperboloid operation
   uses a Cartesian inverse boost when either endpoint has scaled spatial radius at
-  most 1 and the stable polar frame otherwise, while the PV operation inherits both
+  most 1e-1 and the stable polar frame otherwise, while the PV operation inherits both
   branches through its exact Hyperboloid lift. This also preserves derivatives with
   respect to an origin mean. Use for faithful hyperbolic ResNets.</li>
 <li><strong>Gyro radial RMSNorm</strong> (<code>HyperboloidGyroRMSNorm</code>, <code>ProperVelocityGyroRMSNorm</code>,
@@ -2407,10 +2407,10 @@ matching the estimator the ILNN GyroBN reference uses in practice.</p>
 <p>Centering uses :meth:<code>Hyperboloid.gyro_difference</code>. The general spelling
 <code>addition(scalar_mul(-1, mu), x)</code> is an ambient Lorentz boost whose large
 terms cancel when a far-away mean lies close to its batch points. The dedicated
-difference uses a Cartesian inverse boost when either endpoint is exactly the
-origin and the stable polar frame otherwise. The Cartesian branch preserves
-the derivative with respect to an origin mean; the earlier value-only origin
-fallback did not.</p>
+difference uses a Cartesian inverse boost when either endpoint's scaled spatial
+radius is at most 1e-1 and the stable polar frame otherwise. The Cartesian branch
+preserves the derivative with respect to an origin mean; the earlier value-only
+origin fallback did not.</p>
 <p>The bias <code>w ⊕ x</code> and the <code>scalar_mul</code> scaling keep the general
 :meth:<code>Hyperboloid.addition</code>: their base point is the learned bias and their result is
 generally far from the origin, where the boost is well conditioned.</p>
@@ -2484,9 +2484,9 @@ mode): no iteration, fully vmap/JIT-clean.</p>
 spatial part of a Lorentz boost, so the general inverse-addition spelling can
 lose the small difference between a far-away mean and a nearby batch point.
 The dedicated PV operation lifts both points exactly to the hyperboloid. It
-inherits the Cartesian inverse-boost branch when either endpoint is exactly
-the origin and the stable polar frame otherwise, including the repaired
-derivative with respect to an origin mean.</p>
+inherits the Cartesian inverse-boost branch when either endpoint's scaled
+spatial radius is at most 1e-1 and the stable polar frame otherwise, including
+the repaired derivative with respect to an origin mean.</p>
 <p>The bias <code>w ⊕ x</code> and the <code>scalar_mul</code> scaling keep the general
 :meth:<code>ProperVelocity.addition</code>: their result is as far from the origin as their base point,
 which is the regime the boost is good at.</p>

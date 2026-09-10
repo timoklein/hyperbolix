@@ -4144,10 +4144,11 @@ at <span class="arithmatex">\(K = 2\)</span> the projection error goes from 1.41
 8.633e-03 at <span class="arithmatex">\(a = 12\)</span>; Busemann-coordinate preservation (<code>|dB|</code>, the true value of which is 0) goes
 from 8.170e-02 to 8.836e-05 at <span class="arithmatex">\(a = 8\)</span> and from 7.731e-02 to 1.575e-04 at <span class="arithmatex">\(a = 12\)</span>.</p>
 <h3 id="gyro-difference">Gyro-Difference and GyroBatchNorm Centering at Large Radius<a class="headerlink" href="#gyro-difference" title="Permanent link">&para;</a></h3>
-<p>The current operation uses a Cartesian inverse boost when either endpoint is
-exactly the origin and the stable polar frame otherwise. The measurements in this section describe the preceding
-high-radius value and collinear-gradient repairs, before the Cartesian origin
-branch; they are not measurements of the current origin derivative rule.</p>
+<p>The current operation uses a Cartesian inverse boost when either endpoint's
+scaled spatial radius is at most 1e-1 and the stable polar frame otherwise. The
+measurements in this section describe the preceding high-radius value and
+collinear-gradient repairs, before the Cartesian origin branch; they are not
+measurements of the current origin derivative rule.</p>
 <p><code>Hyperboloid.gyro_difference(x, y, c)</code> computes <span class="arithmatex">\((\ominus x)\oplus y\)</span>, the operation
 <code>HyperboloidGyroBatchNorm</code> needs to center a batch on its mean and any layer needs for a difference
 of two far points. The general gyro-addition <code>addition(neg(x), y)</code> (the Lorentz boost
@@ -4325,9 +4326,9 @@ pairs: worst relative disagreement 2.34e-15; against a <code>np.longdouble</code
 inside the float64 representation floor of its own radius (worst 0.62×)
 (<code>step2c_gyro_difference_equivalence.out</code>).</p>
 <h3 id="origin-derivatives">Origin derivatives and the Cartesian chart<a class="headerlink" href="#origin-derivatives" title="Permanent link">&para;</a></h3>
-<p><code>gyro_difference</code> and <code>ptransp</code> use Cartesian formulas when either endpoint is
-exactly the origin. The difference is the inverse Lorentz boost with reconstructed
-time. Transport uses the closed-form geodesic transport and derives the input
+<p><code>gyro_difference</code> and <code>ptransp</code> use Cartesian formulas when either endpoint's
+scaled spatial radius is at most 1e-1. The difference is the inverse Lorentz boost
+with reconstructed time. Transport uses the closed-form geodesic transport and derives the input
 tangent time as <span class="arithmatex">\(v_0=\langle x_s,v_s\rangle/x_0\)</span>, without a cleanup projection.
 Otherwise both retain the stable geodesic frame.</p>
 <p><code>logmap</code> uses the regular Cartesian expression when either endpoint is exactly the
