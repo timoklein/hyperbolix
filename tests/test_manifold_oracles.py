@@ -1155,9 +1155,15 @@ def test_hyperboloid_dist_and_logmap_to_the_origin_match_the_origin_variants(dty
     u = np.asarray(manifold.logmap(origin_A, x_A, c), dtype=np.float64)
     assert np.allclose(u, d * e_rad_A, rtol=max(rtol, 1e-6) * 10.0, atol=0.0)
 
-    # The reverse direction uses an equivalent Cartesian chart, with independent rounding.
+    # The reverse direction uses an equivalent Cartesian chart, with independent rounding. Over
+    # this whole grid the two charts differ by at most 2 ulps of the dtype (measured 0.50-1.71
+    # ulps in float32, 0.50-1.90 in float64, most cells below 1 ulp) with no radius or curvature
+    # trend -- worst 2.040e-07 (float32) and 4.213e-16 (float64), on GPU and CPU alike
+    # (`logs/2026-09-10_v130_evidence_close/probe_logmap_origin_chart_gap.out`). The parametrized
+    # rtol covers that on its own, so this carries no floor: a 1e-12 floor would only have
+    # loosened the float64 arm from its 1e-13 to 1e-12.
     u0 = np.asarray(manifold.logmap(x_A, origin_A, c), dtype=np.float64)
-    assert np.allclose(u0, np.asarray(manifold.logmap_0(x_A, c), dtype=np.float64), rtol=max(rtol, 1e-12), atol=0.0)
+    assert np.allclose(u0, np.asarray(manifold.logmap_0(x_A, c), dtype=np.float64), rtol=rtol, atol=0.0)
 
 
 # ---------------------------------------------------------------------------------------------
