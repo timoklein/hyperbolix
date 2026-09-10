@@ -40,9 +40,10 @@ repos:
         exclude: ^mkdocs\.yml$  # MkDocs uses custom YAML tags
       # Check for merge conflict markers
       - id: check-merge-conflict
-      # Check for large files (>500KB)
+      # Check for large files (>500KB), excluding versioned design assets (e.g. logo)
       - id: check-added-large-files
         args: [--maxkb=500]
+        exclude: ^assets/
       # Check for case conflicts on case-insensitive filesystems
       - id: check-case-conflict
       # Validate pyproject.toml syntax
