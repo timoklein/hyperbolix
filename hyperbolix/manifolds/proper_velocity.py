@@ -211,9 +211,9 @@ def _gyro_difference(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCu
         (⊖x) ⊕_U y = ((⊖X) ⊕_H Y)[1:]
 
     exactly. The lifted hyperboloid operation uses its Cartesian inverse boost
-    when either endpoint is exactly the origin and the stable polar frame
-    otherwise. The Cartesian branch preserves the base-point derivative at the
-    origin; the earlier value-only origin fallback erased it. PV inherits both
+    when either endpoint's scaled spatial radius is at most 1e-1 and the stable
+    polar frame otherwise. The Cartesian branch preserves the base-point derivative
+    at the origin; the earlier value-only origin fallback erased it. PV inherits both
     branches and their derivatives through the lift.
 
     Args:
@@ -531,8 +531,8 @@ def _ptransp(
         PT^PV_{x→y}(v) = PT^H_{X→Y}(V)[1:]
 
     holds *exactly*. :func:`~hyperbolix.manifolds.hyperboloid._ptransp` uses the
-    Cartesian closed form when either endpoint is exactly the origin. That branch
-    reconstructs the input tangent time from its spatial part,
+    Cartesian closed form when either endpoint's scaled spatial radius is at most
+    1e-1. That branch reconstructs the input tangent time from its spatial part,
     ``V₀ = ⟨X_s,V_s⟩/X₀``, then evaluates
     ``V + β(X + Y)`` with ``β = ⟨V,Y⟩_L/(1/c - ⟨X,Y⟩_L)``. It needs no
     cleanup projection. Otherwise the operation retains the stable geodesic frame.
@@ -846,8 +846,8 @@ class ProperVelocity(ManifoldBase):
         Mathematically identical to ``addition(scalar_mul(-1, x), y)``; use this whenever the
         result is expected much closer to the origin than the operands (centering a batch,
         differences of two far points). The exact hyperboloid lift uses a Cartesian
-        inverse boost at an exact origin endpoint and the stable polar frame
-        otherwise. See :func:`_gyro_difference`.
+        inverse boost when either endpoint's scaled spatial radius is at most 1e-1
+        and the stable polar frame otherwise. See :func:`_gyro_difference`.
         """
         return _gyro_difference(self._cast(x), self._cast(y), c)
 
@@ -913,8 +913,9 @@ class ProperVelocity(ManifoldBase):
     ) -> Float[Array, "dim"]:
         """Parallel transport v from T_x PV to T_y PV through the exact lift.
 
-        The lifted hyperboloid transport uses its Cartesian closed form at an exact
-        origin endpoint and the stable polar frame otherwise.
+        The lifted hyperboloid transport uses its Cartesian closed form when either
+        endpoint's scaled spatial radius is at most 1e-1 and the stable polar frame
+        otherwise.
         """
         return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
 
