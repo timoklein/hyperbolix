@@ -9,6 +9,7 @@ from hyperbolix.utils.math_utils import (
     MIN_NORM,
     _pow2_divisor,
     acosh,
+    asinh,
     atanh,
     capped_exp,
     cosh,
@@ -270,6 +271,203 @@ def test_acosh_gradient_at_boundary():
         for x in [0.5, 1.0, 1.0 + 1e-9]:
             g = jax.grad(lambda a: acosh(a))(jnp.asarray(x, dtype=dtype))
             assert jnp.isfinite(g)
+
+
+# --------------------------------------------------------------------------------------
+# asinh / acosh: the custom_jvp rules that replace jax's `rsqrt(x*x ± 1)` derivatives.
+#
+# jax's JVP for `asinh_p`/`acosh_p` materializes `x*x` (`jax/_src/lax/lax.py` ~:4746/:4753),
+# which overflows float32 for |x| > 1.84e19 and makes the derivative *exactly zero* while the
+# true value 1/hypot(1, x) is still an ordinary normal float. These tests pin the fix and
+# document the upstream behaviour they work around.
+# --------------------------------------------------------------------------------------
+
+# Above this the true float32 tangent 1/hypot(1, x) < 1.18e-38 is subnormal, and XLA flushes
+# subnormal results to zero — a dtype limit, not the squaring bug (see probe in
+# logs/2026-09-11_asinh_acosh_custom_jvp/probe_subnormal_tail.py).
+_F32_TANGENT_NORMAL_MAX = 8.0e37
+
+# The exact float32 magnitude at which jax's `x*x + 1` overflows to inf.
+_F32_SQUARING_OVERFLOW = 1.84e19
+
+
+def _fd_scalar(fn, c):
+    """Central finite difference at two step sizes, agreeing to 8e-6 relative.
+
+    Copied from ``tests/test_origin_map_derivatives.py`` (same helper, same contract): an
+    oracle that is independent of JAX's autodiff, so a wrong-but-self-consistent custom JVP
+    cannot pass by agreeing with itself.
+    """
+    d5 = (np.asarray(fn(c + 1e-5)) - np.asarray(fn(c - 1e-5))) / 2e-5
+    d6 = (np.asarray(fn(c + 1e-6)) - np.asarray(fn(c - 1e-6))) / 2e-6
+    np.testing.assert_allclose(d6, d5, rtol=8e-6, atol=5e-7)
+    return d6
+
+
+def _log_grid(dtype, low_exp: int, high_exp: int) -> np.ndarray:
+    """Signed log-spaced magnitudes over ``[10**low_exp, 10**high_exp]``, plus exact 0."""
+    magnitudes = np.logspace(low_exp, high_exp, 4 * (high_exp - low_exp) + 1, dtype=np.float64)
+    return np.concatenate([-magnitudes[::-1], np.zeros(1), magnitudes]).astype(dtype)
+
+
+def _within_ulps(got, expected_f64, dtype, max_ulps: float = 1.0) -> np.ndarray:
+    """Elementwise |got - expected| <= ``max_ulps`` ulp of ``expected`` rounded to ``dtype``."""
+    expected = np.asarray(expected_f64, dtype=np.float64).astype(dtype)
+    ulp = np.spacing(np.abs(expected)).astype(np.float64)
+    diff = np.abs(np.asarray(got, dtype=np.float64) - expected.astype(np.float64))
+    return diff <= max_ulps * ulp
+
+
+@pytest.mark.parametrize(
+    ("dtype", "low_exp", "high_exp"),
+    [(jnp.float32, -30, 38), (jnp.float64, -300, 300)],
+)
+def test_asinh_value_is_bitwise_jnp_arcsinh(dtype, low_exp, high_exp):
+    """The wrapper touches only the derivative: forward values are bit-for-bit ``jnp.arcsinh``.
+
+    Both signs plus exact 0, over the dtype's whole usable magnitude range.
+    """
+    grid = jnp.asarray(_log_grid(dtype, low_exp, high_exp))
+    np.testing.assert_array_equal(np.asarray(asinh(grid)), np.asarray(jnp.arcsinh(grid)))
+
+
+@pytest.mark.parametrize(
+    ("dtype", "low_exp", "high_exp", "max_ulps"),
+    [(jnp.float32, -30, 37, 1.0), (jnp.float64, -300, 300, 2.0)],
+)
+def test_asinh_gradient_is_one_over_hypot_across_the_dtype_range(dtype, low_exp, high_exp, max_ulps):
+    """d/dx asinh(x) matches 1/hypot(1, x) computed in float64 and cast, to a couple of ulps.
+
+    1 ulp everywhere in float32; 2 ulps at 8 of 4803 float64 points, all in |x| ~ 1e-8..1e-3
+    where the tangent is ~1 and ``safe_hypot``'s rescale, ``sqrt`` and the division each round.
+    ``jnp.hypot`` is no better there (10 such points) and jax's own ``rsqrt(x*x + 1)`` is off by
+    up to 9e15 ulps with 1168 exact zeros — see
+    ``logs/2026-09-11_asinh_acosh_custom_jvp/probe_hypot_spelling_ulp.py``.
+
+    The float32 grid stops at 1e37: past ~8.5e37 the true tangent is subnormal and XLA
+    flushes it (covered separately by ``test_asinh_float32_tangent_floor_is_subnormal``).
+    """
+    grid = _log_grid(dtype, low_exp, high_exp)
+    grads = jax.vmap(jax.grad(asinh))(jnp.asarray(grid))
+    reference = 1.0 / np.hypot(np.float64(1.0), grid.astype(np.float64))
+    assert np.all(_within_ulps(grads, reference, dtype, max_ulps))
+
+
+@pytest.mark.parametrize("x", [3e19, 1e22, 8e37])
+def test_asinh_gradient_survives_the_float32_squaring_overflow(x: float):
+    """Above 1.84e19 ``jax.grad(jnp.arcsinh)`` is exactly 0.0 in float32; the wrapper is not.
+
+    The ``jnp.arcsinh`` assertions document the upstream bug this wrapper exists for — if they
+    start failing, JAX has fixed its JVP rule and ``_asinh_stable`` can be deleted.
+    """
+    assert x > _F32_SQUARING_OVERFLOW
+    x32 = jnp.asarray(x, dtype=jnp.float32)
+
+    # Upstream: `g * rsqrt(x*x + 1)` with `x*x` overflowed to inf.
+    assert float(jax.grad(jnp.arcsinh)(x32)) == 0.0
+
+    got = jax.grad(asinh)(x32)
+    assert float(got) != 0.0
+    assert np.all(_within_ulps(got, 1.0 / np.hypot(1.0, x), jnp.float32))
+
+
+def test_asinh_float32_tangent_floor_is_subnormal():
+    """At 1e38 the true tangent 1e-38 is subnormal, so a flushed 0.0 is a dtype limit.
+
+    Documented, not asserted away: the wrapper must never be *wrong* here, but whether XLA
+    returns the subnormal or flushes it is a backend property. The last magnitude at which
+    the tangent is guaranteed nonzero is ``_F32_TANGENT_NORMAL_MAX``.
+    """
+    x32 = jnp.asarray(1e38, dtype=jnp.float32)
+    got = float(jax.grad(asinh)(x32))
+    reference = 1.0 / np.hypot(1.0, 1e38)
+    assert reference < float(np.finfo(np.float32).tiny)
+    assert got == 0.0 or bool(_within_ulps(got, reference, jnp.float32))
+
+    # The boundary itself is a normal float and must come back nonzero.
+    normal = jnp.asarray(_F32_TANGENT_NORMAL_MAX, dtype=jnp.float32)
+    assert float(jax.grad(asinh)(normal)) > 0.0
+
+
+def test_asinh_gradient_at_zero_and_second_derivative_are_finite():
+    """asinh'(0) = 1 exactly, and the second derivative is finite at 0 and at 1e20."""
+    for dtype in [jnp.float32, jnp.float64]:
+        assert float(jax.grad(asinh)(jnp.zeros((), dtype))) == 1.0
+        # asinh''(x) = -x/(1+x²)^{3/2}, so exactly 0 at the origin (not NaN from safe_hypot's
+        # zero-gradient branch, which is never reached: the first leg is a constant 1).
+        second = jax.grad(jax.grad(asinh))(jnp.zeros((), dtype))
+        assert jnp.isfinite(second)
+        assert float(second) == 0.0
+
+    second_large = jax.grad(jax.grad(asinh))(jnp.asarray(1e20, dtype=jnp.float32))
+    assert jnp.isfinite(second_large)
+
+
+@pytest.mark.parametrize("x", [1e-3, 0.5, 3.0, 100.0])
+def test_asinh_gradient_matches_a_finite_difference_oracle(x: float):
+    """Independent (non-autodiff) check of the custom JVP in float64.
+
+    ``rtol`` is the oracle's own accuracy, not the JVP's: ``_fd_scalar`` only guarantees its two
+    step sizes agree to 8e-6 relative, and at x = 100 the float64 cancellation in
+    ``asinh(x+h) - asinh(x-h)`` leaves the returned difference ~1.4e-8 off the true derivative.
+    """
+    expected = _fd_scalar(lambda c: np.asarray(asinh(jnp.asarray(c, dtype=jnp.float64))), x)
+    got = jax.grad(asinh)(jnp.asarray(x, dtype=jnp.float64))
+    np.testing.assert_allclose(np.asarray(got), expected, rtol=5e-6, atol=1e-12)
+
+
+@pytest.mark.parametrize("x", [0.0, 0.5, 3e19, 1e22])
+def test_asinh_jit_and_eager_agree_on_value_and_gradient(x: float):
+    """A custom_jvp must survive being staged out: value and gradient are bitwise identical."""
+    for dtype in [jnp.float32, jnp.float64]:
+        x_a = jnp.asarray(x, dtype=dtype)
+        assert float(jax.jit(asinh)(x_a)) == float(asinh(x_a))
+        assert float(jax.jit(jax.grad(asinh))(x_a)) == float(jax.grad(asinh)(x_a))
+
+
+@pytest.mark.parametrize("x", [1.0 + 1e-3, 1.5, 1e22])
+def test_acosh_value_is_unchanged_by_the_custom_jvp(x: float):
+    """Forward ``acosh`` is bit-for-bit the pre-edit ``jnp.acosh(floor_at(x, 1 + 10 eps))``."""
+    for dtype in [jnp.float32, jnp.float64]:
+        x_a = jnp.asarray(x, dtype=dtype)
+        eps = 10.0 * float(jnp.finfo(dtype).eps)
+        expected = jnp.acosh(jnp.where(x_a < 1.0 + eps, jnp.asarray(1.0 + eps, dtype), x_a))
+        assert float(acosh(x_a)) == float(expected)
+
+
+@pytest.mark.parametrize("x", [3e19, 1e22])
+def test_acosh_gradient_survives_the_float32_squaring_overflow(x: float):
+    """Above 1.84e19 ``jax.grad(jnp.arccosh)`` is exactly 0.0 in float32; ``acosh`` is not."""
+    assert x > _F32_SQUARING_OVERFLOW
+    x32 = jnp.asarray(x, dtype=jnp.float32)
+
+    # Upstream: `g * rsqrt(x*x - 1)` with `x*x` overflowed to inf.
+    assert float(jax.grad(jnp.arccosh)(x32)) == 0.0
+
+    got = jax.grad(acosh)(x32)
+    assert float(got) != 0.0
+    reference = 1.0 / (np.sqrt(np.float64(x) - 1.0) * np.sqrt(np.float64(x) + 1.0))
+    assert np.all(_within_ulps(got, reference, jnp.float32))
+
+
+@pytest.mark.parametrize("x", [1.5, 3.0])
+def test_acosh_gradient_matches_a_finite_difference_oracle(x: float):
+    """Independent (non-autodiff) check of the factored acosh JVP in float64.
+
+    ``rtol`` is the finite-difference oracle's own accuracy — see the ``asinh`` counterpart.
+    """
+    expected = _fd_scalar(lambda c: np.asarray(acosh(jnp.asarray(c, dtype=jnp.float64))), x)
+    got = jax.grad(acosh)(jnp.asarray(x, dtype=jnp.float64))
+    np.testing.assert_allclose(np.asarray(got), expected, rtol=5e-6, atol=1e-12)
+
+
+@pytest.mark.parametrize("x", [1.0, 1.0 + 1e-3, 1.5, 1e22])
+def test_acosh_jit_and_eager_agree_on_value_and_gradient(x: float):
+    """A custom_jvp must survive being staged out: value and gradient are bitwise identical."""
+    for dtype in [jnp.float32, jnp.float64]:
+        x_a = jnp.asarray(x, dtype=dtype)
+        assert float(jax.jit(acosh)(x_a)) == float(acosh(x_a))
+        assert float(jax.jit(jax.grad(acosh))(x_a)) == float(jax.grad(acosh)(x_a))
 
 
 def test_atanh():

@@ -297,3 +297,36 @@ def test_gyro_bias_far_field_matches_float64():
     assert float(jnp.max(dist_B)) < 3e-3  # measured 6.3e-4; old spelling 5.1e-2
     for g32, g64 in zip(grads32, grads64, strict=True):
         assert max_rel(g32, g64) < 5e-6  # measured 6.0e-7; old spelling 3.0e-2
+
+
+# --------------------------------------------------------------------------- #
+# Divergence stays loud (shared sinh-lift output map)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("r", [0.0, 1.0])
+def test_row_with_infinite_time_coordinate_stays_non_finite(r: float):
+    """An input row whose time coordinate has already overflowed comes out non-finite.
+
+    With the MLR bias ``r = 0`` the score is NaN and was always loud. With ``r != 0`` the
+    ``-x_t·sinh(√c·r)·‖z‖`` term makes the score ``-inf``, which the old output guard clipped to
+    ``-v_max``: the layer returned a plausible on-sheet point, the loss stayed finite, and only the
+    NaN kernel gradient (one minibatch later, through the dead parameters) gave the divergence
+    away. Both bias regimes are pinned here; ``r = 1`` is the regression.
+
+    The four healthy rows must be bit-identical to a call that contains only them — a diverged row
+    may not perturb its batch neighbours.
+    """
+    c, in_dim, out_dim, dtype = 0.7, 5, 4, jnp.float32
+    layer = HypLinearHyperboloidPLFC(
+        get_hyperboloid(dtype), in_dim, out_dim, rngs=nnx.Rngs(0), use_gyro_bias=True, param_dtype=dtype
+    )
+    layer.bias[...] = jnp.full_like(layer.bias[...], r)
+    layer.gyro_bias[...] = jnp.full_like(layer.gyro_bias[...], 0.1)  # zero-init would be a no-op
+
+    good_BAi = hyperboloid_points(jax.random.PRNGKey(0), 4, in_dim, c, dtype)
+    bad_Ai = jnp.concatenate([jnp.array([jnp.inf], dtype=dtype), jnp.full((in_dim - 1,), 0.3, dtype=dtype)])
+
+    y_BAo = layer(jnp.concatenate([good_BAi, bad_Ai[None, :]], axis=0), c=c)
+    good_only_BAo = layer(good_BAi, c=c)
+
+    assert not bool(jnp.isfinite(y_BAo[4]).any()), f"diverged row must stay loud, got {y_BAo[4]}"
+    assert np.asarray(y_BAo[:4]).tobytes() == np.asarray(good_only_BAo).tobytes()

@@ -4,6 +4,7 @@ from .curvature import LearnableCurvature
 from .helpers import compute_hyperbolic_delta, compute_pairwise_distances, get_delta
 from .math_utils import (
     acosh,
+    asinh,
     atanh,
     capped_exp,
     cosh,
@@ -22,6 +23,7 @@ from .math_utils import (
 __all__ = [
     "LearnableCurvature",
     "acosh",
+    "asinh",
     "atanh",
     "capped_exp",
     "compute_hyperbolic_delta",

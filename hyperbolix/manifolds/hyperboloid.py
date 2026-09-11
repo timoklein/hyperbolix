@@ -62,6 +62,7 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import (
     MIN_NORM,
+    asinh,
     cosh,
     floor_at,
     radial_perp_decomposition,
@@ -717,11 +718,13 @@ def _dist_stable(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     ``1 + 10·eps`` domain clamp made every distance below ~1.5e-3 unrepresentable, whereas
     ``arcsinh`` is exact near 0.
 
-    ``jnp.arcsinh`` is used directly — measured ≤2.5 ulp in both dtypes with a clean derivative
-    ``1/√(1 + S²)``, so no ``custom_jvp`` is needed anywhere in this path.
+    Since commit 91d3231 this calls the overflow-safe ``asinh`` wrapper from
+    ``hyperbolix.utils.math_utils`` rather than ``jnp.arcsinh`` directly — the forward value is
+    bit-identical (measured ≤2.5 ulp in both dtypes) and the derivative is the equivalent
+    overflow-free ``1/hypot(1, S)``, so no further ``custom_jvp`` is needed in this path.
     """
     frame = _polar_frame(x, y, c)
-    return 2.0 * jnp.arcsinh(frame.sinh_half) / frame.sqrt_c
+    return 2.0 * asinh(frame.sinh_half) / frame.sqrt_c
 
 
 def _dist_stable_smoothened(
@@ -741,7 +744,7 @@ def _dist_stable_smoothened(
     frame = _polar_frame(x, y, c)
     eps = 10.0 * float(jnp.finfo(x.dtype).eps)
     sinh_half_floored = safe_hypot(frame.sinh_half, jnp.asarray(eps, dtype=x.dtype))
-    return 2.0 * jnp.arcsinh(sinh_half_floored) / frame.sqrt_c
+    return 2.0 * asinh(sinh_half_floored) / frame.sqrt_c
 
 
 def _dist(
@@ -849,7 +852,7 @@ def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[A
     # overflows float32 past coordinate 1.8e19 — geodesic radius ~45 at c = 1, ~139 at c = 0.1 — and
     # a network whose points sit there is already diverging. It propagates as `inf`, the intended
     # signal, and `arcsinh(inf) = inf` is the correct limit.
-    return jnp.arcsinh(sqrt_c * _norm(x[1:])) / sqrt_c
+    return asinh(sqrt_c * _norm(x[1:])) / sqrt_c
 
 
 def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -868,7 +871,7 @@ def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature)
     # Same one-reduction radius as :func:`_dist_0_stable`; the scalar `safe_hypot` that applies the
     # ε floor stays (it composes two already-reduced scalars, so it costs no extra pass).
     radius_floored = safe_hypot(sqrt_c * _norm(x[1:]), jnp.asarray(eps, dtype=x.dtype))
-    return jnp.arcsinh(radius_floored) / sqrt_c
+    return asinh(radius_floored) / sqrt_c
 
 
 def _dist_0(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
@@ -1041,7 +1044,7 @@ def _asinhc(s: Float[Array, "..."]) -> Float[Array, "..."]:
     s_safe = jnp.where(small, jnp.ones_like(s), s)
     s_sq = s * s
     series = 1.0 - s_sq / 6.0 + 0.075 * s_sq * s_sq
-    return jnp.where(small, series, jnp.arcsinh(s_safe) / s_safe)
+    return jnp.where(small, series, asinh(s_safe) / s_safe)
 
 
 def _logmap_direction(frame: _PolarFrame) -> tuple[Float[Array, ""], Float[Array, "dim"]]:
@@ -1313,7 +1316,7 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
     u = sqrt_c * y_rest_norm
     # = d₀(y)/‖y_s‖, → 1 as u → 0. The `where` only fires on a non-finite `u`, where the quotient
     # would be inf/inf = NaN; the scale 1 there hands the ±inf spatial entries straight through.
-    scale = jnp.where(jnp.isfinite(u), jnp.arcsinh(u) / u, 1.0)
+    scale = jnp.where(jnp.isfinite(u), asinh(u) / u, 1.0)
 
     v0 = jnp.zeros(1, dtype=y.dtype)
     v_rest = scale * y_rest
@@ -1582,6 +1585,12 @@ def _egrad2rgrad(
     the projector needs no division by the measured Lorentz norm, which is the quantity that has no
     significant bits left past geodesic radius ~9 in float32.
 
+    The projection removes the normal component analytically through this closed form, so any
+    normal component still present in the result is exactly the rounding of ``grad_lorentz``'s own
+    normal contamination scaled by ``cosh²(a)`` at scaled radius ``a``, not an artifact of the
+    projector; a vector that is already tangent by construction (an output of :func:`_logmap` or
+    :func:`_ptransp`) should be used directly rather than passed back through this projection.
+
     This is the NumPy oracle in ``tests/test_manifold_oracles.py::
     test_hyperboloid_egrad2rgrad_equals_minkowski_projection``, verbatim.
 
@@ -1625,6 +1634,12 @@ def _tangent_proj(
     radius should build it tangent by construction (``_logmap``, ``_ptransp``) rather than project
     a contaminated one; this helper is for the ambient-gradient and public-API cases where the
     input genuinely is off the tangent space.
+
+    The projection above removes the normal component analytically, so any normal component still
+    present after it is exactly the rounding of ``v``'s own normal contamination scaled by
+    ``cosh²(a)`` at scaled radius ``a``; a vector that is already tangent by construction (an output
+    of ``_logmap``, ``_ptransp``) should be used directly rather than passed back through this
+    projector.
 
     No caller inside this module remains: ``_logmap``/``_logmap_0`` return tangent vectors by
     construction and ``_ptransp``/``_ptransp_0`` now do too. The remaining users are the public
@@ -1900,7 +1915,7 @@ def _compute_mlr(
     # at c = 1, radius 5, default init the float32 logits sat 9.4e-2 (D = 128) / 1.8e-1
     # (D = 32) from the float64 ones relative to the largest logit, and every clamped cell had
     # an exactly-zero input gradient. logs/2026-09-04_safe_norm_hot_path_revert/precision/mlr_clamp
-    signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c
+    signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c
     res_BP = z_norm_1P * signed_dist2hyp_BP
     return res_BP
 
@@ -2060,7 +2075,15 @@ class Hyperboloid(ManifoldBase):
         return _create_origin(c, dim, self.dtype)
 
     def minkowski_inner(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"]) -> Float[Array, ""]:
-        """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩."""
+        """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩.
+
+        This is the literal form ``-x₀·y₀ + ⟨x_s, y_s⟩``, whose two terms are each
+        ``O(cosh²(a)/c)`` and cancel, so the absolute rounding error is about ``eps·cosh²(a)/c``
+        (float32: 0.26 at ``a = 8``, reaching 1 at ``a ≈ 8.7`` for ``c = 1``). Nothing inside the library calls it; do not
+        use it to recover ``⟨x, x⟩_L = -1/c``, to check manifold membership, or to form distances —
+        use ``dist``/``sqdist``/``tangent_inner``/``is_in_manifold``, which are cancellation-free
+        (see ``docs/user-guide/numerical-stability.md``).
+        """
         return _minkowski_inner(self._cast(x), self._cast(y))
 
     def proj(self, x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:

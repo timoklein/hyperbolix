@@ -18,7 +18,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import ManifoldParam
-from ..utils.math_utils import floor_at, safe_norm
+from ..utils.math_utils import asinh, floor_at, safe_norm
 from ._helpers import validate_poincare_manifold
 
 
@@ -178,7 +178,7 @@ class HypRegressionPoincare(nnx.Module):
 
         # Signed distance to hyperplane. No clamp on the asinh argument — same reason as in
         # `manifolds/hyperboloid._compute_mlr`; see there.
-        signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c  # (B, P)
+        signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c  # (B, P)
 
         # Conformal factor for p
         lambda_p_P1 = self.manifold.conformal_factor(p, c)  # (P, 1)

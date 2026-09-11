@@ -83,6 +83,12 @@ def _conformal_factor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array
 
     For ``c > 0`` the denominator → 0 at the ball boundary and is floored with a dtype-eps margin (the
     historical Poincaré behavior); for ``c ≤ 0`` the denominator is ``≥ 1`` and the floor never bites.
+
+    ``λ`` grows like ``e^a`` at scaled radius ``a``, and every quantity that inherits it — the Möbius
+    operations, the Poincaré MLR score, ``_conformal_factor_batch`` — shares this ball chart's
+    representation ceiling (``a ≈ 12.6`` float32 / ``27.7`` float64); the library adds no guard
+    beyond the chart's own ``_boundary_floor`` above, by design (loud divergence over silent
+    saturation, see CLAUDE.md).
     """
     x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
     denom = floor_at(1.0 - c * x2, jnp.where(jnp.asarray(c) > 0, _boundary_floor(x, c), MIN_NORM))

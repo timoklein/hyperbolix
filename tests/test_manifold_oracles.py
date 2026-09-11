@@ -37,8 +37,9 @@ from hyperbolix.manifolds import (
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds._gyrovector_core import _conformal_factor, _conformal_factor_batch, _proj
 from hyperbolix.manifolds.hyperboloid import _polar_frame
-from hyperbolix.nn_layers.hyperboloid_core import sinh_lift_to_hyperboloid
-from hyperbolix.utils.math_utils import MIN_NORM
+from hyperbolix.nn_layers.hyperboloid_core import sinh_lift_to_hyperboloid, spatial_to_hyperboloid
+from hyperbolix.utils.math_utils import MIN_NORM, clamp_to
+from hyperbolix.utils.math_utils import sinh as safe_sinh
 
 jax.config.update("jax_enable_x64", True)
 
@@ -427,6 +428,78 @@ def test_sinh_lift_saturates_at_v_max(c: float):
     saturated = np.sinh(v_max) / np.sqrt(c)
     assert float(lifted_once[0, 1]) == pytest.approx(saturated, rel=1e-12)
     assert float(lifted_once[0, 2]) == pytest.approx(-saturated, rel=1e-12)
+
+
+def _old_sinh_lift(spatial_BO, c: float, v_max: float, eps: float = 1e-7):
+    """The pre-pass-through spelling of ``sinh_lift_to_hyperboloid``: clip, always.
+
+    Transcribed rather than imported, so the bit-equality assertion below keeps its meaning if the
+    library spelling moves again. On a non-finite score this is the bug the pass-through replaced:
+    ``clamp_to(-inf, -v_max, v_max)`` is ``-v_max``, and the caller gets a plausible on-sheet point
+    back from a row that has already diverged.
+    """
+    sqrt_c = jnp.sqrt(c)
+    sinh_arg_BO = clamp_to(sqrt_c * spatial_BO, -v_max, v_max)
+    res_rem_BO = safe_sinh(sinh_arg_BO) / sqrt_c
+    return spatial_to_hyperboloid(res_rem_BO, c_in=c, c_out=c, eps=eps)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+@pytest.mark.parametrize("dtype", [jnp.float32, F64])
+@pytest.mark.parametrize("c", CURVATURES)
+def test_sinh_lift_is_bit_identical_to_the_old_spelling_on_finite_scores(c: float, dtype, seed: int):
+    """The non-finite pass-through is free on finite input: same bits in value and in ``jax.grad``.
+
+    The two ``where``s branch on ``isfinite`` alone, so every finite row must take the old
+    expression op-for-op — not merely to tolerance. Scores are drawn on ±3·``v_max``, so roughly
+    two thirds of them land in the clipped tail and both sides of the guard are exercised.
+    """
+    v_max = 5.0
+    key_s, key_w = jax.random.split(jax.random.PRNGKey(seed))
+    spatial_BO = jax.random.uniform(key_s, (6, 4), dtype=dtype, minval=-3.0 * v_max, maxval=3.0 * v_max)
+    weight_BA = jax.random.normal(key_w, (6, 5), dtype=dtype)
+
+    def contraction(lift):
+        return lambda s: jnp.sum(weight_BA * lift(s, c, v_max))
+
+    new_BA = sinh_lift_to_hyperboloid(spatial_BO, c, v_max)
+    old_BA = _old_sinh_lift(spatial_BO, c, v_max)
+    grad_new_BO = jax.grad(contraction(sinh_lift_to_hyperboloid))(spatial_BO)
+    grad_old_BO = jax.grad(contraction(_old_sinh_lift))(spatial_BO)
+
+    assert new_BA.dtype == old_BA.dtype == dtype
+    assert np.asarray(new_BA).tobytes() == np.asarray(old_BA).tobytes()
+    assert np.asarray(grad_new_BO).tobytes() == np.asarray(grad_old_BO).tobytes()
+    # The clipped tail has to be present, or the test passes on the trivial branch alone.
+    assert bool(jnp.any(jnp.abs(jnp.sqrt(c) * spatial_BO) > v_max))
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+def test_sinh_lift_passes_a_non_finite_score_through_instead_of_clipping_it(c: float):
+    """An ``inf``/NaN score reaches the output as ``inf``/NaN, not as ``±sinh(v_max)/√c``.
+
+    A score is non-finite only when the point that produced it has already left the representable
+    manifold; clipping it to the guard bound would hand the caller a finite, on-sheet point and a
+    finite loss while the parameter gradient goes NaN. The diverged row must also leave its
+    neighbours' bits alone — that is what the inner ``where`` buys.
+    """
+    v_max = 5.0
+    good_O = jnp.array([0.4, -0.2, 0.7, 0.3], dtype=F64)
+    bad_O = jnp.array([jnp.inf, -jnp.inf, jnp.nan, 0.3], dtype=F64)
+
+    lifted_BA = sinh_lift_to_hyperboloid(jnp.stack([good_O, bad_O]), c, v_max)
+    finite_only_BA = sinh_lift_to_hyperboloid(good_O[None, :], c, v_max)
+
+    bad_A = np.asarray(lifted_BA[1])
+    assert np.isposinf(bad_A[1]) and np.isneginf(bad_A[2]) and np.isnan(bad_A[3])
+    assert not np.isfinite(bad_A[0]), "the time slot must go non-finite with the spatial ones"
+    assert bad_A[4] == pytest.approx(np.sinh(0.3 * np.sqrt(c)) / np.sqrt(c), rel=1e-12)
+
+    # Neighbouring row: untouched, bit for bit.
+    assert np.asarray(lifted_BA[0]).tobytes() == np.asarray(finite_only_BA[0]).tobytes()
+    # The finite column of the diverged row itself: also the value an all-finite call would give.
+    healthy_BA = sinh_lift_to_hyperboloid(bad_O.at[:3].set(good_O[:3])[None, :], c, v_max)
+    assert np.asarray(lifted_BA[1, 4]).tobytes() == np.asarray(healthy_BA[0, 4]).tobytes()
 
 
 # =============================================================================================

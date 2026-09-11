@@ -672,6 +672,67 @@ def sinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     return 0.5 * (jnp.expm1(x) - jnp.expm1(-x))
 
 
+@jax.custom_jvp
+def _asinh_stable(x):
+    return jnp.arcsinh(x)
+
+
+@_asinh_stable.defjvp
+def _asinh_stable_jvp(primals, tangents):
+    (x,), (t,) = primals, tangents
+    # 1/hypot(1, x), not jax's rsqrt(x*x + 1): see the `asinh` docstring.
+    return _asinh_stable(x), t / safe_hypot(jnp.ones_like(x), x)
+
+
+@_jit
+def asinh(x: Float[Array, "..."]) -> Float[Array, "..."]:
+    """Inverse hyperbolic sine with an overflow-free derivative. Domain=(-inf, inf).
+
+    Forward value is ``jnp.arcsinh`` unchanged — bit-identical, same op, no clamp, no domain
+    guard (``asinh`` has no domain boundary). Only the derivative differs.
+
+    JAX's JVP rule for ``asinh_p`` is ``g * rsqrt(x*x + 1)`` (``jax/_src/lax/lax.py``, ~:4746 in
+    0.11.1 and unchanged in the installed 0.9.1). It materializes ``x*x``, which overflows float32
+    for ``|x| > 1.84e19``: ``rsqrt(inf) = 0``, so the returned derivative is **exactly 0.0** while
+    the true value ``1/hypot(1, x) ≈ 1/|x|`` is an ordinary normal float down to ``|x| ≈ 8.5e37``.
+    Nothing warns — forward values stay correct and the gradient silently freezes. The library hits
+    this in ``manifolds/hyperboloid._compute_mlr``, whose score ``‖z‖·asinh(√c·alpha/‖z‖)/√c`` pushes
+    ``asinh`` argument past 1.8e19 whenever ``‖z‖`` collapses, freezing the MLR bias and its input
+    gradient (``logs/2026-09-11_plfc_residual_nan/``).
+
+    The ``custom_jvp`` above spells the same derivative as ``1/hypot(1, x)`` via :func:`safe_hypot`,
+    which rescales by an exact power of two instead of squaring, so no intermediate can overflow.
+    Identical to the builtin rule wherever the builtin is finite, correct where it is not, and
+    exactly ``1.0`` at ``x = 0``. The only remaining floor is the dtype's: above ``|x| ≈ 8.5e37`` in
+    float32 the true tangent is subnormal and XLA flushes it to zero — a representation limit, not
+    a cancellation.
+
+    **Removable.** This wrapper exists only to work around the upstream rule (bug report:
+    ``logs/2026-09-11_plfc_residual_nan/jax_issue_asinh_jvp.md``). Once JAX computes the ``asinh``
+    JVP without squaring its argument, ``_asinh_stable`` can be deleted and every call site can go
+    back to ``jnp.arcsinh``.
+
+    Args:
+        x: Input array of any shape
+
+    Returns:
+        ``asinh(x)``, with a derivative that does not overflow at large ``|x|``
+    """
+    return _asinh_stable(x)
+
+
+@jax.custom_jvp
+def _acosh_stable(x):
+    return jnp.acosh(x)
+
+
+@_acosh_stable.defjvp
+def _acosh_stable_jvp(primals, tangents):
+    (x,), (t,) = primals, tangents
+    # 1/(sqrt(x-1)*sqrt(x+1)), not jax's rsqrt(x*x - 1): see the `acosh` docstring.
+    return _acosh_stable(x), t / (safe_sqrt(x - 1.0) * safe_sqrt(x + 1.0))
+
+
 @_jit
 def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Inverse hyperbolic cosine with domain clamping. Domain=[1, inf).
@@ -684,6 +745,17 @@ def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     margin bounds the derivative at ~1/sqrt(2*margin) and keeps the forward
     error sqrt(2*margin) below test tolerances (f32: ~1.5e-3, f64: ~6.6e-8).
 
+    The forward value is ``jnp.acosh`` on the floored argument, unchanged. What ``_acosh_stable``
+    above changes is the derivative at the *other* end of the domain: JAX's JVP rule for ``acosh_p``
+    is ``g * rsqrt(x*x - 1)`` (``jax/_src/lax/lax.py``, ~:4753 in 0.11.1, unchanged in the installed
+    0.9.1), and ``x*x`` overflows float32 for ``x > 1.84e19``, making the derivative exactly ``0.0``
+    where the true ``1/(sqrt(x-1)·sqrt(x+1)) ≈ 1/x`` is still an ordinary float. The factored
+    spelling never materializes ``x²``. It agrees with the builtin rule to within a float32 ulp near
+    the boundary (measured at ``x = 1 + 1e-3``: 2.23545685e1 vs 2.23545704e1, true 2.23550917e1 —
+    both dominated by the float32 rounding of ``x`` itself) and is the only correct one at ``1e22``.
+    :func:`safe_sqrt` keeps the ``x = 1`` end free of the ``0 * inf = NaN`` the floor already guards
+    against. Same removability note as :func:`asinh`.
+
     Args:
         x: Input array of any shape
 
@@ -692,7 +764,7 @@ def acosh(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """
     eps = 10.0 * float(jnp.finfo(x.dtype).eps)
     x = floor_at(x, 1.0 + eps)
-    return jnp.acosh(x)
+    return _acosh_stable(x)
 
 
 def _is_low_precision(dtype) -> bool:

@@ -66,7 +66,7 @@ import jax.numpy as jnp
 import jax.scipy.special
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, tanh
+from ..utils.math_utils import MIN_NORM, asinh, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, tanh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
@@ -206,7 +206,7 @@ def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Scala
     one_minus_cx = 2.0 / _conformal_factor(x, c)
     one_minus_cy = 2.0 / _conformal_factor(y, c)
     sqrt_t = sqrt_c * diff_norm / jnp.sqrt(one_minus_cx * one_minus_cy)
-    return 2.0 * jnp.arcsinh(sqrt_t) / sqrt_c
+    return 2.0 * asinh(sqrt_t) / sqrt_c
 
 
 def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -332,7 +332,7 @@ def _dist_0_metric_tensor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[A
     # cannot drive the denominator to 0; consistent with _dist_metric_tensor and _apollonian_dist.
     one_minus_cx = 2.0 / _conformal_factor(x, c)
     sqrt_t = sqrt_c * x_norm / jnp.sqrt(one_minus_cx)
-    return 2.0 * jnp.arcsinh(sqrt_t) / sqrt_c
+    return 2.0 * asinh(sqrt_t) / sqrt_c
 
 
 def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
@@ -723,7 +723,7 @@ def _compute_mlr_pp(
     # No clamp on the asinh argument — same reason as in `manifolds/hyperboloid._compute_mlr`;
     # see there. λ(x) puts this argument past the old float32 bound sooner than the hyperboloid
     # one does: λ ≈ 75 already at geodesic radius 5, c = 1.
-    signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c  # (B, P)
+    signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c  # (B, P)
     res_BP = 2 * z_norm_P1.T * signed_dist2hyp_BP  # z_norm.T broadcasts (1, P) over (B, P)
     return res_BP
 
