@@ -718,8 +718,10 @@ def _dist_stable(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     ``1 + 10·eps`` domain clamp made every distance below ~1.5e-3 unrepresentable, whereas
     ``arcsinh`` is exact near 0.
 
-    ``jnp.arcsinh`` is used directly — measured ≤2.5 ulp in both dtypes with a clean derivative
-    ``1/√(1 + S²)``, so no ``custom_jvp`` is needed anywhere in this path.
+    Since commit 91d3231 this calls the overflow-safe ``asinh`` wrapper from
+    ``hyperbolix.utils.math_utils`` rather than ``jnp.arcsinh`` directly — the forward value is
+    bit-identical (measured ≤2.5 ulp in both dtypes) and the derivative is the equivalent
+    overflow-free ``1/hypot(1, S)``, so no further ``custom_jvp`` is needed in this path.
     """
     frame = _polar_frame(x, y, c)
     return 2.0 * asinh(frame.sinh_half) / frame.sqrt_c
@@ -1583,6 +1585,12 @@ def _egrad2rgrad(
     the projector needs no division by the measured Lorentz norm, which is the quantity that has no
     significant bits left past geodesic radius ~9 in float32.
 
+    The projection removes the normal component analytically through this closed form, so any
+    normal component still present in the result is exactly the rounding of ``grad_lorentz``'s own
+    normal contamination scaled by ``cosh²(a)`` at scaled radius ``a``, not an artifact of the
+    projector; a vector that is already tangent by construction (an output of :func:`_logmap` or
+    :func:`_ptransp`) should be used directly rather than passed back through this projection.
+
     This is the NumPy oracle in ``tests/test_manifold_oracles.py::
     test_hyperboloid_egrad2rgrad_equals_minkowski_projection``, verbatim.
 
@@ -1626,6 +1634,12 @@ def _tangent_proj(
     radius should build it tangent by construction (``_logmap``, ``_ptransp``) rather than project
     a contaminated one; this helper is for the ambient-gradient and public-API cases where the
     input genuinely is off the tangent space.
+
+    The projection above removes the normal component analytically, so any normal component still
+    present after it is exactly the rounding of ``v``'s own normal contamination scaled by
+    ``cosh²(a)`` at scaled radius ``a``; a vector that is already tangent by construction (an output
+    of ``_logmap``, ``_ptransp``) should be used directly rather than passed back through this
+    projector.
 
     No caller inside this module remains: ``_logmap``/``_logmap_0`` return tangent vectors by
     construction and ``_ptransp``/``_ptransp_0`` now do too. The remaining users are the public
@@ -2061,7 +2075,15 @@ class Hyperboloid(ManifoldBase):
         return _create_origin(c, dim, self.dtype)
 
     def minkowski_inner(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"]) -> Float[Array, ""]:
-        """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩."""
+        """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩.
+
+        This is the literal form ``-x₀·y₀ + ⟨x_s, y_s⟩``, whose two terms are each
+        ``O(cosh²(a)/c)`` and cancel, so the absolute rounding error is about ``eps·cosh²(a)/c``
+        (float32: already 1 at ``a ≈ 8`` for ``c = 1``). Nothing inside the library calls it; do not
+        use it to recover ``⟨x, x⟩_L = -1/c``, to check manifold membership, or to form distances —
+        use ``dist``/``sqdist``/``tangent_inner``/``is_in_manifold``, which are cancellation-free
+        (see ``docs/user-guide/numerical-stability.md``).
+        """
         return _minkowski_inner(self._cast(x), self._cast(y))
 
     def proj(self, x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
