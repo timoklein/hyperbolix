@@ -62,6 +62,7 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import (
     MIN_NORM,
+    asinh,
     cosh,
     floor_at,
     radial_perp_decomposition,
@@ -721,7 +722,7 @@ def _dist_stable(x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c
     ``1/√(1 + S²)``, so no ``custom_jvp`` is needed anywhere in this path.
     """
     frame = _polar_frame(x, y, c)
-    return 2.0 * jnp.arcsinh(frame.sinh_half) / frame.sqrt_c
+    return 2.0 * asinh(frame.sinh_half) / frame.sqrt_c
 
 
 def _dist_stable_smoothened(
@@ -741,7 +742,7 @@ def _dist_stable_smoothened(
     frame = _polar_frame(x, y, c)
     eps = 10.0 * float(jnp.finfo(x.dtype).eps)
     sinh_half_floored = safe_hypot(frame.sinh_half, jnp.asarray(eps, dtype=x.dtype))
-    return 2.0 * jnp.arcsinh(sinh_half_floored) / frame.sqrt_c
+    return 2.0 * asinh(sinh_half_floored) / frame.sqrt_c
 
 
 def _dist(
@@ -849,7 +850,7 @@ def _dist_0_stable(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[A
     # overflows float32 past coordinate 1.8e19 — geodesic radius ~45 at c = 1, ~139 at c = 0.1 — and
     # a network whose points sit there is already diverging. It propagates as `inf`, the intended
     # signal, and `arcsinh(inf) = inf` is the correct limit.
-    return jnp.arcsinh(sqrt_c * _norm(x[1:])) / sqrt_c
+    return asinh(sqrt_c * _norm(x[1:])) / sqrt_c
 
 
 def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -868,7 +869,7 @@ def _dist_0_stable_smoothened(x: Float[Array, "dim_plus_1"], c: ScalarCurvature)
     # Same one-reduction radius as :func:`_dist_0_stable`; the scalar `safe_hypot` that applies the
     # ε floor stays (it composes two already-reduced scalars, so it costs no extra pass).
     radius_floored = safe_hypot(sqrt_c * _norm(x[1:]), jnp.asarray(eps, dtype=x.dtype))
-    return jnp.arcsinh(radius_floored) / sqrt_c
+    return asinh(radius_floored) / sqrt_c
 
 
 def _dist_0(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
@@ -1041,7 +1042,7 @@ def _asinhc(s: Float[Array, "..."]) -> Float[Array, "..."]:
     s_safe = jnp.where(small, jnp.ones_like(s), s)
     s_sq = s * s
     series = 1.0 - s_sq / 6.0 + 0.075 * s_sq * s_sq
-    return jnp.where(small, series, jnp.arcsinh(s_safe) / s_safe)
+    return jnp.where(small, series, asinh(s_safe) / s_safe)
 
 
 def _logmap_direction(frame: _PolarFrame) -> tuple[Float[Array, ""], Float[Array, "dim"]]:
@@ -1313,7 +1314,7 @@ def _logmap_0(y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array,
     u = sqrt_c * y_rest_norm
     # = d₀(y)/‖y_s‖, → 1 as u → 0. The `where` only fires on a non-finite `u`, where the quotient
     # would be inf/inf = NaN; the scale 1 there hands the ±inf spatial entries straight through.
-    scale = jnp.where(jnp.isfinite(u), jnp.arcsinh(u) / u, 1.0)
+    scale = jnp.where(jnp.isfinite(u), asinh(u) / u, 1.0)
 
     v0 = jnp.zeros(1, dtype=y.dtype)
     v_rest = scale * y_rest
@@ -1900,7 +1901,7 @@ def _compute_mlr(
     # at c = 1, radius 5, default init the float32 logits sat 9.4e-2 (D = 128) / 1.8e-1
     # (D = 32) from the float64 ones relative to the largest logit, and every clamped cell had
     # an exactly-zero input gradient. logs/2026-09-04_safe_norm_hot_path_revert/precision/mlr_clamp
-    signed_dist2hyp_BP = jnp.asinh(asinh_arg_BP) / sqrt_c
+    signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c
     res_BP = z_norm_1P * signed_dist2hyp_BP
     return res_BP
 

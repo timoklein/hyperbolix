@@ -51,6 +51,7 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import (
     MIN_NORM,
+    asinh,
     cosh,
     floor_at,
     radial_perp_decomposition,
@@ -236,7 +237,7 @@ def _scalar_mul(t: Float[Array, ""] | float, x: Float[Array, "dim"], c: ScalarCu
     x_norm = _safe_norm(x)[..., None]
     arg = sqrt_c * x_norm  # √c·||x||, never exactly zero
     # sinh is the overflow-protected variant; jnp.asinh is stable on all of R.
-    scale = sinh(t * jnp.asinh(arg)) / arg
+    scale = sinh(t * asinh(arg)) / arg
     return scale * x
 
 
@@ -299,7 +300,7 @@ def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """
     sqrt_c = jnp.sqrt(c)
     x_norm = safe_norm(x)
-    return jnp.asinh(sqrt_c * x_norm) / sqrt_c
+    return asinh(sqrt_c * x_norm) / sqrt_c
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +332,7 @@ def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]
     y_norm = _safe_norm(y)[..., None]
     arg = sqrt_c * y_norm
     # asinh(arg)/arg has limit 1 as arg → 0.
-    scale = jnp.asinh(arg) / arg
+    scale = asinh(arg) / arg
     return scale * y
 
 
@@ -786,7 +787,7 @@ def _compute_mlr(
     # No clamp on the asinh argument — same reason as in `manifolds/hyperboloid._compute_mlr`;
     # see there. PV coordinates are unconstrained, so this argument grows like `sinh(r)` with no
     # bounded factor in front of it.
-    return (z_norm_P1.T / sqrt_c) * jnp.asinh(asinh_arg_BP)
+    return (z_norm_P1.T / sqrt_c) * asinh(asinh_arg_BP)
 
 
 # ---------------------------------------------------------------------------
