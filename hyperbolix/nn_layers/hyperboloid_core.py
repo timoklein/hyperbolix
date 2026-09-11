@@ -36,14 +36,12 @@ from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
 from hyperbolix.utils.math_utils import (
     MIN_NORM,
     clamp_to,
-)
-from hyperbolix.utils.math_utils import cosh as safe_cosh
-from hyperbolix.utils.math_utils import (
     floor_at,
     safe_hypot,
     safe_hypot_norm,
     safe_norm,
 )
+from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 from hyperbolix.utils.precision import MATMUL_PRECISION as MATMUL_PRECISION  # re-export
 
@@ -306,6 +304,15 @@ def sinh_lift_to_hyperboloid(
     the gradient in the already-saturated tail. Callers must ``_assert_v_max_safe(v_max)`` so
     the bare ``jnp.sinh`` below cannot overflow float32.
 
+    The clip guards *finite* scores only: a non-finite ``√c · score`` (the input point's time
+    coordinate already overflowed float32 upstream) is passed through unchanged instead of being
+    clipped to ``±v_max``, so the spatial slot stays ``inf``/NaN, the reconstructed time slot goes
+    non-finite with it, and the loss goes NaN at the onset minibatch rather than a plausible
+    saturated point hiding the divergence behind a finite loss and a NaN parameter gradient.
+    Finite rows take the same expression as before op-for-op — value and ``jax.grad`` are
+    unchanged — and the inner ``where`` keeps the non-finite row's NaN out of the ``sinh`` VJP,
+    so it cannot contaminate the finite rows' cotangents.
+
     Parameters
     ----------
     spatial_BO : Array, shape (..., O)
@@ -323,12 +330,19 @@ def sinh_lift_to_hyperboloid(
         Points on the hyperboloid with curvature ``c`` (time coordinate first).
     """
     sqrt_c = jnp.sqrt(c)
-    sinh_arg_BO = clamp_to(sqrt_c * spatial_BO, -v_max, v_max)
+    arg_BO = sqrt_c * spatial_BO
+    # Double `where`, both branching on a constant `isfinite` predicate (no measured quantity is
+    # clipped or maximised here). The inner one keeps a NaN out of the sinh VJP, so a diverged row
+    # cannot poison the finite rows' cotangents; the outer one routes the non-finite score around
+    # both the clip and the sinh, so it reaches `spatial_to_hyperboloid` intact and the point comes
+    # out loudly non-finite instead of saturated at ±sinh(v_max)/√c.
+    finite_BO = jnp.isfinite(arg_BO)
+    safe_arg_BO = jnp.where(finite_BO, arg_BO, jnp.zeros_like(arg_BO))
     # safe_sinh: the argument is already bounded to ±v_max ≪ the math_utils.sinh overflow clamp
     # (callers assert v_max safety), so the clamp itself is redundant here — but the wrapper's
     # expm1-form is an accuracy fix (XLA's CPU jnp.sinh is up to ~17-496 ulps off for |x| >= 16),
     # not just a clamp, so it is still worth routing through.
-    res_rem_BO = safe_sinh(sinh_arg_BO) / sqrt_c
+    res_rem_BO = jnp.where(finite_BO, safe_sinh(clamp_to(safe_arg_BO, -v_max, v_max)) / sqrt_c, arg_BO)
     # Time reconstruction via the hyperboloid constraint (scale = 1 since c_in == c_out).
     return spatial_to_hyperboloid(res_rem_BO, c_in=c, c_out=c, eps=eps)
 

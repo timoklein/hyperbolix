@@ -308,3 +308,26 @@ def test_bmlr_hyperboloid_far_field_matches_float64():
     assert _max_rel(logits32_BK, logits64_BK) < 1e-6  # measured 1.1e-7; old busemann 3.7e-3
     for g32, g64 in zip(grads32, grads64, strict=True):
         assert _max_rel(g32, g64) < 2e-4  # measured 2.3e-5; old busemann 7.1e-2
+
+
+def test_busemann_row_with_infinite_time_coordinate_stays_non_finite():
+    """A diverged input row comes out non-finite, and leaves its batch neighbours bit-identical.
+
+    ``HypLinearHyperboloidBusemann`` shares ``sinh_lift_to_hyperboloid`` with the PLFC layer, so it
+    inherits the same contract: the ``±v_max`` clip guards finite scores only, and a Busemann logit
+    that has already gone ``inf``/NaN is passed through rather than clipped to a plausible point.
+    """
+    in_dim, out_dim, dtype = 5, 4, jnp.float32
+    layer = HypLinearHyperboloidBusemann(
+        get_hyperboloid(dtype), in_dim=in_dim, out_dim=out_dim, rngs=nnx.Rngs(0), use_gyro_bias=True, param_dtype=dtype
+    )
+    layer.gyro_bias[...] = jnp.full_like(layer.gyro_bias[...], 0.1)  # zero-init would be a no-op
+
+    good_BAi = _make_hyperboloid_points(jax.random.PRNGKey(0), 4, in_dim, dtype)
+    bad_Ai = jnp.concatenate([jnp.array([jnp.inf], dtype=dtype), jnp.full((in_dim - 1,), 0.3, dtype=dtype)])
+
+    y_BAo = layer(jnp.concatenate([good_BAi, bad_Ai[None, :]], axis=0), c=C)
+    good_only_BAo = layer(good_BAi, c=C)
+
+    assert not bool(jnp.isfinite(y_BAo[4]).any()), f"diverged row must stay loud, got {y_BAo[4]}"
+    assert np.asarray(y_BAo[:4]).tobytes() == np.asarray(good_only_BAo).tobytes()

@@ -451,3 +451,36 @@ def test_gyro_bias_far_field_matches_float64():
     assert float(jnp.max(dist_N)) < 3e-3  # measured 5.4e-4; old spelling 5.3e-2
     for g32, g64 in zip(grads32, grads64, strict=True):
         assert _max_rel(g32, g64) < 2e-6  # measured 1.6e-7; old spelling 3.0e-2
+
+
+def test_pixel_with_infinite_time_coordinate_stays_non_finite():
+    """One diverged pixel comes out non-finite; every other pixel is bit-identical.
+
+    The conv inherits ``sinh_lift_to_hyperboloid`` through the PLFC stage, so it inherits the
+    non-finite pass-through: the ``±v_max`` clip guards finite scores only. ``kernel_size=1`` with
+    VALID padding makes each output pixel depend on exactly one input pixel, so the blast radius of
+    the bad pixel is exactly one output pixel and the rest can be compared bit for bit.
+    """
+    c, in_channels, out_channels, hw, dtype = 0.7, 4, 4, 3, jnp.float32
+    manifold = Hyperboloid(dtype=dtype)
+    layer = HypConv2DHyperboloidILNN(
+        manifold_module=manifold,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=1,
+        rngs=nnx.Rngs(0),
+        padding="VALID",
+        param_dtype=dtype,
+    )
+    # r != 0 is the hard case: it turns the diverged pixel's MLR score into -inf, which the old
+    # output guard clipped to -v_max (r = 0 gives a NaN score, which was always loud).
+    layer.bias[...] = jnp.full_like(layer.bias[...], 1.0)
+
+    x_BHWC = _proj_image(jax.random.normal(jax.random.PRNGKey(0), (1, hw, hw, in_channels), dtype=dtype) * 0.3, manifold, c)
+    bad_BHWC = x_BHWC.at[0, 0, 0, 0].set(jnp.inf)
+
+    good_NC = np.asarray(layer(x_BHWC, c=c)).reshape(-1, out_channels)
+    mixed_NC = np.asarray(layer(bad_BHWC, c=c)).reshape(-1, out_channels)
+
+    assert not np.isfinite(mixed_NC[0]).any(), f"diverged pixel must stay loud, got {mixed_NC[0]}"
+    assert mixed_NC[1:].tobytes() == good_NC[1:].tobytes()
