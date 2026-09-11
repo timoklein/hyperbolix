@@ -1069,7 +1069,7 @@ bias and input gradients come back exactly zero while the kernel gradient surviv
 `r = 20`, radius 24, the argument is still only 1.37e16 and every gradient is finite
 (`logs/2026-09-11_plfc_residual_nan/fuzz_asinh_f32.out`, cell `C5-r60`, and
 `fuzz_composite_5c2aa99_f32.out` for the neighbouring `r`). This is an upstream bug,
-reported upstream (JAX issue link to follow — `TODO(link)`), with the report kept at
+reported upstream as [jax-ml/jax#40634](https://github.com/jax-ml/jax/issues/40634), with the report kept at
 `logs/2026-09-11_plfc_residual_nan/jax_issue_asinh_jvp.md`; when JAX stops squaring the argument the
 wrappers can go away and the call sites can return to `jnp.arcsinh`.
 
