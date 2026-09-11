@@ -1,6 +1,9 @@
-# Hyperbolix
+<p align="center" markdown="1">
+  ![Hyperbolix](assets/hyperbolix-light.png#only-light){ width="360" }
+  ![Hyperbolix](assets/hyperbolix-dark.png#only-dark){ width="360" }
+</p>
 
-**Hyperbolic Deep Learning in JAX**
+<p align="center"><strong>Hyperbolic Deep Learning in JAX</strong></p>
 
 Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing manifold operations, neural network layers, and Riemannian optimizers for hyperbolic geometry. Built with Flax NNX and Optax for modern JAX workflows.
 

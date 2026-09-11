@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/hyperbolix_logo.png" alt="Hyperbolix" width="360">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hyperbolix-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/hyperbolix-light.png">
+    <img src="docs/assets/hyperbolix-light.png" alt="Hyperbolix" width="360">
+  </picture>
 </p>
 
 <p align="center"><strong>Hyperbolic Deep Learning in JAX</strong></p>
