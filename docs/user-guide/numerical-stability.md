@@ -325,32 +325,31 @@ gradient with respect to the point, 36 cells per entry (dims 16/64/512 × `c ∈
 | 16 | 0.042 | 0.040 | 0.39 | 0.86 | 1.0 |
 
 Cells at ~1e-7 are float32 rounding — no measurable loss. `n/a` marks `ρ ≥ a`, where the hyperplane
-cannot cross the point at all. The rule of thumb the table supports: **the float32 gradient is about
-1 % wrong at `a + ρ ≈ 15` and entirely wrong by 18** — the same `ln(1/eps)` budget as the two-point
+cannot cross the point at all. The rule of thumb the table supports: **the float32 gradient is about 0.1 % wrong at `a + ρ ≈ 15`, about 1 % at `a + ρ ≈ 16`, roughly 40 % by 18, and entirely wrong by 22** — the same `ln(1/eps)` budget as the two-point
 cancellation above, now spent on `a + ρ` rather than on `a` alone. At `ρ = 8` the *score* can come
 out with the wrong sign: on the branch aligned with the hyperplane normal, `a = 14`, `c = 1`,
 dim 512, the true score in `asinh` units is `+6.00` and float32 returns `-3.04`
 (`logs/2026-09-11_mlr_half_angle/audit/sign.py`). Float64 has the usual ~20 extra nats of budget —
-the same cells' median float64 gradient error at `ρ = 8` is 9.2e-12 — so `a + ρ ≈ 35` is its
-equivalent limit.
+the same cells' median float64 gradient error at `ρ = 8` is 2.5e-13 — so `a + ρ ≈ 36` is its
+equivalent limit — extrapolated, not measured: the grid stops at `a + ρ = 24`, where the float64 median is 6.6e-13.
 
 All three conditions have to hold at once: an input far from the origin, **and** a hyperplane far
 from the origin, **and** points close to that hyperplane, which is where the `O(1)` difference is
 smallest. With normalized features (`a ≲ 8`) and an `O(1)` bias none of this arises — every cell at
-`a + ρ ≤ 12` in the table is at float32 rounding. The remedies are the ordinary ones: run the head in
+`a + ρ ≤ 10` in the table is at float32 rounding; the two `a + ρ = 12` cells are already ~5e-6, some 50× eps. The remedies are the ordinary ones: run the head in
 float64, or keep `a + ρ` under ≈ 15 by bounding the trunk's radius in the model and weight-decaying
 the head's bias.
 
 !!! note "A cancellation-free rewrite was measured and not adopted"
-    A half-angle rewrite of the same score removes the `e^ρ` factor: median on-hyperplane score gain
-    2.1 / 17 / 354 / 2.0e4 at `ρ = 1 / 2 / 4 / 8`, and over the float32 on-hyperplane cells with
+    A half-angle rewrite of the same score removes the `e^ρ` factor: median on-hyperplane score gain, pooled over the four charts and both dtypes,
+    2.1 / 17 / 354 / 2.0e4 at `ρ = 1 / 2 / 4 / 8` (float32 hyperboloid alone: 2.6 / 17 / 311 / 3.7e3), and over the float32 on-hyperplane cells with
     `ρ ≥ 2` a median relative gradient error of 2.3e-5 against 0.0091 for the shipped form
     (`logs/2026-09-11_mlr_half_angle/probe_mlr_cancellation.out`). It is **not** in the library: the
     fused `(B, P, D)` unit-vector difference it needs cannot use the tensor-core GEMM, and it
-    measured 1.8–2.5× forward+backward on `HypRegressionHyperboloid` (`B = 256`, `D = 512`,
-    `P = 1000`) and `HypConv2DHyperboloidILNN` (8192 pixels, `P = D = 64`) with 26–36 % more peak
+    measured 1.9–2.5× forward+backward on `HypRegressionHyperboloid` (`B = 256`, `D = 512`,
+    `P = 1000`) and 1.8–2.2× on `HypConv2DHyperboloidILNN` (8192 pixels, `P = D = 64`) across the two autotune settings measured (the 2.5× is the head at `--xla_gpu_autotune_level=0`, the 1.8× is ILNN at the default level; one timing repeat each) with 26–36 % more peak
     memory on an H100 (`logs/2026-09-11_vda_w3_gpu/cost_summary.md`;
-    `HypLinearHyperboloidPLFC` at `B = 512`, `P = D = 64` came within 3 %). A regime that needs all
+    `HypLinearHyperboloidPLFC` at `B = 512`, `P = D = 64` was within 4 % forward+backward at the default autotune level and 3× faster at level 0, but 22 % slower forward at the default level). A regime that needs all
     three conditions at once does not buy that on every step.
 
 #### FGG's Spacelike `V` Columns Are Short by the `eps` Floor {#fgg-spacelike-v}
@@ -359,15 +358,14 @@ the head's bias.
 2026 — floors the column norm on the **time** row, `√(‖w‖² + eps)` with `eps = 1e-7`, but multiplies
 the **space** rows by the raw `w`. The two rows are then no longer scaled by the same number, so a
 column's Minkowski norm comes out as `‖w‖² − eps·sinh²(ρ)` instead of `‖w‖²`, with `ρ = −√c·b/‖w‖`
-the column's transport argument. The relative distortion `eps·sinh²(ρ)/‖w‖²` is 1e-9 at the shipped
-init (`‖w‖ = 2`, `ρ = 0.2`), 5.5e-4 at `‖w‖ = 1`, `ρ = 5`, and 89 % at `‖w‖ = 0.5`, `ρ = 8`
+the column's transport argument. The relative distortion `eps·sinh²(ρ)/‖w‖²` is exactly zero at the shipped init, where `init_bias = 0.0` gives `ρ = 0`; 1e-9 at `‖w‖ = 2`, `ρ = 0.2`, 5.5e-4 at `‖w‖ = 1`, `ρ = 5`, and 89 % at `‖w‖ = 0.5`, `ρ = 8`
 (`logs/2026-09-11_mlr_half_angle/audit/fgg.py`). It needs a small weight column together with a
 large bias, which is far outside the init regime, and it is left as it is.
 
 #### Input Overflow: A Finite Loss, Then a 100 % NaN Gradient {#input-overflow-fingerprint}
 
 A hyperboloid point whose spatial coordinate passes float32's `1.8e19` can no longer have a time
-coordinate: `x₀ = √(1/c + ‖x_s‖²)` overflows to `inf`. That is scaled radius `a ≈ 44`, i.e. geodesic
+coordinate: `x₀ = √(1/c + ‖x_s‖²)` overflows to `inf`. That is scaled radius `a ≈ 45` at `c = 1`, `44.7` at the probe's `c = 0.5`, i.e. geodesic
 radius `≈ 44/√c` — see [Norms: One Reduction, Gradient-Safe at Zero](#safe-norms) for where the
 coordinate ceiling comes from. `HypLinearHyperboloidPLFC`, `HypConv2DHyperboloidILNN` and
 `HypLinearHyperboloidBusemann` all finish in `sinh_lift_to_hyperboloid`, and an `inf` time
@@ -381,10 +379,10 @@ MLR bias `r` (`logs/2026-09-11_plfc_residual_nan/fuzz_C6_bias_f32.out`; `B = 512
   and the minibatch that caused it is the one that reports it.
 - **`r ≠ 0`, i.e. anything trained.** The score is `±inf`, the clip maps it to `±v_max`, and the
   layer returns a **finite, fully saturated point** at the output ceiling (`a_out = 12.1`). The loss
-  stays finite and unremarkable — 12.6 to 13.8 against 13.1 at the same file's clean baseline corner
+  stays finite and unremarkable — 12.6 to 13.8, against 13.1 at the clean baseline corner of `fuzz_composite_5c2aa99_f32.out`
   — and every logit is finite. The *backward* is not: the kernel gradient comes back 4096 of 4096
   NaN and the bias gradient 64 of 64 NaN, where the clip's zero cotangent meets the `inf` in the
-  score. One Adam step later every weight is NaN and the next forward is dead.
+  score. One Adam step later every weight the NaN gradient touches is NaN — inferred from the gradient, no optimizer step was run.
 
 So the fingerprint to recognise is **a finite loss, followed one minibatch later by a 100 % NaN
 kernel and bias gradient in a PLFC / ILNN / Busemann layer, with no NaN loss anywhere**. It means an
@@ -1050,7 +1048,7 @@ print(atanh(z))  # Clamped away from ±1 singularities
 all — `asinh` has no domain boundary and the wrapper's forward is bit-identical to `jnp.arcsinh`.
 What it repairs is the **derivative**. JAX's JVP rules for `asinh_p` and `acosh_p` are
 `g·rsqrt(x² + 1)` and `g·rsqrt(x² − 1)` (`jax/_src/lax/lax.py:4746` and `:4753` in jax 0.11.1,
-unchanged in the 0.9.1 this repo pins), and `x²` overflows float32 once `|x| > 1.84e19`. `rsqrt(inf)`
+unchanged in the 0.9.1 this repo pins, where they are at `:4350` and `:4354`), and `x²` overflows float32 once `|x| > 1.84e19`. `rsqrt(inf)`
 is `0`, so the returned derivative is **exactly 0.0** while the true `1/hypot(1, x) ≈ 1/|x|` is an
 ordinary normal float: at `x = 1e22`, `jax.grad(jnp.arcsinh)` gives `0.0` where the answer is
 `1e-22`, with a perfectly correct forward value of `51.35` and no warning. A parameter downstream of
@@ -1060,9 +1058,8 @@ The wrappers spell the same derivatives as `1/hypot(1, x)` and `1/(√(x−1)·�
 materialise `x²`. All 16 library `asinh` call sites — the hyperboloid and Poincaré `dist`/`dist_0`
 slots, `logmap_0`'s `asinhc`, the proper-velocity operations, and every MLR head — go through the
 wrapper. Its float32 derivative is correct up to `|x| ≈ 8.5e37`, past which the true tangent is
-subnormal and XLA flushes it to zero; below that it moves the gradient by at most 1 float32 ulp or
-2 float64 ulps against a float64 reference on a log-spaced grid spanning `1e-30` to `1e37`
-(float32) and `1e-300` to `1e300` (float64)
+subnormal and XLA flushes it to zero, and moves the gradient by at most 1 float32 ulp / 2 float64 ulps against a float64 reference on a log-spaced grid spanning `1e-30` to `1e37`
+(float32) and `1e-300` to `1e300` (float64); the `acosh` tangent was spot-checked at six points per dtype, where it agrees with the builtin rule to a float32 ulp (both are ~2 % off a float64 reference near `x = 1`, from the rounding of `x` itself)
 (`logs/2026-09-11_asinh_acosh_custom_jvp/probe_grid_ulp.py`,
 `probe_subnormal_tail.py`, `probe_hypot_grad.py`).
 

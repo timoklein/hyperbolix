@@ -2079,7 +2079,7 @@ class Hyperboloid(ManifoldBase):
 
         This is the literal form ``-x₀·y₀ + ⟨x_s, y_s⟩``, whose two terms are each
         ``O(cosh²(a)/c)`` and cancel, so the absolute rounding error is about ``eps·cosh²(a)/c``
-        (float32: already 1 at ``a ≈ 8`` for ``c = 1``). Nothing inside the library calls it; do not
+        (float32: 0.26 at ``a = 8``, reaching 1 at ``a ≈ 8.7`` for ``c = 1``). Nothing inside the library calls it; do not
         use it to recover ``⟨x, x⟩_L = -1/c``, to check manifold membership, or to form distances —
         use ``dist``/``sqdist``/``tangent_inner``/``is_in_manifold``, which are cancellation-free
         (see ``docs/user-guide/numerical-stability.md``).
