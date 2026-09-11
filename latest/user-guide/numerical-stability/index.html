@@ -3248,7 +3248,7 @@ obtained as a difference of two <code>O(cosh²a)</code> numbers; reading the tim
 factors, so a genuinely on-sheet point now passes a fixed <code>atol</code> far past the <code>a ≈ 7</code> (float32) /
 <code>a ≈ 11</code> (float64) ceiling the old check imposed — see <a href="#the-atol-convention">The <code>atol</code> Convention</a>.</p>
 <h4 id="known-limits">Known limits<a class="headerlink" href="#known-limits" title="Permanent link">&para;</a></h4>
-<p>Three places still lose accuracy at large radius, for reasons the fix above does not remove:</p>
+<p>Four places still lose accuracy at large radius, for reasons the fix above does not remove:</p>
 <ol>
 <li><strong><code>ptransp</code>'s direction below the float32 angular resolution.</strong> A transported direction that
    differs from the identity by less than the point-representation floor <code>eps·sinh(a)/√c</code> is
@@ -3263,6 +3263,10 @@ factors, so a genuinely on-sheet point now passes a fixed <code>atol</code> far 
 <li><strong>The wrapped-normal <code>log_prob</code> on the hyperboloid.</strong> Its density involves the same
    <code>⟨x,x⟩_L</code>-style terms, so float32 and float64 diverge by roughly <code>eps·cosh(a)·‖v‖²/σ²</code> at large
    radius — qualitative, no probe in this pass isolates it.</li>
+<li><strong>The MLR score, when the hyperplane itself sits far from the origin.</strong> The reference Lorentz
+   MLR the library keeps subtracts two terms of size <code>e^(a+ρ)</code>, with <code>ρ</code> the scaled hyperplane
+   offset, so a large bias costs as many digits as a large input radius — see
+   <a href="#mlr-large-bias">The MLR Score at a Large Hyperplane Offset</a> below.</li>
 </ol>
 <p>Two more items that used to be on this list — gyro-centering with a near-identity partner, and
 <code>ProperVelocity.dist</code>/<code>logmap</code> between nearby points — were fixed in a later pass; see
@@ -3282,6 +3286,151 @@ perfectly finite. The remedy is <code>score_dtype=jnp.float64</code>, which runs
 the softmax; it fixes the arithmetic only, so activations that are themselves stored in float32
 past <code>a ≈ 8</code> still carry a floor of the same order, and a <code>HyperboloidGyroRMSNorm</code> in front of the
 layer (or a smaller <code>c</code>) is the cheaper first remedy.</p>
+<h4 id="mlr-large-bias">The MLR Score at a Large Hyperplane Offset<a class="headerlink" href="#mlr-large-bias" title="Permanent link">&para;</a></h4>
+<p>Every multinomial-logistic-regression head in the library evaluates the reference Lorentz MLR score
+of Bdeir et al. 2023,</p>
+<div class="arithmatex">\[
+\alpha = -x_0\sinh(\sqrt{c}\,r)\,\lVert z\rVert + \cosh(\sqrt{c}\,r)\,\langle z, x_s\rangle,
+\]</div>
+<p>for a hyperplane with normal <code>z</code> and offset <code>r</code>. Writing <code>a = √c·d</code> for the scaled radius of the
+input point, <code>ρ = √c·r</code> for the scaled offset, and <code>θ</code> for the angle between the point and the
+hyperplane normal, that is</p>
+<div class="arithmatex">\[
+\sinh(a)\cosh(\rho)\cos\theta \;-\; \cosh(a)\sinh(\rho),
+\]</div>
+<p>two terms of size <code>e^(a+ρ)</code> whose difference is <code>O(1)</code> for a point near the hyperplane. The rounding
+error is therefore <code>eps·e^(a+ρ)</code>, against the point's own representation floor of <code>eps·e^a</code>: <strong>a
+hyperplane far from the origin costs exactly as many digits as an input far from the origin.</strong> The
+same expression sits in <code>HypRegressionHyperboloid</code> and the PLFC / ILNN / Busemann layers that end in
+it, in the proper-velocity MLR, in the Poincaré++ MLR (where <code>ρ = 2√c·r</code>), and in <code>FGGLinear</code>'s
+spacelike-<code>V</code> GEMM.</p>
+<p>Measured, float32 hyperboloid, points placed exactly on the hyperplane, median relative error of the
+gradient with respect to the point, 36 cells per entry (dims 16/64/512 × <code>c ∈ {0.1, 0.5, 1}</code> ×
+4 seeds; <code>logs/2026-09-11_mlr_half_angle/probe_mlr_cancellation.out</code> and the per-cell
+<code>probe_mlr_cancellation_cells.csv</code>):</p>
+<table>
+<thead>
+<tr>
+<th><code>a</code> \ <code>ρ</code></th>
+<th>0.5</th>
+<th>1</th>
+<th>2</th>
+<th>4</th>
+<th>8</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8</td>
+<td>8e-8</td>
+<td>1e-7</td>
+<td>4e-7</td>
+<td>8e-6</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>10</td>
+<td>2e-7</td>
+<td>4e-7</td>
+<td>5e-6</td>
+<td>3e-4</td>
+<td>0.52</td>
+</tr>
+<tr>
+<td>12</td>
+<td>1e-5</td>
+<td>5e-5</td>
+<td>3e-4</td>
+<td>0.013</td>
+<td>0.84</td>
+</tr>
+<tr>
+<td>14</td>
+<td>9e-4</td>
+<td>1.3e-3</td>
+<td>0.013</td>
+<td>0.32</td>
+<td>0.98</td>
+</tr>
+<tr>
+<td>16</td>
+<td>0.042</td>
+<td>0.040</td>
+<td>0.39</td>
+<td>0.86</td>
+<td>1.0</td>
+</tr>
+</tbody>
+</table>
+<p>Cells at ~1e-7 are float32 rounding — no measurable loss. <code>n/a</code> marks <code>ρ ≥ a</code>, where the hyperplane
+cannot cross the point at all. The rule of thumb the table supports: <strong>the float32 gradient is about 0.1 % wrong at <code>a + ρ ≈ 15</code>, about 1 % at <code>a + ρ ≈ 16</code>, roughly 40 % by 18, and entirely wrong by 22</strong> — the same <code>ln(1/eps)</code> budget as the two-point
+cancellation above, now spent on <code>a + ρ</code> rather than on <code>a</code> alone. At <code>ρ = 8</code> the <em>score</em> can come
+out with the wrong sign: on the branch aligned with the hyperplane normal, <code>a = 14</code>, <code>c = 1</code>,
+dim 512, the true score in <code>asinh</code> units is <code>+6.00</code> and float32 returns <code>-3.04</code>
+(<code>logs/2026-09-11_mlr_half_angle/audit/sign.py</code>). Float64 has the usual ~20 extra nats of budget —
+the same cells' median float64 gradient error at <code>ρ = 8</code> is 2.5e-13 — so <code>a + ρ ≈ 36</code> is its
+equivalent limit — extrapolated, not measured: the grid stops at <code>a + ρ = 24</code>, where the float64 median is 6.6e-13.</p>
+<p>All three conditions have to hold at once: an input far from the origin, <strong>and</strong> a hyperplane far
+from the origin, <strong>and</strong> points close to that hyperplane, which is where the <code>O(1)</code> difference is
+smallest. With normalized features (<code>a ≲ 8</code>) and an <code>O(1)</code> bias none of this arises — every cell at
+<code>a + ρ ≤ 10</code> in the table is at float32 rounding; the two <code>a + ρ = 12</code> cells are already ~5e-6, some 50× eps. The remedies are the ordinary ones: run the head in
+float64, or keep <code>a + ρ</code> under ≈ 15 by bounding the trunk's radius in the model and weight-decaying
+the head's bias.</p>
+<div class="admonition note">
+<p class="admonition-title">A cancellation-free rewrite was measured and not adopted</p>
+<p>A half-angle rewrite of the same score removes the <code>e^ρ</code> factor: median on-hyperplane score gain, pooled over the four charts and both dtypes,
+2.1 / 17 / 354 / 2.0e4 at <code>ρ = 1 / 2 / 4 / 8</code> (float32 hyperboloid alone: 2.6 / 17 / 311 / 3.7e3), and over the float32 on-hyperplane cells with
+<code>ρ ≥ 2</code> a median relative gradient error of 2.3e-5 against 0.0091 for the shipped form
+(<code>logs/2026-09-11_mlr_half_angle/probe_mlr_cancellation.out</code>). It is <strong>not</strong> in the library: the
+fused <code>(B, P, D)</code> unit-vector difference it needs cannot use the tensor-core GEMM, and it
+measured 1.9–2.5× forward+backward on <code>HypRegressionHyperboloid</code> (<code>B = 256</code>, <code>D = 512</code>,
+<code>P = 1000</code>) and 1.8–2.2× on <code>HypConv2DHyperboloidILNN</code> (8192 pixels, <code>P = D = 64</code>) across the two autotune settings measured (the 2.5× is the head at <code>--xla_gpu_autotune_level=0</code>, the 1.8× is ILNN at the default level; one timing repeat each) with 26–36 % more peak
+memory on an H100 (<code>logs/2026-09-11_vda_w3_gpu/cost_summary.md</code>;
+<code>HypLinearHyperboloidPLFC</code> at <code>B = 512</code>, <code>P = D = 64</code> was within 4 % forward+backward at the default autotune level and 3× faster at level 0, but 22 % slower forward at the default level). A regime that needs all
+three conditions at once does not buy that on every step.</p>
+</div>
+<h4 id="fgg-spacelike-v">FGG's Spacelike <code>V</code> Columns Are Short by the <code>eps</code> Floor<a class="headerlink" href="#fgg-spacelike-v" title="Permanent link">&para;</a></h4>
+<p><code>build_spacelike_V</code> — the <code>FGGLinear</code> / <code>FGGConv2D</code> weight construction, Eq. 12 of Klis et al.
+2026 — floors the column norm on the <strong>time</strong> row, <code>√(‖w‖² + eps)</code> with <code>eps = 1e-7</code>, but multiplies
+the <strong>space</strong> rows by the raw <code>w</code>. The two rows are then no longer scaled by the same number, so a
+column's Minkowski norm comes out as <code>‖w‖² − eps·sinh²(ρ)</code> instead of <code>‖w‖²</code>, with <code>ρ = −√c·b/‖w‖</code>
+the column's transport argument. The relative distortion <code>eps·sinh²(ρ)/‖w‖²</code> is exactly zero at the shipped init, where <code>init_bias = 0.0</code> gives <code>ρ = 0</code>; 1e-9 at <code>‖w‖ = 2</code>, <code>ρ = 0.2</code>, 5.5e-4 at <code>‖w‖ = 1</code>, <code>ρ = 5</code>, and 89 % at <code>‖w‖ = 0.5</code>, <code>ρ = 8</code>
+(<code>logs/2026-09-11_mlr_half_angle/audit/fgg.py</code>). It needs a small weight column together with a
+large bias, which is far outside the init regime, and it is left as it is.</p>
+<h4 id="input-overflow-fingerprint">Input Overflow: A Finite Loss, Then a 100 % NaN Gradient<a class="headerlink" href="#input-overflow-fingerprint" title="Permanent link">&para;</a></h4>
+<p>A hyperboloid point whose spatial coordinate passes float32's <code>1.8e19</code> can no longer have a time
+coordinate: <code>x₀ = √(1/c + ‖x_s‖²)</code> overflows to <code>inf</code>. That is scaled radius <code>a ≈ 45</code> at <code>c = 1</code>, <code>44.7</code> at the probe's <code>c = 0.5</code>, i.e. geodesic
+radius <code>≈ 44/√c</code> — see <a href="#safe-norms">Norms: One Reduction, Gradient-Safe at Zero</a> for where the
+coordinate ceiling comes from. <code>HypLinearHyperboloidPLFC</code>, <code>HypConv2DHyperboloidILNN</code> and
+<code>HypLinearHyperboloidBusemann</code> all finish in <code>sinh_lift_to_hyperboloid</code>, and an <code>inf</code> time
+coordinate reaches that lift as a non-finite MLR score.</p>
+<p>The lift used to clip that score to <code>±v_max</code> like any other, and what happened next depended on the
+MLR bias <code>r</code> (<code>logs/2026-09-11_plfc_residual_nan/fuzz_C6_bias_f32.out</code>; <code>B = 512</code>, <code>D = 64</code>,
+<code>c = 0.5</code>, symmetric InfoNCE, one row of 512 pushed to input scaled radius 50):</p>
+<ul>
+<li><strong><code>r = 0</code>, the shipped init.</strong> <code>inf · sinh(0) = NaN</code>, the logits row is NaN, the loss is NaN. Loud,
+  and the minibatch that caused it is the one that reports it.</li>
+<li><strong><code>r ≠ 0</code>, i.e. anything trained.</strong> The score is <code>±inf</code>, the clip maps it to <code>±v_max</code>, and the
+  layer returns a <strong>finite, fully saturated point</strong> at the output ceiling (<code>a_out = 12.1</code>). The loss
+  stays finite and unremarkable — 12.6 to 13.8, against 13.1 at the clean baseline corner of <code>fuzz_composite_5c2aa99_f32.out</code>
+  — and every logit is finite. The <em>backward</em> is not: the kernel gradient comes back 4096 of 4096
+  NaN and the bias gradient 64 of 64 NaN, where the clip's zero cotangent meets the <code>inf</code> in the
+  score. One Adam step later every weight the NaN gradient touches is NaN — inferred from the gradient, no optimizer step was run.</li>
+</ul>
+<p>So the fingerprint to recognise is <strong>a finite loss, followed one minibatch later by a 100 % NaN
+kernel and bias gradient in a PLFC / ILNN / Busemann layer, with no NaN loss anywhere</strong>. It means an
+input row went past the float32 ceiling, not that the layer's arithmetic is wrong.</p>
+<p>Since this change the lift passes a non-finite score straight through: the spatial slot stays
+<code>inf</code>/NaN, the reconstructed time slot follows, and the loss is NaN at the <em>onset</em> minibatch. For a
+<code>-inf</code> score at <code>r = 1</code> the old lift returned the plausible finite point
+<code>[22799.6, -13163.3, -13163.3, -13163.3]</code>; it now returns <code>[inf, -inf, -inf, -inf]</code>
+(<code>logs/2026-09-11_w1_sinh_lift_nonfinite/probe_old_vs_new.py</code>). Finite rows take the same expression
+op-for-op, in value and in gradient.</p>
+<p>What to do about it is a model-side decision, not a library one: hyperbolix deliberately adds no
+input-side bound here, because a bound would put the silent saturation back (see the
+<em>loud divergence over silent saturation</em> rule in <code>CLAUDE.md</code>). Monitor the per-row maximum input
+time coordinate — or <code>dist_0</code> of the input — at the layer's entry, and bound the trunk that feeds it
+in your own model.</p>
 <h3 id="hyperboloid-origin-chart">The Hyperboloid Origin Chart<a class="headerlink" href="#hyperboloid-origin-chart" title="Permanent link">&para;</a></h3>
 <p><code>dist_0</code> and <code>logmap_0</code> used to recover the geodesic radius from the ambient <strong>time</strong> coordinate
 <span class="arithmatex">\(x_0\)</span>, and that coordinate cannot resolve a small radius. On the sheet</p>
@@ -3989,7 +4138,7 @@ wrong direction on its flat step even though fixed-curvature values looked corre
 </span></code></pre></div>
 <h3 id="solution-protected-math-utils">Solution: Protected Math Utils<a class="headerlink" href="#solution-protected-math-utils" title="Permanent link">&para;</a></h3>
 <p>Hyperbolix provides overflow-protected hyperbolic functions:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.math_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">cosh</span><span class="p">,</span> <span class="n">sinh</span><span class="p">,</span> <span class="n">acosh</span><span class="p">,</span> <span class="n">atanh</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.math_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">cosh</span><span class="p">,</span> <span class="n">sinh</span><span class="p">,</span> <span class="n">asinh</span><span class="p">,</span> <span class="n">acosh</span><span class="p">,</span> <span class="n">atanh</span>
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
 </span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="c1"># Protected versions</span>
 </span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="mf">100.0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
@@ -4003,6 +4152,33 @@ wrong direction on its flat step even though fixed-curvature values looked corre
 </span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="n">z</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="mf">0.999999</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 </span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="nb">print</span><span class="p">(</span><span class="n">atanh</span><span class="p">(</span><span class="n">z</span><span class="p">))</span>  <span class="c1"># Clamped away from ±1 singularities</span>
 </span></code></pre></div>
+<h4 id="asinh-acosh-wrappers"><code>asinh</code> and <code>acosh</code>: The Derivative Overflows Before the Value Does<a class="headerlink" href="#asinh-acosh-wrappers" title="Permanent link">&para;</a></h4>
+<p><code>asinh</code> is wrapped for a different reason from the others: its forward value needs no protection at
+all — <code>asinh</code> has no domain boundary and the wrapper's forward is bit-identical to <code>jnp.arcsinh</code>.
+What it repairs is the <strong>derivative</strong>. JAX's JVP rules for <code>asinh_p</code> and <code>acosh_p</code> are
+<code>g·rsqrt(x² + 1)</code> and <code>g·rsqrt(x² − 1)</code> (<code>jax/_src/lax/lax.py:4746</code> and <code>:4753</code> in jax 0.11.1,
+unchanged in the 0.9.1 this repo pins, where they are at <code>:4350</code> and <code>:4354</code>), and <code>x²</code> overflows float32 once <code>|x| &gt; 1.84e19</code>. <code>rsqrt(inf)</code>
+is <code>0</code>, so the returned derivative is <strong>exactly 0.0</strong> while the true <code>1/hypot(1, x) ≈ 1/|x|</code> is an
+ordinary normal float: at <code>x = 1e22</code>, <code>jax.grad(jnp.arcsinh)</code> gives <code>0.0</code> where the answer is
+<code>1e-22</code>, with a perfectly correct forward value of <code>51.35</code> and no warning. A parameter downstream of
+an <code>asinh</code> whose argument grows exponentially simply stops moving.</p>
+<p>The wrappers spell the same derivatives as <code>1/hypot(1, x)</code> and <code>1/(√(x−1)·√(x+1))</code>, which never
+materialise <code>x²</code>. All 16 library <code>asinh</code> call sites — the hyperboloid and Poincaré <code>dist</code>/<code>dist_0</code>
+slots, <code>logmap_0</code>'s <code>asinhc</code>, the proper-velocity operations, and every MLR head — go through the
+wrapper. Its float32 derivative is correct up to <code>|x| ≈ 8.5e37</code>, past which the true tangent is
+subnormal and XLA flushes it to zero, and moves the gradient by at most 1 float32 ulp / 2 float64 ulps against a float64 reference on a log-spaced grid spanning <code>1e-30</code> to <code>1e37</code>
+(float32) and <code>1e-300</code> to <code>1e300</code> (float64); the <code>acosh</code> tangent was spot-checked at six points per dtype, where it agrees with the builtin rule to a float32 ulp (both are ~2 % off a float64 reference near <code>x = 1</code>, from the rounding of <code>x</code> itself)
+(<code>logs/2026-09-11_asinh_acosh_custom_jvp/probe_grid_ulp.py</code>,
+<code>probe_subnormal_tail.py</code>, <code>probe_hypot_grad.py</code>).</p>
+<p>The library reaches the bad regime in the hyperboloid MLR: at bias <code>r = 60</code>, the <code>asinh</code> argument is
+5.97e22 at input scaled radius 11 and 2.64e28 at radius 24, past the cutoff in every row, and the
+bias and input gradients come back exactly zero while the kernel gradient survives (21.8) — at
+<code>r = 20</code>, radius 24, the argument is still only 1.37e16 and every gradient is finite
+(<code>logs/2026-09-11_plfc_residual_nan/fuzz_asinh_f32.out</code>, cell <code>C5-r60</code>, and
+<code>fuzz_composite_5c2aa99_f32.out</code> for the neighbouring <code>r</code>). This is an upstream bug,
+reported upstream as <a href="https://github.com/jax-ml/jax/issues/40634">jax-ml/jax#40634</a>, with the report kept at
+<code>logs/2026-09-11_plfc_residual_nan/jax_issue_asinh_jvp.md</code>; when JAX stops squaring the argument the
+wrappers can go away and the call sites can return to <code>jnp.arcsinh</code>.</p>
 <h3 id="smooth-clamping">Smooth Clamping<a class="headerlink" href="#smooth-clamping" title="Permanent link">&para;</a></h3>
 <p>The library uses <strong>smooth clamping</strong> via softplus instead of hard clipping:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.math_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">smooth_clamp</span>
