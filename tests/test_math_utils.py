@@ -290,6 +290,15 @@ _F32_TANGENT_NORMAL_MAX = 8.0e37
 # The exact float32 magnitude at which jax's `x*x + 1` overflows to inf.
 _F32_SQUARING_OVERFLOW = 1.84e19
 
+# jax's own `asinh_p`/`acosh_p` JVP rules square their argument (jax-ml/jax#40634), so
+# `jax.grad(jnp.arcsinh)` is exactly 0.0 above `_F32_SQUARING_OVERFLOW` in float32. Verified on every
+# release up to and including 0.11.1 (`logs/2026-09-12_jax_upstream_fixes/probe_jax0.11.1.out`).
+# The fix, jax-ml/jax#40643, is an open PR on 2026-09-12 with no release attached, so the builtin
+# assertions below run only where the bug is a verified fact; on a newer jax they are skipped
+# rather than guessed at, and the wrapper's own assertions run everywhere. Raise the bound when a
+# newer release is verified still broken; delete it (and the builtin assertions) once the fix ships.
+_BUILTIN_ASINH_ACOSH_JVP_KNOWN_BROKEN = jax.__version_info__ <= (0, 11, 1)
+
 
 def _fd_scalar(fn, c):
     """Central finite difference at two step sizes, agreeing to 8e-6 relative.
@@ -357,14 +366,17 @@ def test_asinh_gradient_is_one_over_hypot_across_the_dtype_range(dtype, low_exp,
 def test_asinh_gradient_survives_the_float32_squaring_overflow(x: float):
     """Above 1.84e19 ``jax.grad(jnp.arcsinh)`` is exactly 0.0 in float32; the wrapper is not.
 
-    The ``jnp.arcsinh`` assertions document the upstream bug this wrapper exists for — if they
-    start failing, JAX has fixed its JVP rule and ``_asinh_stable`` can be deleted.
+    The ``jnp.arcsinh`` assertion documents the upstream bug this wrapper exists for. It is gated
+    on ``_BUILTIN_ASINH_ACOSH_JVP_KNOWN_BROKEN`` (jax <= 0.11.1, the last release verified broken)
+    so a jax that ships the fix (jax-ml/jax#40643) does not fail this test; once it does ship,
+    ``_asinh_stable`` can be deleted and the builtin assertion with it.
     """
     assert x > _F32_SQUARING_OVERFLOW
     x32 = jnp.asarray(x, dtype=jnp.float32)
 
-    # Upstream: `g * rsqrt(x*x + 1)` with `x*x` overflowed to inf.
-    assert float(jax.grad(jnp.arcsinh)(x32)) == 0.0
+    if _BUILTIN_ASINH_ACOSH_JVP_KNOWN_BROKEN:
+        # Upstream: `g * rsqrt(x*x + 1)` with `x*x` overflowed to inf.
+        assert float(jax.grad(jnp.arcsinh)(x32)) == 0.0
 
     got = jax.grad(asinh)(x32)
     assert float(got) != 0.0
@@ -437,12 +449,16 @@ def test_acosh_value_is_unchanged_by_the_custom_jvp(x: float):
 
 @pytest.mark.parametrize("x", [3e19, 1e22])
 def test_acosh_gradient_survives_the_float32_squaring_overflow(x: float):
-    """Above 1.84e19 ``jax.grad(jnp.arccosh)`` is exactly 0.0 in float32; ``acosh`` is not."""
+    """Above 1.84e19 ``jax.grad(jnp.arccosh)`` is exactly 0.0 in float32; ``acosh`` is not.
+
+    The builtin assertion is gated exactly as in the ``asinh`` test above.
+    """
     assert x > _F32_SQUARING_OVERFLOW
     x32 = jnp.asarray(x, dtype=jnp.float32)
 
-    # Upstream: `g * rsqrt(x*x - 1)` with `x*x` overflowed to inf.
-    assert float(jax.grad(jnp.arccosh)(x32)) == 0.0
+    if _BUILTIN_ASINH_ACOSH_JVP_KNOWN_BROKEN:
+        # Upstream: `g * rsqrt(x*x - 1)` with `x*x` overflowed to inf.
+        assert float(jax.grad(jnp.arccosh)(x32)) == 0.0
 
     got = jax.grad(acosh)(x32)
     assert float(got) != 0.0

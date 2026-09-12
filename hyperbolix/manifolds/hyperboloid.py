@@ -1886,7 +1886,7 @@ def _compute_mlr(
     # double-`where` gives an exact 0 value and an exactly-zero VJP there, so the dead row simply
     # receives no gradient.
     # The floor itself is `floor_at` — a `where` on a comparison against the constant — not
-    # `clip`/`jnp.maximum`. `jnp.maximum(n, eps)` carries the tie-breaking JVP
+    # `clip`/`jnp.maximum`. On jax <= 0.11.1, `jnp.maximum(n, eps)` carries the tie-breaking JVP
     # `g * [n == ans] / (1 + [eps == ans])` (jax's `_balanced_eq`), which tests the *operand* for
     # bit equality with the *result*. That is safe only while both are the same value in the
     # compiled graph. XLA:GPU emits `n = sqrt(sum(z*z))` twice here — once as its own fusion, once
@@ -1895,8 +1895,11 @@ def _compute_mlr(
     # then differ by 1 ulp, `[n == ans]` is false, and the entire `d‖z‖` branch of the gradient is
     # silently zeroed for that output row — measured 1.0e-2 relative on
     # `test_gradient_contract[linear_plfc-f32]`, firing in ~2 of 3 process launches on an A100.
-    # `floor_at` compares `n` against `min_enorm` (0.027 vs 1e-15 here), which no 1-ulp
-    # disagreement can flip, and keeps `maximum`'s NaN propagation.
+    # Reported as jax-ml/jax#40564 and fixed upstream by jax-ml/jax#40578 (merged 2026-09-09,
+    # first release after 0.11.1): the rule now compares the two operands, `n` against `eps`,
+    # which is exactly what `floor_at` does. `floor_at` compares `n` against `min_enorm` (0.027 vs
+    # 1e-15 here), which no 1-ulp disagreement can flip, keeps `maximum`'s NaN propagation, and
+    # stays because the library supports `jax>=0.9`; the fixed `maximum` would be no cheaper.
     z_enorm_P1 = safe_norm(z)[:, None]  # (P,1)
     z_norm_1P = floor_at(z_enorm_P1, min_enorm).T  # (1,P)
     x0_B1 = x[:, 0:1]  # time coordinate

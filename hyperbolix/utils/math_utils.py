@@ -54,20 +54,27 @@ def floor_at(x: Float[Array, "..."], min_value: ArrayLike) -> Float[Array, "..."
     ``<`` for that reason — ``where(x > min_value, x, min_value)`` would silently replace a NaN
     with the floor.
 
-    What changes is the **gradient**. ``jnp.maximum``'s JVP is jax's tie-breaking ``_balanced_eq``,
-    ``g * [x == ans] / (1 + [min_value == ans])``: it tests the *operand* ``x`` for **bit**
-    equality with the *result* ``ans``. That is sound only while the two are the same value in the
-    compiled graph, and on XLA:GPU they need not be — the backward fusion may **recompute** ``x``
-    (typically a reduction such as a norm) with a different emitter than the forward copy, chosen
-    per process by the fusion autotuner. The two copies then differ by 1 ulp, ``[x == ans]`` is
-    false, and the *whole* gradient branch through ``x`` is silently zeroed — no NaN, no warning,
-    bit-identical within a process, different across launches. Measured on an A100 at
-    ``manifolds/hyperboloid._compute_mlr``: 1.0e-2 relative gradient error, firing in ~2 of 3
-    launches (see ``logs/2026-09-03_plfc_jit_grad/``).
+    What changes is the **gradient**, and only on jax <= 0.11.1. There ``jnp.maximum``'s JVP is
+    the tie-breaking ``_balanced_eq``, ``g * [x == ans] / (1 + [min_value == ans])``: it tests the
+    *operand* ``x`` for **bit** equality with the *result* ``ans``. That is sound only while the
+    two are the same value in the compiled graph, and on XLA:GPU they need not be — the backward
+    fusion may **recompute** ``x`` (typically a reduction such as a norm) with a different emitter
+    than the forward copy, chosen per process by the fusion autotuner. The two copies then differ
+    by 1 ulp, ``[x == ans]`` is false, and the *whole* gradient branch through ``x`` is silently
+    zeroed — no NaN, no warning, bit-identical within a process, different across launches.
+    Measured on an A100 at ``manifolds/hyperboloid._compute_mlr``: 1.0e-2 relative gradient
+    error, firing in ~2 of 3 launches (see ``logs/2026-09-03_plfc_jit_grad/``). Reported as
+    jax-ml/jax#40564; fixed upstream by jax-ml/jax#40578 (merged 2026-09-09, first release after
+    0.11.1), which rewrites the rule as ``_balanced_cmp(x, min_value)`` — a comparison of the two
+    *operands*, i.e. the same predicate this helper uses.
 
-    ``where`` compares against the *constant* instead, which no 1-ulp disagreement can flip. The
-    only gradient difference is exactly at a tie ``x == min_value``, where ``maximum`` splits
-    0.5/0.5 and this routes the full cotangent to ``x``.
+    ``where`` compares against the *constant*, which no 1-ulp disagreement can flip, on every jax
+    the library supports (``jax>=0.9``), and it lowers to the same compare-and-select the fixed
+    rule does, so there is nothing to gain by converting call sites back once the fix ships. The
+    only gradient differences against ``maximum`` sit on measure-zero inputs: at an exact tie
+    ``x == min_value`` ``maximum`` splits 0.5/0.5 while this routes the full cotangent to ``x``,
+    and on a NaN ``x`` ``maximum`` (fixed or not) returns gradient 0 while this passes the cotangent
+    through to the NaN.
 
     Args:
         x: Input array of any shape
@@ -82,7 +89,9 @@ def floor_at(x: Float[Array, "..."], min_value: ArrayLike) -> Float[Array, "..."
 def cap_at(x: Float[Array, "..."], max_value: ArrayLike) -> Float[Array, "..."]:
     """``min(x, max_value)`` written as a ``where``. Mirror of :func:`floor_at`; same rationale.
 
-    NaN-preserving for the same reason (``NaN > max_value`` is false, so ``x`` is selected).
+    NaN-preserving for the same reason (``NaN > max_value`` is false, so ``x`` is selected), and
+    the same version story: ``jnp.minimum``'s JVP shared ``_balanced_eq`` on jax <= 0.11.1 and
+    shares ``_balanced_cmp`` after jax-ml/jax#40578.
 
     Args:
         x: Input array of any shape
@@ -98,7 +107,9 @@ def clamp_to(x: Float[Array, "..."], min_value: ArrayLike, max_value: ArrayLike)
     """``jnp.clip(x, min_value, max_value)`` written as two ``where``s. See :func:`floor_at`.
 
     Composed in ``clip``'s own order, ``min(max(x, lo), hi)``, so the two agree bit-for-bit even
-    for the degenerate ``lo > hi`` (both return ``hi``).
+    for the degenerate ``lo > hi`` (both return ``hi``). ``jnp.clip`` is ``minimum(maximum(...))``
+    underneath, so it carried the jax <= 0.11.1 gradient hazard described in :func:`floor_at` and
+    is covered by the same upstream fix.
 
     Args:
         x: Input array of any shape
