@@ -1014,6 +1014,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#klein-numerics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Klein: Cancellation-Free Distance on a Half-Radius Chart
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Klein: Cancellation-Free Distance on a Half-Radius Chart">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-distance-without-cancellation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Distance Without Cancellation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#measured-accuracy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Measured Accuracy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#klein-chart-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Chart Ceiling and Floor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-reference-_klein_expmap-is-exact-only-at-c-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Reference _klein_expmap Is Exact Only at \(c = 1\)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#hyperbolic-function-overflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2489,6 +2561,78 @@
     <span class="md-ellipsis">
       
         Recommendations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#klein-numerics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Klein: Cancellation-Free Distance on a Half-Radius Chart
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Klein: Cancellation-Free Distance on a Half-Radius Chart">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-distance-without-cancellation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Distance Without Cancellation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#measured-accuracy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Measured Accuracy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#klein-chart-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Chart Ceiling and Floor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-reference-_klein_expmap-is-exact-only-at-c-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Reference _klein_expmap Is Exact Only at \(c = 1\)
       
     </span>
   </a>
@@ -4073,6 +4217,7 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 <li><strong>Hyperboloid</strong>: unbounded radius, and <code>dist</code>/<code>logmap</code>/<code>sqdist</code>/<code>tangent_norm</code>/<code>expmap</code>/<code>ptransp</code>/<code>tangent_proj</code>/<code>tangent_inner</code>/<code>egrad2rgrad</code>/gyro <code>addition</code>/<code>busemann</code> are all cancellation-free, designed to avoid the identified cancellation, with accuracy limited by the operation and stored inputs (see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>). The constraint <span class="arithmatex">\(\langle x, x\rangle_L = -1/c\)</span> must still be maintained and can drift under Euclidean updates — see <a href="#the-atol-convention">The <code>atol</code> Convention</a> — and a handful of places still lose accuracy for reasons the fix does not remove, listed under <a href="#hyperboloid-known-limitations">Known Limitations</a>.</li>
 <li><strong>Proper Velocity</strong>: unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span>, stable at large radii, exact Euclidean retraction (plain <code>optax.adam</code> / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large. Its tangent-space metric shares the hyperboloid's fix (see <a href="#pv-tangent-metric">below</a>), and <code>PV.dist</code>/<code>logmap</code> between two nearby points at large radius now go through the exact hyperboloid lift — see <a href="#pv-dist-lift">below</a>.</li>
 <li><strong>κ-Stereographic</strong>: identical numerics to the Poincaré ball for <span class="arithmatex">\(c &gt; 0\)</span> (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near <span class="arithmatex">\(c = 0\)</span> — see the <a href="#stereographic-near-zero-curvature">dedicated section below</a>.</li>
+<li><strong>Klein</strong>: the pairwise operations are cancellation-free, but the chart reaches its boundary at half the Poincaré radius (scaled radius 6.32 in float32, 13.86 in float64, at <span class="arithmatex">\(c = 1\)</span>) and its error floor grows as <span class="arithmatex">\(\varepsilon\cosh^2(a)\)</span> — see the <a href="#klein-numerics">dedicated section below</a>.</li>
 </ul>
 <div class="admonition note">
 <p class="admonition-title">Training PV layers</p>
@@ -4126,6 +4271,278 @@ wrong direction on its flat step even though fixed-curvature values looked corre
 <li>Use <code>Stereographic(dtype=jnp.float64)</code> when training a signed curvature that may cross zero, per Bachmann et al. (2020). Float32 is fine at fixed moderate curvature (<span class="arithmatex">\(\lvert c\rvert \gtrsim 10^{-4}\)</span>) and moderate radii.</li>
 <li>With <code>LearnableCurvature(parameterization="identity")</code>, the default clamp <span class="arithmatex">\([-10, 10]\)</span> includes 0 by design — a curvature crossing zero is a <em>feature</em> (the geometry interpolates hyperbolic → flat → spherical smoothly), not an error state.</li>
 </ul>
+<h2 id="klein-numerics">Klein: Cancellation-Free Distance on a Half-Radius Chart<a class="headerlink" href="#klein-numerics" title="Permanent link">&para;</a></h2>
+<p><code>Klein</code> stores points in the same Euclidean ball as <code>Poincare</code> and uses the same <code>proj</code>, but
+its two-point operations (<code>dist</code>, <code>logmap</code>, <code>ptransp</code>, <code>gyro_difference</code>) are written so that no
+digits cancel. What limits it is the chart: a Klein point reaches the boundary at half the
+Poincaré radius, and the one quantity every formula divides by, <span class="arithmatex">\(g_x = 1 - c\lVert x\rVert^2\)</span>,
+cannot be computed more accurately than its own rounding. Below, <span class="arithmatex">\(a = \sqrt{c}\,d_0\)</span> is the
+scaled radius (geodesic distance from the origin times <span class="arithmatex">\(\sqrt{c}\)</span>), and <span class="arithmatex">\(\varepsilon\)</span> is the
+machine epsilon (1.19e-7 in float32, 2.22e-16 in float64). Measurements are from
+<code>logs/2026-09-28_klein-manifold/probe_klein.out</code>.</p>
+<h3 id="the-distance-without-cancellation">The Distance Without Cancellation<a class="headerlink" href="#the-distance-without-cancellation" title="Permanent link">&para;</a></h3>
+<p>Two textbook spellings of the Klein distance lose digits:</p>
+<ul>
+<li>The hyperboloid form lifted to Klein, <span class="arithmatex">\(\cosh(\sqrt{c}\,d) = (1 - c\langle x, y\rangle)/\sqrt{g_x g_y}\)</span>,
+  takes <code>acosh</code> of a number close to 1 when the points are close — the hyperboloid's
+  <a href="#the-hyperboloids-two-point-cancellation-failure-mode">two-point cancellation</a> again.</li>
+<li>Zhang et al. (2026), Eq. 4, <span class="arithmatex">\(d = \operatorname{artanh}\!\big(\sqrt{c}\,\lVert(-x)\oplus_E y\rVert\big)/\sqrt{c}\)</span>,
+  builds the Einstein sum from <span class="arithmatex">\(O(1)\)</span> terms that cancel when <span class="arithmatex">\(x\)</span> and <span class="arithmatex">\(y\)</span> are close, and divides by
+  <span class="arithmatex">\(1 - c\langle x, y\rangle\)</span>, which is itself a small difference of <span class="arithmatex">\(O(1)\)</span> terms near the boundary.</li>
+</ul>
+<p><code>Klein.dist</code> follows the derivation in Zhang et al. (2026), Appendix Eqs. 12 and 14. Let
+<span class="arithmatex">\(w = y - x\)</span> (exact in floating point for close points, by Sterbenz's lemma). Two identities do
+the work: the Lagrange identity
+<span class="arithmatex">\(\lVert x\rVert^2\lVert y\rVert^2 - \langle x, y\rangle^2 = \lVert x\rVert^2\lVert w\rVert^2 - \langle x, w\rangle^2\)</span>,
+and the Einstein gamma identity
+<span class="arithmatex">\(1 - c\lVert(-x)\oplus_E y\rVert^2 = g_x g_y/(1 - c\langle x, y\rangle)^2\)</span>. The second says
+<span class="arithmatex">\(\operatorname{sech}^2(\sqrt{c}\,d) = g_x g_y/(1 - c\langle x, y\rangle)^2\)</span>, so
+<span class="arithmatex">\(\sinh^2(\sqrt{c}\,d) = \big[(1 - c\langle x, y\rangle)^2 - g_x g_y\big]/(g_x g_y)\)</span>. Expanding the
+bracket gives <span class="arithmatex">\(c\lVert w\rVert^2 - c^2\big(\lVert x\rVert^2\lVert y\rVert^2 - \langle x, y\rangle^2\big)\)</span>,
+and the Lagrange identity turns it into <span class="arithmatex">\(c\,N\)</span> with</p>
+<div class="arithmatex">\[
+N = g_x\lVert w\rVert^2 + c\,\langle x, w\rangle^2, \qquad
+S^2 = \sinh^2(\sqrt{c}\,d) = \frac{c\,N}{g_x\, g_y}, \qquad
+d(x, y) = \frac{\operatorname{arsinh}(S)}{\sqrt{c}}.
+\]</div>
+<p><span class="arithmatex">\(N\)</span> is a sum of two non-negative terms built from <span class="arithmatex">\(w\)</span>, the factor <span class="arithmatex">\(1 - c\langle x, y\rangle\)</span> has
+cancelled out, and no <code>acosh</code> or <code>atanh</code> is evaluated near 1. At <span class="arithmatex">\(x = y\)</span>, <span class="arithmatex">\(w\)</span> is exactly zero,
+so <code>dist</code> is exactly 0 and its gradient is a finite zero. The same <span class="arithmatex">\(N\)</span> gives the other pairwise
+operations in closed form:</p>
+<ul>
+<li>tangent norm of the chord: <span class="arithmatex">\(\lVert w\rVert_x = \sqrt{N}/g_x\)</span></li>
+<li><code>logmap</code>: <span class="arithmatex">\(\log_x(y) = \operatorname{arsinhc}(S)\,\sqrt{g_x/g_y}\;w\)</span>, with
+  <span class="arithmatex">\(\operatorname{arsinhc}(s) = \operatorname{arsinh}(s)/s\)</span> (analytic at <span class="arithmatex">\(s = 0\)</span>)</li>
+<li><code>ptransp</code>: <span class="arithmatex">\(\sqrt{g_y/g_x}\,(v - \kappa\, w)\)</span>, with
+  <span class="arithmatex">\(\kappa = \big[c\langle x, v\rangle/g_x + c\langle y, v\rangle/\sqrt{g_x g_y}\big]/\big(1 + \sqrt{1 + S^2}\big)\)</span></li>
+</ul>
+<p>In float64, against independent NumPy oracles (dimension 5, 200 pairs per curvature, error
+<span class="arithmatex">\(\lVert a - b\rVert/\max(\lVert b\rVert, 1)\)</span>, maximum over pairs), all 30 checks pass the 1e-11
+threshold; for example <code>dist</code> against the hyperboloid <code>acosh</code> is 4.510e-15, <code>logmap</code> against the
+hyperboloid log 4.493e-15, <code>ptransp</code> against the hyperboloid transport 1.310e-15, and
+<code>einstein_midpoint</code> against the normalized Lorentz centroid 4.415e-16.</p>
+<h3 id="measured-accuracy">Measured Accuracy<a class="headerlink" href="#measured-accuracy" title="Permanent link">&para;</a></h3>
+<p>The accuracy probe places <span class="arithmatex">\(x\)</span> at scaled radius <span class="arithmatex">\(a\)</span>, <span class="arithmatex">\(x = \tanh(a)/\sqrt{c}\cdot\hat{x}\)</span>, and
+<span class="arithmatex">\(y = x + t\,(1 - \tanh a)/\sqrt{c}\cdot\hat{v}\)</span> with random unit <span class="arithmatex">\(\hat{x}, \hat{v}\)</span> (dimension 8,
+200 pairs per cell). So <span class="arithmatex">\(t\)</span> is the step as a fraction of <span class="arithmatex">\(x\)</span>'s Euclidean gap to the boundary: at
+<span class="arithmatex">\(c = 1\)</span>, <span class="arithmatex">\(a = 4\)</span>, the gap is <span class="arithmatex">\(1 - \tanh 4 = 6.7\times10^{-4}\)</span> and <span class="arithmatex">\(t = 10^{-2}\)</span> moves <span class="arithmatex">\(y\)</span> by
+<span class="arithmatex">\(6.7\times10^{-6}\)</span>. The reference is a 90-digit <code>Decimal</code> evaluation at the <strong>stored</strong>
+(already rounded) points, so the table measures the error of the formula, not the error of
+storing the points. Median / max relative error of <code>dist</code>, <span class="arithmatex">\(c = 1\)</span>, <span class="arithmatex">\(t = 10^{-2}\)</span>:</p>
+<table>
+<thead>
+<tr>
+<th>dtype</th>
+<th><span class="arithmatex">\(a\)</span></th>
+<th><code>Klein.dist</code></th>
+<th>literal <code>acosh</code></th>
+<th>Zhang et al. Eq. 4 (<code>artanh</code>)</th>
+<th><code>Klein.logmap</code></th>
+<th><span class="arithmatex">\(\varepsilon\cosh^2(a)\)</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>float32</td>
+<td>0.5</td>
+<td>3.35e-08 / 1.48e-07</td>
+<td>1.18e-03 / 4.29e-03</td>
+<td>5.44e-07 / 2.57e-06</td>
+<td>3.79e-08 / 1.74e-07</td>
+<td>1.5e-07</td>
+</tr>
+<tr>
+<td>float32</td>
+<td>2</td>
+<td>1.94e-07 / 8.29e-07</td>
+<td>7.73e-02 / 1.00e+00</td>
+<td>1.42e-04 / 9.33e-04</td>
+<td>2.27e-07 / 1.15e-06</td>
+<td>1.7e-06</td>
+</tr>
+<tr>
+<td>float32</td>
+<td>4</td>
+<td>1.19e-05 / 5.15e-05</td>
+<td>1.00e+00 / 4.23e+01</td>
+<td>4.33e-02 / 3.58e-01</td>
+<td>1.41e-05 / 5.20e-05</td>
+<td>8.9e-05</td>
+</tr>
+<tr>
+<td>float32</td>
+<td>6</td>
+<td>7.48e-04 / 3.01e-03</td>
+<td>1.00e+00 / 1.04e+03</td>
+<td>9.97e-01 / 9.21e+01</td>
+<td>6.93e-04 / 3.16e-03</td>
+<td>4.9e-03</td>
+</tr>
+<tr>
+<td>float64</td>
+<td>0.5</td>
+<td>5.87e-17 / 2.77e-16</td>
+<td>1.78e-12 / 7.10e-12</td>
+<td>1.88e-15 / 8.15e-15</td>
+<td>8.14e-17 / 2.94e-16</td>
+<td>2.8e-16</td>
+</tr>
+<tr>
+<td>float64</td>
+<td>2</td>
+<td>3.31e-16 / 1.84e-15</td>
+<td>1.56e-10 / 1.15e-09</td>
+<td>2.44e-13 / 1.43e-12</td>
+<td>3.97e-16 / 1.86e-15</td>
+<td>3.1e-15</td>
+</tr>
+<tr>
+<td>float64</td>
+<td>4</td>
+<td>1.97e-14 / 9.33e-14</td>
+<td>2.58e-08 / 2.04e-06</td>
+<td>4.50e-11 / 3.88e-10</td>
+<td>2.47e-14 / 1.25e-13</td>
+<td>1.7e-13</td>
+</tr>
+<tr>
+<td>float64</td>
+<td>6</td>
+<td>1.24e-12 / 4.92e-12</td>
+<td>7.01e-07 / 3.62e-04</td>
+<td>2.15e-09 / 4.28e-08</td>
+<td>1.51e-12 / 5.49e-12</td>
+<td>9.0e-12</td>
+</tr>
+<tr>
+<td>float64</td>
+<td>10</td>
+<td>3.74e-09 / 1.82e-08</td>
+<td>2.55e-03 / 1.01e+00</td>
+<td>7.99e-06 / 3.08e-03</td>
+<td>3.34e-09 / 1.71e-08</td>
+<td>2.7e-08</td>
+</tr>
+<tr>
+<td>float64</td>
+<td>13</td>
+<td>1.54e-06 / 5.58e-06</td>
+<td>1.00e+00 / 6.89e+02</td>
+<td>3.11e-03 / 1.87e-01</td>
+<td>1.74e-06 / 5.81e-06</td>
+<td>1.1e-05</td>
+</tr>
+</tbody>
+</table>
+<p>The last column is the chart's floor, explained <a href="#klein-chart-ceiling">below</a>. The full grid in
+the probe output also covers <span class="arithmatex">\(c = 0.1\)</span> and <span class="arithmatex">\(t \in \{10^{-4}, 0.3\}\)</span>. What it shows:</p>
+<ul>
+<li><strong><code>Klein.dist</code> does not depend on the separation.</strong> At float32, <span class="arithmatex">\(c = 1\)</span>, <span class="arithmatex">\(a = 4\)</span> the median
+  is 1.17e-05, 1.19e-05 and 1.25e-05 for <span class="arithmatex">\(t = 10^{-4}, 10^{-2}, 0.3\)</span>. The literal <code>acosh</code>
+  loses the whole distance on close pairs (median 1.00e+00 at <span class="arithmatex">\(t = 10^{-4}\)</span> for every float32 <span class="arithmatex">\(a\)</span>), and
+  the Eq. 4 form has median 2.97e+00 in the same float32, <span class="arithmatex">\(a = 4\)</span>, <span class="arithmatex">\(t = 10^{-4}\)</span> cell.</li>
+<li><strong>Its error is the chart floor.</strong> From <span class="arithmatex">\(a = 2\)</span> on, the maximum <code>Klein.dist</code> error is below
+  <span class="arithmatex">\(\varepsilon\cosh^2(a)\)</span> in 47 of the 48 cells (both dtypes, both <span class="arithmatex">\(c\)</span>, all three <span class="arithmatex">\(t\)</span>); the
+  exception is float32, <span class="arithmatex">\(c = 0.1\)</span>, <span class="arithmatex">\(a = 6\)</span>, <span class="arithmatex">\(t = 10^{-4}\)</span> at 5.26e-03, 1.08× the floor. At
+  <span class="arithmatex">\(a = 0.5\)</span> the maximum is under <span class="arithmatex">\(2\varepsilon\)</span> (2.11e-07 in float32, 3.81e-16 in float64).
+  <code>logmap</code>'s error is the same size as <code>dist</code>'s in every cell except float32, <span class="arithmatex">\(a = 6\)</span>,
+  <span class="arithmatex">\(t = 10^{-4}\)</span> (both <span class="arithmatex">\(c\)</span>), described next.</li>
+<li>At float32, <span class="arithmatex">\(a = 6\)</span>, <span class="arithmatex">\(t = 10^{-4}\)</span>, the step <span class="arithmatex">\(10^{-4}(1 - \tanh 6) = 1.2\times10^{-9}\)</span> is
+  below the float32 spacing of the coordinates, and 137 of 200 stored <span class="arithmatex">\(y\)</span> equal <span class="arithmatex">\(x\)</span> at <span class="arithmatex">\(c = 1\)</span>
+  (131 at <span class="arithmatex">\(c = 0.1\)</span>); those pairs have no relative error and are skipped.</li>
+</ul>
+<h3 id="klein-chart-ceiling">The Chart Ceiling and Floor<a class="headerlink" href="#klein-chart-ceiling" title="Permanent link">&para;</a></h3>
+<p><strong>Ceiling.</strong> <code>proj</code> caps <span class="arithmatex">\(\lVert x\rVert\)</span> at <span class="arithmatex">\(1/\sqrt{c} - \varepsilon^{0.75}\)</span>, the Poincaré
+ball's <a href="#poincare-roundtrip-ceiling">margin</a>. A Klein point has
+<span class="arithmatex">\(\sqrt{c}\,\lVert x\rVert = \tanh(a)\)</span> where a Poincaré point has <span class="arithmatex">\(\tanh(a/2)\)</span>, so at <span class="arithmatex">\(c = 1\)</span> the
+projection ceiling is <span class="arithmatex">\(a = \operatorname{atanh}(1 - \varepsilon^{0.75})\)</span>
+= <strong>6.32</strong> in float32 and <strong>13.86</strong> in float64 — half the Poincaré ball's 12.65 / 27.7.</p>
+<p><code>poincare_to_klein</code>, <code>hyperboloid_to_klein</code> and <code>pv_to_klein</code> do not project. A point farther
+out than the ceiling lands between the <code>proj</code> margin and the boundary, not on the margin: in
+float32 at <span class="arithmatex">\(c = 1\)</span> the margin is <span class="arithmatex">\(\lVert k\rVert = 1 - \varepsilon^{0.75} = 0.99999356\)</span>, and the
+three maps give <span class="arithmatex">\(\lVert k\rVert\)</span> = 0.9999983 at <span class="arithmatex">\(a = 7\)</span> and 0.99999976 at <span class="arithmatex">\(a = 8\)</span>. From <span class="arithmatex">\(a = 10\)</span>
+on, <span class="arithmatex">\(\lVert k\rVert\)</span> rounds to exactly <span class="arithmatex">\(1/\sqrt{c}\)</span> (at <span class="arithmatex">\(a = 10\)</span> for <code>poincare_to_klein</code> and
+<code>pv_to_klein</code>, at <span class="arithmatex">\(a = 12\)</span> for all three). Klein operations floor the gap <span class="arithmatex">\(g_k\)</span> at its value on
+the margin, so every such point reads as <span class="arithmatex">\(a \approx 6.32\)</span>: <code>Klein.dist</code> to the origin is 6.325
+for all three maps at <span class="arithmatex">\(a = 7, 8, 10, 12\)</span> (<code>logs/2026-09-28_klein_audit/audit_jax.out</code>). The
+radius beyond the ceiling is lost either way; call <code>Klein.proj</code> after mapping far points in, so
+that the stored point is the one the operations actually use.</p>
+<p><strong>Floor.</strong> <span class="arithmatex">\(g_x = 1 - c\lVert x\rVert^2 = \operatorname{sech}^2(a)\)</span>. Computing it subtracts
+<span class="arithmatex">\(c\lVert x\rVert^2 \approx 1\)</span> from 1, so <span class="arithmatex">\(g_x\)</span> carries an absolute error of about <span class="arithmatex">\(\varepsilon\)</span>,
+a relative error of <span class="arithmatex">\(\varepsilon/g_x = \varepsilon\cosh^2(a)\)</span>. The pairwise formulas and the
+metric divide by <span class="arithmatex">\(g_x\)</span> or its square root, so this is the relative error floor of the chart. Worked example,
+float32 at <span class="arithmatex">\(a = 4\)</span>: <span class="arithmatex">\(1.19\times10^{-7}\cdot\cosh^2 4 = 1.19\times10^{-7}\cdot 745.7 = 8.9\times10^{-5}\)</span>,
+against a measured <code>Klein.dist</code> median of 1.19e-05 and maximum of 5.15e-05 (<span class="arithmatex">\(c = 1\)</span>,
+<span class="arithmatex">\(t = 10^{-2}\)</span>). Since <span class="arithmatex">\(\cosh^2(a) \approx e^{2a}/4\)</span>, the Klein radial floor scales as <span class="arithmatex">\(e^{2a}\)</span>,
+where the floor of the Poincaré ball and the hyperboloid scales as <span class="arithmatex">\(e^{a}\)</span> (constants dropped).
+The rewrite above removes every other cancellation, so the rounding of <span class="arithmatex">\(g_x\)</span> is the error that
+remains.</p>
+<p>In practice: float32 <code>Klein</code> is accurate to about 1e-5 at <span class="arithmatex">\(a = 4\)</span> and 1e-3 at <span class="arithmatex">\(a = 6\)</span> (medians
+1.19e-05 and 7.48e-04 above). For larger radii use <code>Klein(dtype=jnp.float64)</code>, or the
+hyperboloid, whose floor scales as <span class="arithmatex">\(e^{a}\)</span>.</p>
+<h3 id="cost">Cost<a class="headerlink" href="#cost" title="Permanent link">&para;</a></h3>
+<p><code>jit(vmap(dist))</code> over <span class="arithmatex">\(10^6\)</span> pairs, float32, <span class="arithmatex">\(c = 1\)</span>, radius <span class="arithmatex">\(\le 0.9/\sqrt{c}\)</span>, median of 25 runs
+after warm-up (jax 0.9.1, NVIDIA A100-PCIE-40GB, shared with other processes during the runs);
+the ratio is to the Eq. 4 form, the reference Einstein <code>artanh</code> spelling. One run
+(<code>logs/2026-09-28_klein-manifold/probe_klein.out</code>):</p>
+<table>
+<thead>
+<tr>
+<th>dim</th>
+<th>mode</th>
+<th><code>Klein.dist</code> ms</th>
+<th>Eq. 4 <code>artanh</code> ms</th>
+<th>literal <code>acosh</code> ms</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>16</td>
+<td>fwd</td>
+<td>0.383 (0.94×)</td>
+<td>0.407 (1.00×)</td>
+<td>0.363 (0.89×)</td>
+</tr>
+<tr>
+<td>16</td>
+<td>fwd+bwd</td>
+<td>0.535 (0.53×)</td>
+<td>1.016 (1.00×)</td>
+<td>0.519 (0.51×)</td>
+</tr>
+<tr>
+<td>128</td>
+<td>fwd</td>
+<td>1.051 (0.58×)</td>
+<td>1.812 (1.00×)</td>
+<td>1.024 (0.56×)</td>
+</tr>
+<tr>
+<td>128</td>
+<td>fwd+bwd</td>
+<td>2.493 (0.42×)</td>
+<td>5.925 (1.00×)</td>
+<td>2.426 (0.41×)</td>
+</tr>
+</tbody>
+</table>
+<p>Over five runs (this one, <code>probe_klein_after_logmap0_fix.out</code>, and three in
+<code>logs/2026-09-28_klein_audit/timing_rerun.out</code>), <code>Klein.dist</code> forward+backward takes
+0.48–0.53× the Eq. 4 time at dim 16 and 0.42–0.45× at dim 128, and the dim-128 forward takes
+0.55–0.59×. The dim-16 forward ratio ranged from 0.91× to 1.44×, within run-to-run noise on
+the shared GPU, so no speed difference is claimed there.</p>
+<h3 id="the-reference-_klein_expmap-is-exact-only-at-c-1">The Reference <code>_klein_expmap</code> Is Exact Only at <span class="arithmatex">\(c = 1\)</span><a class="headerlink" href="#the-reference-_klein_expmap-is-exact-only-at-c-1" title="Permanent link">&para;</a></h3>
+<p><code>Klein.expmap</code> is <span class="arithmatex">\(\exp_x(v) = x + v/\big(\theta\coth\theta + c\langle x, v\rangle/g_x\big)\)</span> with
+<span class="arithmatex">\(\theta = \sqrt{c}\,\lVert v\rVert_x\)</span>. The reference implementation
+(github.com/sc-zyl/Klein_hml, <code>Hyperbolic/hmath.py</code>, <code>_klein_expmap</code>) omits the factor <span class="arithmatex">\(c\)</span> in the
+second denominator term. The two agree at <span class="arithmatex">\(c = 1\)</span>. For <span class="arithmatex">\(c \ne 1\)</span> the reference still moves <span class="arithmatex">\(x\)</span>
+along <span class="arithmatex">\(\pm v\)</span>, but by the wrong amount. In a float64 check at <span class="arithmatex">\(c = 0.1\)</span> with three random samples
+(<code>logs/2026-09-28_klein-manifold/probe_ref_expmap.out</code>,
+<code>logs/2026-09-28_klein_audit/audit_ref_expmap_nan.out</code>), one result landed outside the ball
+(<span class="arithmatex">\(c\lVert\cdot\rVert^2 = 1.055\)</span>, NaN distance, where <span class="arithmatex">\(\lVert v\rVert_x = 2.117\)</span>), one landed on
+the far side of <span class="arithmatex">\(x\)</span> (<span class="arithmatex">\(t = -0.61\)</span> along <span class="arithmatex">\(v\)</span>, distance 1.368 instead of 1.749), and one landed at
+distance 0.317 instead of 0.504. All three <span class="arithmatex">\(c = 1\)</span> samples matched. <code>Klein.expmap</code> matches the hyperboloid
+exponential map to 1.748e-15 in the float64 oracle check above.</p>
 <h2 id="hyperbolic-function-overflow">Hyperbolic Function Overflow<a class="headerlink" href="#hyperbolic-function-overflow" title="Permanent link">&para;</a></h2>
 <h3 id="the-problem">The Problem<a class="headerlink" href="#the-problem" title="Permanent link">&para;</a></h3>
 <p>Standard implementations of cosh, sinh can overflow:</p>
