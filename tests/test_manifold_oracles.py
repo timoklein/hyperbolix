@@ -669,6 +669,12 @@ _DEGENERATE_CASES = [
     ("hyperboloid_to_pv", iso.hyperboloid_to_pv, jnp.array([1.0, 0.0, 0.0, 0.0], dtype=F64)),
     ("poincare_to_hyperboloid", iso.poincare_to_hyperboloid, jnp.zeros(3, dtype=F64)),
     ("hyperboloid_to_poincare", iso.hyperboloid_to_poincare, jnp.array([1.0, 0.0, 0.0, 0.0], dtype=F64)),
+    ("klein_to_poincare", iso.klein_to_poincare, jnp.zeros(3, dtype=F64)),
+    ("poincare_to_klein", iso.poincare_to_klein, jnp.zeros(3, dtype=F64)),
+    ("klein_to_hyperboloid", iso.klein_to_hyperboloid, jnp.zeros(3, dtype=F64)),
+    ("hyperboloid_to_klein", iso.hyperboloid_to_klein, jnp.array([1.0, 0.0, 0.0, 0.0], dtype=F64)),
+    ("klein_to_pv", iso.klein_to_pv, jnp.zeros(3, dtype=F64)),
+    ("pv_to_klein", iso.pv_to_klein, jnp.zeros(3, dtype=F64)),
 ]
 
 
@@ -694,6 +700,20 @@ def test_isometry_gradients_are_finite_at_the_poincare_boundary():
     assert bool(jnp.all(jnp.isfinite(grad)))
 
 
+@pytest.mark.parametrize("fn", [iso.klein_to_pv, iso.klein_to_hyperboloid, iso.klein_to_poincare], ids=lambda f: f.__name__)
+def test_isometry_gradients_are_finite_at_the_klein_boundary(fn):
+    """The Klein maps divide by ``√(1 - c‖k‖²)``, whose derivative is infinite at ‖k‖ -> 1/√c.
+
+    The ``_boundary_floor`` on the gap keeps the cotangent finite, as the floor does for
+    ``poincare_to_pv`` above.
+    """
+    near_boundary_D = jnp.array([1.0 - 1e-12, 0.0], dtype=F64)
+
+    grad = jax.grad(lambda v: jnp.sum(fn(v, 1.0)))(near_boundary_D)
+
+    assert bool(jnp.all(jnp.isfinite(grad)))
+
+
 @pytest.mark.parametrize("c", CURVATURES)
 def test_pv_to_poincare_jacobian_matches_central_differences(c: float):
     """Autodiff Jacobian of ``pv_to_poincare`` vs a central-difference estimate.
@@ -713,6 +733,33 @@ def test_pv_to_poincare_jacobian_matches_central_differences(c: float):
         step[j] = eps
         plus = np.asarray(iso.pv_to_poincare(x_D + jnp.asarray(step), c))
         minus = np.asarray(iso.pv_to_poincare(x_D - jnp.asarray(step), c))
+        numeric[:, j] = (plus - minus) / (2.0 * eps)
+
+    assert np.allclose(jacobian, numeric, rtol=1e-6, atol=1e-9)
+    # Non-trivial map: the Jacobian is not a scaled identity at a generic off-axis point.
+    off_diagonal = jacobian - np.diag(np.diag(jacobian))
+    assert np.max(np.abs(off_diagonal)) > 1e-3
+
+
+@pytest.mark.parametrize("c", CURVATURES)
+def test_klein_to_poincare_jacobian_matches_central_differences(c: float):
+    """Autodiff Jacobian of ``klein_to_poincare`` vs a central-difference estimate.
+
+    Same check as for ``pv_to_poincare``: pins the slope through the floored ``√(1 - c‖k‖²)``,
+    which no round-trip test sees. The point sits at ``√c‖k‖ = 0.42``, inside the Klein ball at
+    every curvature and far from the floor.
+    """
+    x_D = jnp.array([0.4, -0.7, 0.25], dtype=F64) * (0.5 / np.sqrt(c))
+
+    jacobian = np.asarray(jax.jacfwd(lambda v: iso.klein_to_poincare(v, c))(x_D))
+
+    eps = 1e-6
+    numeric = np.zeros_like(jacobian)
+    for j in range(x_D.shape[0]):
+        step = np.zeros(x_D.shape[0])
+        step[j] = eps
+        plus = np.asarray(iso.klein_to_poincare(x_D + jnp.asarray(step), c))
+        minus = np.asarray(iso.klein_to_poincare(x_D - jnp.asarray(step), c))
         numeric[:, j] = (plus - minus) / (2.0 * eps)
 
     assert np.allclose(jacobian, numeric, rtol=1e-6, atol=1e-9)

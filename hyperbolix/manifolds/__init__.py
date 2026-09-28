@@ -3,6 +3,7 @@
 from . import isometry_mappings
 from .euclidean import Euclidean
 from .hyperboloid import Hyperboloid
+from .klein import Klein
 from .poincare import Poincare
 from .product import ProductManifold
 from .proper_velocity import ProperVelocity
@@ -13,6 +14,7 @@ __all__ = [
     "Curvature",
     "Euclidean",
     "Hyperboloid",
+    "Klein",
     "Manifold",
     "Poincare",
     "ProductManifold",

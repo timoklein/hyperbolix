@@ -8,6 +8,7 @@ Supported Models (curvature ``c > 0``, sectional curvature ``-c``):
     - Hyperboloid model (Lorentz model): Points in R^(d+1) satisfying ⟨x,x⟩_L = -1/c
     - Poincaré ball model: Points in R^d with ||y||² < 1/c
     - Proper Velocity (PV) model: Unconstrained points in R^d (Chen et al. 2026)
+    - Beltrami-Klein model: Points in R^d with ||k||² < 1/c (geodesics are straight chords)
 
 Provided maps (all exact, distance-preserving, mutually consistent):
     - Poincaré ↔ Hyperboloid: ``poincare_to_hyperboloid`` / ``hyperboloid_to_poincare``
@@ -18,6 +19,18 @@ Provided maps (all exact, distance-preserving, mutually consistent):
       (direct map — PV coordinates are the space-like part of the 4-velocity;
       the projection Π of Ferreira 2017, Sec. 2, built on the PV gyrogroup of
       Ungar 2005, Def. 3.40).
+    - Klein ↔ Poincaré: ``klein_to_poincare`` / ``poincare_to_klein``
+      (the Einstein half / Möbius double maps, k = 2 ⊗ p).
+    - Klein ↔ Hyperboloid: ``klein_to_hyperboloid`` / ``hyperboloid_to_klein``
+      (central projection from the ambient origin onto the plane x₀ = 1/√c).
+    - Klein ↔ PV: ``klein_to_pv`` / ``pv_to_klein``
+      (PV = Einstein velocity scaled by its Lorentz factor, x = gamma_k·k).
+
+Klein chart precision: with scaled radius ``a = √c·d(0, ·)`` a Klein point has
+``√c·||k|| = tanh(a)`` where a Poincaré point has ``tanh(a/2)``, so ``1 - c·||k||²``
+reaches the ``_boundary_floor`` margin at half the Poincaré radius — scaled radius
+≈ 6.3 in float32 and ≈ 13.9 in float64 (Poincaré: 12.6 / 27.7). Points farther out
+than that, mapped into Klein, land on the boundary margin.
 
 JIT Compilation & Batching
 ---------------------------
@@ -44,7 +57,8 @@ References:
     Ferreira. "Harmonic Analysis on the Proper Velocity Gyrogroup." Banach J.
     Math. Anal. 11(1), 21-49, 2017 (PV ↔ Hyperboloid projection Π, Sec. 2).
     Ungar. "Analytic Hyperbolic Geometry: Mathematical Foundations and
-    Applications." World Scientific, 2005 (PV gyrogroup, Def. 3.40).
+    Applications." World Scientific, 2005 (PV gyrogroup, Def. 3.40; the
+    Einstein ↔ Möbius gyrovector-space isomorphism behind Klein ↔ Poincaré).
 """
 
 import jax.numpy as jnp
@@ -340,3 +354,267 @@ def hyperboloid_to_pv(
     """
     del c  # curvature-independent: PV coords are the hyperboloid spatial part
     return x[1:]
+
+
+def _klein_gap(k: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """``g_k = 1 - c·||k||²`` floored at ``_boundary_floor(k, c)``, the inverse squared Lorentz factor 1/gamma_k².
+
+    Same floor, and for the same reason, as the ``1 - c·||y||²`` of :func:`poincare_to_hyperboloid`:
+    it is the analytic minimum on a projected ball point, so anything below it is rounding noise.
+    On a Klein point ``g_k = sech²(a)`` at scaled radius ``a = √c·d(0, k)``, so the floor is
+    reached at ``a ≈ 6.3`` (float32) / ``13.9`` (float64) — half the Poincaré chart's radius,
+    whose gap is ``sech²(a/2)``. The cancellation in ``1 - c·||k||²`` costs a relative error of
+    ``eps·cosh²(a)`` on ``g_k``, the Klein chart's own representation floor.
+    """
+    k_sqnorm = jnp.dot(k, k, precision=MATMUL_PRECISION)
+    return floor_at(1.0 - c * k_sqnorm, _boundary_floor(k, c))
+
+
+def klein_to_poincare(
+    k: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Beltrami-Klein point to the Poincaré ball.
+
+    The Einstein half map ``p = (1/2) ⊗_E k``: with the Einstein Lorentz factor
+    ``gamma_k = 1/√(1 - c·||k||²)``,
+
+    Formula:
+        p = gamma_k/(1 + gamma_k)·k = k / (1 + √(1 - c·||k||²))
+
+    Both models use the radius-1/√c ball (curvature -c). The denominator is in
+    [1, 2], so the map is well-conditioned; ``1 - c·||k||²`` is floored at
+    ``_boundary_floor(k, c)`` (see :func:`_klein_gap`). A Klein point has
+    ``√c·||k|| = tanh(a)`` at scaled radius ``a = √c·d(0, k)`` where a Poincaré
+    point has ``tanh(a/2)``, so the Klein chart runs out of float precision at
+    half the Poincaré radius (``a ≈ 6.3`` float32, ``13.9`` float64).
+
+    Args:
+        k: Point in the Klein ball, shape (dim,). Should satisfy ||k||² < 1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the Poincaré ball, shape (dim,). Satisfies ||p||² < 1/c.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Klein origin maps to Poincaré origin
+        >>> p = isometry_mappings.klein_to_poincare(jnp.zeros(2), c=1.0)
+        >>> bool(jnp.allclose(p, jnp.zeros(2)))
+        True
+
+    References:
+        Ungar. "Analytic Hyperbolic Geometry: Mathematical Foundations and
+        Applications." World Scientific, 2005 — Einstein ↔ Möbius isomorphism.
+    """
+    c = jnp.asarray(c, dtype=k.dtype)
+    # The gap is floored strictly positive, so the plain square root is safe and its derivative finite.
+    return k / (1.0 + jnp.sqrt(_klein_gap(k, c)))
+
+
+def poincare_to_klein(
+    p: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Poincaré ball point to the Beltrami-Klein model.
+
+    Inverse of :func:`klein_to_poincare`: the Möbius doubling ``k = 2 ⊗_M p``.
+
+    Formula:
+        k = 2·p / (1 + c·||p||²)
+
+    The denominator is in [1, 2], so no floor is needed. Since
+    ``√c·||k|| = tanh(a)`` with ``a = √c·d(0, p)``, a Poincaré point beyond scaled
+    radius ≈ 6.3 (float32) / 13.9 (float64) lands on the Klein boundary margin.
+
+    Args:
+        p: Point in the Poincaré ball, shape (dim,). Should satisfy ||p||² < 1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the Klein ball, shape (dim,). Satisfies ||k||² < 1/c.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Poincaré origin maps to Klein origin
+        >>> k = isometry_mappings.poincare_to_klein(jnp.zeros(2), c=1.0)
+        >>> bool(jnp.allclose(k, jnp.zeros(2)))
+        True
+
+    References:
+        Ungar. "Analytic Hyperbolic Geometry: Mathematical Foundations and
+        Applications." World Scientific, 2005 — Einstein ↔ Möbius isomorphism.
+    """
+    c = jnp.asarray(c, dtype=p.dtype)
+    return 2.0 * p / (1.0 + c * jnp.dot(p, p, precision=MATMUL_PRECISION))
+
+
+def klein_to_hyperboloid(
+    k: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim_plus_1"]:
+    """Convert a Beltrami-Klein point to the hyperboloid model.
+
+    Inverse of the central projection from the ambient origin onto the plane
+    ``x₀ = 1/√c`` (scaled by √c so the Klein ball has radius 1/√c).
+
+    Formula:
+        x_s = k / √(1 - c·||k||²) = gamma_k·k
+        x₀  = 1 / (√c·√(1 - c·||k||²)) = √(1/c + ||x_s||²)
+
+    The spatial part is :func:`klein_to_pv`; the time component is rebuilt from it
+    with ``safe_hypot_norm`` exactly as :func:`pv_to_hyperboloid` does, so the
+    result satisfies ``⟨x,x⟩_L = -1/c`` to rounding even where ``1 - c·||k||²`` is
+    floored. The two time formulas agree in exact arithmetic.
+
+    Args:
+        k: Point in the Klein ball, shape (dim,). Should satisfy ||k||² < 1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point on the hyperboloid, shape (dim+1,). Satisfies ⟨x,x⟩_L = -1/c, x₀ > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Klein origin maps to the hyperboloid origin [1/√c, 0, ...]
+        >>> x = isometry_mappings.klein_to_hyperboloid(jnp.zeros(2), c=1.0)
+        >>> bool(jnp.allclose(x, jnp.array([1.0, 0.0, 0.0])))
+        True
+
+    References:
+        Wikipedia: Hyperboloid model - Relation to other models
+    """
+    return pv_to_hyperboloid(klein_to_pv(k, c), c)
+
+
+def hyperboloid_to_klein(
+    x: Float[Array, "dim_plus_1"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a hyperboloid point to the Beltrami-Klein model.
+
+    Central projection from the ambient origin onto the plane ``x₀ = 1/√c``.
+
+    Formula:
+        k = x_s / (√c·x₀)
+        where x = [x₀, x_s] on the hyperboloid (x₀ ≥ 1/√c)
+
+    ``hyperboloid_core.lorentz_scale`` writes the same map as ``φ_K(x) = x_s/x₀``:
+    that is the unit-ball Klein coordinate ``√c·k``. Since ``√c·||k|| =
+    ||x_s||/x₀ = tanh(a)`` at scaled radius ``a = √c·d(0, x)``, points beyond
+    ``a ≈ 6.3`` (float32) / ``13.9`` (float64) land on the Klein boundary margin.
+
+    Args:
+        x: Point on the hyperboloid, shape (dim+1,). Should satisfy ⟨x,x⟩_L = -1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the Klein ball, shape (dim,). Satisfies ||k||² < 1/c.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Hyperboloid origin maps to the Klein origin
+        >>> k = isometry_mappings.hyperboloid_to_klein(jnp.array([1.0, 0.0, 0.0]), c=1.0)
+        >>> bool(jnp.allclose(k, jnp.zeros(2)))
+        True
+
+    References:
+        Wikipedia: Hyperboloid model - Relation to other models
+    """
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
+    # √c·x₀ ≥ 1 on the hyperboloid; the floor only guards an off-manifold input, as in
+    # :func:`hyperboloid_to_poincare`.
+    return x[1:] / floor_at(sqrt_c * x[0], MIN_NORM)
+
+
+def klein_to_pv(
+    k: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Beltrami-Klein point to Proper Velocity space.
+
+    A Klein point is an Einstein (coordinate) velocity; its proper velocity is
+    the velocity times its Lorentz factor.
+
+    Formula:
+        x = gamma_k·k = k / √(1 - c·||k||²)
+
+    The image grows without bound as k approaches the boundary (PV is the
+    unconstrained model); ``1 - c·||k||²`` is floored at ``_boundary_floor(k, c)``
+    (see :func:`_klein_gap`), reached at scaled radius ``a ≈ 6.3`` (float32) /
+    ``13.9`` (float64).
+
+    Args:
+        k: Point in the Klein ball, shape (dim,). Should satisfy ||k||² < 1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in PV space (unconstrained R^n), shape (dim,).
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Klein origin maps to the PV origin
+        >>> x = isometry_mappings.klein_to_pv(jnp.zeros(2), c=1.0)
+        >>> bool(jnp.allclose(x, jnp.zeros(2)))
+        True
+
+    References:
+        Ungar. "Analytic Hyperbolic Geometry: Mathematical Foundations and
+        Applications." World Scientific, 2005 — Einstein and PV gyrogroups.
+    """
+    c = jnp.asarray(c, dtype=k.dtype)
+    # The gap is floored strictly positive, so the plain square root is safe and its derivative finite.
+    return k / jnp.sqrt(_klein_gap(k, c))
+
+
+def pv_to_klein(
+    x: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Proper Velocity point to the Beltrami-Klein model.
+
+    Inverse of :func:`klein_to_pv`: the Einstein velocity is the proper velocity
+    times the PV beta factor ``β_x = 1/√(1 + c·||x||²)``.
+
+    Formula:
+        k = β_x·x = x / √(1 + c·||x||²)
+
+    Every finite PV point lands inside the Klein ball in exact arithmetic; in
+    floating point a point beyond scaled radius ≈ 6.3 (float32) / 13.9 (float64)
+    lands on the boundary margin.
+
+    Args:
+        x: Point in PV space (unconstrained R^n), shape (dim,).
+        c: Curvature (positive).
+
+    Returns:
+        Point in the Klein ball, shape (dim,). Satisfies ||k||² < 1/c.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # PV origin maps to the Klein origin
+        >>> k = isometry_mappings.pv_to_klein(jnp.zeros(2), c=1.0)
+        >>> bool(jnp.allclose(k, jnp.zeros(2)))
+        True
+
+    References:
+        Ungar. "Analytic Hyperbolic Geometry: Mathematical Foundations and
+        Applications." World Scientific, 2005 — Einstein and PV gyrogroups.
+    """
+    # √(1 + c·||x||²) via `safe_hypot_norm`, overflow-free past ||x|| = 1.8e19/√c; same form as
+    # :func:`pv_to_poincare`.
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
+    beta_inv = safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))  # 1/β_x
+    return x / beta_inv
