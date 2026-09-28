@@ -11,6 +11,7 @@ import pytest
 
 from hyperbolix.manifolds import (
     Euclidean,
+    HalfSpace,
     Hyperboloid,
     Klein,
     Poincare,
@@ -90,7 +91,7 @@ def test_distmat_contract(hyperboloid, poincare, manifold_name: str):
 
 
 def _manifold_case(name: str, n_points: int = 12, seed: int = 3):
-    """``(manifold, c, points, version_idx)`` for each of the seven manifolds.
+    """``(manifold, c, points, version_idx)`` for each of the eight manifolds.
 
     Curvature is a per-factor tuple for ``ProductManifold`` and signed for ``Stereographic``,
     so the case table also covers the two non-scalar/non-positive curvature shapes the helpers
@@ -121,6 +122,14 @@ def _manifold_case(name: str, n_points: int = 12, seed: int = 3):
         manifold = Klein(dtype=jnp.float64)
         raw = jnp.asarray(0.3 * gen.normal(0.0, 1.0, size=(n_points, dim)), dtype=jnp.float64)
         return manifold, 1.0, jax.vmap(manifold.proj, in_axes=(0, None))(raw, 1.0), manifold.VERSION_DEFAULT
+
+    if name == "halfspace":
+        # Built in NumPy: horizontal part 0.3·N(0, 1), height exp(0.3·N(0, 1)) > 0 in the last slot.
+        manifold = HalfSpace(dtype=jnp.float64)
+        horizontal = 0.3 * gen.normal(0.0, 1.0, size=(n_points, dim - 1))
+        height = np.exp(0.3 * gen.normal(0.0, 1.0, size=(n_points, 1)))
+        pts = jnp.asarray(np.concatenate([horizontal, height], axis=-1), dtype=jnp.float64)
+        return manifold, 1.0, pts, manifold.VERSION_DEFAULT
 
     if name == "stereographic_hyperbolic":
         manifold = Stereographic(dtype=jnp.float64)
@@ -153,6 +162,7 @@ MANIFOLD_CASES = [
     "hyperboloid",
     "proper_velocity",
     "klein",
+    "halfspace",
     "stereographic_hyperbolic",
     "stereographic_spherical",
     "product",
@@ -161,7 +171,7 @@ MANIFOLD_CASES = [
 
 @pytest.mark.parametrize("case", MANIFOLD_CASES)
 def test_compute_pairwise_distances_works_on_every_manifold(case: str):
-    """The distance matrix is the manifold's own ``dist`` on every pair, for all seven manifolds.
+    """The distance matrix is the manifold's own ``dist`` on every pair, for all eight manifolds.
 
     The value oracle (an off-diagonal entry against a direct ``manifold.dist`` call) is what
     makes this more than a smoke test: three of these cases used to raise ``TypeError`` outright,

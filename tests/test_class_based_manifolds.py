@@ -1,6 +1,6 @@
 """Contract tests for the class-based manifold API: jit, vmap, grad and dtype.
 
-One parametrized matrix (5 manifolds x 4 contracts = 20 items) replaces the 44 near-duplicate
+One parametrized matrix (6 manifolds x 4 contracts = 24 items) replaces the 44 near-duplicate
 per-manifold tests this file used to hold. The rewrite is driven by the audit finding that the
 old file passed unchanged with a 2x-wrong Poincare distance: every assertion in it was a
 ``dtype ==``, ``shape ==``, ``isfinite`` or ``> 0`` check, so nothing pinned a value.
@@ -32,6 +32,7 @@ import numpy as np
 import pytest
 
 from hyperbolix.manifolds.euclidean import Euclidean
+from hyperbolix.manifolds.halfspace import HalfSpace
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT, Hyperboloid
 from hyperbolix.manifolds.klein import Klein
 from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT, Poincare
@@ -67,6 +68,11 @@ def _oracle_klein(x: np.ndarray, y: np.ndarray, c: float) -> float:
     num = 1.0 - c * float(np.dot(x, y))
     den = np.sqrt((1.0 - c * np.sum(x**2)) * (1.0 - c * np.sum(y**2)))
     return float(np.arccosh(num / den) / np.sqrt(c))
+
+
+def _oracle_halfspace(x: np.ndarray, y: np.ndarray, c: float) -> float:
+    """d(x, y) = (1/√c)·arcosh(1 + ‖x - y‖²/(2·x_n·y_n)) — the upper half-space, height last."""
+    return float(np.arccosh(1.0 + np.sum((x - y) ** 2) / (2.0 * x[-1] * y[-1])) / np.sqrt(c))
 
 
 def _oracle_pv(x: np.ndarray, y: np.ndarray, c: float) -> float:
@@ -162,12 +168,25 @@ CASES = [
         v_raw=[0.05, 0.05],
         oracle=_oracle_klein,
     ),
+    ManifoldCase(
+        name="HalfSpace",
+        make=lambda dtype: HalfSpace(dtype=dtype),
+        c=1.0,
+        version_idx=None,
+        # Last coordinate is the height (> 0); o = (0, 1) at c = 1.
+        x_raw=[0.1, 0.5],
+        y_raw=[0.3, 0.9],
+        x2_raw=[0.15, 0.6],
+        y2_raw=[0.35, 1.2],
+        v_raw=[0.05, 0.05],
+        oracle=_oracle_halfspace,
+    ),
 ]
 
 CASE_IDS = [case.name for case in CASES]
 
 # jit-vs-eager is asserted at *zero* tolerance wherever that holds (it does for ``dist`` on all
-# five manifolds, and for every vmap-vs-loop comparison below). XLA is free to fuse and reorder
+# six manifolds, and for every vmap-vs-loop comparison below). XLA is free to fuse and reorder
 # float operations inside a jitted trace, and for the composite exp/log maps that costs a single
 # ULP, so those two use ULP_TOL. Both bounds are many orders of magnitude tighter than any
 # semantic difference (a dropped factor, a wrong ``version_idx`` branch) could hide in.
@@ -376,6 +395,7 @@ _BATCHED_OPS: dict[str, list[str]] = {
     "PoincareBall": ["proj", "expmap_0", "logmap_0", "scalar_mul"],
     "ProperVelocity": ["proj", "expmap_0", "logmap_0", "scalar_mul"],
     "Klein": ["proj", "expmap_0", "logmap_0", "scalar_mul"],
+    "HalfSpace": ["proj", "expmap_0", "logmap_0", "scalar_mul"],
 }
 
 

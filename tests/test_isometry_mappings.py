@@ -23,7 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hyperbolix.manifolds import Hyperboloid, Klein, Poincare, ProperVelocity
+from hyperbolix.manifolds import HalfSpace, Hyperboloid, Klein, Poincare, ProperVelocity
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
 from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT
@@ -1959,3 +1959,183 @@ def test_halfspace_pv_gradients_finite(u: list[float]):
             for i in range(DIM)
         ]
         assert np.allclose(np.asarray(g_u), np.asarray(fd), atol=1e-6, rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Half-space operations are equivariant under the maps
+# ---------------------------------------------------------------------------
+#
+# As for Klein above: each ``HalfSpace`` op must equal the same op of another model transported
+# through the library maps, ``f_H(x, ...) = φ⁻¹(f_M(φ(x), ...))``, with tangent vectors moved by
+# ``jax.jvp`` of the map itself. ``φ = halfspace_to_poincare`` is the Cayley transform (``o ↦ 0``,
+# differential ``½I`` at ``o``); ``ψ = halfspace_to_hyperboloid``. The ``halfspace_points`` fixture
+# keeps the scaled radius below ≈ 3 and the tangent steps below scaled length 1.5, so every derived
+# point stays below scaled radius ≈ 6, where the conftest tolerance holds in float32.
+
+
+def _halfspace_tangents(key: jax.Array, x_BD: jnp.ndarray, dtype: jnp.dtype) -> jnp.ndarray:
+    """Random tangent vectors at ``x_BD`` with scaled norm ``√c·‖v‖_x`` uniform in [0.1, 1.5].
+
+    The metric is conformal, ``√c·‖v‖_x = ‖v‖/x_n`` at every ``c``, so ``v = τ·x_n·u`` with ``u`` a
+    Euclidean unit vector has scaled length ``τ`` — set without calling ``HalfSpace.tangent_norm``
+    (which the tests below also check).
+    """
+    k_dir, k_len = jax.random.split(key)
+    u_BD = jax.random.normal(k_dir, x_BD.shape, dtype=dtype)
+    u_BD = u_BD / jnp.linalg.norm(u_BD, axis=-1, keepdims=True)
+    tau_B = jax.random.uniform(k_len, (x_BD.shape[0],), dtype=dtype, minval=0.1, maxval=1.5)
+    return u_BD * (tau_B[:, None] * x_BD[:, -1:])
+
+
+def test_halfspace_dist_and_dist_0_match_poincare_and_hyperboloid_through_the_maps(
+    halfspace_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """``HalfSpace.dist(x, y) == Poincare.dist(φx, φy) == Hyperboloid.dist(ψx, ψy)``, and ``dist_0`` likewise."""
+    c = curvature
+    atol, rtol = tolerance
+    halfspace, poincare, hyperboloid = HalfSpace(dtype=dtype), Poincare(dtype=dtype), Hyperboloid(dtype=dtype)
+
+    n = N_POINTS // 2
+    xs, ys = halfspace_points[:n], halfspace_points[n : 2 * n]
+    to_p, to_h = _batch(iso.halfspace_to_poincare), _batch(iso.halfspace_to_hyperboloid)
+
+    d_hs = jax.vmap(lambda a, b: halfspace.dist(a, b, c))(xs, ys)
+    d_p = jax.vmap(lambda a, b: poincare.dist(a, b, c, version_idx=VERSION_MOBIUS_DIRECT))(to_p(xs, c), to_p(ys, c))
+    d_h = jax.vmap(lambda a, b: hyperboloid.dist(a, b, c, version_idx=VERSION_DEFAULT))(to_h(xs, c), to_h(ys, c))
+    assert jnp.allclose(d_hs, d_p, atol=atol, rtol=rtol), "HalfSpace.dist != Poincare.dist through HS->P"
+    assert jnp.allclose(d_hs, d_h, atol=atol, rtol=rtol), "HalfSpace.dist != Hyperboloid.dist through HS->H"
+
+    d0_hs = jax.vmap(lambda a: halfspace.dist_0(a, c))(halfspace_points)
+    d0_p = jax.vmap(lambda a: poincare.dist_0(a, c))(to_p(halfspace_points, c))
+    d0_h = jax.vmap(lambda a: hyperboloid.dist_0(a, c))(to_h(halfspace_points, c))
+    assert jnp.allclose(d0_hs, d0_p, atol=atol, rtol=rtol), "HalfSpace.dist_0 != Poincare.dist_0 through HS->P"
+    assert jnp.allclose(d0_hs, d0_h, atol=atol, rtol=rtol), "HalfSpace.dist_0 != Hyperboloid.dist_0 through HS->H"
+
+
+def test_halfspace_gyro_operations_match_mobius_through_the_cayley_map(
+    halfspace_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """``⊕``, ``(⊖x) ⊕ y`` and ``⊗`` of the half-space equal Möbius conjugated by the Cayley map.
+
+    The half-space gyro structure is defined as the Möbius structure carried over by ``φ``, and
+    ``φ`` maps ``⊖x`` to ``-φx``, so ``x ⊕ y = φ⁻¹(φx ⊕_M φy)``, ``(⊖x) ⊕ y = φ⁻¹((-φx) ⊕_M φy)`` and
+    ``r ⊗ x = φ⁻¹(r ⊗_M φx)``. None is vacuous: ``HalfSpace`` builds all three from its own
+    ``expmap``/``logmap``/``ptransp`` (``exp_x(PT_{o→x}(log_o y))``), never from the Möbius formula.
+    """
+    c = curvature
+    atol, rtol = tolerance
+    halfspace, poincare = HalfSpace(dtype=dtype), Poincare(dtype=dtype)
+    to_p, to_hs = _batch(iso.halfspace_to_poincare), _batch(iso.poincare_to_halfspace)
+
+    n = N_POINTS // 2
+    xs, ys = halfspace_points[:n], halfspace_points[n : 2 * n]
+    xp, yp = to_p(xs, c), to_p(ys, c)
+
+    add_hs = jax.vmap(lambda a, b: halfspace.addition(a, b, c))(xs, ys)
+    add_p = to_hs(jax.vmap(lambda a, b: poincare.addition(a, b, c))(xp, yp), c)
+    assert jnp.allclose(add_hs, add_p, atol=atol, rtol=rtol), "HalfSpace.addition != Mobius addition through HS<->P"
+
+    diff_hs = jax.vmap(lambda a, b: halfspace.gyro_difference(a, b, c))(xs, ys)
+    diff_p = to_hs(jax.vmap(lambda a, b: poincare.addition(-a, b, c))(xp, yp), c)
+    assert jnp.allclose(diff_hs, diff_p, atol=atol, rtol=rtol), "HalfSpace.gyro_difference != (-p) (+)_M q through HS<->P"
+
+    for r in (-1.5, 0.3, 2.0):
+        mul_hs = jax.vmap(lambda a, r=r: halfspace.scalar_mul(r, a, c))(halfspace_points)
+        mul_p = to_hs(jax.vmap(lambda a, r=r: poincare.scalar_mul(r, a, c))(to_p(halfspace_points, c)), c)
+        assert jnp.allclose(mul_hs, mul_p, atol=atol, rtol=rtol), f"HalfSpace.scalar_mul({r}) != Mobius through HS<->P"
+
+
+def test_halfspace_origin_exp_and_log_match_poincare_through_the_half_differential(
+    halfspace_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """``φ ∘ exp^H_o = exp^P_0 ∘ dφ_o`` and ``dφ_o ∘ log^H_o = log^P_0 ∘ φ``, with ``dφ_o = ½I``.
+
+    The half-space metric at ``o = e_n/√c`` is ``I/(c·o_n²) = I`` and Poincaré's at 0 is
+    ``λ_0²I = 4I``, so ``½I`` is an isometry of the two tangent spaces. Hence
+    ``φ(exp^H_o(v)) = exp^P_0(v/2)`` and ``log^H_o(x)/2 = log^P_0(φx)``. The ``½`` is read off
+    ``jax.jvp`` of ``halfspace_to_poincare`` at ``o`` and asserted to be ``½I``.
+    """
+    c = curvature
+    atol, rtol = tolerance
+    halfspace, poincare = HalfSpace(dtype=dtype), Poincare(dtype=dtype)
+    to_p = _batch(iso.halfspace_to_poincare)
+    push = _push(iso.halfspace_to_poincare, c)
+
+    origins_BD = jnp.broadcast_to(_halfspace_origin(c, dtype), halfspace_points.shape)
+    v_BD = _halfspace_tangents(jax.random.PRNGKey(5), origins_BD, dtype)
+    zero_p_BD, v_p_BD = push(origins_BD, v_BD)
+    assert jnp.allclose(zero_p_BD, 0.0, atol=atol), "HS->P does not map o to 0"
+    assert jnp.allclose(v_p_BD, 0.5 * v_BD, atol=atol, rtol=rtol), "d(HS->P) at o is not I/2"
+
+    exp_hs = to_p(jax.vmap(lambda v: halfspace.expmap_0(v, c))(v_BD), c)
+    exp_p = jax.vmap(lambda v: poincare.expmap_0(v, c))(v_p_BD)
+    assert jnp.allclose(exp_hs, exp_p, atol=atol, rtol=rtol), "HS->P(exp^H_o(v)) != exp^P_0(dφ_o v)"
+
+    log_hs = jax.vmap(lambda x: halfspace.logmap_0(x, c))(halfspace_points)
+    _, log_hs_pushed = push(origins_BD, log_hs)
+    log_p = jax.vmap(lambda p: poincare.logmap_0(p, c))(to_p(halfspace_points, c))
+    assert jnp.allclose(log_hs_pushed, log_p, atol=atol, rtol=rtol), "dφ_o(log^H_o(x)) != log^P_0(HS->P(x))"
+    assert jnp.allclose(log_hs, 2.0 * log_p, atol=atol, rtol=rtol), "log^H_o(x) != 2·log^P_0(HS->P(x))"
+
+
+def test_halfspace_expmap_logmap_ptransp_match_the_hyperboloid_through_the_jvp_pushforward(
+    halfspace_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """``exp``, ``log``, ``PT``, ``PT_0`` and ``‖·‖_x`` of the half-space equal the hyperboloid's under ``ψ``.
+
+    With ``(X, V) = (ψ(x), dψ_x(v))`` from ``jax.jvp`` of ``ψ = halfspace_to_hyperboloid``:
+
+    * ``HalfSpace.expmap(v, x) == H->HS(Hyperboloid.expmap(V, X))``
+    * ``dψ_x(HalfSpace.logmap(y, x)) == Hyperboloid.logmap(ψy, X)``
+    * ``dψ_y(HalfSpace.ptransp(v, x, y)) == Hyperboloid.ptransp(V, X, ψy)``
+    * ``dψ_y(HalfSpace.ptransp_0(v, y)) == Hyperboloid.ptransp_0(dψ_o v, ψy)``
+    * ``HalfSpace.tangent_norm(v, x) == Hyperboloid.tangent_norm(V, X)`` (the metric is the pullback)
+    """
+    c = curvature
+    atol, rtol = tolerance
+    halfspace, hyperboloid = HalfSpace(dtype=dtype), Hyperboloid(dtype=dtype)
+    push = _push(iso.halfspace_to_hyperboloid, c)
+
+    n = N_POINTS // 2
+    xs, ys = halfspace_points[:n], halfspace_points[n : 2 * n]
+    v_BD = _halfspace_tangents(jax.random.PRNGKey(11), xs, dtype)
+    x_BA, v_BA = push(xs, v_BD)
+    y_BA = _batch(iso.halfspace_to_hyperboloid)(ys, c)
+
+    norm_hs = jax.vmap(lambda v, x: halfspace.tangent_norm(v, x, c))(v_BD, xs)
+    norm_h = jax.vmap(lambda v, x: hyperboloid.tangent_norm(v, x, c))(v_BA, x_BA)
+    assert jnp.allclose(norm_hs, norm_h, atol=atol, rtol=rtol), "HalfSpace metric != pullback of the Minkowski metric"
+
+    exp_hs = jax.vmap(lambda v, x: halfspace.expmap(v, x, c))(v_BD, xs)
+    exp_h = _batch(iso.hyperboloid_to_halfspace)(jax.vmap(lambda v, x: hyperboloid.expmap(v, x, c))(v_BA, x_BA), c)
+    assert jnp.allclose(exp_hs, exp_h, atol=atol, rtol=rtol), "HalfSpace.expmap != H->HS(Hyperboloid.expmap(dψ v))"
+
+    log_hs = jax.vmap(lambda y, x: halfspace.logmap(y, x, c))(ys, xs)
+    _, log_hs_pushed = push(xs, log_hs)
+    log_h = jax.vmap(lambda y, x: hyperboloid.logmap(y, x, c))(y_BA, x_BA)
+    assert jnp.allclose(log_hs_pushed, log_h, atol=atol, rtol=rtol), "dψ(HalfSpace.logmap) != Hyperboloid.logmap"
+
+    pt_hs = jax.vmap(lambda v, x, y: halfspace.ptransp(v, x, y, c))(v_BD, xs, ys)
+    _, pt_hs_pushed = push(ys, pt_hs)
+    pt_h = jax.vmap(lambda v, x, y: hyperboloid.ptransp(v, x, y, c))(v_BA, x_BA, y_BA)
+    assert jnp.allclose(pt_hs_pushed, pt_h, atol=atol, rtol=rtol), "dψ(HalfSpace.ptransp) != Hyperboloid.ptransp(dψ v)"
+
+    origins_BD = jnp.broadcast_to(_halfspace_origin(c, dtype), ys.shape)
+    v0_BD = _halfspace_tangents(jax.random.PRNGKey(17), origins_BD, dtype)
+    _, v0_BA = push(origins_BD, v0_BD)
+    pt0_hs = jax.vmap(lambda v, y: halfspace.ptransp_0(v, y, c))(v0_BD, ys)
+    _, pt0_hs_pushed = push(ys, pt0_hs)
+    pt0_h = jax.vmap(lambda v, y: hyperboloid.ptransp_0(v, y, c))(v0_BA, y_BA)
+    assert jnp.allclose(pt0_hs_pushed, pt0_h, atol=atol, rtol=rtol), "dψ(HalfSpace.ptransp_0) != Hyperboloid.ptransp_0"

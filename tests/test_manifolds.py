@@ -4,7 +4,7 @@ Tests for the hyperbolix backend using vmap-native pure functions.
 Adapted for the new single-point API with vmap for batching.
 
 Fixtures are defined in tests/conftest.py and automatically loaded. The generic tests run on
-``manifold_and_c`` (Euclidean / Poincaré / Hyperboloid / Klein); ProperVelocity is covered by
+``manifold_and_c`` (Euclidean / Poincaré / Hyperboloid / Klein / HalfSpace); ProperVelocity is covered by
 ``tests/test_pv_manifold.py``, whose namesakes are strictly stronger. Manifold-specific tests
 request the dedicated ``poincare_and_c`` / ``hyperboloid_and_c`` fixtures instead of skipping
 three quarters of a four-way parametrization.
@@ -80,6 +80,27 @@ def _is_gyrovector(manifold) -> bool:
     Euclidean-style gyrovector checks apply to it unchanged.
     """
     return _is_euclidean(manifold) or _is_poincare(manifold) or _is_klein(manifold)
+
+
+def _is_halfspace(manifold) -> bool:
+    """The Poincaré upper half-space: a gyrovector space too (Möbius through the Cayley map), but
+    with origin ``o = e_n/√c`` and inverse ``⊖x = (-x_s, x_n)/(c‖x‖²)``, so it is deliberately NOT
+    in ``_is_gyrovector`` (whose checks assume origin ``0`` and ``⊖x = -x``) and gets its own
+    branches wherever a test builds the origin or the inverse.
+    """
+    return isinstance(manifold, hj.manifolds.HalfSpace)
+
+
+def _halfspace_origin(points: jnp.ndarray, c: float) -> jnp.ndarray:
+    """The half-space origin ``o = e_n/√c`` (height in the last slot), broadcast to ``points``."""
+    return jnp.zeros_like(points).at[..., -1].set(jnp.sqrt(1.0 / c))
+
+
+def _halfspace_ominus(points: jnp.ndarray, c: float) -> jnp.ndarray:
+    """Closed-form half-space gyro-inverse ``⊖x = (-x_s, x_n)/(c‖x‖²)``: the geodesic symmetry at ``o``
+    (inversion in the sphere of radius ``1/√c`` about ``0``, then ``x_s → -x_s``)."""
+    flipped = points.at[..., :-1].multiply(-1.0)
+    return flipped / (c * jnp.sum(points**2, axis=-1, keepdims=True))
 
 
 def _random_ball_point(rng: np.random.Generator, dim: int, max_radius: float) -> np.ndarray:
@@ -177,6 +198,46 @@ def test_addition(manifold_and_c, tolerance: tuple[float, float], uniform_points
         # Result stays on the manifold
         x_h, y_h = _split(uniform_points, 2)
         assert _batch_is_in_manifold(manifold, addition_batch(x_h, y_h, c), c)
+        return
+
+    # The HalfSpace carries the Möbius gyrogroup over by the Cayley map: identity o = e_n/√c
+    # (NOT zeros), inverse ⊖x = (-x_s, x_n)/(c‖x‖²) (NOT -x). Same axioms as the generic body,
+    # with the correct identity/inverse and the gyronorm ‖x‖ read as d(o, x).
+    if _is_halfspace(manifold):
+        atol, rtol = tolerance
+        addition_batch = jax.vmap(manifold.addition, in_axes=(0, 0, None))
+        gyro_difference_batch = jax.vmap(manifold.gyro_difference, in_axes=(0, 0, None))
+        scalar_mul_batch = jax.vmap(manifold.scalar_mul, in_axes=(0, 0, None))
+        dist_0_batch = jax.vmap(manifold.dist_0, in_axes=(0, None))
+
+        origin = _halfspace_origin(uniform_points, c)
+        ominus = _halfspace_ominus(uniform_points, c)
+
+        # The closed-form inverse is (-1) ⊗ x and (⊖x) ⊕ o = gyro_difference(x, o)
+        neg_ones = -jnp.ones(uniform_points.shape[0], dtype=uniform_points.dtype)
+        assert jnp.allclose(scalar_mul_batch(neg_ones, uniform_points, c), ominus, atol=atol, rtol=rtol)
+        assert jnp.allclose(gyro_difference_batch(uniform_points, origin, c), ominus, atol=atol, rtol=rtol)
+
+        # Left/right identity: o ⊕ x = x and x ⊕ o = x
+        assert jnp.allclose(addition_batch(origin, uniform_points, c), uniform_points, atol=atol, rtol=rtol)
+        assert jnp.allclose(addition_batch(uniform_points, origin, c), uniform_points, atol=atol, rtol=rtol)
+
+        # Left/right inverse: (⊖x) ⊕ x = o and x ⊕ (⊖x) = o
+        assert jnp.allclose(addition_batch(ominus, uniform_points, c), origin, atol=atol, rtol=rtol)
+        assert jnp.allclose(addition_batch(uniform_points, ominus, c), origin, atol=atol, rtol=rtol)
+
+        # Distributive (automorphic inverse) law: ⊖(x ⊕ y) = (⊖x) ⊕ (⊖y)
+        x, y = _split(uniform_points, 2)
+        xy = addition_batch(x, y, c)
+        ominus_x_ominus_y = addition_batch(_halfspace_ominus(x, c), _halfspace_ominus(y, c), c)
+        assert jnp.allclose(_halfspace_ominus(xy, c), ominus_x_ominus_y, atol=atol, rtol=rtol)
+
+        # Gyrotriangle inequality with gyronorm d(o, ·): d(o, x ⊕ y) ≤ d(o, x) + d(o, y)
+        # (x ⊕ · is an isometry taking ⊖x to o, so d(o, x ⊕ y) = d(⊖x, y)).
+        assert jnp.all(dist_0_batch(xy, c) <= dist_0_batch(x, c) + dist_0_batch(y, c) + atol)
+
+        # Results stay on the manifold
+        assert _batch_is_in_manifold(manifold, xy, c)
         return
 
     atol, rtol = tolerance
@@ -392,6 +453,46 @@ def test_scalar_mul(
         result_norm_rhs = scalar_mul_batch(r_abs, x_norm, c)
         assert jnp.allclose(result_norm_lhs, result_norm_rhs, atol=atol, rtol=rtol)
 
+    # The same gyrovector properties on the HalfSpace, with identity o = e_n/√c, inverse
+    # ⊖x = (-x_s, x_n)/(c‖x‖²), gyronorm ‖x‖ = d(o, x), and "direction" read at o (log_o x / ‖log_o x‖)
+    if _is_halfspace(manifold):
+        dist_0_batch = jax.vmap(manifold.dist_0, in_axes=(0, None))
+        logmap_0_batch = jax.vmap(manifold.logmap_0, in_axes=(0, None))
+
+        # N-Gyroaddition property: n ⊗ x = x ⊕ x ⊕ ... ⊕ x (n times), starting from o
+        n_sum = _halfspace_origin(uniform_points, c)
+        for _ in range(n):
+            n_sum = addition_batch(n_sum, uniform_points, c)
+        n_scalar = jnp.ones(uniform_points.shape[0], dtype=uniform_points.dtype) * n
+        result_n = scalar_mul_batch(n_scalar, uniform_points, c)
+        assert jnp.allclose(n_sum, result_n, atol=atol, rtol=rtol)
+
+        # Distributive law: (r1 + r2) ⊗ x = (r1 ⊗ x) ⊕ (r2 ⊗ x)
+        result_dist = scalar_mul_batch(r1 + r2, uniform_points, c)
+        result_r1 = scalar_mul_batch(r1, uniform_points, c)
+        result_r2 = scalar_mul_batch(r2, uniform_points, c)
+        result_add = addition_batch(result_r1, result_r2, c)
+        assert jnp.allclose(result_dist, result_add, atol=atol, rtol=rtol)
+
+        # Distributive law: (-r) ⊗ x = r ⊗ (⊖x)
+        result_neg_r = scalar_mul_batch(-r1, uniform_points, c)
+        result_r_neg = scalar_mul_batch(r1, _halfspace_ominus(uniform_points, c), c)
+        assert jnp.allclose(result_neg_r, result_r_neg, atol=atol, rtol=rtol)
+
+        # Scaling property: direction preservation at o
+        r_abs = jnp.abs(r1)
+        log_scaled = logmap_0_batch(scalar_mul_batch(r_abs, uniform_points, c), c)
+        log_r = logmap_0_batch(scalar_mul_batch(r1, uniform_points, c), c)
+        log_x = logmap_0_batch(uniform_points, c)
+        left_side = log_scaled / jnp.linalg.norm(log_r, axis=-1, keepdims=True)
+        right_side = log_x / jnp.linalg.norm(log_x, axis=-1, keepdims=True)
+        assert jnp.allclose(left_side, right_side, atol=atol, rtol=rtol)
+
+        # Homogeneity property: d(o, r ⊗ x) = |r|·d(o, x)
+        result_norm_lhs = dist_0_batch(scalar_mul_batch(r1, uniform_points, c), c)
+        result_norm_rhs = r_abs * dist_0_batch(uniform_points, c)
+        assert jnp.allclose(result_norm_lhs, result_norm_rhs, atol=atol, rtol=rtol)
+
     # Numerical stability tests
     r_zero = 0.0
     r_small = float(atol)
@@ -404,11 +505,16 @@ def test_scalar_mul(
         v_eps_norm = v_eps_norm.at[0, 0].set(v_eps_norm[0, 0] + jnp.sqrt(1.0 / c))
         proj_single = jax.vmap(manifold.proj, in_axes=(0, None))
         v_eps_norm = proj_single(v_eps_norm, c)
+    elif _is_halfspace(manifold):
+        # o + atol·e_0: a point at distance ≈ atol from o, off the vertical axis
+        v_eps_norm = v_eps_norm.at[0, -1].set(jnp.sqrt(1.0 / c))
 
     # Origin for comparison
     if _is_hyperboloid(manifold):
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
+    elif _is_halfspace(manifold):
+        origin = _halfspace_origin(uniform_points, c)
     else:
         origin = jnp.zeros_like(uniform_points)
 
@@ -429,10 +535,14 @@ def test_scalar_mul(
     assert jnp.all(jnp.isfinite(res))
     assert manifold.is_in_manifold(res, c=c)
     assert res[0] > r_zero
-    assert jnp.allclose(res[1:], jnp.zeros_like(res[1:]), atol=atol, rtol=rtol)
+    if _is_halfspace(manifold):
+        # The height slot stays at the origin's o_n, not at 0
+        assert jnp.allclose(res[1:], origin[0, 1:], atol=atol, rtol=rtol)
+    else:
+        assert jnp.allclose(res[1:], jnp.zeros_like(res[1:]), atol=atol, rtol=rtol)
 
     # Stability of multiplication with large scalars
-    if _is_gyrovector(manifold):
+    if _is_gyrovector(manifold) or _is_halfspace(manifold):
         # Note: Hyperboloid manifold may fail is_in_manifold check with large scalars
         # due to numerical instabilities in the Minkowski inner product
         r_large_arr = jnp.ones(uniform_points.shape[0]) * r_large
@@ -597,6 +707,9 @@ def test_dist_0(manifold_and_c, tolerance: tuple[float, float], uniform_points: 
         # Hyperboloid origin: [sqrt(1/c), 0, ..., 0]
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
+    elif _is_halfspace(manifold):
+        # HalfSpace origin: [0, ..., 0, sqrt(1/c)]
+        origin = _halfspace_origin(uniform_points, c)
     else:
         origin = jnp.zeros_like(uniform_points)
 
@@ -1029,6 +1142,8 @@ def test_expmap_logmap_basic(
     if _is_hyperboloid(manifold):
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
+    elif _is_halfspace(manifold):
+        origin = _halfspace_origin(uniform_points, c)
     else:
         origin = jnp.zeros_like(uniform_points)
 
@@ -1065,6 +1180,29 @@ def test_expmap_logmap_basic(
 
         v0_retr = retraction_batch(v0, origin, c)
         assert jnp.all(jnp.isfinite(v0_retr))
+
+    if _is_halfspace(manifold):
+        # The same checks with the step at x rescaled to the Riemannian length it has at o
+        # (‖v‖_x = ‖v/x_n‖/√c, and x_n = 1/√c at o): chart-coordinate v would be a step of
+        # ‖v‖/(√c·x_n), unbounded as x_n → 0, which leaves any dtype — a scale mismatch, not a
+        # property of expmap.
+        v_x = v * (jnp.sqrt(c) * uniform_points[:, -1:])
+
+        v_manif = expmap_batch(v_x, uniform_points, c)
+        assert jnp.all(jnp.isfinite(v_manif))
+        assert _batch_is_in_manifold(manifold, v_manif, c)
+
+        v0_manif = expmap_0_batch(v0, c)
+        assert jnp.all(jnp.isfinite(v0_manif))
+        assert _batch_is_in_manifold(manifold, v0_manif, c)
+
+        v_retr = retraction_batch(v_x, uniform_points, c)
+        assert jnp.all(jnp.isfinite(v_retr))
+        assert _batch_is_in_manifold(manifold, v_retr, c)
+
+        v0_retr = retraction_batch(v0, origin, c)
+        assert jnp.all(jnp.isfinite(v0_retr))
+        assert _batch_is_in_manifold(manifold, v0_retr, c)
 
     # Numerical stability of logmap - check logmap produces finite tangent vectors
     if _is_poincare(manifold) and uniform_points.dtype == jnp.dtype("float32"):
@@ -1680,6 +1818,8 @@ def test_ptransp_is_an_isometry_and_round_trips(
     if _is_hyperboloid(manifold):
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
+    elif _is_halfspace(manifold):
+        origin = _halfspace_origin(uniform_points, c)
     else:
         origin = jnp.zeros_like(uniform_points)
 
@@ -1780,6 +1920,8 @@ def test_tangent_norm_consistency(manifold_and_c, tolerance: tuple[float, float]
     if _is_hyperboloid(manifold):
         origin = jnp.zeros_like(uniform_points)
         origin = origin.at[:, 0].set(jnp.sqrt(1.0 / c))
+    elif _is_halfspace(manifold):
+        origin = _halfspace_origin(uniform_points, c)
     else:
         origin = jnp.zeros_like(uniform_points)
 
@@ -1868,6 +2010,17 @@ def test_is_in_manifold(manifold_and_c, uniform_points: jnp.ndarray) -> None:
         direction = uniform_points[0] / jnp.linalg.norm(uniform_points[0])
         just_outside = direction * jnp.sqrt(1.01 / c)
         assert not manifold.is_in_manifold(just_outside, c=c)
+    elif _is_halfspace(manifold):
+        # The open constraint x_n > 0 has no tolerance: height 0 and below are rejected, as is a
+        # non-finite point; a far but finite point (huge x_s, tiny normal height) is accepted.
+        point = uniform_points[0]
+        assert not manifold.is_in_manifold(point.at[-1].set(0.0), c=c)
+        assert not manifold.is_in_manifold(point.at[-1].set(-point[-1]), c=c)
+        assert not manifold.is_in_manifold(point.at[0].set(jnp.nan), c=c)
+        assert not manifold.is_in_manifold(point.at[0].set(jnp.inf), c=c)
+        assert not manifold.is_in_manifold(point.at[-1].set(jnp.inf), c=c)
+        far_away = jnp.ones_like(point).at[:-1].multiply(1e12).at[-1].set(1e-30)
+        assert bool(manifold.is_in_manifold(far_away, c=c))
     else:
         # Euclidean: unconstrained, so `is_in_manifold` only checks finiteness — this keeps the
         # Euclidean parametrization of this test from being assertion-free (audit A1-F9).
