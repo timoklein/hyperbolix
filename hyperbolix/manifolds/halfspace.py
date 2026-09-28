@@ -26,8 +26,12 @@ Numerics
 --------
 Every two-point quantity is built from ``w = y - x`` (exact by Sterbenz for close points) and
 the scaled chord ``r = (w/√x_n)/√y_n``, whose half-norm is ``sinh(√c·d/2)``. The divisions are
-sequential and ``x_n·y_n`` or ``x_n²`` is never formed, so neither under- nor overflows for heights
-anywhere in the dtype's normal range. Measured in float32 at ``c = 1`` against a 80-digit oracle
+sequential and ``x_n·y_n`` or ``x_n²`` is never formed, so ``r`` itself neither under- nor overflows
+for heights anywhere in the dtype's normal range. ``‖r‖²`` is a plain sum of squares, which sets the
+pairwise ceiling: it overflows once the chord passes ``‖r‖ ≈ √(max float)`` — ``1.8e19`` in float32,
+i.e. ``√c·d ≈ 88.7`` (float64: ``1.3e154``, ``√c·d ≈ 709.8``) — and past it ``dist`` returns ``inf``
+and ``logmap``, ``gyro_difference`` (and ``ptransp`` once ``‖w_s‖/(x_n + y_n)`` overflows its square)
+return inf/NaN, never a finite wrong value. Measured in float32 at ``c = 1`` against a 80-digit oracle
 evaluated at the stored inputs, ``dist``, ``logmap`` and ``ptransp`` have median relative error
 2-7e-8 at every radius up to 12 and separation down to 1e-5, and ``expmap`` stays within ~2.5
 rounding floors for every step direction.
@@ -44,8 +48,11 @@ and its ``ptransp``/``mobius_add`` are wrong at any precision (:func:`_ptransp`,
 Storage floor: a stored point's own rounding, as a distance, is ``≈ 0.4·(eps/2)·cosh(√c·δ)/√c``
 with ``cosh(√c·δ) = ‖x‖/x_n`` and ``δ`` the distance to the vertical geodesic through ``o``. On that
 axis (``x_s = 0``) the floor stays at ``≈ 0.4·(eps/2)/√c`` for every height in the dtype's normal
-range, so the chart has no radius ceiling along it; off the axis it grows as ``cosh(√c·δ)``, like
-the hyperboloid's ``eps·sinh(a)`` (float32 at ``√c·δ = 10``: ≈ 2.6e-4 nats).
+range, so storage and the single-point ``_0`` ops (``dist_0``, ``logmap_0``) have no radius ceiling
+along it (float32 heights ``1.2e-38`` to ``1.7e38``: relative error ≤ 1.3e-7, measured); two points on the axis are still
+limited by the pairwise ceiling above (their separation ``ln(y_n/x_n)`` reaches 88.7 before the
+heights leave the normal range). Off the axis the floor grows as ``cosh(√c·δ)``, like the
+hyperboloid's ``eps·sinh(a)`` (float32 at ``√c·δ = 10``: ≈ 2.6e-4 nats).
 
 Dimension key:
     D: manifold dimension (``dim``); the height is the last coordinate
@@ -57,10 +64,11 @@ Yu & De Sa. HTorch (github.com/ydtydr/HTorch), ``manifolds/halfspace.py``.
 Ungar. "A Gyrovector Space Approach to Hyperbolic Geometry." 2009.
 """
 
+import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, asinh, cosh, floor_at, safe_hypot, safe_norm, sinh
+from ..utils.math_utils import MIN_NORM, asinh, cosh, floor_at, safe_hypot, safe_sqrt, sinh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase
 from .hyperboloid import _asinhc
@@ -97,17 +105,43 @@ def _proj(x: Float[Array, "... dim"]) -> Float[Array, "... dim"]:
 # ---------------------------------------------------------------------------
 
 
+@jax.custom_jvp
+def _chord_sq(w: Float[Array, "dim"], x_n: Float[Array, "1"], y_n: Float[Array, "1"]) -> Float[Array, ""]:
+    """Squared scaled chord ``‖r‖² = ‖w‖²/(x_n·y_n)``, as ``Σ r²`` with ``r = (w/√x_n)/√y_n`` (no ``x_n·y_n``).
+
+    The JVP ``2·r·ṙ - ‖r‖²·(ẋ_n/x_n + ẏ_n/y_n)`` hands the heights their derivative through the
+    reduced ``‖r‖²`` instead of through every ``r_i``, so reverse mode needs no second reduction over
+    the row (autodiff of the plain spelling reduces ``r̄·r`` again for each height). Same value; the
+    tangent is exactly 0 at ``w = 0``. Overflows to ``inf`` once ``‖r‖ > √(max float)``.
+    """
+    r_D = (w / jnp.sqrt(x_n)) / jnp.sqrt(y_n)
+    return jnp.sum(r_D * r_D, axis=-1)
+
+
+@_chord_sq.defjvp
+def _chord_sq_jvp(primals, tangents):
+    w, x_n, y_n = primals
+    dw, dx_n, dy_n = tangents
+    r_D = (w / jnp.sqrt(x_n)) / jnp.sqrt(y_n)
+    r2 = jnp.sum(r_D * r_D, axis=-1)
+    dr_D = (dw / jnp.sqrt(x_n)) / jnp.sqrt(y_n)
+    return r2, 2.0 * jnp.sum(r_D * dr_D, axis=-1) - r2 * (dx_n / x_n + dy_n / y_n)[..., 0]
+
+
 def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Geodesic distance ``(2/√c)·arsinh(‖r‖/2)``, ``r = ((y - x)/√x_n)/√y_n``.
 
     The same function as the literal ``arcosh(1 + ‖x - y‖²/(2x_n y_n))/√c`` via
     ``sinh(θ/2)² = (cosh θ - 1)/2``, but ``arsinh`` of the half-chord keeps full relative accuracy
     for close pairs, where the literal form's ``1 + tiny`` rounds the separation away. At ``x == y``
-    ``r`` is exactly zero, and ``safe_norm`` gives ``0`` with a zero (finite) gradient.
+    ``r`` is exactly zero, and ``safe_sqrt`` gives ``0`` with a zero (finite) gradient.
+
+    ``‖r‖²`` is a plain sum of squares (:func:`_chord_sq`): it overflows once the chord passes
+    ``‖r‖ ≈ 1.8e19`` in float32 (``√c·d ≈ 88.6``; float64 ``1.3e154``, ``√c·d ≈ 709``), and past that
+    the distance is ``inf`` rather than a finite wrong value.
     """
     c = jnp.asarray(c, dtype=x.dtype)
-    r_D = ((y - x) / jnp.sqrt(x[..., -1:])) / jnp.sqrt(y[..., -1:])
-    return 2.0 * asinh(0.5 * safe_norm(r_D)) / jnp.sqrt(c)
+    return 2.0 * asinh(0.5 * safe_sqrt(_chord_sq(y - x, x[..., -1:], y[..., -1:]))) / jnp.sqrt(c)
 
 
 def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -118,6 +152,28 @@ def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
 # ---------------------------------------------------------------------------
 # Exp / log maps
 # ---------------------------------------------------------------------------
+
+
+@jax.custom_jvp
+def _sq_over(v_s: Float[Array, "dim_s"], x_n: Float[Array, "1"]) -> Float[Array, "1"]:
+    """``‖v_s/x_n‖²`` as a plain sum of squares, with a JVP that routes the height through the reduced value.
+
+    JVP ``2·p_s·(v̇_s/x_n) - 2‖p_s‖²·ẋ_n/x_n`` (``p_s = v_s/x_n``): reverse mode needs no second
+    reduction over the row for ``x̄_n``, and XLA no longer keeps ``p_s`` in memory between the forward
+    and backward kernels (``expmap`` fwd+bwd on an A100: 1.2-1.5 → ~0.9-1.0 times the literal form).
+    The tangent is exactly 0 at ``v_s = 0``.
+    """
+    p_s = v_s / x_n
+    return jnp.sum(p_s * p_s, axis=-1, keepdims=True)
+
+
+@_sq_over.defjvp
+def _sq_over_jvp(primals, tangents):
+    v_s, x_n = primals
+    dv_s, dx_n = tangents
+    p_s = v_s / x_n
+    ps2 = jnp.sum(p_s * p_s, axis=-1, keepdims=True)
+    return ps2, 2.0 * jnp.sum(p_s * (dv_s / x_n), axis=-1, keepdims=True) - 2.0 * ps2 * (dx_n / x_n)
 
 
 def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -137,20 +193,26 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     denominator ``θ + p_n``.
 
     ``sc`` is evaluated from ``θ`` floored at ``MIN_NORM`` (value exactly 1 there), so ``v = 0``
-    returns ``x`` with Jacobian the identity. The grouping ``(sc·p_s)/E`` matters: ``sc/E`` overflows
+    returns ``x`` with Jacobian exactly ``I`` in reverse mode and ``I`` to one ulp in forward mode
+    (the tangent of ``p = v/x_n`` is ``fl(1/x_n)``, multiplied back by ``x_n``; the diagonal misses 1
+    by an ulp at about one height in eight). The grouping ``(sc·p_s)/E`` matters: ``sc/E`` overflows
     float32 for an exactly vertical step from ``θ ≈ 50`` and ``inf·0`` would be NaN.
+
+    ``θ² = ‖p_s‖² + p_n²`` with ``‖p_s‖²`` one plain sum of squares (:func:`_sq_over`; overflow only
+    past ``θ ≈ 1.8e19`` in float32, far beyond ``sinh``'s own ``θ ≈ 89``), built from the same
+    ``p_s = v_s/x_n`` the output uses, so ``θ`` and the step direction agree to the bit.
     """
     del c
     x_n = x[..., -1:]
-    p_D = v / x_n
-    theta = safe_norm(p_D)[..., None]
+    v_s = v[..., :-1]
+    p_s = v_s / x_n
+    p_n = v[..., -1:] / x_n
+    ps2 = _sq_over(v_s, x_n)
+    theta = safe_sqrt(ps2 + p_n * p_n)
     theta_f = floor_at(theta, MIN_NORM)
     sc = sinh(theta_f) / theta_f
-    p_s = p_D[..., :-1]
-    p_n = p_D[..., -1:]
     up = (p_n > 0) & (theta > 0.5)
     den = jnp.where(up, theta + p_n, jnp.ones_like(theta))
-    ps2 = jnp.sum(p_s * p_s, axis=-1, keepdims=True)
     e = jnp.where(up, jnp.exp(-theta) + sc * ps2 / den, cosh(theta) - sc * p_n)
     y_s = x[..., :-1] + x_n * ((sc * p_s) / e)
     return jnp.concatenate([y_s, x_n / e], axis=-1)
@@ -189,18 +251,22 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     reverse mode. That exactness depends on the grouping: ``x_n`` enters only through the ratio
     ``x_n/y_n`` (exactly 1 at coincidence), never as ``x_n·(w/x_n)`` or ``(x_n·w)/y_n``, whose
     derivative rounds ``x_n·fl(1/x_n)`` and misses 1 by an ulp at ~12% of points.
+
+    ``‖r‖² = ‖r_s‖² + r_n²`` is one plain reduction over the spatial slice, shared with the height
+    component; past ``‖r‖ ≈ √(max float)`` (float32 ``√c·d ≈ 88.7``) it overflows and the result is NaN.
     """
     del c
     x_n = x[..., -1:]
     y_n = y[..., -1:]
     w_D = y - x
-    r_D = (w_D / jnp.sqrt(x_n)) / jnp.sqrt(y_n)
-    s = 0.5 * safe_norm(r_D)[..., None]
-    k = _asinhc(s) / safe_hypot(jnp.ones_like(s), s)
-    r_s = r_D[..., :-1]
-    rs2 = jnp.sum(r_s * r_s, axis=-1, keepdims=True)
+    w_s = w_D[..., :-1]
     w_n = w_D[..., -1:]
-    v_s = (k * (x_n / y_n)) * w_D[..., :-1]
+    r_s = (w_s / jnp.sqrt(x_n)) / jnp.sqrt(y_n)
+    r_n = (w_n / jnp.sqrt(x_n)) / jnp.sqrt(y_n)
+    rs2 = jnp.sum(r_s * r_s, axis=-1, keepdims=True)
+    s = 0.5 * safe_sqrt(rs2 + r_n * r_n)
+    k = _asinhc(s) / safe_hypot(jnp.ones_like(s), s)
+    v_s = (k * (x_n / y_n)) * w_s
     v_n = 0.5 * k * (x_n * rs2 + w_n + (x_n / y_n) * w_n)
     return jnp.concatenate([v_s, v_n], axis=-1)
 
@@ -300,9 +366,11 @@ def _tangent_inner(
 
 
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """``‖v‖_x = ‖v/x_n‖/√c`` via ``safe_norm`` (overflow-free, exact 0 with zero VJP at ``v = 0``)."""
+    """``‖v‖_x = ‖v/x_n‖/√c``: ``safe_sqrt`` of a plain sum of squares (exact 0 with zero VJP at ``v = 0``;
+    ``inf`` once ``‖v/x_n‖`` passes ``√(max float)``, 1.8e19 in float32)."""
     c = jnp.asarray(c, dtype=x.dtype)
-    return safe_norm(v / x[..., -1:]) / jnp.sqrt(c)
+    p = v / x[..., -1:]
+    return safe_sqrt(jnp.sum(p * p, axis=-1)) / jnp.sqrt(c)
 
 
 def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -352,7 +420,9 @@ class HalfSpace(ManifoldBase):
     ``w = y - x`` and are cancellation-free; ``expmap`` is cancellation-free for every step direction.
     What remains is the storage floor, a stored point's own rounding ``≈ 0.4·(eps/2)·cosh(√c·δ)/√c``
     as a distance, with ``cosh(√c·δ) = ‖x‖/x_n`` and ``δ`` the distance to the vertical geodesic
-    through ``o``. Points on that axis are exact across the dtype's normal range of heights.
+    through ``o``. Points on that axis are stored exactly across the dtype's normal range of heights;
+    the pairwise ops return inf/NaN past a scaled distance ``√c·d ≈ 88.7`` (float32; float64 ``709.8``),
+    where the squared chord overflows.
 
     Args:
         dtype: Target JAX dtype for computations (default: jnp.float32)
