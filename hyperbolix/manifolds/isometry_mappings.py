@@ -692,8 +692,7 @@ def halfspace_to_poincare(
         True
 
     References:
-        Ratcliffe. "Foundations of Hyperbolic Manifolds." Springer, 3rd ed.
-        2019 — Ch. 4, the conformal ball and upper half-space models.
+        HTorch (github.com/ydtydr/HTorch), ``manifolds/halfspace.py`` — ``HalfSpace.to_poincare``.
     """
     c = jnp.asarray(c, dtype=x.dtype)
     sqrt_c = jnp.sqrt(c)
@@ -754,8 +753,8 @@ def poincare_to_halfspace(
         True
 
     References:
-        Ratcliffe. "Foundations of Hyperbolic Manifolds." Springer, 3rd ed.
-        2019 — Ch. 4, the conformal ball and upper half-space models.
+        HTorch (github.com/ydtydr/HTorch), ``manifolds/halfspace.py`` — the inverse of
+        ``HalfSpace.to_poincare``.
     """
     c = jnp.asarray(c, dtype=p.dtype)
     sqrt_c = jnp.sqrt(c)
@@ -824,8 +823,8 @@ def halfspace_to_hyperboloid(
         True
 
     References:
-        Cannon, Floyd, Kenyon, Parry. "Hyperbolic Geometry." Flavors of Geometry, MSRI Publ. 31,
-        1997 — Sec. 7, the maps between the models at c = 1 (rescaled by 1/√c here).
+        HTorch (github.com/ydtydr/HTorch), ``manifolds/halfspace.py`` — ``HalfSpace.to_lorentz``
+        (time coordinate last there; first here).
     """
     c = jnp.asarray(c, dtype=x.dtype)
     sqrt_c = jnp.sqrt(c)
@@ -885,8 +884,8 @@ def hyperboloid_to_halfspace(
         True
 
     References:
-        Cannon, Floyd, Kenyon, Parry. "Hyperbolic Geometry." Flavors of Geometry, MSRI Publ. 31,
-        1997 — Sec. 7, the maps between the models at c = 1 (rescaled by 1/√c here).
+        HTorch (github.com/ydtydr/HTorch), ``manifolds/halfspace.py`` — the inverse of
+        ``HalfSpace.to_lorentz``.
     """
     c = jnp.asarray(c, dtype=x.dtype)
     sqrt_c = jnp.sqrt(c)
