@@ -17,6 +17,7 @@ For per-method signatures and full API surface, see the
 | Cross-curvature transformations (`c_in != c_out`) | `Hyperboloid` + `HTCLinear` | Native cross-curvature support in HTC layers |
 | Drop-in numerical stability | `ProperVelocity` | Unconstrained $\mathbb{R}^n$; no projection or constraint drift |
 | Spherical / cyclic data, or learning the *sign* of curvature | `Stereographic` | One signed-`c` manifold spans hyperbolic (`c>0`), Euclidean (`c=0`), and spherical (`c<0`), differentiable across zero (Bachmann et al. 2020) |
+| Straight-line geodesics, Einstein midpoint aggregation, or porting Klein-model code (Mao et al. 2024; Zhang et al. 2026) | `Klein` | Geodesics are chords of the ball; `einstein_midpoint` is a closed-form weighted mean. Scaled radius $\sqrt{c}\,d_0$ is limited to 6.32 in float32 (13.86 in float64) at `c=1`, half the Poincaré ball's — see the [numerical-stability guide](numerical-stability.md#klein-numerics) |
 | You don't know which to pick | `Hyperboloid` (or `ProperVelocity`) | Robust at `c=1.0`; PV adds no-projection convenience |
 
 !!! tip "Single best default"
@@ -38,6 +39,7 @@ different conventions:
 | `HRCBatchNorm`, `HRCLayerNorm` (Hyperboloid normalization) | `num_features` | **Spatial (d)** — excludes time | `32` |
 | `HypLinearPoincare*`, `HypConv2DPoincare`, `HypRegressionPoincare*` | `in_dim` | **Spatial (d)** — Poincaré has no time | `32` |
 | `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV` | `in_dim` | **Spatial (d)** | `32` |
+| `Klein` points and the `klein_to_*` / `*_to_klein` maps (no Klein layers) | point shape | **Spatial (d)** — a ball point like Poincaré | `32` |
 | `hyp_avg_pool2d` (Hyperboloid global pool) | NHWC channels | **Ambient (d+1)** | `33` |
 | `hyp_flatten2d` (Hyperboloid LogCat flatten) | NHWC channels | **Ambient (d+1)** in, `H·W·d + 1` out | `33` in, `H·W·32 + 1` out |
 | `ProductManifold` factor `dim` | per-factor | **Same as the factor's layer** (ambient for Hyperboloid, spatial otherwise) | `33` for `Hyperboloid`, `32` for `Poincare` |
@@ -316,13 +318,37 @@ x_poincare = isometry_mappings.pv_to_poincare(x_pv, c)
 # space-like part of the 4-velocity, so this is just a concat / slice.
 x_hyperboloid = isometry_mappings.pv_to_hyperboloid(x_pv, c)        # add time = √(1/c + ‖x‖²)
 x_pv = isometry_mappings.hyperboloid_to_pv(x_hyperboloid, c)        # drop the time component
+
+# Klein (d) ↔ Poincaré (d): the Einstein half k/(1 + √g) and the Möbius double 2p/(1 + c‖p‖²),
+# with g = 1 - c‖k‖². Einstein addition in Klein is Möbius addition in Poincaré under this pair.
+x_poincare = isometry_mappings.klein_to_poincare(x_klein, c)
+x_klein = isometry_mappings.poincare_to_klein(x_poincare, c)
+
+# Klein (d) ↔ Hyperboloid (d+1) and ↔ Proper Velocity (d)
+x_hyperboloid = isometry_mappings.klein_to_hyperboloid(x_klein, c)  # (1/(√c·√g), k/√g)
+x_klein = isometry_mappings.hyperboloid_to_klein(x_hyperboloid, c)  # x_s/(√c·x₀)
+x_pv = isometry_mappings.klein_to_pv(x_klein, c)                    # k/√g
+x_klein = isometry_mappings.pv_to_klein(x_pv, c)                    # x/√(1 + c‖x‖²)
 ```
 
 All single-point functions; batch with `jax.vmap(fn, in_axes=(0, None))`.
 
 The `logmap → expmap` route is lossy (tangent-space round-trip accumulates
 numerical error) and slower. The isometries are exact and mutually consistent —
-`pv_to_hyperboloid` equals `poincare_to_hyperboloid ∘ pv_to_poincare`.
+`pv_to_hyperboloid` equals `poincare_to_hyperboloid ∘ pv_to_poincare`, and
+`klein_to_hyperboloid` is `pv_to_hyperboloid ∘ klein_to_pv`.
+
+!!! warning "Mapping into Klein halves the representable radius"
+    A point at scaled radius $a = \sqrt{c}\,d_0$ has Klein norm $\tanh(a)/\sqrt{c}$ but
+    Poincaré norm $\tanh(a/2)/\sqrt{c}$, so `poincare_to_klein`, `hyperboloid_to_klein`
+    and `pv_to_klein` send every point past $a \approx 6.32$ (float32) / $13.86$ (float64),
+    at $c = 1$, beyond the `Klein.proj` margin. These maps do not project: in float32 at
+    $c = 1$ such points land between the margin ($\lVert k\rVert = 0.99999356$) and the
+    boundary, and from $a \approx 10$ on exactly on $\lVert k\rVert = 1/\sqrt{c}$. Klein
+    operations floor the gap $1 - c\lVert k\rVert^2$ at its value on the margin, so all of
+    these points read as $a \approx 6.32$. Map out of Klein freely; map into it only points
+    you know lie inside that radius, and call `Klein.proj` after mapping far points in. See the
+    [numerical-stability guide](numerical-stability.md#klein-chart-ceiling).
 
 !!! tip "Why PV for numerically hard regimes"
     The Poincaré ball is bounded (`‖y‖² < 1/c`) and the hyperboloid time

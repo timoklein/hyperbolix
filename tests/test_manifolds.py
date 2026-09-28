@@ -4,7 +4,7 @@ Tests for the hyperbolix backend using vmap-native pure functions.
 Adapted for the new single-point API with vmap for batching.
 
 Fixtures are defined in tests/conftest.py and automatically loaded. The generic tests run on
-``manifold_and_c`` (Euclidean / Poincaré / Hyperboloid); ProperVelocity is covered by
+``manifold_and_c`` (Euclidean / Poincaré / Hyperboloid / Klein); ProperVelocity is covered by
 ``tests/test_pv_manifold.py``, whose namesakes are strictly stronger. Manifold-specific tests
 request the dedicated ``poincare_and_c`` / ``hyperboloid_and_c`` fixtures instead of skipping
 three quarters of a four-way parametrization.
@@ -69,9 +69,17 @@ def _is_hyperboloid(manifold) -> bool:
     return isinstance(manifold, hj.manifolds.Hyperboloid)
 
 
+def _is_klein(manifold) -> bool:
+    return isinstance(manifold, hj.manifolds.Klein)
+
+
 def _is_gyrovector(manifold) -> bool:
-    """Manifolds that carry a gyrovector-space structure (non-trivial scalar mul axioms)."""
-    return _is_euclidean(manifold) or _is_poincare(manifold)
+    """Manifolds that carry a gyrovector-space structure (non-trivial scalar mul axioms).
+
+    Klein is Ungar's Einstein gyrovector space: origin ``0``, inverse ``⊖x = -x``, so the
+    Euclidean-style gyrovector checks apply to it unchanged.
+    """
+    return _is_euclidean(manifold) or _is_poincare(manifold) or _is_klein(manifold)
 
 
 def _random_ball_point(rng: np.random.Generator, dim: int, max_radius: float) -> np.ndarray:
@@ -1852,6 +1860,14 @@ def test_is_in_manifold(manifold_and_c, uniform_points: jnp.ndarray) -> None:
         # Points not on hyperboloid surface should not be on manifold
         outside = jnp.ones_like(uniform_points[0]) * 10.0
         assert not manifold.is_in_manifold(outside, c=c)
+    elif _is_klein(manifold):
+        # Same ball as Poincaré: rejected once c‖x‖² ≥ 1 + atol. The far point mirrors the
+        # Poincaré branch; the second one sits just past the boundary (c‖x‖² = 1.01) at any c.
+        outside = jnp.ones_like(uniform_points[0]) * 10.0
+        assert not manifold.is_in_manifold(outside, c=c)
+        direction = uniform_points[0] / jnp.linalg.norm(uniform_points[0])
+        just_outside = direction * jnp.sqrt(1.01 / c)
+        assert not manifold.is_in_manifold(just_outside, c=c)
     else:
         # Euclidean: unconstrained, so `is_in_manifold` only checks finiteness — this keeps the
         # Euclidean parametrization of this test from being assertion-free (audit A1-F9).

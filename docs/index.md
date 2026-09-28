@@ -9,7 +9,7 @@ Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing m
 
 ## Features
 
-- **6 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), and Product Manifold (mixed-curvature composition) — all with complete geometric operations
+- **7 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), Klein (Beltrami–Klein ball — straight-chord geodesics, Einstein gyrovector operations), and Product Manifold (mixed-curvature composition) — all with complete geometric operations
 - **Learnable Curvature**: `LearnableCurvature` module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp; works with any `nnx.Optimizer`
 - **Neural Network Layers**: 40+ hyperbolic layers including linear, convolutional, regression, attention, normalization, and PV layers
 - **Activation Functions**: 5 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish, GELU)
@@ -107,6 +107,7 @@ output = model(input_data, c=1.0)
 | Poincaré vector quantization (VQ-VAE / HyperVQ) layers | ✅ Stable | v0.8.0 |
 | κ-Stereographic manifold (Bachmann et al. 2020, signed learnable curvature) | ✅ Stable | v0.11.0 |
 | Dimensionality reduction (HoroPCA, CO-SNE, Fréchet mean) | ✅ Stable | v1.0.0 |
+| Klein manifold + isometry maps (Klein ↔ Poincaré / Hyperboloid / Proper Velocity) | ✅ Stable | Unreleased |
 | CI/CD pipeline | ✅ Stable | v0.1.4 |
 
 ## Key Concepts
