@@ -1186,7 +1186,8 @@ $r = \big((y - x)/\sqrt{x_n}\big)/\sqrt{y_n}$, and `logmap` builds $\theta/\sinh
 same $r$. `expmap` evaluates its denominator in a non-cancelling form for near-vertical upward
 steps. `ptransp` is a rational formula: the conformal scale $y_n/x_n$ times a rotation by
 $-2\arctan\big(\lVert w_s\rVert/(x_n + y_n)\big)$. In float32 at scaled separation $10^{-5}$, the
-literal `acosh` has median relative error 1.00, and `HalfSpace.dist` a median of at most 4.24e-8
+literal `acosh` has median relative error 1.00 (evaluated eagerly, or jitted on XLA:GPU; XLA:CPU's
+`jit` rewrites it into an accurate form), and `HalfSpace.dist` a median of at most 4.24e-8
 at scaled radii from 0.5 to 12, $c = 1$ (`logs/2026-09-28_halfspace-manifold/timing_pass/probe_final.out`).
 
 The error that remains is a stored point's own rounding, about
@@ -1197,8 +1198,8 @@ not grow with the height.
 Three cases return `inf`/NaN instead of a finite wrong value. The squared chord
 $\lVert r\rVert^2$ overflows past a scaled distance $\sqrt{c}\,d$ of 88.72 in float32 (709.78 in
 float64); past it `dist` returns `inf`, and `logmap`, `ptransp` and `gyro_difference` return
-non-finite values (`timing_pass/ceiling_check.out`). `logmap` can reach `-inf` earlier when the
-base point sits high, once $x_n e^{\sqrt{c}\,d}$ passes the largest float
+non-finite values (`timing_pass/ceiling_check.out`). `logmap` can return a non-finite vector
+earlier, once $x_n e^{\sqrt{c}\,d}$ passes the largest float
 (`test_fixes/logmap_overflow_repro_plain.out`). An exactly vertical upward `expmap` step
 longer than $\theta = \ln(1/\text{tiny})$, where tiny is the smallest normal number (87.34 in
 float32, 708.40 in float64), returns an infinite height with NaN horizontal coordinates: the

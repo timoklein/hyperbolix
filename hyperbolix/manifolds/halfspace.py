@@ -33,11 +33,11 @@ i.e. ``√c·d ≈ 88.7`` (float64: ``1.3e154``, ``√c·d ≈ 709.8``) — and 
 and ``logmap``, ``gyro_difference`` (and ``ptransp`` once ``‖w_s‖/(x_n + y_n)`` overflows its square)
 return inf/NaN, never a finite wrong value. Measured in float32 at ``c = 1`` against a 80-digit oracle
 evaluated at the stored inputs, ``dist``, ``logmap`` and ``ptransp`` have median relative error
-2-7e-8 at every radius up to 12 and separation down to 1e-5, and ``expmap`` stays within ~2.5
-rounding floors for every step direction.
+2-7e-8 at every radius up to 12 and separation down to 1e-5, and ``expmap`` stays within 3.7
+rounding floors over the oracle battery's step directions (float32, ``c ∈ {0.3, 1, 2.5}``).
 
 The literal forms of the reference implementation (HTorch) cancel. ``arcosh(1 + ‖w‖²/(2x_n y_n))``
-returns 0 (relative error 1.0) at float32 separation 1e-5 and 2e-2 at 1e-3 — XLA:CPU's ``jit``
+returns 0 (relative error 1.0) at float32 separation 1e-5 and 2-4e-2 at 1e-3 — XLA:CPU's ``jit``
 happens to rewrite it into an accurate form, XLA:GPU's does not. Its ``logmap``,
 ``x_n(θ·coth θ - (θ/sinh θ)(x_n/y_n))``, has median relative error 2e-3 to 1.2e-2 at float32
 separation 1e-5 and is NaN at float64 separation 1e-9. Its ``expmap`` denominator
@@ -48,11 +48,12 @@ and its ``ptransp``/``mobius_add`` are wrong at any precision (:func:`_ptransp`,
 Storage floor: a stored point's own rounding, as a distance, is ``≈ 0.4·(eps/2)·cosh(√c·δ)/√c``
 with ``cosh(√c·δ) = ‖x‖/x_n`` and ``δ`` the distance to the vertical geodesic through ``o``. On that
 axis (``x_s = 0``) the floor stays at ``≈ 0.4·(eps/2)/√c`` for every height in the dtype's normal
-range, so storage has no radius ceiling along it (at ``c = 1``, ``dist_0``/``logmap_0`` at float32
-heights ``1.2e-38`` to ``1.7e38``: relative error ≤ 1.3e-7, measured). Two points on the axis are still
-limited by the pairwise ceiling above, and ``logmap`` forms ``(x_n/y_n)·w_n`` and ``x_n·‖r_s‖²`` before
-scaling by ``θ/sinh θ``, so it returns ``-inf`` earlier, once ``x_n·e^{√c·d}`` passes max float (float32,
-``c = 0.1``: ``logmap_0`` at the smallest normal height). Off the axis the floor grows as ``cosh(√c·δ)``, like the
+range, so storage has no radius ceiling along it (``dist_0``/``logmap_0`` at float32 heights
+``1.2e-38`` to ``1.7e38``: relative error ≤ 3.6e-8 at ``c = 1``, ≤ 1.3e-7 at ``c = 0.37``, measured). Two
+points on the axis are still limited by the pairwise ceiling above, and ``logmap`` forms
+``(x_n/y_n)·w_n`` and ``x_n·‖r_s‖²`` before scaling by ``θ/sinh θ``, so it returns a non-finite vector
+earlier, once ``x_n·e^{√c·d}`` passes max float (float32, ``c = 0.1``: ``logmap_0`` at the smallest
+normal height). Off the axis the floor grows as ``cosh(√c·δ)``, like the
 hyperboloid's ``eps·sinh(a)`` (float32 at ``√c·δ = 10``: ≈ 2.6e-4 nats).
 
 Dimension key:
