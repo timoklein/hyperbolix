@@ -4,7 +4,7 @@ This page documents the core manifold operations in Hyperbolix. Each manifold is
 
 ## Overview
 
-Hyperbolix provides six base manifold classes plus a composition class:
+Hyperbolix provides seven base manifold classes plus a composition class:
 
 - **Euclidean**: Flat Euclidean space (baseline)
 - **Poincaré Ball**: Conformal model of hyperbolic space
@@ -12,6 +12,7 @@ Hyperbolix provides six base manifold classes plus a composition class:
 - **Proper Velocity**: Unconstrained $\mathbb{R}^n$ model from special relativity (Chen et al. 2026)
 - **κ-Stereographic**: Signed-curvature model unifying hyperbolic, Euclidean, and spherical geometry in one manifold (Bachmann et al. 2020)
 - **Klein**: Beltrami–Klein ball model — straight-chord geodesics and Einstein gyrovector operations (Mao et al. 2024; Zhang et al. 2026)
+- **HalfSpace**: Poincaré upper half-space model — the height is the last coordinate, and the gyrovector operations are Möbius operations carried over from the ball by the Cayley transform
 - **Product Manifold**: Heterogeneous-curvature product spaces $M_1 \times M_2 \times \dots \times M_n$ (Gu et al. 2019)
 
 All manifolds share a common interface defined by the `Manifold` protocol and support:
@@ -254,6 +255,50 @@ The gyrovector structure is Ungar's Einstein gyrovector space (Ungar 2009): `add
       show_source: true
       heading_level: 3
 
+## HalfSpace
+
+The Poincaré upper half-space model stores a point as $x = (x_s, x_n)$ with the height $x_n > 0$ in the **last** coordinate. The sectional curvature is $-c$ and the metric is conformal:
+
+$$g_x(u, v) = \frac{\langle u, v\rangle}{c\,x_n^2}.$$
+
+The origin is $o = e_n/\sqrt{c}$, not 0, and every `_0` method is the general method evaluated at $o$. Geodesics are vertical lines and half-circles orthogonal to the boundary $x_n = 0$. In chart coordinates `expmap`, `logmap` and `ptransp` do not depend on $c$, because a constant factor on the metric leaves the Christoffel symbols unchanged; only the origin, distances, norms and inner products carry $c$. The convention follows HTorch (github.com/ydtydr/HTorch, `manifolds/halfspace.py`). `HalfSpace` conforms to the scalar-`c` `Manifold` protocol.
+
+!!! info "Relation to the Poincaré ball and the hyperboloid"
+    The Cayley transform `halfspace_to_poincare` maps $o$ to the ball origin with differential $\tfrac12 I$, the vertical axis through $o$ onto the $e_n$ diameter, $x_n \to \infty$ to the north pole $e_n/\sqrt{c}$, and $x_n \to 0$ to the boundary sphere. The isometries in `isometry_mappings`, with $g_k = 1 - c\lVert k\rVert^2$:
+
+    - `halfspace_to_poincare(x)` $= \big(2x_s,\ (c\lVert x\rVert^2 - 1)/\sqrt{c}\big)\big/\big(c\lVert x_s\rVert^2 + (1 + \sqrt{c}\,x_n)^2\big)$, `poincare_to_halfspace(p)` $= \big(2p_s,\ (1 - c\lVert p\rVert^2)/\sqrt{c}\big)\big/\big(c\lVert p_s\rVert^2 + (\sqrt{c}\,p_n - 1)^2\big)$
+    - `halfspace_to_hyperboloid(x)` $= \big(c\lVert x\rVert^2 + 1,\ 2\sqrt{c}\,x_s,\ c\lVert x\rVert^2 - 1\big)/(2c\,x_n)$ (time coordinate first), `hyperboloid_to_halfspace(X)` $= \big(X_{\mathrm{mid}},\ 1/\sqrt{c}\big)\big/\big(\sqrt{c}\,(X_0 - X_n)\big)$
+    - `halfspace_to_klein(x)` $= \big(2x_s,\ (c\lVert x\rVert^2 - 1)/\sqrt{c}\big)/(1 + c\lVert x\rVert^2)$, `klein_to_halfspace(k)` $= \big(k_s,\ \sqrt{g_k}/\sqrt{c}\big)/(1 - \sqrt{c}\,k_n)$
+    - `halfspace_to_pv(x)` $= \big(2\sqrt{c}\,x_s,\ c\lVert x\rVert^2 - 1\big)/(2c\,x_n)$, the spatial part of the hyperboloid point; `pv_to_halfspace(u)` $= \big(u_s,\ 1/\sqrt{c}\big)\big/\big(\sqrt{c}\,(\sqrt{1/c + \lVert u\rVert^2} - u_n)\big)$
+
+    These are the formulas; the code rearranges the differences that cancel. For example, $c\lVert x\rVert^2 - 1$ is evaluated as $c\lVert x_s\rVert^2 + (\sqrt{c}\,x_n - 1)(\sqrt{c}\,x_n + 1)$, and for $X_n \ge 0$ the gap $X_0 - X_n$ as $(1/c + \lVert X_{\mathrm{mid}}\rVert^2)/(X_0 + X_n)$. None of the maps projects its output.
+
+!!! note "Gyrovector structure: Möbius operations through the Cayley transform"
+    - `addition(x, y)` $= x \oplus y = \exp_x\!\big(P_{o\to x}(\log_o y)\big)$
+    - `gyro_difference(x, y)` $= (\ominus x) \oplus y = \exp_o\!\big(P_{x\to o}(\log_x y)\big)$, built from $\log_x y$, so two close points give a point close to $o$ without cancellation
+    - `scalar_mul(r, x)` $= r \otimes x = \exp_o(r\,\log_o x)$
+    - the gyro-inverse is $\ominus x = (-x_s,\ x_n)/(c\lVert x\rVert^2)$
+
+    Each equals the Möbius operation of the Poincaré ball conjugated by `halfspace_to_poincare`. Unlike `Poincare`, the identity element is $o = e_n/\sqrt{c}$, and $\ominus x \ne -x$.
+
+!!! note "Pairwise operations: cancellation-free"
+    `dist` has a single implementation; `version_idx` is accepted and ignored. With $r = \big((y - x)/\sqrt{x_n}\big)/\sqrt{y_n}$, divided in sequence so that $x_n y_n$ is never formed,
+
+    $$d(x, y) = \frac{2}{\sqrt{c}}\,\operatorname{arsinh}\!\Big(\tfrac12\lVert r\rVert\Big).$$
+
+    This is the same function as the textbook $\operatorname{arcosh}\!\big(1 + \lVert y - x\rVert^2/(2x_n y_n)\big)/\sqrt{c}$, without its `acosh` of a number close to 1 for close pairs. `logmap` builds $\theta/\sinh\theta$ from the same $r$. `expmap` evaluates its denominator in a second, non-cancelling form for near-vertical upward steps. `ptransp` is a rational formula with no transcendental functions. The derivations and measured errors are in the [numerical-stability guide](../user-guide/numerical-stability.md#halfspace-numerics).
+
+!!! warning "Storage floor and the float ceilings"
+    The error that remains is a stored point's own rounding, about $0.4\,(\varepsilon/2)\cosh(\sqrt{c}\,\delta)/\sqrt{c}$ as a distance, where $\delta$ is the distance to the vertical geodesic through $o$ and $\cosh(\sqrt{c}\,\delta) = \lVert x\rVert/x_n$. On that axis the floor does not grow with the height. Two cases return `inf`/NaN at a finite radius: the pairwise operations past a scaled distance $\sqrt{c}\,d = 88.72$ in float32 (709.78 in float64), where $\lVert r\rVert^2$ overflows, and `expmap` for an exactly vertical upward step longer than $\theta = 87.34$ in float32 (708.40 in float64), where $e^{-\theta}$ underflows. See [the half-space numerics](../user-guide/numerical-stability.md#halfspace-numerics).
+
+!!! note "Projection, retraction and membership"
+    `proj` floors the height at the dtype's smallest normal number, `jnp.finfo(dtype).tiny`, so a valid point is returned unchanged. `retraction` is `proj((x_s + v_s, x_n·exp(v_n/x_n)))`: first order, exact for vertical steps, and never outside the half-space, where the plain `x + v` leaves it for large downward steps. `is_in_manifold` checks that `x` is finite with `x_n > 0`; `atol` is accepted and unused, as for `ProperVelocity`.
+
+::: hyperbolix.manifolds.halfspace.HalfSpace
+    options:
+      show_source: true
+      heading_level: 3
+
 ## Product Manifold
 
 Heterogeneous-curvature product space $P = M_1 \times M_2 \times \dots \times M_n$ where each factor $M_i$ can be any base manifold (Poincaré, Hyperboloid, Euclidean, Proper Velocity) with its own curvature $c_i$. Points are represented as flat concatenated arrays of shape `(total_dim,)`.
@@ -278,12 +323,27 @@ where $x_i$, $y_i$ are the per-factor slices of the flat points.
 ## Isometry Mappings
 
 Distance-preserving maps between the Poincaré ball, hyperboloid, Proper
-Velocity (PV), and Klein models — all coordinate models of the same hyperbolic space.
+Velocity (PV), Klein, and half-space models — all coordinate models of the same hyperbolic space.
 Provides Poincaré ↔ Hyperboloid, Poincaré ↔ PV (PVNN Eq. 4), the direct
 Hyperboloid ↔ PV map (PV coordinates are the space-like part of the 4-velocity),
-and Klein ↔ Poincaré / Hyperboloid / PV (`klein_to_poincare`, `poincare_to_klein`,
+Klein ↔ Poincaré / Hyperboloid / PV (`klein_to_poincare`, `poincare_to_klein`,
 `klein_to_hyperboloid`, `hyperboloid_to_klein`, `klein_to_pv`, `pv_to_klein`; a Klein
-point is an Einstein velocity, and its proper velocity is `k/√g_k`).
+point is an Einstein velocity, and its proper velocity is `k/√g_k`), and half-space ↔
+Poincaré / Hyperboloid / Klein / PV (`halfspace_to_poincare`, `poincare_to_halfspace`,
+`halfspace_to_hyperboloid`, `hyperboloid_to_halfspace`, `halfspace_to_klein`,
+`klein_to_halfspace`, `halfspace_to_pv`, `pv_to_halfspace`; the first pair is the Cayley
+transform, and `halfspace_to_pv` is the spatial part of `halfspace_to_hyperboloid`).
+
+None of the half-space maps projects its output. `poincare_to_halfspace` and
+`klein_to_halfspace` floor the ball's gap $1 - c\lVert\cdot\rVert^2$, as the other maps out
+of a ball do, so the height they return is positive. `klein_to_halfspace` maps every point
+of the closed Klein ball, the north pole included, to a finite point;
+`poincare_to_halfspace` returns `inf`/NaN at the north pole $e_n/\sqrt{c}$, the half-space's
+point at infinity, which a `Poincare.proj`-projected point never reaches.
+`hyperboloid_to_halfspace` and `pv_to_halfspace` do not floor $x_n$. `klein_to_halfspace`
+is limited by the Klein chart's own rounding, relative error $\varepsilon\cosh^2(a)$ at
+scaled radius $a$, in every spelling (see
+[the Klein chart's floor](../user-guide/numerical-stability.md#klein-chart-ceiling)).
 
 ::: hyperbolix.manifolds.isometry_mappings
     options:

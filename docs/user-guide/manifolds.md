@@ -18,6 +18,7 @@ For per-method signatures and full API surface, see the
 | Drop-in numerical stability | `ProperVelocity` | Unconstrained $\mathbb{R}^n$; no projection or constraint drift |
 | Spherical / cyclic data, or learning the *sign* of curvature | `Stereographic` | One signed-`c` manifold spans hyperbolic (`c>0`), Euclidean (`c=0`), and spherical (`c<0`), differentiable across zero (Bachmann et al. 2020) |
 | Straight-line geodesics, Einstein midpoint aggregation, or porting Klein-model code (Mao et al. 2024; Zhang et al. 2026) | `Klein` | Geodesics are chords of the ball; `einstein_midpoint` is a closed-form weighted mean. Scaled radius $\sqrt{c}\,d_0$ is limited to 6.32 in float32 (13.86 in float64) at `c=1`, half the Poincaré ball's — see the [numerical-stability guide](numerical-stability.md#klein-numerics) |
+| Horosphere / vertical-geodesic structure (horospheres centred at infinity are the planes $x_n = \text{const}$), or porting half-space code (HTorch) | `HalfSpace` | Conformal metric $\lVert dx\rVert^2/(c\,x_n^2)$ with the height as the last coordinate and origin $e_n/\sqrt{c}$. Pairwise ops are cancellation-free, and points on the vertical axis through the origin are stored to full precision at every height in the dtype's normal range. Pairwise `dist`/`logmap` return `inf`/NaN past scaled distance $\sqrt{c}\,d = 88.7$ in float32 (709.8 in float64) — see the [numerical-stability guide](numerical-stability.md#halfspace-numerics) |
 | You don't know which to pick | `Hyperboloid` (or `ProperVelocity`) | Robust at `c=1.0`; PV adds no-projection convenience |
 
 !!! tip "Single best default"
@@ -40,6 +41,7 @@ different conventions:
 | `HypLinearPoincare*`, `HypConv2DPoincare`, `HypRegressionPoincare*` | `in_dim` | **Spatial (d)** — Poincaré has no time | `32` |
 | `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV` | `in_dim` | **Spatial (d)** | `32` |
 | `Klein` points and the `klein_to_*` / `*_to_klein` maps (no Klein layers) | point shape | **Spatial (d)** — a ball point like Poincaré | `32` |
+| `HalfSpace` points and the `halfspace_to_*` / `*_to_halfspace` maps (no half-space layers) | point shape | **Spatial (d)** — the height $x_n > 0$ is the **last** coordinate; the origin is $e_n/\sqrt{c}$, not 0 | `32` |
 | `hyp_avg_pool2d` (Hyperboloid global pool) | NHWC channels | **Ambient (d+1)** | `33` |
 | `hyp_flatten2d` (Hyperboloid LogCat flatten) | NHWC channels | **Ambient (d+1)** in, `H·W·d + 1` out | `33` in, `H·W·32 + 1` out |
 | `ProductManifold` factor `dim` | per-factor | **Same as the factor's layer** (ambient for Hyperboloid, spatial otherwise) | `33` for `Hyperboloid`, `32` for `Poincare` |
@@ -329,14 +331,27 @@ x_hyperboloid = isometry_mappings.klein_to_hyperboloid(x_klein, c)  # (1/(√c·
 x_klein = isometry_mappings.hyperboloid_to_klein(x_hyperboloid, c)  # x_s/(√c·x₀)
 x_pv = isometry_mappings.klein_to_pv(x_klein, c)                    # k/√g
 x_klein = isometry_mappings.pv_to_klein(x_pv, c)                    # x/√(1 + c‖x‖²)
+
+# Half-space (d, height last) ↔ Poincaré (d): the Cayley transform, origin e_n/√c ↦ 0
+x_poincare = isometry_mappings.halfspace_to_poincare(x_halfspace, c)
+x_halfspace = isometry_mappings.poincare_to_halfspace(x_poincare, c)
+
+# Half-space (d) ↔ Hyperboloid (d+1), ↔ Klein (d) and ↔ Proper Velocity (d)
+x_hyperboloid = isometry_mappings.halfspace_to_hyperboloid(x_halfspace, c)
+x_halfspace = isometry_mappings.hyperboloid_to_halfspace(x_hyperboloid, c)
+x_klein = isometry_mappings.halfspace_to_klein(x_halfspace, c)
+x_halfspace = isometry_mappings.klein_to_halfspace(x_klein, c)
+x_pv = isometry_mappings.halfspace_to_pv(x_halfspace, c)            # spatial part of the hyperboloid point
+x_halfspace = isometry_mappings.pv_to_halfspace(x_pv, c)
 ```
 
 All single-point functions; batch with `jax.vmap(fn, in_axes=(0, None))`.
 
 The `logmap → expmap` route is lossy (tangent-space round-trip accumulates
 numerical error) and slower. The isometries are exact and mutually consistent —
-`pv_to_hyperboloid` equals `poincare_to_hyperboloid ∘ pv_to_poincare`, and
-`klein_to_hyperboloid` is `pv_to_hyperboloid ∘ klein_to_pv`.
+`pv_to_hyperboloid` equals `poincare_to_hyperboloid ∘ pv_to_poincare`,
+`klein_to_hyperboloid` is `pv_to_hyperboloid ∘ klein_to_pv`, and `halfspace_to_pv` is
+the spatial part of `halfspace_to_hyperboloid`.
 
 !!! warning "Mapping into Klein halves the representable radius"
     A point at scaled radius $a = \sqrt{c}\,d_0$ has Klein norm $\tanh(a)/\sqrt{c}$ but
@@ -349,6 +364,37 @@ numerical error) and slower. The isometries are exact and mutually consistent �
     these points read as $a \approx 6.32$. Map out of Klein freely; map into it only points
     you know lie inside that radius, and call `Klein.proj` after mapping far points in. See the
     [numerical-stability guide](numerical-stability.md#klein-chart-ceiling).
+
+!!! note "The half-space model: height last, origin at $e_n/\sqrt{c}$"
+    A `HalfSpace` point keeps its height $x_n > 0$ in the last coordinate, and its origin is
+    $e_n/\sqrt{c}$, not 0. Code written for the zero origin of `Poincare`, `Klein` or
+    `ProperVelocity` should use `expmap_0`/`logmap_0`, which start from $e_n/\sqrt{c}$. None of the maps
+    into the half-space projects; `hyperboloid_to_halfspace` and `pv_to_halfspace` return
+    the height without a floor, and `HalfSpace.proj` floors it at the dtype's smallest normal
+    number. `klein_to_halfspace` inherits the Klein chart's error floor
+    $\varepsilon\cosh^2(a)$ ([Klein's chart floor](numerical-stability.md#klein-chart-ceiling)).
+
+    ```python
+    import jax.numpy as jnp
+    from hyperbolix.manifolds import HalfSpace, Poincare, isometry_mappings
+
+    halfspace = HalfSpace()
+    c = 1.0
+
+    x = jnp.array([0.1, 1.0])   # (x_s, x_n): the height x_n > 0 is the last coordinate
+    y = jnp.array([0.3, 0.5])
+
+    d = halfspace.dist(x, y, c)                # (2/√c)·asinh(‖r‖/2), cancellation-free
+    v = halfspace.logmap(y, x, c)              # tangent_norm(v, x, c) equals d
+    y_rec = halfspace.expmap(v, x, c)          # back to y
+    o = halfspace.expmap_0(jnp.zeros(2), c)    # the origin e_n/√c = [0, 1]
+
+    # The Cayley transform to the Poincaré ball preserves the distance
+    p_x = isometry_mappings.halfspace_to_poincare(x, c)
+    p_y = isometry_mappings.halfspace_to_poincare(y, c)
+    d_ball = Poincare().dist(p_x, p_y, c)                     # equals d
+    x_back = isometry_mappings.poincare_to_halfspace(p_x, c)  # round trip to x
+    ```
 
 !!! tip "Why PV for numerically hard regimes"
     The Poincaré ball is bounded (`‖y‖² < 1/c`) and the hyperboloid time
