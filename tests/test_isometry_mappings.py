@@ -932,7 +932,250 @@ def halfspace_points(curvature: float, dtype: jnp.dtype) -> jnp.ndarray:
 # Half-space ↔ Poincaré maps
 # ---------------------------------------------------------------------------
 
-# (halfspace-poincare map tests go here)
+#
+# The Cayley transform is checked against an independent NumPy route through the hyperboloid: the
+# half-space lift ``X = ((||x||² + 1/c)/(2 x_n), x_s/(√c x_n), (||x||² - 1/c)/(2 x_n))`` (time first)
+# and its inverse ``x_n = 1/(c (X_0 - X_n))``, ``x_s = √c x_n X_s``, written below without any map
+# under test.
+
+
+def _hs_poincare_lift(x_BD: np.ndarray, c: float) -> np.ndarray:
+    """NumPy float64 half-space → hyperboloid lift (time coordinate first)."""
+    x_BD = np.asarray(x_BD, dtype=np.float64)
+    sqnorm_B1 = np.sum(x_BD**2, axis=-1, keepdims=True)
+    x_n_B1 = x_BD[..., -1:]
+    time_B1 = (sqnorm_B1 + 1.0 / c) / (2.0 * x_n_B1)
+    last_B1 = (sqnorm_B1 - 1.0 / c) / (2.0 * x_n_B1)
+    return np.concatenate([time_B1, x_BD[..., :-1] / (np.sqrt(c) * x_n_B1), last_B1], axis=-1)
+
+
+def _hs_poincare_unlift(h_BD1: np.ndarray, c: float) -> np.ndarray:
+    """NumPy float64 hyperboloid → half-space, the inverse of :func:`_hs_poincare_lift`."""
+    h_BD1 = np.asarray(h_BD1, dtype=np.float64)
+    x_n_B1 = 1.0 / (c * (h_BD1[..., :1] - h_BD1[..., -1:]))
+    return np.concatenate([np.sqrt(c) * x_n_B1 * h_BD1[..., 1:-1], x_n_B1], axis=-1)
+
+
+def _hs_poincare_ball_points(key: jax.Array, c: float, dtype: jnp.dtype, dim: int = DIM) -> jnp.ndarray:
+    """Uniform-in-ball Poincaré points of radius < 0.7/√c, as the ``poincare_points`` fixture, at any ``c``/``dim``."""
+    k_dir, k_rad = jax.random.split(key)
+    dirs = jax.random.normal(k_dir, (N_POINTS, dim), dtype=dtype)
+    dirs = dirs / jnp.maximum(jnp.linalg.norm(dirs, axis=1, keepdims=True), 1e-12)
+    radii = jax.random.uniform(k_rad, (N_POINTS, 1), dtype=dtype) ** (1.0 / dim)
+    return dirs * radii * (0.7 / jnp.sqrt(c))
+
+
+def _hs_poincare_halfspace_points(key: jax.Array, c: float, dtype: jnp.dtype, dim: int = DIM) -> jnp.ndarray:
+    """Half-space points distributed as the ``halfspace_points`` fixture, at any ``c``/``dim``."""
+    k_s, k_n = jax.random.split(key)
+    x_s = 0.5 * jax.random.normal(k_s, (N_POINTS, dim - 1), dtype=dtype) / jnp.sqrt(c)
+    x_n = jnp.exp(0.5 * jax.random.normal(k_n, (N_POINTS, 1), dtype=dtype)) / jnp.sqrt(c)
+    return jnp.concatenate([x_s, x_n], axis=1)
+
+
+def test_halfspace_poincare_target_manifold_validity(
+    manifolds: tuple[Poincare, Hyperboloid, ProperVelocity],
+    halfspace_points: jnp.ndarray,
+    poincare_points: jnp.ndarray,
+    curvature: float,
+):
+    """HS→P lands inside the ball; P→HS lands in the half-space (finite, ``x_n > 0``)."""
+    poincare = manifolds[0]
+    c = curvature
+
+    assert jnp.all(_in_halfspace(halfspace_points)), "test points not in the half-space"
+    p_BD = _batch(iso.halfspace_to_poincare)(halfspace_points, c)
+    assert jnp.all(_batch(poincare.is_in_manifold)(p_BD, c))
+    assert jnp.all(_in_halfspace(_batch(iso.poincare_to_halfspace)(poincare_points, c)))
+
+
+def test_halfspace_poincare_round_trips(
+    halfspace_points: jnp.ndarray,
+    poincare_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """Half-space <-> Poincaré round-trips to identity (both directions)."""
+    c = curvature
+    atol, rtol = tolerance
+
+    x_rt = _batch(iso.poincare_to_halfspace)(_batch(iso.halfspace_to_poincare)(halfspace_points, c), c)
+    assert jnp.allclose(x_rt, halfspace_points, atol=atol, rtol=rtol)
+
+    p_rt = _batch(iso.halfspace_to_poincare)(_batch(iso.poincare_to_halfspace)(poincare_points, c), c)
+    assert jnp.allclose(p_rt, poincare_points, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("c", [1e-3, 1e-1, 10.0, 100.0])
+def test_halfspace_poincare_extreme_curvatures(c: float):
+    """float64-only: HS -> P -> HS and P -> HS -> P round-trip at extreme curvatures (points scaled by 1/√c)."""
+    x_BD = _hs_poincare_halfspace_points(jax.random.PRNGKey(2025), c, jnp.float64)
+    p_BD = _hs_poincare_ball_points(jax.random.PRNGKey(2026), c, jnp.float64)
+
+    x_rt = _batch(iso.poincare_to_halfspace)(_batch(iso.halfspace_to_poincare)(x_BD, c), c)
+    assert jnp.allclose(x_rt, x_BD, atol=1e-9, rtol=1e-9), f"HS->P->HS round-trip failed at c={c}"
+    p_rt = _batch(iso.halfspace_to_poincare)(_batch(iso.poincare_to_halfspace)(p_BD, c), c)
+    assert jnp.allclose(p_rt, p_BD, atol=1e-9, rtol=1e-9), f"P->HS->P round-trip failed at c={c}"
+
+
+def test_halfspace_poincare_origin_and_half_differential(curvature: float, dtype: jnp.dtype):
+    """Origins map to origins (to 1 ulp), and the float64 differential at the origin is ``½·I`` (inverse: ``2·I``)."""
+    c = curvature
+    eps = float(jnp.finfo(dtype).eps)
+
+    o_D = _halfspace_origin(c, dtype)
+    zero_D = jnp.zeros(DIM, dtype=dtype)
+    assert jnp.allclose(iso.halfspace_to_poincare(o_D, c), zero_D, atol=eps / np.sqrt(c), rtol=0.0)
+    assert jnp.allclose(iso.poincare_to_halfspace(zero_D, c), o_D, atol=0.0, rtol=eps)
+
+    o64_D = _halfspace_origin(c, jnp.float64)
+    eye_DD = jnp.eye(DIM, dtype=jnp.float64)
+    jac_fwd_DD = jax.jacfwd(iso.halfspace_to_poincare)(o64_D, c)
+    jac_inv_DD = jax.jacfwd(iso.poincare_to_halfspace)(jnp.zeros(DIM, dtype=jnp.float64), c)
+    assert jnp.allclose(jac_fwd_DD, 0.5 * eye_DD, atol=1e-14, rtol=0.0), "HS->P differential at o is not I/2"
+    assert jnp.allclose(jac_inv_DD, 2.0 * eye_DD, atol=1e-14, rtol=0.0), "P->HS differential at 0 is not 2I"
+
+
+def test_halfspace_poincare_isometry_preserves_distance(
+    manifolds: tuple[Poincare, Hyperboloid, ProperVelocity],
+    halfspace_points: jnp.ndarray,
+    poincare_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """``d_P(φx, φy)`` equals the NumPy half-space distance of ``(x, y)``, and ``d_HS(ψp, ψq)`` equals ``d_P(p, q)``."""
+    poincare = manifolds[0]
+    c = curvature
+    atol, rtol = tolerance
+    n = N_POINTS // 2
+
+    def poincare_dist(a_BD, b_BD):
+        return np.asarray(jax.vmap(lambda a, b: poincare.dist(a, b, c, version_idx=VERSION_MOBIUS_DIRECT))(a_BD, b_BD))
+
+    xs, ys = halfspace_points[:n], halfspace_points[n : 2 * n]
+    d_hs = _halfspace_dist_oracle(np.asarray(xs), np.asarray(ys), c)
+    to_p = _batch(iso.halfspace_to_poincare)
+    assert np.allclose(poincare_dist(to_p(xs, c), to_p(ys, c)), d_hs, atol=atol, rtol=rtol), "HS -> P not an isometry"
+
+    ps, qs = poincare_points[:n], poincare_points[n : 2 * n]
+    to_hs = _batch(iso.poincare_to_halfspace)
+    d_back = _halfspace_dist_oracle(np.asarray(to_hs(ps, c)), np.asarray(to_hs(qs, c)), c)
+    assert np.allclose(d_back, poincare_dist(ps, qs), atol=atol, rtol=rtol), "P -> HS not an isometry"
+
+
+def test_halfspace_poincare_commutative_diagram(
+    halfspace_points: jnp.ndarray,
+    poincare_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """HS→P equals the NumPy lift then ``hyperboloid_to_poincare``; P→HS equals ``poincare_to_hyperboloid`` then the unlift."""
+    c = curvature
+    atol, rtol = tolerance
+    dtype = halfspace_points.dtype
+
+    h_BD1 = jnp.asarray(_hs_poincare_lift(np.asarray(halfspace_points), c), dtype=dtype)
+    via_h = _batch(iso.hyperboloid_to_poincare)(h_BD1, c)
+    assert jnp.allclose(_batch(iso.halfspace_to_poincare)(halfspace_points, c), via_h, atol=atol, rtol=rtol), (
+        "HS->P != HS->H->P"
+    )
+
+    via_h_back = _hs_poincare_unlift(np.asarray(_batch(iso.poincare_to_hyperboloid)(poincare_points, c)), c)
+    direct = np.asarray(_batch(iso.poincare_to_halfspace)(poincare_points, c))
+    assert np.allclose(direct, via_h_back, atol=atol, rtol=rtol), "P->HS != P->H->HS"
+
+
+def test_halfspace_poincare_jit_and_vmap_compatibility(
+    halfspace_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """Both maps are JIT- and vmap-compatible, shape- and dtype-correct, and match eager."""
+    c = curvature
+    atol, rtol = tolerance
+
+    p_BD = jax.jit(_batch(iso.halfspace_to_poincare))(halfspace_points, c)
+    assert p_BD.shape == (N_POINTS, DIM) and p_BD.dtype == dtype
+    assert jnp.allclose(p_BD, _batch(iso.halfspace_to_poincare)(halfspace_points, c), atol=atol, rtol=rtol)
+
+    x_BD = jax.jit(_batch(iso.poincare_to_halfspace))(p_BD, c)
+    assert x_BD.shape == (N_POINTS, DIM) and x_BD.dtype == dtype
+    assert jnp.allclose(x_BD, _batch(iso.poincare_to_halfspace)(p_BD, c), atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("dim", [1, 2, 5, 10])
+def test_halfspace_poincare_dimension_consistency(dim: int):
+    """Both maps handle any dimension, including dim = 1 (empty ``x_s``), and preserve the distance to the origin."""
+    c = 0.5
+    x_D = jnp.concatenate([jnp.linspace(-0.3, 0.3, dim - 1, dtype=jnp.float64), jnp.array([0.7], dtype=jnp.float64)])
+    p_D = jnp.linspace(-0.3, 0.3, dim, dtype=jnp.float64)
+
+    p_img = iso.halfspace_to_poincare(x_D, c)
+    assert p_img.shape == (dim,)
+    assert jnp.allclose(iso.poincare_to_halfspace(p_img, c), x_D, atol=1e-12, rtol=1e-12)
+
+    x_img = iso.poincare_to_halfspace(p_D, c)
+    assert x_img.shape == (dim,)
+    assert jnp.allclose(iso.halfspace_to_poincare(x_img, c), p_D, atol=1e-12, rtol=1e-12)
+
+    d_p = Poincare(dtype=jnp.float64).dist_0(p_img, c, version_idx=VERSION_MOBIUS_DIRECT)
+    d_hs = _halfspace_dist_oracle(np.asarray(x_D)[None], np.asarray(_halfspace_origin(c, jnp.float64, dim))[None], c)
+    assert np.allclose(float(d_p), d_hs[0], atol=1e-12, rtol=1e-12)
+
+
+def test_halfspace_poincare_gradients_are_finite_and_correct():
+    """float64 reverse-mode gradients: ``w/2`` (``2w``) at the origin, central differences at scaled radius ≈ 8.
+
+    The test function is ``w · φ(x)`` for a fixed ``w``, so its gradient is ``Jᵀw``: at the origin the
+    differential is ``½·I`` (inverse ``2·I``); elsewhere a central finite difference is the oracle.
+    """
+    c = 0.5
+    sqrt_c = np.sqrt(c)
+    w_D = jnp.array([0.3, -1.1, 0.7], dtype=jnp.float64)
+
+    def fwd_loss(x):
+        return jnp.dot(w_D, iso.halfspace_to_poincare(x, c))
+
+    def inv_loss(p):
+        return jnp.dot(w_D, iso.poincare_to_halfspace(p, c))
+
+    o_D = _halfspace_origin(c, jnp.float64)
+    assert jnp.allclose(jax.grad(fwd_loss)(o_D), 0.5 * w_D, atol=1e-14, rtol=0.0)
+    assert jnp.allclose(jax.grad(inv_loss)(jnp.zeros(DIM, dtype=jnp.float64)), 2.0 * w_D, atol=1e-14, rtol=0.0)
+
+    # Scaled radius 8 from the origin: up and down the x_n axis, and sideways on the horosphere
+    # x_n = 1/√c; in the ball, radius tanh(4)/√c along a generic direction. Each point carries its
+    # local length scale for the finite-difference step: x_n in the half-space, the distance to the
+    # boundary in the ball.
+    far_hs = [
+        jnp.array([0.0, 0.0, np.exp(8.0)], dtype=jnp.float64) / sqrt_c,
+        jnp.array([0.0, 0.0, np.exp(-8.0)], dtype=jnp.float64) / sqrt_c,
+        jnp.array([np.sqrt(2.0 * np.cosh(8.0) - 2.0), 0.0, 1.0], dtype=jnp.float64) / sqrt_c,
+    ]
+    direction_D = jnp.array([0.48, -0.6, 0.64], dtype=jnp.float64)
+    far_p = [np.tanh(4.0) / sqrt_c * direction_D, -np.tanh(4.0) / sqrt_c * direction_D]
+    cases = [(fwd_loss, z_D, float(z_D[-1])) for z_D in far_hs]
+    cases += [(inv_loss, z_D, (1.0 - np.tanh(4.0)) / sqrt_c) for z_D in far_p]
+
+    def central_difference(loss, z_D, scale):
+        h = 1e-5 * scale
+        steps_DD = h * jnp.eye(DIM, dtype=jnp.float64)
+        return jax.vmap(lambda e: (loss(z_D + e) - loss(z_D - e)) / (2.0 * h))(steps_DD)
+
+    for loss, z_D, scale in cases:
+        g_D = jax.grad(loss)(z_D)
+        assert jnp.all(jnp.isfinite(g_D)), z_D
+        fd_D = central_difference(loss, z_D, scale)
+        assert jnp.allclose(g_D, fd_D, rtol=1e-5, atol=1e-6 * jnp.max(jnp.abs(fd_D))), (z_D, g_D, fd_D)
+
+
+def test_halfspace_poincare_keeps_float32_under_x64(halfspace_points: jnp.ndarray, dtype: jnp.dtype):
+    """float32 in → float32 out with x64 enabled, also for a float64 curvature array."""
+    for c in (0.5, jnp.asarray(0.5, dtype=jnp.float64)):
+        p_BD = _batch(iso.halfspace_to_poincare)(halfspace_points, c)
+        assert p_BD.dtype == dtype
+        assert _batch(iso.poincare_to_halfspace)(p_BD, c).dtype == dtype
 
 
 # ---------------------------------------------------------------------------

@@ -646,7 +646,128 @@ def pv_to_klein(
 # Half-space ↔ Poincaré
 # ---------------------------------------------------------------------------
 
-# (halfspace-poincare maps go here)
+
+def halfspace_to_poincare(
+    x: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Poincaré half-space point to the Poincaré ball (the Cayley transform).
+
+    With ``x = (x_s, x_n)``, ``x_n > 0`` (last coordinate), scaled coordinates
+    ``s = √c·x`` and
+
+    Formula:
+        q   = c·||x_s||² + (√c·x_n - 1)(√c·x_n + 1)       (= c·||x||² - 1)
+        den = ||s_s||² + (1 + s_n)²
+        p   = (2·s_s, q) / (√c·den)
+
+    The half-space origin ``e_n/√c`` maps to the ball origin with differential
+    exactly ``½·I`` (no reflection); the positive ``x_n`` axis maps onto the
+    ``e_n`` diameter, ``x_n → ∞`` to the north pole ``e_n/√c`` and ``x_n → 0`` to
+    the boundary sphere.
+
+    Numerics: ``den`` is a sum of non-negative terms, at least 1 on the half-space,
+    so no floor is needed. ``q`` is written as a product so it does not cancel
+    near the sphere ``c·||x||² = 1`` (the ball's equatorial plane ``p_n = 0``). The
+    result is not projected: past the ball chart's ceiling (scaled radius
+    ``a ≈ 12.6`` float32 / ``27.7`` float64) ``||p||`` rounds to ``1/√c`` or just
+    beyond, as for every map into the ball — call ``Poincare.proj`` for such
+    points. Past float32 ``|s| ≈ 1.8e19`` the squares overflow and the output is
+    NaN, not a saturated point.
+
+    Args:
+        x: Point in the half-space, shape (dim,). Should satisfy x_n > 0.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the Poincaré ball, shape (dim,). Satisfies ||p||² < 1/c.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Half-space origin e_n/√c maps to the Poincaré origin
+        >>> p = isometry_mappings.halfspace_to_poincare(jnp.array([0.0, 0.0, 2.0]), c=0.25)
+        >>> bool(jnp.allclose(p, jnp.zeros(3)))
+        True
+
+    References:
+        Ratcliffe. "Foundations of Hyperbolic Manifolds." Springer, 3rd ed.
+        2019 — Ch. 4, the conformal ball and upper half-space models.
+    """
+    c = jnp.asarray(c, dtype=x.dtype)
+    sqrt_c = jnp.sqrt(c)
+    s_s = sqrt_c * x[:-1]
+    s_n = sqrt_c * x[-1]
+    s_s_sqnorm = jnp.dot(s_s, s_s, precision=MATMUL_PRECISION)
+
+    # q = ||s||² - 1 as a product: the difference (s_n - 1) is exact near s_n = 1, so q keeps
+    # its relative precision on the sphere ||s|| = 1 that maps to the equatorial plane p_n = 0.
+    q = s_s_sqnorm + (s_n - 1.0) * (s_n + 1.0)
+    den = s_s_sqnorm + (1.0 + s_n) ** 2  # ≥ 1 for s_n > 0: no floor
+    return jnp.concatenate([2.0 * s_s, q[None]]) / (sqrt_c * den)
+
+
+def poincare_to_halfspace(
+    p: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Poincaré ball point to the Poincaré half-space (inverse Cayley transform).
+
+    Inverse of :func:`halfspace_to_poincare`. With scaled coordinates ``s = √c·p``,
+
+    Formula:
+        g   = 1 - ||s||²                                  (= 1 - c·||p||²)
+        den = ||s_s||² + (s_n - 1)²                       (= ||s - e_n||²)
+        x   = (2·s_s, g) / (√c·den)
+
+    The ball origin maps to the half-space origin ``e_n/√c``; the north pole
+    ``e_n/√c`` is the half-space's point at infinity and every other boundary
+    point lands on ``x_n = 0``.
+
+    Numerics: ``g`` is floored at ``_boundary_floor(p, c)`` exactly as
+    :func:`poincare_to_hyperboloid` floors ``1 - c·||y||²`` — the analytic minimum
+    on a ``Poincare.proj``-projected point, so anything below it is rounding
+    noise. The ball chart ends at scaled radius ``a ≈ 12.6`` (float32) / ``27.7``
+    (float64) at the ``proj`` margin; a point past it is wherever
+    ``Poincare.proj`` put it, and its image is the half-space point at that
+    capped radius. ``den`` is not floored: it vanishes only at the north pole,
+    a point the half-space cannot hold, so the output there is ``inf``/NaN —
+    loud, not a clamped finite point. On a projected point
+    ``den ≥ (1 - ||s||)² ≥ eps**1.5`` (the ``proj`` margin squared), so the
+    division is finite everywhere the ball is.
+
+    Args:
+        p: Point in the Poincaré ball, shape (dim,). Should satisfy ||p||² < 1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the half-space, shape (dim,). Satisfies x_n > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Poincaré origin maps to the half-space origin e_n/√c
+        >>> x = isometry_mappings.poincare_to_halfspace(jnp.zeros(3), c=0.25)
+        >>> bool(jnp.allclose(x, jnp.array([0.0, 0.0, 2.0])))
+        True
+
+    References:
+        Ratcliffe. "Foundations of Hyperbolic Manifolds." Springer, 3rd ed.
+        2019 — Ch. 4, the conformal ball and upper half-space models.
+    """
+    c = jnp.asarray(c, dtype=p.dtype)
+    sqrt_c = jnp.sqrt(c)
+    s_s = sqrt_c * p[:-1]
+    s_n = sqrt_c * p[-1]
+    s_s_sqnorm = jnp.dot(s_s, s_s, precision=MATMUL_PRECISION)
+
+    # `_boundary_floor`: the dtype-aware floor `_conformal_factor` puts on `1 - c‖p‖²`; see
+    # `poincare_to_hyperboloid`.
+    gap = floor_at(1.0 - c * jnp.dot(p, p, precision=MATMUL_PRECISION), _boundary_floor(p, c))
+    den = s_s_sqnorm + (s_n - 1.0) ** 2  # zero only at the north pole (x_n = ∞): no floor
+    return jnp.concatenate([2.0 * s_s, gap[None]]) / (sqrt_c * den)
 
 
 # ---------------------------------------------------------------------------
