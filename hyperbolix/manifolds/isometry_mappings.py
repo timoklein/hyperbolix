@@ -976,10 +976,9 @@ def klein_to_halfspace(
     evaluated as ``Δ = (1 - c·k_n²)/(1 + √c·k_n)`` with ``1 - c·k_n² = g_k + c·||k_s||²``, so
     the only cancellation left is that of ``g_k`` (:func:`_klein_gap`), the Klein chart's own
     floor ``eps·cosh²(a)`` at scaled radius ``a = √c·d(0, k)``, and the rounded √c never enters a
-    difference. Measured in float32 on axis points at a = 3 to 6, c = 0.5: relative error of
-    ``x_n`` at most 0.12·eps·cosh²(a) against 0.55 to 0.65 for the literal ``1 - √c·k_n``
-    (c = 2.3: 0.16 to 0.20 against 0.75 to 0.92); the two agree where ``√c·k_n`` is exact
-    (c = 1, 4).
+    difference. Every spelling of ``Δ`` is limited by that same ``eps·cosh²(a)`` floor; the
+    gap-based form above only removes the extra rounding that the literal ``1 - √c·k_n`` adds on
+    top of it.
 
     ``g_k`` is floored at ``_boundary_floor(k, c)``, so every point of the closed ball maps to a
     finite half-space point with ``x_n > 0``: a Klein point past the chart ceiling, the north
