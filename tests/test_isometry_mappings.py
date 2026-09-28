@@ -1695,4 +1695,267 @@ def test_halfspace_klein_gradients(curvature: float):
 # Half-space ↔ PV maps
 # ---------------------------------------------------------------------------
 
-# (halfspace-pv map tests go here)
+#
+# PV coordinates are the space-like part of the hyperboloid point, so ``halfspace_to_pv`` is checked
+# against an independent NumPy float64 hyperboloid lift, and ``pv_to_halfspace`` against the
+# closed-form inverse. Neither reference goes through another half-space map.
+
+
+def _hs_pv_hyperboloid_lift(x_BD: np.ndarray, c: float) -> np.ndarray:
+    """Half-space → hyperboloid in NumPy float64, time first: ``((||x||²+1/c), x_s/√c, (||x||²-1/c)) / (2x_n)``.
+
+    The middle block is ``x_s/(√c·x_n)``, written here with the shared ``1/(2x_n)`` factor as ``2x_s/√c``.
+    """
+    x_BD = np.asarray(x_BD, dtype=np.float64)
+    sq_B1 = np.sum(x_BD**2, axis=-1, keepdims=True)
+    two_xn_B1 = 2.0 * x_BD[..., -1:]
+    return np.concatenate(
+        [(sq_B1 + 1.0 / c) / two_xn_B1, 2.0 * x_BD[..., :-1] / np.sqrt(c) / two_xn_B1, (sq_B1 - 1.0 / c) / two_xn_B1],
+        axis=-1,
+    )
+
+
+def _hs_pv_cayley(x_BD: np.ndarray, c: float) -> np.ndarray:
+    """Half-space → Poincaré ball (Cayley transform) in NumPy float64.
+
+    ``p = (2√c·x_s, c||x||² - 1) / (√c·(1 + 2√c·x_n + c||x||²))`` — the origin ``e_n/√c`` goes to 0 and
+    the boundary ``x_n = 0`` to the sphere ``||p|| = 1/√c``.
+    """
+    x_BD = np.asarray(x_BD, dtype=np.float64)
+    sqrt_c = np.sqrt(c)
+    csq_B1 = c * np.sum(x_BD**2, axis=-1, keepdims=True)
+    denom_B1 = sqrt_c * (1.0 + 2.0 * sqrt_c * x_BD[..., -1:] + csq_B1)
+    return np.concatenate([2.0 * sqrt_c * x_BD[..., :-1], csq_B1 - 1.0], axis=-1) / denom_B1
+
+
+def _hs_pv_inverse_oracle(u_BD: np.ndarray, c: float) -> np.ndarray:
+    """PV → half-space in NumPy float64 for ``u_n > 0``, spelled ``x_n = (X₀ + u_n)/(1 + c||u_s||²)``, ``x_s = √c·u_s·x_n``.
+
+    Algebraically ``1/(c(X₀ - u_n))`` multiplied through by ``X₀ + u_n`` — a different spelling from the
+    library's, and cancellation-free for ``u_n > 0``, so it serves as the far-up-the-axis reference.
+    """
+    u_BD = np.asarray(u_BD, dtype=np.float64)
+    time_B1 = np.sqrt(1.0 / c + np.sum(u_BD**2, axis=-1, keepdims=True))
+    x_n_B1 = (time_B1 + u_BD[..., -1:]) / (1.0 + c * np.sum(u_BD[..., :-1] ** 2, axis=-1, keepdims=True))
+    return np.concatenate([np.sqrt(c) * u_BD[..., :-1] * x_n_B1, x_n_B1], axis=-1)
+
+
+def _hs_pv_literal_pv_to_halfspace(u: jnp.ndarray, c: float) -> jnp.ndarray:
+    """The textbook spelling ``Δ = √(1/c + ||u||²) - u_n`` — the negative control for the cancellation test."""
+    c = jnp.asarray(c, dtype=u.dtype)
+    delta = jnp.sqrt(1.0 / c + jnp.dot(u, u)) - u[-1]
+    return jnp.concatenate([u[:-1] / (jnp.sqrt(c) * delta), (1.0 / (c * delta))[None]])
+
+
+def test_halfspace_pv_target_manifold_validity(
+    manifolds: tuple[Poincare, Hyperboloid, ProperVelocity],
+    halfspace_points: jnp.ndarray,
+    pv_points: jnp.ndarray,
+    curvature: float,
+):
+    """half-space → PV lands on finite PV points; PV → half-space lands in ``x_n > 0``."""
+    _, _, pv = manifolds
+    c = curvature
+
+    assert jnp.all(_in_halfspace(halfspace_points)), "test points not in the half-space"
+    assert jnp.all(_batch(pv.is_in_manifold)(_batch(iso.halfspace_to_pv)(halfspace_points, c), c))
+    assert jnp.all(_in_halfspace(_batch(iso.pv_to_halfspace)(pv_points, c)))
+
+
+def test_halfspace_pv_round_trip(
+    halfspace_points: jnp.ndarray,
+    pv_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """half-space <-> PV round-trips to identity (both directions)."""
+    c = curvature
+    atol, rtol = tolerance
+
+    x_rt = _batch(iso.pv_to_halfspace)(_batch(iso.halfspace_to_pv)(halfspace_points, c), c)
+    assert jnp.allclose(x_rt, halfspace_points, atol=atol, rtol=rtol)
+
+    u_rt = _batch(iso.halfspace_to_pv)(_batch(iso.pv_to_halfspace)(pv_points, c), c)
+    assert jnp.allclose(u_rt, pv_points, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("c", [1e-3, 1e-1, 10.0, 100.0])
+def test_halfspace_pv_extreme_curvatures(c: float):
+    """float64-only: both round trips and both maps against their NumPy references at extreme curvatures."""
+    k_s, k_n, k_u = jax.random.split(jax.random.PRNGKey(2027), 3)
+    x_s = 0.5 * jax.random.normal(k_s, (N_POINTS, DIM - 1), dtype=jnp.float64) / jnp.sqrt(c)
+    x_n = jnp.exp(0.5 * jax.random.normal(k_n, (N_POINTS, 1), dtype=jnp.float64)) / jnp.sqrt(c)
+    hs_pts = jnp.concatenate([x_s, x_n], axis=1)
+    pv_pts = jax.random.normal(k_u, (N_POINTS, DIM), dtype=jnp.float64) / jnp.sqrt(c)
+
+    u = _batch(iso.halfspace_to_pv)(hs_pts, c)
+    assert np.allclose(np.asarray(u), _hs_pv_hyperboloid_lift(hs_pts, c)[:, 1:], atol=1e-9, rtol=1e-9)
+    x_rt = _batch(iso.pv_to_halfspace)(u, c)
+    assert jnp.allclose(x_rt, hs_pts, atol=1e-9, rtol=1e-9), f"H->PV->H round-trip failed at c={c}"
+
+    upper = np.asarray(pv_pts[:, -1] > 0)
+    x = _batch(iso.pv_to_halfspace)(pv_pts, c)
+    assert np.allclose(np.asarray(x)[upper], _hs_pv_inverse_oracle(pv_pts, c)[upper], atol=1e-9, rtol=1e-9)
+    u_rt = _batch(iso.halfspace_to_pv)(x, c)
+    assert jnp.allclose(u_rt, pv_pts, atol=1e-9, rtol=1e-9), f"PV->H->PV round-trip failed at c={c}"
+
+
+def test_halfspace_pv_origin_mapping(curvature: float, dtype: jnp.dtype, tolerance: tuple[float, float]):
+    """The half-space origin ``e_n/√c`` maps to the PV origin 0, and back."""
+    c = curvature
+    atol, rtol = tolerance
+    origin = _halfspace_origin(c, dtype)
+    zero_D = jnp.zeros(DIM, dtype=dtype)
+
+    assert jnp.allclose(iso.halfspace_to_pv(origin, c), zero_D, atol=atol, rtol=rtol)
+    assert jnp.allclose(iso.pv_to_halfspace(zero_D, c), origin, atol=atol, rtol=rtol)
+
+
+def test_halfspace_pv_isometry_preserves_distance(
+    manifolds: tuple[Poincare, Hyperboloid, ProperVelocity],
+    halfspace_points: jnp.ndarray,
+    pv_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """``d_PV(ψx, ψy) = d_H(x, y)`` and ``d_H(ψ⁻¹u, ψ⁻¹v) = d_PV(u, v)``, ``d_H`` from the NumPy oracle.
+
+    Includes the distance from the origin in both directions.
+    """
+    _, _, pv = manifolds
+    c = curvature
+    atol, rtol = tolerance
+    n = N_POINTS // 2
+
+    xs, ys = halfspace_points[:n], halfspace_points[n : 2 * n]
+    d_oracle = _halfspace_dist_oracle(np.asarray(xs), np.asarray(ys), c)
+    d_pv = jax.vmap(lambda a, b: pv.dist(a, b, c))(_batch(iso.halfspace_to_pv)(xs, c), _batch(iso.halfspace_to_pv)(ys, c))
+    assert np.allclose(np.asarray(d_pv), d_oracle, atol=atol, rtol=rtol), "half-space -> PV not an isometry"
+
+    us, vs = pv_points[:n], pv_points[n : 2 * n]
+    d_pv_uv = jax.vmap(lambda a, b: pv.dist(a, b, c))(us, vs)
+    d_hs = _halfspace_dist_oracle(
+        np.asarray(_batch(iso.pv_to_halfspace)(us, c)), np.asarray(_batch(iso.pv_to_halfspace)(vs, c)), c
+    )
+    assert np.allclose(d_hs, np.asarray(d_pv_uv), atol=atol, rtol=rtol), "PV -> half-space not an isometry"
+
+    origin_B = np.broadcast_to(np.asarray(_halfspace_origin(c, jnp.float64)), halfspace_points.shape)
+    d0_oracle = _halfspace_dist_oracle(np.asarray(halfspace_points), origin_B, c)
+    d0_pv = jax.vmap(lambda a: pv.dist_0(a, c))(_batch(iso.halfspace_to_pv)(halfspace_points, c))
+    assert np.allclose(np.asarray(d0_pv), d0_oracle, atol=atol, rtol=rtol)
+
+    d0_hs = _halfspace_dist_oracle(np.asarray(_batch(iso.pv_to_halfspace)(pv_points, c)), origin_B, c)
+    d0_pv_u = jax.vmap(lambda a: pv.dist_0(a, c))(pv_points)
+    assert np.allclose(d0_hs, np.asarray(d0_pv_u), atol=atol, rtol=rtol)
+
+
+def test_halfspace_pv_commutative_diagrams(
+    halfspace_points: jnp.ndarray,
+    pv_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """PV → {hyperboloid, Poincaré} after half-space → PV equals the NumPy lift / Cayley transform of x."""
+    c = curvature
+    atol, rtol = tolerance
+
+    u = _batch(iso.halfspace_to_pv)(halfspace_points, c)
+    lift = _hs_pv_hyperboloid_lift(np.asarray(halfspace_points), c)
+    assert np.allclose(np.asarray(_batch(iso.pv_to_hyperboloid)(u, c)), lift, atol=atol, rtol=rtol), "HS->PV->H != lift"
+    cayley = _hs_pv_cayley(np.asarray(halfspace_points), c)
+    assert np.allclose(np.asarray(_batch(iso.pv_to_poincare)(u, c)), cayley, atol=atol, rtol=rtol), "HS->PV->P != Cayley"
+
+    # Inverse direction: the half-space image of a PV point lifts back to that PV point's hyperboloid point.
+    x = _batch(iso.pv_to_halfspace)(pv_points, c)
+    lift_back = _hs_pv_hyperboloid_lift(np.asarray(x), c)
+    assert np.allclose(lift_back, np.asarray(_batch(iso.pv_to_hyperboloid)(pv_points, c)), atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize(
+    "u",
+    [[0.3, 0.0, 1e3], [0.3, 0.0, 1e4], [0.3, -0.2, 1e10], [0.0, 0.3, 1e20], [3e19, 1e19, 2e19]],
+    ids=["un1e3", "un1e4", "un1e10", "un1e20", "us3e19"],
+)
+def test_halfspace_pv_far_up_the_axis_float32(u: list[float]):
+    """float32, c = 1: PV points far up the axis map to the right half-space point and round-trip.
+
+    Negative control: the literal ``Δ = √(1/c + ||u||²) - u_n`` cancels (relative error 7.9e-3 at
+    ``u_n = 1e3``, ``x_n = inf`` from ``u_n ≈ 4.1e3``) or overflows ``||u||²`` (``x = 0`` at
+    ``||u_s|| = 3e19``), and fails the same check.
+    """
+    c = 1.0
+    u_D = jnp.asarray(u, dtype=jnp.float32)
+    expected = _hs_pv_inverse_oracle(np.asarray(u_D)[None], c)[0]
+
+    x = iso.pv_to_halfspace(u_D, c)
+    assert x.dtype == jnp.float32
+    assert np.allclose(np.asarray(x), expected, rtol=1e-6, atol=0.0)
+    assert jnp.allclose(iso.halfspace_to_pv(x, c), u_D, rtol=1e-6, atol=0.0)
+
+    x_literal = np.asarray(_hs_pv_literal_pv_to_halfspace(u_D, c))
+    assert not np.allclose(x_literal, expected, rtol=1e-3, atol=0.0), "negative control unexpectedly passed"
+
+
+def test_halfspace_pv_jit_and_vmap_compatibility(
+    halfspace_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """Both maps are JIT- and vmap-compatible, keep the input dtype under x64 (float64 ``c``), and match eager."""
+    c64 = jnp.asarray(curvature, dtype=jnp.float64)  # a float64 c must not promote float32 points
+    atol, rtol = tolerance
+
+    u = jax.jit(_batch(iso.halfspace_to_pv))(halfspace_points, c64)
+    assert u.shape == (N_POINTS, DIM)
+    assert u.dtype == dtype
+    assert jnp.allclose(u, _batch(iso.halfspace_to_pv)(halfspace_points, c64), atol=atol, rtol=rtol)
+
+    x = jax.jit(_batch(iso.pv_to_halfspace))(u, c64)
+    assert x.shape == (N_POINTS, DIM)
+    assert x.dtype == dtype
+    assert jnp.allclose(x, _batch(iso.pv_to_halfspace)(u, c64), atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("dim", [1, 2, 5, 10])
+def test_halfspace_pv_dimension_consistency(dim: int):
+    """half-space <-> PV handle arbitrary dimensions, including dim = 1 (empty ``x_s``)."""
+    c = 1.0
+    x = jnp.concatenate([jnp.linspace(-0.3, 0.3, dim - 1, dtype=jnp.float64), jnp.array([0.7])])
+    u = iso.halfspace_to_pv(x, c)
+    assert u.shape == (dim,)
+    assert np.allclose(np.asarray(u), _hs_pv_hyperboloid_lift(np.asarray(x)[None], c)[0, 1:], atol=1e-12, rtol=1e-12)
+    x_rt = iso.pv_to_halfspace(u, c)
+    assert x_rt.shape == (dim,)
+    assert jnp.allclose(x_rt, x, atol=1e-12, rtol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "u",
+    [[0.0, 0.0, 0.0], [0.0, 0.0, 1e8], [1e3, -2.0, -1e8], [0.0, 0.0, -1e20], [0.5, -0.5, 0.0]],
+    ids=["origin", "far-up", "far-down", "far-down-on-axis", "equator"],
+)
+def test_halfspace_pv_gradients_finite(u: list[float]):
+    """float64: VJPs of both maps are finite at the origin, far points, and the ``u_n = 0`` branch seam.
+
+    ``far-down-on-axis`` rounds ``X₀ + u_n`` to 0 on the unselected branch of ``pv_to_halfspace``, the
+    case its double ``where`` exists for. The gradient of ``pv_to_halfspace`` is also checked against
+    central finite differences where the point is O(1).
+    """
+    c = 0.5
+    u_D = jnp.asarray(u, dtype=jnp.float64)
+    g_u = jax.grad(lambda v: jnp.sum(iso.pv_to_halfspace(v, c)))(u_D)
+    assert jnp.all(jnp.isfinite(g_u))
+
+    x_D = iso.pv_to_halfspace(u_D, c)
+    g_x = jax.grad(lambda v: jnp.sum(iso.halfspace_to_pv(v, c)))(x_D)
+    assert jnp.all(jnp.isfinite(g_x))
+
+    if np.max(np.abs(u)) <= 1.0:
+        h = 1e-6
+        eye = np.eye(DIM)
+        fd = [
+            (np.sum(iso.pv_to_halfspace(u_D + h * eye[i], c)) - np.sum(iso.pv_to_halfspace(u_D - h * eye[i], c))) / (2 * h)
+            for i in range(DIM)
+        ]
+        assert np.allclose(np.asarray(g_u), np.asarray(fd), atol=1e-6, rtol=1e-6)
