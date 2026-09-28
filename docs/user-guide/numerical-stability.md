@@ -1109,10 +1109,19 @@ the probe output also covers $c = 0.1$ and $t \in \{10^{-4}, 0.3\}$. What it sho
 **Ceiling.** `proj` caps $\lVert x\rVert$ at $1/\sqrt{c} - \varepsilon^{0.75}$, the Poincaré
 ball's [margin](#poincare-roundtrip-ceiling). A Klein point has
 $\sqrt{c}\,\lVert x\rVert = \tanh(a)$ where a Poincaré point has $\tanh(a/2)$, so at $c = 1$ the
-largest scaled radius the Klein chart holds is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$
-= **6.32** in float32 and **13.86** in float64 — half the Poincaré ball's 12.65 / 27.7. Points
-farther out, mapped into Klein by `poincare_to_klein`, `hyperboloid_to_klein` or `pv_to_klein`,
-land on the boundary margin and lose their radius.
+projection ceiling is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$
+= **6.32** in float32 and **13.86** in float64 — half the Poincaré ball's 12.65 / 27.7.
+
+`poincare_to_klein`, `hyperboloid_to_klein` and `pv_to_klein` do not project. A point farther
+out than the ceiling lands between the `proj` margin and the boundary, not on the margin: in
+float32 at $c = 1$ the margin is $\lVert k\rVert = 1 - \varepsilon^{0.75} = 0.99999356$, and the
+three maps give $\lVert k\rVert$ = 0.9999983 at $a = 7$ and 0.99999976 at $a = 8$. From $a = 10$
+on, $\lVert k\rVert$ rounds to exactly $1/\sqrt{c}$ (at $a = 10$ for `poincare_to_klein` and
+`pv_to_klein`, at $a = 12$ for all three). Klein operations floor the gap $g_k$ at its value on
+the margin, so every such point reads as $a \approx 6.32$: `Klein.dist` to the origin is 6.325
+for all three maps at $a = 7, 8, 10, 12$ (`logs/2026-09-28_klein_audit/audit_jax.out`). The
+radius beyond the ceiling is lost either way; call `Klein.proj` after mapping far points in, so
+that the stored point is the one the operations actually use.
 
 **Floor.** $g_x = 1 - c\lVert x\rVert^2 = \operatorname{sech}^2(a)$. Computing it subtracts
 $c\lVert x\rVert^2 \approx 1$ from 1, so $g_x$ carries an absolute error of about $\varepsilon$,
@@ -1120,19 +1129,21 @@ a relative error of $\varepsilon/g_x = \varepsilon\cosh^2(a)$. The pairwise form
 metric divide by $g_x$ or its square root, so this is the relative error floor of the chart. Worked example,
 float32 at $a = 4$: $1.19\times10^{-7}\cdot\cosh^2 4 = 1.19\times10^{-7}\cdot 745.7 = 8.9\times10^{-5}$,
 against a measured `Klein.dist` median of 1.19e-05 and maximum of 5.15e-05 ($c = 1$,
-$t = 10^{-2}$). Since $\cosh^2(a) \approx e^{2a}/4$, this floor grows twice as fast in $a$ as the
-$\varepsilon e^{a}$ floor of the Poincaré ball and the hyperboloid (6.5e-6 at float32, $a = 4$).
+$t = 10^{-2}$). Since $\cosh^2(a) \approx e^{2a}/4$, the Klein radial floor scales as $e^{2a}$,
+where the floor of the Poincaré ball and the hyperboloid scales as $e^{a}$ (constants dropped).
 The rewrite above removes every other cancellation, so the rounding of $g_x$ is the error that
 remains.
 
 In practice: float32 `Klein` is accurate to about 1e-5 at $a = 4$ and 1e-3 at $a = 6$ (medians
 1.19e-05 and 7.48e-04 above). For larger radii use `Klein(dtype=jnp.float64)`, or the
-hyperboloid, whose floor grows as $\varepsilon e^{a}$.
+hyperboloid, whose floor scales as $e^{a}$.
 
 ### Cost
 
 `jit(vmap(dist))` over $10^6$ pairs, float32, $c = 1$, radius $\le 0.9/\sqrt{c}$, median of 25 runs
-after warm-up (jax 0.9.1, NVIDIA A100-PCIE-40GB); the ratio is to the Eq. 4 form:
+after warm-up (jax 0.9.1, NVIDIA A100-PCIE-40GB, shared with other processes during the runs);
+the ratio is to the Eq. 4 form, the reference Einstein `artanh` spelling. One run
+(`logs/2026-09-28_klein-manifold/probe_klein.out`):
 
 | dim | mode | `Klein.dist` ms | Eq. 4 `artanh` ms | literal `acosh` ms |
 |---|---|---|---|---|
@@ -1141,15 +1152,24 @@ after warm-up (jax 0.9.1, NVIDIA A100-PCIE-40GB); the ratio is to the Eq. 4 form
 | 128 | fwd | 1.051 (0.58×) | 1.812 (1.00×) | 1.024 (0.56×) |
 | 128 | fwd+bwd | 2.493 (0.42×) | 5.925 (1.00×) | 2.426 (0.41×) |
 
-`Klein.dist` costs 1.03–1.06× the literal `acosh` and at most 0.94× the Eq. 4 form.
+Over five runs (this one, `probe_klein_after_logmap0_fix.out`, and three in
+`logs/2026-09-28_klein_audit/timing_rerun.out`), `Klein.dist` forward+backward takes
+0.48–0.53× the Eq. 4 time at dim 16 and 0.42–0.45× at dim 128, and the dim-128 forward takes
+0.55–0.59×. The dim-16 forward ratio ranged from 0.91× to 1.44×, within run-to-run noise on
+the shared GPU, so no speed difference is claimed there.
 
 ### The Reference `_klein_expmap` Is Exact Only at $c = 1$
 
 `Klein.expmap` is $\exp_x(v) = x + v/\big(\theta\coth\theta + c\langle x, v\rangle/g_x\big)$ with
 $\theta = \sqrt{c}\,\lVert v\rVert_x$. The reference implementation
 (github.com/sc-zyl/Klein_hml, `Hyperbolic/hmath.py`, `_klein_expmap`) omits the factor $c$ in the
-second denominator term. The two agree at $c = 1$; for any other curvature the reference returns a
-point on the correct chord at the wrong distance from $x$. `Klein.expmap` matches the hyperboloid
+second denominator term. The two agree at $c = 1$. For $c \ne 1$ the reference still moves $x$
+along $\pm v$, but by the wrong amount. In a float64 check at $c = 0.1$ with three random samples
+(`logs/2026-09-28_klein-manifold/probe_ref_expmap.out`,
+`logs/2026-09-28_klein_audit/audit_ref_expmap_nan.out`), one result landed outside the ball
+($c\lVert\cdot\rVert^2 = 1.055$, NaN distance, where $\lVert v\rVert_x = 2.117$), one landed on
+the far side of $x$ ($t = -0.61$ along $v$, distance 1.368 instead of 1.749), and one landed at
+distance 0.317 instead of 0.504. All three $c = 1$ samples matched. `Klein.expmap` matches the hyperboloid
 exponential map to 1.748e-15 in the float64 oracle check above.
 
 ## Hyperbolic Function Overflow

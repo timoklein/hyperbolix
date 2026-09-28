@@ -338,7 +338,8 @@ def _einstein_midpoint(
 
     Equal to the normalized weighted Lorentz centroid ``Σ wᵢXᵢ / (√c‖Σ wᵢXᵢ‖_L)`` mapped to Klein:
     the Klein coordinate ``X_s/(√c·X₀)`` of any positive multiple of ``Σ wᵢXᵢ`` is this ratio.
-    With non-negative weights every term is non-negative, so nothing cancels.
+    With non-negative weights the denominator ``Σ wᵢ·gammaᵢ`` is a sum of non-negative terms and
+    cannot cancel; the numerator ``Σ wᵢ·gammaᵢ·xᵢ`` can, when the points lie on opposite sides.
     """
     if weights_N is None:
         weights_N = jnp.ones(x_ND.shape[0], dtype=x_ND.dtype)
@@ -365,7 +366,7 @@ class Klein(ManifoldBase):
 
     Precision: the chart shares Poincaré's ``eps**0.75`` boundary margin, but a Klein point at
     scaled radius ``a = √c·d`` has ``√c‖x‖ = tanh(a)`` where a Poincaré point has ``tanh(a/2)``,
-    so the representable ceiling is **half** Poincaré's: ``a ≈ 6.3`` in float32 and ``≈ 13.9`` in
+    so the projection ceiling is **half** Poincaré's: ``a ≈ 6.3`` in float32 and ``≈ 13.9`` in
     float64 (at ``c = 1``). Inside it the pairwise ops (``dist``, ``logmap``, ``ptransp``,
     ``gyro_difference``) are cancellation-free; what remains is the storage floor of the gap,
     ``1 - c‖x‖²`` known to relative ``eps·cosh²(a)``.

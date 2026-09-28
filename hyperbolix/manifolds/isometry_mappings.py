@@ -28,9 +28,15 @@ Provided maps (all exact, distance-preserving, mutually consistent):
 
 Klein chart precision: with scaled radius ``a = √c·d(0, ·)`` a Klein point has
 ``√c·||k|| = tanh(a)`` where a Poincaré point has ``tanh(a/2)``, so ``1 - c·||k||²``
-reaches the ``_boundary_floor`` margin at half the Poincaré radius — scaled radius
-≈ 6.3 in float32 and ≈ 13.9 in float64 (Poincaré: 12.6 / 27.7). Points farther out
-than that, mapped into Klein, land on the boundary margin.
+reaches the ``_boundary_floor`` value at half the Poincaré radius — scaled radius
+≈ 6.3 in float32 and ≈ 13.9 in float64 at c = 1 (Poincaré: 12.6 / 27.7). The maps
+into Klein (``poincare_to_klein``, ``hyperboloid_to_klein``, ``pv_to_klein``) do not
+project. A point farther out than that lands between the ``proj`` margin and the
+boundary (float32, c = 1: ``||k|| = 0.9999983`` at a = 7 against the margin
+0.99999356), and from a ≈ 10 on ``||k||`` rounds to exactly ``1/√c`` (at a = 12 for all
+three maps). Klein operations floor ``1 - c·||k||²`` at the
+``_boundary_floor`` value, so all such points read as a ≈ 6.32 (float32, c = 1). Call
+``Klein.proj`` after mapping far points into Klein.
 
 JIT Compilation & Batching
 ---------------------------
@@ -425,16 +431,19 @@ def poincare_to_klein(
     Formula:
         k = 2·p / (1 + c·||p||²)
 
-    The denominator is in [1, 2], so no floor is needed. Since
-    ``√c·||k|| = tanh(a)`` with ``a = √c·d(0, p)``, a Poincaré point beyond scaled
-    radius ≈ 6.3 (float32) / 13.9 (float64) lands on the Klein boundary margin.
+    The denominator is in [1, 2], so no floor is needed. The result is not
+    projected. Since ``√c·||k|| = tanh(a)`` with ``a = √c·d(0, p)``, a Poincaré point
+    beyond scaled radius ≈ 6.3 (float32) / 13.9 (float64) at c = 1 lands past the
+    ``Klein.proj`` margin, and Klein operations read it as radius ≈ 6.3 / 13.9 (see
+    the module docstring). Call ``Klein.proj`` on the result for such points.
 
     Args:
         p: Point in the Poincaré ball, shape (dim,). Should satisfy ||p||² < 1/c.
         c: Curvature (positive).
 
     Returns:
-        Point in the Klein ball, shape (dim,). Satisfies ||k||² < 1/c.
+        Point in the closed Klein ball, shape (dim,). In float32, ``||k||`` can round
+        to ``1/√c`` beyond a ≈ 10; call ``Klein.proj`` before using such points.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -508,14 +517,18 @@ def hyperboloid_to_klein(
     ``hyperboloid_core.lorentz_scale`` writes the same map as ``φ_K(x) = x_s/x₀``:
     that is the unit-ball Klein coordinate ``√c·k``. Since ``√c·||k|| =
     ||x_s||/x₀ = tanh(a)`` at scaled radius ``a = √c·d(0, x)``, points beyond
-    ``a ≈ 6.3`` (float32) / ``13.9`` (float64) land on the Klein boundary margin.
+    ``a ≈ 6.3`` (float32) / ``13.9`` (float64) at c = 1 land past the ``Klein.proj``
+    margin (the result is not projected), and Klein operations read them as radius
+    ≈ 6.3 / 13.9 (see the module docstring). Call ``Klein.proj`` on the result for
+    such points.
 
     Args:
         x: Point on the hyperboloid, shape (dim+1,). Should satisfy ⟨x,x⟩_L = -1/c.
         c: Curvature (positive).
 
     Returns:
-        Point in the Klein ball, shape (dim,). Satisfies ||k||² < 1/c.
+        Point in the closed Klein ball, shape (dim,). In float32, ``||k||`` can round
+        to ``1/√c`` beyond a ≈ 10; call ``Klein.proj`` before using such points.
 
     Examples:
         >>> import jax.numpy as jnp
@@ -589,16 +602,19 @@ def pv_to_klein(
     Formula:
         k = β_x·x = x / √(1 + c·||x||²)
 
-    Every finite PV point lands inside the Klein ball in exact arithmetic; in
-    floating point a point beyond scaled radius ≈ 6.3 (float32) / 13.9 (float64)
-    lands on the boundary margin.
+    Every finite PV point lands inside the Klein ball in exact arithmetic. The
+    result is not projected: in floating point a point beyond scaled radius ≈ 6.3
+    (float32) / 13.9 (float64) at c = 1 lands past the ``Klein.proj`` margin, and
+    Klein operations read it as radius ≈ 6.3 / 13.9 (see the module docstring).
+    Call ``Klein.proj`` on the result for such points.
 
     Args:
         x: Point in PV space (unconstrained R^n), shape (dim,).
         c: Curvature (positive).
 
     Returns:
-        Point in the Klein ball, shape (dim,). Satisfies ||k||² < 1/c.
+        Point in the closed Klein ball, shape (dim,). In float32, ``||k||`` can round
+        to ``1/√c`` beyond a ≈ 10; call ``Klein.proj`` before using such points.
 
     Examples:
         >>> import jax.numpy as jnp

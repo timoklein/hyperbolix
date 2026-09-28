@@ -342,8 +342,12 @@ numerical error) and slower. The isometries are exact and mutually consistent ‚Ä
     A point at scaled radius $a = \sqrt{c}\,d_0$ has Klein norm $\tanh(a)/\sqrt{c}$ but
     Poincar√© norm $\tanh(a/2)/\sqrt{c}$, so `poincare_to_klein`, `hyperboloid_to_klein`
     and `pv_to_klein` send every point past $a \approx 6.32$ (float32) / $13.86$ (float64),
-    at $c = 1$, onto the Klein boundary margin. Map out of Klein freely; map into it only
-    points you know lie inside that radius. See the
+    at $c = 1$, beyond the `Klein.proj` margin. These maps do not project: in float32 at
+    $c = 1$ such points land between the margin ($\lVert k\rVert = 0.99999356$) and the
+    boundary, and from $a \approx 10$ on exactly on $\lVert k\rVert = 1/\sqrt{c}$. Klein
+    operations floor the gap $1 - c\lVert k\rVert^2$ at its value on the margin, so all of
+    these points read as $a \approx 6.32$. Map out of Klein freely; map into it only points
+    you know lie inside that radius, and call `Klein.proj` after mapping far points in. See the
     [numerical-stability guide](numerical-stability.md#klein-chart-ceiling).
 
 !!! tip "Why PV for numerically hard regimes"
