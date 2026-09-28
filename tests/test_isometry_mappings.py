@@ -1437,7 +1437,258 @@ def test_halfspace_hyperboloid_float32_preserved_under_x64(curvature: float):
 # Half-space ↔ Klein maps
 # ---------------------------------------------------------------------------
 
-# (halfspace-klein map tests go here)
+#
+# Oracles are NumPy float64 closed forms built from the hyperboloid lift of a half-space point,
+# ``X = ((||x||² + 1/c)/(2 x_n), x_s/(√c x_n), (||x||² - 1/c)/(2 x_n))`` (time first), and its
+# inverse ``x_n = 1/(c (X₀ - X_n))``, ``x_s = √c x_n X_s`` — never another library map of the pair.
+
+
+def _hs_klein_lift_np(x_BD: np.ndarray, c: float) -> np.ndarray:
+    """Half-space -> hyperboloid lift in NumPy float64 (time coordinate first)."""
+    x_BD = np.asarray(x_BD, dtype=np.float64)
+    x_s_BS, x_n_B1 = x_BD[:, :-1], x_BD[:, -1:]
+    sqnorm_B1 = np.sum(x_BD**2, axis=-1, keepdims=True)
+    time_B1 = (sqnorm_B1 + 1.0 / c) / (2.0 * x_n_B1)
+    last_B1 = (sqnorm_B1 - 1.0 / c) / (2.0 * x_n_B1)
+    return np.concatenate([time_B1, x_s_BS / (np.sqrt(c) * x_n_B1), last_B1], axis=1)
+
+
+def _hs_klein_from_klein_np(k_BD: np.ndarray, c: float) -> np.ndarray:
+    """Klein -> half-space in NumPy float64 via the hyperboloid: ``X = (1, √c k)/(√c √(1 - c||k||²))``."""
+    k_BD = np.asarray(k_BD, dtype=np.float64)
+    sqrt_gap_B1 = np.sqrt(1.0 - c * np.sum(k_BD**2, axis=-1, keepdims=True))
+    time_B1 = 1.0 / (np.sqrt(c) * sqrt_gap_B1)
+    spatial_BD = k_BD / sqrt_gap_B1
+    x_n_B1 = 1.0 / (c * (time_B1 - spatial_BD[:, -1:]))
+    return np.concatenate([np.sqrt(c) * x_n_B1 * spatial_BD[:, :-1], x_n_B1], axis=1)
+
+
+def _hs_klein_halfspace_points(key: jax.Array, c: float, dtype: jnp.dtype) -> jnp.ndarray:
+    """Same construction as the ``halfspace_points`` fixture, callable at any curvature."""
+    k_s, k_n = jax.random.split(key)
+    x_s = 0.5 * jax.random.normal(k_s, (N_POINTS, DIM - 1), dtype=dtype) / jnp.sqrt(c)
+    x_n = jnp.exp(0.5 * jax.random.normal(k_n, (N_POINTS, 1), dtype=dtype)) / jnp.sqrt(c)
+    return jnp.concatenate([x_s, x_n], axis=1)
+
+
+def test_halfspace_klein_target_manifold_validity(halfspace_points: jnp.ndarray, klein_points: jnp.ndarray, curvature: float):
+    """Half-space -> Klein lands inside the Klein ball; Klein -> half-space lands in ``x_n > 0``."""
+    c = curvature
+    assert jnp.all(_in_halfspace(halfspace_points)), "test points not in the half-space"
+    assert jnp.all(_in_klein_ball(_batch(iso.halfspace_to_klein)(halfspace_points, c), c))
+    assert jnp.all(_in_halfspace(_batch(iso.klein_to_halfspace)(klein_points, c)))
+
+
+def test_halfspace_klein_round_trip(
+    halfspace_points: jnp.ndarray,
+    klein_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """Half-space <-> Klein round-trips to identity (both directions)."""
+    c = curvature
+    atol, rtol = tolerance
+
+    x_rt = _batch(iso.klein_to_halfspace)(_batch(iso.halfspace_to_klein)(halfspace_points, c), c)
+    assert jnp.allclose(x_rt, halfspace_points, atol=atol, rtol=rtol)
+
+    k_rt = _batch(iso.halfspace_to_klein)(_batch(iso.klein_to_halfspace)(klein_points, c), c)
+    assert jnp.allclose(k_rt, klein_points, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("c", [1e-3, 1e-1, 10.0, 100.0])
+def test_halfspace_klein_extreme_curvatures(c: float):
+    """float64-only: round trips and distance preservation at extreme curvatures (points scaled by 1/√c)."""
+    x_BD = _hs_klein_halfspace_points(jax.random.PRNGKey(2027), c, jnp.float64)
+    k_BD = _klein_ball_points(jax.random.PRNGKey(2028), c, jnp.float64)
+
+    x_to_k = _batch(iso.halfspace_to_klein)(x_BD, c)
+    assert jnp.allclose(_batch(iso.klein_to_halfspace)(x_to_k, c), x_BD, atol=1e-9, rtol=1e-9), f"H->K->H at c={c}"
+    k_rt = _batch(iso.halfspace_to_klein)(_batch(iso.klein_to_halfspace)(k_BD, c), c)
+    assert jnp.allclose(k_rt, k_BD, atol=1e-9, rtol=1e-9), f"K->H->K at c={c}"
+
+    n = N_POINTS // 2
+    d_hs = _halfspace_dist_oracle(np.asarray(x_BD[:n]), np.asarray(x_BD[n:]), c)
+    d_k = _klein_dist_oracle(np.asarray(x_to_k[:n]), np.asarray(x_to_k[n:]), c)
+    assert np.allclose(d_k, d_hs, atol=1e-9, rtol=1e-9), f"H->K not an isometry at c={c}"
+
+
+def test_halfspace_klein_origin_mapping(curvature: float, dtype: jnp.dtype, tolerance: tuple[float, float]):
+    """The half-space origin ``e_n/√c`` maps to the Klein origin, and back."""
+    c = curvature
+    atol, rtol = tolerance
+    zero_D = jnp.zeros(DIM, dtype=dtype)
+    origin_D = _halfspace_origin(c, dtype)
+
+    assert jnp.allclose(iso.halfspace_to_klein(origin_D, c), zero_D, atol=atol, rtol=rtol)
+    assert jnp.allclose(iso.klein_to_halfspace(zero_D, c), origin_D, atol=atol, rtol=rtol)
+
+
+def test_halfspace_klein_isometry_preserves_distance(
+    halfspace_points: jnp.ndarray,
+    klein_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """Pairwise and from-origin distances agree across the maps, both oracles NumPy float64 closed forms."""
+    c = curvature
+    atol, rtol = tolerance
+    n = N_POINTS // 2
+
+    x_BD = np.asarray(halfspace_points)
+    k_BD = np.asarray(_batch(iso.halfspace_to_klein)(halfspace_points, c))
+    d_hs = _halfspace_dist_oracle(x_BD[:n], x_BD[n:], c)
+    assert np.allclose(_klein_dist_oracle(k_BD[:n], k_BD[n:], c), d_hs, atol=atol, rtol=rtol), "H -> K"
+
+    origin_BD = np.broadcast_to(np.asarray(_halfspace_origin(c, dtype)), x_BD.shape)
+    d0_k = np.arctanh(np.sqrt(c) * np.linalg.norm(k_BD.astype(np.float64), axis=-1)) / np.sqrt(c)
+    assert np.allclose(d0_k, _halfspace_dist_oracle(x_BD, origin_BD, c), atol=atol, rtol=rtol), "H -> K from origin"
+
+    k_BD = np.asarray(klein_points)
+    x_BD = np.asarray(_batch(iso.klein_to_halfspace)(klein_points, c))
+    d_k = _klein_dist_oracle(k_BD[:n], k_BD[n:], c)
+    assert np.allclose(_halfspace_dist_oracle(x_BD[:n], x_BD[n:], c), d_k, atol=atol, rtol=rtol), "K -> H"
+
+
+def test_halfspace_klein_commutative_diagrams(
+    halfspace_points: jnp.ndarray,
+    klein_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """K∘(H→K) equals independent NumPy closed forms: the Cayley transform into Poincaré, the lift, and back.
+
+    ``klein_to_poincare(halfspace_to_klein(x))`` must be the Cayley transform
+    ``p = (2√c x_s, c||x||² - 1)/(√c (1 + 2√c x_n + c||x||²))``, ``klein_to_hyperboloid(halfspace_to_klein(x))``
+    the hyperboloid lift, and ``klein_to_halfspace(k)`` the inverse lift of the Klein point's hyperboloid image.
+    """
+    c = curvature
+    atol, rtol = tolerance
+    sqrt_c = np.sqrt(c)
+
+    x_np = np.asarray(halfspace_points, dtype=np.float64)
+    c_sqnorm_B1 = c * np.sum(x_np**2, axis=-1, keepdims=True)
+    cayley_BD = np.concatenate([2.0 * sqrt_c * x_np[:, :-1], c_sqnorm_B1 - 1.0], axis=1) / (
+        sqrt_c * (1.0 + 2.0 * sqrt_c * x_np[:, -1:] + c_sqnorm_B1)
+    )
+
+    k_BD = _batch(iso.halfspace_to_klein)(halfspace_points, c)
+    p_BD = np.asarray(_batch(iso.klein_to_poincare)(k_BD, c))
+    assert np.allclose(p_BD, cayley_BD, atol=atol, rtol=rtol), "H->K->P != Cayley transform"
+    h_BD = np.asarray(_batch(iso.klein_to_hyperboloid)(k_BD, c))
+    assert np.allclose(h_BD, _hs_klein_lift_np(x_np, c), atol=atol, rtol=rtol), "H->K->Hyperboloid != lift"
+
+    x_from_k = np.asarray(_batch(iso.klein_to_halfspace)(klein_points, c))
+    assert np.allclose(x_from_k, _hs_klein_from_klein_np(np.asarray(klein_points), c), atol=atol, rtol=rtol)
+
+
+def _hs_klein_axis_xn_reference(k_n: float, c: float) -> float:
+    """``x_n`` of the on-axis Klein point ``(0, ..., k_n)`` in 50-digit Decimal: ``√((1 + s)/(1 - s))/√c``, ``s = √c k_n``."""
+    from decimal import Decimal, localcontext
+
+    with localcontext() as ctx:
+        ctx.prec = 50
+        sqrt_c = Decimal(c).sqrt()
+        s = sqrt_c * Decimal(k_n)  # exact binary value of the float input
+        return float(((1 + s) / (1 - s)).sqrt() / sqrt_c)
+
+
+def test_halfspace_klein_north_pole_regression(dtype: jnp.dtype):
+    """Near the north pole (far up the half-space axis) ``x_n`` stays at the Klein chart's floor.
+
+    ``Δ = 1 - √c k_n`` vanishes there. ``klein_to_halfspace`` evaluates it through the Klein gap,
+    ``(g_k + c||k_s||²)/(1 + √c k_n)``, so its only cancellation is ``g_k``'s own, a relative error
+    ``~eps·cosh²(a)`` at scaled radius ``a``. The literal ``1 - √c k_n`` adds an independent
+    cancellation of the rounded ``√c`` (negative control). ``c = 0.5`` is exact in binary while ``√c``
+    is not; at ``c = 1`` the two spellings coincide, since ``√c k_n`` is then exact. Errors are
+    measured on the exact float input against a 50-digit reference, in units of ``eps·cosh²(a)``.
+    """
+    c = 0.5
+    eps = float(jnp.finfo(dtype).eps)
+    a_B = np.linspace(3.0, 5.5 if dtype == jnp.float32 else 12.0, 16)  # below the Klein chart ceiling
+    k_n_B = jnp.asarray(np.tanh(a_B) / np.sqrt(c), dtype=dtype)
+    k_BD = jnp.zeros((a_B.shape[0], DIM), dtype=dtype).at[:, -1].set(k_n_B)
+    ref_B = np.array([_hs_klein_axis_xn_reference(float(v), c) for v in k_n_B])
+    unit_B = eps * np.cosh(a_B) ** 2
+
+    x_n_B = np.asarray(_batch(iso.klein_to_halfspace)(k_BD, c)[:, -1], dtype=np.float64)
+    c_t, sqrt_c_t = jnp.asarray(c, dtype=dtype), jnp.sqrt(jnp.asarray(c, dtype=dtype))
+    literal_B = jnp.sqrt(1.0 - c_t * k_n_B**2) / (sqrt_c_t * (1.0 - sqrt_c_t * k_n_B))
+    literal_B = np.asarray(literal_B, dtype=np.float64)
+
+    err_map = np.sqrt(np.mean((np.abs(x_n_B - ref_B) / ref_B / unit_B) ** 2))
+    err_literal = np.sqrt(np.mean((np.abs(literal_B - ref_B) / ref_B / unit_B) ** 2))
+    assert err_map < 0.3, f"klein_to_halfspace x_n error {err_map:.3f}·eps·cosh²(a)"
+    assert err_literal > 2.0 * err_map, f"negative control: literal {err_literal:.3f} vs map {err_map:.3f}"
+
+
+def test_halfspace_klein_jit_and_vmap_compatibility(
+    halfspace_points: jnp.ndarray,
+    klein_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """Both maps are JIT- and vmap-compatible and match eager; float32 in -> float32 out under x64."""
+    c = curvature
+    atol, rtol = tolerance
+
+    for fn, pts in [(iso.halfspace_to_klein, halfspace_points), (iso.klein_to_halfspace, klein_points)]:
+        out = jax.jit(_batch(fn))(pts, c)
+        assert out.shape == (N_POINTS, DIM), fn.__name__
+        assert out.dtype == dtype, fn.__name__
+        assert jnp.allclose(out, _batch(fn)(pts, c), atol=atol, rtol=rtol), fn.__name__
+
+
+@pytest.mark.parametrize("dim", [1, 2, 5, 10])
+def test_halfspace_klein_dimension_consistency(dim: int):
+    """Half-space <-> Klein handle arbitrary dimensions; dim = 1 has an empty ``x_s`` (the geodesic line)."""
+    c = 1.0
+    x = jnp.concatenate([jnp.linspace(-0.3, 0.3, dim - 1, dtype=jnp.float64), jnp.array([1.7])])
+
+    k = iso.halfspace_to_klein(x, c)
+    assert k.shape == (dim,)
+    x_rt = iso.klein_to_halfspace(k, c)
+    assert x_rt.shape == (dim,)
+    assert jnp.allclose(x_rt, x, atol=1e-9, rtol=1e-9)
+
+
+def test_halfspace_klein_gradients(curvature: float):
+    """float64: the Jacobians are finite and match central finite differences at the origin and far points.
+
+    At the origin both Jacobians are the identity (the maps' differential there is ``I``), which pins
+    the ``k_n = 0`` switch of the ``klein_to_halfspace`` double ``where``. The finite-difference step
+    is ``1e-5`` of the point's local length scale: ``x_n`` in the half-space, ``(1 - c||k||²)/√c``
+    in the Klein ball.
+    """
+    c = curvature
+    s = 1.0 / np.sqrt(c)
+    t5 = np.tanh(5.0)
+    cases = [
+        (iso.halfspace_to_klein, np.array([0.0, 0.0, s])),  # origin
+        (iso.halfspace_to_klein, np.array([0.3 * s, -0.2 * s, np.exp(8.0) * s])),  # far up the axis
+        (iso.halfspace_to_klein, np.array([0.3 * s, -0.2 * s, np.exp(-8.0) * s])),  # near the boundary plane
+        (iso.klein_to_halfspace, np.array([0.0, 0.0, 0.0])),  # origin
+        (iso.klein_to_halfspace, np.array([1e-3 * s, 0.0, t5 * s])),  # near the north pole
+        (iso.klein_to_halfspace, np.array([1e-3 * s, 0.0, -t5 * s])),  # near the south pole
+        (iso.klein_to_halfspace, np.array([0.6 * s, -0.5 * s, 0.3 * s])),  # off-axis
+    ]
+    for fn, pt in cases:
+        pt_D = jnp.asarray(pt, dtype=jnp.float64)
+        jac_DD = np.asarray(jax.jacrev(fn)(pt_D, c))
+        assert np.all(np.isfinite(jac_DD)), f"{fn.__name__} at {pt}"
+
+        scale = pt[-1] if fn is iso.halfspace_to_klein else (1.0 - c * np.sum(pt**2)) * s
+        h = 1e-5 * scale
+        fd_DD = np.stack(
+            [(np.asarray(fn(pt_D.at[j].add(h), c)) - np.asarray(fn(pt_D.at[j].add(-h), c))) / (2 * h) for j in range(DIM)],
+            axis=1,
+        )
+        assert np.allclose(jac_DD, fd_DD, atol=1e-5 * np.max(np.abs(fd_DD)), rtol=1e-5), f"{fn.__name__} at {pt}"
+
+    assert np.allclose(jax.jacrev(iso.halfspace_to_klein)(_halfspace_origin(c, jnp.float64), c), np.eye(DIM), atol=1e-12)
+    assert np.allclose(jax.jacrev(iso.klein_to_halfspace)(jnp.zeros(DIM, jnp.float64), c), np.eye(DIM), atol=1e-12)
 
 
 # ---------------------------------------------------------------------------

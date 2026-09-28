@@ -902,7 +902,120 @@ def hyperboloid_to_halfspace(
 # Half-space ↔ Klein
 # ---------------------------------------------------------------------------
 
-# (halfspace-klein maps go here)
+
+def halfspace_to_klein(
+    x: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Poincaré half-space point to the Beltrami-Klein model.
+
+    The hyperboloid lift ``X = ((||x||² + 1/c)/(2·x_n), x_s/(√c·x_n), (||x||² - 1/c)/(2·x_n))``
+    followed by the central projection ``k = X_s/(√c·X₀)`` of :func:`hyperboloid_to_klein`,
+    collapsed into one rational map. With ``x = (x_s, x_n)``, ``x_n > 0``:
+
+    Formula:
+        k = (2·x_s, (c·||x||² - 1)/√c) / (1 + c·||x||²)
+
+    The half-space origin ``e_n/√c`` maps to the Klein origin, and the axis ``x_s = 0`` to the
+    Klein diameter along ``e_n``: ``x_n → ∞`` reaches the north pole ``e_n/√c``, ``x_n → 0`` the
+    south pole. The numerator ``c·||x||² - 1`` vanishes at the origin; it is evaluated as
+    ``c·||x_s||² + (√c·x_n - 1)(√c·x_n + 1)``, exact near the origin whenever ``√c·x_n`` is (c a
+    power of 4, c = 1 included: float32 relative error of ``k_n`` at ``√c·x_n = 1 + 1e-4`` is
+    0.2 eps against 840 eps for the literal ``c·||x||² - 1``). At other c the rounding of √c
+    limits both spellings alike, to a sub-eps absolute error on ``√c·k_n``.
+
+    The result is not projected. Since ``√c·||k|| = tanh(a)`` with ``a = √c·d(o, x)``, a point
+    beyond scaled radius ≈ 6.3 (float32) / 13.9 (float64) at c = 1 lands past the ``Klein.proj``
+    margin, and Klein operations read it as radius ≈ 6.3 / 13.9 (see the module docstring). Call
+    ``Klein.proj`` on the result for such points. Past ``√c·||x|| ≈ 1.8e19`` (float32, scaled
+    radius ≈ 44) ``c·||x||²`` overflows and ``k_n`` is NaN.
+
+    Args:
+        x: Point in the half-space, shape (dim,). Should satisfy x_n = x[-1] > 0.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the closed Klein ball, shape (dim,). In float32, ``||k||`` can round
+        to ``1/√c`` beyond a ≈ 10; call ``Klein.proj`` before using such points.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Half-space origin e_n/√c maps to the Klein origin
+        >>> k = isometry_mappings.halfspace_to_klein(jnp.array([0.0, 1.0]), c=1.0)
+        >>> bool(jnp.allclose(k, jnp.zeros(2)))
+        True
+
+    References:
+        Wikipedia: Poincaré half-plane model / Beltrami-Klein model - Relation to other models
+    """
+    c = jnp.asarray(c, dtype=x.dtype)
+    sqrt_c = jnp.sqrt(c)
+    x_s, x_n = x[:-1], x[-1]
+    c_xs_sqnorm = c * jnp.dot(x_s, x_s, precision=MATMUL_PRECISION)
+    c_x_sqnorm = c_xs_sqnorm + c * x_n * x_n
+    q = c_xs_sqnorm + (sqrt_c * x_n - 1.0) * (sqrt_c * x_n + 1.0)  # c·||x||² - 1 without cancellation
+    # 1 + c·||x||² ≥ 1, so no floor is needed.
+    return jnp.concatenate([2.0 * x_s, (q / sqrt_c)[None]]) / (1.0 + c_x_sqnorm)
+
+
+def klein_to_halfspace(
+    k: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Beltrami-Klein point to the Poincaré half-space model.
+
+    Inverse of :func:`halfspace_to_klein`. With ``k = (k_s, k_n)`` and the Klein gap
+    ``g_k = 1 - c·||k||²``:
+
+    Formula:
+        Δ = 1 - √c·k_n
+        x = (k_s/Δ, √g_k/(√c·Δ))
+
+    ``Δ`` vanishes at the north pole ``e_n/√c`` (far up the half-space axis). For ``k_n > 0`` it is
+    evaluated as ``Δ = (1 - c·k_n²)/(1 + √c·k_n)`` with ``1 - c·k_n² = g_k + c·||k_s||²``, so
+    the only cancellation left is that of ``g_k`` (:func:`_klein_gap`), the Klein chart's own
+    floor ``eps·cosh²(a)`` at scaled radius ``a = √c·d(0, k)``, and the rounded √c never enters a
+    difference. Measured in float32 on axis points at a = 3 to 6, c = 0.5: relative error of
+    ``x_n`` at most 0.12·eps·cosh²(a) against 0.55 to 0.65 for the literal ``1 - √c·k_n``
+    (c = 2.3: 0.16 to 0.20 against 0.75 to 0.92); the two agree where ``√c·k_n`` is exact
+    (c = 1, 4).
+
+    ``g_k`` is floored at ``_boundary_floor(k, c)``, so every point of the closed ball maps to a
+    finite half-space point with ``x_n > 0``: a Klein point past the chart ceiling, the north
+    pole itself included, lands at the scaled radius ≈ 6.3 (float32) / 13.9 (float64) at c = 1
+    that the Klein operations read it at.
+
+    Args:
+        k: Point in the Klein ball, shape (dim,). Should satisfy ||k||² < 1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the half-space, shape (dim,). Satisfies x_n = x[-1] > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Klein origin maps to the half-space origin e_n/√c
+        >>> x = isometry_mappings.klein_to_halfspace(jnp.zeros(2), c=1.0)
+        >>> bool(jnp.allclose(x, jnp.array([0.0, 1.0])))
+        True
+
+    References:
+        Wikipedia: Poincaré half-plane model / Beltrami-Klein model - Relation to other models
+    """
+    c = jnp.asarray(c, dtype=k.dtype)
+    sqrt_c = jnp.sqrt(c)
+    k_s, k_n = k[:-1], k[-1]
+    gap = _klein_gap(k, c)
+    # Double where: the unselected branch divides by 1 + √c·k_n, which is 0 at the south pole.
+    k_n_pos = jnp.where(k_n > 0, k_n, 0.0)
+    delta_north = (gap + c * jnp.dot(k_s, k_s, precision=MATMUL_PRECISION)) / (1.0 + sqrt_c * k_n_pos)
+    delta = jnp.where(k_n > 0, delta_north, 1.0 - sqrt_c * k_n)
+    # The gap is floored strictly positive, so the plain square root is safe and its derivative finite.
+    return jnp.concatenate([k_s / delta, (jnp.sqrt(gap) / (sqrt_c * delta))[None]])
 
 
 # ---------------------------------------------------------------------------
