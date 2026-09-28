@@ -9,6 +9,7 @@ Supported Models (curvature ``c > 0``, sectional curvature ``-c``):
     - Poincaré ball model: Points in R^d with ||y||² < 1/c
     - Proper Velocity (PV) model: Unconstrained points in R^d (Chen et al. 2026)
     - Beltrami-Klein model: Points in R^d with ||k||² < 1/c (geodesics are straight chords)
+    - Poincaré half-space model: Points in R^d with last coordinate x_n > 0 (origin e_n/√c)
 
 Provided maps (all exact, distance-preserving, mutually consistent):
     - Poincaré ↔ Hyperboloid: ``poincare_to_hyperboloid`` / ``hyperboloid_to_poincare``
@@ -25,6 +26,11 @@ Provided maps (all exact, distance-preserving, mutually consistent):
       (central projection from the ambient origin onto the plane x₀ = 1/√c).
     - Klein ↔ PV: ``klein_to_pv`` / ``pv_to_klein``
       (PV = Einstein velocity scaled by its Lorentz factor, x = gamma_k·k).
+    - Half-space ↔ Poincaré: ``halfspace_to_poincare`` / ``poincare_to_halfspace``
+      (the Cayley transform, origin e_n/√c ↦ 0 with differential ½·I).
+    - Half-space ↔ Hyperboloid: ``halfspace_to_hyperboloid`` / ``hyperboloid_to_halfspace``.
+    - Half-space ↔ Klein: ``halfspace_to_klein`` / ``klein_to_halfspace``.
+    - Half-space ↔ PV: ``halfspace_to_pv`` / ``pv_to_halfspace``.
 
 Klein chart precision: with scaled radius ``a = √c·d(0, ·)`` a Klein point has
 ``√c·||k|| = tanh(a)`` where a Poincaré point has ``tanh(a/2)``, so ``1 - c·||k||²``
@@ -634,3 +640,31 @@ def pv_to_klein(
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
     beta_inv = safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))  # 1/β_x
     return x / beta_inv
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ Poincaré
+# ---------------------------------------------------------------------------
+
+# (halfspace-poincare maps go here)
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ Hyperboloid
+# ---------------------------------------------------------------------------
+
+# (halfspace-hyperboloid maps go here)
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ Klein
+# ---------------------------------------------------------------------------
+
+# (halfspace-klein maps go here)
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ PV
+# ---------------------------------------------------------------------------
+
+# (halfspace-pv maps go here)

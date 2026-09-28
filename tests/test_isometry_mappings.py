@@ -886,3 +886,71 @@ def test_klein_einstein_midpoint_is_the_lorentz_midpoint_through_the_maps(
         uniform_N = jnp.full((pts_ND.shape[0],), 1.0 / pts_ND.shape[0], dtype=dtype)
         mid_h_uniform = iso.hyperboloid_to_klein(lorentz_midpoint(lifted_NA, uniform_N[None, :], c)[0], c)
         assert jnp.allclose(klein.einstein_midpoint(pts_ND, None, c), mid_h_uniform, atol=atol, rtol=rtol), "uniform"
+
+
+# ---------------------------------------------------------------------------
+# Poincaré half-space maps — shared helpers
+# ---------------------------------------------------------------------------
+#
+# The map tests below do not call the ``HalfSpace`` class: membership of a half-space image is
+# checked directly as ``x_n > 0``, and half-space distances against an independent NumPy float64
+# closed form. The ``HalfSpace`` operations themselves are tested through the maps in a later block.
+
+
+def _in_halfspace(x_BD: jnp.ndarray) -> jnp.ndarray:
+    """``x_n > 0`` with finite entries, row-wise — the half-space model's only constraint."""
+    return jnp.all(jnp.isfinite(x_BD), axis=-1) & (x_BD[..., -1] > 0.0)
+
+
+def _halfspace_dist_oracle(x_BD: np.ndarray, y_BD: np.ndarray, c: float) -> np.ndarray:
+    """Half-space geodesic distance in NumPy float64: ``acosh(1 + ||x - y||²/(2 x_n y_n)) / √c``."""
+    x_BD, y_BD = np.asarray(x_BD, dtype=np.float64), np.asarray(y_BD, dtype=np.float64)
+    arg_B = 1.0 + np.sum((x_BD - y_BD) ** 2, axis=-1) / (2.0 * x_BD[..., -1] * y_BD[..., -1])
+    return np.arccosh(arg_B) / np.sqrt(c)
+
+
+def _halfspace_origin(c: float, dtype: jnp.dtype, dim: int = DIM) -> jnp.ndarray:
+    """The half-space origin ``e_n/√c``."""
+    return jnp.zeros(dim, dtype=dtype).at[-1].set(1.0 / jnp.sqrt(jnp.asarray(c, dtype=dtype)))
+
+
+@pytest.fixture
+def halfspace_points(curvature: float, dtype: jnp.dtype) -> jnp.ndarray:
+    """Half-space points built without any map under test.
+
+    ``x_s ~ N(0, 0.5²)/√c`` and ``log(√c·x_n) ~ N(0, 0.5²)``: the scaled distance from the origin
+    stays below ≈ 3, well inside the range where float32 carries the fixture tolerance.
+    """
+    c = curvature
+    k_s, k_n = jax.random.split(jax.random.PRNGKey(2718))
+    x_s = 0.5 * jax.random.normal(k_s, (N_POINTS, DIM - 1), dtype=dtype) / jnp.sqrt(c)
+    x_n = jnp.exp(0.5 * jax.random.normal(k_n, (N_POINTS, 1), dtype=dtype)) / jnp.sqrt(c)
+    return jnp.concatenate([x_s, x_n], axis=1)
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ Poincaré maps
+# ---------------------------------------------------------------------------
+
+# (halfspace-poincare map tests go here)
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ Hyperboloid maps
+# ---------------------------------------------------------------------------
+
+# (halfspace-hyperboloid map tests go here)
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ Klein maps
+# ---------------------------------------------------------------------------
+
+# (halfspace-klein map tests go here)
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ PV maps
+# ---------------------------------------------------------------------------
+
+# (halfspace-pv map tests go here)
