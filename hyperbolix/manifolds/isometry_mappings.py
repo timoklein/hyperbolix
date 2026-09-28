@@ -774,7 +774,128 @@ def poincare_to_halfspace(
 # Half-space ↔ Hyperboloid
 # ---------------------------------------------------------------------------
 
-# (halfspace-hyperboloid maps go here)
+
+def halfspace_to_hyperboloid(
+    x: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim_plus_1"]:
+    """Convert a Poincaré half-space point to the hyperboloid model.
+
+    With ``x = (x_s, x_n)``, ``x_n > 0`` (last coordinate), metric ``||dx||²/(c·x_n²)`` and
+    origin ``e_n/√c``, the map sends the origin to the hyperboloid origin ``[1/√c, 0, ..., 0]``
+    and the vertical axis to the ``(X₀, X_n)`` plane. Let ``u_n = √c·x_n``.
+
+    Formula:
+        X_mid = x_s / (√c·x_n)                                    (n-1 entries)
+        X_n   = (c·||x||² - 1) / (2c·x_n)
+              = ||x_s||²/(2·x_n) + (u_n - 1)(u_n + 1)/(2c·x_n)
+        X₀    = (c·||x||² + 1) / (2c·x_n) = √(1/c + ||X_mid||² + X_n²)
+        X = [X₀, X_mid, X_n]
+
+    Numerics: the spatial part ``X_s = (X_mid, X_n)`` carries the point, and ``X₀`` is rebuilt
+    from it with ``safe_hypot_norm`` exactly as :func:`pv_to_hyperboloid` and
+    :func:`klein_to_hyperboloid` do, so ``⟨X,X⟩_L = -1/c`` holds to one rounding of ``X₀``.
+    ``X_n`` keeps ``c·x_n² - 1`` in the factored form ``(u_n - 1)(u_n + 1)``: the literal
+    ``c·||x||² - 1`` rounds ``c·x_n²`` before subtracting and loses the relative accuracy of
+    ``X_n`` near the origin (float32, 1e-3/√c around it, c ∈ {1, 4}: median relative error 3.5e-8
+    against 1.6e-5 for the literal; at other ``c`` the rounding of ``√c`` bounds both). Where
+    ``c·||x||² ≈ 1`` away from the axis (the hemisphere that maps to ``X_n = 0``) the subtraction
+    cancels in every spelling; the absolute error there is ``~eps·X₀``, the hyperboloid's own
+    storage floor. ``||x_s||²/(2·x_n)`` carries no factor of
+    ``c``, and it overflows float32 only once ``||x_s||`` passes 1.8e19, where ``X_n ≥ ||x_s||``
+    is already past the hyperboloid's float32 coordinate ceiling, so the overflow is where the
+    hyperboloid itself returns ``inf``. ``x_n`` is not floored: every ``x_n > 0`` is a valid point,
+    and ``x_n ≤ 0`` is off the model and returns ``inf``/NaN. The result is not projected.
+
+    Args:
+        x: Point in the half-space, shape (dim,). Should satisfy x_n = x[-1] > 0.
+        c: Curvature (positive).
+
+    Returns:
+        Point on the hyperboloid, shape (dim+1,). Satisfies ⟨X,X⟩_L = -1/c, X₀ > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Half-space origin e_n/√c maps to the hyperboloid origin [1/√c, 0, ...]
+        >>> X = isometry_mappings.halfspace_to_hyperboloid(jnp.array([0.0, 2.0]), c=0.25)
+        >>> bool(jnp.allclose(X, jnp.array([2.0, 0.0, 0.0])))
+        True
+
+    References:
+        Cannon, Floyd, Kenyon, Parry. "Hyperbolic Geometry." Flavors of Geometry, MSRI Publ. 31,
+        1997 — Sec. 7, the maps between the models at c = 1 (rescaled by 1/√c here).
+    """
+    c = jnp.asarray(c, dtype=x.dtype)
+    sqrt_c = jnp.sqrt(c)
+    x_s, x_n = x[:-1], x[-1]
+    u_n = sqrt_c * x_n
+    x_mid = x_s / u_n
+    x_last = jnp.dot(x_s, x_s, precision=MATMUL_PRECISION) / (2.0 * x_n) + (u_n - 1.0) * ((u_n + 1.0) / (2.0 * c * x_n))
+    x_spatial = jnp.concatenate([x_mid, x_last[None]])
+    # √(1/c + ||X_s||²) in one overflow-free reduction; see :func:`pv_to_hyperboloid`.
+    time = safe_hypot_norm(x_spatial, jnp.asarray(1.0, dtype=x.dtype) / sqrt_c)
+    return jnp.concatenate([time[None], x_spatial])
+
+
+def hyperboloid_to_halfspace(
+    x: Float[Array, "dim_plus_1"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a hyperboloid point to the Poincaré half-space model.
+
+    Inverse of :func:`halfspace_to_hyperboloid`. With ``X = [X₀, X_mid, X_n]`` and
+    ``Δ = X₀ - X_n > 0``:
+
+    Formula:
+        x_s = X_mid / (√c·Δ)
+        x_n = 1 / (c·Δ)
+
+    Numerics: written literally, ``Δ`` is a difference of two ``O(sinh a)`` numbers whose result
+    is ``O(e^{-a})`` for points far up the vertical axis or out along the horosphere through the
+    origin (``X_n ≈ X₀``). For ``X_n ≥ 0`` the sheet constraint gives the cancellation-free form
+
+        Δ = (1/c + ||X_mid||²) / (X₀ + X_n),
+
+    and for ``X_n < 0`` the literal ``X₀ - X_n`` is a sum of positive values. This is the spelling
+    of ``hyperboloid._busemann_arg`` with ``v = e_n``: the numerator is built from the spatial
+    part, and the stored ``X₀`` enters only the denominator (and the ``X_n < 0`` branch). The unused
+    denominator is ``X₀ + where(X_n ≥ 0, X_n, 0)``, positive in both branches, so neither branch
+    produces a NaN cotangent under reverse mode. ``Δ`` is positive on the sheet, so no floor is
+    needed. The result is not projected. Measured in float32 against a 60-digit oracle, c ∈ {0.3,
+    1, 4, 10}: median relative error 5e-8 far up the axis (``√c·x_n`` up to 1e6) and ≤ 7e-8 in
+    every other family. The literal ``X₀ - X_n`` gives 0.2 far up the axis, first returns ``inf``
+    at ``√c·x_n ≈ 6e3``, and returns it for almost every point past 1e4.
+
+    Args:
+        x: Point on the hyperboloid, shape (dim+1,). Should satisfy ⟨x,x⟩_L = -1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the half-space, shape (dim,). Satisfies x_n > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Hyperboloid origin [1/√c, 0, ...] maps to the half-space origin e_n/√c
+        >>> x = isometry_mappings.hyperboloid_to_halfspace(jnp.array([2.0, 0.0, 0.0]), c=0.25)
+        >>> bool(jnp.allclose(x, jnp.array([0.0, 2.0])))
+        True
+
+    References:
+        Cannon, Floyd, Kenyon, Parry. "Hyperbolic Geometry." Flavors of Geometry, MSRI Publ. 31,
+        1997 — Sec. 7, the maps between the models at c = 1 (rescaled by 1/√c here).
+    """
+    c = jnp.asarray(c, dtype=x.dtype)
+    sqrt_c = jnp.sqrt(c)
+    x0, x_mid, x_last = x[0], x[1:-1], x[-1]
+    nonnegative = x_last >= 0
+    denominator = x0 + jnp.where(nonnegative, x_last, jnp.zeros_like(x_last))
+    rationalized = (1.0 / c + jnp.dot(x_mid, x_mid, precision=MATMUL_PRECISION)) / denominator
+    gap = jnp.where(nonnegative, rationalized, x0 - x_last)  # Δ = X₀ - X_n
+    return jnp.concatenate([x_mid / (sqrt_c * gap), (1.0 / (c * gap))[None]])
 
 
 # ---------------------------------------------------------------------------

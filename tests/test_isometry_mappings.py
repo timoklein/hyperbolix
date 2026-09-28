@@ -1182,7 +1182,255 @@ def test_halfspace_poincare_keeps_float32_under_x64(halfspace_points: jnp.ndarra
 # Half-space ↔ Hyperboloid maps
 # ---------------------------------------------------------------------------
 
-# (halfspace-hyperboloid map tests go here)
+
+def _hs_hyperboloid_points(key: jax.Array, c: float, dtype: jnp.dtype, dim: int = DIM) -> jnp.ndarray:
+    """Half-space points drawn like the ``halfspace_points`` fixture, at any ``c`` and ``dim``."""
+    k_s, k_n = jax.random.split(key)
+    x_s = 0.5 * jax.random.normal(k_s, (N_POINTS, dim - 1), dtype=dtype) / jnp.sqrt(c)
+    x_n = jnp.exp(0.5 * jax.random.normal(k_n, (N_POINTS, 1), dtype=dtype)) / jnp.sqrt(c)
+    return jnp.concatenate([x_s, x_n], axis=1)
+
+
+def _hs_hyperboloid_literal_inverse(X_BA: jnp.ndarray, c: float) -> jnp.ndarray:
+    """``x = (X_mid, 1/√c) / (√c·(X₀ - X_n))`` with the literal, cancelling ``X₀ - X_n`` — negative control."""
+    gap_B1 = (X_BA[:, 0] - X_BA[:, -1])[:, None]
+    return jnp.concatenate([X_BA[:, 1:-1] / (np.sqrt(c) * gap_B1), 1.0 / (c * gap_B1)], axis=1)
+
+
+def _hs_hyperboloid_far_points(c: float) -> np.ndarray:
+    """float32-exact far half-space points (unit-curvature coordinates ``u = √c·x``), every entry nonzero.
+
+    Far up the axis (``u_n`` in 1e3..1e5) and out along the horosphere through the origin
+    (``u_n = 1``, ``||u_s||`` in 1e3..1e4) — both map to ``X_n ≈ X₀`` — then far below the origin
+    (``u_n`` in 1e-5..1e-3), where ``X_n < 0`` and nothing cancels.
+    """
+    up = [[0.05, -0.03, u_n] for u_n in (1e3, 3e3, 1e4, 1e5)]
+    out = [[0.6 * r, -0.8 * r, 1.0] for r in (1e3, 3e3, 1e4)]
+    down = [[0.3, 0.4, u_n] for u_n in (1e-3, 1e-4, 1e-5)]
+    return np.asarray(np.asarray(up + out + down) / np.sqrt(c), dtype=np.float32)
+
+
+def test_halfspace_hyperboloid_target_manifold_validity(
+    manifolds: tuple[Poincare, Hyperboloid, ProperVelocity],
+    halfspace_points: jnp.ndarray,
+    hyperboloid_points: jnp.ndarray,
+    curvature: float,
+):
+    """Half-space images land on the hyperboloid; hyperboloid images land in the half-space."""
+    _, hyperboloid, _ = manifolds
+    c = curvature
+
+    assert jnp.all(_in_halfspace(halfspace_points)), "test points not in the half-space"
+    X = _batch(iso.halfspace_to_hyperboloid)(halfspace_points, c)
+    assert jnp.all(_batch(hyperboloid.is_in_manifold)(X, c))
+    assert jnp.all(_in_halfspace(_batch(iso.hyperboloid_to_halfspace)(hyperboloid_points, c)))
+
+
+def test_halfspace_hyperboloid_round_trip(
+    halfspace_points: jnp.ndarray,
+    hyperboloid_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """Half-space <-> Hyperboloid round-trips to identity (both directions)."""
+    c = curvature
+    atol, rtol = tolerance
+
+    x_rt = _batch(iso.hyperboloid_to_halfspace)(_batch(iso.halfspace_to_hyperboloid)(halfspace_points, c), c)
+    assert jnp.allclose(x_rt, halfspace_points, atol=atol, rtol=rtol)
+
+    h_rt = _batch(iso.halfspace_to_hyperboloid)(_batch(iso.hyperboloid_to_halfspace)(hyperboloid_points, c), c)
+    assert jnp.allclose(h_rt, hyperboloid_points, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("c", [1e-3, 1e-1, 10.0, 100.0])
+def test_halfspace_hyperboloid_extreme_curvatures(c: float):
+    """float64-only: both round trips at extreme curvatures (points scaled by 1/√c)."""
+    x = _hs_hyperboloid_points(jax.random.PRNGKey(2027), c, jnp.float64)
+    x_rt = _batch(iso.hyperboloid_to_halfspace)(_batch(iso.halfspace_to_hyperboloid)(x, c), c)
+    assert jnp.allclose(x_rt, x, atol=1e-9, rtol=1e-9), f"HS->H->HS round-trip failed at c={c}"
+
+    spatial = jax.random.normal(jax.random.PRNGKey(2028), (N_POINTS, DIM), dtype=jnp.float64) / jnp.sqrt(c)
+    ambient = jnp.concatenate([jnp.zeros((N_POINTS, 1), dtype=jnp.float64), spatial], axis=1)
+    X = _batch(Hyperboloid(dtype=jnp.float64).proj)(ambient, c)
+    X_rt = _batch(iso.halfspace_to_hyperboloid)(_batch(iso.hyperboloid_to_halfspace)(X, c), c)
+    assert jnp.allclose(X_rt, X, atol=1e-9, rtol=1e-9), f"H->HS->H round-trip failed at c={c}"
+
+
+def test_halfspace_hyperboloid_origin_mapping(curvature: float, dtype: jnp.dtype, tolerance: tuple[float, float]):
+    """The half-space origin ``e_n/√c`` maps to the hyperboloid origin ``[1/√c, 0, ...]``, and back."""
+    c = curvature
+    atol, rtol = tolerance
+    hs_origin = _halfspace_origin(c, dtype)
+    hyperboloid_origin = jnp.zeros(DIM + 1, dtype=dtype).at[0].set(jnp.sqrt(1.0 / c))
+
+    assert jnp.allclose(iso.halfspace_to_hyperboloid(hs_origin, c), hyperboloid_origin, atol=atol, rtol=rtol)
+    assert jnp.allclose(iso.hyperboloid_to_halfspace(hyperboloid_origin, c), hs_origin, atol=atol, rtol=rtol)
+
+
+def test_halfspace_hyperboloid_preserves_distance(
+    manifolds: tuple[Poincare, Hyperboloid, ProperVelocity],
+    halfspace_points: jnp.ndarray,
+    hyperboloid_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """``d_H(ψx, ψy) = d_HS(x, y)`` and ``d_HS(ψ⁻¹X, ψ⁻¹Y) = d_H(X, Y)``, ``d_HS`` from the NumPy closed form."""
+    _, hyperboloid, _ = manifolds
+    c = curvature
+    atol, rtol = tolerance
+    n = N_POINTS // 2
+
+    def dist_h(a, b):
+        return np.asarray(jax.vmap(lambda p, q: hyperboloid.dist(p, q, c, version_idx=VERSION_DEFAULT))(a, b))
+
+    xs, ys = halfspace_points[:n], halfspace_points[n : 2 * n]
+    d_oracle = _halfspace_dist_oracle(np.asarray(xs), np.asarray(ys), c)
+    d_h = dist_h(_batch(iso.halfspace_to_hyperboloid)(xs, c), _batch(iso.halfspace_to_hyperboloid)(ys, c))
+    assert np.allclose(d_h, d_oracle, atol=atol, rtol=rtol), "HS -> Hyperboloid not an isometry"
+
+    Xs, Ys = hyperboloid_points[:n], hyperboloid_points[n : 2 * n]
+    d_hs = _halfspace_dist_oracle(
+        np.asarray(_batch(iso.hyperboloid_to_halfspace)(Xs, c)), np.asarray(_batch(iso.hyperboloid_to_halfspace)(Ys, c)), c
+    )
+    assert np.allclose(d_hs, dist_h(Xs, Ys), atol=atol, rtol=rtol), "Hyperboloid -> HS not an isometry"
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0, 4.0])
+def test_halfspace_hyperboloid_far_points_round_trip_without_cancellation(c: float):
+    """float32 regression: far points with ``X_n ≈ X₀`` round-trip; the literal ``X₀ - X_n`` does not.
+
+    Far up the axis and out along the horosphere through the origin, ``X₀ - X_n`` is ``O(e^{-a})``
+    against ``O(e^{a})`` operands: the literal difference is wrong by ≥ 1 % (or ``inf``, from
+    ``√c·x_n ≈ 6e3``), while the rationalized ``(1/c + ||X_mid||²)/(X₀ + X_n)`` is accurate to a few
+    ulps. Far below the origin ``X_n < 0`` and both agree. The images stay on the hyperboloid.
+    """
+    x_BD = _hs_hyperboloid_far_points(c)
+    n_cancel = 7  # the first 7 rows are the far-up and horosphere families
+    X_BA = _batch(iso.halfspace_to_hyperboloid)(jnp.asarray(x_BD), c)
+    assert X_BA.dtype == jnp.float32
+    hyperboloid = Hyperboloid(dtype=jnp.float32)
+    assert jnp.all(jax.vmap(lambda X: hyperboloid.is_in_manifold(X, c, atol=1e-5))(X_BA))
+
+    x_rt = np.asarray(_batch(iso.hyperboloid_to_halfspace)(X_BA, c))
+    assert np.allclose(x_rt, x_BD, rtol=1e-5, atol=0.0), np.abs(x_rt / x_BD - 1).max(axis=1)
+
+    x_lit = np.asarray(_hs_hyperboloid_literal_inverse(X_BA, c))
+    with np.errstate(invalid="ignore"):
+        err_lit_B = np.abs(x_lit / x_BD - 1).max(axis=1)
+    err_lit_B = np.where(np.isfinite(err_lit_B), err_lit_B, np.inf)
+    assert np.median(err_lit_B[:n_cancel]) > 1e-2, f"negative control did not fail: {err_lit_B[:n_cancel]}"
+    assert np.all(err_lit_B[n_cancel:] < 1e-5), "literal should be exact where X_n < 0"
+
+
+def test_halfspace_hyperboloid_matches_cayley_through_poincare(
+    halfspace_points: jnp.ndarray,
+    poincare_points: jnp.ndarray,
+    curvature: float,
+    tolerance: tuple[float, float],
+):
+    """HS→H→P equals the NumPy Cayley transform, and P→H→HS equals its NumPy inverse.
+
+    Cayley: ``p = (2√c·x_s, c||x||² - 1) / (√c·(1 + 2√c·x_n + c||x||²))``. Inverse, with
+    ``m = c||p_s||² + (1 - √c·p_n)²``: ``x_s = 2p_s/m``, ``x_n = (1 - c||p||²)/(√c·m)``.
+    """
+    c = curvature
+    atol, rtol = tolerance
+    sqrt_c = np.sqrt(c)
+
+    x = np.asarray(halfspace_points, dtype=np.float64)
+    sq_B1 = np.sum(x**2, axis=-1, keepdims=True)
+    denom_B1 = sqrt_c * (1.0 + 2.0 * sqrt_c * x[:, -1:] + c * sq_B1)
+    p_expected = np.concatenate([2.0 * sqrt_c * x[:, :-1], c * sq_B1 - 1.0], axis=1) / denom_B1
+    p = _batch(iso.hyperboloid_to_poincare)(_batch(iso.halfspace_to_hyperboloid)(halfspace_points, c), c)
+    assert np.allclose(np.asarray(p), p_expected, atol=atol, rtol=rtol), "HS->H->P != Cayley"
+
+    p = np.asarray(poincare_points, dtype=np.float64)
+    m_B1 = c * np.sum(p[:, :-1] ** 2, axis=-1, keepdims=True) + (1.0 - sqrt_c * p[:, -1:]) ** 2
+    x_expected = np.concatenate(
+        [2.0 * p[:, :-1] / m_B1, (1.0 - c * np.sum(p**2, axis=-1, keepdims=True)) / (sqrt_c * m_B1)], axis=1
+    )
+    x_hs = _batch(iso.hyperboloid_to_halfspace)(_batch(iso.poincare_to_hyperboloid)(poincare_points, c), c)
+    assert np.allclose(np.asarray(x_hs), x_expected, atol=atol, rtol=rtol), "P->H->HS != inverse Cayley"
+
+
+def test_halfspace_hyperboloid_jit_and_vmap_compatibility(
+    halfspace_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """Both maps are JIT- and vmap-compatible, shape- and dtype-correct, and match eager."""
+    c = curvature
+    atol, rtol = tolerance
+
+    X = jax.jit(_batch(iso.halfspace_to_hyperboloid))(halfspace_points, c)
+    assert X.shape == (N_POINTS, DIM + 1) and X.dtype == dtype
+    assert jnp.allclose(X, _batch(iso.halfspace_to_hyperboloid)(halfspace_points, c), atol=atol, rtol=rtol)
+
+    x = jax.jit(_batch(iso.hyperboloid_to_halfspace))(X, c)
+    assert x.shape == (N_POINTS, DIM) and x.dtype == dtype
+    assert jnp.allclose(x, _batch(iso.hyperboloid_to_halfspace)(X, c), atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("dim", [1, 2, 5, 10])
+def test_halfspace_hyperboloid_dimension_consistency(dim: int):
+    """Both maps handle any dimension, including dim = 1 (empty ``x_s``: the vertical axis only)."""
+    c = 1.0
+    x = jnp.concatenate([jnp.linspace(-0.3, 0.3, dim - 1, dtype=jnp.float64), jnp.array([0.7])])
+    X = iso.halfspace_to_hyperboloid(x, c)
+    assert X.shape == (dim + 1,)
+    assert Hyperboloid(dtype=jnp.float64).is_in_manifold(X, c, 1e-12)
+    x_rt = iso.hyperboloid_to_halfspace(X, c)
+    assert x_rt.shape == (dim,)
+    assert jnp.allclose(x_rt, x, atol=1e-12, rtol=1e-12)
+
+
+def test_halfspace_hyperboloid_derivatives():
+    """float64: both Jacobians are finite and match central finite differences at the origin, on the
+    hemisphere ``c||x||² = 1`` (``X_n = 0``, the inverse's branch boundary) and at the far points.
+
+    Two closed-form oracles: at the origin both maps have the identity as differential on the spatial
+    part (``dX_mid = dx_s``, ``dX_n = dx_n`` at ``x = e_n/√c``, ``dX₀ = 0``), and the composition
+    ``inverse ∘ forward`` has the identity Jacobian everywhere — through the ``where`` on ``X_n ≥ 0`` the
+    inverse's branches differ in their ambient ``X₀`` partial, so only this sheet derivative is fixed.
+    At ``x = (0, 0, 1e-10)`` ``X₀ + X_n`` rounds to exactly 0: an inverse whose unused rationalized
+    branch divides by the plain ``X₀ + X_n`` (single ``where``) has a non-finite Jacobian there.
+    """
+    c = 0.7
+    fwd, inv = iso.halfspace_to_hyperboloid, iso.hyperboloid_to_halfspace
+    origin = _halfspace_origin(c, jnp.float64)
+    hemisphere = jnp.array([0.6, 0.0, 0.8], dtype=jnp.float64) / jnp.sqrt(c)
+    below_origin = jnp.array([0.0, 0.0, 1e-10], dtype=jnp.float64)
+    assert fwd(below_origin, c)[0] + fwd(below_origin, c)[-1] == 0.0, "precondition: X₀ + X_n rounds to 0"
+    points = [origin, hemisphere, below_origin, *jnp.asarray(_hs_hyperboloid_far_points(c), dtype=jnp.float64)]
+
+    def fd_jacobian(fn, p):
+        # Per-coordinate relative step: the far points span 1e-5..1e4 across coordinates.
+        h_A = 1e-6 * jnp.maximum(jnp.abs(p), 1e-2 * jnp.max(jnp.abs(p)))
+        cols = [(fn(p + h * e, c) - fn(p - h * e, c)) / (2 * h) for h, e in zip(h_A, jnp.eye(p.shape[0]), strict=True)]
+        return jnp.stack(cols, axis=1)
+
+    for x in points:
+        for fn, p in ((fwd, x), (inv, fwd(x, c))):
+            jac = jax.jacrev(fn)(p, c)
+            assert jnp.all(jnp.isfinite(jac)), (fn.__name__, p)
+            assert jnp.allclose(jac, fd_jacobian(fn, p), rtol=1e-5, atol=1e-7 * jnp.max(jnp.abs(jac))), (fn.__name__, p)
+        assert jnp.allclose(jax.jacrev(lambda y: inv(fwd(y, c), c))(x), jnp.eye(DIM), atol=1e-9), x
+
+    J_fwd = jax.jacrev(fwd)(origin, c)
+    assert jnp.allclose(J_fwd[0], 0.0, atol=1e-12) and jnp.allclose(J_fwd[1:], jnp.eye(DIM), atol=1e-12)
+    J_inv = jax.jacrev(inv)(fwd(origin, c), c)
+    assert jnp.allclose(J_inv[:, 1:], jnp.eye(DIM), atol=1e-12)
+
+
+def test_halfspace_hyperboloid_float32_preserved_under_x64(curvature: float):
+    """With x64 enabled, a float32 point stays float32 whether ``c`` is a Python or a float64 scalar."""
+    x = _hs_hyperboloid_points(jax.random.PRNGKey(2029), curvature, jnp.float32)
+    for c in (curvature, jnp.asarray(curvature, dtype=jnp.float64)):
+        X = _batch(iso.halfspace_to_hyperboloid)(x, c)
+        assert X.dtype == jnp.float32
+        assert _batch(iso.hyperboloid_to_halfspace)(X, c).dtype == jnp.float32
 
 
 # ---------------------------------------------------------------------------
