@@ -81,6 +81,7 @@ jobs:
           # Top-level: core manifolds
           - "test_manifolds.py test_manifold_oracles.py"
           - "test_stereographic.py"
+          - "test_klein.py"
           - "test_class_based_manifolds.py test_manifold_curvature.py"
           - "test_product_manifold.py test_pv_manifold.py"
           - "test_isometry_mappings.py test_docs_security.py"

@@ -12,6 +12,7 @@ import pytest
 from hyperbolix.manifolds import (
     Euclidean,
     Hyperboloid,
+    Klein,
     Poincare,
     ProductManifold,
     ProperVelocity,
@@ -89,7 +90,7 @@ def test_distmat_contract(hyperboloid, poincare, manifold_name: str):
 
 
 def _manifold_case(name: str, n_points: int = 12, seed: int = 3):
-    """``(manifold, c, points, version_idx)`` for each of the six manifolds.
+    """``(manifold, c, points, version_idx)`` for each of the seven manifolds.
 
     Curvature is a per-factor tuple for ``ProductManifold`` and signed for ``Stereographic``,
     so the case table also covers the two non-scalar/non-positive curvature shapes the helpers
@@ -115,6 +116,11 @@ def _manifold_case(name: str, n_points: int = 12, seed: int = 3):
     if name == "proper_velocity":
         pts = jnp.asarray(gen.normal(0.0, 1.0, size=(n_points, dim)), dtype=jnp.float64)
         return ProperVelocity(dtype=jnp.float64), 1.0, pts, 0
+
+    if name == "klein":
+        manifold = Klein(dtype=jnp.float64)
+        raw = jnp.asarray(0.3 * gen.normal(0.0, 1.0, size=(n_points, dim)), dtype=jnp.float64)
+        return manifold, 1.0, jax.vmap(manifold.proj, in_axes=(0, None))(raw, 1.0), manifold.VERSION_DEFAULT
 
     if name == "stereographic_hyperbolic":
         manifold = Stereographic(dtype=jnp.float64)
@@ -146,6 +152,7 @@ MANIFOLD_CASES = [
     "poincare",
     "hyperboloid",
     "proper_velocity",
+    "klein",
     "stereographic_hyperbolic",
     "stereographic_spherical",
     "product",
@@ -154,7 +161,7 @@ MANIFOLD_CASES = [
 
 @pytest.mark.parametrize("case", MANIFOLD_CASES)
 def test_compute_pairwise_distances_works_on_every_manifold(case: str):
-    """The distance matrix is the manifold's own ``dist`` on every pair, for all six manifolds.
+    """The distance matrix is the manifold's own ``dist`` on every pair, for all seven manifolds.
 
     The value oracle (an off-diagonal entry against a direct ``manifold.dist`` call) is what
     makes this more than a smoke test: three of these cases used to raise ``TypeError`` outright,

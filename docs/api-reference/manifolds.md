@@ -4,13 +4,14 @@ This page documents the core manifold operations in Hyperbolix. Each manifold is
 
 ## Overview
 
-Hyperbolix provides five base manifold classes plus a composition class:
+Hyperbolix provides six base manifold classes plus a composition class:
 
 - **Euclidean**: Flat Euclidean space (baseline)
 - **Poincaré Ball**: Conformal model of hyperbolic space
 - **Hyperboloid**: Lorentz/Minkowski model of hyperbolic space
 - **Proper Velocity**: Unconstrained $\mathbb{R}^n$ model from special relativity (Chen et al. 2026)
 - **κ-Stereographic**: Signed-curvature model unifying hyperbolic, Euclidean, and spherical geometry in one manifold (Bachmann et al. 2020)
+- **Klein**: Beltrami–Klein ball model — straight-chord geodesics and Einstein gyrovector operations (Mao et al. 2024; Zhang et al. 2026)
 - **Product Manifold**: Heterogeneous-curvature product spaces $M_1 \times M_2 \times \dots \times M_n$ (Gu et al. 2019)
 
 All manifolds share a common interface defined by the `Manifold` protocol and support:
@@ -213,6 +214,46 @@ The Proper Velocity (PV) model — an **unconstrained** $\mathbb{R}^n$ represent
       show_source: true
       heading_level: 3
 
+## Klein
+
+The Beltrami–Klein model (the Klein model) uses the same open ball $\lVert x\rVert < 1/\sqrt{c}$ as the Poincaré ball, with sectional curvature $-c$, but its geodesics are the **straight chords** of the ball. The metric is not conformal:
+
+$$g_x(u, v) = \frac{\langle u, v\rangle}{g_x} + \frac{c\,\langle x, u\rangle\langle x, v\rangle}{g_x^2}, \qquad g_x = 1 - c\lVert x\rVert^2.$$
+
+The gyrovector structure is Ungar's Einstein gyrovector space (Ungar 2009): `addition` is Einstein addition $\oplus_E$ and `scalar_mul` is Einstein scalar multiplication $\otimes_E$. `Klein` conforms to the scalar-`c` `Manifold` protocol.
+
+!!! info "Relation to the Poincaré ball and the hyperboloid"
+    A Klein point at geodesic distance $d_0$ from the origin has $\sqrt{c}\,\lVert x\rVert = \tanh(\sqrt{c}\,d_0)$, where a Poincaré point has $\tanh(\sqrt{c}\,d_0/2)$. The isometries in `isometry_mappings` are the Einstein half and the Möbius double:
+
+    - `klein_to_poincare(k)` $= k/(1 + \sqrt{g_k})$, which is $\tfrac12 \otimes_E k$
+    - `poincare_to_klein(p)` $= 2p/(1 + c\lVert p\rVert^2)$, which is $2 \otimes_M p$
+    - `klein_to_hyperboloid(k)` $= \big(1/(\sqrt{c}\sqrt{g_k}),\ k/\sqrt{g_k}\big)$, `hyperboloid_to_klein(x)` $= x_s/(\sqrt{c}\,x_0)$
+    - `klein_to_pv(k)` $= k/\sqrt{g_k}$, `pv_to_klein(x)` $= x/\sqrt{1 + c\lVert x\rVert^2}$
+
+    Under the first pair, Einstein addition corresponds to Möbius addition. Einstein and Möbius scalar multiplication have the same formula, and so do the two models' `expmap_0`; `Klein` reuses Poincaré's code for both.
+
+!!! note "Distance: one formulation, cancellation-free"
+    `dist` has a single implementation; `version_idx` is accepted and ignored, as for `ProperVelocity`. With $w = y - x$,
+
+    $$d(x, y) = \frac{1}{\sqrt{c}}\,\operatorname{arsinh}\sqrt{\frac{c\,\big[g_x\lVert w\rVert^2 + c\,\langle x, w\rangle^2\big]}{g_x\, g_y}},$$
+
+    whose numerator is a sum of non-negative terms. It never forms $1 - c\langle x, y\rangle$ and needs no `acosh`/`atanh` near 1. `logmap` and `ptransp` are built from the same quantity. The derivation and measured errors are in the [numerical-stability guide](../user-guide/numerical-stability.md#klein-numerics).
+
+!!! note "Einstein extras"
+    Beyond the protocol, `Klein` provides:
+
+    - `gyro_difference(x, y, c)`: $(\ominus x) \oplus_E y$, evaluated without the $1 - c\langle x, y\rangle$ cancellation
+    - `lorentz_factor(x, c)`: $\gamma_x = 1/\sqrt{g_x}$, which is the hyperboloid's $\sqrt{c}\,X_0$
+    - `einstein_midpoint(x_ND, weights_N, c)`: $\sum_i w_i \gamma_i x_i / \sum_i w_i \gamma_i$ (`weights_N=None` for uniform weights), equal to the normalized weighted Lorentz centroid mapped to the Klein ball
+
+!!! warning "Half the Poincaré ball's radius range"
+    `proj` uses the Poincaré ball's `eps**0.75` boundary margin, but because a Klein point sits at $\tanh(a)$ rather than $\tanh(a/2)$ ($a = \sqrt{c}\,d_0$, the scaled radius), the largest representable radius at $c = 1$ is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$ = **6.32** in float32 and **13.86** in float64, half of Poincaré's 12.65 / 27.7. See [the chart ceiling and floor](../user-guide/numerical-stability.md#klein-chart-ceiling).
+
+::: hyperbolix.manifolds.klein.Klein
+    options:
+      show_source: true
+      heading_level: 3
+
 ## Product Manifold
 
 Heterogeneous-curvature product space $P = M_1 \times M_2 \times \dots \times M_n$ where each factor $M_i$ can be any base manifold (Poincaré, Hyperboloid, Euclidean, Proper Velocity) with its own curvature $c_i$. Points are represented as flat concatenated arrays of shape `(total_dim,)`.
@@ -236,10 +277,13 @@ where $x_i$, $y_i$ are the per-factor slices of the flat points.
 
 ## Isometry Mappings
 
-Distance-preserving maps between the Poincaré ball, hyperboloid, and Proper
-Velocity (PV) models — all coordinate models of the same hyperbolic space.
-Provides Poincaré ↔ Hyperboloid, Poincaré ↔ PV (PVNN Eq. 4), and the direct
-Hyperboloid ↔ PV map (PV coordinates are the space-like part of the 4-velocity).
+Distance-preserving maps between the Poincaré ball, hyperboloid, Proper
+Velocity (PV), and Klein models — all coordinate models of the same hyperbolic space.
+Provides Poincaré ↔ Hyperboloid, Poincaré ↔ PV (PVNN Eq. 4), the direct
+Hyperboloid ↔ PV map (PV coordinates are the space-like part of the 4-velocity),
+and Klein ↔ Poincaré / Hyperboloid / PV (`klein_to_poincare`, `poincare_to_klein`,
+`klein_to_hyperboloid`, `hyperboloid_to_klein`, `klein_to_pv`, `pv_to_klein`; a Klein
+point is an Einstein velocity, and its proper velocity is `k/√g_k`).
 
 ::: hyperbolix.manifolds.isometry_mappings
     options:
@@ -349,6 +393,30 @@ grad_riem = pv.egrad2rgrad(grad_euc, x, c)
 # Retraction is exact Euclidean addition (PV is unconstrained)
 x_next = pv.retraction(v, x, c)
 assert jnp.allclose(x_next, x + v)
+```
+
+### Klein Operations
+
+```python
+import jax.numpy as jnp
+from hyperbolix.manifolds import Klein, isometry_mappings
+
+klein = Klein()
+c = 1.0
+
+x = jnp.array([0.3, 0.5])   # points in the ball c‖x‖² < 1
+y = jnp.array([-0.2, 0.4])
+
+d = klein.dist(x, y, c)          # cancellation-free arsinh form
+v = klein.logmap(y, x, c)        # parallel to the chord y - x
+y_rec = klein.expmap(v, x, c)    # back to y
+
+gamma = klein.lorentz_factor(x, c)                         # 1/√(1 - c‖x‖²)
+m = klein.einstein_midpoint(jnp.stack([x, y]), None, c)    # = Lorentz centroid
+
+# Einstein addition in Klein = Möbius addition in Poincaré, through the isometry
+p = isometry_mappings.klein_to_poincare(x, c)
+x_back = isometry_mappings.poincare_to_klein(p, c)
 ```
 
 ### Product Manifolds (Mixed Curvature)

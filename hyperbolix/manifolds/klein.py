@@ -187,8 +187,9 @@ def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     :func:`_xcothx`, so ``v = 0`` gives ``x`` with Jacobian exactly the identity. The denominator is
     positive: ``θ·coth θ > θ ≥ c|x·v|/g_x``.
 
-    Mao et al.'s reference ``_klein_expmap`` omits the factor ``c`` in the denominator's second
-    term (exact only at ``c = 1``).
+    The Zhang et al. (2026) reference implementation's ``_klein_expmap`` (sc-zyl/Klein_hml,
+    ``Hyperbolic/hmath.py``) omits the factor ``c`` in the denominator's second term (exact only
+    at ``c = 1``).
 
     ``g_x‖v‖²`` overflows float32 past tangent coordinate ~1.8e19 (a diverging network); there
     ``θ = inf`` and the result is the base point ``x``, as for ``Poincare.expmap``.
@@ -228,8 +229,11 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
 
 def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """``log_0(y) = arsinhc(s)·y/√g_y``, ``s = √c‖y‖/√g_y`` (:func:`_logmap` at ``x = 0``)."""
-    sqrt_g_y = jnp.sqrt(_gap(y, c))
-    s = jnp.sqrt(c) * safe_norm(y) / sqrt_g_y
+    # Last-axis reductions with `keepdims` rather than `_gap`'s `jnp.dot`: like Poincaré's
+    # `_logmap_0`, an implicitly batched `(B, dim)` input must give the per-row result.
+    y2 = jnp.sum(y**2, axis=-1, keepdims=True)
+    sqrt_g_y = jnp.sqrt(floor_at(1.0 - c * y2, _boundary_floor(y, c)))
+    s = jnp.sqrt(c) * safe_norm(y)[..., None] / sqrt_g_y
     return _asinhc(s) * y / sqrt_g_y
 
 

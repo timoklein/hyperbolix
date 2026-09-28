@@ -7,7 +7,8 @@ transcription, or a finite-difference estimate — rather than against another l
 
 Audit specs covered (F6-M1): M1-01 MLR value oracles, M1-02 exact Riemannian-gradient leg,
 M1-04 projection boundary clamp, M1-08 sinh lift, M1-09 beta-concatenation, M1-10 conformal factor
-at signed curvature, M1-11 protocol conformance, M1-12 isometry gradients, M1-14 Lorentz boost.
+at signed curvature, M1-11 protocol conformance, M1-12 isometry gradients, M1-14 Lorentz boost,
+M1-16 Klein ball (Decimal dist/logmap battery, analytic configurations, longdouble gyro/transport).
 
 Dimension key:
     B: batch          P: number of MLR classes / hyperplanes
@@ -17,6 +18,7 @@ Dimension key:
 from __future__ import annotations
 
 import decimal
+import functools
 from typing import NamedTuple
 
 import jax
@@ -28,6 +30,7 @@ import scipy.special
 from hyperbolix.manifolds import (
     Euclidean,
     Hyperboloid,
+    Klein,
     Manifold,
     Poincare,
     ProductManifold,
@@ -627,9 +630,10 @@ def test_lorentz_boost_of_the_origin_is_the_identity():
         Hyperboloid(),
         ProperVelocity(),
         Stereographic(),
+        Klein(),
         ProductManifold((Poincare(), 2), (Hyperboloid(), 3)),
     ],
-    ids=["Euclidean", "Poincare", "Hyperboloid", "ProperVelocity", "Stereographic", "Product"],
+    ids=["Euclidean", "Poincare", "Hyperboloid", "ProperVelocity", "Stereographic", "Klein", "Product"],
 )
 def test_every_manifold_satisfies_the_manifold_protocol(manifold):
     """Every shipped manifold is a structural ``Manifold``.
@@ -3031,3 +3035,615 @@ def test_hyperboloid_logmap_squared_norm_gradient_is_exact_on_the_collinear_set(
                     got_D = np.asarray(jax.grad(logsq)(jnp.asarray(y_s_D), x_A, c), dtype=np.float64)
                     err = float(np.max(np.abs(got_D - expected_D))) / comparison
                     assert err <= bound, f"c={c} dim={dim} a={a} r_y/r_x={sign * scale}: {err:.3e}"
+
+
+# =============================================================================================
+# M1-16 — Klein ball: Decimal oracle battery for dist / logmap
+#
+# The Klein chart is the Poincaré ball's Euclidean ball with straight-chord geodesics and the
+# non-conformal metric ``g_x(u, v) = (u·v)/g_x + c(x·u)(x·v)/g_x²``, ``g_x = 1 - c‖x‖²``. A point at
+# scaled radius ``a = √c·d₀`` has ``√c‖x‖ = tanh(a)`` and ``g_x = sech²(a)``, so the chart ends where
+# ``sech²(a)`` reaches ``_proj``'s boundary floor: ``a ≈ 6.3`` (float32) / ``13.9`` (float64) at
+# ``c = 1``. The library ``dist`` is ``asinh(√(c·N/(g_x·g_y)))/√c`` with ``N = g_x‖w‖² + c(x·w)²``,
+# ``w = y - x`` — a sum of non-negative terms, where the literal
+# ``acosh((1 - c x·y)/√(g_x·g_y))`` subtracts two O(1) numbers to get ``cosh(√c·d) - 1``.
+#
+# The oracle mirrors the M1-15 hyperboloid battery: the points are STORED in the dtype under test,
+# and every dependent quantity (``g_x``, ``g_y``, ``w``, ``N``) is formed from the stored coordinates
+# in 80-digit Decimal, so input rounding is never charged to the library. What is charged is the
+# arithmetic error of any float evaluation of the chart, whose dominant term is the boundary gap —
+# see :func:`_klein_gap_rounding`.
+# =============================================================================================
+
+_KLEIN_RADII = {
+    jnp.float32: (0.01, 1.0, 3.0, 5.0, 6.0),
+    jnp.float64: (0.01, 1.0, 3.0, 5.0, 6.0, 10.0, 13.0),
+}
+"""Scaled radius ``a = √c·d₀`` of the first point, per dtype, capped below the chart's ceiling."""
+
+_KLEIN_CONFIGS = (
+    # ("radial", Δ): second point on the SAME ray at scaled radius a + Δ (Δ < 0 goes inward, and
+    # through the origin to the mirrored side when a + Δ < 0).
+    ("radial", 1e-6),
+    ("radial", 1e-3),
+    ("radial", 1.0),
+    ("radial", -1.0),
+    # ("angular", ψ): second point at the SAME radius, angle ψ at the origin.
+    ("angular", 1e-3),
+    ("angular", 0.1),
+    ("angular", 1.0),
+    ("angular", np.pi),
+    # ("generic", t): y = x + t·(1 - tanh a)/√c·v, v a fixed random unit vector — a step of a fixed
+    # fraction of the Euclidean distance to the boundary, i.e. a CLOSE pair at every radius.
+    ("generic", 1e-2),
+    ("generic", 0.3),
+)
+
+
+class _KleinCase(NamedTuple):
+    """One stored (x, y) pair plus its Decimal-oracle truth. See ``_klein_case``."""
+
+    x_D: jnp.ndarray
+    y_D: jnp.ndarray
+    d_ref: float
+    u_ref_D: np.ndarray  # log_x(y), Decimal oracle cast to float64
+    g_x: float  # 1 - c‖x‖² of the stored x, Decimal oracle cast to float64
+    g_y: float
+    label: str
+
+
+def _klein_gap_floor(c: float, dtype) -> float:
+    """``_gyrovector_core._boundary_floor`` restated: the smallest gap on a ``_proj``-ected point.
+
+    ``_proj`` caps the norm at ``1/√c - m`` with ``m = eps**0.75``, so ``1 - c‖x‖² ≥ 2√c·m - c·m²``.
+    The library floors ``g_x`` there; a case whose stored gap sits near it is past the chart's
+    ceiling and is skipped rather than measured against the floor.
+    """
+    m = float(np.finfo(dtype).eps) ** 0.75
+    return 2.0 * np.sqrt(c) * m - c * m * m
+
+
+def _klein_gap_rounding(g_x: float, g_y: float, eps: float) -> float:
+    """Relative error of a float evaluation of the boundary gaps: ``eps/min(g_x, g_y)`` = ``eps·cosh²(a)``.
+
+    Forming ``c‖x‖²`` costs one rounding of an O(1) number — an absolute error ``~eps`` — and the
+    subtraction ``1 - c‖x‖²`` hands that absolute error to a result of size ``g_x = sech²(a)``, so
+    the gap is known only to relative ``eps/g_x = eps·cosh²(a)``. Every Klein pair quantity divides
+    by ``g_x·g_y`` (``S²`` in ``dist``, ``√(g_x/g_y)`` in ``logmap``, ``g_x²`` in ``tangent_norm``) and
+    inherits it; the farther point dominates. This is not input rounding (the oracle reads the
+    stored coordinates) but the arithmetic floor of the chart itself: the gap is the one quantity
+    the ball chart has to form by subtraction.
+
+    Worked number: float32 at ``a = 4``, ``g = sech²(4) = 1.34e-3``, so
+    ``eps/g = 1.19e-7/1.34e-3 = 8.9e-5``; at ``a = 6`` it is ``4.8e-3``. Float64 at ``a = 13``:
+    ``2.2e-16·cosh²(13) = 1.5e-5``. The measured library error tracks it (probe
+    ``logs/2026-09-28_klein-manifold/probe_klein.out``: median 1.2e-5 at ``a = 4``, 7.5e-4 at
+    ``a = 6`` in float32).
+    """
+    return eps / min(g_x, g_y)
+
+
+def _klein_decimal_oracle(x_D: np.ndarray, y_D: np.ndarray, c: float, prec: int = 80):
+    """``(d, log_x(y), g_x, g_y)`` in ``prec``-digit Decimal from the stored coordinates.
+
+    ``sinh²(√c·d) = c·N/(g_x·g_y)`` with ``N = g_x‖w‖² + c(x·w)²``, ``w = y - x``;
+    ``d = ln(s + √(s² + 1))/√c`` with ``s = sinh(√c·d)``. Klein geodesics are straight chords, so
+    ``log_x(y) = d·w/‖w‖_x`` with ``‖w‖_x = √N/g_x``. Converting a binary float to ``Decimal`` is
+    exact, and at 80 digits the gap's cancellation (11 digits at ``a = 13``) cannot reach the result.
+    """
+    with decimal.localcontext() as ctx:
+        ctx.prec = prec
+        c_d = decimal.Decimal(float(c))
+        xs = [decimal.Decimal(float(v)) for v in x_D]
+        ys = [decimal.Decimal(float(v)) for v in y_D]
+        ws = [b - a for a, b in zip(xs, ys, strict=True)]
+        g_x = 1 - c_d * sum(v * v for v in xs)
+        g_y = 1 - c_d * sum(v * v for v in ys)
+        xw = sum(a * b for a, b in zip(xs, ws, strict=True))
+        n = g_x * sum(v * v for v in ws) + c_d * xw * xw
+        s2 = c_d * n / (g_x * g_y)
+        s = s2.sqrt()
+        d = (s + (s2 + 1).sqrt()).ln() / c_d.sqrt()
+        coef = d * g_x / n.sqrt() if n > 0 else decimal.Decimal(0)
+        return d, [coef * v for v in ws], g_x, g_y
+
+
+def _klein_generic_direction(dim: int) -> np.ndarray:
+    """Fixed random unit vector for the ``generic`` configurations."""
+    v = np.random.default_rng([23, dim]).normal(size=dim)
+    return v / np.linalg.norm(v)
+
+
+def _klein_case(a: float, kind: str, param: float, c: float, dim: int, dtype) -> _KleinCase | None:
+    """Build one oracle case, or ``None`` if the stored pair coincides or leaves the chart."""
+    e1, e2 = _hyperboloid_basis(dim)
+    sqrt_c = np.sqrt(c)
+    x64 = (np.tanh(a) / sqrt_c) * e1
+    if kind == "radial":
+        y64 = (np.tanh(a + param) / sqrt_c) * e1
+    elif kind == "angular":
+        y64 = (np.tanh(a) / sqrt_c) * (np.cos(param) * e1 + np.sin(param) * e2)
+    else:
+        y64 = x64 + param * (1.0 - np.tanh(a)) / sqrt_c * _klein_generic_direction(dim)
+    # Built in float64, THEN rounded: the oracle below reads the rounded values.
+    x_D = np.asarray(x64, dtype=dtype)
+    y_D = np.asarray(y64, dtype=dtype)
+
+    d_dec, u_dec, g_x_dec, g_y_dec = _klein_decimal_oracle(x_D, y_D, c)
+    d_ref, g_x, g_y = float(d_dec), float(g_x_dec), float(g_y_dec)
+    if d_ref == 0.0 or min(g_x, g_y) < 2.0 * _klein_gap_floor(c, dtype):
+        return None
+    u_ref_D = np.array([float(v) for v in u_dec])
+    label = f"c={c} dim={dim} a={a} {kind}({param:g}) d={d_ref:.6g}"
+    return _KleinCase(jnp.asarray(x_D), jnp.asarray(y_D), d_ref, u_ref_D, g_x, g_y, label)
+
+
+@functools.cache
+def _klein_cases(c: float, dtype) -> tuple[_KleinCase, ...]:
+    """Every case of the (radius x configuration x dim) grid that the stored pair can represent."""
+    cases = []
+    for dim in (2, 10):
+        for a in _KLEIN_RADII[dtype]:
+            for kind, param in _KLEIN_CONFIGS:
+                case = _klein_case(a, kind, param, c, dim, dtype)
+                if case is not None:
+                    cases.append(case)
+    return tuple(cases)
+
+
+_KLEIN_DTYPES = [(jnp.float32, 8.0 * float(np.finfo(np.float32).eps)), (jnp.float64, 8.0 * float(np.finfo(np.float64).eps))]
+"""``(dtype, rtol)``: the dtype constant of every Klein bound, ``8·eps`` — its value at the origin.
+
+Measured worst relative error over the cases with ``g_min > 0.5`` (``a < 0.66``): 2.5e-7 = 2.1 eps
+(float32) and 4.3e-16 = 2.0 eps (float64), across ``dist``, ``logmap``, ``tangent_norm`` and the
+symmetry gap (``logs/2026-09-28_klein-manifold/probe_klein_oracle_bounds.out``)."""
+
+_KLEIN_K = 4.0
+"""Multiplier ``K`` of :func:`_klein_gap_rounding`, one value for every battery quantity.
+
+Calibrated on the cases with ``g_min < 0.1`` (``a > 1.8``) after removing the ``8·eps`` constant:
+the worst ``err/(eps/g_min)`` is 1.08 (float64, ``c = 2.5``, ``a = 10``, ``dist`` of a radial 1e-6
+pair) and 0.93 (float32, ``c = 0.3``, ``a = 5``), with a median of 0.06-0.22 depending on the
+quantity (``logs/2026-09-28_klein-manifold/probe_klein_oracle_k_far.out``). ``K = 4`` leaves
+~3.7x of margin over the worst case."""
+
+
+def _klein_tol(case: _KleinCase, dtype, rtol: float) -> float:
+    """Relative bound ``rtol + K·eps·cosh²(a)`` of one battery case."""
+    eps = float(np.finfo(dtype).eps)
+    return rtol + _KLEIN_K * _klein_gap_rounding(case.g_x, case.g_y, eps)
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _KLEIN_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_klein_dist_matches_the_decimal_oracle(dtype, rtol: float, c: float):
+    """``dist`` vs the 80-digit reference at the stored points, relative error ``≤ rtol + K·eps·cosh²(a)``."""
+    manifold = Klein(dtype=dtype)
+    cases = _klein_cases(c, dtype)
+    assert len(cases) >= 40, f"grid collapsed to {len(cases)} cases"
+    for case in cases:
+        d = float(manifold.dist(case.x_D, case.y_D, c))
+        tol = _klein_tol(case, dtype, rtol)
+        assert abs(d - case.d_ref) <= tol * case.d_ref, f"{case.label}: {d} vs {case.d_ref} (rel tol {tol:.3e})"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _KLEIN_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_klein_logmap_matches_the_decimal_oracle(dtype, rtol: float, c: float):
+    """``logmap`` vs ``d·w·g_x/√N`` from the same reference, relative vector error in the max-norm."""
+    manifold = Klein(dtype=dtype)
+    cases = _klein_cases(c, dtype)
+    assert len(cases) >= 40, f"grid collapsed to {len(cases)} cases"
+    for case in cases:
+        u = np.asarray(manifold.logmap(case.y_D, case.x_D, c), dtype=np.float64)
+        scale = float(np.max(np.abs(case.u_ref_D)))
+        err = float(np.max(np.abs(u - case.u_ref_D))) / scale
+        tol = _klein_tol(case, dtype, rtol)
+        assert err <= tol, f"{case.label}: relative logmap error {err:.3e} > {tol:.3e}"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _KLEIN_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_klein_tangent_norm_of_logmap_equals_dist(dtype, rtol: float, c: float):
+    """``‖log_x(y)‖_x == d(x, y)``, both library calls, held to the Decimal ``d_ref``'s bound."""
+    manifold = Klein(dtype=dtype)
+    cases = _klein_cases(c, dtype)
+    assert len(cases) >= 40, f"grid collapsed to {len(cases)} cases"
+    for case in cases:
+        u = manifold.logmap(case.y_D, case.x_D, c)
+        norm = float(manifold.tangent_norm(u, case.x_D, c))
+        tol = _klein_tol(case, dtype, rtol)
+        assert abs(norm - case.d_ref) <= tol * case.d_ref, f"{case.label}: ‖log‖ = {norm} vs d = {case.d_ref}"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _KLEIN_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_klein_dist_is_symmetric_to_the_battery_bound(dtype, rtol: float, c: float):
+    """``d(x, y) == d(y, x)`` to the ``dist`` bound — not bitwise.
+
+    ``N = g_x‖w‖² + c(x·w)²`` is not symmetric term by term (``g_y‖w‖² + c(y·w)²`` is the same number
+    only in exact arithmetic), so the two orders round differently. Each order sits inside the
+    oracle bound on its own, so their gap could in principle need twice it; measured, it needs at
+    most 0.92 of ``eps/g_min`` (median ~1e-4 of it), so one bound is asserted.
+    """
+    manifold = Klein(dtype=dtype)
+    for case in _klein_cases(c, dtype):
+        forward = float(manifold.dist(case.x_D, case.y_D, c))
+        backward = float(manifold.dist(case.y_D, case.x_D, c))
+        tol = _klein_tol(case, dtype, rtol)
+        assert abs(forward - backward) <= tol * case.d_ref, f"{case.label}: {forward} vs {backward}"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _KLEIN_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_klein_literal_acosh_dist_violates_the_battery_bound(dtype, rtol: float, c: float):
+    """Negative control: the literal ``acosh((1 - c x·y)/√(g_x·g_y))/√c`` fails the bound on close far pairs.
+
+    Evaluated in the dtype under test on the same stored cases. For a close pair the argument is
+    ``cosh(√c·d) = 1 + O(d²)``, formed as a quotient of two O(g) numbers that each carry an
+    absolute ``eps`` error — so ``acosh`` reads ``d`` off a difference buried at relative
+    ``eps·cosh²(a)/(c·d²)``. A battery the literal could pass would have no teeth.
+
+    "Close far pair": ``√c·d ≤ 1e-2`` with the farther point at ``g ≤ 0.01`` (``a ≥ 2.3``), 8-28
+    cases per cell. Measured: the literal violates the bound on every one of them in every cell,
+    with a median of 381-6300x the bound (float32) and 6.8e4-1.0e5x (float64), worst 2.0e4-8.2e4x
+    and 1.4e11-2.5e11x; the library ``dist`` stays at ≤ 0.27x on the whole grid. The least-violated
+    single case is 1.07x (float32, ``c = 2.5``), so the assertion is on the median, not on every case.
+    """
+    sqrt_c = np.sqrt(c)
+
+    def literal(x_D, y_D):
+        g_x = 1.0 - c * jnp.dot(x_D, x_D)
+        g_y = 1.0 - c * jnp.dot(y_D, y_D)
+        arg = (1.0 - c * jnp.dot(x_D, y_D)) / jnp.sqrt(g_x * g_y)
+        return jnp.arccosh(jnp.maximum(arg, 1.0)) / sqrt_c
+
+    close_far = [
+        case for case in _klein_cases(c, dtype) if np.sqrt(c) * case.d_ref <= 1e-2 and min(case.g_x, case.g_y) <= 0.01
+    ]
+    assert len(close_far) >= 6, f"only {len(close_far)} close far pairs"
+    ratios = []
+    for case in close_far:
+        d = float(literal(case.x_D, case.y_D))
+        ratios.append(abs(d - case.d_ref) / (_klein_tol(case, dtype, rtol) * case.d_ref))
+    assert float(np.median(ratios)) >= 10.0, f"literal median is only {np.median(ratios):.1f}x the bound"
+    assert max(ratios) >= 100.0, f"literal worst is only {max(ratios):.1f}x the bound"
+
+
+# ---------------------------------------------------------------------------------------------
+# Klein configurations with an analytic answer
+# ---------------------------------------------------------------------------------------------
+
+
+def _decimal_atanh(z: decimal.Decimal) -> decimal.Decimal:
+    """``artanh(z) = ½·ln((1 + z)/(1 - z))`` in the ambient Decimal context."""
+    return ((1 + z) / (1 - z)).ln() / 2
+
+
+def _decimal_scaled_norm(x_D: np.ndarray, c: float) -> decimal.Decimal:
+    """``√c·‖x‖`` of the stored coordinates, in the ambient Decimal context."""
+    return (decimal.Decimal(float(c)) * sum(decimal.Decimal(float(v)) ** 2 for v in x_D)).sqrt()
+
+
+_KLEIN_RAY_CASES = [(dtype, rtol, a) for dtype, rtol in _KLEIN_DTYPES for a in (0.5, *_KLEIN_RADII[dtype][2:])]
+_KLEIN_RAY_IDS = [f"{a:g}-{'f32' if dtype is jnp.float32 else 'f64'}" for dtype, _, a in _KLEIN_RAY_CASES]
+
+
+@pytest.mark.parametrize(("dtype", "rtol", "a"), _KLEIN_RAY_CASES, ids=_KLEIN_RAY_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_klein_dist_on_a_shared_ray_is_the_atanh_radius_difference(dtype, rtol: float, c: float, a: float):
+    """Same ray: ``d = |artanh(√c·r_y) - artanh(√c·r_x)|/√c``; opposite rays: the sum.
+
+    One-dimensional facts about the geodesic through the origin. ``y = x/2`` is an exact halving
+    of every stored component, so the stored pair is collinear by construction (no rounding-level
+    angle) and ``r_y = r_x/2`` exactly; ``-y`` is exact too. The expected values are evaluated in
+    Decimal from the stored ``r_x``, since float64 ``artanh`` at ``√c·r = 1 - 1e-11`` (``a = 13``)
+    would itself lose five digits. Same relative bound as the battery, with ``g`` of the stored x.
+    """
+    manifold = Klein(dtype=dtype)
+    direction = np.random.default_rng([31, round(10 * a)]).normal(size=4)
+    x_D = np.asarray((np.tanh(a) / np.sqrt(c)) * direction / np.linalg.norm(direction), dtype=dtype)
+    y_D = np.ldexp(x_D, -1).astype(dtype)  # exact halving
+    with decimal.localcontext() as ctx:
+        ctx.prec = 60
+        z_x = _decimal_scaled_norm(x_D, c)
+        sqrt_c = decimal.Decimal(float(c)).sqrt()
+        same = float((_decimal_atanh(z_x) - _decimal_atanh(z_x / 2)) / sqrt_c)
+        opposite = float((_decimal_atanh(z_x) + _decimal_atanh(z_x / 2)) / sqrt_c)
+        g_x = float(1 - z_x * z_x)
+    eps = float(np.finfo(dtype).eps)
+    tol = rtol + _KLEIN_K * _klein_gap_rounding(g_x, g_x, eps)
+
+    x, y = jnp.asarray(x_D), jnp.asarray(y_D)
+    for label, got, want in (
+        ("x->y", manifold.dist(x, y, c), same),
+        ("y->x", manifold.dist(y, x, c), same),
+        ("x->-y", manifold.dist(x, -y, c), opposite),
+    ):
+        assert abs(float(got) - want) <= tol * want, f"{label}: {float(got)} vs {want} (rel tol {tol:.3e})"
+
+
+def _klein_dist_0_bound(a: float, eps: float) -> float:
+    """Derived relative error of ``dist_0`` at scaled radius ``a``: ``½·eps·cosh²(a)·tanh(a)/a``.
+
+    ``dist_0 = asinh(S)/√c`` with ``S = √c‖x‖/√g``. The gap carries relative error ``eps·cosh²(a)``
+    (:func:`_klein_gap_rounding`), so ``S`` carries half of it, and ``asinh`` maps a relative error
+    of ``S`` to one of ``d`` with gain ``S/(√(1 + S²)·asinh S) = tanh(a)/a`` (≤ 1, → 1 at the
+    origin). Worked numbers: float32 at ``a = 1`` is 4.4e-8, at ``a = 3`` 2.0e-6 — so the 1e-6
+    float32 target holds only out to ``a ≈ 2.5`` (``√c·r ≈ 0.987``); float64 meets 1e-14 out to
+    ``a ≈ 3.3``.
+    """
+    return 0.5 * eps * np.cosh(a) ** 2 * np.tanh(a) / a
+
+
+_KLEIN_DIST_0_Z = {
+    jnp.float32: (1e-8, 1e-6, 1e-4, 1e-2, 0.1, 0.5, 0.9, 0.99, 0.999, 0.9999, 0.99998),
+    jnp.float64: (1e-8, 1e-6, 1e-4, 1e-2, 0.1, 0.5, 0.9, 0.99, 0.999, 1.0 - 1e-6, 1.0 - 1e-9, 1.0 - 1e-11),
+}
+"""``√c·‖x‖`` from the origin to just inside each dtype's chart ceiling."""
+_KLEIN_DIST_0_RTOL = {jnp.float32: 1e-6, jnp.float64: 1e-14}
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_klein_dist_0_matches_the_decimal_atanh_from_1e_8_to_the_ceiling(dtype, c: float):
+    """``dist_0(x) = artanh(√c‖x‖)/√c`` against Decimal, rtol 1e-6 (f32) / 1e-14 (f64) where it is attainable.
+
+    The tolerance is ``max(rtol, 4·bound(a))`` with the derived bound of :func:`_klein_dist_0_bound`:
+    the fixed rtol is asserted exactly at the radii where the derivation says the chart can meet it,
+    and the derived bound (not a guess) takes over beyond. At least five radii per case must be held
+    to the fixed rtol, so the test cannot drift into asserting only the loose tail.
+    """
+    manifold = Klein(dtype=dtype)
+    eps = float(np.finfo(dtype).eps)
+    rtol = _KLEIN_DIST_0_RTOL[dtype]
+    floor = _klein_gap_floor(c, dtype)
+    rng = np.random.default_rng(17)
+    n_tight = 0
+    for z in _KLEIN_DIST_0_Z[dtype]:
+        direction = rng.normal(size=8)
+        x_D = np.asarray((z / np.sqrt(c)) * direction / np.linalg.norm(direction), dtype=dtype)
+        with decimal.localcontext() as ctx:
+            ctx.prec = 60
+            z_stored = _decimal_scaled_norm(x_D, c)
+            expected = float(_decimal_atanh(z_stored) / decimal.Decimal(float(c)).sqrt())
+            g = float(1 - z_stored * z_stored)
+        if g < 2.0 * floor:
+            continue
+        a = float(np.sqrt(c)) * expected
+        derived = 4.0 * _klein_dist_0_bound(a, eps)
+        n_tight += derived <= rtol
+        tol = max(rtol, derived)
+        got = float(manifold.dist_0(jnp.asarray(x_D), c))
+        assert abs(got - expected) <= tol * expected, f"z={z}: {got} vs {expected} (rel tol {tol:.3e})"
+    assert n_tight >= 5, f"only {n_tight} radii held to rtol {rtol}"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), _KLEIN_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_klein_pairwise_dist_to_the_origin_matches_dist_0_and_the_decimal_atanh(dtype, rtol: float, c: float):
+    """``dist(0, y) == dist(y, 0) == dist_0(y) == artanh(√c‖y‖)/√c`` (Decimal) at every battery radius.
+
+    The two-point code path at a zero endpoint: ``w = ±y`` and ``N = ‖y‖²`` whichever endpoint is
+    the origin (``g_0 = 1``; with the origin second, ``N = g_y‖y‖² + c‖y‖⁴ = ‖y‖²``), so the pair
+    form must reduce to the origin form without a special case.
+    """
+    manifold = Klein(dtype=dtype)
+    eps = float(np.finfo(dtype).eps)
+    origin = jnp.zeros(6, dtype=dtype)
+    direction = np.random.default_rng(29).normal(size=6)
+    for a in _KLEIN_RADII[dtype]:
+        y_D = np.asarray((np.tanh(a) / np.sqrt(c)) * direction / np.linalg.norm(direction), dtype=dtype)
+        with decimal.localcontext() as ctx:
+            ctx.prec = 60
+            z = _decimal_scaled_norm(y_D, c)
+            expected = float(_decimal_atanh(z) / decimal.Decimal(float(c)).sqrt())
+            g = float(1 - z * z)
+        if g < 2.0 * _klein_gap_floor(c, dtype):
+            continue
+        tol = rtol + _KLEIN_K * _klein_gap_rounding(g, g, eps)
+        y = jnp.asarray(y_D)
+        for label, got in (
+            ("dist(0, y)", manifold.dist(origin, y, c)),
+            ("dist(y, 0)", manifold.dist(y, origin, c)),
+            ("dist_0(y)", manifold.dist_0(y, c)),
+        ):
+            assert abs(float(got) - expected) <= tol * expected, f"a={a} {label}: {float(got)} vs {expected}"
+
+
+# ---------------------------------------------------------------------------------------------
+# Klein gyro-operations and transport against longdouble oracles
+#
+# float64 library vs an ``np.longdouble`` (x86 80-bit, eps 1.1e-19) transcription of the literal
+# closed forms, with every operand built in NumPy. The transport and exponential oracles go
+# through the hyperboloid: a Klein pair ``(k, u)`` is pushed to ``(X, V)`` with
+# ``X = (G/√c, G·k)``, ``V = (√c·G³(k·u), G·u + c·G³(k·u)·k)`` (the differential of the isometry,
+# ``G = 1/√(1 - c‖k‖²)`` the Lorentz factor), the hyperboloid formula is applied, and the result is
+# pulled back by ``k = Y_s/(√c·Y₀)``, ``u' = (V_s - √c·V₀·k)/G``. None of these share code with the library's
+# chord formulas. Radii stop at 4: the float64 gap alone is worth ``eps·cosh²(4) = 1.6e-13``
+# relative there (6x under the 1e-12 bound), and ``2.2e-16·cosh²(5) = 1.2e-12`` would already
+# exceed it — the Klein chart's precision limit, not an oracle limit.
+# ---------------------------------------------------------------------------------------------
+
+_KLEIN_LD_RADII = ((0.3, 4.0), (4.0, 2.0), (3.0, 3.0), (1.0, 1.0))
+"""``(a, b)`` scaled radii of the two operands, all ≤ 4."""
+
+
+def _klein_point_np(a: float, c: float, direction_D: np.ndarray) -> np.ndarray:
+    """float64 Klein point at scaled radius ``a`` along the unit ``direction_D``."""
+    return (np.tanh(a) / np.sqrt(c)) * direction_D
+
+
+def _ld_gamma(k_D: np.ndarray, c: float) -> np.longdouble:
+    """Einstein Lorentz factor ``1/√(1 - c‖k‖²)`` in longdouble."""
+    k = np.asarray(k_D, dtype=_LD)
+    return _LD(1.0) / np.sqrt(_LD(1.0) - _LD(c) * np.dot(k, k))
+
+
+def _ld_klein_einstein_addition(x_D: np.ndarray, y_D: np.ndarray, c: float) -> np.ndarray:
+    """Literal ``x ⊕_E y = (x + y/G_x + c·G_x/(1 + G_x)·(x·y)·x)/(1 + c x·y)``, ``G_x`` the Lorentz factor, in longdouble."""
+    c_ld = _LD(c)
+    x, y = np.asarray(x_D, dtype=_LD), np.asarray(y_D, dtype=_LD)
+    gamma_x = _ld_gamma(x, c)
+    xy = np.dot(x, y)
+    return (x + y / gamma_x + (c_ld * gamma_x / (_LD(1.0) + gamma_x) * xy) * x) / (_LD(1.0) + c_ld * xy)
+
+
+def _ld_klein_push(k_D: np.ndarray, u_D: np.ndarray, c: float) -> tuple[np.ndarray, np.ndarray]:
+    """``(X, V)``: the Klein point and tangent pushed to the hyperboloid, in longdouble."""
+    c_ld, sqrt_c = _LD(c), np.sqrt(_LD(c))
+    k, u = np.asarray(k_D, dtype=_LD), np.asarray(u_D, dtype=_LD)
+    gamma = _ld_gamma(k, c)
+    ku = np.dot(k, u)
+    x_A = np.concatenate([[gamma / sqrt_c], gamma * k])
+    v_A = np.concatenate([[sqrt_c * gamma**3 * ku], gamma * u + (c_ld * gamma**3 * ku) * k])
+    return x_A, v_A
+
+
+def _ld_klein_pull_point(x_A: np.ndarray, c: float) -> np.ndarray:
+    """``k = X_s/(√c·X₀)``."""
+    return x_A[1:] / (np.sqrt(_LD(c)) * x_A[0])
+
+
+def _ld_klein_pull_tangent(y_A: np.ndarray, v_A: np.ndarray, c: float) -> np.ndarray:
+    """``u' = (V_s - √c·V₀·k_y)/G_y`` with the Lorentz factor ``G_y = √c·Y₀``."""
+    sqrt_c = np.sqrt(_LD(c))
+    k_y = _ld_klein_pull_point(y_A, c)
+    return (v_A[1:] - sqrt_c * v_A[0] * k_y) / (sqrt_c * y_A[0])
+
+
+def _ld_minkowski(u_A: np.ndarray, v_A: np.ndarray) -> np.longdouble:
+    """``⟨u, v⟩_L = -u₀v₀ + ⟨u_s, v_s⟩``."""
+    return -u_A[0] * v_A[0] + np.dot(u_A[1:], v_A[1:])
+
+
+def _ld_klein_ptransp(v_D: np.ndarray, x_D: np.ndarray, y_D: np.ndarray, c: float) -> np.ndarray:
+    """Klein transport via the hyperboloid: ``V + ⟨Y, V⟩_L/(1/c - ⟨X, Y⟩_L)·(X + Y)``, pulled back at y."""
+    x_A, v_A = _ld_klein_push(x_D, v_D, c)
+    y_A, _ = _ld_klein_push(y_D, np.zeros_like(np.asarray(y_D)), c)
+    moved_A = v_A + (_ld_minkowski(y_A, v_A) / (_LD(1.0) / _LD(c) - _ld_minkowski(x_A, y_A))) * (x_A + y_A)
+    return _ld_klein_pull_tangent(y_A, moved_A, c)
+
+
+def _ld_klein_expmap(v_D: np.ndarray, x_D: np.ndarray, c: float) -> np.ndarray:
+    """Klein exponential via the hyperboloid: ``cosh(θ)X + sinh(θ)/θ·V``, ``θ = √c‖V‖_L``, pulled back."""
+    x_A, v_A = _ld_klein_push(x_D, v_D, c)
+    theta = np.sqrt(_LD(c)) * np.sqrt(_ld_minkowski(v_A, v_A))
+    y_A = np.cosh(theta) * x_A + (np.sinh(theta) / theta) * v_A
+    return _ld_klein_pull_point(y_A, c)
+
+
+def _rel_max_err(got, expected_ld: np.ndarray) -> float:
+    """``max|got - expected|/max|expected|`` evaluated in longdouble."""
+    got_ld = np.asarray(got, dtype=_LD)
+    return float(np.max(np.abs(got_ld - expected_ld)) / np.max(np.abs(expected_ld)))
+
+
+@pytest.mark.parametrize("kind", _BOOST_DIRECTION_KINDS)
+@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
+def test_klein_addition_matches_the_longdouble_einstein_formula(c: float, kind: str):
+    """``x ⊕_E y`` vs the literal Einstein formula in longdouble, float64, radii ≤ 4.
+
+    The comparison scale is the ball radius ``1/√c`` floored by the result's own max-norm: for the
+    anti-parallel equal-radius pair ``x ⊕ (-x) = 0`` exactly (the library forms ``s = x + y = 0``;
+    the literal cancels to ~1e-17), so a result-relative scale would divide by zero.
+    """
+    manifold = Klein(dtype=F64)
+    n_checked = 0
+    for dim in _BOOST_DIMS:
+        d1_D, d2_D = _boost_direction_pair(kind, dim)
+        for a, b in _KLEIN_LD_RADII:
+            x_D, y_D = _klein_point_np(a, c, d1_D), _klein_point_np(b, c, d2_D)
+            expected_D = _ld_klein_einstein_addition(x_D, y_D, c)
+            got_D = np.asarray(manifold.addition(jnp.asarray(x_D), jnp.asarray(y_D), c), dtype=_LD)
+            scale = max(float(np.max(np.abs(expected_D))), 1.0 / np.sqrt(c))
+            err = float(np.max(np.abs(got_D - expected_D))) / scale
+            assert err <= 1e-12, f"c={c} {kind} dim={dim} a={a} b={b}: {err:.3e}"
+            n_checked += 1
+    assert n_checked == len(_BOOST_DIMS) * len(_KLEIN_LD_RADII)
+
+
+@pytest.mark.parametrize("kind", _BOOST_DIRECTION_KINDS)
+@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
+def test_klein_gyro_difference_matches_the_longdouble_einstein_formula(c: float, kind: str):
+    """``(⊖x) ⊕_E y`` vs the literal Einstein formula at ``(-x, y)`` in longdouble, relative to the result.
+
+    Here the scale IS the result: ``gyro_difference`` exists to give two close points a small,
+    accurate difference, so a ball-radius scale would hide exactly the cancellation it avoids.
+    Its norm is ``tanh(√c·d)/√c``, bounded below by the pair's distance, so the scale never
+    vanishes on this grid (the parallel equal-radius pair has ``y = x`` and is handled below).
+    """
+    manifold = Klein(dtype=F64)
+    for dim in _BOOST_DIMS:
+        d1_D, d2_D = _boost_direction_pair(kind, dim)
+        for a, b in _KLEIN_LD_RADII:
+            x_D, y_D = _klein_point_np(a, c, d1_D), _klein_point_np(b, c, d2_D)
+            if np.array_equal(x_D, y_D):
+                continue
+            expected_D = _ld_klein_einstein_addition(-x_D, y_D, c)
+            got = manifold.gyro_difference(jnp.asarray(x_D), jnp.asarray(y_D), c)
+            err = _rel_max_err(got, expected_D)
+            assert err <= 1e-12, f"c={c} {kind} dim={dim} a={a} b={b}: {err:.3e}"
+
+    # Degenerate cases against their closed forms: y = x -> 0, x = 0 -> y, y = 0 -> -x.
+    x_D = jnp.asarray(_klein_point_np(3.0, c, _boost_direction_pair("random", 5)[0]))
+    zero_D = jnp.zeros(5, dtype=F64)
+    assert float(jnp.max(jnp.abs(manifold.gyro_difference(x_D, x_D, c)))) == 0.0
+    np.testing.assert_allclose(np.asarray(manifold.gyro_difference(zero_D, x_D, c)), np.asarray(x_D), rtol=1e-15)
+    np.testing.assert_allclose(np.asarray(manifold.gyro_difference(x_D, zero_D, c)), -np.asarray(x_D), rtol=1e-12)
+
+
+@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
+@pytest.mark.parametrize("dim", _BOOST_DIMS)
+def test_klein_ptransp_0_matches_the_longdouble_hyperboloid_transport(c: float, dim: int):
+    """``PT_{0→y}`` vs the hyperboloid transport from the origin, pulled back, relative to the result."""
+    manifold = Klein(dtype=F64)
+    rng = np.random.default_rng([41, dim, round(1000 * c)])
+    for a in (0.3, 2.0, 4.0):
+        d_D = rng.normal(size=dim)
+        y_D = _klein_point_np(a, c, d_D / np.linalg.norm(d_D))
+        v_D = rng.normal(size=dim)
+        expected_D = _ld_klein_ptransp(v_D, np.zeros(dim), y_D, c)
+        got = manifold.ptransp_0(jnp.asarray(v_D), jnp.asarray(y_D), c)
+        err = _rel_max_err(got, expected_D)
+        assert err <= 1e-12, f"c={c} dim={dim} a={a}: {err:.3e}"
+
+
+@pytest.mark.parametrize("kind", _BOOST_DIRECTION_KINDS)
+@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
+def test_klein_ptransp_matches_the_longdouble_hyperboloid_transport(c: float, kind: str):
+    """``PT_{x→y}`` vs the pushed / transported / pulled-back hyperboloid formula, relative to the result."""
+    manifold = Klein(dtype=F64)
+    for dim in _BOOST_DIMS:
+        d1_D, d2_D = _boost_direction_pair(kind, dim)
+        v_D = np.random.default_rng([43, dim]).normal(size=dim)
+        for a, b in _KLEIN_LD_RADII:
+            x_D, y_D = _klein_point_np(a, c, d1_D), _klein_point_np(b, c, d2_D)
+            expected_D = _ld_klein_ptransp(v_D, x_D, y_D, c)
+            got = manifold.ptransp(jnp.asarray(v_D), jnp.asarray(x_D), jnp.asarray(y_D), c)
+            err = _rel_max_err(got, expected_D)
+            assert err <= 1e-12, f"c={c} {kind} dim={dim} a={a} b={b}: {err:.3e}"
+
+
+_KLEIN_EXPMAP_STEPS = ((0.3, 1e-3), (0.3, 0.5), (0.3, 3.0), (2.0, 1.0), (3.0, 1e-3), (3.0, 0.1), (3.0, 1.0))
+"""``(a, τ)``: base scaled radius and scaled Riemannian step ``τ = √c·‖v‖_x``. ``τ = 1e-3`` sits on
+the float64 series branch of ``_xcothx`` (threshold 6.9e-3); every target stays at scaled radius ≤ 4."""
+
+
+@pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
+@pytest.mark.parametrize("dim", _BOOST_DIMS)
+def test_klein_expmap_matches_the_longdouble_hyperboloid_exponential(c: float, dim: int):
+    """``exp_x(v)`` vs the hyperboloid exponential of the pushed vector, mapped back, relative to the result."""
+    manifold = Klein(dtype=F64)
+    rng = np.random.default_rng([47, dim, round(1000 * c)])
+    for a, tau in _KLEIN_EXPMAP_STEPS:
+        d_D = rng.normal(size=dim)
+        x_D = _klein_point_np(a, c, d_D / np.linalg.norm(d_D))
+        v_D = rng.normal(size=dim)
+        g_x = 1.0 - c * float(np.dot(x_D, x_D))
+        norm_x = np.sqrt(g_x * float(np.dot(v_D, v_D)) + c * float(np.dot(x_D, v_D)) ** 2) / g_x
+        v_D = v_D * (tau / (np.sqrt(c) * norm_x))
+        expected_D = _ld_klein_expmap(v_D, x_D, c)
+        got = manifold.expmap(jnp.asarray(v_D), jnp.asarray(x_D), c)
+        err = _rel_max_err(got, expected_D)
+        assert err <= 1e-12, f"c={c} dim={dim} a={a} tau={tau}: {err:.3e}"

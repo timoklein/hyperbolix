@@ -80,8 +80,23 @@ jax.config.update("jax_enable_x64", True)
 # generator from (seed_jax, stream_id, ...) instead of drawing from a single shared generator,
 # so the values a test sees no longer depend on which other tests ran first. Without this a
 # failure found in a full run may not reproduce under ``-k`` (and vice versa).
-_CURVATURE_STREAM = {"euclidean": 0, "poincare": 1, "hyperboloid": 2, "pv": 3}
-_POINTS_STREAM = {"euclidean": 10, "poincare": 11, "hyperboloid": 12, "pv": 13}
+_CURVATURE_STREAM = {"euclidean": 0, "poincare": 1, "hyperboloid": 2, "pv": 3, "klein": 4}
+_POINTS_STREAM = {"euclidean": 10, "poincare": 11, "hyperboloid": 12, "pv": 13, "klein": 14}
+
+# Largest scaled geodesic radius ``a = √c·d(0, x)`` of the Klein ``uniform_points`` sample
+# (Euclidean cap ``√c‖x‖ ≤ tanh(a)``). A Klein point's boundary gap ``1 - c‖x‖²`` is known only to
+# relative ``eps·cosh²(a)``, and the binding generic assertion — ``test_egrad2rgrad_is_metric_dual``,
+# whose tangent_inner divides by the gap squared — carries that error at about 4x: with *every*
+# point placed at the cap (c ∈ {0.05, 1, 5}, dim 10) its worst error / shared tolerance is
+#   float32 (4e-3): 0.63 at a = 5.0, 1.8 at a = 5.5, 3.6-5.8 at a = 6.0 (ceiling a ≈ 6.3);
+#   float64 (1e-7): 0.45 at a = 9.5, 0.8-1.5 at a = 10.0, 7-11 at a = 11.0.
+# So each cap is the widest half-unit step that passes even with the whole sample on the cap
+# (uncapped, i.e. Poincaré's full-ball sampling, failed at 1 of 8 seeds). The eps·cosh²(a) floor
+# sits in the gap computed from stored float32 coordinates, not in a cancellation of
+# ``egrad2rgrad``; evaluating the same float32 points in float64 passes at 1e-8 of the tolerance.
+# (logs/2026-09-28_klein_shared_suite/probe_klein_sampler_cap.py, probe_egrad2rgrad_cancellation.py)
+# For comparison, the Hyperboloid sample stops at a ≈ 1.1 (Poincaré radius scaled by 0.5).
+_KLEIN_MAX_SCALED_RADIUS = {"float32": 5.0, "float64": 9.5}
 
 
 @pytest.fixture(scope="package", params=[10])
@@ -143,13 +158,23 @@ def _make_manifold_and_c(manifold_name: str, dtype: jnp.dtype, seed: int, draw: 
         return hj.manifolds.Hyperboloid(dtype=dtype), c
     elif manifold_name == "pv":
         return hj.manifolds.ProperVelocity(dtype=dtype), c
+    elif manifold_name == "klein":
+        return hj.manifolds.Klein(dtype=dtype), c
     raise ValueError(f"Unknown manifold: {manifold_name}")
 
 
 @pytest.fixture(
     scope="package",
-    params=[("euclidean", 0), ("poincare", 0), ("poincare", 1), ("hyperboloid", 0), ("hyperboloid", 1)],
-    ids=["Euclidean", "PoincareBall-c0", "PoincareBall-c1", "Hyperboloid-c0", "Hyperboloid-c1"],
+    params=[
+        ("euclidean", 0),
+        ("poincare", 0),
+        ("poincare", 1),
+        ("hyperboloid", 0),
+        ("hyperboloid", 1),
+        ("klein", 0),
+        ("klein", 1),
+    ],
+    ids=["Euclidean", "PoincareBall-c0", "PoincareBall-c1", "Hyperboloid-c0", "Hyperboloid-c1", "Klein-c0", "Klein-c1"],
 )
 def manifold_and_c(request: pytest.FixtureRequest, dtype: jnp.dtype, seed_jax: int):
     """Fixture providing (manifold_instance, curvature) tuples.
@@ -252,6 +277,21 @@ def _sample_uniform_points(manifold, c: float, dim: int, dtype: jnp.dtype, seed:
         data = rng.normal(0.0, 1.0, size=(num_pts, dim)).astype(np_dtype)
         data = data / np.sqrt(c)
         return jnp.asarray(data, dtype=dtype)
+
+    elif isinstance(manifold, hj.manifolds.Klein):
+        rng = np.random.default_rng([seed, _POINTS_STREAM["klein"], dim])
+        # Klein ball: drawn directly in the ball (not through the isometry maps, which are under
+        # test elsewhere) with the Poincaré sampler's uniform-in-ball direction and radius, in the
+        # Euclidean ball √c‖x‖ ≤ tanh(a_max): a Klein point at distance d has √c‖x‖ = tanh(√c·d).
+        # a_max is _KLEIN_MAX_SCALED_RADIUS (see its comment for why the sample is capped).
+        a_max = _KLEIN_MAX_SCALED_RADIUS[np_dtype.name]
+        random_dirs = rng.normal(0.0, 1.0, size=(num_pts, dim))
+        random_dirs /= np.linalg.norm(random_dirs, axis=-1, keepdims=True)
+        random_radii = rng.random((num_pts, 1)) ** (1.0 / dim)
+        points = (random_dirs * random_radii) * (np.tanh(a_max) / np.sqrt(c))
+        points = jnp.asarray(points.astype(np_dtype), dtype=dtype)
+        proj_batch = jax.vmap(manifold.proj, in_axes=(0, None))
+        return proj_batch(points, c)
 
     else:
         raise ValueError("Unknown manifold module")

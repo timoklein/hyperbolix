@@ -57,7 +57,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 
 ### Module layout
 
-- **`manifolds/`** — Plain Python classes (not `nnx.Module`): `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `ProductManifold`. Each is instantiated with a dtype (`Poincare(dtype=jnp.float64)`). `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity` conform to the scalar-`c` `Manifold` protocol in `protocol.py`; `ProductManifold` intentionally does **not** (it takes a per-factor `cs: Sequence[Curvature]` sequence instead of a scalar `c`, and has no `c` attribute). `_base.py` has shared `ManifoldBase`.
+- **`manifolds/`** — Plain Python classes (not `nnx.Module`): `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `Klein`, `ProductManifold`. Each is instantiated with a dtype (`Poincare(dtype=jnp.float64)`). `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `Klein` conform to the scalar-`c` `Manifold` protocol in `protocol.py`; `ProductManifold` intentionally does **not** (it takes a per-factor `cs: Sequence[Curvature]` sequence instead of a scalar `c`, and has no `c` attribute). `_base.py` has shared `ManifoldBase`.
 - **`nn_layers/`** — Flax NNX layers (`nnx.Module`). Two families:
   - *Poincare*: `HypLinearPoincare`, `HypLinearPoincarePP`, `HypConv2DPoincare`, `PoincareBatchNorm2D`, `HypRegressionPoincare` (Ganea et al. 2018, Shimizu et al. 2020, van Spengler et al. 2023)
   - *Hyperboloid*: `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `HTCLinear`, `HypLinearHyperboloidPLFC`, `LorentzConv2D` (Klis et al. 2026, Shimizu et al. 2020, Shi et al. 2026), attention layers, positional encodings, normalization
@@ -88,6 +88,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 
 - Hyperboloid tangent primitives (`dist`, `logmap`, `sqdist`, `tangent_norm`, `expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, `egrad2rgrad`, gyro `addition`, `gyro_difference`, `busemann`) are cancellation-free and accurate to the point-representation floor `eps·sinh(a)/sqrt(c)` at scaled radius `a = sqrt(c)*d` — float32 good to `a ≈ 16.6`, float64 much further
 - Poincaré pairwise `dist`/`logmap` (the factored Möbius denominator) are accurate up to the ball chart's own representation ceiling — `a ≈ 12.6` in float32, `≈ 27.7` in float64 — past which the ball cannot represent the point at all
+- `Klein` pairwise `dist`/`logmap`/`ptransp`/`gyro_difference` are cancellation-free (asinh form built from `w = y - x`), but the chart holds half the Poincaré radius — `a ≈ 6.32` in float32, `≈ 13.86` in float64 at `c = 1` (`√c‖x‖ = tanh(a)` vs Poincaré's `tanh(a/2)`) — and its relative error floor is the rounding of `g_x = 1 - c‖x‖²`, `eps·cosh²(a)` (float32 `a = 4`: 8.9e-5)
 - Exceptions that still cancel at large radius: `HyperbolicFullAttention`'s GEMM-formed scores and a `ptransp` step below the representation floor — see `docs/user-guide/numerical-stability.md`
 - Conformal factor lambda grows exponentially near Poincare ball boundary
 - Tests parametrize both dtypes with tolerances: `atol=4e-3` (f32), `atol=1e-7` (f64)

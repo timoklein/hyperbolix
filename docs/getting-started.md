@@ -76,13 +76,14 @@ print(f"Distances shape: {distances.shape}")  # (100,)
 
 ### Manifolds
 
-Hyperbolix provides six manifold types:
+Hyperbolix provides seven manifold types:
 
 - **Euclidean**: Flat space (baseline)
 - **Poincaré Ball**: Conformal model (angles preserved)
 - **Hyperboloid**: Lorentz model (natural for convolutions)
 - **Proper Velocity**: Unconstrained $\mathbb{R}^n$ model from special relativity (Chen et al. 2026) — no projection step, Euclidean retraction
 - **κ-Stereographic**: Signed curvature — hyperbolic, flat, or spherical in one manifold (Bachmann et al. 2020)
+- **Klein**: Beltrami–Klein ball model — geodesics are straight chords, Einstein gyrovector operations (Mao et al. 2024; Zhang et al. 2026)
 - **Product**: Mixed-curvature composition of several factor manifolds (Gu et al. 2019)
 
 ### Curvature Parameter

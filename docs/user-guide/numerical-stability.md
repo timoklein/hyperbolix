@@ -962,6 +962,7 @@ x_rec = pv.expmap_0(y, c)      # round-trips to x_large
 - **Hyperboloid**: unbounded radius, and `dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/`tangent_inner`/`egrad2rgrad`/gyro `addition`/`busemann` are all cancellation-free, designed to avoid the identified cancellation, with accuracy limited by the operation and stored inputs (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)). The constraint $\langle x, x\rangle_L = -1/c$ must still be maintained and can drift under Euclidean updates — see [The `atol` Convention](#the-atol-convention) — and a handful of places still lose accuracy for reasons the fix does not remove, listed under [Known Limitations](#hyperboloid-known-limitations).
 - **Proper Velocity**: unconstrained $\mathbb{R}^n$, stable at large radii, exact Euclidean retraction (plain `optax.adam` / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large. Its tangent-space metric shares the hyperboloid's fix (see [below](#pv-tangent-metric)), and `PV.dist`/`logmap` between two nearby points at large radius now go through the exact hyperboloid lift — see [below](#pv-dist-lift).
 - **κ-Stereographic**: identical numerics to the Poincaré ball for $c > 0$ (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near $c = 0$ — see the [dedicated section below](#stereographic-near-zero-curvature).
+- **Klein**: the pairwise operations are cancellation-free, but the chart reaches its boundary at half the Poincaré radius (scaled radius 6.32 in float32, 13.86 in float64, at $c = 1$) and its error floor grows as $\varepsilon\cosh^2(a)$ — see the [dedicated section below](#klein-numerics).
 
 !!! note "Training PV layers"
     `HypLinearPV`, `HypConv2DPV`, and `HypRegressionPV` store their weights as plain `nnx.Param` (not `ManifoldParam`). Use a standard `nnx.Optimizer(model, optax.adam(lr), wrt=nnx.Param)` — no `riemannian_adam` / `riemannian_sgd` wrapper is required.
@@ -1006,6 +1007,150 @@ wrong direction on its flat step even though fixed-curvature values looked corre
 
 - Use `Stereographic(dtype=jnp.float64)` when training a signed curvature that may cross zero, per Bachmann et al. (2020). Float32 is fine at fixed moderate curvature ($\lvert c\rvert \gtrsim 10^{-4}$) and moderate radii.
 - With `LearnableCurvature(parameterization="identity")`, the default clamp $[-10, 10]$ includes 0 by design — a curvature crossing zero is a *feature* (the geometry interpolates hyperbolic → flat → spherical smoothly), not an error state.
+
+## Klein: Cancellation-Free Distance on a Half-Radius Chart {#klein-numerics}
+
+`Klein` stores points in the same Euclidean ball as `Poincare` and uses the same `proj`, but
+its two-point operations (`dist`, `logmap`, `ptransp`, `gyro_difference`) are written so that no
+digits cancel. What limits it is the chart: a Klein point reaches the boundary at half the
+Poincaré radius, and the one quantity every formula divides by, $g_x = 1 - c\lVert x\rVert^2$,
+cannot be computed more accurately than its own rounding. Below, $a = \sqrt{c}\,d_0$ is the
+scaled radius (geodesic distance from the origin times $\sqrt{c}$), and $\varepsilon$ is the
+machine epsilon (1.19e-7 in float32, 2.22e-16 in float64). Measurements are from
+`logs/2026-09-28_klein-manifold/probe_klein.out`.
+
+### The Distance Without Cancellation
+
+Two textbook spellings of the Klein distance lose digits:
+
+- The hyperboloid form lifted to Klein, $\cosh(\sqrt{c}\,d) = (1 - c\langle x, y\rangle)/\sqrt{g_x g_y}$,
+  takes `acosh` of a number close to 1 when the points are close — the hyperboloid's
+  [two-point cancellation](#the-hyperboloids-two-point-cancellation-failure-mode) again.
+- Zhang et al. (2026), Eq. 4, $d = \operatorname{artanh}\!\big(\sqrt{c}\,\lVert(-x)\oplus_E y\rVert\big)/\sqrt{c}$,
+  builds the Einstein sum from $O(1)$ terms that cancel when $x$ and $y$ are close, and divides by
+  $1 - c\langle x, y\rangle$, which is itself a small difference of $O(1)$ terms near the boundary.
+
+`Klein.dist` follows the derivation in Zhang et al. (2026), Appendix Eqs. 12 and 14. Let
+$w = y - x$ (exact in floating point for close points, by Sterbenz's lemma). Two identities do
+the work: the Lagrange identity
+$\lVert x\rVert^2\lVert y\rVert^2 - \langle x, y\rangle^2 = \lVert x\rVert^2\lVert w\rVert^2 - \langle x, w\rangle^2$,
+and the Einstein gamma identity
+$1 - c\lVert(-x)\oplus_E y\rVert^2 = g_x g_y/(1 - c\langle x, y\rangle)^2$. The second says
+$\operatorname{sech}^2(\sqrt{c}\,d) = g_x g_y/(1 - c\langle x, y\rangle)^2$, so
+$\sinh^2(\sqrt{c}\,d) = \big[(1 - c\langle x, y\rangle)^2 - g_x g_y\big]/(g_x g_y)$. Expanding the
+bracket gives $c\lVert w\rVert^2 - c^2\big(\lVert x\rVert^2\lVert y\rVert^2 - \langle x, y\rangle^2\big)$,
+and the Lagrange identity turns it into $c\,N$ with
+
+$$
+N = g_x\lVert w\rVert^2 + c\,\langle x, w\rangle^2, \qquad
+S^2 = \sinh^2(\sqrt{c}\,d) = \frac{c\,N}{g_x\, g_y}, \qquad
+d(x, y) = \frac{\operatorname{arsinh}(S)}{\sqrt{c}}.
+$$
+
+$N$ is a sum of two non-negative terms built from $w$, the factor $1 - c\langle x, y\rangle$ has
+cancelled out, and no `acosh` or `atanh` is evaluated near 1. At $x = y$, $w$ is exactly zero,
+so `dist` is exactly 0 and its gradient is a finite zero. The same $N$ gives the other pairwise
+operations in closed form:
+
+- tangent norm of the chord: $\lVert w\rVert_x = \sqrt{N}/g_x$
+- `logmap`: $\log_x(y) = \operatorname{arsinhc}(S)\,\sqrt{g_x/g_y}\;w$, with
+  $\operatorname{arsinhc}(s) = \operatorname{arsinh}(s)/s$ (analytic at $s = 0$)
+- `ptransp`: $\sqrt{g_y/g_x}\,(v - \kappa\, w)$, with
+  $\kappa = \big[c\langle x, v\rangle/g_x + c\langle y, v\rangle/\sqrt{g_x g_y}\big]/\big(1 + \sqrt{1 + S^2}\big)$
+
+In float64, against independent NumPy oracles (dimension 5, 200 pairs per curvature, error
+$\lVert a - b\rVert/\max(\lVert b\rVert, 1)$, maximum over pairs), all 30 checks pass the 1e-11
+threshold; for example `dist` against the hyperboloid `acosh` is 4.510e-15, `logmap` against the
+hyperboloid log 4.493e-15, `ptransp` against the hyperboloid transport 1.310e-15, and
+`einstein_midpoint` against the normalized Lorentz centroid 4.415e-16.
+
+### Measured Accuracy
+
+The accuracy probe places $x$ at scaled radius $a$, $x = \tanh(a)/\sqrt{c}\cdot\hat{x}$, and
+$y = x + t\,(1 - \tanh a)/\sqrt{c}\cdot\hat{v}$ with random unit $\hat{x}, \hat{v}$ (dimension 8,
+200 pairs per cell). So $t$ is the step as a fraction of $x$'s Euclidean gap to the boundary: at
+$c = 1$, $a = 4$, the gap is $1 - \tanh 4 = 6.7\times10^{-4}$ and $t = 10^{-2}$ moves $y$ by
+$6.7\times10^{-6}$. The reference is a 90-digit `Decimal` evaluation at the **stored**
+(already rounded) points, so the table measures the error of the formula, not the error of
+storing the points. Median / max relative error of `dist`, $c = 1$, $t = 10^{-2}$:
+
+| dtype | $a$ | `Klein.dist` | literal `acosh` | Zhang et al. Eq. 4 (`artanh`) | `Klein.logmap` | $\varepsilon\cosh^2(a)$ |
+|---|---|---|---|---|---|---|
+| float32 | 0.5 | 3.35e-08 / 1.48e-07 | 1.18e-03 / 4.29e-03 | 5.44e-07 / 2.57e-06 | 3.79e-08 / 1.74e-07 | 1.5e-07 |
+| float32 | 2 | 1.94e-07 / 8.29e-07 | 7.73e-02 / 1.00e+00 | 1.42e-04 / 9.33e-04 | 2.27e-07 / 1.15e-06 | 1.7e-06 |
+| float32 | 4 | 1.19e-05 / 5.15e-05 | 1.00e+00 / 4.23e+01 | 4.33e-02 / 3.58e-01 | 1.41e-05 / 5.20e-05 | 8.9e-05 |
+| float32 | 6 | 7.48e-04 / 3.01e-03 | 1.00e+00 / 1.04e+03 | 9.97e-01 / 9.21e+01 | 6.93e-04 / 3.16e-03 | 4.9e-03 |
+| float64 | 0.5 | 5.87e-17 / 2.77e-16 | 1.78e-12 / 7.10e-12 | 1.88e-15 / 8.15e-15 | 8.14e-17 / 2.94e-16 | 2.8e-16 |
+| float64 | 2 | 3.31e-16 / 1.84e-15 | 1.56e-10 / 1.15e-09 | 2.44e-13 / 1.43e-12 | 3.97e-16 / 1.86e-15 | 3.1e-15 |
+| float64 | 4 | 1.97e-14 / 9.33e-14 | 2.58e-08 / 2.04e-06 | 4.50e-11 / 3.88e-10 | 2.47e-14 / 1.25e-13 | 1.7e-13 |
+| float64 | 6 | 1.24e-12 / 4.92e-12 | 7.01e-07 / 3.62e-04 | 2.15e-09 / 4.28e-08 | 1.51e-12 / 5.49e-12 | 9.0e-12 |
+| float64 | 10 | 3.74e-09 / 1.82e-08 | 2.55e-03 / 1.01e+00 | 7.99e-06 / 3.08e-03 | 3.34e-09 / 1.71e-08 | 2.7e-08 |
+| float64 | 13 | 1.54e-06 / 5.58e-06 | 1.00e+00 / 6.89e+02 | 3.11e-03 / 1.87e-01 | 1.74e-06 / 5.81e-06 | 1.1e-05 |
+
+The last column is the chart's floor, explained [below](#klein-chart-ceiling). The full grid in
+the probe output also covers $c = 0.1$ and $t \in \{10^{-4}, 0.3\}$. What it shows:
+
+- **`Klein.dist` does not depend on the separation.** At float32, $c = 1$, $a = 4$ the median
+  is 1.17e-05, 1.19e-05 and 1.25e-05 for $t = 10^{-4}, 10^{-2}, 0.3$. The literal `acosh`
+  loses the whole distance on close pairs (median 1.00e+00 at $t = 10^{-4}$ for every float32 $a$), and
+  the Eq. 4 form has median 2.97e+00 in the same float32, $a = 4$, $t = 10^{-4}$ cell.
+- **Its error is the chart floor.** From $a = 2$ on, the maximum `Klein.dist` error is below
+  $\varepsilon\cosh^2(a)$ in 47 of the 48 cells (both dtypes, both $c$, all three $t$); the
+  exception is float32, $c = 0.1$, $a = 6$, $t = 10^{-4}$ at 5.26e-03, 1.08× the floor. At
+  $a = 0.5$ the maximum is under $2\varepsilon$ (2.11e-07 in float32, 3.81e-16 in float64).
+  `logmap`'s error is the same size as `dist`'s in every cell except float32, $a = 6$,
+  $t = 10^{-4}$ (both $c$), described next.
+- At float32, $a = 6$, $t = 10^{-4}$, the step $10^{-4}(1 - \tanh 6) = 1.2\times10^{-9}$ is
+  below the float32 spacing of the coordinates, and 137 of 200 stored $y$ equal $x$ at $c = 1$
+  (131 at $c = 0.1$); those pairs have no relative error and are skipped.
+
+### The Chart Ceiling and Floor {#klein-chart-ceiling}
+
+**Ceiling.** `proj` caps $\lVert x\rVert$ at $1/\sqrt{c} - \varepsilon^{0.75}$, the Poincaré
+ball's [margin](#poincare-roundtrip-ceiling). A Klein point has
+$\sqrt{c}\,\lVert x\rVert = \tanh(a)$ where a Poincaré point has $\tanh(a/2)$, so at $c = 1$ the
+largest scaled radius the Klein chart holds is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$
+= **6.32** in float32 and **13.86** in float64 — half the Poincaré ball's 12.65 / 27.7. Points
+farther out, mapped into Klein by `poincare_to_klein`, `hyperboloid_to_klein` or `pv_to_klein`,
+land on the boundary margin and lose their radius.
+
+**Floor.** $g_x = 1 - c\lVert x\rVert^2 = \operatorname{sech}^2(a)$. Computing it subtracts
+$c\lVert x\rVert^2 \approx 1$ from 1, so $g_x$ carries an absolute error of about $\varepsilon$,
+a relative error of $\varepsilon/g_x = \varepsilon\cosh^2(a)$. The pairwise formulas and the
+metric divide by $g_x$ or its square root, so this is the relative error floor of the chart. Worked example,
+float32 at $a = 4$: $1.19\times10^{-7}\cdot\cosh^2 4 = 1.19\times10^{-7}\cdot 745.7 = 8.9\times10^{-5}$,
+against a measured `Klein.dist` median of 1.19e-05 and maximum of 5.15e-05 ($c = 1$,
+$t = 10^{-2}$). Since $\cosh^2(a) \approx e^{2a}/4$, this floor grows twice as fast in $a$ as the
+$\varepsilon e^{a}$ floor of the Poincaré ball and the hyperboloid (6.5e-6 at float32, $a = 4$).
+The rewrite above removes every other cancellation, so the rounding of $g_x$ is the error that
+remains.
+
+In practice: float32 `Klein` is accurate to about 1e-5 at $a = 4$ and 1e-3 at $a = 6$ (medians
+1.19e-05 and 7.48e-04 above). For larger radii use `Klein(dtype=jnp.float64)`, or the
+hyperboloid, whose floor grows as $\varepsilon e^{a}$.
+
+### Cost
+
+`jit(vmap(dist))` over $10^6$ pairs, float32, $c = 1$, radius $\le 0.9/\sqrt{c}$, median of 25 runs
+after warm-up (jax 0.9.1, NVIDIA A100-PCIE-40GB); the ratio is to the Eq. 4 form:
+
+| dim | mode | `Klein.dist` ms | Eq. 4 `artanh` ms | literal `acosh` ms |
+|---|---|---|---|---|
+| 16 | fwd | 0.383 (0.94×) | 0.407 (1.00×) | 0.363 (0.89×) |
+| 16 | fwd+bwd | 0.535 (0.53×) | 1.016 (1.00×) | 0.519 (0.51×) |
+| 128 | fwd | 1.051 (0.58×) | 1.812 (1.00×) | 1.024 (0.56×) |
+| 128 | fwd+bwd | 2.493 (0.42×) | 5.925 (1.00×) | 2.426 (0.41×) |
+
+`Klein.dist` costs 1.03–1.06× the literal `acosh` and at most 0.94× the Eq. 4 form.
+
+### The Reference `_klein_expmap` Is Exact Only at $c = 1$
+
+`Klein.expmap` is $\exp_x(v) = x + v/\big(\theta\coth\theta + c\langle x, v\rangle/g_x\big)$ with
+$\theta = \sqrt{c}\,\lVert v\rVert_x$. The reference implementation
+(github.com/sc-zyl/Klein_hml, `Hyperbolic/hmath.py`, `_klein_expmap`) omits the factor $c$ in the
+second denominator term. The two agree at $c = 1$; for any other curvature the reference returns a
+point on the correct chord at the wrong distance from $x$. `Klein.expmap` matches the hyperboloid
+exponential map to 1.748e-15 in the float64 oracle check above.
 
 ## Hyperbolic Function Overflow
 

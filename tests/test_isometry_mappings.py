@@ -10,7 +10,9 @@ hyperboloid (Lorentz), Proper Velocity (PV), and Beltrami-Klein models:
 
 Every map is verified for: target-manifold validity, round-trip identity,
 origin↦origin, geodesic-distance preservation (the defining isometry property),
-the cross-model commutative diagram, and JIT/vmap compatibility. Tests are
+the cross-model commutative diagram, and JIT/vmap compatibility; every ``Klein``
+operation is also checked for equivariance (the Klein op equals another model's op
+transported through the maps, tangents via ``jax.jvp``). Tests are
 parametrized over both dtypes (conftest ``dtype``/``tolerance``) and over a
 range of curvatures — the latter specifically guards against curvature-dependent
 bugs that a single ``c=1.0`` test cannot catch.
@@ -21,10 +23,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hyperbolix.manifolds import Hyperboloid, Poincare, ProperVelocity
+from hyperbolix.manifolds import Hyperboloid, Klein, Poincare, ProperVelocity
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
 from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT
+from hyperbolix.nn_layers.hyperboloid_core import lorentz_midpoint
 
 DIM = 3  # spatial dimension (hyperboloid ambient dimension is DIM + 1)
 N_POINTS = 20
@@ -359,8 +362,9 @@ def test_dimension_consistency(dim: int):
 # Beltrami-Klein maps
 # ---------------------------------------------------------------------------
 #
-# The Klein class is not imported: membership of a Klein image is checked directly as
-# ``c·||k||² < 1``, and Klein distances against an independent NumPy float64 closed form.
+# The map tests in this block do not call the Klein class: membership of a Klein image is checked
+# directly as ``c·||k||² < 1``, and Klein distances against an independent NumPy float64 closed
+# form. The ``Klein`` operations themselves are tested through the maps in the next block.
 
 
 def _in_klein_ball(k_BD: jnp.ndarray, c: float) -> jnp.ndarray:
@@ -671,3 +675,214 @@ def test_klein_dimension_consistency(dim: int):
         k_rt = from_fn(out, c)
         assert k_rt.shape == (dim,), from_fn.__name__
         assert jnp.allclose(k_rt, k, atol=1e-9, rtol=1e-9), from_fn.__name__
+
+
+# ---------------------------------------------------------------------------
+# Klein operations are equivariant under the maps
+# ---------------------------------------------------------------------------
+#
+# An isometry carries every geometric operation with it, so each ``Klein`` op must equal the same
+# op of another model transported through the library maps: ``f_K(x, ...) = φ⁻¹(f_M(φ(x), ...))``.
+# Tangent vectors move with the map's differential, computed with ``jax.jvp`` of the map itself —
+# not a hand-derived pushforward that could share an algebra slip with the Klein code. The
+# ``klein_points`` fixture caps the scaled radius at ``atanh(0.9) ≈ 1.47``, and every derived point
+# (sums, exponentials) stays below scaled radius ≈ 3, where float32 still carries ~5 digits in the
+# Klein gap, so the conftest tolerance holds.
+
+
+def _klein_tangents(key: jax.Array, k_BD: jnp.ndarray, c: float, dtype: jnp.dtype) -> jnp.ndarray:
+    """Random tangent vectors at ``k_BD`` with scaled Klein-metric norm ``√c·‖v‖_x`` uniform in [0.1, 1.5].
+
+    The norm is the closed form ``‖v‖_x = √(g_x‖v‖² + c(x·v)²)/g_x``, ``g_x = 1 - c‖x‖²``, so the step
+    length is set independently of ``Klein.tangent_norm`` (which the tests below also check).
+    """
+    k_dir, k_len = jax.random.split(key)
+    v_BD = jax.random.normal(k_dir, k_BD.shape, dtype=dtype)
+    tau_B = jax.random.uniform(k_len, (k_BD.shape[0],), dtype=dtype, minval=0.1, maxval=1.5)
+    g_B = 1.0 - c * jnp.sum(k_BD**2, axis=-1)
+    xv_B = jnp.sum(k_BD * v_BD, axis=-1)
+    norm_B = jnp.sqrt(g_B * jnp.sum(v_BD**2, axis=-1) + c * xv_B**2) / g_B
+    return v_BD * (tau_B / (jnp.sqrt(c) * norm_B))[:, None]
+
+
+def _push(fn, c: float):
+    """Batched ``(φ(k), dφ_k(u))`` for the map ``fn``, via ``jax.jvp``."""
+    return jax.vmap(lambda k, u: jax.jvp(lambda p: fn(p, c), (k,), (u,)))
+
+
+def test_klein_dist_and_dist_0_match_poincare_and_hyperboloid_through_the_maps(
+    klein_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """``Klein.dist(x, y) == Poincare.dist(φx, φy) == Hyperboloid.dist(ψx, ψy)``, and ``dist_0`` likewise."""
+    c = curvature
+    atol, rtol = tolerance
+    klein, poincare, hyperboloid = Klein(dtype=dtype), Poincare(dtype=dtype), Hyperboloid(dtype=dtype)
+
+    n = N_POINTS // 2
+    xs, ys = klein_points[:n], klein_points[n : 2 * n]
+    to_p, to_h = _batch(iso.klein_to_poincare), _batch(iso.klein_to_hyperboloid)
+
+    d_k = jax.vmap(lambda a, b: klein.dist(a, b, c))(xs, ys)
+    d_p = jax.vmap(lambda a, b: poincare.dist(a, b, c, version_idx=VERSION_MOBIUS_DIRECT))(to_p(xs, c), to_p(ys, c))
+    d_h = jax.vmap(lambda a, b: hyperboloid.dist(a, b, c, version_idx=VERSION_DEFAULT))(to_h(xs, c), to_h(ys, c))
+    assert jnp.allclose(d_k, d_p, atol=atol, rtol=rtol), "Klein.dist != Poincare.dist through K->P"
+    assert jnp.allclose(d_k, d_h, atol=atol, rtol=rtol), "Klein.dist != Hyperboloid.dist through K->H"
+
+    d0_k = jax.vmap(lambda a: klein.dist_0(a, c))(klein_points)
+    d0_p = jax.vmap(lambda a: poincare.dist_0(a, c))(to_p(klein_points, c))
+    d0_h = jax.vmap(lambda a: hyperboloid.dist_0(a, c))(to_h(klein_points, c))
+    assert jnp.allclose(d0_k, d0_p, atol=atol, rtol=rtol), "Klein.dist_0 != Poincare.dist_0 through K->P"
+    assert jnp.allclose(d0_k, d0_h, atol=atol, rtol=rtol), "Klein.dist_0 != Hyperboloid.dist_0 through K->H"
+
+
+def test_klein_gyro_operations_match_mobius_through_the_poincare_map(
+    klein_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """Einstein ``⊕``, ``(⊖x) ⊕ y`` and ``⊗`` equal their Möbius counterparts conjugated by K->P.
+
+    ``klein_to_poincare`` is the Einstein half ``p = ½ ⊗ k``, a gyrovector-space isomorphism from
+    ``(K, ⊕_E, ⊗)`` onto ``(P, ⊕_M, ⊗)`` (Ungar 2009): it carries ``⊕_E`` to ``⊕_M``, the gyro-inverse
+    ``-k`` to ``-p``, and commutes with scalar multiplication. So
+    ``x ⊕_E y = P->K(φx ⊕_M φy)``, ``(⊖x) ⊕_E y = P->K((-φx) ⊕_M φy)`` and
+    ``r ⊗ x = P->K(r ⊗ φx)``. The last one is not vacuous even though ``Klein.scalar_mul`` reuses
+    the Möbius formula: the two sides apply it at different radii (``tanh(a)`` vs ``tanh(a/2)``).
+    """
+    c = curvature
+    atol, rtol = tolerance
+    klein, poincare = Klein(dtype=dtype), Poincare(dtype=dtype)
+    to_p, to_k = _batch(iso.klein_to_poincare), _batch(iso.poincare_to_klein)
+
+    n = N_POINTS // 2
+    xs, ys = klein_points[:n], klein_points[n : 2 * n]
+    xp, yp = to_p(xs, c), to_p(ys, c)
+
+    add_k = jax.vmap(lambda a, b: klein.addition(a, b, c))(xs, ys)
+    add_p = to_k(jax.vmap(lambda a, b: poincare.addition(a, b, c))(xp, yp), c)
+    assert jnp.allclose(add_k, add_p, atol=atol, rtol=rtol), "Einstein addition != Mobius addition through K<->P"
+
+    diff_k = jax.vmap(lambda a, b: klein.gyro_difference(a, b, c))(xs, ys)
+    diff_p = to_k(jax.vmap(lambda a, b: poincare.addition(-a, b, c))(xp, yp), c)
+    assert jnp.allclose(diff_k, diff_p, atol=atol, rtol=rtol), "Einstein gyro_difference != (-p) (+)_M q through K<->P"
+
+    for r in (-1.5, 0.3, 2.0):
+        mul_k = jax.vmap(lambda a, r=r: klein.scalar_mul(r, a, c))(klein_points)
+        mul_p = to_k(jax.vmap(lambda a, r=r: poincare.scalar_mul(r, a, c))(to_p(klein_points, c)), c)
+        assert jnp.allclose(mul_k, mul_p, atol=atol, rtol=rtol), f"Einstein scalar_mul({r}) != Mobius through K<->P"
+
+
+def test_klein_origin_exp_and_log_match_poincare_through_the_half_differential(
+    klein_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """``K->P ∘ exp^K_0 = exp^P_0 ∘ d(K->P)_0`` and ``d(K->P)_0 ∘ log^K_0 = log^P_0 ∘ K->P``.
+
+    Tangent correspondence at the origin: ``K->P(k) = k/(1 + √(1 - c‖k‖²)) = k/2 + O(‖k‖³)``, so
+    its differential at 0 is ``½I``. The Klein metric at 0 is ``I`` and Poincaré's is
+    ``λ_0²I = 4I``, so ``½I`` is an isometry of the two tangent spaces
+    (``‖v/2‖_P = 2·‖v‖/2 = ‖v‖``) — the correspondence is ``v ↦ v/2``, not the identity, even though
+    ``Klein.expmap_0`` and ``Poincare.expmap_0`` are the same function. Hence
+    ``K->P(exp^K_0(v)) = exp^P_0(v/2)`` and ``log^K_0(k)/2 = log^P_0(K->P(k))``. The ``½`` is
+    read off ``jax.jvp`` of ``klein_to_poincare`` at 0 and asserted to be ``½I``.
+    """
+    c = curvature
+    atol, rtol = tolerance
+    klein, poincare = Klein(dtype=dtype), Poincare(dtype=dtype)
+    to_p = _batch(iso.klein_to_poincare)
+
+    zeros_BD = jnp.zeros_like(klein_points)
+    v_BD = _klein_tangents(jax.random.PRNGKey(5), zeros_BD, c, dtype)
+    _, v_p_BD = _push(iso.klein_to_poincare, c)(zeros_BD, v_BD)
+    assert jnp.allclose(v_p_BD, 0.5 * v_BD, atol=atol, rtol=rtol), "d(K->P) at the origin is not I/2"
+
+    exp_k = to_p(jax.vmap(lambda v: klein.expmap_0(v, c))(v_BD), c)
+    exp_p = jax.vmap(lambda v: poincare.expmap_0(v, c))(v_p_BD)
+    assert jnp.allclose(exp_k, exp_p, atol=atol, rtol=rtol), "K->P(exp^K_0(v)) != exp^P_0(dφ_0 v)"
+
+    log_k = jax.vmap(lambda k: klein.logmap_0(k, c))(klein_points)
+    _, log_k_pushed = _push(iso.klein_to_poincare, c)(zeros_BD, log_k)
+    log_p = jax.vmap(lambda p: poincare.logmap_0(p, c))(to_p(klein_points, c))
+    assert jnp.allclose(log_k_pushed, log_p, atol=atol, rtol=rtol), "dφ_0(log^K_0(k)) != log^P_0(K->P(k))"
+
+
+def test_klein_expmap_logmap_ptransp_match_the_hyperboloid_through_the_jvp_pushforward(
+    klein_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """``exp``, ``log``, ``PT`` and ``‖·‖_x`` of Klein equal the hyperboloid's under ``ψ = klein_to_hyperboloid``.
+
+    With ``(X, V) = (ψ(x), dψ_x(v))`` from ``jax.jvp``:
+
+    * ``Klein.expmap(v, x) == H->K(Hyperboloid.expmap(V, X))``
+    * ``dψ_x(Klein.logmap(y, x)) == Hyperboloid.logmap(ψy, X)``
+    * ``dψ_y(Klein.ptransp(v, x, y)) == Hyperboloid.ptransp(V, X, ψy)``
+    * ``Klein.tangent_norm(v, x) == Hyperboloid.tangent_norm(V, X)`` (the metric is the pullback)
+
+    Written out, ``dψ_x(u) = (√c·G³(x·u), G·u + c·G³(x·u)·x)`` with ``G = 1/√(1 - c‖x‖²)``; the jvp
+    of the library map is used instead of that formula so no hand algebra sits in the oracle.
+    """
+    c = curvature
+    atol, rtol = tolerance
+    klein, hyperboloid = Klein(dtype=dtype), Hyperboloid(dtype=dtype)
+    push = _push(iso.klein_to_hyperboloid, c)
+
+    n = N_POINTS // 2
+    xs, ys = klein_points[:n], klein_points[n : 2 * n]
+    v_BD = _klein_tangents(jax.random.PRNGKey(11), xs, c, dtype)
+    x_BA, v_BA = push(xs, v_BD)
+    y_BA = _batch(iso.klein_to_hyperboloid)(ys, c)
+
+    norm_k = jax.vmap(lambda v, x: klein.tangent_norm(v, x, c))(v_BD, xs)
+    norm_h = jax.vmap(lambda v, x: hyperboloid.tangent_norm(v, x, c))(v_BA, x_BA)
+    assert jnp.allclose(norm_k, norm_h, atol=atol, rtol=rtol), "Klein metric != pullback of the Minkowski metric"
+
+    exp_k = jax.vmap(lambda v, x: klein.expmap(v, x, c))(v_BD, xs)
+    exp_h = _batch(iso.hyperboloid_to_klein)(jax.vmap(lambda v, x: hyperboloid.expmap(v, x, c))(v_BA, x_BA), c)
+    assert jnp.allclose(exp_k, exp_h, atol=atol, rtol=rtol), "Klein.expmap != H->K(Hyperboloid.expmap(dψ v))"
+
+    log_k = jax.vmap(lambda y, x: klein.logmap(y, x, c))(ys, xs)
+    _, log_k_pushed = push(xs, log_k)
+    log_h = jax.vmap(lambda y, x: hyperboloid.logmap(y, x, c))(y_BA, x_BA)
+    assert jnp.allclose(log_k_pushed, log_h, atol=atol, rtol=rtol), "dψ(Klein.logmap) != Hyperboloid.logmap"
+
+    pt_k = jax.vmap(lambda v, x, y: klein.ptransp(v, x, y, c))(v_BD, xs, ys)
+    _, pt_k_pushed = push(ys, pt_k)
+    pt_h = jax.vmap(lambda v, x, y: hyperboloid.ptransp(v, x, y, c))(v_BA, x_BA, y_BA)
+    assert jnp.allclose(pt_k_pushed, pt_h, atol=atol, rtol=rtol), "dψ(Klein.ptransp) != Hyperboloid.ptransp(dψ v)"
+
+
+def test_klein_einstein_midpoint_is_the_lorentz_midpoint_through_the_maps(
+    klein_points: jnp.ndarray,
+    curvature: float,
+    dtype: jnp.dtype,
+    tolerance: tuple[float, float],
+):
+    """``Klein.einstein_midpoint == H->K(lorentz_midpoint(K->H(points)))``, weighted and uniform.
+
+    The Einstein midpoint ``Σ wᵢGᵢxᵢ/Σ wᵢGᵢ`` (``Gᵢ`` the Lorentz factors) is the Klein coordinate of the weighted Lorentz
+    centroid ``Σ wᵢXᵢ`` (normalized onto the sheet), and ``hyperboloid_core.lorentz_midpoint``
+    computes that centroid with its own cancellation-free normalization. Checked on the full
+    20-point cloud and on a 3-point subset, whose midpoint sits far from the origin.
+    """
+    c = curvature
+    atol, rtol = tolerance
+    klein = Klein(dtype=dtype)
+    weights_N = jax.random.uniform(jax.random.PRNGKey(13), (N_POINTS,), dtype=dtype, minval=0.1, maxval=1.0)
+
+    for pts_ND, w_N in ((klein_points, weights_N), (klein_points[:3], weights_N[:3])):
+        lifted_NA = _batch(iso.klein_to_hyperboloid)(pts_ND, c)
+        mid_h = iso.hyperboloid_to_klein(lorentz_midpoint(lifted_NA, w_N[None, :], c)[0], c)
+        assert jnp.allclose(klein.einstein_midpoint(pts_ND, w_N, c), mid_h, atol=atol, rtol=rtol), "weighted"
+
+        uniform_N = jnp.full((pts_ND.shape[0],), 1.0 / pts_ND.shape[0], dtype=dtype)
+        mid_h_uniform = iso.hyperboloid_to_klein(lorentz_midpoint(lifted_NA, uniform_N[None, :], c)[0], c)
+        assert jnp.allclose(klein.einstein_midpoint(pts_ND, None, c), mid_h_uniform, atol=atol, rtol=rtol), "uniform"
