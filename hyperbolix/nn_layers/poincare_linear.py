@@ -18,7 +18,7 @@ from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import ManifoldParam
-from ..utils.math_utils import sinh
+from ..utils.math_utils import _pow2_divisor, floor_at, safe_hypot_norm, sinh
 from ._helpers import validate_poincare_manifold
 
 
@@ -164,7 +164,10 @@ def _poincare_pp_forward(
 ) -> Float[Array, "batch out_dim"]:
     """Pure-function HNN++ forward pass.
 
-    Used by both HypLinearPoincarePP and HypConv2DPoincare.
+    Used by both HypLinearPoincarePP and HypConv2DPoincare. The final lift
+    ``y = w / (1 + sqrt(1 + c‖w‖²))`` with ``w = sinh(√c·v)/√c`` is evaluated without squaring
+    anything large, so the output stays finite and off the origin for every finite score ``v``
+    (see the comment in the body).
     """
     # Map to manifold if needed (static branch - JIT friendly)
     if input_space == "tangent":
@@ -173,12 +176,22 @@ def _poincare_pp_forward(
     # Compute multinomial linear regression
     v = manifold.compute_mlr_pp(x_BI, kernel_OI, bias_O1, c)
 
-    # Generalized linear transformation
+    # Generalized linear transformation y = w / (1 + sqrt(1 + c‖w‖²)), w = sinh(√c·v)/√c, written in
+    # s = √c·w with each row divided by D, the power of two at or below max(max|s|, 1):
+    #     t = s·(1/D),   y = t / (√c·(1/D + sqrt(‖t‖² + 1/D²))).
+    # Squaring w directly overflowed float32 once √c·v passed ~44 and returned exactly the origin with
+    # a zero gradient. Here |t| < 2, so nothing overflows and the denominator stays small (JAX's div
+    # JVP squares it). Multiply by 1/D rather than divide by D: XLA folds (s/D)/X into s/(D·X), which
+    # overflows again. D carries no gradient; at v = 0 the Jacobian dy/dv is exactly I/2. Near the sinh
+    # clip the backward's cotangent·(1/D) can be subnormal, and XLA:CPU flushes it to zero.
     sqrt_c = jnp.sqrt(c)
-    w_BO = sinh(sqrt_c * v) / sqrt_c
-    w2_B1 = jnp.sum(w_BO**2, axis=-1, keepdims=True)
-    denom_B1 = 1 + jnp.sqrt(1 + c * w2_B1)
-    res_BO = w_BO / denom_B1  # (B, 1) broadcasts over (B, O)
+    s_BO = sinh(sqrt_c * v)  # (B, O)
+    one = jnp.asarray(1.0, dtype=s_BO.dtype)
+    scale_B1 = jax.lax.stop_gradient(floor_at(jnp.max(jnp.abs(s_BO), axis=-1, keepdims=True), one))  # (B, 1)
+    inv_divisor_B1 = one / _pow2_divisor(scale_B1)  # (B, 1), exact power of two in (0, 1]
+    t_BO = s_BO * inv_divisor_B1  # exact unless subnormal (see above); max|t| in [1, 2) when D > 1
+    denom_B1 = inv_divisor_B1 + safe_hypot_norm(t_BO, inv_divisor_B1[:, 0])[:, None]  # (B, 1)
+    res_BO = t_BO / (sqrt_c * denom_B1)  # (B, 1) broadcasts over (B, O)
 
     # Project results to the manifold
     res_BO = jax.vmap(manifold.proj, in_axes=(0, None), out_axes=0)(res_BO, c)
