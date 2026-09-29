@@ -107,7 +107,9 @@ class HypRegressionPoincareBusemann(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization.
     input_space : str
-        ``"manifold"`` (default) or ``"tangent"`` (lift via ``expmap_0`` first). Static for JIT.
+        ``"manifold"`` (default) or ``"tangent"``: a tangent vector at the origin, scored where
+        ``expmap_0`` would place it without forming the ball point, whose float32 lift stops at the
+        ceiling ``√c‖v‖ ≈ 6.33`` (``Poincare._busemann_tangent``). Static for JIT.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32). Compute precision
         of manifold operations is set by ``manifold.dtype``.
@@ -130,7 +132,7 @@ class HypRegressionPoincareBusemann(nnx.Module):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
-        validate_poincare_manifold(manifold_module, required_methods=("expmap_0", "busemann"))
+        validate_poincare_manifold(manifold_module, required_methods=("busemann", "_busemann_tangent"))
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim

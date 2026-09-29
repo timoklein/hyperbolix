@@ -157,7 +157,9 @@ class HypLinearPoincareBusemann(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization.
     input_space : str
-        ``"manifold"`` (default) or ``"tangent"`` (lift via ``expmap_0`` first). Static for JIT.
+        ``"manifold"`` (default) or ``"tangent"``: a tangent vector at the origin, scored where
+        ``expmap_0`` would place it without forming the ball point, whose float32 lift stops at the
+        ceiling ``√c‖v‖ ≈ 6.33`` (``Poincare._busemann_tangent``). Static for JIT.
     activation : Callable or None
         Optional Euclidean activation ``φ`` applied to the Busemann logits (default: identity).
         Avoid ``relu`` when stacking several of these layers on high-dimensional input — same
@@ -193,9 +195,11 @@ class HypLinearPoincareBusemann(nnx.Module):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
-        required_methods = ("expmap_0", "busemann")
+        # The methods `__call__` calls: `expmap_0` only for the gyro-bias point, since tangent input
+        # is scored by `_busemann_tangent` without the lift.
+        required_methods = ("busemann", "_busemann_tangent", "proj")
         if use_gyro_bias:
-            required_methods = ("expmap_0", "busemann", "addition")
+            required_methods = ("busemann", "_busemann_tangent", "proj", "expmap_0", "addition")
         validate_poincare_manifold(manifold_module, required_methods=required_methods)
         _assert_v_max_safe(v_max)
 
