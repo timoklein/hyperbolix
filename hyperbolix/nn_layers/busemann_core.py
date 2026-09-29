@@ -35,6 +35,8 @@ from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, clamp_to, safe_norm, safe_normalize
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 
+from .poincare_linear import _poincare_sinh_lift
+
 
 def _init_weight_norm_params(
     rngs: nnx.Rngs,
@@ -159,8 +161,12 @@ def busemann_fc_poincare_output(
 
     The ``clip`` is the same output-side overflow guard as the hyperboloid path
     (:func:`hyperboloid_core.sinh_lift_to_hyperboloid`); callers must
-    ``_assert_v_max_safe(v_max)``. The closed form always lands strictly inside the ball
-    (``√c·‖y‖ < 1``), so the caller's ``proj`` is defensive against float rounding only.
+    ``_assert_v_max_safe(v_max)``. The second line is evaluated by
+    :func:`~hyperbolix.nn_layers.poincare_linear._poincare_sinh_lift` without forming ``‖ω‖²``,
+    so it cannot overflow float32 for any ``v_max``, ``O`` or ``c``; saturated rows land at the
+    ball's edge, not the origin. In exact arithmetic the closed form lands strictly inside the
+    ball (``√c·‖y‖ < 1``); in float32 a saturated row can round onto or past the boundary, and the
+    caller's ``proj`` pulls it back.
 
     Parameters
     ----------
@@ -174,12 +180,10 @@ def busemann_fc_poincare_output(
     Returns
     -------
     Array, shape (B, O)
-        Points inside the Poincaré ball with curvature ``c`` (pre-projection).
+        Points in the Poincaré ball with curvature ``c``, before the caller's ``proj``.
     """
     sqrt_c = jnp.sqrt(c)
     # safe_sinh: expm1-form is an accuracy fix over XLA's CPU jnp.sinh (up to ~17-496 ulps off for
     # |x| >= 16), not just a clamp — the ±v_max clip here is still the output-side overflow guard.
-    omega_BO = safe_sinh(clamp_to(sqrt_c * u_BO, -v_max, v_max)) / sqrt_c
-    omega_sqnorm_B1 = jnp.sum(omega_BO**2, axis=-1, keepdims=True)
-    denom_B1 = 1.0 + jnp.sqrt(1.0 + c * omega_sqnorm_B1)
-    return omega_BO / denom_B1
+    s_BO = safe_sinh(clamp_to(sqrt_c * u_BO, -v_max, v_max))  # (B, O), s = √c·ω
+    return _poincare_sinh_lift(s_BO, c)

@@ -15,6 +15,7 @@ from flax import nnx
 from hyperbolix.manifolds import ProperVelocity
 from hyperbolix.nn_layers import HypLinearPV
 from hyperbolix.nn_layers.pv_linear import _pv_fc_forward
+from hyperbolix.utils.math_utils import sinh
 
 
 def _manifold(dtype: jnp.dtype) -> ProperVelocity:
@@ -214,6 +215,42 @@ def test_pv_fc_forward_helper_matches_layer(dtype):
     )
     atol = 1e-6 if dtype == jnp.float32 else 1e-12
     assert jnp.allclose(y_layer, y_helper, atol=atol)
+
+
+@pytest.mark.parametrize("c", [0.1, 1.0])
+def test_pv_fc_forward_passes_an_inf_score_through_f32(c):
+    """An inf score gives a non-finite output row, not sinh's clip value ``7e37/√c``.
+
+    Row 1 has an ``+inf`` entry; with a positive kernel and a negative bias both asinh terms go to
+    ``+inf`` with the same sign, so every score in that row is ``+inf`` (not NaN). The old
+    ``sinh(√c·v)/√c`` returned a finite, saturated row there. Finite rows must keep the old value
+    bit-for-bit, and their input gradient must stay finite.
+    """
+    dtype = jnp.float32
+    batch_size, in_dim, out_dim = 4, 5, 3
+    manifold = _manifold(dtype)
+    x_BI = _manifold_points(dtype, (batch_size, in_dim)).at[1, 0].set(jnp.inf)
+    kernel_OI = jnp.abs(jax.random.normal(jax.random.PRNGKey(1), (out_dim, in_dim), dtype=dtype)) * 0.5
+    bias_O1 = jnp.full((out_dim, 1), -0.1, dtype=dtype)
+    finite_rows = jnp.array([0, 2, 3])
+
+    @jax.jit
+    def forward(x_BI):
+        return _pv_fc_forward(x_BI, kernel_OI, bias_O1, manifold, c, "manifold")
+
+    @jax.jit
+    def old_forward(x_BI):
+        v_BO = manifold.compute_mlr(x_BI, kernel_OI, bias_O1, c)
+        sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=dtype))
+        return sinh(sqrt_c * v_BO) / sqrt_c
+
+    y_BO = forward(x_BI)
+    assert bool(jnp.all(jnp.isposinf(manifold.compute_mlr(x_BI, kernel_OI, bias_O1, c)[1])))
+    assert not bool(jnp.any(jnp.isfinite(y_BO[1])))
+    np.testing.assert_array_equal(np.asarray(y_BO[finite_rows]), np.asarray(old_forward(x_BI)[finite_rows]))
+
+    grad_BI = jax.jit(jax.grad(lambda x_BI: jnp.sum(forward(x_BI)[finite_rows] ** 2)))(x_BI)
+    assert bool(jnp.all(jnp.isfinite(grad_BI[finite_rows])))
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])

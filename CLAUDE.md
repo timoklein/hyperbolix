@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install
 uv sync --locked --dev
 
-# Run all tests (6,923 items across 1,241 test functions) on all cores (pytest-xdist; ~9 min on 48 CPU workers,
+# Run all tests (6,985 items across 1,249 test functions) on all cores (pytest-xdist; ~9 min on 48 CPU workers,
 # hours single-process: the suite is JAX-compile-heavy)
 uv run pytest -n auto
 

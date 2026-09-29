@@ -83,30 +83,6 @@ def test_lorentz_residual_origin_jacobians_match_literal_two_point_mean(dtype, o
     assert jnp.allclose(pullback(cotangent_A)[0], cotangent_A @ expected_AD, atol=atol, rtol=atol)
 
 
-def _radial_ratio_from_sq(sq: jax.Array, kind: str) -> jax.Array:
-    """Stable sinhc/asinhc as a function of the squared argument."""
-    small = sq < jnp.asarray(1e-6, dtype=sq.dtype)
-    safe_sq = jnp.where(small, jnp.ones_like(sq), sq)
-    z = jnp.sqrt(safe_sq)
-    if kind == "sinh":
-        ordinary = jnp.sinh(z) / z
-        series = 1.0 + sq / 6.0 + sq**2 / 120.0
-    else:
-        ordinary = jnp.arcsinh(z) / z
-        series = 1.0 - sq / 6.0 + 3.0 * sq**2 / 40.0
-    return jnp.where(small, series, ordinary)
-
-
-def _pv_log0(x_D: jax.Array, c: float) -> jax.Array:
-    sq = c * jnp.sum(x_D**2, axis=-1, keepdims=True)
-    return _radial_ratio_from_sq(sq, "asinh") * x_D
-
-
-def _pv_exp0(v_D: jax.Array, c: float) -> jax.Array:
-    sq = c * jnp.sum(v_D**2, axis=-1, keepdims=True)
-    return _radial_ratio_from_sq(sq, "sinh") * v_D
-
-
 def _inverse_boost_spatial(x_D: jax.Array, y_D: jax.Array, c: float) -> jax.Array:
     """Spatial part of the inverse Lorentz boost ``Lambda_x^-1 y``."""
     inv_c = jnp.asarray(1.0 / c, dtype=x_D.dtype)
@@ -137,16 +113,17 @@ def _radial_distance_sq(x_D: jax.Array, c: float) -> jax.Array:
 
 
 def _gyro_bn_oracle(spatial_ND: jax.Array, *, manifold_name: str, gamma: float, min_var: float, eps: float) -> jax.Array:
-    """Literal train-mode GyroBN pipeline with zero gyro-bias."""
-    if manifold_name == "hyperboloid":
-        points_NA = _sheet_lift(spatial_ND)
-        h_A = jnp.mean(points_NA, axis=0)
-        denom = jnp.sqrt(C * (h_A[0] ** 2 - jnp.sum(h_A[1:] ** 2)))
-        mean_D = h_A[1:] / denom
-        points_ND = spatial_ND
-    else:
-        mean_D = _pv_exp0(jnp.mean(_pv_log0(spatial_ND, C), axis=0), C)
-        points_ND = spatial_ND
+    """Literal train-mode GyroBN pipeline with zero gyro-bias.
+
+    PV coordinates are the spatial part of the hyperboloid lift, so both manifolds share the
+    same closed-form Lorentz-centroid batch mean.
+    """
+    del manifold_name
+    points_NA = _sheet_lift(spatial_ND)
+    h_A = jnp.mean(points_NA, axis=0)
+    denom = jnp.sqrt(C * (h_A[0] ** 2 - jnp.sum(h_A[1:] ** 2)))
+    mean_D = h_A[1:] / denom
+    points_ND = spatial_ND
 
     centered_ND = jax.vmap(_inverse_boost_spatial, in_axes=(None, 0, None))(mean_D, points_ND, C)
     var = jnp.maximum(jnp.mean(_radial_distance_sq(centered_ND, C)), jnp.asarray(min_var, dtype=spatial_ND.dtype))

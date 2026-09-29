@@ -1,7 +1,8 @@
 """HoroPCA — hyperbolic dimensionality reduction via horospherical projections.
 
 Port of the curvature-general HoroPCA variant (Chami et al., ICML 2021) to JAX. All
-computation runs on the hyperboloid; Poincaré input is mapped in via the exact isometry.
+computation runs on the hyperboloid; Poincaré, ProperVelocity, Klein and half-space input is mapped
+in via the exact isometries.
 K ideal points (horospheres) are jointly optimized to maximize the variance of the
 horospherically projected data (measured as the mean squared pairwise geodesic distance),
 using Adam with gradient clipping. Projecting onto the K-dimensional ideal span and reading
@@ -30,8 +31,7 @@ import jax.numpy as jnp
 import optax
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ..manifolds import Hyperboloid, Manifold, Poincare
-from ..manifolds._gyrovector_core import _proj_batch as _proj_batch_ball
+from ..manifolds import Hyperboloid, Manifold
 from ..manifolds.hyperboloid import (
     VERSION_DEFAULT,
     VERSION_SMOOTHENED,
@@ -45,11 +45,12 @@ from ..manifolds.hyperboloid import (
     _proj,
     _proj_batch,
 )
-from ..manifolds.isometry_mappings import hyperboloid_to_poincare, poincare_to_hyperboloid
+from ..manifolds.isometry_mappings import hyperboloid_to_poincare
 from ..manifolds.protocol import ScalarCurvature
 from ..utils.helpers import compute_pairwise_distances
 from ..utils.math_utils import MIN_NORM, floor_at, safe_norm, safe_normalize
 from ..utils.precision import MATMUL_PRECISION
+from ._input_models import clean, input_model, map_batch
 from .frechet import frechet_mean
 
 # -------------------------------------------------------------------------------------
@@ -331,16 +332,20 @@ class HoroPCA:
     variance of the horospherically projected data, then transform points to K-dimensional
     ball coordinates. Input/output models follow the manifold: Poincaré input ``(N, D)`` maps
     to ``(N, K)`` ball coordinates; Hyperboloid input ``(N, A)`` maps to ``(N, K+1)``
-    hyperboloid points (the ball coordinates lifted back through the isometry).
+    hyperboloid points; ProperVelocity, Klein and HalfSpace input ``(N, D)`` maps to ``(N, K)``
+    points of the same model (the ball coordinates mapped back through the isometry). Klein and
+    HalfSpace input is projected (``proj_batch``) before it is mapped onto the hyperboloid.
 
     Args:
-        manifold: A ``Poincare`` or ``Hyperboloid`` instance (sets the I/O model and dtype).
+        manifold: A ``Poincare``, ``Hyperboloid``, ``ProperVelocity``, ``Klein`` or ``HalfSpace``
+            instance (sets the I/O model and dtype).
         n_components: Number of components K (needs 1 <= K <= D, the spatial dim).
         lr: Adam learning rate (default 1e-3).
         max_steps: Number of optimization steps (default 100).
         center_data: Fréchet-mean-center the data before fitting (default True — the
             algorithm assumes mean-zero data). When False the boost is the identity.
-        frechet_step_size: Karcher step size for the Fréchet mean (default 1.0).
+        frechet_step_size: Multiplier on the Fréchet mean's curvature-aware Karcher step
+            (default 1.0).
         frechet_tol: Karcher convergence tolerance (default 1e-8).
         frechet_max_iters: Karcher iteration cap (default 100).
 
@@ -372,12 +377,7 @@ class HoroPCA:
         frechet_tol: float = 1e-8,
         frechet_max_iters: int = 100,
     ) -> None:
-        if isinstance(manifold, Hyperboloid):
-            self._is_hyperboloid = True
-        elif isinstance(manifold, Poincare):
-            self._is_hyperboloid = False
-        else:
-            raise ValueError(f"HoroPCA supports 'Poincare' or 'Hyperboloid' manifolds, got {type(manifold).__name__}.")
+        self._input_model = input_model(manifold, "HoroPCA")
 
         self.manifold = manifold
         self.n_components = n_components
@@ -402,25 +402,23 @@ class HoroPCA:
         self.explained_variance_ratio_: Array | None = None
 
     def _spatial_dim(self, x_ND: Float[Array, "N R"]) -> int:
-        """Spatial dim D from an input array (ambient - 1 for hyperboloid, as-is for ball)."""
-        return x_ND.shape[1] - 1 if self._is_hyperboloid else x_ND.shape[1]
+        """Spatial dim D from an input array (ambient - 1 for hyperboloid, as-is otherwise)."""
+        return x_ND.shape[1] - 1 if self._input_model.has_time else x_ND.shape[1]
 
     def _to_hyperboloid(self, x_ND: Float[Array, "N R"], c: ScalarCurvature) -> Float[Array, "N A"]:
         """Convert/clean input into on-manifold hyperboloid points (N, A)."""
         x_cast = self._hyperboloid._cast(x_ND)
-        if self._is_hyperboloid:
-            return _proj_batch(x_cast, c)  # projection hygiene
-        # Ball hygiene BEFORE the lift: poincare_to_hyperboloid floors 1 - c‖y‖² instead of
+        # Hygiene BEFORE the lift: e.g. poincare_to_hyperboloid floors 1 - c‖y‖² instead of
         # erroring, so an on/outside-boundary point (routine under float32 saturation) would lift
         # to a time coordinate ~1e15 and silently NaN the Fréchet mean.
-        x_ball = _proj_batch_ball(x_cast, c)
-        return jax.vmap(poincare_to_hyperboloid, in_axes=(0, None))(x_ball, c)
+        x_clean = clean(self._input_model, x_cast, c)
+        return map_batch(self._input_model.to_hyperboloid, x_clean, c)
 
     def fit(self, x_ND: Float[Array, "N R"], c: ScalarCurvature, key: PRNGKeyArray) -> "HoroPCA":
         """Fit the components on ``x_ND`` at curvature ``c``.
 
         Args:
-            x_ND: Input points, shape (N, D) for Poincaré or (N, A) for Hyperboloid.
+            x_ND: Input points, shape (N, A) for Hyperboloid, (N, D) for the other models.
             c: Curvature (positive) — bound into the fitted state.
             key: PRNG key for the Gaussian component init.
 
@@ -480,11 +478,11 @@ class HoroPCA:
         the fit-time ``c``).
 
         Args:
-            x_ND: Input points, shape (N, D) for Poincaré or (N, A) for Hyperboloid.
+            x_ND: Input points, shape (N, A) for Hyperboloid, (N, D) for the other models.
 
         Returns:
-            Poincaré ball coordinates ``(N, K)`` for Poincaré input, or hyperboloid points
-            ``(N, K+1)`` for Hyperboloid input.
+            Points of the input's model: hyperboloid points ``(N, K+1)`` for Hyperboloid input,
+            ``(N, K)`` coordinates otherwise.
         """
         if self.components_ is None or self.c_ is None or self.boost_ is None:
             raise ValueError("HoroPCA must be fitted before calling transform().")
@@ -493,10 +491,7 @@ class HoroPCA:
         x_hyp_NA = self._to_hyperboloid(x_ND, c)
         x_work_NA = _proj_batch(jnp.matmul(x_hyp_NA, self.boost_.T, precision=MATMUL_PRECISION), c)
         _, ball_NK = _transform_jit(x_work_NA, self.components_, c)
-
-        if self._is_hyperboloid:
-            return jax.vmap(poincare_to_hyperboloid, in_axes=(0, None))(ball_NK, c)  # (N, K+1)
-        return ball_NK  # (N, K)
+        return map_batch(self._input_model.from_ball, ball_NK, c)  # (N, K+1) hyperboloid, else (N, K)
 
     def fit_transform(self, x_ND: Float[Array, "N R"], c: ScalarCurvature, key: PRNGKeyArray) -> Float[Array, "N out"]:
         """Fit on ``x_ND`` then return its embedding (equivalent to ``fit(...).transform(...)``)."""

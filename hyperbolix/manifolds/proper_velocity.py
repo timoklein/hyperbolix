@@ -695,9 +695,13 @@ def _egrad2rgrad(grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCur
 
 
 def _proj(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-    """Projection onto PV. PV is R^n; we only replace non-finite entries."""
+    """Projection onto PV: the identity.
+
+    PV is all of R^n, so every finite point is already on the manifold. Non-finite entries pass
+    through unchanged, so a diverged point stays loud.
+    """
     del c
-    return jnp.nan_to_num(x)
+    return x
 
 
 def _is_in_manifold(x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
@@ -834,7 +838,7 @@ class ProperVelocity(ManifoldBase):
     # -- Gyro-operations -----------------------------------------------------
 
     def proj(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-        """Projection onto PV (replaces non-finite values; PV is unconstrained)."""
+        """Projection onto PV: the identity (PV is R^n; non-finite entries pass through)."""
         return _proj(self._cast(x), c)
 
     def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:

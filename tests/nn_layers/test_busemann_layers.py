@@ -331,3 +331,31 @@ def test_busemann_row_with_infinite_time_coordinate_stays_non_finite():
 
     assert not bool(jnp.isfinite(y_BAo[4]).any()), f"diverged row must stay loud, got {y_BAo[4]}"
     assert np.asarray(y_BAo[:4]).tobytes() == np.asarray(good_only_BAo).tobytes()
+
+
+@pytest.mark.parametrize("c", [0.01, 1.0])
+def test_bfc_poincare_saturated_scores_stay_at_boundary_f32(c):
+    """Saturated Busemann scores must lift to the ball's edge in float32, not collapse to the origin.
+
+    Regression: the Poincaré output map squared ω = sinh(√c·u)/√c, so ``sum(ω**2)`` overflowed once
+    O·sinh²(v_max)/c passed FLT_MAX (here v_max = 44, O = 64: sinh(44)² ≈ 4e37), and the output became
+    exactly the origin with an exactly-zero gradient and no NaN. ``log_scale + log(1e6)`` scales every
+    ``alpha_k`` by 1e6, which pushes most of the √c·u past the ``v_max`` clip.
+    """
+    in_dim, out_dim, v_max = 16, 64, 44.0
+    layer = HypLinearPoincareBusemann(get_poincare(jnp.float32), in_dim, out_dim, rngs=nnx.Rngs(0), v_max=v_max)
+    u_BI = jax.random.normal(jax.random.PRNGKey(0), (4, in_dim), dtype=jnp.float32)
+    x_BI = 0.9 / jnp.sqrt(c) * u_BI / jnp.linalg.norm(u_BI, axis=-1, keepdims=True)  # 0.9 of the ball radius
+    layer.log_scale[...] = layer.log_scale[...] + jnp.log(1e6)
+
+    def loss_fn(m):
+        return jnp.sum(m(x_BI, c))
+
+    y_BO = nnx.jit(lambda m: m(x_BI, c))(layer)
+    _loss, grads = nnx.jit(nnx.value_and_grad(loss_fn))(layer)
+    radius_B = jnp.sqrt(c) * jnp.linalg.norm(y_BO, axis=-1)
+
+    assert jnp.all(jnp.isfinite(y_BO)), "non-finite output"
+    assert jnp.all(radius_B > 0.99), f"rows left the ball's edge (√c·‖y‖ = {radius_B})"
+    for _, value in jax.tree_util.tree_flatten_with_path(nnx.state(grads, nnx.Param))[0]:
+        assert jnp.all(jnp.isfinite(value)), "gradients contain NaN or Inf"

@@ -33,9 +33,12 @@ above); the per-sample radial RMSNorm covers all three.
   `ProperVelocityGyroBatchNorm`) — a port of GyroBN (Chen et al., ICLR 2024 / 2025).
   *Centers* by gyro-translating with the inverse batch mean, *scales* by the inverse
   Fréchet standard deviation, *biases* with a learned manifold point, and keeps
-  running statistics for evaluation (`use_running_average`). The Hyperboloid batch
-  mean is the closed-form Lorentz centroid; the PV mean is the closed-form
-  log-Euclidean mean. Both center with `gyro_difference`: the Hyperboloid operation
+  running statistics for evaluation (`use_running_average`). Both use the closed-form
+  Lorentz centroid as the batch mean; the PV layer takes it on the exact hyperboloid
+  lift of its points (PV coordinates are the hyperboloid's spatial part). The centroid
+  commutes with the gyro-translation used for centering, so the output's Fréchet mean
+  lies close to the bias point; the log-Euclidean mean the PV layer used before did
+  not. Both center with `gyro_difference`: the Hyperboloid operation
   uses a Cartesian inverse boost when either endpoint has scaled spatial radius at
   most 1e-1 and the stable polar frame otherwise, while the PV operation inherits both
   branches through its exact Hyperboloid lift. This also preserves derivatives with

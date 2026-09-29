@@ -21,6 +21,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
+from hyperbolix.decomposition import frechet_mean
 from hyperbolix.manifolds import Hyperboloid, Poincare, ProperVelocity
 from hyperbolix.nn_layers import (
     HyperboloidGyroBatchNorm,
@@ -77,10 +78,23 @@ def _lorentz_centroid_ref(manifold, x_NF, c):
     return s_F / (jnp.sqrt(c) * jnp.sqrt(-minkowski_sq))
 
 
+def _pv_lorentz_centroid_ref(manifold, x_ND, c):
+    """Uniform Lorentz centroid of PV points: lift ``x -> (sqrt(1/c + ||x||²), x)``, centroid, drop time."""
+    time_N1 = jnp.sqrt(1.0 / c + jnp.sum(x_ND**2, axis=-1, keepdims=True))
+    return _lorentz_centroid_ref(manifold, jnp.concatenate([time_N1, x_ND], axis=-1), c)[1:]
+
+
 def _log_euclidean_mean_ref(manifold, x_NF, c):
-    """``expmap_0(mean_i logmap_0(x_i))`` — the PV batch-mean estimator."""
+    """``expmap_0(mean_i logmap_0(x_i))`` — the PV batch mean before the Lorentz centroid."""
     v_NF = jax.vmap(manifold.logmap_0, in_axes=(0, None))(x_NF, c)
     return manifold.expmap_0(jnp.mean(v_NF, axis=0), c)
+
+
+class _LogEuclideanPVGyroBatchNorm(ProperVelocityGyroBatchNorm):
+    """``ProperVelocityGyroBatchNorm`` with the previous log-Euclidean batch mean (negative control)."""
+
+    def _batch_mean(self, x_NF, c):
+        return _log_euclidean_mean_ref(self.manifold, x_NF, c)
 
 
 CONFIGS = {
@@ -99,7 +113,7 @@ CONFIGS = {
         rms=ProperVelocityGyroRMSNorm,
         points=_pv_points,
         origin=lambda m, dim, dt: m.create_origin(1.0, dim),
-        batch_mean=_log_euclidean_mean_ref,
+        batch_mean=_pv_lorentz_centroid_ref,
         time=0,
     ),
     "poincare": dict(
@@ -259,8 +273,8 @@ def test_bn_centers_scales_and_biases(cfg, dtype):
     * scaling — the factor is checked by value, not just for finiteness;
     * bias — the radii are measured about ``w``, not the origin.
 
-    ``mu`` and ``var`` are recomputed here (Lorentz centroid / log-Euclidean mean
-    transcribed in ``CONFIGS[...]["batch_mean"]``, variance straight from
+    ``mu`` and ``var`` are recomputed here (the Lorentz centroid, taken on the
+    hyperboloid lift for PV, transcribed in ``CONFIGS[...]["batch_mean"]``, variance straight from
     ``manifold.dist``), so a ``frechet_variance ≡ 0`` mutation also fails: the
     library would then use the ``min_var`` floor while the reference uses the
     true variance.
@@ -488,7 +502,7 @@ def test_bn_pv_float32_tracks_float64_on_a_tight_cluster_at_scaled_radius_9():
     PV gyroaddition *is* the spatial part of the Lorentz boost (see
     ``ProperVelocity._addition``), so a clustered far batch puts
     ``ProperVelocityGyroBatchNorm``'s centering in exactly the regime the hyperboloid one is in:
-    the log-Euclidean batch mean lands *among* the points, both operands sit at ``a = 9`` and the
+    the batch mean lands *among* the points, both operands sit at ``a = 9`` and the
     result is ``O(1)``, where the boost's three ``O(e^{2a})`` terms cancel identically.
     ``ProperVelocityGyroBatchNorm`` therefore centres with
     :meth:`ProperVelocity.gyro_difference`.
@@ -497,11 +511,13 @@ def test_bn_pv_float32_tracks_float64_on_a_tight_cluster_at_scaled_radius_9():
     Both legs get **bit-identical** inputs (rounded to float32, then widened), so the only
     difference is the arithmetic precision.
 
-    Measured on this configuration (mean pairwise separation 1.84): max geodesic error between the
-    legs 6.3e-4 on the CPU / 5.7e-4 on an A100, against a bound of 2.6e-3 (4.1x); max relative
-    error of ``∂loss/∂bias`` 4.9e-4 / 4.7e-4 against a bound of 2e-3 (4.0x)
+    Measured on this configuration (mean pairwise separation 1.84) with the Lorentz-centroid batch
+    mean, on the CPU: max geodesic error between the legs 8.0e-4 against a bound of 2.6e-3 (3.3x);
+    max relative error of ``∂loss/∂bias`` 6.0e-4 against a bound of 2e-3 (3.3x)
+    (``logs/2026-09-29_follow-ups/1b_gyrobn/gyrobn_pv_mean.log``, section D). The previous
+    log-Euclidean mean gave 6.3e-4 / 4.9e-4 on the CPU and 5.7e-4 / 4.7e-4 on an A100
     (``logs/2026-09-08_hyperboloid_tangent_primitives/step2c_pv_new_test_measurements{,_gpu}.out``,
-    section 4). With the base class's ambient centering the same configuration gives 2.75 nats and
+    section 4). With that mean and the base class's ambient centering the configuration gives 2.75 nats and
     a bias gradient 6.7 relative off at ``a = 9``, and 10.9 nats / 2.9e+4 at ``a = 12``; the
     spread batch (random directions, mean back near the origin) is 3.4e-7 either way, which is why
     a far batch alone does not see this
@@ -550,6 +566,50 @@ def test_bn_pv_float32_tracks_float64_on_a_tight_cluster_at_scaled_radius_9():
     _, g64 = nnx.value_and_grad(lambda bn: loss_fn(bn, x_ND_64))(build(jnp.float64))
     rel = float(jnp.max(jnp.abs(g32.bias[...].astype(jnp.float64) - g64.bias[...])) / jnp.max(jnp.abs(g64.bias[...])))
     assert rel < 2e-3, f"float32 bias gradient is {rel:.3e} relative off the float64 one"
+
+
+def test_bn_pv_output_frechet_mean_sits_at_the_bias():
+    """Train-mode PV GyroBN puts the output's Fréchet mean at the bias point, with spread ``gamma``.
+
+    The batch is ``ctr ⊕ expmap_0(v_i)``: 256 points of spread ≈ 1 around a centre at distance 2
+    from the origin (``c = 1``, ``D = 16``). The oracle is the Karcher-iteration Fréchet mean,
+    asserted converged; ``step_size=0.5`` because the default step 1 stalls at output spread 2
+    (residual 0.50 after 500 iterations). Gyro-translation by the bias is an isometry, so the drift
+    is measured from ``expmap_0(bias)``.
+
+    Measured: drift 2.9e-3 (bound 2e-2) and spread 0.999994 (bound 1e-3) with the Lorentz
+    centroid; the previous log-Euclidean mean gives drift 0.35 and spread 0.92, and is asserted to
+    fail the drift bound so the test cannot pass vacuously
+    (``logs/2026-09-29_follow-ups/1b_gyrobn/gyrobn_pv_mean.log``, sections E and G).
+    """
+    c, D, N, R, s = 1.0, 16, 256, 2.0, 1.0
+    pv = ProperVelocity(dtype=jnp.float64)
+    k_dir, k_pts, k_bias = jax.random.split(jax.random.PRNGKey(7), 3)
+    u_D = jax.random.normal(k_dir, (D,), dtype=jnp.float64)
+    u_D /= jnp.linalg.norm(u_D)
+    ctr_D = pv.expmap_0(R * u_D, c)
+    v_ND = (s / jnp.sqrt(D)) * jax.random.normal(k_pts, (N, D), dtype=jnp.float64)
+    pts_ND = jax.vmap(pv.expmap_0, in_axes=(0, None))(v_ND, c)
+    x_ND = jax.vmap(pv.addition, in_axes=(None, 0, None))(ctr_D, pts_ND, c)
+    bias_D = 0.3 * jax.random.normal(k_bias, (D,), dtype=jnp.float64)
+    bias_pt_D = pv.expmap_0(bias_D, c)
+
+    def drift_and_spread(bn_cls):
+        bn = bn_cls(pv, num_features=D, param_dtype=jnp.float64)
+        bn.bias[...] = bias_D
+        y_ND = bn(x_ND, c=c, use_running_average=False)
+        m_D = frechet_mean(y_ND, pv, c, step_size=0.5, max_iters=500, tol=1e-12)
+        grad_D = jnp.mean(jax.vmap(pv.logmap, in_axes=(0, None, None))(y_ND, m_D, c), axis=0)
+        assert float(pv.tangent_norm(grad_D, m_D, c)) < 1e-10, "the Fréchet-mean oracle did not converge"
+        d_N = jax.vmap(pv.dist, in_axes=(0, None, None))(y_ND, m_D, c)
+        return float(pv.dist(m_D, bias_pt_D, c)), float(jnp.sqrt(jnp.mean(d_N**2)))
+
+    drift, spread = drift_and_spread(ProperVelocityGyroBatchNorm)
+    assert drift < 2e-2, f"output Fréchet mean is {drift:.3e} from the bias point"
+    assert abs(spread - 1.0) < 1e-3, f"output spread is {spread:.6f}, gamma is 1"
+
+    drift_old, _ = drift_and_spread(_LogEuclideanPVGyroBatchNorm)
+    assert drift_old > 2e-2, f"negative control: the log-Euclidean mean drifts only {drift_old:.3e}"
 
 
 # ============================================================================

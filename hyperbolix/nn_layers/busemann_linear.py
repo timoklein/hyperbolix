@@ -228,7 +228,8 @@ class HypLinearPoincareBusemann(nnx.Module):
         if self.activation is not None:
             u_BO = self.activation(u_BO)
         y_BO = busemann_fc_poincare_output(u_BO, c, self.v_max)
-        # Closed form already lands strictly inside the ball; proj guards against float rounding.
+        # The closed form lands strictly inside the ball in exact arithmetic, but a saturated float32
+        # row can round onto or just past the boundary (√c·‖y‖ ≥ 1); proj pulls it back inside.
         y_BO = jax.vmap(self.manifold.proj, in_axes=(0, None))(y_BO, c)
 
         if self.gyro_bias is not None:

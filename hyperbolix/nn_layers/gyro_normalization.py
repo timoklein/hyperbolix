@@ -55,6 +55,7 @@ Dimension key
   N: flattened number of points (product of all leading dims)
   F: feature dim of an input point  (ambient: D+1 for Hyperboloid, D for PV)
   D: spatial feature dim (== ``num_features``)
+  A: ambient dim D+1 of a PV point lifted to the hyperboloid
 
 References
 ----------
@@ -73,6 +74,7 @@ from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.manifolds.isometry_mappings import hyperboloid_to_pv, pv_to_hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
 from hyperbolix.utils.math_utils import floor_at
@@ -277,10 +279,16 @@ class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
 class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
     """GyroBN for the Proper Velocity (PV) model.
 
-    Inputs are ``(..., D)`` PV points; ``num_features = D``. PV has no closed-form
-    centroid, so the batch mean is the closed-form **log-Euclidean** mean
-    ``expmap_0(mean_i logmap_0(x_i))`` (the GyroBN reference's ``use_euclid_stats``
-    mode): no iteration, fully vmap/JIT-clean.
+    Inputs are ``(..., D)`` PV points; ``num_features = D``. PV coordinates are the
+    spatial part of a hyperboloid point, so the batch mean is the closed-form Lorentz
+    centroid :class:`HyperboloidGyroBatchNorm` uses, taken on the exact lift
+    :func:`~hyperbolix.manifolds.isometry_mappings.pv_to_hyperboloid` and mapped back.
+    The centroid commutes with the gyro-translation used for centering, so the output's
+    Fréchet mean lies close to the bias point with spread close to ``gamma``. The earlier
+    log-Euclidean mean ``expmap_0(mean_i logmap_0(x_i))`` does not commute with it: for
+    a batch of spread 2 centered at distance 2 to 5 from the origin (``c = 1``,
+    ``gamma = 1``), the output's Fréchet mean was 0.73-0.77 from the bias point and its
+    spread 0.59-0.63; the centroid gives 8.2e-3 and 1.000.
 
     Centering uses :meth:`ProperVelocity.gyro_difference`. PV gyroaddition is the
     spatial part of a Lorentz boost, so the general inverse-addition spelling can
@@ -302,9 +310,10 @@ class ProperVelocityGyroBatchNorm(_GyroBatchNormBase):
         super().__init__(manifold_module, num_features, **kwargs)
 
     def _batch_mean(self, x_NF: Float[Array, "N F"], c: float) -> Float[Array, "F"]:
-        v_NF = jax.vmap(self.manifold.logmap_0, in_axes=(0, None))(x_NF, c)
-        v_mean_F = jnp.mean(v_NF, axis=0)
-        return self.manifold.expmap_0(v_mean_F, c)
+        z_NA = jax.vmap(pv_to_hyperboloid, in_axes=(0, None))(x_NF, c)  # exact lift, A = D + 1
+        n = x_NF.shape[0]
+        weights_1N = jnp.full((1, n), 1.0 / n, dtype=x_NF.dtype)  # uniform centroid
+        return hyperboloid_to_pv(lorentz_midpoint(z_NA, weights_1N, c)[0], c)
 
     def _center(self, mu_F: Float[Array, "F"], x_NF: Float[Array, "N F"], c: float) -> Float[Array, "N F"]:
         """Center through PV's exact lift to the origin-Cartesian/polar gyro-difference."""

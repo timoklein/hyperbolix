@@ -7,6 +7,8 @@ Correctness anchors (all independent of the iteration itself):
 - A singleton is its own mean.
 - Cross-model consistency: the Poincaré and hyperboloid means agree under the isometry.
 - The output dtype is preserved and an explicit ``init_D`` reaches the same fixed point.
+- The curvature-aware step converges on a batch spread past √c·d ≈ 2.
+- On a product manifold the mean is the concatenation of the factor means.
 """
 
 import jax
@@ -16,7 +18,7 @@ import pytest
 
 from hyperbolix.decomposition import frechet_mean
 from hyperbolix.distributions import wrapped_normal_hyperboloid as wn
-from hyperbolix.manifolds import Euclidean, Hyperboloid, Poincare, ProperVelocity
+from hyperbolix.manifolds import Euclidean, HalfSpace, Hyperboloid, Klein, Poincare, ProductManifold, ProperVelocity
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.nn_layers.hyperboloid_core import lorentz_midpoint
 
@@ -139,9 +141,9 @@ def test_frechet_mean_dtype_and_explicit_init(dtype, c):
 # Manifold-generic correctness (audit M2-07)
 #
 # Every test above runs on the Hyperboloid or the Poincaré ball, both of which get a
-# closed-form initial estimate from ``frechet_mean``'s type dispatch. The two below cover the
+# closed-form initial estimate from ``frechet_mean``'s type dispatch. The ones below cover the
 # other two branches: Euclidean (where the answer is known exactly) and the generic
-# "start from x[0]" fallback that ProperVelocity takes.
+# "start from x[0]" fallback that ProperVelocity, Klein and HalfSpace take.
 # =============================================================================================
 
 
@@ -181,6 +183,76 @@ def test_frechet_mean_pv_is_a_stationary_point(c):
     mean_R = frechet_mean(x_NR, manifold, c, max_iters=300)
     assert float(jnp.linalg.norm(jax.grad(objective)(mean_R))) < 1e-5
     assert float(jnp.linalg.norm(jax.grad(objective)(mean_R + 0.5))) > 1.0
+
+
+@pytest.mark.parametrize("model", ["Klein", "HalfSpace"])
+@pytest.mark.parametrize("c", CURVATURES)
+def test_frechet_mean_klein_halfspace_stationary_and_isometric(model, c):
+    """On Klein and HalfSpace the mean is a stationary point and maps onto the hyperboloid mean.
+
+    Same autodiff oracle as the PV test: both charts are open subsets of ℝⁿ with a positive-definite
+    metric, so the Euclidean gradient of Σ d(x_i, ·)² vanishes exactly where the Riemannian one
+    does. The points are mapped in from the hyperboloid, whose (closed-form-initialized) mean,
+    mapped the same way, is a second answer computed on a different chart.
+    """
+    dtype = jnp.float64
+    manifold, from_hyp = {
+        "Klein": (Klein(dtype=dtype), iso.hyperboloid_to_klein),
+        "HalfSpace": (HalfSpace(dtype=dtype), iso.hyperboloid_to_halfspace),
+    }[model]
+    x_hyp = _hyp_points(10, 20, 4, c, sigma=0.5, dtype=dtype)
+    x_NR = jax.vmap(from_hyp, in_axes=(0, None))(x_hyp, c)
+
+    def objective(mean_R):
+        return jnp.sum(jax.vmap(manifold.dist, in_axes=(0, None, None))(x_NR, mean_R, c) ** 2)
+
+    mean_R = frechet_mean(x_NR, manifold, c, max_iters=300)
+    assert float(jnp.linalg.norm(jax.grad(objective)(mean_R))) < 1e-5
+    assert float(jnp.linalg.norm(jax.grad(objective)(mean_R + 0.1))) > 1.0
+
+    mean_hyp = frechet_mean(x_hyp, Hyperboloid(dtype=dtype), c, max_iters=300)
+    assert float(manifold.dist(mean_R, from_hyp(mean_hyp, c), c)) < 1e-6
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_frechet_mean_converges_on_a_spread_batch(seed):
+    """The curvature-aware step converges at spread √c·d ≈ 2, where the fixed Karcher step oscillates.
+
+    Wrapped-normal cloud with tangent spread sigma·√D = 2 at c = 1, on the Hyperboloid and the same
+    cloud in ProperVelocity. The Hessian of ½d² reaches a·coth(a) ≈ 2 in the non-radial directions
+    there, so the old fixed step 1 overshoots. Measured residual after the default 100 iterations
+    (seeds 0 / 1): old fixed step 1.3 / 3.4e-3 (Hyperboloid) and 1.3 / 0.13 (PV); curvature-aware
+    step 1.1e-10 / 5.3e-10 and 1.1e-10 / 4.3e-10
+    (logs/2026-09-29_follow-ups/4_fixes/frechet_spread_test_residuals.out).
+    """
+    dtype, c, dim = jnp.float64, 1.0, 16
+    x_hyp = _hyp_points(seed, 64, dim, c, sigma=2.0 / np.sqrt(dim), dtype=dtype)
+    x_pv = jax.vmap(iso.hyperboloid_to_pv, in_axes=(0, None))(x_hyp, c)
+    for manifold, x_NR in ((Hyperboloid(dtype=dtype), x_hyp), (ProperVelocity(dtype=dtype), x_pv)):
+        mean_R = frechet_mean(x_NR, manifold, c)  # default step_size and max_iters
+        assert _stationarity_residual(x_NR, manifold, mean_R, c) < 1e-6
+
+
+def test_frechet_mean_product_is_the_product_of_factor_means():
+    """On a ProductManifold with per-factor curvatures the mean is the concatenated factor means.
+
+    ½d² on a product is the sum of the factors' ½d², so its minimizer is the tuple of the factor
+    minimizers. The two factors have different curvatures (a per-factor ``c`` sequence), which is
+    what the curvature-aware step has to reduce to one scalar.
+    """
+    dtype, c_ball, c_hyp = jnp.float64, 1.0, 0.5
+    P, H = Poincare(dtype=dtype), Hyperboloid(dtype=dtype)
+    product = ProductManifold((P, 3), (H, 4), dtype=dtype)
+    x_ball = jax.vmap(iso.hyperboloid_to_poincare, in_axes=(0, None))(_hyp_points(10, 20, 3, c_ball, 0.5, dtype), c_ball)
+    x_hyp = _hyp_points(11, 20, 3, c_hyp, 0.5, dtype)
+    x_NR = jnp.concatenate([x_ball, x_hyp], axis=-1)  # (20, 3 + 4)
+
+    mean_R = frechet_mean(x_NR, product, (c_ball, c_hyp), max_iters=300)
+    factor_means_R = jnp.concatenate(
+        [frechet_mean(x_ball, P, c_ball, max_iters=300), frechet_mean(x_hyp, H, c_hyp, max_iters=300)]
+    )
+    assert mean_R.shape == (7,)
+    assert jnp.allclose(mean_R, factor_means_R, atol=1e-6)
 
 
 # =============================================================================================
