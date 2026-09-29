@@ -180,25 +180,51 @@ def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
 
 
 def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-    """Exponential map ``exp_x(v) = x + v / (θ·coth θ + c(x·v)/g_x)``, ``θ = √c·‖v‖_x``.
+    """Exponential map ``exp_x(v) = x + v / (θ·coth θ + u)``, ``θ = √c·‖v‖_x``, ``u = c(x·v)/g_x``.
 
     Klein geodesics are chords, so ``exp_x(v)`` lies on the ray ``x + t·v``; the scalar follows
-    from the hyperboloid geodesic pulled back through the isometry. ``θ·coth θ`` is evaluated by
-    :func:`_xcothx`, so ``v = 0`` gives ``x`` with Jacobian exactly the identity. The denominator is
-    positive: ``θ·coth θ > θ ≥ c|x·v|/g_x``.
+    from the hyperboloid geodesic pulled back through the isometry. The denominator is positive:
+    ``θ·coth θ > θ ≥ |u|``.
+
+    Outward (``u ≥ 0``) and short (``θ ≤ 0.5``) steps evaluate it as written, ``θ·coth θ`` by
+    :func:`_xcothx`, so ``v = 0`` gives ``x`` with Jacobian exactly the identity. For an inward step
+    (``u < 0``) it is a difference of two ≈θ terms — a radial step from scaled radius ``a`` keeps only
+    ``θ·(1 - tanh a)`` — and past θ ≈ 7.2 the saturated ``tanh`` inside :func:`_xcothx` adds
+    ``10·eps·θ`` to it. With ``q = θ² - u² = c‖v‖²/g_x`` the inward denominator is instead a sum of
+    non-negative terms::
+
+        θ·coth θ + u = A + q/(θ - u),      A = θ(coth θ - 1) = 2θ·e^{-2θ}/(1 - e^{-2θ})
+
+    ``q`` and ``θ - u`` share the factor ``1/g_x``, so the second term is formed as
+    ``c‖v‖²/(√c·√(g_x‖v‖² + c(x·v)²) - c(x·v))``, whose dominant part never sees the rounding of
+    ``g_x``. On this branch ``e^{-2θ} ≤ e^{-1}``, so ``1 - e^{-2θ}`` does not cancel, and unlike
+    ``2θ/expm1(2θ)`` the form keeps a finite derivative where ``e^{2θ}`` overflows. Measured in
+    float32 on radial steps at ``c = 1`` against the float64 hyperboloid expmap of the same inputs:
+    0.85 → 1.4e-4 nats at (a, θ) = (4, 8), 7.2e-4 → 5.4e-6 at (3, 6); over oblique steps that stay
+    inside the chart the error is within ~11 times the chart floor ``eps·cosh²(a)``, the rounding of
+    ``g_x`` that θ and the stored result still carry (``logs/2026-09-29_cancellation-free/1d/``). Both
+    branches are exact identities of the same function; the double ``where`` on θ and on ``θ - u``
+    (zero only at ``v = 0``) keeps the untaken branch finite in reverse mode.
 
     The Zhang et al. (2026) reference implementation's ``_klein_expmap`` (sc-zyl/Klein_hml,
     ``Hyperbolic/hmath.py``) omits the factor ``c`` in the denominator's second term (exact only
     at ``c = 1``).
 
     ``g_x‖v‖²`` overflows float32 past tangent coordinate ~1.8e19 (a diverging network); there
-    ``θ = inf`` and the result is the base point ``x``, as for ``Poincare.expmap``.
+    ``θ = inf``, the step takes the literal branch, and the result is the base point ``x``, as for
+    ``Poincare.expmap``.
     """
     g_x = _gap(x, c)
     xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
     v2 = jnp.dot(v, v, precision=MATMUL_PRECISION)
-    theta = jnp.sqrt(c) * safe_sqrt(g_x * v2 + c * xv * xv) / g_x
-    return _proj(x + v / (_xcothx(theta) + c * xv / g_x), c)
+    r = jnp.sqrt(c) * safe_sqrt(g_x * v2 + c * xv * xv)  # g_x·θ
+    theta = r / g_x
+    inward = (xv < 0) & (theta > 0.5) & (theta < jnp.inf)
+    theta_in = jnp.where(inward, theta, jnp.ones_like(theta))
+    den = jnp.where(inward, r - c * xv, jnp.ones_like(theta))  # g_x·(θ - u), a sum of positives when inward
+    e = jnp.exp(-2.0 * theta_in)
+    d_in = 2.0 * theta_in * e / (1.0 - e) + c * v2 / den
+    return _proj(x + v / jnp.where(inward, d_in, _xcothx(theta) + c * xv / g_x), c)
 
 
 def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:

@@ -703,6 +703,123 @@ def test_float32_grads_match_float64(c):
 
 
 # ---------------------------------------------------------------------------
+# 8b. expmap: inward steps (x·v < 0)
+# ---------------------------------------------------------------------------
+
+
+def _np_expmap_oracle(x_D: np.ndarray, v_D: np.ndarray, c: float) -> np.ndarray:
+    """Long-double hyperboloid geodesic of the lifted ``(x, v)``, mapped back with ``k = Y_s/(√c·Y₀)``.
+
+    ``V = (√c(x·v)/g^{3/2}, v/√g + c(x·v)·x/g^{3/2})`` is the differential of :func:`_np_lift`, and
+    ``exp_X(V) = cosh(θ)·X + sinh(θ)/θ·V`` with ``θ = √c·‖v‖_x`` from the literal Klein metric (the lift
+    is an isometry).
+    """
+    ld = np.longdouble
+    x, v, c_ld = x_D.astype(ld), v_D.astype(ld), ld(c)
+    g = 1 - c_ld * (x @ x)
+    xv = x @ v
+    lift_x = np.concatenate([[1 / (np.sqrt(c_ld) * np.sqrt(g))], x / np.sqrt(g)])
+    lift_v = np.concatenate([[np.sqrt(c_ld) * xv / g**1.5], v / np.sqrt(g) + c_ld * xv * x / g**1.5])
+    theta = np.sqrt(c_ld) * np.sqrt((v @ v) / g + c_ld * xv**2 / g**2)
+    y = np.cosh(theta) * lift_x + np.sinh(theta) / theta * lift_v
+    return y[1:] / (np.sqrt(c_ld) * y[0])
+
+
+def _inward_step(a: float, theta: float, phi: float, c: float, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    """Float64 base point at scaled radius ``a`` and a step of scaled length ``θ`` at ``φ`` radians off ``-x̂`` (dim 5)."""
+    x_hat = rng.normal(size=5)
+    x_hat /= np.linalg.norm(x_hat)
+    n_D = rng.normal(size=5)
+    n_D -= (n_D @ x_hat) * x_hat
+    n_D /= np.linalg.norm(n_D)
+    x_D = x_hat * math.tanh(a) / math.sqrt(c)
+    u_D = -math.cos(phi) * x_hat + math.sin(phi) * n_D
+    return x_D, u_D * (theta / (math.sqrt(c) * math.sqrt(_np_klein_inner(u_D, u_D, x_D, c))))
+
+
+@pytest.mark.parametrize(("a", "theta"), [(4.0, 8.0), (3.0, 6.0)])
+def test_expmap_inward_step_float32_matches_oracle(c, a, theta):
+    """Float32 steps through the origin against the long-double geodesic of the same float32 inputs.
+
+    Radial and near-radial (φ ≤ 3e-2) steps from scaled radius ``a`` land at ≈ ``θ - a`` on the far side,
+    inside the float32 chart. For ``x·v < 0`` the literal denominator ``θ·coth θ + u`` (``u = c(x·v)/g_x``)
+    is a difference of two ≈θ terms — and past θ ≈ 7.2 the saturated ``tanh`` inside ``_xcothx`` adds
+    ``10·eps·θ`` to it: the worst step of this battery was 0.84 nats off at (a, θ) = (4, 8) and 2.7e-3
+    at (3, 6). What remains is the chart's floor, the rounding of ``g = 1 - c‖x‖²`` (relative
+    ``eps·cosh²(a)``, 8.9e-5 at a = 4): measured worst 5.1e-4 (5.7 floors) and 2.9e-5 (2.5 floors).
+    Tolerance 16 floors.
+    """
+    k32 = Klein(dtype=jnp.float32)
+    rng = np.random.default_rng(31)
+    atol = 16 * float(jnp.finfo(jnp.float32).eps) * math.cosh(a) ** 2
+    for phi in (0.0, 1e-3, 1e-2, 3e-2):
+        x_D, v_D = _inward_step(a, theta, phi, c, rng)
+        x32 = k32.proj(jnp.asarray(x_D, jnp.float32), c)
+        v32 = jnp.asarray(v_D, jnp.float32)
+        y_D = np.asarray(k32.expmap(v32, x32, c), np.float64)
+        y_ref_D = _np_expmap_oracle(np.asarray(x32, np.float64), np.asarray(v32, np.float64), c)
+        err = math.sqrt(c) * _np_dist(y_D, y_ref_D, c)
+        assert err < atol, f"φ = {phi}: {err:.2e} nats (tolerance {atol:.1e})"
+
+
+def test_expmap_outward_and_short_steps_keep_the_literal_denominator(c):
+    """Outward (``x·v ≥ 0``) and short inward (θ ≤ 0.5) steps still evaluate ``x + v/(θ·coth θ + u)``.
+
+    Compared with that expression written out from the module's own helpers: within one ulp per
+    coordinate (the float32 rewrite of the inward branch must not move any other step).
+    """
+    from hyperbolix.manifolds._gyrovector_core import _proj
+    from hyperbolix.manifolds.klein import _gap, _xcothx
+    from hyperbolix.utils.math_utils import safe_sqrt
+    from hyperbolix.utils.precision import MATMUL_PRECISION
+
+    def literal(v, x):
+        g_x = _gap(x, c)
+        xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
+        v2 = jnp.dot(v, v, precision=MATMUL_PRECISION)
+        theta = jnp.sqrt(c) * safe_sqrt(g_x * v2 + c * xv * xv) / g_x
+        return _proj(x + v / (_xcothx(theta) + c * xv / g_x), c)
+
+    k32 = Klein(dtype=jnp.float32)
+    rng = np.random.default_rng(32)
+    cases = []
+    for a, theta, sign in [(0.5, 3.0, -1.0), (2.0, 1.5, -1.0), (3.0, 4.0, -1.0), (1.0, 0.3, 1.0), (4.0, 0.45, 1.0)]:
+        for phi in (0.0, 0.4, 1.2):
+            x_D, v_D = _inward_step(a, theta, phi, c, rng)
+            cases.append((x_D, sign * v_D))  # sign -1 flips the step outward; +1 keeps a short inward step
+    for x_D, v_D in cases:
+        x32 = k32.proj(jnp.asarray(x_D, jnp.float32), c)
+        v32 = jnp.asarray(v_D, jnp.float32)
+        got, want = np.asarray(k32.expmap(v32, x32, c)), np.asarray(jax.jit(literal)(v32, x32))
+        assert np.all(np.abs(got - want) <= np.spacing(np.abs(want))), (got, want)
+
+
+@pytest.mark.parametrize("theta", [3.0, 0.5])
+def test_expmap_inward_grads_match_central_differences(c, theta):
+    """Float64 derivatives of an inward step w.r.t. ``v``, ``x`` and ``c``, and of ``v = 0``, against central differences.
+
+    θ = 3 runs the rewritten inward branch, θ = 0.5 sits on its switch. At ``v = 0`` the gradient is taken in
+    reverse mode, where a NaN derivative of the untaken branch would reach the cotangent.
+    """
+    rng = np.random.default_rng(33)
+    x_D, v_D = _inward_step(2.0, theta, 0.4, c, rng)
+    w = jnp.asarray(rng.normal(size=5))
+    x, v = jnp.asarray(x_D), jnp.asarray(v_D)
+    checks = [
+        (lambda p: w @ _K64.expmap(p, x, c), v_D),
+        (lambda p: w @ _K64.expmap(v, p, c), x_D),
+        (lambda p: w @ _K64.expmap(p, x, c), np.zeros(5)),
+    ]
+    for f, at_D in checks:
+        got = np.asarray(jax.grad(f)(jnp.asarray(at_D)))
+        np.testing.assert_allclose(got, _central_diff_grad(jax.jit(f), at_D), rtol=1e-6, atol=1e-8)
+    f_c = jax.jit(lambda cc: w @ _K64.expmap(v, x, cc))
+    h = 1e-6 * c
+    fd = (float(f_c(jnp.asarray(c + h))) - float(f_c(jnp.asarray(c - h)))) / (2 * h)
+    np.testing.assert_allclose(float(jax.grad(f_c)(jnp.asarray(c, jnp.float64))), fd, rtol=1e-6, atol=1e-8)
+
+
+# ---------------------------------------------------------------------------
 # 9. Chart ceiling
 # ---------------------------------------------------------------------------
 
