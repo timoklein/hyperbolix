@@ -32,7 +32,7 @@ Create a Poincare instance with desired dtype, then use its methods:
     >>> distance = dist_jit(x, y, c=1.0, version_idx=VERSION_MOBIUS_DIRECT)
 
 Version Constants:
-    VERSION_MOBIUS_DIRECT (0): Direct Möbius distance formula (fastest)
+    VERSION_MOBIUS_DIRECT (0): Direct Möbius distance formula (default)
     VERSION_MOBIUS (1): Möbius distance via addition
     VERSION_METRIC_TENSOR (2): Metric tensor induced distance
 
@@ -65,7 +65,8 @@ For numerical accuracy with large distances or near-boundary points:
   points at scaled radius 7.2 on opposite sides (true √c·d = 14.4, c = 1) give 14.400112.
   VERSION_MOBIUS (1) takes the norm of the projected (-x) ⊕ y, which cannot pass the ceiling,
   so in float32 it still saturates: 12.637328 for the same pair, and its gradient is lost
-  (relative error 1.0).
+  (relative error 1.0). In float64 it saturates once √c·d passes the float64 ceiling 27.7:
+  27.725826 for a true 29 or 40, with the same loss of gradient.
 - Consider projection after operations to maintain manifold constraints
 """
 

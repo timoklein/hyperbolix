@@ -1179,7 +1179,7 @@ x_rec = pv.expmap_0(y, c)      # round-trips to x_large
 - **Poincaré ball**: compact, bounded — fine for small distances ($<5$) and visualization; clamp or use float64 past that.
 - **Hyperboloid**: unbounded radius, and `dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/`tangent_inner`/`egrad2rgrad`/gyro `addition`/`busemann` are all cancellation-free, designed to avoid the identified cancellation, with accuracy limited by the operation and stored inputs (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)). The constraint $\langle x, x\rangle_L = -1/c$ must still be maintained and can drift under Euclidean updates — see [The `atol` Convention](#the-atol-convention) — and a handful of places still lose accuracy for reasons the fix does not remove, listed under [Known Limitations](#hyperboloid-known-limitations).
 - **Proper Velocity**: unconstrained $\mathbb{R}^n$, stable at large radii, exact Euclidean retraction (plain `optax.adam` / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large. Its tangent-space metric shares the hyperboloid's fix (see [below](#pv-tangent-metric)), and `PV.dist`/`logmap` between two nearby points at large radius now go through the exact hyperboloid lift — see [below](#pv-dist-lift).
-- **κ-Stereographic**: identical numerics to the Poincaré ball for $c > 0$ (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near $c = 0$ — see the [dedicated section below](#stereographic-near-zero-curvature).
+- **κ-Stereographic**: the Poincaré ball's numerics for $c > 0$: it shares the gyrovector core (`addition`, `gyration`, `proj`, the conformal factor), and `dist`, `logmap` and `geodesic` use the far-pair asinh form of Poincaré's default `dist`. It adds the flat and spherical regimes and a Taylor-series switchover near $c = 0$ — see the [dedicated section below](#stereographic-near-zero-curvature).
 - **Klein**: the pairwise operations are cancellation-free, but the chart reaches its boundary at half the Poincaré radius (scaled radius 6.32 in float32, 13.86 in float64, at $c = 1$) and its error floor grows as $\varepsilon\cosh^2(a)$ — see the [dedicated section below](#klein-numerics).
 - **HalfSpace**: no boundary at finite distance, and the pairwise operations are cancellation-free. The error floor is a stored point's rounding, which grows as $\cosh(\sqrt{c}\,\delta)$ with the distance $\delta$ to the vertical geodesic through the origin and stays at its minimum on that geodesic at every height. The pairwise operations return `inf`/NaN past a scaled distance of 88.7 in float32 (709.8 in float64) — see the [dedicated section below](#halfspace-numerics).
 
@@ -1190,7 +1190,29 @@ x_rec = pv.expmap_0(y, c)      # round-trips to x_large
 
 The `Stereographic` manifold's signed curvature introduces one numerical regime the other manifolds don't have: the neighborhood of $c = 0$, where every closed-form expression becomes $0/0$ and the implementation switches to Taylor series. The switching logic is internal, but its consequences matter when you train a *signed* learnable curvature that may cross zero.
 
-For $c > 0$ nothing here is new — `Stereographic` shares its gyrovector core with `Poincare`, so every boundary/conformal-factor consideration above applies verbatim. See the [κ-Stereographic API reference](../api-reference/manifolds.md) for the sign convention and the factor-2 flat limit.
+For $c > 0$ the Poincaré sections above apply. `addition`, `gyration`, `proj` and the conformal
+factor are the functions `Poincare` calls, and `ptransp` (with the
+[regrouped gyration](#factored-mobius-denominator)), `ptransp_0`, `tangent_inner`, `tangent_norm`,
+`egrad2rgrad`, `retraction` and `dist_0` return `Poincare`'s bits (checked at $c = 0.3$, 1 and 2.5
+in both dtypes). `dist`, `logmap` and `geodesic` take the half distance in the
+[asinh form](#poincare-far-pairs) of Poincaré's default `dist`, not from the norm of
+$(-x) \oplus y$: that point lies at the full pair distance from the origin, so float32 caps it at
+the ball's ceiling while both inputs are still well inside. Two float32 points at scaled radius 7.2
+on opposite sides ($c = 1$, true $\sqrt{c}\,d = 14.4$) gave `dist` 12.656 with a gradient norm of
+0.037; they now give 14.39999 with 670.7, as `Poincare` does. `dist`, `logmap`, `expmap`,
+`expmap_0`, `logmap_0` and `scalar_mul` agree with `Poincare`'s to rounding, but not always bit for
+bit (float32: `logmap` within 1.1e-5 relative on pairs at scaled radius 6 to 11, the rest within
+3.7e-7). Two things differ.
+`geodesic(t, x, y)` still stores $t \otimes ((-x) \oplus y)$, a point at radius $t\,d$ that float32
+caps once $\sqrt{c}\,t\,d$ passes 12.6; $t = 1/2$ stays inside for any two points the ball stores.
+And `dist` has no counterpart of Poincaré's saturating slot 1. For $c \le 0$ and in the Taylor band
+near $c = 0$ the formulas are unchanged: `logmap` and `geodesic` return the same bits as before, and
+`dist`, which now takes the norm of $(-x) \oplus y$ from the Möbius denominator without forming the
+point, moves by at most 3.1e-7 relative in float32 (5.6e-16 in float64). Measured in
+`logs/2026-09-29_cancellation-free/stereo_fix/` (`probe_old.out`, `probe_new.out`,
+`diff_old_new.out`) and `logs/2026-09-29_cancellation-free/docs_b1/probe_stereo_vs_poincare.out`.
+See the [κ-Stereographic API reference](../api-reference/manifolds.md) for the sign convention and
+the factor-2 flat limit.
 
 ### The Taylor Cutover Is dtype-Dependent
 
@@ -2071,7 +2093,7 @@ x = jnp.array([0.1, 0.2])
 y = jnp.array([0.3, 0.4])
 c = 1.0
 
-# Version 0: Direct Möbius distance (FASTEST, default)
+# Version 0: Direct Möbius distance (default)
 d0 = poincare.dist(x, y, c, version_idx=poincare.VERSION_MOBIUS_DIRECT)
 
 # Version 1: Möbius via addition
@@ -2172,7 +2194,6 @@ values, from three reductions over the dimension.
 ### Which Version to Use?
 
 **General recommendation**: `VERSION_MOBIUS_DIRECT` (version 0)
-- Fastest
 - Fewest intermediate operations
 - Best for most applications
 
@@ -2192,7 +2213,11 @@ values, from three reductions over the dimension.
 - **`VERSION_MOBIUS` (version 1)**, the norm of $(-x) \oplus y$ through `_addition`, is unchanged
   and still saturates on far float32 pairs: 12.637328 for a true 14.4 (two points at scaled
   radius 7.2 on opposite sides, $c = 1$), with a gradient relative error of 1.0
-  (`logs/2026-09-29_cancellation-free/2_evidence/probes/1a_merged.out`).
+  (`logs/2026-09-29_cancellation-free/2_evidence/probes/1a_merged.out`). Float64 moves the
+  saturation out to the float64 ceiling, $\sqrt{c}\,d \approx 27.7$: the same construction gives
+  27.725826 for a true 29 and for a true 40, again with a gradient relative error of 1.0, while
+  slots 0 and 2 return 29 and 40 to within 7.6e-8
+  (`logs/2026-09-29_cancellation-free/docs_b1/probe_slot1_f64.out`).
 - **Debugging**: compare against `Poincare(dtype=jnp.float64)` rather than across versions — slots
   0 and 2 always agree, and slot 1 departs from them on far pairs because it saturates.
 
@@ -2491,7 +2516,8 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
     - ✅ **Monitor conformal factors** during training
     - ✅ **Validate manifold constraints** in debugging
     - ✅ **Use `VERSION_MOBIUS_DIRECT` for Poincaré distance** (`VERSION_METRIC_TENSOR` runs the
-      same body; `VERSION_MOBIUS` saturates on far float32 pairs)
+      same body; `VERSION_MOBIUS` saturates on far pairs, past $\sqrt{c}\,d \approx 12.6$ in float32
+      and 27.7 in float64)
     - ✅ **Clip curvature** if learnable (0.1 < c < 10.0)
     - ✅ **Initialize embeddings conservatively** (small norms)
     - ✅ **Prefer `ProperVelocity` for large-radius features** — unconstrained $\mathbb{R}^n$ avoids the boundary entirely and trains with plain `optax.adam`
@@ -2521,8 +2547,9 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
    ```
 
 5. **Use float64 manifold** — switching the Poincaré `version_idx` does not help:
-   `VERSION_METRIC_TENSOR` runs the default's body, and `VERSION_MOBIUS` saturates on far float32
-   pairs (see [Which Version to Use?](#which-version-to-use)):
+   `VERSION_METRIC_TENSOR` runs the default's body, and `VERSION_MOBIUS` saturates on far pairs,
+   past $\sqrt{c}\,d \approx 12.6$ in float32 and 27.7 in float64 (see
+   [Which Version to Use?](#which-version-to-use)):
    ```python
    from hyperbolix.manifolds import Poincare
    import jax.numpy as jnp

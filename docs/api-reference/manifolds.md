@@ -54,7 +54,7 @@ The Poincaré ball model with Möbius operations.
 !!! note "Distance Versions"
     The Poincaré `dist` method has a `version_idx` parameter selecting between 3 formulations:
 
-    - `VERSION_MOBIUS_DIRECT` (0): direct Möbius distance formula (default, fastest)
+    - `VERSION_MOBIUS_DIRECT` (0): direct Möbius distance formula (default)
     - `VERSION_MOBIUS` (1): Möbius via addition
     - `VERSION_METRIC_TENSOR` (2): Direct metric tensor integration
 
@@ -78,7 +78,8 @@ The Poincaré ball model with Möbius operations.
     on opposite sides (true $\sqrt{c}\,d = 14.4$) give 14.400112. `logmap` takes its magnitude from
     the same argument. Slot 1 takes the norm of the projected $(-x)\oplus y$, which cannot pass the
     ceiling, so in float32 it still saturates: the same pair gives 12.637328, and its gradient is
-    lost (relative error 1.0).
+    lost (relative error 1.0). In float64 it saturates once $\sqrt{c}\,d$ passes the float64
+    ceiling, 27.7: 27.725826 for a true 29 or 40, with the same loss of gradient.
 
 !!! note "Apollonian weak metric"
     `apollonian_dist(x, y, c)` is the **non-symmetric** Apollonian weak metric $\delta$
