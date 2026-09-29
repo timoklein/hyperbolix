@@ -11,7 +11,7 @@ Fréchet-mean-zero data before fitting horospherical components.
 Dimension key:
   N: number of points
   R: manifold representation dim (ambient d+1 for Hyperboloid, spatial d for
-     Poincare / ProperVelocity / Euclidean)
+     Poincare / ProperVelocity / Klein / HalfSpace / Euclidean)
 
 References:
     Karcher, H. "Riemannian center of mass and mollifier smoothing." Comm. Pure Appl.
@@ -28,6 +28,10 @@ from jaxtyping import Array, Float
 from ..manifolds import Hyperboloid, Manifold, Poincare
 from ..manifolds.protocol import ScalarCurvature
 from ..nn_layers.hyperboloid_core import lorentz_midpoint
+from ..utils.math_utils import tanh
+
+# Below this scaled distance a·coth(a) is evaluated as 1 + a²/3 (dropped term a⁴/45 ≈ 2e-14).
+_ACOTH_SERIES_SEAM = 1e-3
 
 
 def frechet_mean(
@@ -45,14 +49,19 @@ def frechet_mean(
     Minimizes ``Σ_i d(μ, x_i)²`` over the manifold. Each iteration averages the log-map
     tangents at the current estimate and steps along the exponential map::
 
-        v   = step_size · mean_i logmap(x_i, μ)      # tangent at μ
+        a_i = √c · ‖logmap(x_i, μ)‖_μ                 # scaled distance to each point
+        η   = step_size / mean_i(a_i · coth(a_i))     # curvature-aware step (a·coth(a) = 1 at a = 0)
+        v   = η · mean_i logmap(x_i, μ)               # tangent at μ
         μ   ← proj(expmap(v, μ))
         δ   = ‖v‖_μ                                   # Riemannian tangent norm
 
-    stopping when ``δ ≤ tol`` or ``max_iters`` is reached. With ``step_size = 1`` this is
-    the standard Karcher fixed point (Newton-like on the negative-curvature squared-distance
-    functional). The loop is not differentiated (``while_loop`` is not reverse-mode
-    differentiable) — used purely as a numerical solver.
+    stopping when ``δ ≤ tol`` or ``max_iters`` is reached. The Hessian of ``½d(·, x_i)²`` has
+    eigenvalues between 1 (radial) and ``a_i·coth(a_i)``, so the fixed Karcher step ``η = 1``
+    overshoots once the batch spreads past ``√c·d ≈ 2`` (measured: no convergence in 100
+    iterations); dividing by the mean ``a_i·coth(a_i)`` avoids that and reduces to
+    ``η = step_size`` for a tight batch (or ``c = 0``).
+    The loop is not differentiated (``while_loop`` is not reverse-mode differentiable) — used
+    purely as a numerical solver.
 
     The initial estimate is dispatched by manifold type: Hyperboloid uses the closed-form
     Lorentz centroid (:func:`lorentz_midpoint` with uniform weights); Poincaré uses the
@@ -66,10 +75,10 @@ def frechet_mean(
 
     Args:
         x_NR: Points on the manifold, shape (N, R). ``R`` is the ambient dim (d+1) for
-            Hyperboloid, the spatial dim (d) for Poincaré / ProperVelocity / Euclidean.
+            Hyperboloid, the spatial dim (d) for the other models.
         manifold: Manifold instance (satisfies the ``Manifold`` protocol).
         c: Curvature (positive scalar for single manifolds).
-        step_size: Karcher step size (default 1.0 — the standard fixed point).
+        step_size: Multiplier on the curvature-aware step ``η`` (default 1.0).
         tol: Convergence tolerance on the Riemannian tangent-update norm (default 1e-8).
         max_iters: Maximum iterations (default 100).
         init_D: Optional explicit initial estimate, shape (R,), in representation space.
@@ -97,11 +106,13 @@ def frechet_mean(
         # Projected Euclidean mean (the ball is convex, so the mean stays inside it).
         mean_R = manifold.proj(jnp.mean(x_NR, axis=0), c)
     else:
-        # Euclidean / ProperVelocity and any other manifold: first point is a valid start.
+        # Euclidean / ProperVelocity / Klein / HalfSpace and any other manifold: first point is a valid start.
         mean_R = x_NR[0]
 
     # -- Karcher fixed-point iteration (lax.while_loop) ---------------------------------
     logmap_batched = jax.vmap(manifold.logmap, in_axes=(0, None, None))  # log_μ(x_i) for all i
+    norm_batched = jax.vmap(manifold.tangent_norm, in_axes=(0, None, None))  # d(x_i, μ) for all i
+    sqrt_c = jnp.sqrt(jnp.maximum(jnp.asarray(c, dtype=dtype), 0.0))
 
     def cond_fn(carry: tuple[Array, Array, Array]) -> Array:
         _, delta, it = carry
@@ -110,7 +121,13 @@ def frechet_mean(
     def body_fn(carry: tuple[Array, Array, Array]) -> tuple[Array, Array, Array]:
         mean, _, it = carry
         logs_NR = logmap_batched(x_NR, mean, c)  # (N, R) tangents at mean
-        v_R = step_size * jnp.mean(logs_NR, axis=0)  # (R,) averaged tangent
+        a_N = sqrt_c * norm_batched(logs_NR, mean, c)  # (N,) scaled distances √c·d(x_i, μ)
+        # a·coth(a), with its series 1 + a²/3 below the seam (exactly 1 at a = 0, no 0/0).
+        small_N = a_N < _ACOTH_SERIES_SEAM
+        a_safe_N = jnp.where(small_N, 1.0, a_N)
+        acoth_N = jnp.where(small_N, 1.0 + a_N**2 / 3.0, a_safe_N / tanh(a_safe_N))
+        eta = step_size / jnp.mean(acoth_N)  # ≤ step_size: a·coth(a) ≥ 1
+        v_R = eta * jnp.mean(logs_NR, axis=0)  # (R,) averaged tangent
         new_mean = manifold.proj(manifold.expmap(v_R, mean, c), c)
         new_delta = manifold.tangent_norm(v_R, mean, c)
         return new_mean, new_delta, it + 1

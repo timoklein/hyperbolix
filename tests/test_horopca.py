@@ -10,7 +10,7 @@ themselves, which are frame-dependent (QR sign) and vary across seeds/BLAS:
 - The projection lands on the manifold, is idempotent, fixes origin-side geodesic points, and
   its spatial part lies in the component span.
 - The loss has finite gradients (including at coincident pairs) and decreases; the fit JIT is
-  reused; input/output models match; Poincaré and hyperboloid inputs give isometric outputs;
+  reused; input/output models match; every input model gives an output isometric to the Poincaré one;
   centering preserves pairwise variance; a planted 2-D submanifold is recovered end-to-end.
 """
 
@@ -29,7 +29,7 @@ from hyperbolix.decomposition import (
 )
 from hyperbolix.decomposition.horopca import _fit_jit, lift_ideals, orthonormalize_rows
 from hyperbolix.distributions import wrapped_normal_hyperboloid as wn
-from hyperbolix.manifolds import Euclidean, Hyperboloid, Poincare
+from hyperbolix.manifolds import Euclidean, HalfSpace, Hyperboloid, Klein, Poincare, ProperVelocity
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT
 from hyperbolix.utils.helpers import compute_pairwise_distances
@@ -53,6 +53,21 @@ def _hyp_points(seed: int, n: int, dim: int, c: float, sigma: float, dtype) -> j
     H = Hyperboloid(dtype=dtype)
     mu0 = H.create_origin(c, dim)
     return wn.sample(jax.random.PRNGKey(seed), mu0, jnp.asarray(sigma, dtype=dtype), c, sample_shape=(n,), manifold_module=H)
+
+
+# Every input model HoroPCA accepts, with the isometry that carries a hyperboloid test point into it.
+INPUT_MODELS = {
+    "Hyperboloid": (Hyperboloid, None),
+    "Poincare": (Poincare, iso.hyperboloid_to_poincare),
+    "ProperVelocity": (ProperVelocity, iso.hyperboloid_to_pv),
+    "Klein": (Klein, iso.hyperboloid_to_klein),
+    "HalfSpace": (HalfSpace, iso.hyperboloid_to_halfspace),
+}
+
+
+def _in_model(x_hyp: jnp.ndarray, from_hyp, c: float) -> jnp.ndarray:
+    """Hyperboloid points carried into an input model (identity for ``from_hyp=None``)."""
+    return x_hyp if from_hyp is None else jax.vmap(from_hyp, in_axes=(0, None))(x_hyp, c)
 
 
 def _ortho_q(seed: int, k: int, dim: int, dtype) -> jnp.ndarray:
@@ -317,44 +332,46 @@ def test_fit_jit_cache_reuse():
 # --- 17. shapes and output models ------------------------------------------------------
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("k", [1, 2])
-def test_transform_shapes_and_models(dtype, k):
-    """Hyperboloid in → (N, K+1) on-manifold; Poincaré in → (N, K) inside the ball."""
+@pytest.mark.parametrize("model", list(INPUT_MODELS))
+def test_transform_shapes_and_models(dtype, k, model):
+    """Hyperboloid in → (N, K+1); every other model in → (N, K) of the same model; all on-manifold."""
     c = 1.0
     dim = 5
     n = 20
-    H, P = Hyperboloid(dtype=dtype), Poincare(dtype=dtype)
-    x_hyp = _hyp_points(16, n, dim, c, sigma=0.5, dtype=dtype)
-    x_ball = jax.vmap(iso.hyperboloid_to_poincare, in_axes=(0, None))(x_hyp, c)
+    cls, from_hyp = INPUT_MODELS[model]
+    manifold = cls(dtype=dtype)
+    x = _in_model(_hyp_points(16, n, dim, c, sigma=0.5, dtype=dtype), from_hyp, c)
     key = jax.random.PRNGKey(0)
 
-    z_hyp = HoroPCA(H, k, max_steps=30).fit_transform(x_hyp, c, key)
-    assert z_hyp.shape == (n, k + 1)
-    assert bool(jax.vmap(H.is_in_manifold, in_axes=(0, None))(z_hyp, c).all())
-
-    z_ball = HoroPCA(P, k, max_steps=30).fit_transform(x_ball, c, key)
-    assert z_ball.shape == (n, k)
-    radius = 1.0 / jnp.sqrt(jnp.asarray(c, dtype=dtype))
-    assert bool((jnp.linalg.norm(z_ball, axis=1) < radius).all())
+    z = HoroPCA(manifold, k, max_steps=30).fit_transform(x, c, key)
+    assert z.shape == (n, k + 1 if model == "Hyperboloid" else k)
+    assert bool(jax.vmap(manifold.is_in_manifold, in_axes=(0, None))(z, c).all())
+    if model == "Poincare":
+        radius = 1.0 / jnp.sqrt(jnp.asarray(c, dtype=dtype))
+        assert bool((jnp.linalg.norm(z, axis=1) < radius).all())
 
 
-# --- 18. Poincaré / hyperboloid input equivalence --------------------------------------
+# --- 18. input-model equivalence against the Poincaré ball -----------------------------
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("c", CURVATURES)
-def test_input_model_equivalence(dtype, c):
-    """Fitting the same data as Poincaré vs hyperboloid gives isometric embeddings."""
+@pytest.mark.parametrize("model", [m for m in INPUT_MODELS if m != "Poincare"])
+def test_input_model_equivalence(dtype, c, model):
+    """Fitting the same data in another input model vs the Poincaré ball gives isometric embeddings."""
     atol = 4e-3 if dtype == jnp.float32 else 1e-5
     dim = 5
-    H, P = Hyperboloid(dtype=dtype), Poincare(dtype=dtype)
+    P = Poincare(dtype=dtype)
+    cls, from_hyp = INPUT_MODELS[model]
+    manifold = cls(dtype=dtype)
     x_hyp = _hyp_points(17, 24, dim, c, sigma=0.5, dtype=dtype)
     x_ball = jax.vmap(iso.hyperboloid_to_poincare, in_axes=(0, None))(x_hyp, c)
     key = jax.random.PRNGKey(0)
 
-    z_hyp = HoroPCA(H, 2, max_steps=50).fit_transform(x_hyp, c, key)
+    z = HoroPCA(manifold, 2, max_steps=50).fit_transform(_in_model(x_hyp, from_hyp, c), c, key)
     z_ball = HoroPCA(P, 2, max_steps=50).fit_transform(x_ball, c, key)
 
-    d_hyp = compute_pairwise_distances(z_hyp, H, c, VERSION_DEFAULT)
+    d_model = compute_pairwise_distances(z, manifold, c, VERSION_DEFAULT)
     d_ball = compute_pairwise_distances(z_ball, P, c, VERSION_DEFAULT)
-    assert jnp.allclose(d_hyp, d_ball, atol=atol)
+    assert jnp.allclose(d_model, d_ball, atol=atol)
 
 
 # --- 19. centering flow ----------------------------------------------------------------
@@ -514,7 +531,7 @@ def test_horopca_validation_errors():
     x_NA = _hyp_points(20, 12, 5, c, sigma=0.4, dtype=dtype)
     key = jax.random.PRNGKey(0)
 
-    with pytest.raises(ValueError, match="supports 'Poincare' or 'Hyperboloid'"):
+    with pytest.raises(ValueError, match="supports 'Poincare', 'Hyperboloid', 'ProperVelocity', 'Klein' or 'HalfSpace'"):
         HoroPCA(Euclidean(dtype=dtype), 2)
 
     with pytest.raises(ValueError, match="Expected a 2D array"):

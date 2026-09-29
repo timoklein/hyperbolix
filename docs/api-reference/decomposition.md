@@ -1,8 +1,9 @@
 # Decomposition API
 
 Hyperbolic dimensionality reduction. HoroPCA (Chami et al. 2021) reduces the dimension of
-data on the hyperboloid or Poincaré ball by jointly optimizing a set of ideal points and
-projecting the data horospherically, preserving Busemann coordinates. CO-SNE (Guo et al. 2022)
+hyperbolic data — given on the hyperboloid, the Poincaré ball, or in the ProperVelocity, Klein or
+half-space model — by jointly optimizing a set of ideal points and projecting the data
+horospherically, preserving Busemann coordinates. CO-SNE (Guo et al. 2022)
 is the hyperbolic analogue of t-SNE, adding a magnitude loss that preserves each point's
 distance-to-origin (the hierarchy depth). The Fréchet mean is the data-centering primitive
 HoroPCA builds on.
@@ -19,7 +20,9 @@ HoroPCA builds on.
 A thin sklearn-style class over the functional core: `fit` the components at a chosen
 curvature, then `transform` points to their low-dimensional embedding. Poincaré input
 `(N, D)` maps to `(N, K)` ball coordinates; Hyperboloid input `(N, A)` maps to `(N, K+1)`
-hyperboloid points.
+hyperboloid points; `ProperVelocity`, `Klein` and `HalfSpace` input `(N, D)` maps to `(N, K)`
+points of the same model. Every model is carried onto the hyperboloid by its direct isometry
+(Klein and HalfSpace points are projected first) and the result is carried back.
 
 ::: hyperbolix.decomposition.horopca.HoroPCA
     options:
@@ -73,7 +76,9 @@ both pairwise similarities (the t-SNE KL term) and each point's distance-to-orig
 hierarchy depth — via an added magnitude loss `H = (1/N)·Σᵢ(‖xᵢ‖² − ‖yᵢ‖²)²` (paper Eq. 10).
 A thin sklearn-style class over the functional core; being non-parametric it has `fit` /
 `fit_transform` but no out-of-sample `transform` (matching sklearn's `TSNE`). Poincaré input
-`(N, D)` embeds to `(N, K)` ball coordinates; Hyperboloid input `(N, A)` embeds to `(N, K+1)`.
+`(N, D)` embeds to `(N, K)` ball coordinates; Hyperboloid input `(N, A)` embeds to `(N, K+1)`;
+`ProperVelocity`, `Klein` and `HalfSpace` input `(N, D)` embeds to `(N, K)` points of the same
+model (mapped onto the ball by the direct isometry, Klein and HalfSpace points projected first).
 
 !!! warning "Calibrated learning rate"
     The exact-autodiff gradients differ in scale from the reference's hand-derived gradients,
@@ -126,8 +131,10 @@ distance matrix and squared ball norms.
 ## Fréchet mean
 
 The Karcher fixed-point Fréchet (Riemannian center of mass) mean, used to center data before
-fitting. Manifold-generic — works for `Hyperboloid`, `Poincare`, `ProperVelocity`, and
-`Euclidean`.
+fitting. Manifold-generic — works for `Hyperboloid`, `Poincare`, `ProperVelocity`, `Klein`,
+`HalfSpace` and `Euclidean`. The step is divided by the mean of `a·coth(a)` over the points
+(`a = √c·d` to the current estimate), so it converges on widely spread batches where the plain
+Karcher step overshoots; `step_size` multiplies that step.
 
 ::: hyperbolix.decomposition.frechet.frechet_mean
     options:

@@ -16,7 +16,8 @@ KL-only exploration stage, then a KL + magnitude stage.
 
 This module provides a pure functional core (independently usable and JIT-friendly) plus a
 thin sklearn-style :class:`CoSNE` wrapper. All embedding-space work runs on the Poincaré
-ball; Hyperboloid input/output is mapped through the exact isometry.
+ball; Hyperboloid, ProperVelocity, Klein and half-space input/output is mapped through the exact
+isometries.
 
 Deliberate deviations from the reference implementation
 -------------------------------------------------------
@@ -56,14 +57,13 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ..manifolds import Hyperboloid, Manifold, Poincare
+from ..manifolds import Manifold, Poincare
 from ..manifolds._gyrovector_core import _proj
-from ..manifolds.hyperboloid import _proj_batch
-from ..manifolds.isometry_mappings import hyperboloid_to_poincare, poincare_to_hyperboloid
 from ..manifolds.poincare import VERSION_MOBIUS_DIRECT, _dist, _egrad2rgrad
 from ..manifolds.protocol import ScalarCurvature
 from ..utils.helpers import compute_pairwise_distances
 from ..utils.math_utils import cap_at, floor_at
+from ._input_models import clean, input_model, map_batch
 
 # Probability floor / sum guard for P and Q — sklearn's MACHINE_EPSILON semantics: always
 # float64 eps, independent of the compute dtype. Flooring at float32 eps (1.19e-7) instead
@@ -409,8 +409,10 @@ class CoSNE:
     ball embedding of hyperbolic data that preserves both pairwise similarities (t-SNE KL
     term) and each point's distance-to-origin (the CO magnitude term). Input/output follow the
     manifold: Poincaré input ``(N, D)`` embeds to ``(N, K)`` ball coordinates; Hyperboloid
-    input ``(N, A)`` embeds to ``(N, K+1)`` hyperboloid points (the ball coordinates lifted
-    back through the isometry).
+    input ``(N, A)`` embeds to ``(N, K+1)`` hyperboloid points; ProperVelocity, Klein and
+    HalfSpace input ``(N, D)`` embeds to ``(N, K)`` points of the same model (the ball
+    coordinates mapped back through the isometry). Klein and HalfSpace input is projected
+    (``proj_batch``) before it is mapped onto the ball.
 
     Being non-parametric (like sklearn's ``TSNE``), it has no out-of-sample ``transform`` —
     only ``fit`` / ``fit_transform``. For a precomputed-distance workflow (e.g. HycoCLIP), call
@@ -422,7 +424,8 @@ class CoSNE:
         most reliable in ``dtype=jnp.float64``.
 
     Args:
-        manifold: A ``Poincare`` or ``Hyperboloid`` instance (sets the I/O model and dtype).
+        manifold: A ``Poincare``, ``Hyperboloid``, ``ProperVelocity``, ``Klein`` or ``HalfSpace``
+            instance (sets the I/O model and dtype).
         n_components: Embedding dimension K (default 2).
         perplexity: Target perplexity — the effective neighbor count (default 30.0, sklearn).
             Must be < N.
@@ -448,8 +451,8 @@ class CoSNE:
             the default author's-code plain-distance kernel ``(1 + d/gamma²)⁻¹`` (default False).
 
     Attributes (set after :meth:`fit`, sklearn trailing-underscore convention):
-        embedding_: Low-dimensional embedding — ``(N, K)`` ball coordinates for Poincaré
-            input, ``(N, K+1)`` hyperboloid points for Hyperboloid input.
+        embedding_: Low-dimensional embedding in the input's model — ``(N, K+1)`` hyperboloid
+            points for Hyperboloid input, ``(N, K)`` coordinates otherwise.
         kl_divergence_: Final KL divergence on the unexaggerated P (scalar).
         losses_kl_: Per-step KL trace, shape (S,). Stage-1 entries use the exaggerated P (a
             discontinuity at the stage boundary is expected).
@@ -472,12 +475,7 @@ class CoSNE:
         exploration_n_iter: int = 500,
         exact_cauchy: bool = False,
     ) -> None:
-        if isinstance(manifold, Hyperboloid):
-            self._is_hyperboloid = True
-        elif isinstance(manifold, Poincare):
-            self._is_hyperboloid = False
-        else:
-            raise ValueError(f"CoSNE supports 'Poincare' or 'Hyperboloid' manifolds, got {type(manifold).__name__}.")
+        self._input_model = input_model(manifold, "CoSNE")
 
         self.manifold = manifold
         self.n_components = n_components
@@ -503,16 +501,14 @@ class CoSNE:
     def _to_ball(self, x_ND: Float[Array, "N R"], c: ScalarCurvature) -> Float[Array, "N D"]:
         """Convert/clean input into Poincaré ball coordinates (N, D)."""
         x_cast = self._poincare._cast(x_ND)
-        if self._is_hyperboloid:
-            x_hyp = _proj_batch(x_cast, c)  # hyperboloid hygiene before the isometry (mirrors HoroPCA)
-            return jax.vmap(hyperboloid_to_poincare, in_axes=(0, None))(x_hyp, c)
-        return self._poincare.proj_batch(x_cast, c)  # ball hygiene
+        x_clean = clean(self._input_model, x_cast, c)  # hygiene before the isometry (mirrors HoroPCA)
+        return map_batch(self._input_model.to_ball, x_clean, c)
 
     def fit(self, x_ND: Float[Array, "N R"], c: ScalarCurvature, key: PRNGKeyArray) -> "CoSNE":
         """Fit the embedding on ``x_ND`` at curvature ``c``.
 
         Args:
-            x_ND: Input points, shape (N, D) for Poincaré or (N, A) for Hyperboloid.
+            x_ND: Input points, shape (N, A) for Hyperboloid, (N, D) for the other models.
             c: Curvature (positive) — bound into the fitted state.
             key: PRNG key for the embedding init.
 
@@ -549,10 +545,7 @@ class CoSNE:
             exact_cauchy=self.exact_cauchy,
         )
 
-        if self._is_hyperboloid:
-            embedding = jax.vmap(poincare_to_hyperboloid, in_axes=(0, None))(y_NK, c)  # (N, K+1)
-        else:
-            embedding = y_NK  # (N, K)
+        embedding = map_batch(self._input_model.from_ball, y_NK, c)  # (N, K+1) hyperboloid, else (N, K)
 
         self.embedding_ = embedding
         self.kl_divergence_ = final_kl

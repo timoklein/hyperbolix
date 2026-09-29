@@ -15,7 +15,7 @@ recomputation with the code under test:
   gradient ``-(4/N)(‖x‖² - ‖y‖²)·y``.
 - The fit stays strictly inside the ball with finite traces, decreases the stage-2 KL, is
   invariant to ``learning_rate_h`` when the exploration stage fills the whole run, matches
-  across Poincaré/Hyperboloid input, reuses its JIT cache, validates its arguments, and
+  across every input model (against Poincaré input), reuses its JIT cache, validates its arguments, and
   recovers planted clusters while preserving the norm hierarchy (the CO selling point).
 """
 
@@ -33,7 +33,7 @@ from hyperbolix.decomposition import (
 )
 from hyperbolix.decomposition.cosne import _fit_jit, low_dim_probabilities
 from hyperbolix.distributions import wrapped_normal_poincare as wn
-from hyperbolix.manifolds import Euclidean, Hyperboloid, Poincare
+from hyperbolix.manifolds import Euclidean, HalfSpace, Hyperboloid, Klein, Poincare, ProperVelocity
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.utils.helpers import compute_pairwise_distances
 
@@ -250,27 +250,36 @@ def test_stagewise_contract():
     assert np.allclose(np.array(emb0), np.array(emb1), atol=1e-12)
 
 
-# --- 10. Poincaré / hyperboloid input equivalence --------------------------------------
-def test_hyperboloid_input_equivalence():
-    """Hyperboloid input embeds isometrically to the Poincaré-input embedding (same key)."""
+# --- 10. input-model equivalence against the Poincaré ball -----------------------------
+# Every non-ball input model CoSNE accepts: (class, ball → model, model → ball).
+OTHER_MODELS = {
+    "Hyperboloid": (Hyperboloid, iso.poincare_to_hyperboloid, iso.hyperboloid_to_poincare),
+    "ProperVelocity": (ProperVelocity, iso.poincare_to_pv, iso.pv_to_poincare),
+    "Klein": (Klein, iso.poincare_to_klein, iso.klein_to_poincare),
+    "HalfSpace": (HalfSpace, iso.poincare_to_halfspace, iso.halfspace_to_poincare),
+}
+
+
+@pytest.mark.parametrize("model", list(OTHER_MODELS))
+def test_input_model_equivalence(model):
+    """Input in another model embeds isometrically to the Poincaré-input embedding (same key)."""
     dtype = jnp.float64
     c = 1.0
+    cls, from_ball, to_ball = OTHER_MODELS[model]
     x_ball = _ball_points(16, 24, 5, c, 0.4, dtype)
-    x_hyp = jax.vmap(iso.poincare_to_hyperboloid, in_axes=(0, None))(x_ball, c)
+    x_model = jax.vmap(from_ball, in_axes=(0, None))(x_ball, c)
     key = jax.random.PRNGKey(0)
 
     emb_ball = CoSNE(Poincare(dtype=dtype), 2, perplexity=10.0, n_iter=200, exploration_n_iter=100).fit_transform(
         x_ball, c, key
     )
-    emb_hyp = CoSNE(Hyperboloid(dtype=dtype), 2, perplexity=10.0, n_iter=200, exploration_n_iter=100).fit_transform(
-        x_hyp, c, key
-    )
-    emb_hyp_ball = jax.vmap(iso.hyperboloid_to_poincare, in_axes=(0, None))(emb_hyp, c)  # (N, 3) → (N, 2)
+    emb_model = CoSNE(cls(dtype=dtype), 2, perplexity=10.0, n_iter=200, exploration_n_iter=100).fit_transform(x_model, c, key)
+    emb_model_ball = jax.vmap(to_ball, in_axes=(0, None))(emb_model, c)  # (N, 3) or (N, 2) → (N, 2)
 
     # atol 1e-5 (matching HoroPCA's equivalence test): the two paths are identical in exact
-    # arithmetic, but the ``h2p ∘ p2h`` round-trip on the hyperboloid input injects ~1e-15
+    # arithmetic, but the ``to_ball ∘ from_ball`` round-trip on the input injects ~1e-15
     # relative error that grows to ~1e-6 over 200 near-boundary optimization steps.
-    assert np.allclose(np.array(emb_ball), np.array(emb_hyp_ball), atol=1e-5)
+    assert np.allclose(np.array(emb_ball), np.array(emb_model_ball), atol=1e-5)
 
 
 # --- 11. end-to-end synthetic-cluster recovery + norm preservation (paper §4.1) ---------
