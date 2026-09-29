@@ -720,7 +720,7 @@ def test_isometry_gradients_are_finite_at_the_poincare_boundary():
 def test_isometry_gradients_are_finite_at_the_klein_boundary(fn):
     """The Klein maps divide by ``√(1 - c‖k‖²)``, whose derivative is infinite at ‖k‖ -> 1/√c.
 
-    The ``_boundary_floor`` on the gap keeps the cotangent finite, as the floor does for
+    The ``_boundary_divisor_floor`` on the gap keeps the cotangent finite, as the floor does for
     ``poincare_to_pv`` above.
     """
     near_boundary_D = jnp.array([1.0 - 1e-12, 0.0], dtype=F64)
@@ -3108,8 +3108,8 @@ def _klein_gap_floor(c: float, dtype) -> float:
     """``_gyrovector_core._boundary_floor`` restated: the smallest gap on a ``_proj``-ected point.
 
     ``_proj`` caps the norm at ``1/√c - m`` with ``m = eps**0.75``, so ``1 - c‖x‖² ≥ 2√c·m - c·m²``.
-    The library floors ``g_x`` there; a case whose stored gap sits near it is past the chart's
-    ceiling and is skipped rather than measured against the floor.
+    The library floors ``g_x`` at half of it; a case whose stored gap sits near it is past the
+    chart's ceiling and is skipped rather than measured against the floor.
     """
     m = float(np.finfo(dtype).eps) ** 0.75
     return 2.0 * np.sqrt(c) * m - c * m * m

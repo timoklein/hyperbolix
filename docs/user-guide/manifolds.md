@@ -360,8 +360,9 @@ the spatial part of `halfspace_to_hyperboloid`.
     at $c = 1$, beyond the `Klein.proj` margin. These maps do not project: in float32 at
     $c = 1$ such points land between the margin ($\lVert k\rVert = 0.99999356$) and the
     boundary, and from $a \approx 10$ on exactly on $\lVert k\rVert = 1/\sqrt{c}$. Klein
-    operations floor the gap $1 - c\lVert k\rVert^2$ at its value on the margin, so all of
-    these points read as $a \approx 6.32$. Map out of Klein freely; map into it only points
+    operations floor the gap $1 - c\lVert k\rVert^2$ at half its value on the margin, so
+    these points read at their own radius only up to $a \approx 6.67$, and as $a \approx 6.67$
+    beyond. Map out of Klein freely; map into it only points
     you know lie inside that radius, and call `Klein.proj` after mapping far points in. See the
     [numerical-stability guide](numerical-stability.md#klein-chart-ceiling).
 

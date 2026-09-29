@@ -1138,11 +1138,15 @@ out than the ceiling lands between the `proj` margin and the boundary, not on th
 float32 at $c = 1$ the margin is $\lVert k\rVert = 1 - \varepsilon^{0.75} = 0.99999356$, and the
 three maps give $\lVert k\rVert$ = 0.9999983 at $a = 7$ and 0.99999976 at $a = 8$. From $a = 10$
 on, $\lVert k\rVert$ rounds to exactly $1/\sqrt{c}$ (at $a = 10$ for `poincare_to_klein` and
-`pv_to_klein`, at $a = 12$ for all three). Klein operations floor the gap $g_k$ at its value on
-the margin, so every such point reads as $a \approx 6.32$: `Klein.dist` to the origin is 6.325
-for all three maps at $a = 7, 8, 10, 12$ (`logs/2026-09-28_klein_audit/audit_jax.out`). The
-radius beyond the ceiling is lost either way; call `Klein.proj` after mapping far points in, so
-that the stored point is the one the operations actually use.
+`pv_to_klein`, at $a = 12$ for all three). Klein operations floor the gap $g_k$ at half its
+value on the margin: the computed gap of a point that `proj` capped lands within a few $\varepsilon$
+of that value on either side, and a floor there would zero the gradient of every point it binds
+on. So a mapped-in point reads at its own radius up to $a \approx 6.67$ and as $a \approx 6.67$
+beyond: `Klein.dist` to the origin is 6.51 at $a = 6.5$ and 6.67 for all three maps at
+$a = 7, 8, 10, 12$ (float64: 14.21 from $a = 15$ on;
+`logs/2026-09-29_cancellation-free/floorfix2/probe_far_reading.out`). The radius beyond that is
+lost either way; call `Klein.proj` after mapping far points in, so that the stored point is the
+one the operations actually use.
 
 **Floor.** $g_x = 1 - c\lVert x\rVert^2 = \operatorname{sech}^2(a)$. Computing it subtracts
 $c\lVert x\rVert^2 \approx 1$ from 1, so $g_x$ carries an absolute error of about $\varepsilon$,

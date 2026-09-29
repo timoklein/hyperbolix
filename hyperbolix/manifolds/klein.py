@@ -44,7 +44,7 @@ from jaxtyping import Array, Float
 from ..utils.math_utils import asinh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
-from ._gyrovector_core import _boundary_floor, _proj, _proj_batch
+from ._gyrovector_core import _boundary_divisor_floor, _proj, _proj_batch
 from .hyperboloid import _asinhc
 from .poincare import _expmap_0 as _poincare_expmap_0
 from .poincare import _scalar_mul as _poincare_scalar_mul
@@ -61,14 +61,23 @@ VERSION_DEFAULT = 0
 
 
 def _gap(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Boundary gap ``g_x = 1 - c‖x‖² = 1/gamma_x²``, floored at its analytic minimum on projected points.
+    """Boundary gap ``g_x = 1 - c‖x‖² = 1/gamma_x²``, floored below the rounding band of a capped point.
 
     The Klein chart is the same Euclidean ball as Poincaré's with the same ``eps**0.75`` margin
-    (:func:`_gyrovector_core._proj`), so :func:`_gyrovector_core._boundary_floor` is the same
-    analytic floor here.
+    (:func:`_gyrovector_core._proj`; :func:`_expmap_0` is Poincaré's), so it takes the Poincaré
+    floor, :func:`_gyrovector_core._boundary_divisor_floor`: half the gap's analytic value on the
+    margin. The computed gap of a capped point lands -4.6 to +5.3 eps from that analytic value and
+    below it for 11-84 % of the capped points (``logs/2026-09-29_cancellation-free/floorfix2/``).
+    Floored at the analytic value, as it was, the gap lost its derivative ``-2c·x`` there, the
+    dominant term of every gradient w.r.t. a capped point: relative error 1.0 for ``dist``,
+    ``logmap``, ``ptransp``, ``⊕``, ``tangent_norm``, ``egrad2rgrad`` and ``lorentz_factor``, up to
+    7.9 for ``expmap`` w.r.t. its base point (float64). With the half floor the gradients there are
+    bit-identical to the unfloored ones in both dtypes. A point past the margin that was never
+    projected (the maps into Klein do not project) still meets the floor, which keeps the gap
+    positive and reads it at scaled radius ≈ 6.67 (float32) / 14.21 (float64) at c = 1.
     """
     x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
-    return floor_at(1.0 - c * x2, _boundary_floor(x, c))
+    return floor_at(1.0 - c * x2, _boundary_divisor_floor(x, c))
 
 
 def _pair(
@@ -262,9 +271,11 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
 def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """``log_0(y) = arsinhc(s)·y/√g_y``, ``s = √c‖y‖/√g_y`` (:func:`_logmap` at ``x = 0``)."""
     # Last-axis reductions with `keepdims` rather than `_gap`'s `jnp.dot`: like Poincaré's
-    # `_logmap_0`, an implicitly batched `(B, dim)` input must give the per-row result.
+    # `_logmap_0`, an implicitly batched `(B, dim)` input must give the per-row result. `_gap`'s floor,
+    # below the rounding band of a capped point (at the analytic cap value this spelling of the gap
+    # bound for 6-84 % of the capped points, and the gradient lost its dominant term).
     y2 = jnp.sum(y**2, axis=-1, keepdims=True)
-    sqrt_g_y = jnp.sqrt(floor_at(1.0 - c * y2, _boundary_floor(y, c)))
+    sqrt_g_y = jnp.sqrt(floor_at(1.0 - c * y2, _boundary_divisor_floor(y, c)))
     s = jnp.sqrt(c) * safe_norm(y)[..., None] / sqrt_g_y
     return _asinhc(s) * y / sqrt_g_y
 
@@ -376,7 +387,7 @@ def _einstein_midpoint(
     if weights_N is None:
         weights_N = jnp.ones(x_ND.shape[0], dtype=x_ND.dtype)
     x2_N = jnp.einsum("nd,nd->n", x_ND, x_ND, precision=MATMUL_PRECISION)  # (N,)
-    g_N = floor_at(1.0 - c * x2_N, _boundary_floor(x_ND, c))  # (N,)
+    g_N = floor_at(1.0 - c * x2_N, _boundary_divisor_floor(x_ND, c))  # (N,), `_gap`'s floor
     wg_N = weights_N / jnp.sqrt(g_N)  # (N,) wᵢ·gammaᵢ
     num_D = jnp.einsum("n,nd->d", wg_N, x_ND, precision=MATMUL_PRECISION)  # (D,)
     return _proj(num_D / jnp.sum(wg_N), c)

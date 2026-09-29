@@ -878,6 +878,104 @@ def test_expmap0_huge_vector_saturates_at_margin(manifold, c, dim, rng, dtype):
     assert bool(jnp.all(jnp.isfinite(far_D))) and bool(manifold.is_in_manifold(far_D, c))
 
 
+def _capped_points(manifold: Klein, c: float, n: int, seed: int) -> jnp.ndarray:
+    """``n`` points that ``proj`` caps, dim 5: radii from 1/√c (where 1 + e^-30 rounds to 1) to 3.7/√c."""
+    key_u, key_r = jax.random.split(jax.random.PRNGKey(seed))
+    u_ND = jax.random.normal(key_u, (n, 5), dtype=manifold.dtype)
+    u_ND = u_ND / jnp.linalg.norm(u_ND, axis=-1, keepdims=True)
+    r_N1 = (1.0 + jnp.exp(jax.random.uniform(key_r, (n, 1), dtype=manifold.dtype, minval=-30.0, maxval=1.0))) / math.sqrt(c)
+    return jax.vmap(manifold.proj, in_axes=(0, None))(u_ND * r_N1, c)
+
+
+# Tolerance of each gradient below in units of the chart floor eps/g: 8 where the gradient carries
+# the gap g = 1 - c‖x‖² once, 16 where it carries a higher power (g^-3/2, g^-2).
+_CAPPED_TOL = {"dist": 8, "einstein_midpoint": 16, "dist_0": 8, "logmap_0": 8, "lorentz_factor": 16, "tangent_norm": 16}
+
+
+def test_gradients_at_capped_points_match_the_unfloored_reference(manifold, c, dtype):
+    """``dist``, ``einstein_midpoint``, ``dist_0``, ``‖logmap_0‖₂``, ``lorentz_factor``, ``tangent_norm`` w.r.t. capped points.
+
+    Each reads the gap ``g = 1 - c‖x‖²``, and at the cap its gradient is dominated by the gap's
+    derivative ``-2c·x``. The computed gap of a capped point lands -4.6 to +5.3 eps from its analytic
+    value ``_boundary_floor``; floored at that value (``_gap``, ``_logmap_0``,
+    ``_einstein_midpoint``), the floor bound for 6-84 % of the capped points and zeroed that term:
+    relative error 1.0 for all six (``logs/2026-09-29_cancellation-free/floorfix2/``). Oracle: the
+    closed forms in longdouble on the stored inputs, with the curvature the dtype holds. Tolerance:
+    ``_CAPPED_TOL`` times the chart floor ``eps/g``. Pairs are cap-cap, free-cap and cap-free (free
+    at scaled radius 1); only the derivative w.r.t. a capped point is checked.
+    """
+    eps = float(jnp.finfo(dtype).eps)
+    ld = np.longdouble
+    cc = ld(np.asarray(c, dtype=_np_dtype(dtype)))  # the curvature `1 - c * x2` computes with
+    capped_ND = _capped_points(manifold, c, 72, seed=17)
+    free_ND = (math.tanh(1.0) / math.sqrt(c)) * capped_ND[48:] / jnp.linalg.norm(capped_ND[48:], axis=-1, keepdims=True)
+    u_np = np.linspace(1.0, -0.5, 5) / np.linalg.norm(np.linspace(1.0, -0.5, 5))
+    u_D, u = jnp.asarray(u_np, dtype=dtype), np.asarray(np.asarray(u_np, dtype=_np_dtype(dtype)), dtype=ld)
+    failures = []
+
+    def check(label, got_ND, ref_ND, g_N):
+        err_N = np.linalg.norm(np.asarray(got_ND, np.float64) - np.asarray(ref_ND, np.float64), axis=-1)
+        err_N = err_N / np.linalg.norm(np.asarray(ref_ND, np.float64), axis=-1)
+        bad_N = err_N > _CAPPED_TOL[label.split()[1]] * eps / np.asarray(g_N, np.float64)
+        if bad_N.any():
+            failures.append(f"{label}: {bad_N.sum()}/{bad_N.size} over tolerance, max error {err_N.max():.2e}")
+
+    pair_grads = {
+        "dist": jax.vmap(jax.grad(lambda p, q: manifold.dist(p, q, c), argnums=(0, 1))),
+        "einstein_midpoint": jax.vmap(
+            jax.grad(lambda p, q: jnp.dot(u_D, manifold.einstein_midpoint(jnp.stack([p, q]), None, c)), argnums=(0, 1))
+        ),
+    }
+    pairs = {
+        "cap-cap": (capped_ND[:24], capped_ND[24:48], (0, 1)),
+        "free-cap": (free_ND, capped_ND[24:48], (1,)),
+        "cap-free": (capped_ND[:24], free_ND, (0,)),
+    }
+    for kind, (x_ND, y_ND, capped_args) in pairs.items():
+        x, y = np.asarray(x_ND, dtype=ld), np.asarray(y_ND, dtype=ld)
+        g_x, g_y = 1 - cc * np.sum(x * x, -1, keepdims=True), 1 - cc * np.sum(y * y, -1, keepdims=True)
+        w = y - x
+        # sinh(√c·d) and cosh(√c·d) from the cancellation-free pair quantity N = g_x‖w‖² + c(x·w)².
+        s = np.sqrt(cc * (g_x * np.sum(w * w, -1, keepdims=True) + cc * np.sum(x * w, -1, keepdims=True) ** 2) / (g_x * g_y))
+        cosh, root = np.sqrt(1 + s * s), np.sqrt(g_x * g_y)
+        gam_x, gam_y = 1 / np.sqrt(g_x), 1 / np.sqrt(g_y)
+        m = (gam_x * x + gam_y * y) / (gam_x + gam_y)
+        refs = {
+            "dist": (
+                (cosh * cc * x / g_x - cc * y / root) / (np.sqrt(cc) * s),
+                (cosh * cc * y / g_y - cc * x / root) / (np.sqrt(cc) * s),
+            ),
+            "einstein_midpoint": tuple(
+                (gam * u + np.sum(u * (p - m), -1, keepdims=True) * cc * p * gam**3) / (gam_x + gam_y)
+                for p, gam in ((x, gam_x), (y, gam_y))
+            ),
+        }
+        for name, grad_fn in pair_grads.items():
+            got = grad_fn(x_ND, y_ND)
+            for arg in capped_args:
+                check(f"{kind} {name} d/d{'xy'[arg]}", got[arg], refs[name][arg], np.minimum(g_x, g_y)[:, 0])
+
+    point_grads = {
+        "dist_0": jax.vmap(jax.grad(lambda p: manifold.dist_0(p, c))),
+        "logmap_0": jax.vmap(jax.grad(lambda p: jnp.linalg.norm(manifold.logmap_0(p, c)))),
+        "lorentz_factor": jax.vmap(jax.grad(lambda p: manifold.lorentz_factor(p, c))),
+        "tangent_norm": jax.vmap(jax.grad(lambda p: manifold.tangent_norm(u_D, p, c))),
+    }
+    x = np.asarray(capped_ND, dtype=ld)
+    g, r = 1 - cc * np.sum(x * x, -1, keepdims=True), np.sqrt(np.sum(x * x, -1, keepdims=True))
+    q = g * np.sum(u * u) + cc * np.sum(x * u, -1, keepdims=True) ** 2  # g²·‖u‖_x²
+    refs = {
+        "dist_0": x / (r * g),  # d₀ = artanh(√c·r)/√c
+        "logmap_0": x / (r * g),  # ‖log_0(x)‖₂ = d₀: the metric at the origin is the identity
+        "lorentz_factor": cc * x / g**1.5,
+        "tangent_norm": cc * (np.sum(x * u, -1, keepdims=True) * u - np.sum(u * u) * x) / (np.sqrt(q) * g)
+        + 2 * cc * np.sqrt(q) * x / g**2,
+    }
+    for name, grad_fn in point_grads.items():
+        check(f"cap {name} d/dx", grad_fn(capped_ND), refs[name], g[:, 0])
+    assert not failures, "\n".join(failures)
+
+
 # ---------------------------------------------------------------------------
 # 10. Protocol & integration
 # ---------------------------------------------------------------------------

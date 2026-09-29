@@ -68,10 +68,10 @@ def _boundary_floor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, 
     where the float64 chart itself ends. See :func:`_mobius_denominator`.
 
     Only ``x``'s dtype is read, never its values. Factored out of :func:`_conformal_factor`, whose
-    historical spelling this is verbatim. The floored divisors (:func:`_conformal_factor`,
-    :func:`_mobius_denominator` squared, the Poincaré ``B``'s and ``poincare._busemann``) take half
-    of it, :func:`_boundary_divisor_floor`; ``isometry_mappings.poincare_to_hyperboloid`` /
-    ``poincare_to_pv`` and the Klein chart use it directly.
+    historical spelling this is verbatim. No site floors at it any more: the floored divisors
+    (:func:`_conformal_factor`, :func:`_mobius_denominator` squared, the Poincaré ``B``'s and
+    ``poincare._busemann``), the Klein chart's gap and the gaps the isometry maps read off a
+    Poincaré or Klein point take half of it, :func:`_boundary_divisor_floor`.
     """
     max_norm_eps = _get_max_norm_eps(x)
     abs_c = jnp.abs(jnp.asarray(c))
