@@ -963,6 +963,7 @@ x_rec = pv.expmap_0(y, c)      # round-trips to x_large
 - **Proper Velocity**: unconstrained $\mathbb{R}^n$, stable at large radii, exact Euclidean retraction (plain `optax.adam` / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large. Its tangent-space metric shares the hyperboloid's fix (see [below](#pv-tangent-metric)), and `PV.dist`/`logmap` between two nearby points at large radius now go through the exact hyperboloid lift — see [below](#pv-dist-lift).
 - **κ-Stereographic**: identical numerics to the Poincaré ball for $c > 0$ (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near $c = 0$ — see the [dedicated section below](#stereographic-near-zero-curvature).
 - **Klein**: the pairwise operations are cancellation-free, but the chart reaches its boundary at half the Poincaré radius (scaled radius 6.32 in float32, 13.86 in float64, at $c = 1$) and its error floor grows as $\varepsilon\cosh^2(a)$ — see the [dedicated section below](#klein-numerics).
+- **HalfSpace**: no boundary at finite distance, and the pairwise operations are cancellation-free. The error floor is a stored point's rounding, which grows as $\cosh(\sqrt{c}\,\delta)$ with the distance $\delta$ to the vertical geodesic through the origin and stays at its minimum on that geodesic at every height. The pairwise operations return `inf`/NaN past a scaled distance of 88.7 in float32 (709.8 in float64) — see the [dedicated section below](#halfspace-numerics).
 
 !!! note "Training PV layers"
     `HypLinearPV`, `HypConv2DPV`, and `HypRegressionPV` store their weights as plain `nnx.Param` (not `ManifoldParam`). Use a standard `nnx.Optimizer(model, optax.adam(lr), wrt=nnx.Param)` — no `riemannian_adam` / `riemannian_sgd` wrapper is required.
@@ -1171,6 +1172,44 @@ along $\pm v$, but by the wrong amount. In a float64 check at $c = 0.1$ with thr
 the far side of $x$ ($t = -0.61$ along $v$, distance 1.368 instead of 1.749), and one landed at
 distance 0.317 instead of 0.504. All three $c = 1$ samples matched. `Klein.expmap` matches the hyperboloid
 exponential map to 1.748e-15 in the float64 oracle check above.
+
+## Half-Space: Cancellation-Free Pairwise Operations {#halfspace-numerics}
+
+`HalfSpace` (height $x_n > 0$ in the last coordinate, metric $\lVert dx\rVert^2/(c\,x_n^2)$,
+origin $o = e_n/\sqrt{c}$) builds its two-point operations from $w = y - x$, which is exact in
+floating point for close points. The textbook distance
+$\operatorname{arcosh}\!\big(1 + \lVert y - x\rVert^2/(2x_n y_n)\big)/\sqrt{c}$, which the
+reference implementation (HTorch) uses, takes `acosh` of a number close to 1 for close pairs
+and loses the separation. `HalfSpace.dist` evaluates the same function as
+$(2/\sqrt{c})\operatorname{arsinh}(\lVert r\rVert/2)$ with
+$r = \big((y - x)/\sqrt{x_n}\big)/\sqrt{y_n}$, and `logmap` builds $\theta/\sinh\theta$ from the
+same $r$. `expmap` evaluates its denominator in a non-cancelling form for near-vertical upward
+steps. `ptransp` is a rational formula: the conformal scale $y_n/x_n$ times a rotation by
+$-2\arctan\big(\lVert w_s\rVert/(x_n + y_n)\big)$. In float32 at scaled separation $10^{-5}$, the
+literal `acosh` has median relative error 1.00 (evaluated eagerly, or jitted on XLA:GPU; XLA:CPU's
+`jit` rewrites it into an accurate form), and `HalfSpace.dist` a median of at most 4.24e-8
+at scaled radii from 0.5 to 12, $c = 1$ (`logs/2026-09-28_halfspace-manifold/timing_pass/probe_final.out`).
+
+The error that remains is a stored point's own rounding, about
+$0.4\,(\varepsilon/2)\cosh(\sqrt{c}\,\delta)/\sqrt{c}$ as a distance, with $\varepsilon$ the machine
+epsilon and $\delta$ the distance to the vertical geodesic through $o$, so along that axis it does
+not grow with the height.
+
+Three cases return `inf`/NaN instead of a finite wrong value. The squared chord
+$\lVert r\rVert^2$ overflows past a scaled distance $\sqrt{c}\,d$ of 88.72 in float32 (709.78 in
+float64); past it `dist` returns `inf`, and `logmap`, `ptransp` and `gyro_difference` return
+non-finite values (`timing_pass/ceiling_check.out`). `logmap` can return a non-finite vector
+earlier, once $x_n e^{\sqrt{c}\,d}$ passes the largest float
+(`test_fixes/logmap_overflow_repro_plain.out`). An exactly vertical upward `expmap` step
+longer than $\theta = \ln(1/\text{tiny})$, where tiny is the smallest normal number (87.34 in
+float32, 708.40 in float64), returns an infinite height with NaN horizontal coordinates: the
+denominator $e^{-\theta}$ underflows to 0 while the true height $x_n e^{\theta}$ is still
+representable (`docs_checks/docs_checks.out`, CPU). The gyro operations inherit this limit
+through $\exp_o$.
+
+HTorch's `ptransp` applies the ambient-hyperboloid transport formula to chart coordinates, which
+is not an isometry: it transports $(1, 0)$ from $(0, 1)$ to $(0, 2)$ as $(1, 0)$, whose norm at
+the endpoint is 0.5, where the parallel transport is $(2, 0)$ (`timing_pass/probe_final.out`).
 
 ## Hyperbolic Function Overflow
 

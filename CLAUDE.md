@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install
 uv sync --locked --dev
 
-# Run all tests (4,446 items across 1,029 test functions) on all cores (pytest-xdist; ~11 min on 12 workers,
+# Run all tests (6,923 items across 1,241 test functions) on all cores (pytest-xdist; ~9 min on 48 CPU workers,
 # hours single-process: the suite is JAX-compile-heavy)
 uv run pytest -n auto
 
@@ -18,7 +18,7 @@ uv run pytest tests/test_manifolds.py -v
 # Run a single test function
 uv run pytest tests/test_manifolds.py::test_dist -v
 
-# Run the dim-2 float32 slice of the dim-parametrized suites (78/390 in test_manifolds.py)
+# Run the dim-2 float32 slice of the dim-parametrized suites (134/614 in test_manifolds.py)
 # The parametrization ids spell the dimension as a bare number, e.g. [PoincareBall-c1-2-float32-10]
 uv run pytest -k "2-float32"
 
@@ -45,7 +45,7 @@ uv run pytest tests/<relevant_test_file>.py -x -v
 ```
 Anything larger than one or two files gets `-n auto` (pytest-xdist); never run the full suite single-process.
 On a GPU box the xdist workers must not preallocate, or they exhaust the device before any test runs — `tests/conftest.py` now defaults `XLA_PYTHON_CLIENT_PREALLOCATE=false`, so nothing extra is needed; set `JAX_PLATFORMS=cpu` instead when the GPU is busy with someone else's job.
-For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (78 of the 390 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
+For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (134 of the 614 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
 
 ## Architecture
 
@@ -57,7 +57,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 
 ### Module layout
 
-- **`manifolds/`** — Plain Python classes (not `nnx.Module`): `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `Klein`, `ProductManifold`. Each is instantiated with a dtype (`Poincare(dtype=jnp.float64)`). `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `Klein` conform to the scalar-`c` `Manifold` protocol in `protocol.py`; `ProductManifold` intentionally does **not** (it takes a per-factor `cs: Sequence[Curvature]` sequence instead of a scalar `c`, and has no `c` attribute). `_base.py` has shared `ManifoldBase`.
+- **`manifolds/`** — Plain Python classes (not `nnx.Module`): `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `Klein`, `HalfSpace`, `ProductManifold`. Each is instantiated with a dtype (`Poincare(dtype=jnp.float64)`). `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `Klein`, `HalfSpace` conform to the scalar-`c` `Manifold` protocol in `protocol.py`; `ProductManifold` intentionally does **not** (it takes a per-factor `cs: Sequence[Curvature]` sequence instead of a scalar `c`, and has no `c` attribute). `_base.py` has shared `ManifoldBase`.
 - **`nn_layers/`** — Flax NNX layers (`nnx.Module`). Two families:
   - *Poincare*: `HypLinearPoincare`, `HypLinearPoincarePP`, `HypConv2DPoincare`, `PoincareBatchNorm2D`, `HypRegressionPoincare` (Ganea et al. 2018, Shimizu et al. 2020, van Spengler et al. 2023)
   - *Hyperboloid*: `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `HTCLinear`, `HypLinearHyperboloidPLFC`, `LorentzConv2D` (Klis et al. 2026, Shimizu et al. 2020, Shi et al. 2026), attention layers, positional encodings, normalization
@@ -89,6 +89,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 - Hyperboloid tangent primitives (`dist`, `logmap`, `sqdist`, `tangent_norm`, `expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, `egrad2rgrad`, gyro `addition`, `gyro_difference`, `busemann`) are cancellation-free and accurate to the point-representation floor `eps·sinh(a)/sqrt(c)` at scaled radius `a = sqrt(c)*d` — float32 good to `a ≈ 16.6`, float64 much further
 - Poincaré pairwise `dist`/`logmap` (the factored Möbius denominator) are accurate up to the ball chart's own representation ceiling — `a ≈ 12.6` in float32, `≈ 27.7` in float64 — past which the ball cannot represent the point at all
 - `Klein` pairwise `dist`/`logmap`/`ptransp`/`gyro_difference` are cancellation-free (asinh form built from `w = y - x`), but the chart holds half the Poincaré radius — `a ≈ 6.32` in float32, `≈ 13.86` in float64 at `c = 1` (`√c‖x‖ = tanh(a)` vs Poincaré's `tanh(a/2)`) — and its relative error floor is the rounding of `g_x = 1 - c‖x‖²`, `eps·cosh²(a)` (float32 `a = 4`: 8.9e-5). `poincare_to_klein`/`hyperboloid_to_klein`/`pv_to_klein` do not project: past the ceiling they return points outside the `proj` margin (float32: `‖k‖ = 1/√c` exactly from `a ≈ 10`), which Klein ops read as `a ≈ 6.32` — call `Klein.proj` after mapping far points in
+- `HalfSpace` pairwise `dist`/`logmap`/`ptransp`/`gyro_difference` are cancellation-free; the floor is a stored point's rounding `≈ 0.4·(eps/2)·cosh(√c·δ)/√c`, `δ` the distance to the vertical axis through `o = e_n/√c`. Pairwise ops return `inf`/NaN past `√c·d ≈ 88.7` (f32) / `709.8` (f64), as does an exactly vertical upward `expmap` step past `θ ≈ 87.3` / `708.4`. `klein_to_halfspace` is limited by the Klein chart's `eps·cosh²(a)`
 - Exceptions that still cancel at large radius: `HyperbolicFullAttention`'s GEMM-formed scores and a `ptransp` step below the representation floor — see `docs/user-guide/numerical-stability.md`
 - Conformal factor lambda grows exponentially near Poincare ball boundary
 - Tests parametrize both dtypes with tolerances: `atol=4e-3` (f32), `atol=1e-7` (f64)
@@ -98,7 +99,7 @@ Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **si
 
 - `tests/conftest.py`: global fixtures — `seed_jax` (enables float64), `rng`, `dtype`, `tolerance`, `manifold_and_c`, `uniform_points`
 - Tests parametrized across seeds (10-12), dtypes (f32/f64), dims (2,5,10,15), manifolds with random curvatures
-- CI runs 15 test suites in parallel via matrix strategy
+- CI runs 24 matrix jobs in parallel, each a group of test files (`.github/workflows/ci.yaml`)
 
 ## Dimension naming convention
 

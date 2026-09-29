@@ -19,13 +19,13 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 
 ## Features
 
-- 🌐 **7 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), Klein (Beltrami–Klein ball — straight-chord geodesics, Einstein gyrovector operations), and Product Manifold (mixed-curvature composition)
+- 🌐 **8 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), Klein (Beltrami–Klein ball — straight-chord geodesics, Einstein gyrovector operations), Half-Space (Poincaré upper half-space — height as the last coordinate, Möbius gyrovector operations through the Cayley transform), and Product Manifold (mixed-curvature composition)
 - 🎛️ **Learnable Curvature**: `LearnableCurvature` module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp. Works with any `nnx.Optimizer` — no Riemannian optimizer needed
 - 🧠 **40+ Neural Network Layers**: Linear, convolutional, regression, attention, normalization, positional encoding, PV
 - ⚡ **5 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish, GELU
 - 📈 **Riemannian Optimizers**: RAdam and RSGD with automatic manifold detection
 - 🚀 **Pure JAX/Flax NNX**: vmap-native API, JIT-compatible
-- ✅ **4,400+ tests passing** (1,029 test functions, parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
+- ✅ **6,900+ tests passing** (1,241 test functions, parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
 
 ## Quick Start
 

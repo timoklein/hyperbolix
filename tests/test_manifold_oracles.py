@@ -8,7 +8,8 @@ transcription, or a finite-difference estimate — rather than against another l
 Audit specs covered (F6-M1): M1-01 MLR value oracles, M1-02 exact Riemannian-gradient leg,
 M1-04 projection boundary clamp, M1-08 sinh lift, M1-09 beta-concatenation, M1-10 conformal factor
 at signed curvature, M1-11 protocol conformance, M1-12 isometry gradients, M1-14 Lorentz boost,
-M1-16 Klein ball (Decimal dist/logmap battery, analytic configurations, longdouble gyro/transport).
+M1-16 Klein ball (Decimal dist/logmap battery, analytic configurations, longdouble gyro/transport),
+M1-17 Poincaré half-space (Decimal dist/logmap/expmap/ptransp battery, analytic configurations).
 
 Dimension key:
     B: batch          P: number of MLR classes / hyperplanes
@@ -29,6 +30,7 @@ import scipy.special
 
 from hyperbolix.manifolds import (
     Euclidean,
+    HalfSpace,
     Hyperboloid,
     Klein,
     Manifold,
@@ -631,9 +633,10 @@ def test_lorentz_boost_of_the_origin_is_the_identity():
         ProperVelocity(),
         Stereographic(),
         Klein(),
+        HalfSpace(),
         ProductManifold((Poincare(), 2), (Hyperboloid(), 3)),
     ],
-    ids=["Euclidean", "Poincare", "Hyperboloid", "ProperVelocity", "Stereographic", "Klein", "Product"],
+    ids=["Euclidean", "Poincare", "Hyperboloid", "ProperVelocity", "Stereographic", "Klein", "HalfSpace", "Product"],
 )
 def test_every_manifold_satisfies_the_manifold_protocol(manifold):
     """Every shipped manifold is a structural ``Manifold``.
@@ -679,6 +682,15 @@ _DEGENERATE_CASES = [
     ("hyperboloid_to_klein", iso.hyperboloid_to_klein, jnp.array([1.0, 0.0, 0.0, 0.0], dtype=F64)),
     ("klein_to_pv", iso.klein_to_pv, jnp.zeros(3, dtype=F64)),
     ("pv_to_klein", iso.pv_to_klein, jnp.zeros(3, dtype=F64)),
+    # Half-space origin at c = 1: e_n/√c = (0, 0, 1).
+    ("halfspace_to_poincare", iso.halfspace_to_poincare, jnp.array([0.0, 0.0, 1.0], dtype=F64)),
+    ("poincare_to_halfspace", iso.poincare_to_halfspace, jnp.zeros(3, dtype=F64)),
+    ("halfspace_to_hyperboloid", iso.halfspace_to_hyperboloid, jnp.array([0.0, 0.0, 1.0], dtype=F64)),
+    ("hyperboloid_to_halfspace", iso.hyperboloid_to_halfspace, jnp.array([1.0, 0.0, 0.0, 0.0], dtype=F64)),
+    ("halfspace_to_klein", iso.halfspace_to_klein, jnp.array([0.0, 0.0, 1.0], dtype=F64)),
+    ("klein_to_halfspace", iso.klein_to_halfspace, jnp.zeros(3, dtype=F64)),
+    ("halfspace_to_pv", iso.halfspace_to_pv, jnp.array([0.0, 0.0, 1.0], dtype=F64)),
+    ("pv_to_halfspace", iso.pv_to_halfspace, jnp.zeros(3, dtype=F64)),
 ]
 
 
@@ -3647,3 +3659,570 @@ def test_klein_expmap_matches_the_longdouble_hyperboloid_exponential(c: float, d
         got = manifold.expmap(jnp.asarray(v_D), jnp.asarray(x_D), c)
         err = _rel_max_err(got, expected_D)
         assert err <= 1e-12, f"c={c} dim={dim} a={a} tau={tau}: {err:.3e}"
+
+
+# =============================================================================================
+# M1-17 — Poincaré half-space: Decimal oracle battery for dist / logmap / expmap / ptransp
+#
+# Points ``x = (x_s, x_n)``, ``x_n > 0``, metric ``‖dx‖²/(c·x_n²)``, origin ``o = e_n/√c``. The library
+# builds every two-point quantity from ``w = y - x`` (exact by Sterbenz for close points) and the
+# scaled chord ``r = (w/√x_n)/√y_n``, so ``dist``/``logmap``/``ptransp`` are cancellation-free: a few
+# ulp relative to the exact value AT THE STORED INPUTS, at any radius and separation. What a stored
+# point cannot escape is its own rounding, ``≈ 0.4·(eps/2)·cosh(√c·δ)`` scaled distance with
+# ``cosh(√c·δ) = ‖x‖/x_n`` (``δ`` the distance to the vertical geodesic through ``o``) — the oracle
+# reads the stored coordinates, so that floor is never charged to the library except where an op's
+# own OUTPUT is a point (``expmap``, measured in units of the output's floor).
+#
+# The oracle is independent of the library's algebra: it lifts the stored points to the
+# hyperboloid in 100-digit Decimal, ``X = ((‖x‖² + 1/c)/(2x_n), x_s/(√c·x_n), (‖x‖² - 1/c)/(2x_n))``,
+# evaluates the Minkowski-space ``acosh``/``exp``/``log``/transport there, and pulls tangents back
+# with the chart's differential. The lift cancels ~26 digits at scaled radius 30 and the Minkowski
+# inner product of a 1e-9 pair another ~18, which 100 digits absorbs with > 50 to spare.
+# =============================================================================================
+
+_HS_PREC = 100
+
+_HS_RADII = {
+    jnp.float32: (0.5, 2.0, 6.0, 12.0),
+    jnp.float64: (0.5, 2.0, 6.0, 12.0, 20.0, 30.0),
+}
+"""Scaled distance ``a = √c·d(o, x)`` of the base point, per dtype."""
+
+_HS_PLACEMENTS = ("axis-up", "axis-down", "generic")
+"""Where the base point sits at scaled radius ``a``: on the vertical axis through ``o`` above it
+(``x_n = e^a/√c``, ``x_s = 0``) or below it (``e^{-a}/√c``), both at the storage floor's minimum, or
+along a fixed generic direction from ``o`` (off the axis, ``cosh(√c·δ)`` up to ``~e^a``)."""
+
+_HS_DIRECTIONS = ("vertical", "horizontal", "generic", "near-vertical")
+"""Euclidean unit direction of the step from ``x``: ``+e_n`` (along the vertical geodesic), ``e_1``
+(along the horosphere ``x_n = const``), a fixed random unit vector, and ``+e_n`` tilted by
+``_HS_NEAR_VERTICAL_ANGLE`` towards ``e_1`` (the direction the literal ``expmap`` cancels in)."""
+
+_HS_NEAR_VERTICAL_ANGLE = 1e-3
+
+_HS_SEPARATIONS = {
+    jnp.float32: (1e-1, 1e-3, 1e-5),
+    jnp.float64: (1e-1, 1e-3, 1e-5, 1e-9),
+}
+"""Scaled length ``t = √c·d(x, y)`` of the step from ``x`` to the second point."""
+
+_HS_LONG_STEPS = {
+    jnp.float32: (1.0, 10.0),
+    jnp.float64: (1.0, 10.0, 30.0),
+}
+"""Extra ``expmap``-only step lengths ``θ``: the literal form's denominator cancels only for long
+near-vertical upward steps, so the pair separations above alone would not exercise it."""
+
+_HS_DTYPES = [jnp.float32, jnp.float64]
+
+
+def _hs_dvec(a) -> list[decimal.Decimal]:
+    """Exact Decimal copy of a stored float vector."""
+    return [decimal.Decimal(float(v)) for v in np.asarray(a).ravel()]
+
+
+def _hs_ddot(a, b) -> decimal.Decimal:
+    return sum((p * q for p, q in zip(a, b, strict=True)), decimal.Decimal(0))
+
+
+def _hs_mink(a, b) -> decimal.Decimal:
+    """Minkowski inner product, time coordinate first."""
+    return -a[0] * b[0] + _hs_ddot(a[1:], b[1:])
+
+
+def _hs_dasinh(z: decimal.Decimal) -> decimal.Decimal:
+    return (z + (z * z + 1).sqrt()).ln()
+
+
+def _hs_dcosh_sinhc(theta: decimal.Decimal) -> tuple[decimal.Decimal, decimal.Decimal]:
+    """``(cosh θ, sinh θ/θ)``; ``θ`` is never below 1e-9 here, where 100 digits keep ``sinh`` exact."""
+    e, inv = theta.exp(), (-theta).exp()
+    return (e + inv) / 2, (e - inv) / (2 * theta)
+
+
+def _hs_lift(x, c: decimal.Decimal) -> list[decimal.Decimal]:
+    """Half-space point -> hyperboloid point (time first), in the ambient Decimal context."""
+    n2, sqrt_c, x_n = _hs_ddot(x, x), c.sqrt(), x[-1]
+    return [(n2 + 1 / c) / (2 * x_n)] + [v / (sqrt_c * x_n) for v in x[:-1]] + [(n2 - 1 / c) / (2 * x_n)]
+
+
+def _hs_unlift(X, c: decimal.Decimal) -> list[decimal.Decimal]:
+    x_n = 1 / (c * (X[0] - X[-1]))
+    return [c.sqrt() * x_n * v for v in X[1:-1]] + [x_n]
+
+
+def _hs_push(x, v, c: decimal.Decimal) -> list[decimal.Decimal]:
+    """Differential of the lift at ``x`` applied to ``v`` (term-by-term derivative of ``_hs_lift``)."""
+    X, xv, x_n, v_n, sqrt_c = _hs_lift(x, c), _hs_ddot(x, v), x[-1], v[-1], c.sqrt()
+    spatial = [vi / (sqrt_c * x_n) - xi * v_n / (sqrt_c * x_n * x_n) for xi, vi in zip(x[:-1], v[:-1], strict=True)]
+    return [xv / x_n - X[0] * v_n / x_n, *spatial, xv / x_n - X[-1] * v_n / x_n]
+
+
+def _hs_pull(X, V, c: decimal.Decimal) -> list[decimal.Decimal]:
+    """Inverse differential: hyperboloid tangent ``V`` at ``X`` -> half-space tangent."""
+    x_n = 1 / (c * (X[0] - X[-1]))
+    dx_n = -c * x_n * x_n * (V[0] - V[-1])
+    return [c.sqrt() * (dx_n * Xi + x_n * Vi) for Xi, Vi in zip(X[1:-1], V[1:-1], strict=True)] + [dx_n]
+
+
+def _hs_oracle_pair(x_D, y_D, w_D, c: float):
+    """``(d(x, y), log_x(y), PT_{x→y}(w))`` on the hyperboloid, from the stored coordinates."""
+    with decimal.localcontext() as ctx:
+        ctx.prec = _HS_PREC
+        c_d = decimal.Decimal(float(c))
+        x, y, w = _hs_dvec(x_D), _hs_dvec(y_D), _hs_dvec(w_D)
+        X, Y = _hs_lift(x, c_d), _hs_lift(y, c_d)
+        xy = _hs_mink(X, Y)
+        z = -c_d * xy
+        d = (z + (z * z - 1).sqrt()).ln() / c_d.sqrt()
+        U = [b + c_d * xy * a for a, b in zip(X, Y, strict=True)]
+        U_norm = _hs_mink(U, U).sqrt()
+        log = _hs_pull(X, [d * u / U_norm for u in U], c_d)
+        W = _hs_push(x, w, c_d)
+        coef = _hs_mink(Y, W) / (1 / c_d - xy)
+        pt = _hs_pull(Y, [a + coef * (p + q) for a, p, q in zip(W, X, Y, strict=True)], c_d)
+        return float(d), np.array([float(v) for v in log]), np.array([float(v) for v in pt])
+
+
+def _hs_oracle_expmap(x_D, v_D, c: float) -> tuple[decimal.Decimal, ...]:
+    """``exp_x(v)`` on the hyperboloid from the stored coordinates, as a Decimal half-space point."""
+    with decimal.localcontext() as ctx:
+        ctx.prec = _HS_PREC
+        c_d = decimal.Decimal(float(c))
+        x, v = _hs_dvec(x_D), _hs_dvec(v_D)
+        X, V = _hs_lift(x, c_d), _hs_push(x, v, c_d)
+        theta = c_d.sqrt() * _hs_mink(V, V).sqrt()
+        cosh_t, sinhc_t = _hs_dcosh_sinhc(theta)
+        return tuple(_hs_unlift([cosh_t * a + sinhc_t * b for a, b in zip(X, V, strict=True)], c_d))
+
+
+def _hs_scaled_gap(got_D, ref) -> float:
+    """Scaled geodesic distance ``2·asinh(‖got - ref‖/(2√(got_n·ref_n)))`` between a float and a Decimal point."""
+    got = np.asarray(got_D, dtype=np.float64)
+    if not np.all(np.isfinite(got)) or got[-1] <= 0.0:
+        return float("inf")
+    with decimal.localcontext() as ctx:
+        ctx.prec = _HS_PREC
+        g = _hs_dvec(got)
+        diff = [a - b for a, b in zip(g, ref, strict=True)]
+        return float(2 * _hs_dasinh(_hs_ddot(diff, diff).sqrt() / (2 * (g[-1] * ref[-1]).sqrt())))
+
+
+def _hs_unit(dim: int, seed: int) -> np.ndarray:
+    v = np.random.default_rng([seed, dim]).normal(size=dim)
+    return v / np.linalg.norm(v)
+
+
+def _hs_base_point(a: float, placement: str, c: float, dim: int) -> np.ndarray:
+    """Float64 point at scaled radius ``a`` from ``o``, built in closed form (no library call)."""
+    sqrt_c = np.sqrt(c)
+    if placement == "axis-up":
+        return np.concatenate([np.zeros(dim - 1), [np.exp(a) / sqrt_c]])
+    if placement == "axis-down":
+        return np.concatenate([np.zeros(dim - 1), [np.exp(-a) / sqrt_c]])
+    # Cayley image of the ball point √c·b = tanh(a/2)·u: with t = √c·b + e_n, x = (2t/‖t‖² - e_n)/√c,
+    # and x_n = sech²(a/2)/(‖t‖²√c) written without the 1 - ‖√c·b‖² cancellation.
+    u = _hs_unit(dim, 41)
+    t = np.tanh(a / 2.0) * u
+    t[-1] += 1.0
+    t2 = float(np.dot(t, t))
+    return np.concatenate([2.0 * t[:-1] / (t2 * sqrt_c), [1.0 / (np.cosh(a / 2.0) ** 2 * t2 * sqrt_c)]])
+
+
+def _hs_direction(kind: str, dim: int) -> np.ndarray:
+    e_1, e_n = np.eye(dim)[0], np.eye(dim)[-1]
+    if kind == "vertical":
+        return e_n
+    if kind == "horizontal":
+        return e_1
+    if kind == "near-vertical":
+        return np.cos(_HS_NEAR_VERTICAL_ANGLE) * e_n + np.sin(_HS_NEAR_VERTICAL_ANGLE) * e_1
+    return _hs_unit(dim, 43)
+
+
+def _hs_float64_expmap(v: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """Direct-form float64 exponential map, only to BUILD second points from steps ``θ ≤ 0.1``."""
+    p = v / x[-1]
+    theta = np.linalg.norm(p)
+    sinhc = np.sinh(theta) / theta
+    e = np.cosh(theta) - sinhc * p[-1]
+    return np.concatenate([x[:-1] + x[-1] * sinhc * p[:-1] / e, [x[-1] / e]])
+
+
+class _HalfSpacePairCase(NamedTuple):
+    """One stored (x, y) pair, a stored tangent ``w`` at x, and the Decimal-oracle truths."""
+
+    x_D: jnp.ndarray
+    y_D: jnp.ndarray
+    w_D: jnp.ndarray  # transported by ptransp
+    d_ref: float
+    log_ref_D: np.ndarray
+    pt_ref_D: np.ndarray
+    t: float  # nominal scaled separation (the stored pair's actual one is d_ref)
+    label: str
+
+
+class _HalfSpaceStepCase(NamedTuple):
+    """One stored (x, v) and the Decimal ``exp_x(v)``, with the output's rounding floor."""
+
+    x_D: jnp.ndarray
+    v_D: jnp.ndarray
+    theta: float  # nominal scaled step length √c·‖v‖_x
+    direction: str
+    y_ref: tuple[decimal.Decimal, ...]
+    floor: float  # (eps/2)·max(0.4·‖y‖/y_n, θ), scaled distance — see _hs_step_floor
+    label: str
+
+
+def _hs_step_floor(y_ref, theta: float, eps: float) -> float:
+    """Rounding floor of an ``expmap`` output, as a scaled distance: ``(eps/2)·max(0.4·‖y‖/y_n, θ)``.
+
+    The first term is the output's own storage floor (a float point is known to ``≈ 0.4·(eps/2)·
+    cosh(√c·δ)``, ``cosh(√c·δ) = ‖y‖/y_n``). The second is the step length's: ``θ = ‖v/x_n‖`` is
+    formed in the dtype, and a relative ``eps/2`` in ``θ`` moves the endpoint by ``θ·eps/2`` along the
+    geodesic — the same term the hyperboloid's ``expmap`` carries. Worked number, float32 at
+    ``θ = 10`` from an axis point: ``max(0.4, 10)·6e-8 = 6.0e-7``.
+    """
+    with decimal.localcontext() as ctx:
+        ctx.prec = _HS_PREC
+        storage = float(0.4 * float(_hs_ddot(y_ref, y_ref).sqrt() / y_ref[-1]))
+    return 0.5 * eps * max(storage, theta)
+
+
+@functools.cache
+def _halfspace_pair_cases(c: float, dtype) -> tuple[_HalfSpacePairCase, ...]:
+    """Every (dim x radius x placement x direction x separation) pair the stored inputs can resolve."""
+    cases = []
+    for dim in (2, 10):
+        for a in _HS_RADII[dtype]:
+            for placement in _HS_PLACEMENTS:
+                x_D = np.asarray(_hs_base_point(a, placement, c, dim), dtype=dtype)
+                x64 = x_D.astype(np.float64)
+                w_D = np.asarray(x64[-1] * _hs_unit(dim, 47), dtype=dtype)
+                for kind in _HS_DIRECTIONS:
+                    for t in _HS_SEPARATIONS[dtype]:
+                        # Built in float64 from the STORED x, then rounded: the oracle reads the rounded y.
+                        y_D = np.asarray(_hs_float64_expmap(t * x64[-1] * _hs_direction(kind, dim), x64), dtype=dtype)
+                        if np.array_equal(x_D, y_D):
+                            continue
+                        d_ref, log_ref_D, pt_ref_D = _hs_oracle_pair(x_D, y_D, w_D, c)
+                        label = f"c={c} dim={dim} a={a} {placement} {kind} t={t:g} d={d_ref:.6g}"
+                        cases.append(
+                            _HalfSpacePairCase(
+                                jnp.asarray(x_D), jnp.asarray(y_D), jnp.asarray(w_D), d_ref, log_ref_D, pt_ref_D, t, label
+                            )
+                        )
+    return tuple(cases)
+
+
+@functools.cache
+def _halfspace_step_cases(c: float, dtype) -> tuple[_HalfSpaceStepCase, ...]:
+    """``expmap`` inputs: the pair battery's steps plus the long steps of ``_HS_LONG_STEPS``."""
+    eps = float(np.finfo(dtype).eps)
+    cases = []
+    for dim in (2, 10):
+        for a in _HS_RADII[dtype]:
+            for placement in _HS_PLACEMENTS:
+                x_D = np.asarray(_hs_base_point(a, placement, c, dim), dtype=dtype)
+                x_n = float(x_D[-1])
+                for kind in _HS_DIRECTIONS:
+                    for theta in (*_HS_SEPARATIONS[dtype], *_HS_LONG_STEPS[dtype]):
+                        v_D = np.asarray(theta * x_n * _hs_direction(kind, dim), dtype=dtype)
+                        y_ref = _hs_oracle_expmap(x_D, v_D, c)
+                        label = f"c={c} dim={dim} a={a} {placement} {kind} θ={theta:g}"
+                        floor = _hs_step_floor(y_ref, theta, eps)
+                        cases.append(_HalfSpaceStepCase(jnp.asarray(x_D), jnp.asarray(v_D), theta, kind, y_ref, floor, label))
+    return tuple(cases)
+
+
+def _hs_rel_vec_err(got_D, ref_D: np.ndarray) -> float:
+    """``‖got - ref‖/‖ref‖`` (the metric is conformal, so this is also the Riemannian relative error)."""
+    got = np.asarray(got_D, dtype=np.float64)
+    return float(np.linalg.norm(got - ref_D) / np.linalg.norm(ref_D))
+
+
+_HS_K_DIST = 6.0
+"""``dist`` bound in eps (relative). Worst measured over the battery, jitted on CPU: 1.85 eps
+(float32, ``c = 2.5``) and 2.67 eps (float64, ``c = 0.3``); medians 0.0-0.6 eps
+(``logs/2026-09-28_halfspace-manifold/oracle_battery_bounds.out``). ``K = 6`` leaves 2.2x margin."""
+
+_HS_K_LOG = 4.0
+"""``logmap`` bound in eps (relative vector error). Worst measured: 1.54 eps (float32), 1.87 eps
+(float64); medians 0.02-0.32 eps; 2.1x margin."""
+
+_HS_K_PT = 3.0
+"""``ptransp`` bound in eps (relative vector error). Worst measured: 0.88 eps (float32), 1.00 eps
+(float64); 3x margin."""
+
+_HS_K_EXP = 24.0
+"""``expmap`` bound in output rounding floors (:func:`_hs_step_floor`). Worst measured: 3.67 floors
+(float32) and 10.4 floors (float64, a ``θ = 10`` horizontal step to ``‖y‖/y_n ≈ 4000``, where the
+output's ``y_s`` is 1.9 ulp off — ``0.4·(eps/2)`` is the MEDIAN rounding of a stored point, so one
+ulp of the largest coordinate is already 5 floors); medians 0.7-1.1. 2.3x margin
+(``logs/2026-09-28_halfspace-manifold/oracle_expmap_f64_worst.out``)."""
+
+
+def _hs_jit(fn):
+    """Jitted library call, as a user runs it (the literal controls below run in eager NumPy instead)."""
+    return jax.jit(fn)
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_dist_matches_the_decimal_oracle(dtype, c: float):
+    """``dist`` vs the 100-digit hyperboloid ``acosh`` at the stored points: relative error ``≤ K·eps``."""
+    manifold = HalfSpace(dtype=dtype)
+    dist = _hs_jit(lambda x, y: manifold.dist(x, y, c))
+    eps = float(np.finfo(dtype).eps)
+    cases = _halfspace_pair_cases(c, dtype)
+    assert len(cases) >= 40, f"grid collapsed to {len(cases)} cases"
+    for case in cases:
+        d = float(dist(case.x_D, case.y_D))
+        err = abs(d - case.d_ref) / case.d_ref
+        assert err <= _HS_K_DIST * eps, f"{case.label}: {d} vs {case.d_ref} ({err / eps:.2f} eps)"
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_logmap_matches_the_decimal_oracle(dtype, c: float):
+    """``logmap`` vs the hyperboloid log pulled back through the chart: relative vector error ``≤ K·eps``."""
+    manifold = HalfSpace(dtype=dtype)
+    logmap = _hs_jit(lambda y, x: manifold.logmap(y, x, c))
+    eps = float(np.finfo(dtype).eps)
+    cases = _halfspace_pair_cases(c, dtype)
+    assert len(cases) >= 40, f"grid collapsed to {len(cases)} cases"
+    for case in cases:
+        err = _hs_rel_vec_err(logmap(case.y_D, case.x_D), case.log_ref_D)
+        assert err <= _HS_K_LOG * eps, f"{case.label}: relative logmap error {err / eps:.2f} eps"
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_ptransp_matches_the_decimal_oracle(dtype, c: float):
+    """``ptransp`` vs the hyperboloid transport pulled back through the chart: relative error ``≤ K·eps``."""
+    manifold = HalfSpace(dtype=dtype)
+    ptransp = _hs_jit(lambda w, x, y: manifold.ptransp(w, x, y, c))
+    eps = float(np.finfo(dtype).eps)
+    cases = _halfspace_pair_cases(c, dtype)
+    assert len(cases) >= 40, f"grid collapsed to {len(cases)} cases"
+    for case in cases:
+        err = _hs_rel_vec_err(ptransp(case.w_D, case.x_D, case.y_D), case.pt_ref_D)
+        assert err <= _HS_K_PT * eps, f"{case.label}: relative ptransp error {err / eps:.2f} eps"
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_expmap_matches_the_decimal_oracle(dtype, c: float):
+    """``expmap`` vs the hyperboloid exponential: geodesic error ``≤ K`` output rounding floors."""
+    manifold = HalfSpace(dtype=dtype)
+    expmap = _hs_jit(lambda v, x: manifold.expmap(v, x, c))
+    cases = _halfspace_step_cases(c, dtype)
+    assert len(cases) >= 40, f"grid collapsed to {len(cases)} cases"
+    for case in cases:
+        gap = _hs_scaled_gap(expmap(case.v_D, case.x_D), case.y_ref)
+        assert gap <= _HS_K_EXP * case.floor, f"{case.label}: {gap:.3e} = {gap / case.floor:.2f} floors"
+
+
+def _hs_literal_dist(x_D, y_D, c: float) -> float:
+    """HTorch's ``arcosh(1 + ‖x - y‖²/(2x_n·y_n))/√c``, eager NumPy in the stored dtype.
+
+    NumPy rather than ``jax.jit``: XLA:CPU's ``jit`` rewrites ``arccosh(1 + a)`` into an accurate form
+    (XLA:GPU's does not), so the jitted literal would measure the compiler, not the formula.
+    """
+    x, y = np.asarray(x_D), np.asarray(y_D)
+    one = x.dtype.type(1.0)
+    with np.errstate(all="ignore"):
+        arg = one + np.sum((x - y) ** 2) / (x.dtype.type(2.0) * x[-1] * y[-1])
+        return float(np.arccosh(arg) / np.sqrt(x.dtype.type(c)))
+
+
+def _hs_literal_expmap(v_D, x_D) -> np.ndarray:
+    """HTorch's ``y_s = x_s + x_n·p_s/(θ·coth θ - p_n)``, ``y_n = x_n/(cosh θ - (sinh θ/θ)·p_n)``, eager NumPy."""
+    x, v = np.asarray(x_D), np.asarray(v_D)
+    with np.errstate(all="ignore"):
+        p = v / x[-1]
+        theta = np.sqrt(np.sum(p * p))
+        y_s = x[:-1] + x[-1] * p[:-1] / (theta / np.tanh(theta) - p[-1])
+        y_n = x[-1] / (np.cosh(theta) - (np.sinh(theta) / theta) * p[-1])
+    return np.concatenate([y_s, [y_n]])
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_literal_acosh_dist_violates_the_battery_bound(dtype, c: float):
+    """Negative control: the literal ``arcosh`` distance fails the ``dist`` bound on every close pair.
+
+    For ``t ≤ 1e-3`` the argument is ``1 + O(t²)``, and the rounding of ``1 + tiny`` hands ``arcosh``
+    an argument known only to ``eps``, i.e. a distance known only to ``√eps``. Measured on the same
+    stored cases: at least 1.15e4 eps (float64) / 3.2e4 eps (float32) on every ``t ≤ 1e-3`` pair,
+    median 4.3e5-1.9e8 eps (``oracle_battery_bounds.out``), against the library's ≤ 2.7 eps.
+    """
+    eps = float(np.finfo(dtype).eps)
+    close = [case for case in _halfspace_pair_cases(c, dtype) if case.t <= 1e-3]
+    assert len(close) >= 40, f"only {len(close)} close pairs"
+    ratios = []
+    for case in close:
+        err = abs(_hs_literal_dist(case.x_D, case.y_D, c) - case.d_ref) / case.d_ref
+        ratios.append(err / (_HS_K_DIST * eps) if np.isfinite(err) else np.inf)
+    assert min(ratios) > 1.0, f"literal passes the bound on a close pair ({min(ratios):.2f}x)"
+    assert float(np.median(ratios)) >= 1e3, f"literal median is only {np.median(ratios):.1f}x the bound"
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_literal_expmap_violates_the_battery_bound(dtype, c: float):
+    """Negative control: the literal ``expmap`` fails the bound on long (near-)vertical upward steps.
+
+    Its height denominator ``cosh θ - sinh θ·cos φ`` is ``e^{-θ} + sinh θ·(1 - cos φ)``, formed by
+    subtracting two numbers of size ``e^θ/2``, so at ``θ = 10`` float32 keeps no digit of it (NaN or
+    a negative height) and float64 keeps ~8. Measured on the ``θ ≥ 10`` vertical and near-vertical
+    cases: float32 violates the bound on every case (least 5.6e4 floors, half of them NaN); float64
+    on 94-96 % of them (median 4.2e6 floors), with a few cases where the difference happens to round
+    exactly (least 0.02 floors) — so float64 asserts the median and the violated fraction.
+    """
+    cases = [
+        case
+        for case in _halfspace_step_cases(c, dtype)
+        if case.theta >= 10.0 and case.direction in ("vertical", "near-vertical")
+    ]
+    assert len(cases) >= 24, f"only {len(cases)} long near-vertical steps"
+    ratios = np.array([_hs_scaled_gap(_hs_literal_expmap(case.v_D, case.x_D), case.y_ref) / case.floor for case in cases])
+    violated = ratios > _HS_K_EXP
+    assert float(np.median(ratios)) >= 1e3, f"literal median is only {np.median(ratios):.1f} floors"
+    if dtype is jnp.float32:
+        assert bool(np.all(violated)), f"literal float32 passes on {int(np.sum(~violated))} cases"
+    else:
+        assert float(np.mean(violated)) >= 0.75, f"literal float64 violates only {np.mean(violated):.0%} of cases"
+
+    # The same cases, library expmap: all inside the bound (the battery test covers them too).
+    manifold = HalfSpace(dtype=dtype)
+    expmap = _hs_jit(lambda v, x: manifold.expmap(v, x, c))
+    worst = max(_hs_scaled_gap(expmap(case.v_D, case.x_D), case.y_ref) / case.floor for case in cases)
+    assert worst <= _HS_K_EXP, f"library expmap {worst:.2f} floors on the literal's failure cases"
+
+
+# ---------------------------------------------------------------------------------------------
+# Half-space configurations with an analytic answer
+# ---------------------------------------------------------------------------------------------
+
+_HS_HEIGHT_EXPONENTS = {jnp.float32: range(-30, 31, 5), jnp.float64: range(-300, 301, 50)}
+"""``log10`` of the base height on the vertical line; ``x_n·y_n`` leaves float32's range from ``|·| ≈ 19``."""
+
+_HS_HEIGHT_RATIOS = (1.001, 0.5, 1e3, 1e-3)
+
+
+def _hs_check_vertical_line(dtype, c: float, heights: list[tuple[float, float]]) -> None:
+    """Assert ``dist == |ln(y_n/x_n)|/√c`` (Decimal, stored heights) for every pair, both orders, two ``x_s``."""
+    manifold = HalfSpace(dtype=dtype)
+    dist = _hs_jit(lambda x, y: manifold.dist(x, y, c))
+    eps = float(np.finfo(dtype).eps)
+    for x_s in (np.zeros(2), np.array([0.37, -1.2])):
+        for h_x, h_y in heights:
+            x_D = np.asarray(np.append(x_s, h_x), dtype=dtype)
+            y_D = np.asarray(np.append(x_s, h_y), dtype=dtype)
+            with decimal.localcontext() as ctx:
+                ctx.prec = 60
+                ratio = decimal.Decimal(float(y_D[-1])) / decimal.Decimal(float(x_D[-1]))
+                want = float(abs(ratio.ln()) / decimal.Decimal(float(c)).sqrt())
+            for a_D, b_D in ((x_D, y_D), (y_D, x_D)):
+                got = float(dist(jnp.asarray(a_D), jnp.asarray(b_D)))
+                assert abs(got - want) <= _HS_K_DIST * eps * want, f"dist({a_D}, {b_D}) = {got} vs {want}"
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_dist_on_a_shared_vertical_line_is_the_log_height_ratio(dtype, c: float):
+    """Same ``x_s``: ``d = |ln(y_n/x_n)|/√c``, for heights across the dtype's range.
+
+    A vertical line is a geodesic and the metric on it is ``dx_n/(√c·x_n)``, so the distance is the
+    log height ratio. ``x_s`` is shared bit-for-bit (``w_s = 0`` exactly), at 0 and at a generic
+    value. Base heights run from 1e-30 to 1e30 (float32) and 1e-300 to 1e300 (float64), paired at
+    ratios ``1.001`` to ``1e±3``, in both orders; this pins the sequential division
+    ``(w/√x_n)/√y_n``: a spelling that forms ``x_n·y_n`` (or ``x_n·(y_n - x_n)``) overflows or flushes
+    to zero for ``|log10 x_n| ≳ 19`` in float32. The expected value is Decimal ``ln`` of the stored
+    heights, the bound the battery's. Pairs on either side of the pairwise ceiling are the next two tests.
+    """
+    heights = [(10.0**e, 10.0**e * k) for e in _HS_HEIGHT_EXPONENTS[dtype] for k in _HS_HEIGHT_RATIOS]
+    _hs_check_vertical_line(dtype, c, heights)
+
+
+_HS_CEILING_PAIRS = {
+    "inside": {jnp.float32: (1e-19, 1e19), jnp.float64: (1e-152, 1e152)},
+    "past": {jnp.float32: (1e-30, 1e30), jnp.float64: (1e-160, 1e160)},
+}
+"""Axis heights on either side of the pairwise ceiling ``‖r‖ = √(max float)``, i.e. ``√c·d = ln(max float)``:
+88.723 (float32) / 709.783 (float64), measured in
+``logs/2026-09-28_halfspace-manifold/timing_pass/ceiling_check.out``. The chord ``r = ((y - x)/√x_n)/√y_n``
+does not depend on ``c``, so neither does the ceiling in ``√c·d``. Inside: ``√c·d = ln(1e38) = 87.50`` /
+``ln(1e304) = 699.99``. Past: ``ln(1e60) = 138.2`` / ``ln(1e320) = 736.8``."""
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_dist_just_inside_the_pairwise_ceiling_is_the_log_height_ratio(dtype, c: float):
+    """The vertical-line identity at ``√c·d = 87.50`` (float32) / ``699.99`` (float64), both argument orders.
+
+    Axis heights ``1e∓19`` / ``1e∓152``, 1.2 / 9.8 nats of scaled distance below the ceiling where the
+    plain sum of squares ``‖r‖²`` overflows: the chord is formed without overflow right up to it, and
+    ``dist`` keeps the battery's ``K·eps`` relative bound there (measured 0.3-0.7 eps in float32).
+    """
+    lo, hi = _HS_CEILING_PAIRS["inside"][dtype]
+    _hs_check_vertical_line(dtype, c, [(lo, hi)])
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_pairwise_ops_past_the_ceiling_are_loud(dtype, c: float):
+    """Past the ceiling ``dist`` is ``inf`` and ``logmap`` non-finite, in both orders — never a finite value.
+
+    Axis heights ``1e∓30`` (float32, ``√c·d = 138.2``) / ``1e∓160`` (float64, ``736.8``). The true
+    distance is representable, but ``‖r‖²`` is a plain sum of squares (the timing pass's spelling) and
+    overflows; what this pins is that the overflow reaches the output as ``inf``/NaN rather than as a
+    saturated, plausible-looking value.
+    """
+    manifold = HalfSpace(dtype=dtype)
+    dist = _hs_jit(lambda x, y: manifold.dist(x, y, c))
+    logmap = _hs_jit(lambda y, x: manifold.logmap(y, x, c))
+    lo, hi = _HS_CEILING_PAIRS["past"][dtype]
+    for x_s in (np.zeros(2), np.array([0.37, -1.2])):
+        lo_D = jnp.asarray(np.append(x_s, lo), dtype=dtype)
+        hi_D = jnp.asarray(np.append(x_s, hi), dtype=dtype)
+        for a_D, b_D in ((lo_D, hi_D), (hi_D, lo_D)):
+            d = float(dist(a_D, b_D))
+            assert d == np.inf, f"dist({a_D}, {b_D}) = {d}, not inf"
+            log_D = np.asarray(logmap(b_D, a_D))
+            assert not np.all(np.isfinite(log_D)), f"logmap({b_D}, {a_D}) = {log_D} is finite"
+
+
+@pytest.mark.parametrize("dtype", _HS_DTYPES, ids=_HYP_DTYPE_IDS)
+@pytest.mark.parametrize("c", CURVATURES)
+def test_halfspace_dist_0_matches_the_decimal_oracle(dtype, c: float):
+    """``dist_0`` vs ``arcosh(√c·X₀)/√c``, ``X₀ = (‖x‖² + 1/c)/(2x_n)`` the lifted time coordinate, in Decimal.
+
+    Points: every base point of the battery (radii up to 12 / 30, on and off the axis) plus axis
+    points at the extreme heights of the vertical-line test. The oracle uses the exact origin
+    ``1/√c``; the library stores ``o_n = fl(1/√c)``, which moves ``o`` by up to ~1.5 eps of scaled
+    distance, an ABSOLUTE error — so the bound is ``K·eps·max(1, √c·d)``, relative above
+    ``√c·d = 1`` and absolute (scaled) below it.
+    """
+    manifold = HalfSpace(dtype=dtype)
+    dist_0 = _hs_jit(lambda x: manifold.dist_0(x, c))
+    eps = float(np.finfo(dtype).eps)
+    sqrt_c = float(np.sqrt(c))
+    points = [
+        np.asarray(_hs_base_point(a, placement, c, dim), dtype=dtype)
+        for dim in (2, 10)
+        for a in _HS_RADII[dtype]
+        for placement in _HS_PLACEMENTS
+    ]
+    points += [np.asarray([0.0, 0.0, 10.0**e], dtype=dtype) for e in _HS_HEIGHT_EXPONENTS[dtype]]
+    for x_D in points:
+        with decimal.localcontext() as ctx:
+            ctx.prec = _HS_PREC
+            c_d = decimal.Decimal(float(c))
+            x = _hs_dvec(x_D)
+            z = (c_d * _hs_ddot(x, x) + 1) / (2 * c_d.sqrt() * x[-1])
+            want = float((z + (z * z - 1).sqrt()).ln() / c_d.sqrt())
+        got = float(dist_0(jnp.asarray(x_D)))
+        bound = _HS_K_DIST * eps * max(1.0, sqrt_c * want)
+        assert sqrt_c * abs(got - want) <= bound, f"x={x_D}: {got} vs {want} ({sqrt_c * abs(got - want) / eps:.2f} eps)"

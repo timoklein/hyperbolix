@@ -2,6 +2,7 @@
 
 from . import isometry_mappings
 from .euclidean import Euclidean
+from .halfspace import HalfSpace
 from .hyperboloid import Hyperboloid
 from .klein import Klein
 from .poincare import Poincare
@@ -13,6 +14,7 @@ from .stereographic import Stereographic
 __all__ = [
     "Curvature",
     "Euclidean",
+    "HalfSpace",
     "Hyperboloid",
     "Klein",
     "Manifold",

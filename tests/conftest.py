@@ -80,8 +80,8 @@ jax.config.update("jax_enable_x64", True)
 # generator from (seed_jax, stream_id, ...) instead of drawing from a single shared generator,
 # so the values a test sees no longer depend on which other tests ran first. Without this a
 # failure found in a full run may not reproduce under ``-k`` (and vice versa).
-_CURVATURE_STREAM = {"euclidean": 0, "poincare": 1, "hyperboloid": 2, "pv": 3, "klein": 4}
-_POINTS_STREAM = {"euclidean": 10, "poincare": 11, "hyperboloid": 12, "pv": 13, "klein": 14}
+_CURVATURE_STREAM = {"euclidean": 0, "poincare": 1, "hyperboloid": 2, "pv": 3, "klein": 4, "halfspace": 5}
+_POINTS_STREAM = {"euclidean": 10, "poincare": 11, "hyperboloid": 12, "pv": 13, "klein": 14, "halfspace": 15}
 
 # Largest scaled geodesic radius ``a = √c·d(0, x)`` of the Klein ``uniform_points`` sample
 # (Euclidean cap ``√c‖x‖ ≤ tanh(a)``). A Klein point's boundary gap ``1 - c‖x‖²`` is known only to
@@ -97,6 +97,47 @@ _POINTS_STREAM = {"euclidean": 10, "poincare": 11, "hyperboloid": 12, "pv": 13, 
 # (logs/2026-09-28_klein_shared_suite/probe_klein_sampler_cap.py, probe_egrad2rgrad_cancellation.py)
 # For comparison, the Hyperboloid sample stops at a ≈ 1.1 (Poincaré radius scaled by 0.5).
 _KLEIN_MAX_SCALED_RADIUS = {"float32": 5.0, "float64": 9.5}
+
+# Largest scaled geodesic radius ``a = √c·d(o, x)`` of the HalfSpace ``uniform_points`` sample
+# (o = e_n/√c). Measured like _KLEIN_MAX_SCALED_RADIUS: *every* point placed at the cap (random
+# direction), worst error / shared tolerance over c ∈ {0.05, 1, 1.34, 2.40, 5}, dim {2, 10}, 3-10 seeds.
+# Two generic assertions bind, one per dtype:
+#   float32 (4e-3): the bilinearity check of ``test_tangent_inner_is_an_inner_product``. g_x scales as
+#     1/(c·x_n²) ≈ e^{2a}/c, and the test forms a·⟨u, v⟩ + b·⟨v, v⟩ in float32, which can cancel to
+#     near 0, where only the absolute atol is left to absorb an eps·e^{2a} rounding. Worst ratio
+#     0.50 at a = 4.5; 1.2 at a = 5.0 (1 of 100 (c, dim, seed) combinations fails); 2-15 from a = 6.0
+#     on (7-9 of 100). The float32 library value is not the problem: re-evaluating the same stored
+#     float32 points and vectors in float64 gives ≤ 2e-9 of the tolerance.
+#   float64 (1e-7): the inverse check (⊖x) ⊕ x = o of ``test_addition``, a storage-floor error
+#     (≈ eps·cosh(a), growing ≈ e^a): worst ratio 0.26 at a = 17, 0.66 at a = 18.0, 1.18 at a = 18.5,
+#     2.0 at a = 19, 4.7 at a = 20. The same check reaches its float32 floor only at a ≈ 9 (0.42 at 8, 1.1 at 9).
+# Each cap is the widest half-unit step that passes with the whole sample on the cap. From a = 8.5 in
+# float32 the large-scalar check of ``test_scalar_mul`` also fails: 10 ⊗ x sits at scaled radius
+# 10·a, whose height (~e^{-10a}/√c) leaves float32's normal range (a representation limit of the
+# chart, not a precision one).
+# (logs/2026-09-28_halfspace_shared_suite/probe_binding_ratio.py, probe_addition_inverse_ratio.py,
+#  probe_halfspace_sampler_cap.sh → cap_sweep.txt, probe_cap_seeds.sh → cap_seeds_*.txt)
+_HALFSPACE_MAX_SCALED_RADIUS = {"float32": 4.5, "float64": 18.0}
+
+
+def _halfspace_points_at_scaled_radius(a: np.ndarray, directions: np.ndarray, c: float) -> np.ndarray:
+    """Half-space points at scaled distance ``a`` (shape ``(N, 1)``) from ``o = e_n/√c``, in NumPy float64.
+
+    Built through the hyperboloid, not through the library's isometry maps (under test elsewhere):
+    the unit-curvature hyperboloid point ``X = (cosh a, sinh a·u)`` for a unit ``directions`` row
+    ``u = (u_s, u_n)`` maps to ``x_n = (1/√c)/E`` and ``x_s = x_n·sinh a·u_s`` with
+    ``E = X₀ - X_n = cosh a - sinh a·u_n``; ``a = 0`` gives ``o``. ``E`` cancels for ``u_n → 1`` at
+    large ``a``, so there it is formed as ``e^{-a} + sinh a·‖u_s‖²/(1 + u_n)`` (a sum of
+    non-negative terms, the same function since ``1 - u_n = ‖u_s‖²/(1 + u_n)``).
+    """
+    u_s = directions[:, :-1]
+    u_n = directions[:, -1:]
+    sinh_a = np.sinh(a)
+    us2 = np.sum(u_s**2, axis=-1, keepdims=True)
+    e_up = np.exp(-a) + sinh_a * us2 / (1.0 + np.abs(u_n))
+    e = np.where(u_n > 0, e_up, np.cosh(a) - sinh_a * u_n)
+    x_n = (1.0 / np.sqrt(c)) / e
+    return np.concatenate([x_n * sinh_a * u_s, x_n], axis=-1)
 
 
 @pytest.fixture(scope="package", params=[10])
@@ -160,6 +201,8 @@ def _make_manifold_and_c(manifold_name: str, dtype: jnp.dtype, seed: int, draw: 
         return hj.manifolds.ProperVelocity(dtype=dtype), c
     elif manifold_name == "klein":
         return hj.manifolds.Klein(dtype=dtype), c
+    elif manifold_name == "halfspace":
+        return hj.manifolds.HalfSpace(dtype=dtype), c
     raise ValueError(f"Unknown manifold: {manifold_name}")
 
 
@@ -173,8 +216,20 @@ def _make_manifold_and_c(manifold_name: str, dtype: jnp.dtype, seed: int, draw: 
         ("hyperboloid", 1),
         ("klein", 0),
         ("klein", 1),
+        ("halfspace", 0),
+        ("halfspace", 1),
     ],
-    ids=["Euclidean", "PoincareBall-c0", "PoincareBall-c1", "Hyperboloid-c0", "Hyperboloid-c1", "Klein-c0", "Klein-c1"],
+    ids=[
+        "Euclidean",
+        "PoincareBall-c0",
+        "PoincareBall-c1",
+        "Hyperboloid-c0",
+        "Hyperboloid-c1",
+        "Klein-c0",
+        "Klein-c1",
+        "HalfSpace-c0",
+        "HalfSpace-c1",
+    ],
 )
 def manifold_and_c(request: pytest.FixtureRequest, dtype: jnp.dtype, seed_jax: int):
     """Fixture providing (manifold_instance, curvature) tuples.
@@ -292,6 +347,21 @@ def _sample_uniform_points(manifold, c: float, dim: int, dtype: jnp.dtype, seed:
         points = jnp.asarray(points.astype(np_dtype), dtype=dtype)
         proj_batch = jax.vmap(manifold.proj, in_axes=(0, None))
         return proj_batch(points, c)
+
+    elif isinstance(manifold, hj.manifolds.HalfSpace):
+        rng = np.random.default_rng([seed, _POINTS_STREAM["halfspace"], dim])
+        # Upper half-space: the Poincaré sampler's distribution carried over by an isometry fixing
+        # the origin. A uniform direction u and a ball radius √c‖p‖ = s·tanh(a_max/2) with
+        # s = U^{1/dim} (uniform in the ball of that radius) give the scaled radius a = 2·artanh(√c‖p‖)
+        # (≤ a_max); _halfspace_points_at_scaled_radius places the point in NumPy (not through the
+        # isometry maps, which are under test elsewhere). a_max is _HALFSPACE_MAX_SCALED_RADIUS.
+        a_max = _HALFSPACE_MAX_SCALED_RADIUS[np_dtype.name]
+        random_dirs = rng.normal(0.0, 1.0, size=(num_pts, dim))
+        random_dirs /= np.linalg.norm(random_dirs, axis=-1, keepdims=True)
+        random_radii = rng.random((num_pts, 1)) ** (1.0 / dim)
+        a = np.minimum(2.0 * np.arctanh(random_radii * np.tanh(a_max / 2.0)), a_max)
+        points = _halfspace_points_at_scaled_radius(a, random_dirs, c)
+        return jnp.asarray(points.astype(np_dtype), dtype=dtype)
 
     else:
         raise ValueError("Unknown manifold module")

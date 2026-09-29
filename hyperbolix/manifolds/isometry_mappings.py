@@ -9,6 +9,7 @@ Supported Models (curvature ``c > 0``, sectional curvature ``-c``):
     - Poincaré ball model: Points in R^d with ||y||² < 1/c
     - Proper Velocity (PV) model: Unconstrained points in R^d (Chen et al. 2026)
     - Beltrami-Klein model: Points in R^d with ||k||² < 1/c (geodesics are straight chords)
+    - Poincaré half-space model: Points in R^d with last coordinate x_n > 0 (origin e_n/√c)
 
 Provided maps (all exact, distance-preserving, mutually consistent):
     - Poincaré ↔ Hyperboloid: ``poincare_to_hyperboloid`` / ``hyperboloid_to_poincare``
@@ -25,6 +26,11 @@ Provided maps (all exact, distance-preserving, mutually consistent):
       (central projection from the ambient origin onto the plane x₀ = 1/√c).
     - Klein ↔ PV: ``klein_to_pv`` / ``pv_to_klein``
       (PV = Einstein velocity scaled by its Lorentz factor, x = gamma_k·k).
+    - Half-space ↔ Poincaré: ``halfspace_to_poincare`` / ``poincare_to_halfspace``
+      (the Cayley transform, origin e_n/√c ↦ 0 with differential ½·I).
+    - Half-space ↔ Hyperboloid: ``halfspace_to_hyperboloid`` / ``hyperboloid_to_halfspace``.
+    - Half-space ↔ Klein: ``halfspace_to_klein`` / ``klein_to_halfspace``.
+    - Half-space ↔ PV: ``halfspace_to_pv`` / ``pv_to_halfspace``.
 
 Klein chart precision: with scaled radius ``a = √c·d(0, ·)`` a Klein point has
 ``√c·||k|| = tanh(a)`` where a Poincaré point has ``tanh(a/2)``, so ``1 - c·||k||²``
@@ -634,3 +640,501 @@ def pv_to_klein(
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=x.dtype))
     beta_inv = safe_hypot_norm(sqrt_c * x, jnp.asarray(1.0, dtype=x.dtype))  # 1/β_x
     return x / beta_inv
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ Poincaré
+# ---------------------------------------------------------------------------
+
+
+def halfspace_to_poincare(
+    x: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Poincaré half-space point to the Poincaré ball (the Cayley transform).
+
+    With ``x = (x_s, x_n)``, ``x_n > 0`` (last coordinate), scaled coordinates
+    ``s = √c·x`` and
+
+    Formula:
+        q   = c·||x_s||² + (√c·x_n - 1)(√c·x_n + 1)       (= c·||x||² - 1)
+        den = ||s_s||² + (1 + s_n)²
+        p   = (2·s_s, q) / (√c·den)
+
+    The half-space origin ``e_n/√c`` maps to the ball origin with differential
+    exactly ``½·I`` (no reflection); the positive ``x_n`` axis maps onto the
+    ``e_n`` diameter, ``x_n → ∞`` to the north pole ``e_n/√c`` and ``x_n → 0`` to
+    the boundary sphere.
+
+    Numerics: ``den`` is a sum of non-negative terms, at least 1 on the half-space,
+    so no floor is needed. ``q`` is written as a product so it does not cancel
+    near the sphere ``c·||x||² = 1`` (the ball's equatorial plane ``p_n = 0``). The
+    result is not projected: past the ball chart's ceiling (scaled radius
+    ``a ≈ 12.6`` float32 / ``27.7`` float64) ``||p||`` rounds to ``1/√c`` or just
+    beyond, as for every map into the ball — call ``Poincare.proj`` for such
+    points. Past float32 ``|s| ≈ 1.8e19`` the squares overflow and the output is
+    NaN, not a saturated point.
+
+    Args:
+        x: Point in the half-space, shape (dim,). Should satisfy x_n > 0.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the Poincaré ball, shape (dim,). Satisfies ||p||² < 1/c.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Half-space origin e_n/√c maps to the Poincaré origin
+        >>> p = isometry_mappings.halfspace_to_poincare(jnp.array([0.0, 0.0, 2.0]), c=0.25)
+        >>> bool(jnp.allclose(p, jnp.zeros(3)))
+        True
+
+    References:
+        HTorch (github.com/ydtydr/HTorch), ``manifolds/halfspace.py`` — ``HalfSpace.to_poincare``.
+    """
+    c = jnp.asarray(c, dtype=x.dtype)
+    sqrt_c = jnp.sqrt(c)
+    s_s = sqrt_c * x[:-1]
+    s_n = sqrt_c * x[-1]
+    s_s_sqnorm = jnp.dot(s_s, s_s, precision=MATMUL_PRECISION)
+
+    # q = ||s||² - 1 as a product: the difference (s_n - 1) is exact near s_n = 1, so q keeps
+    # its relative precision on the sphere ||s|| = 1 that maps to the equatorial plane p_n = 0.
+    q = s_s_sqnorm + (s_n - 1.0) * (s_n + 1.0)
+    den = s_s_sqnorm + (1.0 + s_n) ** 2  # ≥ 1 for s_n > 0: no floor
+    return jnp.concatenate([2.0 * s_s, q[None]]) / (sqrt_c * den)
+
+
+def poincare_to_halfspace(
+    p: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Poincaré ball point to the Poincaré half-space (inverse Cayley transform).
+
+    Inverse of :func:`halfspace_to_poincare`. With scaled coordinates ``s = √c·p``,
+
+    Formula:
+        g   = 1 - ||s||²                                  (= 1 - c·||p||²)
+        den = ||s_s||² + (s_n - 1)²                       (= ||s - e_n||²)
+        x   = (2·s_s, g) / (√c·den)
+
+    The ball origin maps to the half-space origin ``e_n/√c``; the north pole
+    ``e_n/√c`` is the half-space's point at infinity and every other boundary
+    point lands on ``x_n = 0``.
+
+    Numerics: ``g`` is floored at ``_boundary_floor(p, c)`` exactly as
+    :func:`poincare_to_hyperboloid` floors ``1 - c·||y||²`` — the analytic minimum
+    on a ``Poincare.proj``-projected point, so anything below it is rounding
+    noise. The ball chart ends at scaled radius ``a ≈ 12.6`` (float32) / ``27.7``
+    (float64) at the ``proj`` margin; a point past it is wherever
+    ``Poincare.proj`` put it, and its image is the half-space point at that
+    capped radius. ``den`` is not floored: it vanishes only at the north pole,
+    a point the half-space cannot hold, so the output there is ``inf``/NaN —
+    loud, not a clamped finite point. On a projected point
+    ``den ≥ (1 - ||s||)² ≥ eps**1.5`` (the ``proj`` margin squared), so the
+    division is finite everywhere the ball is.
+
+    Args:
+        p: Point in the Poincaré ball, shape (dim,). Should satisfy ||p||² < 1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the half-space, shape (dim,). Satisfies x_n > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Poincaré origin maps to the half-space origin e_n/√c
+        >>> x = isometry_mappings.poincare_to_halfspace(jnp.zeros(3), c=0.25)
+        >>> bool(jnp.allclose(x, jnp.array([0.0, 0.0, 2.0])))
+        True
+
+    References:
+        HTorch (github.com/ydtydr/HTorch), ``manifolds/halfspace.py`` — the inverse of
+        ``HalfSpace.to_poincare``.
+    """
+    c = jnp.asarray(c, dtype=p.dtype)
+    sqrt_c = jnp.sqrt(c)
+    s_s = sqrt_c * p[:-1]
+    s_n = sqrt_c * p[-1]
+    s_s_sqnorm = jnp.dot(s_s, s_s, precision=MATMUL_PRECISION)
+
+    # `_boundary_floor`: the dtype-aware floor `_conformal_factor` puts on `1 - c‖p‖²`; see
+    # `poincare_to_hyperboloid`.
+    gap = floor_at(1.0 - c * jnp.dot(p, p, precision=MATMUL_PRECISION), _boundary_floor(p, c))
+    den = s_s_sqnorm + (s_n - 1.0) ** 2  # zero only at the north pole (x_n = ∞): no floor
+    return jnp.concatenate([2.0 * s_s, gap[None]]) / (sqrt_c * den)
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ Hyperboloid
+# ---------------------------------------------------------------------------
+
+
+def halfspace_to_hyperboloid(
+    x: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim_plus_1"]:
+    """Convert a Poincaré half-space point to the hyperboloid model.
+
+    With ``x = (x_s, x_n)``, ``x_n > 0`` (last coordinate), metric ``||dx||²/(c·x_n²)`` and
+    origin ``e_n/√c``, the map sends the origin to the hyperboloid origin ``[1/√c, 0, ..., 0]``
+    and the vertical axis to the ``(X₀, X_n)`` plane. Let ``u_n = √c·x_n``.
+
+    Formula:
+        X_mid = x_s / (√c·x_n)                                    (n-1 entries)
+        X_n   = (c·||x||² - 1) / (2c·x_n)
+              = ||x_s||²/(2·x_n) + (u_n - 1)(u_n + 1)/(2c·x_n)
+        X₀    = (c·||x||² + 1) / (2c·x_n) = √(1/c + ||X_mid||² + X_n²)
+        X = [X₀, X_mid, X_n]
+
+    Numerics: the spatial part ``X_s = (X_mid, X_n)`` carries the point, and ``X₀`` is rebuilt
+    from it with ``safe_hypot_norm`` exactly as :func:`pv_to_hyperboloid` and
+    :func:`klein_to_hyperboloid` do, so ``⟨X,X⟩_L = -1/c`` holds to one rounding of ``X₀``.
+    ``X_n`` keeps ``c·x_n² - 1`` in the factored form ``(u_n - 1)(u_n + 1)``: the literal
+    ``c·||x||² - 1`` rounds ``c·x_n²`` before subtracting and loses the relative accuracy of
+    ``X_n`` near the origin (float32, 1e-3/√c around it, c ∈ {1, 4}: median relative error 3.5e-8
+    against 1.6e-5 for the literal; at other ``c`` the rounding of ``√c`` bounds both). Where
+    ``c·||x||² ≈ 1`` away from the axis (the hemisphere that maps to ``X_n = 0``) the subtraction
+    cancels in every spelling; the absolute error there is ``~eps·X₀``, the hyperboloid's own
+    storage floor. ``||x_s||²/(2·x_n)`` carries no factor of
+    ``c``, and it overflows float32 only once ``||x_s||`` passes 1.8e19, where ``X_n ≥ ||x_s||``
+    is already past the hyperboloid's float32 coordinate ceiling, so the overflow is where the
+    hyperboloid itself returns ``inf``. ``x_n`` is not floored: every ``x_n > 0`` is a valid point,
+    and ``x_n ≤ 0`` is off the model and returns ``inf``/NaN. The result is not projected.
+
+    Args:
+        x: Point in the half-space, shape (dim,). Should satisfy x_n = x[-1] > 0.
+        c: Curvature (positive).
+
+    Returns:
+        Point on the hyperboloid, shape (dim+1,). Satisfies ⟨X,X⟩_L = -1/c, X₀ > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Half-space origin e_n/√c maps to the hyperboloid origin [1/√c, 0, ...]
+        >>> X = isometry_mappings.halfspace_to_hyperboloid(jnp.array([0.0, 2.0]), c=0.25)
+        >>> bool(jnp.allclose(X, jnp.array([2.0, 0.0, 0.0])))
+        True
+
+    References:
+        HTorch (github.com/ydtydr/HTorch), ``manifolds/halfspace.py`` — ``HalfSpace.to_lorentz``
+        (time coordinate last there; first here).
+    """
+    c = jnp.asarray(c, dtype=x.dtype)
+    sqrt_c = jnp.sqrt(c)
+    x_s, x_n = x[:-1], x[-1]
+    u_n = sqrt_c * x_n
+    x_mid = x_s / u_n
+    x_last = jnp.dot(x_s, x_s, precision=MATMUL_PRECISION) / (2.0 * x_n) + (u_n - 1.0) * ((u_n + 1.0) / (2.0 * c * x_n))
+    x_spatial = jnp.concatenate([x_mid, x_last[None]])
+    # √(1/c + ||X_s||²) in one overflow-free reduction; see :func:`pv_to_hyperboloid`.
+    time = safe_hypot_norm(x_spatial, jnp.asarray(1.0, dtype=x.dtype) / sqrt_c)
+    return jnp.concatenate([time[None], x_spatial])
+
+
+def hyperboloid_to_halfspace(
+    x: Float[Array, "dim_plus_1"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a hyperboloid point to the Poincaré half-space model.
+
+    Inverse of :func:`halfspace_to_hyperboloid`. With ``X = [X₀, X_mid, X_n]`` and
+    ``Δ = X₀ - X_n > 0``:
+
+    Formula:
+        x_s = X_mid / (√c·Δ)
+        x_n = 1 / (c·Δ)
+
+    Numerics: written literally, ``Δ`` is a difference of two ``O(sinh a)`` numbers whose result
+    is ``O(e^{-a})`` for points far up the vertical axis or out along the horosphere through the
+    origin (``X_n ≈ X₀``). For ``X_n ≥ 0`` the sheet constraint gives the cancellation-free form
+
+        Δ = (1/c + ||X_mid||²) / (X₀ + X_n),
+
+    and for ``X_n < 0`` the literal ``X₀ - X_n`` is a sum of positive values. This is the spelling
+    of ``hyperboloid._busemann_arg`` with ``v = e_n``: the numerator is built from the spatial
+    part, and the stored ``X₀`` enters only the denominator (and the ``X_n < 0`` branch). The unused
+    denominator is ``X₀ + where(X_n ≥ 0, X_n, 0)``, positive in both branches, so neither branch
+    produces a NaN cotangent under reverse mode. ``Δ`` is positive on the sheet, so no floor is
+    needed. The result is not projected. Measured in float32 against a 60-digit oracle, c ∈ {0.3,
+    1, 4, 10}: median relative error 5e-8 far up the axis (``√c·x_n`` up to 1e6) and ≤ 7e-8 in
+    every other family. The literal ``X₀ - X_n`` gives 0.2 far up the axis, first returns ``inf``
+    at ``√c·x_n ≈ 6e3``, and returns it for almost every point past 1e4.
+
+    Args:
+        x: Point on the hyperboloid, shape (dim+1,). Should satisfy ⟨x,x⟩_L = -1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the half-space, shape (dim,). Satisfies x_n > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Hyperboloid origin [1/√c, 0, ...] maps to the half-space origin e_n/√c
+        >>> x = isometry_mappings.hyperboloid_to_halfspace(jnp.array([2.0, 0.0, 0.0]), c=0.25)
+        >>> bool(jnp.allclose(x, jnp.array([0.0, 2.0])))
+        True
+
+    References:
+        HTorch (github.com/ydtydr/HTorch), ``manifolds/halfspace.py`` — the inverse of
+        ``HalfSpace.to_lorentz``.
+    """
+    c = jnp.asarray(c, dtype=x.dtype)
+    sqrt_c = jnp.sqrt(c)
+    x0, x_mid, x_last = x[0], x[1:-1], x[-1]
+    nonnegative = x_last >= 0
+    denominator = x0 + jnp.where(nonnegative, x_last, jnp.zeros_like(x_last))
+    rationalized = (1.0 / c + jnp.dot(x_mid, x_mid, precision=MATMUL_PRECISION)) / denominator
+    gap = jnp.where(nonnegative, rationalized, x0 - x_last)  # Δ = X₀ - X_n
+    return jnp.concatenate([x_mid / (sqrt_c * gap), (1.0 / (c * gap))[None]])
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ Klein
+# ---------------------------------------------------------------------------
+
+
+def halfspace_to_klein(
+    x: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Poincaré half-space point to the Beltrami-Klein model.
+
+    The hyperboloid lift ``X = ((||x||² + 1/c)/(2·x_n), x_s/(√c·x_n), (||x||² - 1/c)/(2·x_n))``
+    followed by the central projection ``k = X_s/(√c·X₀)`` of :func:`hyperboloid_to_klein`,
+    collapsed into one rational map. With ``x = (x_s, x_n)``, ``x_n > 0``:
+
+    Formula:
+        k = (2·x_s, (c·||x||² - 1)/√c) / (1 + c·||x||²)
+
+    The half-space origin ``e_n/√c`` maps to the Klein origin, and the axis ``x_s = 0`` to the
+    Klein diameter along ``e_n``: ``x_n → ∞`` reaches the north pole ``e_n/√c``, ``x_n → 0`` the
+    south pole. The numerator ``c·||x||² - 1`` vanishes at the origin; it is evaluated as
+    ``c·||x_s||² + (√c·x_n - 1)(√c·x_n + 1)``, exact near the origin whenever ``√c·x_n`` is (c a
+    power of 4, c = 1 included: float32 relative error of ``k_n`` at ``√c·x_n = 1 + 1e-4`` is
+    0.2 eps against 840 eps for the literal ``c·||x||² - 1``). At other c the rounding of √c
+    limits both spellings alike, to a sub-eps absolute error on ``√c·k_n``.
+
+    The result is not projected. Since ``√c·||k|| = tanh(a)`` with ``a = √c·d(o, x)``, a point
+    beyond scaled radius ≈ 6.3 (float32) / 13.9 (float64) at c = 1 lands past the ``Klein.proj``
+    margin, and Klein operations read it as radius ≈ 6.3 / 13.9 (see the module docstring). Call
+    ``Klein.proj`` on the result for such points. Past ``√c·||x|| ≈ 1.8e19`` (float32, scaled
+    radius ≈ 44) ``c·||x||²`` overflows and ``k_n`` is NaN.
+
+    Args:
+        x: Point in the half-space, shape (dim,). Should satisfy x_n = x[-1] > 0.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the closed Klein ball, shape (dim,). In float32, ``||k||`` can round
+        to ``1/√c`` beyond a ≈ 10; call ``Klein.proj`` before using such points.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Half-space origin e_n/√c maps to the Klein origin
+        >>> k = isometry_mappings.halfspace_to_klein(jnp.array([0.0, 1.0]), c=1.0)
+        >>> bool(jnp.allclose(k, jnp.zeros(2)))
+        True
+
+    References:
+        Wikipedia: Poincaré half-plane model / Beltrami-Klein model - Relation to other models
+    """
+    c = jnp.asarray(c, dtype=x.dtype)
+    sqrt_c = jnp.sqrt(c)
+    x_s, x_n = x[:-1], x[-1]
+    c_xs_sqnorm = c * jnp.dot(x_s, x_s, precision=MATMUL_PRECISION)
+    c_x_sqnorm = c_xs_sqnorm + c * x_n * x_n
+    q = c_xs_sqnorm + (sqrt_c * x_n - 1.0) * (sqrt_c * x_n + 1.0)  # c·||x||² - 1 without cancellation
+    # 1 + c·||x||² ≥ 1, so no floor is needed.
+    return jnp.concatenate([2.0 * x_s, (q / sqrt_c)[None]]) / (1.0 + c_x_sqnorm)
+
+
+def klein_to_halfspace(
+    k: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Beltrami-Klein point to the Poincaré half-space model.
+
+    Inverse of :func:`halfspace_to_klein`. With ``k = (k_s, k_n)`` and the Klein gap
+    ``g_k = 1 - c·||k||²``:
+
+    Formula:
+        Δ = 1 - √c·k_n
+        x = (k_s/Δ, √g_k/(√c·Δ))
+
+    ``Δ`` vanishes at the north pole ``e_n/√c`` (far up the half-space axis). For ``k_n > 0`` it is
+    evaluated as ``Δ = (1 - c·k_n²)/(1 + √c·k_n)`` with ``1 - c·k_n² = g_k + c·||k_s||²``, so
+    the only cancellation left is that of ``g_k`` (:func:`_klein_gap`), the Klein chart's own
+    floor ``eps·cosh²(a)`` at scaled radius ``a = √c·d(0, k)``, and the rounded √c never enters a
+    difference. Every spelling of ``Δ`` is limited by that same ``eps·cosh²(a)`` floor; the
+    gap-based form above only removes the extra rounding that the literal ``1 - √c·k_n`` adds on
+    top of it.
+
+    ``g_k`` is floored at ``_boundary_floor(k, c)``, so every point of the closed ball maps to a
+    finite half-space point with ``x_n > 0``: a Klein point past the chart ceiling, the north
+    pole itself included, lands at the scaled radius ≈ 6.3 (float32) / 13.9 (float64) at c = 1
+    that the Klein operations read it at.
+
+    Args:
+        k: Point in the Klein ball, shape (dim,). Should satisfy ||k||² < 1/c.
+        c: Curvature (positive).
+
+    Returns:
+        Point in the half-space, shape (dim,). Satisfies x_n = x[-1] > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Klein origin maps to the half-space origin e_n/√c
+        >>> x = isometry_mappings.klein_to_halfspace(jnp.zeros(2), c=1.0)
+        >>> bool(jnp.allclose(x, jnp.array([0.0, 1.0])))
+        True
+
+    References:
+        Wikipedia: Poincaré half-plane model / Beltrami-Klein model - Relation to other models
+    """
+    c = jnp.asarray(c, dtype=k.dtype)
+    sqrt_c = jnp.sqrt(c)
+    k_s, k_n = k[:-1], k[-1]
+    gap = _klein_gap(k, c)
+    # Double where: the unselected branch divides by 1 + √c·k_n, which is 0 at the south pole.
+    k_n_pos = jnp.where(k_n > 0, k_n, 0.0)
+    delta_north = (gap + c * jnp.dot(k_s, k_s, precision=MATMUL_PRECISION)) / (1.0 + sqrt_c * k_n_pos)
+    delta = jnp.where(k_n > 0, delta_north, 1.0 - sqrt_c * k_n)
+    # The gap is floored strictly positive, so the plain square root is safe and its derivative finite.
+    return jnp.concatenate([k_s / delta, (jnp.sqrt(gap) / (sqrt_c * delta))[None]])
+
+
+# ---------------------------------------------------------------------------
+# Half-space ↔ PV
+# ---------------------------------------------------------------------------
+
+
+def halfspace_to_pv(
+    x: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Poincaré half-space point to Proper Velocity space.
+
+    PV coordinates are the space-like part of the hyperboloid point, so this is the
+    spatial part of the half-space → hyperboloid lift. With ``x = (x_s, x_n)``,
+    ``x_n > 0`` the last coordinate:
+
+    Formula:
+        u_s = x_s / (√c·x_n)
+        u_n = (c·||x||² - 1) / (2c·x_n)
+            = ½·(||x_s||²/x_n + (x_n - 1/√c)·(x_n + 1/√c)/x_n)
+
+    The second spelling of ``u_n`` is the one evaluated. The factor
+    ``(x_n - 1/√c)(x_n + 1/√c)`` is ``x_n² - 1/c`` without cancellation near the
+    origin ``x_n = 1/√c`` (``u_n`` keeps its relative accuracy as it passes through
+    0), and ``||x_s||²/x_n`` is formed as ``(x_s/x_n)·x_s``, a sum of non-negative
+    terms. Nothing is squared before a division by ``x_n``, so no intermediate
+    overflows where ``u`` itself is representable: float32 ``c·||x||²`` would overflow
+    at ``x_n = 1.8e19/√c`` (scaled radius ≈ 44), where ``u_n ≈ x_n/2`` is still
+    finite. The input is not floored: ``x_n = 0`` is off the model and returns
+    ``inf``.
+
+    Args:
+        x: Point in the half-space, shape (dim,). Should satisfy x_n > 0.
+        c: Curvature (positive).
+
+    Returns:
+        Point in PV space (unconstrained R^n), shape (dim,).
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # Half-space origin e_n/√c maps to the PV origin (0)
+        >>> u = isometry_mappings.halfspace_to_pv(jnp.array([0.0, 2.0]), c=0.25)
+        >>> bool(jnp.allclose(u, jnp.zeros(2)))
+        True
+
+    References:
+        Wikipedia: Poincaré half-plane model / Hyperboloid model — the
+        half-space ↔ hyperboloid relation (unit curvature, rescaled by 1/√c here).
+    """
+    c = jnp.asarray(c, dtype=x.dtype)
+    inv_sqrt_c = 1.0 / jnp.sqrt(c)
+    x_s, x_n = x[:-1], x[-1]
+    w_s = x_s / x_n  # √c·u_s
+    # `dot` of an empty `x_s` (dim = 1) is exactly 0, so no dimension special case is needed.
+    sq_s_over_n = jnp.dot(w_s, x_s, precision=MATMUL_PRECISION)  # ||x_s||²/x_n
+    u_n = 0.5 * (sq_s_over_n + (x_n - inv_sqrt_c) * ((x_n + inv_sqrt_c) / x_n))
+    return jnp.concatenate([w_s * inv_sqrt_c, u_n[None]])
+
+
+def pv_to_halfspace(
+    u: Float[Array, "dim"],
+    c: ScalarCurvature,
+) -> Float[Array, "dim"]:
+    """Convert a Proper Velocity point to the Poincaré half-space.
+
+    Inverse of :func:`halfspace_to_pv`. With ``u = (u_s, u_n)`` and the hyperboloid
+    time slot ``X₀ = √(1/c + ||u||²)``:
+
+    Formula:
+        Δ = X₀ - u_n   (> 0)
+        x = (u_s / (√c·Δ), 1 / (c·Δ))
+
+    ``Δ`` is evaluated without cancellation: for ``u_n > 0`` (the upper half of the
+    model, towards ``x_n → ∞``) the literal ``X₀ - u_n`` subtracts two nearly equal
+    numbers, so it is rewritten as
+
+        Δ = (1/c + ||u_s||²)/(X₀ + u_n) = (1/c)/s + (u_s/s)·u_s,   s = X₀ + u_n,
+
+    while for ``u_n ≤ 0`` the literal form is a sum and is used as is. Each factor
+    ``u_s/s`` is at most 1 in magnitude and every term is non-negative, so the
+    ``||u_s||²`` that would overflow float32 past ``||u_s|| = 1.8e19`` is never formed;
+    ``X₀`` comes from ``safe_hypot_norm`` for the same reason. The result is finite
+    wherever it is representable. Measured in float32 far up the axis
+    (``u = (0.3, 0, u_n)``, ``c = 1``, against a 150-digit reference): the literal
+    ``X₀ - u_n`` gives ``x_n`` with relative error 7.9e-3 at ``u_n = 1e3``, 0.26 at
+    ``3e3``, and ``inf`` from ``u_n ≈ 4.1e3`` (scaled radius ≈ 9) on; this form stays
+    below 7e-8 out to ``u_n = 1e30``, and at ``||u_s|| = 3e19`` (where the literal form
+    returns ``x = 0``) within 5e-8.
+
+    Args:
+        u: Point in PV space (unconstrained R^n), shape (dim,).
+        c: Curvature (positive).
+
+    Returns:
+        Point in the half-space, shape (dim,). Satisfies x_n > 0.
+
+    Examples:
+        >>> import jax.numpy as jnp
+        >>> from hyperbolix.manifolds import isometry_mappings
+        >>>
+        >>> # PV origin maps to the half-space origin e_n/√c
+        >>> x = isometry_mappings.pv_to_halfspace(jnp.zeros(2), c=0.25)
+        >>> bool(jnp.allclose(x, jnp.array([0.0, 2.0])))
+        True
+
+    References:
+        Wikipedia: Poincaré half-plane model / Hyperboloid model — the
+        half-space ↔ hyperboloid relation (unit curvature, rescaled by 1/√c here).
+    """
+    c = jnp.asarray(c, dtype=u.dtype)
+    inv_c = 1.0 / c
+    u_s, u_n = u[:-1], u[-1]
+    # √(1/c + ||u||²) via `safe_hypot_norm`, overflow-free; same form as :func:`pv_to_hyperboloid`.
+    time = safe_hypot_norm(u, jnp.sqrt(inv_c))
+    upper = u_n > 0.0
+    # Double `where`: on the `u_n ≤ 0` side `time + u_n` can round to 0 (u_n ≪ 0, u_s ≈ 0), and the
+    # unselected branch's infinite derivative would still meet a zero cotangent as NaN.
+    s = jnp.where(upper, time + u_n, time)
+    delta_upper = inv_c / s + jnp.dot(u_s / s, u_s, precision=MATMUL_PRECISION)
+    delta = jnp.where(upper, delta_upper, time - u_n)
+    return jnp.concatenate([u_s / (jnp.sqrt(c) * delta), (1.0 / (c * delta))[None]])
