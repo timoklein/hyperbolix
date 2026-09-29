@@ -81,8 +81,9 @@ def _fhcnn_forward(
         # a zero cotangent as NaN. The floor is deliberate and stays *around* the sqrt
         # (`x_rem_norm_B1` is a divisor two lines down); the origin mask below still fires (the
         # floored norm is 1e-15 <= 1e-5). `sum(x_rem**2)` overflows float32 past spatial coordinate
-        # 1.8e19 -- geodesic radius ~45 at c = 1, ~139 at c = 0.1 -- where the network producing it
-        # is already diverging, and gives `inf`, which is the intended signal.
+        # 1.8e19 -- geodesic radius ~45 at c = 1, ~139 at c = 0.1. Not loud here: the inf norm only
+        # divides, so `res_rem` becomes 0 while the time slot `hypot(scale, 1/√c)` stays finite -- a
+        # finite point off the hyperboloid with zero gradient.
         x_rem_norm_B1 = floor_at(safe_sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True)), MIN_NORM)  # (B, 1)
 
         # Learnable sigmoid scaling. capped_exp: scale_val is unconstrained — a runaway param
@@ -244,21 +245,21 @@ def _hyperboloid_plfc_forward(
 
 
 def _assert_v_max_safe(v_max: float) -> None:
-    """Guard the bare-``jnp.sinh`` PLFC output path against ``v_max``-driven float32 overflow.
+    """Reject a ``v_max`` whose single clipped sinh entry cannot be squared in float32.
 
-    The output spatial coordinate is ``sinh(v_max)/sqrt(c)`` and the time component reconstructs from
-    ``sum(.**2)``; float32 is the binding case because layer inputs may be float32 regardless of
-    ``param_dtype``. Require ``sinh(v_max) < sqrt(finfo(float32).max)`` (≈1.84e19, i.e. ``v_max`` ≲ 45)
-    so the squared spatial norm cannot overflow. The Shi et al. 2026 default ``v_max=10`` is far
-    inside this bound; a user who needs a larger ``v_max`` should restore the wrapped/smooth sinh
-    guard instead.
+    The check bounds one entry: ``sinh(v_max) < sqrt(finfo(float32).max)`` (≈1.84e19, ``v_max`` < 45.05).
+    It cannot see the sum over the ``O`` outputs or the ``1/sqrt(c)`` factor (``c`` is only known at
+    call time), so the hyperboloid time slot, reconstructed from ``sum(y_s**2)``, still overflows to
+    ``inf`` (loudly) once ``O·sinh²(v_max)/c > finfo(float32).max``. The Poincaré Busemann output map
+    does not square ``ω`` and cannot overflow for any ``O`` or ``c``. Stay near the default
+    ``v_max=10`` (Shi et al. 2026).
     """
     f32_safe_sinh = float(jnp.finfo(jnp.float32).max) ** 0.5  # ~1.84e19
     if float(jnp.sinh(v_max)) >= f32_safe_sinh:
         raise ValueError(
-            f"v_max={v_max} is too large for the PLFC sinh diffeomorphism: sinh(v_max) would overflow "
-            f"the float32 squared spatial norm in the time reconstruction. Use v_max < ~45 "
-            f"(default 10), or restore the smooth/wrapped sinh guard for larger values."
+            f"v_max={v_max} is too large: sinh(v_max) alone overflows float32 when squared. Even below "
+            f"this bound the hyperboloid time slot overflows to inf once O·sinh²(v_max)/c exceeds the "
+            f"float32 max (O spatial outputs), so stay near the default v_max=10."
         )
 
 

@@ -586,7 +586,7 @@ def test_pv_proj_is_identity_on_finite_inputs(
     tolerance: tuple[float, float],
     pv_points: jnp.ndarray,
 ) -> None:
-    """proj(x) = x whenever x is finite; NaN rows are scrubbed to 0."""
+    """proj(x) = x whenever x is finite; a NaN row passes through, so a diverged point stays loud."""
     atol, rtol = tolerance
     proj = jax.vmap(pv_manifold.proj, in_axes=(0, None))
     projected = proj(pv_points, curvature)
@@ -594,8 +594,8 @@ def test_pv_proj_is_identity_on_finite_inputs(
 
     dim = pv_points.shape[1]
     nan_row = jnp.full((dim,), jnp.nan, dtype=pv_points.dtype)
-    cleaned = pv_manifold.proj(nan_row, curvature)
-    assert jnp.all(jnp.isfinite(cleaned))
+    passed = pv_manifold.proj(nan_row, curvature)
+    assert jnp.all(jnp.isnan(passed))
 
 
 # ---------------------------------------------------------------------------

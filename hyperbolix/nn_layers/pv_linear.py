@@ -44,7 +44,8 @@ def _pv_fc_forward(
       1) Optional lift Euclidean input via ``expmap_0`` if ``input_space == "tangent"``.
       2) Compute PV MLR scores ``v`` via ``manifold.compute_mlr``.
       3) Optionally apply ``inner_activation`` to ``v`` (paper Eq. 23).
-      4) Return ``(1/√c) · sinh(√c · v)`` — a PV-manifold point.
+      4) Return ``(1/√c) · sinh(√c · v)`` — a PV-manifold point; a non-finite ``v`` passes
+         through unclipped.
     """
     # Map to manifold if needed (static branch — JIT friendly).
     if input_space == "tangent":
@@ -56,7 +57,11 @@ def _pv_fc_forward(
         v_BO = inner_activation(v_BO)
 
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=v_BO.dtype))
-    return sinh(sqrt_c * v_BO) / sqrt_c
+    arg_BO = sqrt_c * v_BO
+    # A non-finite score passes through, so a diverged row stays loud instead of saturating at
+    # sinh's clip. `sinh` clips ±inf to a finite value in the untaken branch, so finite rows keep
+    # the old value and gradient.
+    return jnp.where(jnp.isfinite(arg_BO), sinh(arg_BO), arg_BO) / sqrt_c
 
 
 class HypLinearPV(nnx.Module):
