@@ -762,36 +762,33 @@ def test_expmap_inward_step_float32_matches_oracle(c, a, theta):
         assert err < atol, f"φ = {phi}: {err:.2e} nats (tolerance {atol:.1e})"
 
 
-def test_expmap_outward_and_short_steps_keep_the_literal_denominator(c):
-    """Outward (``x·v ≥ 0``) and short inward (θ ≤ 0.5) steps still evaluate ``x + v/(θ·coth θ + u)``.
+def test_expmap_outward_and_short_steps_float32_match_oracle(c):
+    """Outward (``x·v > 0``) and short (θ ≤ 0.45) float32 steps against the long-double geodesic of the same inputs.
 
-    Compared with that expression written out from the module's own helpers: within one ulp per
-    coordinate (the float32 rewrite of the inward branch must not move any other step).
+    They share the inward steps' denominator ``A + B`` (``B = θ + u`` a plain sum when outward), so the bound is
+    the inward battery's: 16 chart floors ``eps·cosh²(a)``, with ``a`` the larger of the base and destination
+    radius — for an outward step the destination, which stays inside the float32 chart (scaled radius ≤ 5).
+    θ = 0.1 and 1e-3 fall below the float32 small-θ threshold 0.196, where ``A`` is its series. Measured worst
+    0.69 floors (0.53 for the literal ``θ·coth θ + u`` these steps evaluated before, on the same inputs); over a
+    random battery of 248 outward steps 0.88, against 1.5 for the literal (``logs/2026-09-29_cancellation-free/fixup/``).
     """
-    from hyperbolix.manifolds._gyrovector_core import _proj
-    from hyperbolix.manifolds.klein import _gap, _xcothx
-    from hyperbolix.utils.math_utils import safe_sqrt
-    from hyperbolix.utils.precision import MATMUL_PRECISION
-
-    def literal(v, x):
-        g_x = _gap(x, c)
-        xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
-        v2 = jnp.dot(v, v, precision=MATMUL_PRECISION)
-        theta = jnp.sqrt(c) * safe_sqrt(g_x * v2 + c * xv * xv) / g_x
-        return _proj(x + v / (_xcothx(theta) + c * xv / g_x), c)
-
     k32 = Klein(dtype=jnp.float32)
     rng = np.random.default_rng(32)
-    cases = []
-    for a, theta, sign in [(0.5, 3.0, -1.0), (2.0, 1.5, -1.0), (3.0, 4.0, -1.0), (1.0, 0.3, 1.0), (4.0, 0.45, 1.0)]:
-        for phi in (0.0, 0.4, 1.2):
-            x_D, v_D = _inward_step(a, theta, phi, c, rng)
-            cases.append((x_D, sign * v_D))  # sign -1 flips the step outward; +1 keeps a short inward step
-    for x_D, v_D in cases:
-        x32 = k32.proj(jnp.asarray(x_D, jnp.float32), c)
-        v32 = jnp.asarray(v_D, jnp.float32)
-        got, want = np.asarray(k32.expmap(v32, x32, c)), np.asarray(jax.jit(literal)(v32, x32))
-        assert np.all(np.abs(got - want) <= np.spacing(np.abs(want))), (got, want)
+    eps = float(jnp.finfo(jnp.float32).eps)
+    outward = [(0.5, 3.0), (2.0, 1.5), (3.0, 2.0), (2.0, 0.1), (3.0, 1e-3)]  # (a, θ)
+    inward = [(1.0, 0.3), (4.0, 0.45), (2.0, 0.1), (3.0, 1e-3)]
+    for sign, cases in ((-1.0, outward), (1.0, inward)):  # sign -1 flips _inward_step's step outward
+        for a, theta in cases:
+            for phi in (0.0, 0.4, 1.2):
+                x_D, v_D = _inward_step(a, theta, phi, c, rng)
+                x32 = k32.proj(jnp.asarray(x_D, jnp.float32), c)
+                v32 = jnp.asarray(sign * v_D, jnp.float32)
+                y_D = np.asarray(k32.expmap(v32, x32, c), np.float64)
+                y_ref_D = _np_expmap_oracle(np.asarray(x32, np.float64), np.asarray(v32, np.float64), c)
+                a_dest = math.sqrt(c) * _np_dist(np.zeros(5), y_ref_D, c)
+                atol = 16 * eps * math.cosh(max(a, a_dest)) ** 2
+                err = math.sqrt(c) * _np_dist(y_D, y_ref_D, c)
+                assert err < atol, f"(a, θ, sign, φ) = ({a}, {theta}, {sign}, {phi}): {err:.2e} nats (tol {atol:.1e})"
 
 
 @pytest.mark.parametrize("theta", [3.0, 0.5])
@@ -811,6 +808,30 @@ def test_expmap_inward_grads_match_central_differences(c, theta):
         (lambda p: w @ _K64.expmap(p, x, c), np.zeros(5)),
     ]
     for f, at_D in checks:
+        got = np.asarray(jax.grad(f)(jnp.asarray(at_D)))
+        np.testing.assert_allclose(got, _central_diff_grad(jax.jit(f), at_D), rtol=1e-6, atol=1e-8)
+    f_c = jax.jit(lambda cc: w @ _K64.expmap(v, x, cc))
+    h = 1e-6 * c
+    fd = (float(f_c(jnp.asarray(c + h))) - float(f_c(jnp.asarray(c - h)))) / (2 * h)
+    np.testing.assert_allclose(float(jax.grad(f_c)(jnp.asarray(c, jnp.float64))), fd, rtol=1e-6, atol=1e-8)
+
+
+@pytest.mark.parametrize(
+    ("theta", "phi"),
+    [(3.0, math.pi - 0.4), (1.4e-2, math.pi - 0.4), (3.5e-3, math.pi - 0.4), (1.0, math.pi / 2), (3.5e-3, math.pi / 2)],
+)
+def test_expmap_outward_and_switch_grads_match_central_differences(c, theta, phi):
+    """Float64 derivatives of outward steps and of steps on the switch ``x·v = 0``, against central differences.
+
+    The denominator ``A + B`` changes form twice: ``B = θ + u`` with the sign of ``x·v`` (φ = π/2 sits on it, so
+    the central difference straddles both forms) and ``A`` at the float64 small-θ threshold 6.9e-3 (θ = 1.4e-2 and
+    3.5e-3 lie on either side). φ = π - 0.4 is an outward step.
+    """
+    rng = np.random.default_rng(34)
+    x_D, v_D = _inward_step(2.0, theta, phi, c, rng)
+    w = jnp.asarray(rng.normal(size=5))
+    x, v = jnp.asarray(x_D), jnp.asarray(v_D)
+    for f, at_D in ((lambda p: w @ _K64.expmap(p, x, c), v_D), (lambda p: w @ _K64.expmap(v, p, c), x_D)):
         got = np.asarray(jax.grad(f)(jnp.asarray(at_D)))
         np.testing.assert_allclose(got, _central_diff_grad(jax.jit(f), at_D), rtol=1e-6, atol=1e-8)
     f_c = jax.jit(lambda cc: w @ _K64.expmap(v, x, cc))

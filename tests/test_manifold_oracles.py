@@ -3639,7 +3639,7 @@ def test_klein_ptransp_matches_the_longdouble_hyperboloid_transport(c: float, ki
 
 _KLEIN_EXPMAP_STEPS = ((0.3, 1e-3), (0.3, 0.5), (0.3, 3.0), (2.0, 1.0), (3.0, 1e-3), (3.0, 0.1), (3.0, 1.0))
 """``(a, τ)``: base scaled radius and scaled Riemannian step ``τ = √c·‖v‖_x``. ``τ = 1e-3`` sits on
-the float64 series branch of ``_xcothx`` (threshold 6.9e-3); every target stays at scaled radius ≤ 4."""
+the float64 series branch of ``_xcothx_minus_x`` (threshold 6.9e-3); every target stays at scaled radius ≤ 4."""
 
 
 @pytest.mark.parametrize("c", [0.1, 1.0, 3.0])
