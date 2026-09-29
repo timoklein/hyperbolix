@@ -227,8 +227,8 @@ class HypRegressionPoincarePP(nnx.Module):
     Hyperbolic Neural Networks ++ multinomial linear regression layer (Poincaré ball model).
 
     Computation steps:
-        0) Project the input tensor onto the manifold (optional)
-        1) Compute the multinomial linear regression score(s)
+        1) Compute the multinomial linear regression score(s) — for a tangent input, of the point
+           ``expmap_0`` would place on the ball, evaluated from the tangent vector directly
 
     Parameters
     ----------
@@ -274,7 +274,7 @@ class HypRegressionPoincarePP(nnx.Module):
         # Static configuration (treated as compile-time constants for JIT)
         validate_poincare_manifold(
             manifold_module,
-            required_methods=("proj", "addition", "expmap_0", "ptransp_0", "conformal_factor", "compute_mlr_pp"),
+            required_methods=("compute_mlr_pp", "_compute_mlr_pp_tangent"),
         )
         self.manifold = manifold_module
         self.in_dim = in_dim
@@ -310,11 +310,8 @@ class HypRegressionPoincarePP(nnx.Module):
         res : Array of shape (batch, out_dim)
             Multinomial linear regression scores
         """
-        # Map to manifold if needed (static branch - JIT friendly)
+        # Static branch - JIT friendly. A tangent input is scored as expmap_0 would place it, without
+        # forming the ball point: in float32 that lift stopped at the ball's ceiling, √c‖v‖ ≈ 6.33.
         if self.input_space == "tangent":
-            x = jax.vmap(self.manifold.expmap_0, in_axes=(0, None), out_axes=0)(x, c)
-
-        # Compute multinomial linear regression
-        res = self.manifold.compute_mlr_pp(x, self.kernel[...], self.bias[...], c)
-
-        return res
+            return self.manifold._compute_mlr_pp_tangent(x, self.kernel[...], self.bias[...], c)
+        return self.manifold.compute_mlr_pp(x, self.kernel[...], self.bias[...], c)

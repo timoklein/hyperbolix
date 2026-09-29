@@ -775,6 +775,67 @@ def _compute_mlr_pp(
     return res_BP
 
 
+def _compute_mlr_pp_tangent(
+    v: Float[Array, "batch in_dim"],
+    z: Float[Array, "out_dim in_dim"],
+    r: Float[Array, "out_dim 1"],
+    c: ScalarCurvature,
+    min_enorm: float = 1e-15,
+) -> Float[Array, "batch out_dim"]:
+    """:func:`_compute_mlr_pp` of ``x = expmap_0(v)``, evaluated on the tangent vector ``v`` itself.
+
+    With ``t = √c‖v‖`` the point ``x`` sits at scaled radius ``2t``, and both conformal-factor
+    terms of the HNN++ argument are closed-form in ``t``::
+
+        λ_x·√c·⟨x, ẑ⟩ = sinh(2t)·⟨v, ẑ⟩/‖v‖,        λ_x - 1 = cosh(2t)
+
+    so the ball point is never formed. That route read ``λ_x = 2/(1 - c‖x‖²)`` back off the stored
+    point, a relative error ≈ ``eps·e^{2t}/4``, and in float32 its lift stopped at the ball's
+    ceiling ``t ≈ 6.33``, past which the scores were constant with a zero radial gradient.
+    Measured through ``HypRegressionPoincarePP`` (float32 vs float64 on the same inputs, relative
+    to the largest entry, c ∈ {0.3, 1}): at t = 6 scores 1.1e-3 → 8.4e-7 and input gradients
+    1.4e-3 → 1.3e-5; at t = 8 2.0e-1 → 1.5e-6 and 3.8e-1 → 2.8e-5. What remains is the one float32
+    rounding of ``⟨v, ẑ⟩``, amplified by ≈ ``e^{2t}/2`` in a cell near its hyperplane — the
+    point-representation floor, which the ball route shared.
+
+    Args:
+        v: Tangent vector(s) at the origin, shape (batch, in_dim)
+        z: Hyperplane tangent normals at origin, shape (out_dim, in_dim)
+        r: Hyperplane translations, shape (out_dim, 1)
+        c: Manifold curvature (positive)
+        min_enorm: Minimum norm to avoid division by zero
+
+    Returns:
+        MLR scores, shape (batch, out_dim)
+
+    References:
+        Shimizu et al. "Hyperbolic neural networks++." arXiv:2006.08210 (2020).
+    """
+    sqrt_c = jnp.sqrt(c)
+    sqrt_c2r_1P = 2 * sqrt_c * r.T  # (1, P) — r is (P, 1), .T broadcasts
+    z_norm_P1 = floor_at(safe_norm(z)[:, None], min_enorm)  # (P, 1), as in `_compute_mlr_pp`
+
+    # The only reduction over the input. `safe_norm`, for the reason `_expmap_0` gives: `v` is a
+    # tangent vector of unbounded magnitude. The route through the ball paid the same two passes
+    # inside `_expmap_0` plus λ's `sum(x**2)`. The floor sits on `v_norm` and the sinhc below
+    # divides by that same floored quantity, so `sinh(2t)/‖v‖ = 2√c` at v = 0 and the Jacobian
+    # there is 4·z, as through the ball.
+    v_norm_B1 = floor_at(safe_norm(v)[:, None], MIN_NORM)  # (B, 1)
+    two_t_B1 = 2 * sqrt_c * v_norm_B1  # (B, 1): scaled radius of expmap_0(v)
+
+    # Pinned HIGHEST: the decision quantity of `_compute_mlr_pp`'s einsum, now taken on v.
+    z_unitv_BP = jnp.einsum("bi,oi->bo", v, z / z_norm_P1, precision=MATMUL_PRECISION)  # (B, P)
+    asinh_arg_BP = (sinh(two_t_B1) / v_norm_B1) * z_unitv_BP * cosh(sqrt_c2r_1P) - cosh(two_t_B1) * sinh(sqrt_c2r_1P)  # (B, P)
+
+    # No clamp on the asinh argument, as in `_compute_mlr_pp`. Both terms grow like
+    # e^{2t + 2√c|r|}/4: their product overflows float32 once that exponent passes ≈ 89, far past
+    # anything the float32 ball held (2t ≈ 12.7), and the score is then ±inf or NaN. Short of that,
+    # `2t` past the sinh/cosh argument clip (87.8) saturates with a zero radial gradient.
+    signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c  # (B, P)
+    res_BP = 2 * z_norm_P1.T * signed_dist2hyp_BP  # z_norm.T broadcasts (1, P) over (B, P)
+    return res_BP
+
+
 # ---------------------------------------------------------------------------
 # Beta-concatenation (HNN++, Shimizu et al. 2020)
 # ---------------------------------------------------------------------------
@@ -1021,6 +1082,20 @@ class Poincare(ManifoldBase):
     ) -> Float[Array, "batch out_dim"]:
         """Compute HNN++ multinomial linear regression on the Poincare ball."""
         return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)
+
+    def _compute_mlr_pp_tangent(
+        self,
+        v: Float[Array, "batch in_dim"],
+        z: Float[Array, "out_dim in_dim"],
+        r: Float[Array, "out_dim 1"],
+        c: ScalarCurvature,
+        min_enorm: float = 1e-15,
+    ) -> Float[Array, "batch out_dim"]:
+        """``compute_mlr_pp(expmap_0(v), z, r, c)`` from the tangent vector ``v``, without the ball point.
+
+        Private: the tangent-input path of the HNN++ layers (see :func:`_compute_mlr_pp_tangent`).
+        """
+        return _compute_mlr_pp_tangent(self._cast(v), self._cast(z), self._cast(r), c, min_enorm)
 
     def beta_concat(self, points: Float[Array, "M n_i"], c: ScalarCurvature) -> Float[Array, "n"]:
         """Beta-concatenation of M equal-dimensional Poincaré ball points."""
