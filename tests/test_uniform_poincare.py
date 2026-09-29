@@ -468,3 +468,28 @@ def test_rejection_sampler_terminates_in_high_dimension(n: int, R: float) -> Non
     # here the point is termination, so the bound only has to exclude a degenerate output.)
     statistic = scipy.stats.kstest(radii_N, lambda r: _radial_cdf_reference(r, c, R, n)).statistic
     assert statistic < 0.2, f"KS statistic {statistic:.4f}: radii do not follow the target law"
+
+
+# =============================================================================================
+# Small radius in float32
+# =============================================================================================
+
+
+@pytest.mark.parametrize("n", [2, 3])
+def test_small_radius_float32_samples_stay_inside_and_follow_the_law(n: int) -> None:
+    """√c·R = 1e-3 in float32: every sample lies in B(0, R) and the radii follow p(r) ∝ sinh^{n-1}(√c·r).
+
+    ``u = cosh(√c·r) - 1`` is evaluated as ``2·sinh²(√c·r/2)`` and inverted as ``2·asinh(√(u/2))``. The literal
+    ``cosh(√c·R) - 1`` and ``acosh(1 + u)`` round ``1 + u`` in float32, and ``acosh``'s domain clamp at
+    ``1 + 10·eps`` returned ``√(20·eps)/√c ≈ 1.5e-3/√c`` for every draw below it: at √c·R = 1e-3 all samples
+    landed at 1.54·R (KS statistic 1.0); with the half-angle forms the statistic is 0.011 (n = 2) and 0.012
+    (n = 3). Radii are measured in float64 from the float32 samples.
+    """
+    c = 0.5
+    R = float(1e-3 / np.sqrt(c))
+    manifold = Poincare(dtype=_F64)
+    samples_ND = uniform_poincare.sample(jax.random.PRNGKey(24), n=n, c=c, R=R, sample_shape=(_KS_N,), dtype=jnp.float32)
+    radii_N = np.asarray(jax.vmap(lambda x_D: manifold.dist_0(x_D, c))(samples_ND.astype(_F64)))
+    assert np.all(radii_N <= R * (1 + 4 * np.finfo(np.float32).eps)), f"max radius {radii_N.max() / R:.4f}·R"
+    statistic = scipy.stats.kstest(radii_N, lambda r: _radial_cdf_reference(r, c, R, n)).statistic
+    assert statistic < _KS_MAX_D, f"KS statistic {statistic:.4f} against p(r) ∝ sinh^{n - 1}(√c·r)"

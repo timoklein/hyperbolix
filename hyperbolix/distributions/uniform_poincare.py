@@ -6,7 +6,8 @@ coordinates: sample a direction on S^{n-1}, sample a radius from the
 hyperbolic radial density, form a tangent vector, and map to the ball.
 
 The radial density is p(r) ∝ sinh^{n-1}(√c·r) on [0, R].  A substitution
-u = cosh(√c·r) - 1 simplifies sampling:
+u = cosh(√c·r) - 1 = 2·sinh²(√c·r/2) (evaluated in the half-angle form, and inverted as
+r = 2·asinh(√(u/2))/√c, so small radii do not round away) simplifies sampling:
   - n = 2: u is uniform on [0, cosh(√c·R) - 1]  (closed-form)
   - n ≥ 3: rejection sampling with acceptance ∝ (u·(u+2))^{(n-2)/2}
 
@@ -22,9 +23,8 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
-from hyperbolix.utils.math_utils import safe_normalize
-from hyperbolix.utils.math_utils import acosh as safe_acosh
-from hyperbolix.utils.math_utils import cosh as safe_cosh
+from hyperbolix.utils.math_utils import asinh as safe_asinh
+from hyperbolix.utils.math_utils import safe_normalize, safe_sqrt
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 
 # ---------------------------------------------------------------------------
@@ -162,13 +162,15 @@ def _sample_radial_n2(
     u = cosh(√c·r) - 1 is uniform on [0, u_max] when n = 2.
     """
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=dtype))
-    # safe_cosh: exp-form accuracy fix over XLA's CPU jnp.cosh (up to ~17-496 ulps off for
-    # |x| >= 16), plus its overflow clip for free.
-    u_max = safe_cosh(sqrt_c * R) - 1.0
+    # u_max = cosh(√c·R) - 1 in the half-angle form 2·sinh²(√c·R/2), which does not cancel: the
+    # literal difference rounds to 0 in float32 below √c·R ≈ 3.5e-4. safe_sinh: expm1-form accuracy
+    # fix over XLA's CPU jnp.sinh (up to ~17-496 ulps off for |x| >= 16).
+    u_max = 2.0 * safe_sinh(0.5 * sqrt_c * R) ** 2
     u_S = jax.random.uniform(key, shape=shape, dtype=dtype, minval=0.0, maxval=u_max)
-    # safe_acosh: domain-clamps to 1 + 10*eps instead of exactly 1.0, removing the singular
-    # gradient a u_S == 0 draw would otherwise expose.
-    r_S = safe_acosh(u_S + 1.0) / sqrt_c
+    # r = acosh(1 + u)/√c as 2·asinh(√(u/2))/√c: 1 + u rounds in float32, and acosh's domain clamp at
+    # 1 + 10·eps turned every radius below ≈1.5e-3/√c into exactly that — at √c·R = 1e-3 all samples
+    # landed at 1.54·R. safe_sqrt gives a u_S == 0 draw r = 0 with a zero (not infinite) derivative.
+    r_S = 2.0 * safe_asinh(safe_sqrt(0.5 * u_S)) / sqrt_c
     return r_S
 
 
@@ -188,9 +190,9 @@ def _sample_radial_rejection(
     Uses jax.lax.while_loop for JIT compatibility.
     """
     sqrt_c = jnp.asarray(jnp.sqrt(c), dtype=dtype)
-    # safe_cosh: exp-form accuracy fix over XLA's CPU jnp.cosh (up to ~17-496 ulps off for
-    # |x| >= 16), plus its overflow clip for free.
-    u_max = safe_cosh(sqrt_c * R) - 1.0
+    # Half-angle form, as in `_sample_radial_n2`. The literal cosh(√c·R) - 1 rounded to 0 in float32
+    # below √c·R ≈ 3.5e-4, where the acceptance ratio below became 0/0 = NaN and this loop never ended.
+    u_max = 2.0 * safe_sinh(0.5 * sqrt_c * R) ** 2
     # Maximum of u*(u+2) over [0, u_max] is at u = u_max
     ref_val = u_max * (u_max + 2.0)
     exponent = (n - 2) / 2.0
@@ -225,9 +227,8 @@ def _sample_radial_rejection(
     _, u_accepted_T, _ = jax.lax.while_loop(cond_fn, body_fn, init_state)
     u_accepted_T = jnp.asarray(u_accepted_T, dtype=dtype)  # narrow type for pyright
 
-    # safe_acosh: domain-clamps to 1 + 10*eps instead of exactly 1.0, removing the singular
-    # gradient a u_accepted_T == 0 draw would otherwise expose.
-    r_T = safe_acosh(u_accepted_T + 1.0) / sqrt_c
+    # acosh(1 + u) = 2·asinh(√(u/2)), exact where 1 + u rounds (see `_sample_radial_n2`).
+    r_T = 2.0 * safe_asinh(safe_sqrt(0.5 * u_accepted_T)) / sqrt_c
     return r_T.reshape(shape)
 
 
