@@ -1018,3 +1018,133 @@ def test_sample_hyperboloid_float32_tracks_float64_at_scaled_radius_10() -> None
     err_N = jax.vmap(hyp64.dist, in_axes=(0, 0, None))(z_NA_32.astype(_F64), z_NA_64, c)
     assert float(jnp.max(err_N)) < 5e-3, f"float32 samples are {float(jnp.max(err_N)):.3e} nats off the float64 ones"
     assert z_NA_32.shape == (n_draw, n + 1)
+
+
+def _f32_points_and_f64_twins(points_NA: np.ndarray, c: float) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """The same hyperboloid points twice: rounded to float32, and those float32 numbers widened to float64.
+
+    Both copies get their time slot from ``proj``, i.e. from their own spatial part: the float64 twin
+    does not widen the float32 time slot, which sits off the float64 sheet by ``eps·cosh(a)`` relative
+    — a transport that reads the time slot inside a cancellation turns exactly that into error, and a
+    reference sharing it would hide it.
+    """
+    hyp32, hyp64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=_F64)
+    points32_NA = jax.vmap(lambda p_A: hyp32.proj(p_A, c))(jnp.asarray(points_NA, dtype=jnp.float32))
+    points64_NA = jax.vmap(lambda p_A: hyp64.proj(p_A, c))(points32_NA.astype(_F64))
+    return points32_NA, points64_NA
+
+
+@pytest.mark.parametrize("sigma_kind", ["scalar", "diag", "full"])
+@pytest.mark.parametrize("a", [8.0, 10.0])
+def test_log_prob_hyperboloid_float32_tracks_float64_for_radial_displacements(a: float, sigma_kind: str) -> None:
+    """float32 ``log_prob`` matches float64 for ``z`` on the ray through a mean at scaled radius ``a``.
+
+    ``log_prob`` transports ``u = log_μ(z)`` back to the origin, which divides its radial component by
+    ``cosh a``. The generic ``ptransp(u, μ, origin)`` it used took the Cartesian chart there, whose
+    radial component ``u_r - u_r·(1 - 1/cosh a)`` cancels two ``O(cosh a)`` terms: float32 error
+    ``≈ 1.5·eps·cosh(a)·v_r²/σ²`` on the density. A purely radial displacement isolates it — the float32
+    rounding of ``u`` then only perturbs the radial component (divided by ``cosh a`` like the rest of
+    it) or adds a perpendicular part that enters an isotropic density quadratically. A diagonal or
+    full ``Σ`` couples the two directions, so that perpendicular rounding — the ambient chart's own
+    floor, ``~eps·cosh a``, which no transport reading ``u`` removes — enters linearly; hence the
+    looser bound there. Measured max error over these 64 draws, old → new: ``a = 8`` 1.2e-3..1.8e-3 →
+    below 5e-5 (scalar) / 2.5e-4 (diag, full); ``a = 10`` 5.5e-3..1.1e-2 → below 5e-5 / 1.4e-3
+    (``logs/2026-09-29_cancellation-free/1c/tests_old.out``).
+    """
+    c, n, n_draw = 0.5, 3, 64
+    rng = np.random.default_rng(int(a))
+    dir_ND = rng.normal(size=(n_draw, n))
+    dir_ND /= np.linalg.norm(dir_ND, axis=-1, keepdims=True)
+    # Signed radial geodesic displacement of 0.15..0.6 nats: O(sigma) for all three parameterizations.
+    step_N = rng.choice([-1.0, 1.0], n_draw) * rng.uniform(0.15, 0.6, n_draw)
+    zeros_N1 = np.zeros((n_draw, 1))
+    mu32_NA, mu64_NA = _f32_points_and_f64_twins(np.concatenate([zeros_N1, dir_ND * np.sinh(a) / np.sqrt(c)], -1), c)
+    z_s_ND = dir_ND * (np.sinh(a + np.sqrt(c) * step_N) / np.sqrt(c))[:, None]
+    z32_NA, z64_NA = _f32_points_and_f64_twins(np.concatenate([zeros_N1, z_s_ND], -1), c)
+    sigma32 = _sigma_for(sigma_kind, n, jnp.float32)
+
+    lp32_N = wrapped_normal_hyperboloid.log_prob(z32_NA, mu32_NA, sigma32, c, manifold_module=Hyperboloid(dtype=jnp.float32))
+    lp64_N = wrapped_normal_hyperboloid.log_prob(
+        z64_NA, mu64_NA, sigma32.astype(_F64), c, manifold_module=Hyperboloid(dtype=_F64)
+    )
+    assert lp32_N.dtype == jnp.float32, "the float32 leg did not run in float32"
+
+    err = float(jnp.max(jnp.abs(lp32_N.astype(_F64) - lp64_N)))
+    tol = 5e-5 if sigma_kind == "scalar" else 2.5 * float(np.finfo(np.float32).eps) * np.cosh(a)
+    assert err < tol, f"float32 log_prob is {err:.3e} off the float64 one at a = {a} (bound {tol:.1e})"
+
+
+@pytest.mark.parametrize("mu_scaled_radius", [0.0, 0.09, 0.11])
+def test_log_prob_hyperboloid_gradients_match_finite_differences_near_the_origin(mu_scaled_radius: float) -> None:
+    """∂log_prob/∂z and ∂log_prob/∂μ equal central differences in every ambient coordinate (float64).
+
+    ``0.09``/``0.11`` straddle the ``√c·‖μ_s‖ = 0.1`` switch at which the transport back to the origin
+    leaves its Cartesian chart; ``0.0`` is the mean at the origin, where the radial direction ``μ̂`` does
+    not exist and the unselected arm must not leak a NaN or a zero into the derivative. Differences
+    are taken in the ambient coordinates themselves (time slot included), so every input the
+    implementation reads is checked, not only the on-sheet directions.
+    """
+    c, n, h = 0.7, 3, 1e-6
+    hyp = Hyperboloid(dtype=_F64)
+    sigma = _sigma_for("diag", n, _F64)
+    direction_D = jnp.asarray([0.6, -0.48, 0.64], dtype=_F64)  # unit
+    mu_A = hyp.proj(jnp.concatenate([jnp.zeros(1, dtype=_F64), direction_D * (mu_scaled_radius / np.sqrt(c))]), c)
+    v_D = jnp.asarray([0.35, 0.2, -0.3], dtype=_F64)
+    z_A = hyp.expmap(hyp.ptransp_0(hyp.embed_spatial_0(v_D), mu_A, c), mu_A, c)
+
+    def log_p(z_A, mu_A):
+        return wrapped_normal_hyperboloid.log_prob(z_A, mu_A, sigma, c, manifold_module=hyp)
+
+    grad_z_A, grad_mu_A = jax.grad(log_p, argnums=(0, 1))(z_A, mu_A)
+    step_AA = h * jnp.eye(n + 1, dtype=_F64)
+    fd_z_A = jnp.stack([(log_p(z_A + e_A, mu_A) - log_p(z_A - e_A, mu_A)) / (2 * h) for e_A in step_AA])
+    fd_mu_A = jnp.stack([(log_p(z_A, mu_A + e_A) - log_p(z_A, mu_A - e_A)) / (2 * h) for e_A in step_AA])
+
+    assert float(jnp.linalg.norm(fd_mu_A)) > 1e-2, "degenerate case: log_prob does not depend on mu"
+    np.testing.assert_allclose(np.asarray(grad_z_A), np.asarray(fd_z_A), rtol=1e-6, atol=1e-7)
+    np.testing.assert_allclose(np.asarray(grad_mu_A), np.asarray(fd_mu_A), rtol=1e-6, atol=1e-7)
+
+
+def test_log_prob_hyperboloid_mean_gradient_is_finite_at_tiny_radius() -> None:
+    """float32 ``∂log_prob/∂μ`` stays finite as the mean approaches the origin.
+
+    There the transport's radial direction ``μ̂`` is undefined, the Cartesian arm is selected, and the
+    other arm is still evaluated under the ``where`` — with ``1/‖μ_s‖``-sized partials that must stay
+    finite (a zero cotangent times an infinite partial is NaN).
+    """
+    c = 1.0
+    hyp32 = Hyperboloid(dtype=jnp.float32)
+    z_A = hyp32.expmap_0(hyp32.embed_spatial_0(jnp.asarray([0.3, -0.2, 0.25], dtype=jnp.float32)), c)
+    for radius in (0.0, 1e-30, 1e-20, 1e-12, 1e-6, 0.05):
+        mu_A = hyp32.proj(jnp.asarray([0.0, radius, -0.5 * radius, 0.25 * radius], dtype=jnp.float32), c)
+        grad_mu_A = jax.grad(lambda m_A: wrapped_normal_hyperboloid.log_prob(z_A, m_A, 0.3, c, manifold_module=hyp32))(mu_A)
+        assert bool(jnp.all(jnp.isfinite(grad_mu_A))), f"radius {radius}: {grad_mu_A}"
+
+
+def test_ptransp_to_0_matches_the_generic_transport_in_float64() -> None:
+    """``log_prob``'s transport back to the origin equals ``Hyperboloid.ptransp(v, x, origin)`` (float64).
+
+    Radii straddle the ``√c·‖x_s‖ = 0.1`` switch between its two arms and reach ``a = 6``, where the
+    generic transport's float64 cancellation is still below 1e-13. Round-tripping through
+    ``ptransp_0`` must also give back the tangent vector's spatial part.
+    """
+    from hyperbolix.manifolds.hyperboloid import _ptransp_to_0
+
+    c, n = 0.7, 4
+    hyp = Hyperboloid(dtype=_F64)
+    origin_A = hyp.create_origin(c, n)
+    rng = np.random.default_rng(7)
+    for scaled_radius in (0.0, 1e-8, 0.05, 0.0999, 0.1001, 0.5, np.sinh(2.0), np.sinh(6.0)):
+        for _ in range(8):
+            direction_D = rng.normal(size=n)
+            direction_D /= np.linalg.norm(direction_D)
+            x_A = hyp.proj(jnp.asarray(np.concatenate([[0.0], direction_D * scaled_radius / np.sqrt(c)]), dtype=_F64), c)
+            v_A = hyp.ptransp_0(hyp.embed_spatial_0(jnp.asarray(rng.normal(size=n), dtype=_F64)), x_A, c)
+
+            got_A = _ptransp_to_0(v_A, x_A, c)
+            expected_A = hyp.ptransp(v_A, x_A, origin_A, c)
+            scale = max(1.0, float(jnp.linalg.norm(expected_A)))
+            assert float(got_A[0]) == 0.0
+            assert float(jnp.max(jnp.abs(got_A - expected_A))) <= 1e-12 * scale, f"scaled radius {scaled_radius}"
+            back_A = hyp.ptransp_0(got_A, x_A, c)
+            assert float(jnp.max(jnp.abs(back_A[1:] - v_A[1:]))) <= 1e-12 * max(1.0, float(jnp.max(jnp.abs(v_A))))

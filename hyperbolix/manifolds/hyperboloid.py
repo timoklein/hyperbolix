@@ -1485,6 +1485,95 @@ def _ptransp_0(v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: 
     return jnp.concatenate([res0[None], res_s_D])
 
 
+def _ptransp_to_0(
+    v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
+) -> Float[Array, "dim_plus_1"]:
+    """Parallel transport a tangent vector from ``x`` to the origin — the inverse of :func:`_ptransp_0`.
+
+    Dimension key:
+        D: spatial dim
+
+    With ``x̂ = x_s/‖x_s‖``, ``u_r = ⟨v_s, x̂⟩`` and ``u_⊥ = v_s - u_r·x̂`` (the split
+    :func:`~hyperbolix.utils.math_utils.radial_perp_decomposition` gives :func:`_tangent_norm`)::
+
+        PT_{x→0}(v) = (0, u_⊥ + u_r/(√c·x₀)·x̂)
+
+    The radial leg ``(‖x_s‖·u_r/x₀, u_r·x̂)`` has Minkowski length ``|u_r|/(√c·x₀)`` (because
+    ``x₀² - ‖x_s‖² = 1/c``) and the transport keeps its length and orientation; ``u_⊥`` is orthogonal to
+    the geodesic plane and comes through unchanged. ``√c·x₀ = cosh a``, so the radial component is
+    *divided* by ``cosh a``. That divisor reads the stored ``x₀``, as :func:`_tangent_norm` and
+    :func:`_ptransp_0` do: it only divides, so the time slot's rounding stays a relative ``eps``.
+
+    **What this replaces.** ``_ptransp(v, x, origin)`` always takes its Cartesian chart here
+    (:func:`_pair_near_origin` reads the *smaller* endpoint radius), ``v_s - ⟨x_s/x₀, v_s⟩/(x₀ +
+    1/√c)·x_s``, whose radial component is ``u_r - u_r·(1 - 1/cosh a)``: two ``O(u_r)`` terms cancelling
+    down to ``u_r/cosh a``. Measured float32 radial error of the transport: 1.9e-3 relative at
+    ``a = 10`` (``1.5·eps·cosh a``). The same subtraction turns the float32 time slot's own rounding
+    into ``eps·cosh a``: 1.1e-3 at ``a = 10`` with the arithmetic done in float64.
+
+    **The radial residue is replaced, not kept.** ``u_⊥`` is itself ``v_s`` minus an ``O(u_r)`` vector,
+    so it carries a rounding residue of ``~eps·u_r`` *along* ``x̂``, which the formula above would add to
+    ``u_r/cosh a`` — the same ``eps·cosh a`` error again (the one-pass spelling measured 1.6e-3 at
+    ``a = 10``, no better than the Cartesian chart). One more dot measures that residue, and the radial
+    coefficient becomes ``u_r/(√c·x₀) - ⟨u_⊥, x̂⟩``: radial error ≤ 3e-7 at every measured radius
+    ``a ≤ 10``. What remains is perpendicular — ``x̂``'s own direction rounding times ``u_r``, 5.5e-4 at
+    ``a = 10`` — the order of the float32 ``logmap`` output that feeds ``log_prob`` (1.3e-3 there): the
+    ambient chart stores a tangent vector's components at ``cosh a`` times its length (see
+    :func:`_tangent_norm`), and no spelling reading ``(v, x)`` gets below that.
+
+    Near the origin (``√c·‖x_s‖ ≤ 0.1``, the threshold of :func:`_pair_near_origin`) ``x̂`` stops being
+    differentiable while the Cartesian form has nothing left to cancel (``1 - 1/cosh a < 0.005``), so
+    the Cartesian arm is selected there. As in :func:`_ptransp`, that arm is fed the origin wherever it
+    is not selected, keeping its coefficients finite at any radius. The other arm needs no substitute:
+    at ``x_s = 0`` the ``MIN_NORM`` floor inside ``radial_perp_decomposition`` makes ``x̂`` the exact zero
+    vector, and every partial it pairs with its zero cotangent is finite.
+
+    Five reductions over ``D`` — the norm's max and sum (``x̂`` below and the one inside
+    ``radial_perp_decomposition`` are the same expression and compile to one), the radial and the
+    residue dots, and the Cartesian arm's dot — where ``_ptransp`` evaluates both of its charts under
+    its ``where``: 5 against 10 reduce/dot ops in the compiled XLA:CPU HLO, single point and vmapped
+    (``logs/2026-09-29_cancellation-free/1c/probe_new.out``).
+
+    The time slot of ``v`` is ignored — the spatial part is the source of truth, as in
+    :func:`_ptransp_0` — and the result's is exactly 0, a tangent vector at the origin.
+
+    Args:
+        v: Tangent vector at x, shape (dim+1,); the time slot is ignored
+        x: Hyperboloid point, shape (dim+1,)
+        c: Curvature (positive)
+
+    Returns:
+        Parallel transported tangent vector at the origin, shape (dim+1,), time slot 0
+    """
+    sqrt_c = jnp.sqrt(c)
+    x_s_D = x[1:]
+    v_s_D = v[1:]
+    r_x = safe_norm(x_s_D)
+    near_origin = sqrt_c * r_x <= 1e-1
+
+    # Cartesian arm: the closed form with y = origin. Fed the origin where the polar arm is selected,
+    # so its coefficients stay finite however far x is; `x₀ ≥ 1/√c > 0` divides first, as in
+    # `_ptransp_cartesian`, so the dot cannot overflow before the tangent itself does.
+    origin = _create_origin(c, x.shape[0] - 1, dtype=x.dtype)
+    cartesian_x = jnp.where(near_origin, x, origin)
+    cartesian_v0 = jnp.dot(cartesian_x[1:] / cartesian_x[0], v_s_D, precision=MATMUL_PRECISION)
+    cartesian_s_D = v_s_D - (cartesian_v0 / (cartesian_x[0] + 1.0 / sqrt_c)) * cartesian_x[1:]
+
+    # Polar arm. `x_hat_D` is the x̂ `radial_perp_decomposition` builds internally, spelled the same way
+    # so the two compile to one norm.
+    x_hat_D = x_s_D / floor_at(r_x, MIN_NORM)
+    radial, perp_D = radial_perp_decomposition(v_s_D, x_s_D)
+    # Whatever of `perp_D` lies along x̂ is rounding (~eps·u_r), not signal: measure it and replace it by
+    # the exact radial component u_r/cosh a. √c·x₀ = cosh a >= 1 on the upper sheet, so this floor is a
+    # no-op for every valid base point; it only keeps a degenerate x (x₀ = 0) from dividing by zero.
+    residue = jnp.dot(perp_D, x_hat_D, precision=MATMUL_PRECISION)
+    radial_coeff = radial / floor_at(sqrt_c * x[0], MIN_NORM) - residue
+    polar_s_D = perp_D + radial_coeff * x_hat_D
+
+    res_s_D = jnp.where(near_origin, cartesian_s_D, polar_s_D)
+    return jnp.concatenate([jnp.zeros(1, dtype=v.dtype), res_s_D])
+
+
 def _tangent_inner(
     u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, ""]:
