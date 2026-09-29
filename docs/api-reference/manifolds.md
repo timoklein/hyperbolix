@@ -54,7 +54,7 @@ The Poincaré ball model with Möbius operations.
 !!! note "Distance Versions"
     The Poincaré `dist` method has a `version_idx` parameter selecting between 3 formulations:
 
-    - `VERSION_MOBIUS_DIRECT` (0): Möbius addition formula (default, fastest)
+    - `VERSION_MOBIUS_DIRECT` (0): direct Möbius distance formula (default, fastest)
     - `VERSION_MOBIUS` (1): Möbius via addition
     - `VERSION_METRIC_TENSOR` (2): Direct metric tensor integration
 
@@ -67,6 +67,18 @@ The Poincaré ball model with Möbius operations.
     to floor every small radius (`dist_0`) and every small separation (`dist`). See
     [slot 2 reads the radius through `arcsinh`](
     ../user-guide/numerical-stability.md#poincare-metric-tensor-dist-0).
+
+    For `dist`, the `arcsinh` form is also the direct Möbius distance, so slots 0 and 2 run one body:
+
+    $$d(x, y) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x-y\rVert}{\sqrt{(1-c\lVert x\rVert^2)(1-c\lVert y\rVert^2)}}\right)$$
+
+    The literal Möbius form $\frac{2}{\sqrt{c}}\operatorname{atanh}(\sqrt{c}\,\lVert(-x)\oplus y\rVert)$
+    hit `atanh`'s float32 domain clip for far pairs; this one has no domain to clip and stays
+    accurate up to the ball chart's ceiling. In float32 at $c = 1$, two points at scaled radius 7.2
+    on opposite sides (true $\sqrt{c}\,d = 14.4$) give 14.400112. `logmap` takes its magnitude from
+    the same argument. Slot 1 takes the norm of the projected $(-x)\oplus y$, which cannot pass the
+    ceiling, so in float32 it still saturates: the same pair gives 12.637328, and its gradient is
+    lost (relative error 1.0).
 
 !!! note "Apollonian weak metric"
     `apollonian_dist(x, y, c)` is the **non-symmetric** Apollonian weak metric $\delta$

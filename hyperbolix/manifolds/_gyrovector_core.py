@@ -6,19 +6,29 @@ and the κ-stereographic model (signed ``c`` — hyperbolic / Euclidean / spheri
 stability fix lands in exactly one place instead of silently diverging between two hand-mirrored copies.
 
 Every function is curvature-generic (one formula at any sign of ``c``); ``_conformal_factor`` /
-``_conformal_factor_batch`` / ``_proj`` carry a ``jnp.where(c > 0, …)`` / ``abs(c)`` generalization whose
-``c > 0`` branch is exactly the historical Poincaré expression, bit-for-bit. The only theoretical
-departure there is a ``√|c|`` floor at ``√MIN_NORM``: for ``0 < c < 1e-15`` (a Poincaré ball of radius
-``1/√c > 3e7`` — never used) the boundary floor is marginally more conservative than a bare ``√c``.
-``_addition`` and ``_gyration`` are *not* bit-for-bit the historical expressions: ``_addition`` regroups
-the numerator and clamps on a scalar (see its implementation notes), and both take their denominator
-from :func:`_mobius_denominator`, which forms ``1 ± 2c⟨x,y⟩ + c²‖x‖²‖y‖²`` as a sum of non-negative
-terms instead of a cancelling difference. Both changes move the last ulps and are strictly more
-accurate near the ball boundary.
+``_conformal_factor_batch`` / ``_proj`` carry a ``jnp.where(c > 0, …)`` / ``abs(c)`` generalization. For
+``_proj`` the ``c > 0`` branch is exactly the historical Poincaré expression, bit-for-bit. The only
+theoretical departure there is a ``√|c|`` floor at ``√MIN_NORM``: for ``0 < c < 1e-15`` (a Poincaré ball
+of radius ``1/√c > 3e7`` — never used) the boundary floor is marginally more conservative than a bare
+``√c``. The two conformal factors depart once more: they floor the divisor ``1 - c‖x‖²`` at
+:func:`_boundary_divisor_floor`, half the value it takes at the projection cap, where the historical
+expression floored at that value itself (:func:`_boundary_floor`). They still agree bit-for-bit wherever
+the computed ``1 - c‖x‖²`` is at or above the cap value, i.e. everywhere except on capped points that
+round below it and on unprojected points past the cap.
+
+``_addition`` and ``_gyration`` are *not* bit-for-bit the historical expressions. Both regroup their
+numerator ``A·x + B·y`` as ``(A - B)·x + B·s`` with ``s = x + y`` (see their implementation notes):
+where ``s`` is small near the boundary, ``A·x`` and ``B·y`` cancel down to the size of their sum, while
+the regrouped terms are that size on their own. ``_addition`` also clamps on a scalar. Both take their
+denominator from :func:`_mobius_denominator`, which forms ``1 ± 2c⟨x,y⟩ + c²‖x‖²‖y‖²`` as a sum of
+non-negative terms instead of a cancelling difference and floors it at the square of
+:func:`_boundary_divisor_floor`. Away from the boundary these changes move the last ulps; near it they
+are more accurate, by orders of magnitude where the old forms cancelled (measured in :func:`_gyration`
+and :func:`_mobius_denominator`).
 
 All operations act on a single point of shape ``(dim,)``; batch with :func:`jax.vmap`. The
-``_conformal_factor_batch`` helper is the exception — it broadcasts over arbitrary leading dims for the NN
-layers.
+``_conformal_factor_batch`` (for the NN layers) and ``_proj_batch`` helpers are the exceptions — they
+broadcast over arbitrary leading dims.
 
 Dimension key:
     dim: manifold (ambient == spatial for these models) dimension

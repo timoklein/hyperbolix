@@ -1660,16 +1660,19 @@ def test_poincare_mobius_add_stays_inside_the_projection_boundary(dtype: jnp.dty
 def test_poincare_mobius_add_is_more_accurate_near_the_boundary(dtype: jnp.dtype, c: float) -> None:
     """Against a float64 reference the new grouping is strictly better than the old one.
 
-    An absolute tolerance would say little here: at ``ε = 1e-4`` in float32 *both* forms are off
-    by a whole ball radius, because ``A`` and ``B`` are ``O(ε)`` differences of ``O(1)`` terms and
-    float32 has no bits left. What the change buys is a factor ~2 at every ``ε`` — and, once
-    ``ε`` reaches the ceiling margin in float64, a factor of ~1e7, since there the old form's
-    numerator is pure rounding noise while ``B·(x+y) + c‖x+y‖²·x`` still resolves it.
+    One absolute tolerance would say little across this grid: in float32 the new form's own error
+    runs from 5.5e-5 of the ball radius at ``ε = 1e-2`` to 1.9e-2 at the ceiling margin. The old
+    form runs out of bits much sooner, because ``A`` and ``B`` are ``O(ε)`` differences of ``O(1)``
+    terms: at ``ε = 1e-4`` in float32 it is off by 1.9 ball radii, where ``B·(x+y) + c‖x+y‖²·x``
+    is off by 3.3e-3-4.8e-3. At the ceiling margin in float64 the old numerator is still pure
+    rounding noise (1.99 radii) while the new form resolves it to 6.6e-5-1.8e-4, a factor of
+    1e4-3e4.
 
     The ``‖n‖/(εR) ∈ [0.9, 1.1]`` rows are excluded from this comparison only: that is where the
     exact result crosses the ball ceiling, so one form may clamp and the other not, and the
     difference then says nothing about accuracy. They stay in the finiteness and ball assertions.
-    Measured ratio new/old on this grid: 0.48-0.60 everywhere.
+    Measured ratio new/old on this grid: 0.000-0.009, with the replicas' denominator floored at
+    ``_mobius_boundary_floor²`` or at the current ``(_mobius_boundary_floor/2)²`` alike.
     """
     max_norm = _mobius_max_norm(dtype, c)
     for eps_val in _mobius_eps_grid(dtype, c):
@@ -1687,7 +1690,7 @@ def test_poincare_mobius_add_is_more_accurate_near_the_boundary(dtype: jnp.dtype
         assert worst_new <= 0.75 * worst_old + 1e-15, f"c={c}, eps={eps_val:.2e}: new {worst_new:.3e} vs old {worst_old:.3e}"
 
     # Absolute bounds where the input is still well enough conditioned for one to mean something.
-    # Measured: 2.6e-2 (float32, eps=1e-2) and 4.9e-7 (float64, eps=1e-4).
+    # Measured worst case: 6.9e-5 (float32, eps=1e-2) and 2.0e-11 (float64, eps=1e-4).
     abs_bound, abs_eps = (5e-2, 1e-2) if dtype == jnp.float32 else (1e-6, 1e-4)
     worst = 0.0
     for ratio in _MOBIUS_ETA_RATIOS:

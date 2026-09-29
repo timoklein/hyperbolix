@@ -36,6 +36,9 @@ Version Constants:
     VERSION_MOBIUS (1): Möbius distance via addition
     VERSION_METRIC_TENSOR (2): Metric tensor induced distance
 
+For dist, slots 0 and 2 are the same function and run one body, the arcsinh form
+2·arcsinh(√c||x - y||/√(B_x·B_y))/√c with B_x = 1 - c||x||².
+
 Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
 
@@ -50,13 +53,19 @@ grows exponentially as points approach the boundary:
 - At d(0,x) ≈ 10: λ(x) ≈ 10,000+
 
 Float32 (~7 significant digits) loses precision in operations like:
-- logmap/tangent_norm: divide by λ(x), then multiply by λ(x)
+- logmap/tangent_norm: scale by 1 - c||x||² = 2/λ(x), then by λ(x)
 - expmap: multiplies by large λ(x) values
 - addition: combines terms with vastly different scales
 
 For numerical accuracy with large distances or near-boundary points:
 - Use Poincare(dtype=jnp.float64)
-- Expect ~3% relative error with float32 for distances > 10
+- Far pairs: the default dist (slots 0 and 2), logmap and ptransp stay accurate up to the ball
+  chart's ceiling, scaled radius √c·d(0,x) ≈ 12.6 per point in float32 (27.7 in float64) at
+  c = 1. What is left is the rounding of 1 - c||x||², eps/(1 - c||x||²) relative. Two float32
+  points at scaled radius 7.2 on opposite sides (true √c·d = 14.4, c = 1) give 14.400112.
+  VERSION_MOBIUS (1) takes the norm of the projected (-x) ⊕ y, which cannot pass the ceiling,
+  so in float32 it still saturates: 12.637328 for the same pair, and its gradient is lost
+  (relative error 1.0).
 - Consider projection after operations to maintain manifold constraints
 """
 
