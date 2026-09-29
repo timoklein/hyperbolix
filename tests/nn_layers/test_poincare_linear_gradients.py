@@ -226,6 +226,59 @@ def test_hyp_linear_poincare_pp_layer_outputs_on_manifold(dtype):
     assert jnp.all(norms < 1.0), "All outputs should be within unit ball"
 
 
+@pytest.mark.parametrize("out_dim", [10, 64])
+@pytest.mark.parametrize("c", [0.1, 1.0])
+def test_hyp_linear_poincare_pp_large_scores_stay_at_boundary_f32(c, out_dim):
+    """Large MLR scores must lift to the ball's edge in float32, not collapse to the origin.
+
+    Regression: the lift squared w = sinh(√c·v)/√c, so ``sum(w**2)`` overflowed once √c·v passed ~44,
+    and the output became exactly the origin with an exactly-zero gradient and no NaN. Kernel x10
+    puts max √c·v near 56, past that threshold. Kernel x1000 puts most outputs past the float32 sinh
+    clip, and at out_dim = 64 even ‖sinh(√c·v)‖ exceeds FLT_MAX. The jitted c = 1 wide case also
+    catches XLA folding an ``(s/D)/X`` spelling back into the overflowing ``s/(D·X)``.
+    """
+    layer = HypLinearPoincarePP(poincare_f32, 16, out_dim, rngs=nnx.Rngs(0))
+    u_BI = jax.random.normal(jax.random.PRNGKey(0), (4, 16), dtype=jnp.float32)
+    x_BI = 0.9 / jnp.sqrt(c) * u_BI / jnp.linalg.norm(u_BI, axis=-1, keepdims=True)  # 0.9 of the ball radius
+    kernel_init_OI = layer.kernel[...]
+
+    def loss_fn(m):
+        return jnp.sum(m(x_BI, c))
+
+    for scale in (10.0, 1000.0):
+        layer.kernel[...] = kernel_init_OI * scale
+        y_BO = nnx.jit(lambda m: m(x_BI, c))(layer)
+        _loss, grads = nnx.jit(nnx.value_and_grad(loss_fn))(layer)
+        radius_B = jnp.sqrt(c) * jnp.linalg.norm(y_BO, axis=-1)
+
+        assert jnp.all(jnp.isfinite(y_BO)), f"scale={scale}: non-finite output"
+        assert jnp.all(radius_B > 0.999), f"scale={scale}: rows left the ball's edge (√c·‖y‖ = {radius_B})"
+        for _, value in jax.tree_util.tree_flatten_with_path(nnx.state(grads, nnx.Param))[0]:
+            assert jnp.all(jnp.isfinite(value)), f"scale={scale}: gradients contain NaN or Inf"
+
+
+@pytest.mark.parametrize("c", [0.1, 1.0, 2.5])
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
+def test_hyp_linear_poincare_pp_origin_jacobian_matches_closed_form(dtype, c):
+    """At x = origin with the zero-init bias the scores are exactly 0, where the lift's slope is I/2.
+
+    HNN++ at x = 0 (conformal factor 2, bias 0) gives dv/dx = 4·Z, so dy/dx = 2·Z. This guards the
+    lift's derivative at w = 0: a normalized spelling (``ŵ·tanh(asinh(√c‖w‖)/2)/√c`` with
+    ``safe_normalize``) is value-correct there but has a zero Jacobian, and a floor on one side
+    only scales it by a power of √c.
+    """
+    manifold = _manifold(dtype)
+    layer = HypLinearPoincarePP(manifold, 6, 4, rngs=nnx.Rngs(3), param_dtype=dtype)
+    x_I = jnp.zeros((6,), dtype=dtype)
+
+    jac_OI = jax.jacrev(lambda x: layer(x[None, :], c)[0])(x_I)
+
+    atol = 1e-6 if dtype == jnp.float32 else 1e-13
+    assert jnp.allclose(jac_OI, 2.0 * layer.kernel[...], rtol=0.0, atol=atol), jnp.max(
+        jnp.abs(jac_OI - 2.0 * layer.kernel[...])
+    )
+
+
 @pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 def test_world_model_gradients_finite(dtype):
     """Full world model should produce finite gradients."""
