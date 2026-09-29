@@ -2177,6 +2177,50 @@ def test_poincare_gradients_at_capped_points_match_the_unfloored_reference(dtype
                     assert err <= tol, f"{kind} {name} d/d{'xy'[arg]} pair {i}: {err:.2e} > {tol:.2e}"
 
 
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_poincare_one_point_gradients_at_capped_points_match_the_unfloored_reference(dtype: jnp.dtype, c: float) -> None:
+    """``conformal_factor``, ``tangent_norm``, ``busemann`` and ``dist_0`` slot 2, w.r.t. a capped point.
+
+    Each reads ``B = 1 - c‖x‖²``, and at the cap its gradient is dominated by ``B``'s derivative:
+    ``λ = 2/B`` (``∇λ = 4c·x/B²``, also behind ``tangent_norm = λ‖v‖``),
+    ``B^v(x) = log(‖v - √c·x‖²/B)/√c`` and ``d₀ = 2·asinh(√c‖x‖/√B)/√c``. With ``B`` floored at the
+    analytic cap value the floor bound for about a third of the capped points and zeroed that term:
+    relative error 1.0. Oracle: the closed forms in longdouble on the stored inputs. Tolerance
+    ``16·eps/B``, twice the pairwise one, because ``∇λ`` carries ``B`` squared.
+    """
+    manifold = hj.manifolds.Poincare(dtype=dtype)
+    eps = float(jnp.finfo(dtype).eps)
+    x_ND = _poincare_capped_points(manifold, c, 24, seed=23)["proj"]
+    v_D = jnp.asarray(np.linspace(1.0, -0.5, 5) / np.linalg.norm(np.linspace(1.0, -0.5, 5)), dtype=dtype)
+    grads = {
+        "conformal_factor": jax.vmap(jax.grad(lambda p: manifold.conformal_factor(p, c)[0])),
+        "tangent_norm": jax.vmap(jax.grad(lambda p: manifold.tangent_norm(v_D, p, c))),
+        "busemann": jax.vmap(jax.grad(lambda p: manifold.busemann(p, v_D, c))),
+        "dist_0[2]": jax.vmap(jax.grad(lambda p: manifold.dist_0(p, c, version_idx=2))),
+    }
+    ld = np.longdouble
+    v, cc = np.asarray(v_D, dtype=ld), ld(c)
+    for name, grad_fn in grads.items():
+        got_ND = np.asarray(grad_fn(x_ND), dtype=np.float64)
+        for i, x_D in enumerate(x_ND):
+            x = np.asarray(x_D, dtype=ld)
+            b, r = 1 - cc * np.sum(x * x), np.sqrt(np.sum(x * x))
+            if name == "conformal_factor":
+                ref_D = 4 * cc * x / b**2
+            elif name == "tangent_norm":
+                ref_D = 4 * cc * x / b**2 * np.sqrt(np.sum(v * v))
+            elif name == "busemann":
+                w = v - np.sqrt(cc) * x
+                ref_D = (-2 * np.sqrt(cc) * w / np.sum(w * w) + 2 * cc * x / b) / np.sqrt(cc)
+            else:
+                sqrt_t = np.sqrt(cc) * r / np.sqrt(b)
+                ref_D = 2 / np.sqrt(cc) * sqrt_t / np.sqrt(1 + sqrt_t * sqrt_t) * (x / r**2 + cc * x / b)
+            err = float(np.linalg.norm(got_ND[i] - ref_D) / np.linalg.norm(ref_D))
+            tol = 16 * eps / float(b)
+            assert err <= tol, f"{name} point {i}: {err:.2e} > {tol:.2e}"
+
+
 def test_ptransp_is_an_isometry_and_round_trips(
     manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:

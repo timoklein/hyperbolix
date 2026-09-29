@@ -72,7 +72,6 @@ from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
     _boundary_divisor_floor,
-    _boundary_floor,
     _conformal_factor,
     _conformal_factor_batch,
     _gyration,
@@ -319,19 +318,24 @@ def _dist_0_metric_tensor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[A
     two forms are algebraically the same function, so this is **not** a new version slot — slot 2 is
     the metric-tensor *distance*, and it is now computed accurately.
 
-    The boundary guard is unchanged: ``1 - c‖x‖²`` still comes from the clamped conformal factor
-    (= 2/λ(x)), so a point at or past the ball boundary gets the same floored denominator, and the
-    representable ceiling stays 2·arcsinh(1/sqrt(floor))/√c ≈ 12.1/√c (float32) / 27.8/√c (float64).
+    ``‖x‖`` and ``1 - c‖x‖²`` come from one reduction, as in the pairwise slot-2 body
+    (:func:`_dist_mobius_direct`): ``safe_sqrt`` of it, not ``safe_norm``, whose max-scaling pass a
+    ball point does not need, and ``1 - c‖x‖²`` taken directly, not as ``2/λ``, which rounds twice.
+    ``safe_sqrt`` supplies the exactly-zero value *and* exactly-zero VJP at the origin, so
+    ``jax.grad`` is finite there without the ``where``-guard that used to pin it, and ``d₀(0) = 0``
+    stays exact. Below float32 radius ≈ 1e-19 the squared norm underflows, exactly as in slot 0's
+    ``_dist_0_mobius``.
 
-    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at the origin (the same
-    reason ``hyperboloid._dist_0_stable`` uses it), so ``jax.grad`` is finite there without the
-    ``where``-guard that used to pin it, and ``d₀(0) = 0`` stays exact.
+    ``1 - c‖x‖²`` is floored at :func:`_boundary_divisor_floor`, below every capped point's rounding
+    band. A capped point reads as the chart's ceiling, ``√c·d₀ ≈ 12.6`` (float32) / ``27.7``
+    (float64) at c = 1, with its gradient intact. At ``_boundary_floor``, the floor bound for about
+    a third of the capped points and zeroed the dominant ``2c·x/(1 - c‖x‖²)`` term of the gradient
+    (relative error 1.0). Only a point past the cap, never projected, meets the floor.
     """
     sqrt_c = jnp.sqrt(c)
-    x_norm = safe_norm(x)
-    # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)) so a near-boundary point
-    # cannot drive the denominator to 0; the same floor as _dist_mobius_direct and _apollonian_dist.
-    one_minus_cx = 2.0 / _conformal_factor(x, c)
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
+    x_norm = safe_sqrt(x_sqnorm)
+    one_minus_cx = floor_at(1.0 - c * x_sqnorm, _boundary_divisor_floor(x, c))
     sqrt_t = sqrt_c * x_norm / jnp.sqrt(one_minus_cx)
     return 2.0 * asinh(sqrt_t) / sqrt_c
 
@@ -879,12 +883,14 @@ def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature
     """
     sqrt_c = jnp.sqrt(c)
     num = jnp.sum((v - sqrt_c * x) ** 2)
-    # `_boundary_floor`, not `MIN_NORM`: this is the `1 - c‖x‖²` of `_conformal_factor`, and the
-    # docstring above has always claimed the same floor. `MIN_NORM = 1e-15` sits below the analytic
-    # minimum of this quantity in both dtypes (1.3e-5 float32 / 3.6e-12 float64 at c = 1), so it
-    # never bit: a float32 point at the ball ceiling could reach the divisor with pure rounding
-    # noise and return a Busemann coordinate tens of nats too large.
-    denom = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), _boundary_floor(x, c))
+    # `_boundary_divisor_floor`, not `MIN_NORM`: this is the `1 - c‖x‖²` of `_conformal_factor`, and
+    # the docstring above has always claimed the same floor. `MIN_NORM = 1e-15` sits below the
+    # analytic minimum of this quantity in both dtypes (1.3e-5 float32 / 3.6e-12 float64 at c = 1),
+    # so it never bit: a float32 point at the ball ceiling could reach the divisor with pure rounding
+    # noise and return a Busemann coordinate tens of nats too large. That analytic minimum itself
+    # bound for 11-76 % of the capped points and zeroed the dominant 2c·x/B term of ∂B^v/∂x there
+    # (relative error 1.0); half of it is below every capped point's rounding band.
+    denom = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), _boundary_divisor_floor(x, c))
     return jnp.log(num / denom) / sqrt_c
 
 

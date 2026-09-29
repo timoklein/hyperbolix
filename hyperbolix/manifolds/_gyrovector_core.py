@@ -68,9 +68,10 @@ def _boundary_floor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, 
     where the float64 chart itself ends. See :func:`_mobius_denominator`.
 
     Only ``x``'s dtype is read, never its values. Factored out of :func:`_conformal_factor`, whose
-    historical spelling this is verbatim; :func:`_mobius_denominator` uses its square and the
-    Poincaré-only sites — ``poincare._busemann``, ``isometry_mappings.poincare_to_hyperboloid`` /
-    ``poincare_to_pv`` — use it directly.
+    historical spelling this is verbatim. The floored divisors (:func:`_conformal_factor`,
+    :func:`_mobius_denominator` squared, the Poincaré ``B``'s and ``poincare._busemann``) take half
+    of it, :func:`_boundary_divisor_floor`; ``isometry_mappings.poincare_to_hyperboloid`` /
+    ``poincare_to_pv`` and the Klein chart use it directly.
     """
     max_norm_eps = _get_max_norm_eps(x)
     abs_c = jnp.abs(jnp.asarray(c))
@@ -105,17 +106,21 @@ def _boundary_divisor_floor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float
 def _conformal_factor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)``.
 
-    For ``c > 0`` the denominator → 0 at the ball boundary and is floored with a dtype-eps margin (the
-    historical Poincaré behavior); for ``c ≤ 0`` the denominator is ``≥ 1`` and the floor never bites.
+    For ``c > 0`` the denominator → 0 at the ball boundary and is floored at
+    :func:`_boundary_divisor_floor`, below every capped point's rounding band; for ``c ≤ 0`` the
+    denominator is ``≥ 1`` and the ``MIN_NORM`` floor never bites. The floor used to be the analytic
+    cap value ``_boundary_floor`` itself, which bound for 11-76 % of the capped points and zeroed
+    ``∂λ/∂x = 4c·x/(1 - c‖x‖²)²`` there, the dominant term of every gradient that reads ``λ`` at a
+    capped point: ``tangent_norm``, ``egrad2rgrad``, ``ptransp`` (relative error 1.0) and
+    ``expmap`` (0.47, float64).
 
     ``λ`` grows like ``e^a`` at scaled radius ``a``, and every quantity that inherits it — the Möbius
     operations, the Poincaré MLR score, ``_conformal_factor_batch`` — shares this ball chart's
     representation ceiling (``a ≈ 12.6`` float32 / ``27.7`` float64); the library adds no guard
-    beyond the chart's own ``_boundary_floor`` above, by design (loud divergence over silent
-    saturation, see CLAUDE.md).
+    beyond that floor, by design (loud divergence over silent saturation, see CLAUDE.md).
     """
     x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
-    denom = floor_at(1.0 - c * x2, jnp.where(jnp.asarray(c) > 0, _boundary_floor(x, c), MIN_NORM))
+    denom = floor_at(1.0 - c * x2, jnp.where(jnp.asarray(c) > 0, _boundary_divisor_floor(x, c), MIN_NORM))
     return 2.0 / denom
 
 
@@ -146,11 +151,17 @@ def _mobius_denominator(
     float64, ``dist`` is 7.519e-02 wrong as-is and 5.367e-10 here
     (``probe_poincare_mobius_ebebd09.out``, table D.i).
 
-    The floor is :func:`_boundary_floor` **squared** — the analytic minimum of the denominator over
-    projected points: both radii at the cap, with the directions that zero the ``‖x̂ + τŷ‖`` term
-    (``x = y`` for the ``-`` denominator, antipodal for the ``+`` one). At ``c = 1`` that is 1.6e-10
-    (float32) / 1.3e-23 (float64). For ``c ≤ 0`` the denominator legitimately reaches 0 (the
-    sphere's antipode), so ``MIN_NORM`` is kept there.
+    The floor is :func:`_boundary_divisor_floor` **squared**, a quarter of the analytic minimum of
+    the denominator over projected points: both radii at the cap, with the directions that zero the
+    ``‖x̂ + τŷ‖`` term (``x = y`` for the ``-`` denominator, antipodal for the ``+`` one). At
+    ``c = 1`` that minimum is 1.6e-10 (float32) / 1.3e-23 (float64). The minimum itself sat inside
+    the capped points' rounding band. It bound not only at exact coincidence but for capped pairs up
+    to ``√c·d ≈ 0.29-0.45`` (float32) / ``0.02-0.04`` (float64) from coincidence or antipodality.
+    There it dropped ``∂D/∂x`` from ``logmap``, ``ptransp`` and ``⊕``: float64 gradients off by
+    1.5e-3 to 9.4e-3 relative, against a chart floor of 6e-5 to 1.1e-4
+    (``logs/2026-09-29_cancellation-free/floorfix/``). The quartered floor is slack for every capped
+    pair. For ``c ≤ 0`` the denominator legitimately reaches 0 (the sphere's antipode), so
+    ``MIN_NORM`` is kept there.
 
     ``x_sqnorm``/``y_sqnorm`` let a caller that already reduced ``⟨x,x⟩``/``⟨y,y⟩`` for its
     numerator hand them over; the chord/sum is then the only extra reduction this costs.
@@ -189,7 +200,7 @@ def _mobius_denominator(
     negative_w_D = x_hat_D - sign * y_hat_D
     negative_denom = negative_gap * negative_gap - signed_t * jnp.sum(negative_w_D**2)
     denom = jnp.where(c_arr > 0, positive_denom, negative_denom)
-    return floor_at(denom, jnp.where(c_arr > 0, _boundary_floor(x_D, c) ** 2, MIN_NORM))
+    return floor_at(denom, jnp.where(c_arr > 0, _boundary_divisor_floor(x_D, c) ** 2, MIN_NORM))
 
 
 def _proj(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -343,9 +354,14 @@ def _gyration(
 
 
 def _conformal_factor_batch(x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... 1"]:
-    """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)`` over arbitrary leading dims (for the NN layers)."""
+    """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)`` over arbitrary leading dims (for the NN layers).
+
+    Floored as :func:`_conformal_factor` is. At the analytic cap value the floor bound for capped
+    inputs and zeroed the ``λ`` term of the Poincaré MLR score's input gradient (relative error 1.0).
+    """
     dtype = x.dtype
     c_arr = jnp.asarray(c, dtype=dtype)
     x2 = jnp.sum(x**2, axis=-1, keepdims=True)  # (..., 1)
-    denom = floor_at(jnp.asarray(1.0, dtype=dtype) - c_arr * x2, jnp.where(c_arr > 0, _boundary_floor(x, c_arr), MIN_NORM))
+    floor = jnp.where(c_arr > 0, _boundary_divisor_floor(x, c_arr), MIN_NORM)
+    denom = floor_at(jnp.asarray(1.0, dtype=dtype) - c_arr * x2, floor)
     return 2.0 / denom
