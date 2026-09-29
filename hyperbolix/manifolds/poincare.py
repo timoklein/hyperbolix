@@ -135,7 +135,30 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
 
 # Distance implementations for lax.switch
 def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Direct Möbius distance formula (fastest)."""
+    """Direct Möbius distance formula (fastest), in the ``arcsinh`` form ``2·arcsinh(√t)/√c``.
+
+    The Möbius form is ``2·atanh(u)/√c`` with ``u = √c‖x - y‖/√D₋`` and
+    ``D₋ = 1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²``. Writing ``B_x = 1 - c‖x‖²`` (``= 2/λ_x``), the identity
+    ``D₋ = B_x·B_y + c‖x - y‖²`` gives ``1 - u² = B_x·B_y/D₋``, and ``atanh(u) = arcsinh(u/√(1 - u²))``
+    turns the distance into::
+
+        √t = √c‖x - y‖ / √(B_x·B_y),   d(x, y) = 2·arcsinh(√t)/√c
+
+    which is the function slot 2 (:func:`_dist_metric_tensor`) evaluates: **slots 0 and 2 are the
+    same function** and differ only in rounding. The ``atanh`` spelling saturated for far pairs,
+    where ``u → 1`` and the float32 domain clip at ``1 - 10·eps`` took over: two points on opposite
+    sides at scaled radius 7.2 each (true ``√c·d = 14.4``, c = 1) came back 14.333 with an exactly
+    zero gradient, and at 9 each (true 18.0) still 14.333 — both pairs well inside the float32
+    chart. ``arcsinh`` has no domain to clip: the same float32 pairs now give 14.40011 and 17.99972
+    (float64 of the same inputs: 14.40006, 17.99968) with gradients within 2.8e-5 and 2.3e-5
+    relative. What is left is the chart's own floor, the float32 rounding of ``B_x``, ``B_y``
+    (``eps/B`` relative).
+
+    It is also cheaper: three reductions (``‖x - y‖²``, ``‖x‖²``, ``‖y‖²``) where the factored
+    ``D₋`` took five with a traced ``c`` (its ``‖x‖²``, ``‖y‖²`` and both chord/sum reductions of
+    ``_mobius_denominator``), and none of slot 2's ``safe_norm`` max-scaling pass, which a
+    difference of two ball points does not need.
+    """
     sqrt_c = jnp.sqrt(c)
     # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
     # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
@@ -143,16 +166,16 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Scala
     # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
     # This is a numerator, not a divisor, so no floor is needed: the old `+ MIN_NORM**2` was purely
     # the sqrt-gradient guard and it cost a 1e-15 floor on every genuinely small separation.
+    # `dist(x, x)` is therefore an exact 0 with an exactly-zero gradient.
     num = safe_sqrt(jnp.sum((y - x) ** 2))
-    # The denominator is `1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²` = `(1 - c·r_x·r_y)² + c·r_x·r_y·‖x̂ - ŷ‖²`;
-    # spelled the first way it is an O(ε²) difference of O(1) terms and float32 has no bits left
-    # for it past geodesic radius ≈ 8 (measured on a radial pair 0.1 apart at radius 10, c = 1:
-    # 2.9e-2 nats wrong as-is, 4.3e-6 factored). Same three reductions either way — `⟨x,y⟩` is
-    # traded for the chord. See `_gyrovector_core._mobius_denominator`.
-    denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1))
-    xysum_norm = num / denom
-    dist_c = atanh(sqrt_c * xysum_norm)
-    return 2 * dist_c / sqrt_c
+    # B_x, B_y with `_conformal_factor`'s boundary clamp (the analytic minimum of 1 - c‖x‖² on a
+    # projected point), so an unprojected near-boundary point cannot drive the divisor to 0.
+    # Taken directly rather than as `2/λ`, which would round twice.
+    floor_b = _boundary_floor(x, c)
+    one_minus_cx = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), floor_b)
+    one_minus_cy = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), floor_b)
+    sqrt_t = sqrt_c * num / jnp.sqrt(one_minus_cx * one_minus_cy)
+    return 2.0 * asinh(sqrt_t) / sqrt_c
 
 
 def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -237,23 +260,31 @@ def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCu
         Papadopoulos & Troyanov. "Weak metrics on Euclidean domains." (Theorem 2.)
     """
     sqrt_c = jnp.sqrt(c)
-    x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
-    y2 = jnp.dot(y, y, precision=MATMUL_PRECISION)
-    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
-    # G = |c·x·ȳ - 1| generalized to ℝⁿ, i.e. G² = c²‖x‖²‖y‖² - 2c⟨x,y⟩ + 1. We use the
-    # Gram-determinant form (1 - c⟨x,y⟩)² + c²(‖x‖²‖y‖² - ⟨x,y⟩²): a sum of two non-negative
-    # terms (Cauchy-Schwarz ⇒ Gram det ≥ 0), so no catastrophic cancellation near the boundary.
-    # At x=y the Gram term is exactly 0, so G = 1 - c‖x‖² = denom and δ(x,x)=0 to machine precision.
-    gram = x2 * y2 - xy**2  # ‖x‖²‖y‖² - ⟨x,y⟩² ≥ 0 (squared area of the x,y parallelogram)
-    G = jnp.sqrt(floor_at((1.0 - c * xy) ** 2 + c**2 * gram, MIN_NORM))
+    diff_sqnorm = jnp.sum((x - y) ** 2)
+    # 1 - c‖x‖² and 1 - c‖y‖² (= 2/λ) with `_conformal_factor`'s boundary clamp, so the
+    # near-boundary floor matches the rest of the module (δ → ∞ as y → ∂ball is expected). Taken
+    # directly rather than as `2/λ`, whose two roundings left δ(x, x) one ulp off 0 (2.2e-16 in
+    # float64 at scaled radius 3, 1.2e-7 in float32 at 12).
+    floor_b = _boundary_floor(x, c)
+    one_minus_cx = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), floor_b)
+    one_minus_cy = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), floor_b)
+    # G = |c·x·ȳ - 1| generalized to ℝⁿ, i.e. G² = c²‖x‖²‖y‖² - 2c⟨x,y⟩ + 1, spelled as
+    # (1 - c‖x‖²)(1 - c‖y‖²) + c‖x - y‖² (expand both to check): for c > 0 a sum of two
+    # non-negative terms, nothing cancels. The Gram-determinant form (1 - c⟨x,y⟩)² +
+    # c²(‖x‖²‖y‖² - ⟨x,y⟩²) used before only looked that way: its Gram determinant is itself a
+    # difference of O(1) terms that cancels for a close pair, and near the boundary G is
+    # O(1 - c‖x‖²), so float32 came back off by eps/(1 - c‖x‖²)² relative. Measured on a 0.05-nat
+    # pair (|δ| ≈ 0.03, max over 20 directions, float32 vs float64): 9.5e-4 absolute at scaled
+    # radius 5.7 and 6.7e-2 at 8 before, 5.3e-6 and 5.3e-5 after. It also reuses ‖x - y‖² and
+    # drops the ⟨x,y⟩ reduction (three instead of four). The sum is at least the squared floor, so
+    # the sqrt needs no guard, and at x = y the two factors are bitwise equal: G is exactly the
+    # denominator and δ(x, x) an exact 0.
+    G = jnp.sqrt(one_minus_cx * one_minus_cy + c * diff_sqnorm)
     # `safe_sqrt`, not `jnp.linalg.norm`: at x == y the latter's VJP is 0/0 = NaN, and 0*NaN
     # survives every downstream operation, so grad(delta)(x, x) was NaN. Both arguments are ball
     # points, so the sum of squares cannot overflow and no max-scaling is needed.
-    num = sqrt_c * safe_sqrt(jnp.sum((x - y) ** 2)) + G
-    # Denominator 1 - c‖y‖² = 2/λ(y); reuse the already-clamped conformal factor so the
-    # near-boundary floor matches the rest of the module (δ → ∞ as y → ∂ball is expected).
-    denom = 2.0 / _conformal_factor(y, c)
-    return jnp.log(num / denom)
+    num = sqrt_c * safe_sqrt(diff_sqnorm) + G
+    return jnp.log(num / one_minus_cy)
 
 
 def _dist(
@@ -473,13 +504,29 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     # _dist_mobius_direct's num -- keep the two consistent. No floor here: `c_norm_prod` below
     # already carries the explicit divisor floor.
     num = safe_sqrt(jnp.sum((y - x) ** 2))
-    # Same factored denominator as `_dist_mobius_direct` -- the two must stay consistent, since
-    # `sub_norm` is exactly that function's `xysum_norm`.
-    denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1))
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
+    y_sqnorm = jnp.dot(y, y, precision=MATMUL_PRECISION)
+    # ‖(-x) ⊕ y‖ = ‖y - x‖/√D₋ with the factored denominator: the normalization of `sub`. The
+    # norms are reduced once and shared with it and with B_x, B_y below.
+    denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1, x_sqnorm=x_sqnorm, y_sqnorm=y_sqnorm))
     sub_norm = num / denom
     c_norm_prod = floor_at(jnp.sqrt(c) * sub_norm, MIN_NORM)
-    lambda_x = _conformal_factor(x, c)
-    res = 2 * atanh(c_norm_prod) / (c_norm_prod * lambda_x) * sub
+    # B_x = 1 - c‖x‖² = 2/λ_x and B_y, with `_conformal_factor`'s boundary clamp.
+    floor_b = _boundary_floor(x, c)
+    one_minus_cx = floor_at(1.0 - c * x_sqnorm, floor_b)
+    one_minus_cy = floor_at(1.0 - c * y_sqnorm, floor_b)
+    # The magnitude √c·d/2 = atanh(u), u = `c_norm_prod`, in its `asinh` form: 1 - u² = B_x·B_y/D₋
+    # (because D₋ = B_x·B_y + c‖x - y‖²), so atanh(u) = asinh(u·√D₋/√(B_x·B_y)) — which for u
+    # unfloored is asinh(√c‖y - x‖/√(B_x·B_y)), slot 0's `dist` argument. For far pairs u → 1 and
+    # `atanh` hit its float32 domain clip: ‖logmap‖ came back 4.7e-3 (two points on opposite sides
+    # at scaled radius 7.2 each, c = 1) and 0.20 (at 9 each) relative too short; 2.9e-5 and 2.6e-5
+    # after. The argument is formed from the *floored* u, so the ratio asinh(·)/u below is 1 at
+    # y = x, as atanh(u)/u was, and the Jacobian ∂logmap_x(y)/∂y there stays the identity. Built
+    # from the unfloored √c‖y - x‖ instead, the value would still be right (0) but that Jacobian
+    # would be 0.
+    half_dist = asinh(c_norm_prod * denom / jnp.sqrt(one_minus_cx * one_minus_cy))
+    # 2·half_dist/(u·λ_x) · sub with 2/λ_x = B_x.
+    res = one_minus_cx * half_dist / c_norm_prod * sub
     return res
 
 

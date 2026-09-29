@@ -41,6 +41,18 @@ def _batch_is_in_tangent_space(manifold, vectors: jnp.ndarray, points: jnp.ndarr
     return bool(jnp.all(is_in(vectors, points)))
 
 
+def _central_difference_jacobian(f, p_D: np.ndarray, h: float) -> np.ndarray:
+    """``∂f/∂p`` of a float64 ``(n,) -> (m,)`` or scalar function by central differences, shape ``(m, n)``."""
+    columns = []
+    for i in range(p_D.size):
+        e_D = np.zeros_like(p_D)
+        e_D[i] = h
+        plus = np.atleast_1d(np.asarray(f(jnp.asarray(p_D + e_D))))
+        minus = np.atleast_1d(np.asarray(f(jnp.asarray(p_D - e_D))))
+        columns.append((plus - minus) / (2.0 * h))
+    return np.stack(columns, axis=-1)
+
+
 def _dist_fn(manifold):
     """Return distance function.
 
@@ -1114,6 +1126,35 @@ def test_apollonian_matches_boundary_supremum(dim: int, rng: np.random.Generator
         assert jnp.allclose(closed_form, sup_numeric, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.parametrize("a", [0.0, 3.0, 8.0, 12.0])
+def test_apollonian_is_exactly_zero_at_coincidence_with_the_central_difference_gradient(a: float) -> None:
+    """``δ(x, x) == 0`` bit-for-bit in both dtypes, and ``∂δ`` at ``x = y`` matches float64 central differences.
+
+    ``G`` at ``x = y`` is ``√(B_x·B_y)`` of two bitwise-equal factors, i.e. exactly the denominator
+    ``B_y = 1 - c‖y‖²``. Before, the denominator went through ``2/λ_y`` (two roundings) and
+    ``δ(x, x)`` came back 2.2e-16 / -1.1e-16 in float64 at a = 3 / 12 and 1.2e-7 in float32 at
+    a = 12; the Gram-determinant ``G`` was also noisy enough there that central differences
+    landed 8 % off the gradient at a = 12.
+
+    The derivative at ``x = y`` exists apart from the ``√c‖x - y‖`` cone, whose ``safe_sqrt``
+    zero is what a central difference returns up to a bias of ``√c·h/B`` relative. With rounding
+    (``eps/h``) that sets the step to ``h = √(eps·B)``: at most ~6e-6 relative error at a = 12.
+    """
+    ray_D = np.linspace(1.0, 2.0, 8) / np.linalg.norm(np.linspace(1.0, 2.0, 8))
+    x_D = np.tanh(a / 2.0) * ray_D
+    for dtype in (jnp.float32, jnp.float64):
+        x = jnp.asarray(x_D.astype(np.dtype(jnp.dtype(dtype).name)))
+        assert float(hj.manifolds.Poincare(dtype=dtype).apollonian_dist(x, x, 1.0)) == 0.0, f"{dtype} a={a}"
+
+    manifold = hj.manifolds.Poincare(dtype=jnp.float64)
+    x = jnp.asarray(x_D)
+    h = float(np.sqrt(np.finfo(np.float64).eps * (1.0 - x_D @ x_D)))
+    for f in (lambda q: manifold.apollonian_dist(x, q, 1.0), lambda p: manifold.apollonian_dist(p, x, 1.0)):
+        g_D = np.asarray(jax.grad(f)(x))
+        fd_D = _central_difference_jacobian(f, x_D, h)[0]
+        assert np.max(np.abs(g_D - fd_D)) <= 3e-5 * max(1.0, np.max(np.abs(fd_D))), f"a={a}"
+
+
 def test_expmap_logmap_basic(
     manifold_and_c, tolerance: tuple[float, float], uniform_points: jnp.ndarray, rng: np.random.Generator
 ) -> None:
@@ -1793,6 +1834,223 @@ def test_poincare_radial_pair_at_large_radius_matches_the_longdouble_reference(d
     assert abs(float(manifold.tangent_norm(tangent_D, x_D, c)) - dist_ref) <= 1e-3
     mobius_D = np.asarray(manifold.addition(-x_D, y_D, c), dtype=np.float64)
     assert np.max(np.abs(mobius_D - np.asarray(mobius_ref_D, dtype=np.float64))) <= 1e-3 * mobius_norm
+
+
+# ---------------------------------------------------------------------------
+# Poincaré pairwise ops near the boundary: float32 against float64 of the SAME float32 inputs
+#
+# Each case is built in float64 and rounded to float32, and the reference evaluates the rounded
+# coordinates in float64, so only the float32 arithmetic is measured. What no spelling can beat is
+# the chart's own floor: float32 resolves ``B_x = 1 - c‖x‖²`` (``sech²(a/2)`` at scaled radius
+# ``a = √c·d(o, x)``) only to ``eps/B_x`` relative — 1.2e-5 at a = 6, 9e-5 at a = 8, 2.4e-4 at
+# a = 9, 6.6e-4 at a = 10. Probe: ``logs/2026-09-29_cancellation-free/1a/``.
+# ---------------------------------------------------------------------------
+
+
+def _poincare_short_step_pairs(a: float, c: float, n: int, seed: int) -> list[tuple[jnp.ndarray, jnp.ndarray]]:
+    """``n`` float32 pairs: ``x`` at scaled radius ``a``, ``y`` a 0.05-nat step from ``x``, random directions."""
+    rng = np.random.default_rng(seed)
+    manifold64 = hj.manifolds.Poincare(dtype=jnp.float64)
+    pairs = []
+    for _ in range(n):
+        e_D = rng.normal(size=8)
+        x_D = np.tanh(a / 2.0) / np.sqrt(c) * e_D / np.linalg.norm(e_D)
+        w_D = rng.normal(size=8)
+        # Euclidean length 0.05/λ_x, i.e. Riemannian length 0.05.
+        v_D = 0.05 * (1.0 - c * float(x_D @ x_D)) / 2.0 * w_D / np.linalg.norm(w_D)
+        y_D = np.asarray(manifold64.expmap(jnp.asarray(v_D), jnp.asarray(x_D), c))
+        pairs.append((jnp.asarray(x_D.astype(np.float32)), jnp.asarray(y_D.astype(np.float32))))
+    return pairs
+
+
+# Max over the 8 pairs, measured: see the test docstring.
+_PTRANSP_SHORT_STEP_RTOL = {6.0: 2e-4, 8.0: 1e-3, 10.0: 1e-2}
+
+
+@pytest.mark.parametrize("a", [6.0, 8.0, 10.0])
+def test_poincare_ptransp_along_a_short_step_near_the_boundary_is_float32_accurate(a: float) -> None:
+    """``ptransp`` along a 0.05-nat step at scaled radius ``a``: float32 within ``rtol`` of float64.
+
+    ``ptransp(v, x, y) = gyr[y, -x]v · λ_x/λ_y``. For two nearby points near the boundary the
+    gyration numerator ``A·y - B·x`` is a difference of O(1) terms that cancels to O(B_x), while the
+    Möbius denominator is O(B_x²), so the float32 rounding of the O(1) terms came back amplified by
+    ``eps/B_x²``. Grouped in ``s = y - x`` every term is O(B_x) on its own and what is left is the
+    ``eps/B_x`` floor above. Measured relative error, max over the 8 pairs, before → after:
+    3.2e-3 → 1.1e-5 (a = 6), 1.1e-1 → 7.8e-5 (a = 8), 4.7 → 4.0e-4 (a = 10).
+    """
+    manifold32, manifold64 = hj.manifolds.Poincare(dtype=jnp.float32), hj.manifolds.Poincare(dtype=jnp.float64)
+    c = 1.0
+    rng = np.random.default_rng(7)
+    for x_D, y_D in _poincare_short_step_pairs(a, c, 8, seed=int(a)):
+        v_D = jnp.asarray(rng.normal(size=8).astype(np.float32))
+        got_D = np.asarray(manifold32.ptransp(v_D, x_D, y_D, c), dtype=np.float64)
+        v64_D, x64_D, y64_D = (jnp.asarray(np.asarray(t, dtype=np.float64)) for t in (v_D, x_D, y_D))
+        ref_D = np.asarray(manifold64.ptransp(v64_D, x64_D, y64_D, c))
+        assert np.linalg.norm(got_D - ref_D) <= _PTRANSP_SHORT_STEP_RTOL[a] * np.linalg.norm(ref_D)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+def test_poincare_ptransp_to_the_same_point_is_exactly_the_identity(dtype: jnp.dtype) -> None:
+    """``ptransp(v, x, x) == v`` bit-for-bit, at scaled radius 8.
+
+    The gyration numerator is grouped in ``s = y + (-x)``, which is an exact 0 here, so the
+    correction to ``v`` is an exact 0 and ``λ_x/λ_x`` an exact 1. The ungrouped ``A·y - B·x``
+    returned ``v`` off by up to 7.9e-2 (float32) / 1.0e-10 (float64) relative on these four
+    directions.
+    """
+    manifold = hj.manifolds.Poincare(dtype=dtype)
+    np_dtype = np.dtype(jnp.dtype(dtype).name)
+    rng = np.random.default_rng(3)
+    for _ in range(4):
+        e_D = rng.normal(size=8)
+        x_D = jnp.asarray((np.tanh(4.0) * e_D / np.linalg.norm(e_D)).astype(np_dtype))
+        v_D = jnp.asarray(rng.normal(size=8).astype(np_dtype))
+        assert jnp.array_equal(manifold.ptransp(v_D, x_D, x_D, 1.0), v_D)
+
+
+def test_poincare_ptransp_jacobians_at_coincidence_match_central_differences() -> None:
+    """``∂ ptransp(v, x, y)/∂y`` and ``∂/∂x`` at ``y = x`` against float64 central differences.
+
+    The grouped numerator vanishes at ``y = x`` through the factor ``s = y - x``; the derivative
+    must still see the product rule through ``s`` (a guard that zeroed ``s``'s cotangent would keep
+    the value and lose this Jacobian). Radius 3 and the origin, ``c = 0.7``.
+    """
+    manifold = hj.manifolds.Poincare(dtype=jnp.float64)
+    c = 0.7
+    v = jnp.asarray(np.linspace(-1.0, 1.5, 8))
+    for x_D in (np.tanh(1.5) / np.sqrt(c) * np.ones(8) / np.sqrt(8.0), np.zeros(8)):
+        x = jnp.asarray(x_D)
+        jac_y = np.asarray(jax.jacfwd(lambda q, p=x: manifold.ptransp(v, p, q, c))(x))
+        jac_x = np.asarray(jax.jacrev(lambda p, q=x: manifold.ptransp(v, p, q, c))(x))
+        fd_y = _central_difference_jacobian(lambda q, p=x: manifold.ptransp(v, p, q, c), x_D, 1e-6)
+        fd_x = _central_difference_jacobian(lambda p, q=x: manifold.ptransp(v, p, q, c), x_D, 1e-6)
+        assert np.max(np.abs(jac_y - fd_y)) <= 1e-7 * max(1.0, np.max(np.abs(fd_y)))
+        assert np.max(np.abs(jac_x - fd_x)) <= 1e-7 * max(1.0, np.max(np.abs(fd_x)))
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+@pytest.mark.parametrize("a", [7.2, 9.0])
+def test_poincare_dist_of_a_far_pair_is_float32_accurate(c: float, a: float) -> None:
+    """Default-slot ``dist`` and its gradient for ``x = r·e``, ``y = -x``, each at scaled radius ``a``.
+
+    ``√c·d = 2a`` is 14.4 and 18, both well inside the float32 chart. The oracle is the exact
+    distance of the stored coordinates, ``4·atanh(√c‖x‖)/√c``, and its gradient ``λ_x·x̂``, in
+    float64. The ``2·atanh(u)/√c`` spelling (``u = √c‖x - y‖/√D₋``) saturated at the ``atanh``
+    domain clip: 14.333 with an exactly-zero gradient at c = 1 for both radii. The
+    ``2·asinh(√c‖x - y‖/√(B_x·B_y))/√c`` spelling of the same function has no clip to reach.
+    Measured relative error before → after, a = 7.2 / 9: value 4.7e-3 / 0.20 → 3.9e-6 / 2.5e-6
+    and gradient 1 / 1 → 2.8e-5 / 2.3e-5 at c = 1; value 8.0e-3 / 0.20 → 9.3e-6 / 1.0e-5 and
+    gradient 6.5e-2 / 1 → 6.7e-5 / 9.0e-5 at c = 0.3.
+    """
+    manifold = hj.manifolds.Poincare(dtype=jnp.float32)
+    e_D = np.ones(8) / np.sqrt(8.0)
+    x_D = jnp.asarray((np.tanh(a / 2.0) / np.sqrt(c) * e_D).astype(np.float32))
+    y_D = -x_D
+    x64_D = np.asarray(x_D, dtype=np.float64)
+    r = float(np.linalg.norm(x64_D))
+    dist_ref = 4.0 * np.arctanh(np.sqrt(c) * r) / np.sqrt(c)
+    grad_ref_D = 2.0 / (1.0 - c * r * r) * x64_D / r
+
+    assert abs(float(manifold.dist(x_D, y_D, c)) - dist_ref) <= 1e-4 * dist_ref
+    grad_D = np.asarray(jax.grad(lambda p: manifold.dist(p, y_D, c))(x_D), dtype=np.float64)
+    assert np.linalg.norm(grad_D - grad_ref_D) <= 1e-3 * np.linalg.norm(grad_ref_D)
+
+
+def test_poincare_dist_gradient_matches_central_differences_at_the_origin_and_at_coincidence() -> None:
+    """Default-slot ``∂d(x, y)/∂x`` against float64 central differences at the special points.
+
+    At ``x = y`` the derivative does not exist (``d`` is a cone there); the library's convention
+    is the direction-free 0 that ``safe_sqrt`` supplies, which is also what a central difference
+    returns, to O(h). At the origin ``d`` is smooth and the gradient is the full ``λ``-scaled one.
+    """
+    manifold = hj.manifolds.Poincare(dtype=jnp.float64)
+    c = 0.7
+    ray_D = np.linspace(1.0, 2.0, 8) / np.linalg.norm(np.linspace(1.0, 2.0, 8))
+    cases = [
+        (np.tanh(1.5) / np.sqrt(c) * ray_D, np.tanh(1.5) / np.sqrt(c) * ray_D),  # coincident
+        (np.zeros(8), 0.3 * ray_D),  # x at the origin
+        (0.3 * ray_D, np.zeros(8)),  # y at the origin
+        (np.zeros(8), np.zeros(8)),  # both
+    ]
+    for x_D, y_D in cases:
+        y = jnp.asarray(y_D)
+        f = lambda p, q=y: manifold.dist(p, q, c)  # noqa: E731
+        g_D = np.asarray(jax.grad(f)(jnp.asarray(x_D)))
+        fd_D = _central_difference_jacobian(f, x_D, 1e-8)[0]
+        assert np.all(np.isfinite(g_D))
+        assert np.max(np.abs(g_D - fd_D)) <= 1e-5 * max(1.0, np.max(np.abs(fd_D)))
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+@pytest.mark.parametrize(("a", "angle"), [(7.2, np.pi), (9.0, np.pi), (9.0, np.pi / 2)], ids=["opp-7.2", "opp-9", "perp-9"])
+def test_poincare_logmap_of_a_far_pair_is_float32_accurate(c: float, a: float, angle: float) -> None:
+    """``logmap_x(y)`` for two points at scaled radius ``a``, ``angle`` apart: float32 vs float64.
+
+    The magnitude ``atanh(√c‖(-x) ⊕ y‖)`` hit the float32 ``atanh`` domain clip for far pairs:
+    the norm came back up to 0.20 relative too short. It is now ``asinh`` of the same quantity.
+    The direction still comes from ``(-x) ⊕ y`` and was and stays exact to rounding; that vector's
+    boundary clamp shortens the result by a relative 2.5e-6 to 6.4e-6 at these pairs, below the
+    ``eps/B_x`` floor. Measured norm error before → after (opp-7.2 / opp-9 / perp-9): 4.7e-3 /
+    0.20 / 0.17 → 2.9e-5 / 2.6e-5 / 2.6e-5 at c = 1, and → 6.3e-5 / 1.1e-4 / 1.1e-4 at c = 0.3.
+    """
+    manifold32, manifold64 = hj.manifolds.Poincare(dtype=jnp.float32), hj.manifolds.Poincare(dtype=jnp.float64)
+    e1_D = np.ones(8) / np.sqrt(8.0)
+    e2_D = np.zeros(8)
+    e2_D[:2] = [1.0 / np.sqrt(2.0), -1.0 / np.sqrt(2.0)]  # orthogonal to e1
+    radius = np.tanh(a / 2.0) / np.sqrt(c)
+    x_D = jnp.asarray((radius * e1_D).astype(np.float32))
+    y_D = jnp.asarray((radius * (np.cos(angle) * e1_D + np.sin(angle) * e2_D)).astype(np.float32))
+
+    got_D = np.asarray(manifold32.logmap(y_D, x_D, c), dtype=np.float64)
+    ref_D = np.asarray(
+        manifold64.logmap(jnp.asarray(np.asarray(y_D, np.float64)), jnp.asarray(np.asarray(x_D, np.float64)), c)
+    )
+    got_norm, ref_norm = float(np.linalg.norm(got_D)), float(np.linalg.norm(ref_D))
+    assert abs(got_norm - ref_norm) <= 1e-3 * ref_norm
+    assert 1.0 - float(got_D @ ref_D) / (got_norm * ref_norm) <= 1e-6
+
+
+def test_poincare_logmap_jacobian_matches_central_differences_at_and_near_coincidence() -> None:
+    """``∂ logmap_x(y)/∂y`` against float64 central differences, and ``= I`` at ``y = x``.
+
+    ``log_x ∘ exp_x = id`` and ``d exp_x|_0 = I``, so the Jacobian at ``y = x`` is the identity.
+    The magnitude is a ratio ``f(t)/t`` of the floored ``t = √c‖(-x) ⊕ y‖``: a spelling whose
+    numerator is not floored like its denominator keeps the right value there (0) and returns a
+    zero Jacobian. Checked at ``y = x`` (scaled radius 3 and 8, the origin) and at
+    ``‖y - x‖ = 1e-7``, in forward and reverse mode.
+    """
+    manifold = hj.manifolds.Poincare(dtype=jnp.float64)
+    ray_D = np.linspace(1.0, 2.0, 8) / np.linalg.norm(np.linspace(1.0, 2.0, 8))
+    offset_D = np.linspace(2.0, -1.0, 8) / np.linalg.norm(np.linspace(2.0, -1.0, 8))
+    for c, a, sep in [(1.0, 3.0, 0.0), (1.0, 8.0, 0.0), (0.3, 0.0, 0.0), (1.0, 3.0, 1e-7), (0.3, 0.0, 1e-7)]:
+        x_D = np.tanh(a / 2.0) / np.sqrt(c) * ray_D
+        y_D = x_D + sep * offset_D
+        x = jnp.asarray(x_D)
+        f = lambda q, p=x, cc=c: manifold.logmap(q, p, cc)  # noqa: E731
+        fd = _central_difference_jacobian(f, y_D, 1e-8 if sep else 1e-7)
+        for jac in (jax.jacfwd(f)(jnp.asarray(y_D)), jax.jacrev(f)(jnp.asarray(y_D))):
+            assert np.max(np.abs(np.asarray(jac) - fd)) <= 1e-6, f"c={c} a={a} sep={sep}"
+            if sep == 0.0:
+                assert np.max(np.abs(np.asarray(jac) - np.eye(8))) <= 1e-10, f"c={c} a={a}"
+
+
+_APOLLONIAN_SHORT_STEP_ATOL = {5.7: 1e-4, 8.0: 1e-3}
+
+
+@pytest.mark.parametrize("a", [5.7, 8.0])
+def test_apollonian_dist_of_a_close_pair_near_the_boundary_is_float32_accurate(a: float) -> None:
+    """``apollonian_dist`` for a 0.05-nat pair at scaled radius ``a``: float32 vs float64, ``|δ| ≈ 0.03``.
+
+    ``G² = 1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²`` was formed as ``(1 - c⟨x,y⟩)² + c²(‖x‖²‖y‖² - ⟨x,y⟩²)``,
+    whose Gram determinant is itself a cancelling difference for a close pair; it is now
+    ``(1 - c‖x‖²)(1 - c‖y‖²) + c‖x - y‖²``, a sum of non-negative terms. Measured absolute error,
+    max over the 8 pairs, before → after: 3.9e-4 → 3.5e-6 (a = 5.7), 6.0e-2 → 3.3e-5 (a = 8).
+    """
+    manifold32, manifold64 = hj.manifolds.Poincare(dtype=jnp.float32), hj.manifolds.Poincare(dtype=jnp.float64)
+    for x_D, y_D in _poincare_short_step_pairs(a, 1.0, 8, seed=11):
+        got = float(manifold32.apollonian_dist(x_D, y_D, 1.0))
+        x64_D, y64_D = jnp.asarray(np.asarray(x_D, np.float64)), jnp.asarray(np.asarray(y_D, np.float64))
+        assert abs(got - float(manifold64.apollonian_dist(x64_D, y64_D, 1.0))) <= _APOLLONIAN_SHORT_STEP_ATOL[a]
 
 
 def test_ptransp_is_an_isometry_and_round_trips(

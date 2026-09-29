@@ -280,23 +280,39 @@ def _gyration(
 ) -> Float[Array, "dim"]:
     """Gyration ``gyr[x, y]z`` — restores the (broken) commutativity/associativity of ``⊕``.
 
-    Curvature-generic simplified closed form; underlies parallel transport.
+    Curvature-generic simplified closed form ``z + 2(A·x + B·y)/D``, with
+    ``A = -c²⟨x,z⟩‖y‖² + c⟨y,z⟩ + 2c²⟨x,y⟩⟨y,z⟩``, ``B = -c²⟨y,z⟩‖x‖² - c⟨x,z⟩`` and ``D`` the ``⊕``
+    denominator; underlies parallel transport. The numerator is evaluated grouped in ``s = x + y``
+    (see the implementation notes), which is the same function at every real ``c``.
 
     References:
         Ungar. "A gyrovector space approach to hyperbolic geometry." 2022.
     """
-    c2 = c**2
     x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)  # scalar
     y_sqnorm = jnp.dot(y, y, precision=MATMUL_PRECISION)  # scalar
-    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)  # scalar
-    xz = jnp.dot(x, z, precision=MATMUL_PRECISION)  # scalar
+    # A·x + B·y = (A - B)·x + B·s with s = x + y, the device `_addition` uses. Substituting
+    # ⟨x,z⟩ = ⟨s,z⟩ - ⟨y,z⟩ and ‖s‖² = ‖x‖² + 2⟨x,y⟩ + ‖y‖² gives, exactly and for either sign of c,
+    #     A - B = c·(⟨s,z⟩·(1 - c‖y‖²) + c·‖s‖²·⟨y,z⟩),   B = -c·(⟨s,z⟩ - (1 - c‖x‖²)·⟨y,z⟩).
+    # `ptransp(v, x, y)` is gyr[y, -x]v, so s = y - x: for two nearby points near the boundary every
+    # term above is O(1 - c‖x‖²) on its own, where A·x and B·y were O(1) terms cancelling to that
+    # size — and D is O((1 - c‖x‖²)²), so the rounding of the O(1) terms came back amplified by
+    # eps/(1 - c‖x‖²)². Measured on a 0.05-nat step at scaled radius 8 (c = 1, float32 vs float64,
+    # max over 20 directions): ptransp 1.9e-1 relative wrong before, 6.6e-5 after (the float32
+    # floor eps/(1 - c‖x‖²) is 9e-5 there). At s = 0 the correction is an exact 0, so
+    # ptransp(v, x, x) returns v bit-for-bit (was 8.4e-2 off in float32, 9.9e-11 in float64).
+    # ⟨s,z⟩ and ‖s‖² must be dots on s itself: re-forming them from ⟨x,z⟩ + ⟨y,z⟩ or from
+    # ‖x‖² + 2⟨x,y⟩ + ‖y‖² would bring the cancellation straight back.
+    s_D = x + y  # (dim,)
+    s_sqnorm = jnp.dot(s_D, s_D, precision=MATMUL_PRECISION)  # scalar
+    sz = jnp.dot(s_D, z, precision=MATMUL_PRECISION)  # scalar
     yz = jnp.dot(y, z, precision=MATMUL_PRECISION)  # scalar
 
-    coeff_x = -c2 * xz * y_sqnorm + c * yz + 2 * c2 * xy * yz  # scalar
-    coeff_y = -c2 * yz * x_sqnorm - c * xz  # scalar
-    num_D = 2 * (coeff_x * x + coeff_y * y)  # (dim,)
-    # Same denominator, and the same cancellation, as `_addition`; `xy` is kept because `coeff_x`
-    # needs it, so the factored form costs one extra reduction here. See `_mobius_denominator`.
+    coeff_x = c * (sz * (1 - c * y_sqnorm) + c * s_sqnorm * yz)  # A - B, scalar
+    coeff_s = -c * (sz - (1 - c * x_sqnorm) * yz)  # B, scalar
+    num_D = 2 * (coeff_x * x + coeff_s * s_D)  # (dim,)
+    # Same denominator, and the same cancellation, as `_addition`; see `_mobius_denominator`. The
+    # five reductions above replace ‖x‖², ‖y‖², ⟨x,y⟩, ⟨x,z⟩, ⟨y,z⟩ one for one, so the op still
+    # costs the five plus the denominator's chord/sum.
     denom = _mobius_denominator(x, y, c, sign=1, x_sqnorm=x_sqnorm, y_sqnorm=y_sqnorm)  # scalar
 
     return z + num_D / denom

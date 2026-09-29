@@ -217,6 +217,43 @@ def test_gyration_gyrocommutative_law(manifold, points, c, tolerance):
     assert jnp.allclose(lhs, rhs, atol=atol, rtol=rtol)
 
 
+@pytest.mark.parametrize("c_val", [-1.3, -0.2, 0.0, 0.3, 1.0, 2.5])
+def test_gyration_and_ptransp_match_the_literal_formula_at_every_curvature_sign(c_val: float) -> None:
+    """``gyration``/``ptransp`` equal the literal ``z + 2(A·x + B·y)/D`` in float64, value and ``∂/∂c``.
+
+    The shared ``_gyration`` groups its numerator in ``s = x + y`` (``A·x + B·y = (A - B)·x + B·s``),
+    an identity for every real ``c``; this pins it on the signed-curvature path, which no Poincaré
+    test reaches. The literal form is the historical expression, denominator included, and
+    ``ptransp(v, x, y) = gyr[y, -x]v · λ_x/λ_y``. The curvature derivative is checked against a
+    central difference of the literal form, ``c = 0`` included.
+    """
+    manifold = Stereographic(dtype=jnp.float64)
+    rng = np.random.default_rng(5)
+    bound = 0.85 / math.sqrt(abs(c_val)) if c_val != 0.0 else 1.0
+
+    def literal_gyration(x, y, z, c):
+        x2, y2, xy, xz, yz = x @ x, y @ y, x @ y, x @ z, y @ z
+        a_coef = -(c**2) * xz * y2 + c * yz + 2 * c**2 * xy * yz
+        b_coef = -(c**2) * yz * x2 - c * xz
+        return z + 2 * (a_coef * x + b_coef * y) / (1 + 2 * c * xy + c**2 * x2 * y2)
+
+    for _ in range(20):
+        x, y = (rng.normal(size=6) for _ in range(2))
+        x, y = (p / np.linalg.norm(p) * rng.uniform(0.0, bound) for p in (x, y))
+        z = rng.normal(size=6)
+        got = np.asarray(manifold.gyration(jnp.asarray(x), jnp.asarray(y), jnp.asarray(z), c_val))
+        np.testing.assert_allclose(got, literal_gyration(x, y, z, c_val), rtol=1e-12, atol=1e-12)
+
+        lam_ratio = (1.0 - c_val * (y @ y)) / (1.0 - c_val * (x @ x))  # λ_x/λ_y
+        got_pt = np.asarray(manifold.ptransp(jnp.asarray(z), jnp.asarray(x), jnp.asarray(y), c_val))
+        np.testing.assert_allclose(got_pt, literal_gyration(y, -x, z, c_val) * lam_ratio, rtol=1e-12, atol=1e-12)
+
+        x_j, y_j, z_j = jnp.asarray(x), jnp.asarray(y), jnp.asarray(z)
+        d_dc = np.asarray(jax.jacfwd(lambda cc, a=x_j, b=y_j, w=z_j: manifold.gyration(a, b, w, cc))(c_val))
+        fd = (literal_gyration(x, y, z, c_val + 1e-6) - literal_gyration(x, y, z, c_val - 1e-6)) / 2e-6
+        np.testing.assert_allclose(d_dc, fd, rtol=1e-6, atol=1e-7)
+
+
 def test_addition_left_cancellation(manifold, points, c, tolerance):
     """``(-x) ⊕ (x ⊕ y) = y`` — the gyrogroup left-cancellation law, in every curvature regime."""
     atol, rtol = tolerance
