@@ -17,7 +17,7 @@ jobs:
       # `uv sync --locked --dev` takes ~6.8s whether the uv cache is warm, cold
       # or absent -- uv installs fast enough that there is nothing left for a
       # cache to save. Enabling it cost ~3s/job to upload a 288 MiB artifact and
-      # made all 22 matrix jobs race for one cache key.
+      # made every matrix job race for one cache key.
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
         with:
@@ -50,7 +50,7 @@ jobs:
       # `uv sync --locked --dev` takes ~6.8s whether the uv cache is warm, cold
       # or absent -- uv installs fast enough that there is nothing left for a
       # cache to save. Enabling it cost ~3s/job to upload a 288 MiB artifact and
-      # made all 22 matrix jobs race for one cache key.
+      # made every matrix job race for one cache key.
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
         with:
@@ -118,7 +118,7 @@ jobs:
       # `uv sync --locked --dev` takes ~6.8s whether the uv cache is warm, cold
       # or absent -- uv installs fast enough that there is nothing left for a
       # cache to save. Enabling it cost ~3s/job to upload a 288 MiB artifact and
-      # made all 22 matrix jobs race for one cache key.
+      # made every matrix job race for one cache key.
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
         with:
