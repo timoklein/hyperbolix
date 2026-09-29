@@ -1690,8 +1690,9 @@ def test_poincare_mobius_add_is_more_accurate_near_the_boundary(dtype: jnp.dtype
         assert worst_new <= 0.75 * worst_old + 1e-15, f"c={c}, eps={eps_val:.2e}: new {worst_new:.3e} vs old {worst_old:.3e}"
 
     # Absolute bounds where the input is still well enough conditioned for one to mean something.
-    # Measured worst case: 6.9e-5 (float32, eps=1e-2) and 2.0e-11 (float64, eps=1e-4).
-    abs_bound, abs_eps = (5e-2, 1e-2) if dtype == jnp.float32 else (1e-6, 1e-4)
+    # Worst measured error on this grid over c in (0.3, 1, 2.5), jax 0.9.1 CPU: 6.9e-5 (float32,
+    # eps=1e-2) and 2.0e-11 (float64, eps=1e-4) of the ball radius; the bounds below are 14x and 15x that.
+    abs_bound, abs_eps = (1e-3, 1e-2) if dtype == jnp.float32 else (3e-10, 1e-4)
     worst = 0.0
     for ratio in _MOBIUS_ETA_RATIOS:
         if ratio in _MOBIUS_ILL_CONDITIONED:
