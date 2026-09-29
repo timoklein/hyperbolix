@@ -54,14 +54,30 @@ dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
 
 ### Precision Requirements by Distance
 
-| Distance from Origin | Float32 Accuracy | Recommended Precision |
+| Scaled radius $a = \sqrt{c}\,d$ | Float32 relative error, median / max | Recommended Precision |
 |----------------------|------------------|----------------------|
-| d < 3 | Excellent (< 0.01% error) | float32 |
-| 3 ≤ d < 5 | Good (< 0.1% error) | float32 |
-| 5 ≤ d < 10 | Moderate (< 3% error) | float64 for critical ops |
-| d ≥ 10 | Poor (> 3% error) | **float64 required** |
+| 1 | 6.1e-8 / 2.5e-7 | float32 |
+| 3 | 1.2e-7 / 5.1e-7 | float32 |
+| 5 | 2.7e-7 / 2.4e-6 | float32 |
+| 7 | 5.8e-6 / 1.5e-5 | float32 |
+| 10 | 4.6e-5 / 2.2e-4 | float32; float64 for critical ops |
+| 12 | 4.8e-4 / 1.1e-3 | float64 for critical ops |
+| 12.5 | 8.2e-4 / 2.5e-3 | float64 for critical ops |
+| ≥ 12.65 | past the float32 chart ceiling: the ball cannot store the point | **float64 required** |
 
-*Table scoped to the Poincaré ball. `Hyperboloid.dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/`tangent_inner`/`egrad2rgrad`/gyro `addition`/`busemann` under `VERSION_DEFAULT` are evaluated with stable formulas whose tested accuracy is described below — see [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode) below.*
+*Float32 relative error against float64 on the same float32 input, for the single-point
+operations `dist_0`, `logmap_0` (vector error), `expmap_0` (error of the output's scaled radius)
+and the round trip `logmap_0(expmap_0(v))` against `v`: median and max over 256 random directions
+in 16 dimensions, the worst of the four operations and of $c \in \{0.1, 1\}$
+(`logs/2026-09-29_cancellation-free/docs_b2/probe_precision_table.out`). At $c = 1$, $a$ is the
+distance $d$ itself. The last row is the ceiling at $c = 1$ (see
+[The Round-Trip Ceiling](#poincare-roundtrip-ceiling)); at $c = 0.1$ the float32 ceiling is
+$a \approx 13.8$. Table scoped to the Poincaré ball: for the hyperboloid's `dist_0` and `logmap_0` see
+[The Hyperboloid Origin Chart](#hyperboloid-origin-chart), and
+`Hyperboloid.dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/`tangent_inner`/`egrad2rgrad`/gyro
+`addition`/`gyro_difference`/`busemann` under `VERSION_DEFAULT` are evaluated with stable formulas
+whose tested accuracy is described in [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode)
+below.*
 
 !!! tip "Quick Check"
     If your embeddings have distances from the origin > 7, switch to float64:
