@@ -359,3 +359,120 @@ def test_bfc_poincare_saturated_scores_stay_at_boundary_f32(c):
     assert jnp.all(radius_B > 0.99), f"rows left the ball's edge (√c·‖y‖ = {radius_B})"
     for _, value in jax.tree_util.tree_flatten_with_path(nnx.state(grads, nnx.Param))[0]:
         assert jnp.all(jnp.isfinite(value)), "gradients contain NaN or Inf"
+
+
+# --------------------------------------------------------------------------- #
+# Poincaré tangent input: scored from v, without the ball point expmap_0(v)
+# --------------------------------------------------------------------------- #
+POINCARE_LAYERS = [HypRegressionPoincareBusemann, HypLinearPoincareBusemann]
+POINCARE_IDS = ["bmlr", "bfc"]
+
+
+def _tangent_rows(key, batch, in_dim, t_B1, c):
+    """Float64 rows of scaled norm ``t = √c‖v‖`` in random directions."""
+    u_BI = jax.random.normal(key, (batch, in_dim), dtype=jnp.float64)
+    return jnp.asarray(t_B1, dtype=jnp.float64) / jnp.sqrt(c) * u_BI / jnp.linalg.norm(u_BI, axis=-1, keepdims=True)
+
+
+def _copy_params(layer, source, dtype):
+    """Copy ``source``'s kernel, log_scale and bias into ``layer``, cast to ``dtype``."""
+    for name in ("kernel", "log_scale", "bias"):
+        getattr(layer, name)[...] = getattr(source, name)[...].astype(dtype)
+
+
+def _out_and_grads(route, layer, v_BI, w_BO):
+    """``route(layer, v)`` and the gradients of ``sum(w * route(layer, v))`` wrt ``v`` and the parameters."""
+    grads, g_BI = nnx.grad(lambda m, v: jnp.sum(w_BO * route(m, v)), argnums=(0, 1))(layer, v_BI)
+    return route(layer, v_BI), g_BI, (grads.kernel[...], grads.log_scale[...], grads.bias[...])
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+@pytest.mark.parametrize("layer_cls", POINCARE_LAYERS, ids=POINCARE_IDS)
+def test_poincare_busemann_tangent_input_matches_the_ball_route(layer_cls, c):
+    """float64, t = √c‖v‖ ≤ 3: the tangent-input layer equals the route through the ball it replaced.
+
+    That route lifted v first: expmap_0, then the manifold-input layer. The rows straddle the t = 1
+    seam between the two closed forms of ``Poincare._busemann_tangent``, three of them within 1e-7 of
+    it. Outputs, input gradients and parameter gradients agree to 1e-12 relative to their largest
+    entry (measured ≤ 3e-14).
+    """
+    dtype, batch, in_dim, out_dim = jnp.float64, 32, 12, 8
+    manifold = get_poincare(dtype)
+    tangent = layer_cls(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dtype)
+    ball = layer_cls(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), param_dtype=dtype)
+    key_s, key_b, key_t, key_u, key_w = jax.random.split(jax.random.PRNGKey(1), 5)
+    # Move alpha and the bias off their init so every parameter gradient is exercised.
+    tangent.log_scale[...] = tangent.log_scale[...] + 0.3 * jax.random.normal(key_s, (out_dim,), dtype=dtype)
+    tangent.bias[...] = 0.3 * jax.random.normal(key_b, (out_dim,), dtype=dtype)
+    _copy_params(ball, tangent, dtype)
+    seam_B1 = jnp.array([[1.0 - 1e-7], [1.0], [1.0 + 1e-7]], dtype=dtype)
+    t_B1 = jnp.concatenate([jax.random.uniform(key_t, (batch - 3, 1), dtype=dtype, minval=0.05, maxval=3.0), seam_B1])
+    v_BI = _tangent_rows(key_u, batch, in_dim, t_B1, c)
+    w_BO = jax.random.normal(key_w, (batch, out_dim), dtype=dtype)
+
+    def ball_route(model, v_BI):
+        return model(jax.vmap(manifold.expmap_0, in_axes=(0, None))(v_BI, c), c)
+
+    y_new, g_new, params_new = _out_and_grads(lambda m, v: m(v, c), tangent, v_BI, w_BO)
+    y_old, g_old, params_old = _out_and_grads(ball_route, ball, v_BI, w_BO)
+    assert _max_rel(y_new, y_old) < 1e-12, _max_rel(y_new, y_old)
+    assert _max_rel(g_new, g_old) < 1e-12, _max_rel(g_new, g_old)
+    for p_new, p_old in zip(params_new, params_old, strict=True):
+        assert _max_rel(p_new, p_old) < 1e-12, _max_rel(p_new, p_old)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+@pytest.mark.parametrize("layer_cls", POINCARE_LAYERS, ids=POINCARE_IDS)
+def test_poincare_busemann_tangent_input_origin_jacobian(layer_cls, c):
+    """float64: the input Jacobian at v = 0 matches central finite differences.
+
+    The cancellation-free form of ``Poincare._busemann_tangent`` is built from t = √c‖v‖ and
+    v̂ = v/‖v‖, whose cone singularities at the origin cancel only in the sum. Differentiated as
+    written it returns a zero Jacobian there, which would silently stop the gradient to whatever
+    produced an all-zero feature row. The BMLR Jacobian is also closed-form, ∂u_k/∂v = 2·alpha_k·ω_k,
+    since B^ω(expmap_0(v)) = -2⟨ω, v⟩ + O(‖v‖²).
+    """
+    dtype, in_dim, out_dim, h = jnp.float64, 12, 8, 1e-6
+    layer = layer_cls(get_poincare(dtype), in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dtype)
+    layer.bias[...] = 0.3 * jax.random.normal(jax.random.PRNGKey(2), (out_dim,), dtype=dtype)
+
+    def layer_O(v_I):
+        return layer(v_I[None, :], c)[0]
+
+    jac_OI = jax.jacobian(layer_O)(jnp.zeros((in_dim,), dtype=dtype))
+    fd_OI = jnp.stack([(layer_O(h * e_I) - layer_O(-h * e_I)) / (2 * h) for e_I in jnp.eye(in_dim, dtype=dtype)], axis=-1)
+    assert _max_rel(jac_OI, fd_OI) < 1e-7, _max_rel(jac_OI, fd_OI)  # measured ≤ 1.7e-9 (FD truncation)
+    if layer_cls is HypRegressionPoincareBusemann:
+        kernel_OI = layer.kernel[...]
+        omega_OI = kernel_OI / jnp.linalg.norm(kernel_OI, axis=-1, keepdims=True)
+        expected_OI = 2 * jnp.exp(layer.log_scale[...])[:, None] * omega_OI
+        assert _max_rel(jac_OI, expected_OI) < 1e-12, _max_rel(jac_OI, expected_OI)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+@pytest.mark.parametrize("layer_cls", POINCARE_LAYERS, ids=POINCARE_IDS)
+def test_poincare_busemann_tangent_input_far_point_f32(layer_cls, c):
+    """float32 at t = √c‖v‖ = 8: outputs and input gradients match float64 on the same inputs and parameters.
+
+    The lift onto the ball capped this input at the float32 ceiling t ≈ 6.33, past which the score
+    was constant along the ray: outputs 6.3e-2 … 2.1e-1 and input gradients 1.0 … 1.2 off relative
+    to their largest entry, the radial derivative being zero. Here 4.8e-7 and 1.3e-6 at most.
+    """
+    batch, in_dim, out_dim, t = 32, 16, 12, 8.0
+    layer32, layer64 = (
+        layer_cls(get_poincare(dt), in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dt)
+        for dt in (jnp.float32, jnp.float64)
+    )
+    layer32.bias[...] = 0.3 * jax.random.normal(jax.random.PRNGKey(2), (out_dim,), dtype=jnp.float32)
+    _copy_params(layer64, layer32, jnp.float64)
+    v32_BI = _tangent_rows(jax.random.PRNGKey(0), batch, in_dim, jnp.full((batch, 1), t), c).astype(jnp.float32)
+    w32_BO = jax.random.normal(jax.random.PRNGKey(1), (batch, out_dim), dtype=jnp.float32)
+
+    def out_and_grad(layer, v_BI, w_BO):
+        return layer(v_BI, c), jax.grad(lambda v: jnp.sum(w_BO * layer(v, c)))(v_BI)
+
+    y32_BO, g32_BI = out_and_grad(layer32, v32_BI, w32_BO)
+    y64_BO, g64_BI = out_and_grad(layer64, v32_BI.astype(jnp.float64), w32_BO.astype(jnp.float64))
+    assert jnp.isfinite(y32_BO).all() and jnp.isfinite(g32_BI).all()
+    assert _max_rel(y32_BO, y64_BO) < 5e-6, _max_rel(y32_BO, y64_BO)
+    assert _max_rel(g32_BI, g64_BI) < 2e-5, _max_rel(g32_BI, g64_BI)

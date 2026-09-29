@@ -884,6 +884,69 @@ def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature
     return jnp.log(num / denom) / sqrt_c
 
 
+def _busemann_tangent(v: Float[Array, "dim"], omega: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """:func:`_busemann` of ``x = expmap_0(v)``, evaluated on the tangent vector ``v`` itself.
+
+    With ``t = √c‖v‖`` the point sits at scaled radius ``2t``, ``√c·x = tanh(t)·v̂`` and
+    ``1 - c‖x‖² = 1/cosh²(t)``, so for a unit ``ω`` both forms below equal
+    ``√c·B^ω(x) = log(cosh 2t - sinh 2t·⟨ω, v̂⟩)``::
+
+        t ≤ 1:  log(cosh²(t) · ‖ω - tanh(t)·v̂‖²)
+        t > 1:  2t + log(e^{-4t} + (1 - e^{-4t}) · ‖ω - v̂‖²/4)
+
+    and the ball point is never formed. That route read ``1 - c‖x‖²`` back off the stored point, a
+    relative error ≈ ``eps·e^{2t}/4``, and in float32 its lift stopped at the ball's ceiling
+    ``t ≈ 6.33``, past which the coordinate was constant with a zero radial gradient.
+
+    The ``t > 1`` form is the cancellation-free one: every term is non-negative, ``‖ω - v̂‖²`` is a
+    difference norm (exact near ``ω``, where ``1 - ⟨ω, v̂⟩`` cancels) and nothing overflows for any
+    ``t``; only a row exactly on ``ω`` (``‖ω - v̂‖ = 0``) past t ≈ 22 in float32, where ``e^{-4t}``
+    underflows, returns ``-inf``. Its pieces ``t`` and ``v̂`` have cone singularities at ``v = 0`` that cancel only in the
+    sum, so autodiff there returns 0 instead of ``-2ω``. The ``t ≤ 1`` form is the ball route's own
+    ratio with the denominator in closed form: ``tanh(t)/‖v‖·v = √c·expmap_0(v)`` is smooth through
+    the origin, and ``‖ω - tanh(t)·v̂‖ ≥ 1 - tanh(1) = 0.24`` bounds its rounding amplification.
+    Both forms are exact identities, so the value and its derivative are continuous across the
+    seam. Measured through ``HypRegressionPoincareBusemann`` (float32 vs float64 on the same inputs
+    and parameters, relative to the largest entry, c ∈ {0.3, 1}): at t = 5 scores 2.3e-4 → 2.4e-7
+    and input gradients 1.4e-3 → 2.1e-7; at t = 8 2.2e-1 → 2.0e-7 and 1.0 (no radial derivative)
+    → 2.6e-7.
+
+    ``ω`` must be unit, as for :func:`_busemann`. The ``t > 1`` form uses ``‖ω‖ = 1``, so its
+    ``ω``-gradient differs from the ball route's by a multiple of ``ω``, which the row normalization
+    of the Busemann layers projects out.
+
+    Args:
+        v: Tangent vector at the origin, shape (dim,)
+        omega: Unit ideal direction, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Busemann coordinate B^omega(expmap_0(v)), scalar
+    """
+    sqrt_c = jnp.sqrt(c)
+    # The only reduction over the point: the ball route paid `_expmap_0`'s `safe_norm` plus the
+    # `sum(x**2)` of `_busemann`. The floor makes `tanh(t)/‖v‖ = √c` at v = 0.
+    v_norm = floor_at(safe_norm(v), MIN_NORM)
+    t = sqrt_c * v_norm
+    far = t > 1.0
+    tanh_t = tanh(t)
+    # Scaled per point, so the pair below pays one difference norm, as `_busemann` does.
+    w = (jnp.where(far, 1.0, tanh_t) / v_norm) * v  # t > 1: v̂;  t ≤ 1: √c·expmap_0(v)
+    n = jnp.sum((omega - w) ** 2)
+    # Both forms as `offset + log(n + shift)` with per-point `offset` and `shift`, so the pair's
+    # cotangent is 1/(n + shift). Spelled `log(a + b·n)`, the per-point `b` in that cotangent was
+    # fused into the backward pass over the (pair, dim) difference and recomputed for every element:
+    # seven extra ops per element in the compiled CPU HLO, ≈ 5 % of the fwd+bwd at K = 64. The t > 1
+    # form reads `t` floored at the seam: it divides by 1 - e^{-4t} = 0 at v = 0, and the unselected
+    # branch of a `where` must stay finite, or its zero cotangent times an infinite derivative is a
+    # NaN gradient. The t ≤ 1 offset 2·log(cosh t) = -log(1 - tanh²t) reuses the tanh of `w`, finite
+    # on every row because `tanh` caps its output at 1 - 10·eps.
+    exp_m4t = jnp.exp(-4.0 * floor_at(t, 1.0))
+    offset = jnp.where(far, 2.0 * t + jnp.log(0.25 * (1.0 - exp_m4t)), -jnp.log1p(-(tanh_t**2)))
+    shift = jnp.where(far, 4.0 * exp_m4t / (1.0 - exp_m4t), 0.0)
+    return (offset + jnp.log(n + shift)) / sqrt_c
+
+
 # ---------------------------------------------------------------------------
 # Class-based manifold API
 # ---------------------------------------------------------------------------
@@ -1084,3 +1147,11 @@ class Poincare(ManifoldBase):
         ``√c·dist``) and cannot deliver circulation.
         """
         return _busemann(self._cast(x), self._cast(v), c)
+
+    def _busemann_tangent(self, v: Float[Array, "dim"], omega: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+        """``busemann(expmap_0(v), omega, c)`` from the tangent vector ``v``, without the ball point.
+
+        Private: the tangent-input path of the Busemann layers (see :func:`_busemann_tangent`).
+        ``omega`` must be a unit direction.
+        """
+        return _busemann_tangent(self._cast(v), self._cast(omega), c)

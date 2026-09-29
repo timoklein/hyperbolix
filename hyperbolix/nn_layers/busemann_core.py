@@ -113,14 +113,24 @@ def _busemann_score(
         Curvature (positive).
     input_space : str
         ``"manifold"`` (default usage) or ``"tangent"`` — when ``"tangent"``, the input is
-        lifted to the manifold via ``expmap_0`` first.
+        scored where ``expmap_0`` places it: the Hyperboloid lifts it first, the Poincaré ball
+        scores the tangent vector directly (:meth:`Poincare._busemann_tangent`).
 
     Returns
     -------
     Array, shape (B, K)
         The Busemann logits.
     """
-    if input_space == "tangent":
+    # `busemann` is defined on Hyperboloid and Poincare but is not part of the `Manifold`
+    # protocol (Euclidean, ProperVelocity and Stereographic have no horosphere).
+    busemann = cast("Hyperboloid | Poincare", manifold).busemann
+    if input_space == "tangent" and isinstance(manifold, Poincare):
+        # Scored without forming the ball point, whose float32 lift stops at the ceiling
+        # t = √c‖x‖ ≈ 6.33 (see `poincare._busemann_tangent`). The hyperboloid `expmap_0` below is
+        # exact to its coordinate ceiling, so that model keeps the lift.
+        x_BI = x_BI.astype(manifold.dtype)  # the work dtype `expmap_0` gave the lifted input
+        busemann = manifold._busemann_tangent
+    elif input_space == "tangent":
         x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BI, c)
 
     work_dtype = x_BI.dtype
@@ -135,10 +145,7 @@ def _busemann_score(
     alpha_K = capped_exp(log_scale_K.astype(work_dtype))
     bias_K = bias_K.astype(work_dtype)
 
-    # B^{v_k}(x_b): single-point manifold.busemann vmapped over classes (inner) and batch (outer).
-    # `busemann` is defined on Hyperboloid and Poincare but is not part of the `Manifold`
-    # protocol (Euclidean, ProperVelocity and Stereographic have no horosphere).
-    busemann = cast("Hyperboloid | Poincare", manifold).busemann
+    # B^{v_k}(x_b): single-point `busemann` vmapped over classes (inner) and batch (outer).
     busemann_BK = jax.vmap(
         jax.vmap(busemann, in_axes=(None, 0, None)),
         in_axes=(0, None, None),
