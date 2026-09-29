@@ -135,29 +135,35 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
 
 # Distance implementations for lax.switch
 def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Direct Möbius distance formula (fastest), in the ``arcsinh`` form ``2·arcsinh(√t)/√c``.
+    """Geodesic distance in the ``arcsinh`` form ``2·arcsinh(√t)/√c`` — version slots 0 **and** 2.
 
-    The Möbius form is ``2·atanh(u)/√c`` with ``u = √c‖x - y‖/√D₋`` and
+    The Möbius form (slot 0) is ``2·atanh(u)/√c`` with ``u = √c‖x - y‖/√D₋`` and
     ``D₋ = 1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²``. Writing ``B_x = 1 - c‖x‖²`` (``= 2/λ_x``), the identity
     ``D₋ = B_x·B_y + c‖x - y‖²`` gives ``1 - u² = B_x·B_y/D₋``, and ``atanh(u) = arcsinh(u/√(1 - u²))``
     turns the distance into::
 
         √t = √c‖x - y‖ / √(B_x·B_y),   d(x, y) = 2·arcsinh(√t)/√c
 
-    which is the function slot 2 (:func:`_dist_metric_tensor`) evaluates: **slots 0 and 2 are the
-    same function** and differ only in rounding. The ``atanh`` spelling saturated for far pairs,
-    where ``u → 1`` and the float32 domain clip at ``1 - 10·eps`` took over: two points on opposite
-    sides at scaled radius 7.2 each (true ``√c·d = 14.4``, c = 1) came back 14.333 with an exactly
-    zero gradient, and at 9 each (true 18.0) still 14.333 — both pairs well inside the float32
-    chart. ``arcsinh`` has no domain to clip: the same float32 pairs now give 14.40011 and 17.99972
-    (float64 of the same inputs: 14.40006, 17.99968) with gradients within 2.8e-5 and 2.3e-5
-    relative. What is left is the chart's own floor, the float32 rounding of ``B_x``, ``B_y``
-    (``eps/B`` relative).
+    The metric-tensor integral (slot 2, ``VERSION_METRIC_TENSOR``) gives ``acosh(1 + 2t)/√c`` with the
+    same ``t = c‖x - y‖²/((1 - c‖x‖²)(1 - c‖y‖²))``, and the half-angle identity
+    ``acosh(1 + 2t) = 2·arcsinh(√t)`` lands on the same expression, so both slots run this body. Each
+    literal spelling had its own defect. The ``atanh`` one saturated for far pairs, where ``u → 1``
+    and the float32 domain clip at ``1 - 10·eps`` took over: two points on opposite sides at scaled
+    radius 7.2 each (true ``√c·d = 14.4``, c = 1) came back 14.333 with an exactly zero gradient, and
+    at 9 each (true 18.0) still 14.333 — both pairs well inside the float32 chart. The ``acosh`` one
+    put the whole separation into a perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps``
+    domain clamp pinned every pair with ``t < 5·eps`` to a constant floor with a zero gradient (in
+    float32 closer than ``sqrt(5·eps/c)·(1 - c·r²)`` for two points at radius ``r``, 7.7e-4/√c at
+    the origin). ``arcsinh`` has no domain to clip and a derivative bounded by 1: the far float32
+    pairs now give 14.40011 and 17.99972 (float64 of the same inputs: 14.40006, 17.99968) with
+    gradients within 2.8e-5 and 2.3e-5 relative. What is left is the chart's own floor, the float32
+    rounding of ``B_x``, ``B_y`` (``eps/B`` relative).
 
-    It is also cheaper: three reductions (``‖x - y‖²``, ``‖x‖²``, ``‖y‖²``) where the factored
-    ``D₋`` took five with a traced ``c`` (its ``‖x‖²``, ``‖y‖²`` and both chord/sum reductions of
-    ``_mobius_denominator``), and none of slot 2's ``safe_norm`` max-scaling pass, which a
-    difference of two ball points does not need.
+    It is also the cheaper body: three reductions (``‖x - y‖²``, ``‖x‖²``, ``‖y‖²``) where the
+    factored ``D₋`` took five with a traced ``c`` (its ``‖x‖²``, ``‖y‖²`` and both chord/sum
+    reductions of ``_mobius_denominator``) and slot 2's own body four (``safe_norm``'s max-scaling
+    pass, which a difference of two ball points does not need), plus a second rounding of each
+    ``B`` taken as ``2/λ``.
     """
     sqrt_c = jnp.sqrt(c)
     # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
@@ -190,46 +196,6 @@ def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvat
     diff_norm = safe_sqrt(jnp.sum(diff**2))
     dist_c = atanh(sqrt_c * diff_norm)
     return 2 * dist_c / sqrt_c
-
-
-def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Metric-tensor induced distance, in the ``arcsinh`` form: ``2·arcsinh(√t)/√c``.
-
-    The pairwise twin of :func:`_dist_0_metric_tensor`, and it had the same defect. The
-    metric-tensor integral gives ``acosh(1 + 2t)/√c`` with
-    ``t = c‖x - y‖²/((1 - c‖x‖²)(1 - c‖y‖²))``, so the whole separation signal sits in a
-    perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp pinned every
-    pair whose ``t`` fell below ``5·eps`` to a constant floor (killing the gradient), and an extra
-    ``arg < 1 + MIN_NORM`` short-circuit zeroed a second, smaller band below ``t = MIN_NORM/2``. For
-    two points at radius ``r`` the two ``(1 - c·r²)`` factors scale the threshold, so the float32
-    separation floor is ``sqrt(5·eps/c)·(1 - c·r²)`` — 7.7e-4/√c at the origin, tightening to
-    5.8e-4/√c at ``r = 0.5`` for ``c = 1``.
-
-    The half-angle identity ``acosh(1 + 2t) = 2·arcsinh(√t)`` moves the separation into an argument
-    *linear* in ``‖x - y‖``::
-
-        √t = √c‖x - y‖ / sqrt((1 - c‖x‖²)(1 - c‖y‖²)),   d(x, y) = 2·arcsinh(√t)/√c
-
-    ``arcsinh`` needs no domain clamp (its argument is a scaled norm) and its derivative is bounded
-    by 1, so both floors are gone rather than moved. The two forms are the same function, so slot 2
-    still means "metric-tensor distance" — this is not a new version slot.
-
-    Both boundary guards are unchanged: ``1 - c‖x‖²`` and ``1 - c‖y‖²`` still come from the clamped
-    conformal factors (= 2/λ), so an unprojected near-boundary point cannot drive the denominator to
-    0 and the representable ceiling is untouched.
-
-    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at ``x == y``, so
-    ``dist(x, x) == 0`` exactly and ``jax.grad`` there is finite without the ``where``-guard that
-    used to provide it (``test_precision.py::test_poincare_dist_grad_at_coincident_points``).
-    """
-    sqrt_c = jnp.sqrt(c)
-    diff_norm = safe_norm(x - y)
-    # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)). A bare 1 - c||x||² hits 0
-    # for an unprojected near-boundary point and blows up the divide; reuse the module-wide floor.
-    one_minus_cx = 2.0 / _conformal_factor(x, c)
-    one_minus_cy = 2.0 / _conformal_factor(y, c)
-    sqrt_t = sqrt_c * diff_norm / jnp.sqrt(one_minus_cx * one_minus_cy)
-    return 2.0 * asinh(sqrt_t) / sqrt_c
 
 
 def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -307,7 +273,8 @@ def _dist(
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    return lax.switch(version_idx, [_dist_mobius_direct, _dist_mobius, _dist_metric_tensor], x, y, c)
+    # Slot 2 (metric tensor) is the same function as slot 0 and runs its body; see _dist_mobius_direct.
+    return lax.switch(version_idx, [_dist_mobius_direct, _dist_mobius, _dist_mobius_direct], x, y, c)
 
 
 # Distance from origin implementations for lax.switch
@@ -360,7 +327,7 @@ def _dist_0_metric_tensor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[A
     sqrt_c = jnp.sqrt(c)
     x_norm = safe_norm(x)
     # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)) so a near-boundary point
-    # cannot drive the denominator to 0; consistent with _dist_metric_tensor and _apollonian_dist.
+    # cannot drive the denominator to 0; the same floor as _dist_mobius_direct and _apollonian_dist.
     one_minus_cx = 2.0 / _conformal_factor(x, c)
     sqrt_t = sqrt_c * x_norm / jnp.sqrt(one_minus_cx)
     return 2.0 * asinh(sqrt_t) / sqrt_c
