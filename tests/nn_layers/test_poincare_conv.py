@@ -432,3 +432,162 @@ def test_hypconv_poincare_chained_tangent_flow(make_tangent_input, dtype):
     assert jnp.isfinite(loss)
     assert jnp.isfinite(grads1.kernel[...]).all()
     assert jnp.isfinite(grads2.kernel[...]).all()
+
+
+# ============================================================================
+# Tangent in, tangent out without the ball
+#
+# The layer used to lift each patch vector v with expmap_0, run the HNN++ FC on the ball point, and
+# read the result back with logmap_0 after the lift and proj. In float32 that capped the patch at
+# t = √c‖v‖ ≈ 6.33 and the output tangent norm at ≈ 6.33/√c, both with a zero radial gradient. It
+# now scores v directly and returns logmap_0(lift(s)) = asinh(‖s‖)/(2√c‖s‖)·s, s = sinh(√c·score)
+# (logs/2026-09-29_cancellation-free/1b/).
+# ============================================================================
+
+
+def _max_rel_err(a, b):
+    """``max|a - b| / max|b|`` in float64 — the error relative to the largest reference entry."""
+    a, b = jnp.asarray(a, jnp.float64), jnp.asarray(b, jnp.float64)
+    return float(jnp.max(jnp.abs(a - b)) / jnp.max(jnp.abs(b)))
+
+
+def _patches(layer, x_BHWC):
+    return jax.lax.conv_general_dilated_patches(
+        x_BHWC * layer.beta_scale,
+        filter_shape=layer.kernel_size,
+        window_strides=layer.stride,
+        padding=layer.padding,
+        dimension_numbers=("NHWC", "OIHW", "NHWC"),
+        precision=jax.lax.Precision.HIGHEST,
+    )
+
+
+def _ball_route(layer, x_BHWC, c):
+    """The route through the ball the layer replaced, from the public manifold API plus the lift."""
+    from hyperbolix.nn_layers.poincare_linear import _poincare_sinh_lift
+    from hyperbolix.utils.math_utils import sinh
+
+    manifold = layer.manifold
+    patches_BHWK = _patches(layer, x_BHWC)
+    batch, out_h, out_w, concat_dim = patches_BHWK.shape
+    x_NK = jax.vmap(manifold.expmap_0, in_axes=(0, None))(patches_BHWK.reshape(-1, concat_dim), c)
+    s_NO = sinh(jnp.sqrt(c) * manifold.compute_mlr_pp(x_NK, layer.kernel[...], layer.bias[...], c))
+    y_NO = jax.vmap(manifold.proj, in_axes=(0, None))(_poincare_sinh_lift(s_NO, c), c)
+    return jax.vmap(manifold.logmap_0, in_axes=(0, None))(y_NO, c).reshape(batch, out_h, out_w, -1)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_hypconv_poincare_matches_the_ball_route(c):
+    """float64, patch vectors at t = √c‖v‖ ≤ 3: outputs and input gradients equal the ball route
+    (expmap_0 → compute_mlr_pp → sinh → lift → proj → logmap_0) to 1e-12 relative."""
+    dtype = jnp.float64
+    layer = HypConv2DPoincare(Poincare(dtype=dtype), 3, 5, 3, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dtype)
+    key_k, key_b, key_x, key_w = jax.random.split(jax.random.PRNGKey(0), 4)
+    # Identity init plus a perturbation, so every patch coordinate reaches every output channel.
+    layer.kernel[...] = layer.kernel[...] + 0.05 * jax.random.normal(key_k, layer.kernel[...].shape, dtype=dtype)
+    layer.bias[...] = 0.2 * jax.random.normal(key_b, layer.bias[...].shape, dtype=dtype)
+    x_BHWC = jax.random.normal(key_x, (2, 5, 5, 3), dtype=dtype)
+    x_BHWC = 3.0 / (jnp.sqrt(c) * jnp.max(jnp.linalg.norm(_patches(layer, x_BHWC), axis=-1))) * x_BHWC
+    w_BHWO = jax.random.normal(key_w, (2, 5, 5, 5), dtype=dtype)
+
+    y_err = _max_rel_err(layer(x_BHWC, c), _ball_route(layer, x_BHWC, c))
+    g_new = jax.grad(lambda x: jnp.sum(w_BHWO * layer(x, c)))(x_BHWC)
+    g_old = jax.grad(lambda x: jnp.sum(w_BHWO * _ball_route(layer, x, c)))(x_BHWC)
+    assert y_err < 1e-12, y_err
+    assert _max_rel_err(g_new, g_old) < 1e-12, _max_rel_err(g_new, g_old)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
+def test_poincare_sinh_logmap_0_jacobian_at_zero_and_at_the_rescale_switch(c):
+    """The output map asinh(‖s‖)/(2√c‖s‖)·s against central differences (float64).
+
+    At s = 0 the Jacobian is exactly I/(2√c) (a normalized spelling gives 0 there). At max|s| = 2
+    the power-of-two rescale switches from divisor 1 (the asinhc branch) to 2 (the log branch), and
+    the ±h steps land on both sides of it.
+    """
+    from hyperbolix.nn_layers.poincare_linear import _poincare_sinh_logmap_0
+
+    dtype, h = jnp.float64, 1e-6
+
+    def out_O(s_O):
+        return _poincare_sinh_logmap_0(s_O[None, :], c)[0]
+
+    def fd_jacobian(s_O):
+        eye_OO = jnp.eye(s_O.shape[0], dtype=dtype)
+        return jnp.stack([(out_O(s_O + h * e_O) - out_O(s_O - h * e_O)) / (2 * h) for e_O in eye_OO], axis=1)
+
+    zero_O = jnp.zeros((5,), dtype=dtype)
+    jac_OO = jax.jacrev(out_O)(zero_O)
+    assert jnp.allclose(jac_OO, jnp.eye(5, dtype=dtype) / (2 * jnp.sqrt(c)), rtol=0.0, atol=1e-15), jac_OO
+    assert jnp.allclose(fd_jacobian(zero_O), jac_OO, rtol=0.0, atol=1e-9)
+
+    switch_O = jnp.array([2.0, -0.7, 1.3, 0.0, -1.9], dtype=dtype)
+    assert jnp.allclose(fd_jacobian(switch_O), jax.jacrev(out_O)(switch_O), rtol=0.0, atol=1e-8)
+    for s_O in (switch_O, switch_O * (1.0 - 1e-3)):  # divisor 2 and divisor 1
+        s_norm = np.linalg.norm(np.asarray(s_O))
+        expected_O = np.arcsinh(s_norm) / (2 * np.sqrt(c) * s_norm) * np.asarray(s_O)
+        assert np.allclose(np.asarray(out_O(s_O)), expected_O, rtol=0.0, atol=1e-15)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_poincare_sinh_logmap_0_wide_rows_near_the_sinh_clip_f32(c):
+    """float32: a 64-wide row of scores near the sinh clip (|s| up to 7e37) has ‖s‖ past FLT_MAX,
+    yet asinh(‖s‖)/(2√c)·ŝ is finite and matches the float64 closed form."""
+    from hyperbolix.nn_layers.poincare_linear import _poincare_sinh_logmap_0
+
+    rng = np.random.default_rng(0)
+    signs_BO = rng.choice([-1.0, 1.0], size=(4, 64))
+    s_BO = (
+        np.stack(
+            [
+                rng.uniform(3e37, 7e37, 64),  # ‖s‖ ≈ 4.1e38 > FLT_MAX = 3.4e38
+                np.r_[7e37, rng.uniform(0.0, 1.0, 63)],  # one dominant entry at the clip
+                rng.uniform(1.0, 1e5, 64),  # divisor > 1, moderate
+                rng.uniform(0.0, 0.02, 64),  # divisor 1
+            ]
+        )
+        * signs_BO
+    )
+    s32_BO = s_BO.astype(np.float32)
+    s64_BO = s32_BO.astype(np.float64)
+
+    got_BO = np.asarray(_poincare_sinh_logmap_0(jnp.asarray(s32_BO), c), dtype=np.float64)
+    norm_B1 = np.linalg.norm(s64_BO, axis=-1, keepdims=True)
+    expected_BO = np.arcsinh(norm_B1) / (2 * np.sqrt(c) * norm_B1) * s64_BO
+
+    assert np.isfinite(got_BO).all()
+    rel_err_B = np.max(np.abs(got_BO - expected_BO), axis=-1) / np.max(np.abs(expected_BO), axis=-1)
+    assert np.all(rel_err_B < 1e-6), rel_err_B
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_hypconv_poincare_far_patches_f32(c):
+    """float32, every 3x3 patch at t = √c‖v‖ = 8 (beta_scale included): outputs and input gradients
+    match float64 on the same inputs and parameters.
+
+    The ball route capped the patch at t ≈ 6.33 and the output tangent norm at ≈ 6.33/√c: outputs
+    1.7e-1 … 2.3e-1 and input gradients 2.0e-1 … 3.5e-1 off (probe_old.out, default identity init);
+    here 5.7e-7 / 8.1e-7 at most.
+    """
+    in_ch, out_ch, t = 4, 8, 8.0
+    layer32, layer64 = (
+        HypConv2DPoincare(Poincare(dtype=dt), in_ch, out_ch, 3, rngs=nnx.Rngs(0), padding="VALID", param_dtype=dt)
+        for dt in (jnp.float32, jnp.float64)
+    )
+    layer32.bias[...] = 0.2 * jax.random.normal(jax.random.PRNGKey(1), (out_ch, 1), dtype=jnp.float32)
+    layer64.kernel[...] = layer32.kernel[...].astype(jnp.float64)
+    layer64.bias[...] = layer32.bias[...].astype(jnp.float64)
+    # Every pixel at tangent norm rho, so each full 3x3 patch has √c·beta_scale·3·rho = t.
+    u_BHWC = jax.random.normal(jax.random.PRNGKey(0), (2, 6, 6, in_ch), dtype=jnp.float64)
+    rho = t / (jnp.sqrt(c) * layer32.beta_scale * 3)
+    x32_BHWC = (rho * u_BHWC / jnp.linalg.norm(u_BHWC, axis=-1, keepdims=True)).astype(jnp.float32)
+    w32_BHWO = jax.random.normal(jax.random.PRNGKey(2), (2, 4, 4, out_ch), dtype=jnp.float32)
+
+    def out_and_grad(layer, x, w):
+        return layer(x, c), jax.grad(lambda xx: jnp.sum(w * layer(xx, c)))(x)
+
+    y32, g32 = out_and_grad(layer32, x32_BHWC, w32_BHWO)
+    y64, g64 = out_and_grad(layer64, x32_BHWC.astype(jnp.float64), w32_BHWO.astype(jnp.float64))
+
+    assert _max_rel_err(y32, y64) < 1e-5, _max_rel_err(y32, y64)
+    assert _max_rel_err(g32, g64) < 1e-5, _max_rel_err(g32, g64)
