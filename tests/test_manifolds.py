@@ -1449,7 +1449,8 @@ def _mobius_boundary_floor(dtype: jnp.dtype, c: float) -> float:
     """``_boundary_floor``'s value, recomputed from the documented formula (as ``_mobius_eps_grid`` does).
 
     ``1 - c‖x‖²`` at the ``_proj`` ceiling ``1/√c - eps**0.75``. Its **square** is the analytic
-    minimum of the Möbius denominator, and therefore the floor that denominator now carries.
+    minimum of the Möbius denominator; the floor that denominator carries is a quarter of it,
+    :func:`_mobius_denominator_floor`.
     """
     e_mach = float(jnp.finfo(dtype).eps)
     # `float(...)`, not the bare numpy scalar: a np.float64 is *not* weakly typed, so under
@@ -1458,19 +1459,29 @@ def _mobius_boundary_floor(dtype: jnp.dtype, c: float) -> float:
     return float(2.0 * np.sqrt(c) * e_mach**0.75 - c * e_mach**1.5)
 
 
+def _mobius_denominator_floor(dtype: jnp.dtype, c: float) -> float:
+    """``_boundary_divisor_floor²``, the Möbius denominator's floor: ``(_mobius_boundary_floor / 2)²``.
+
+    A quarter of the denominator's analytic minimum, which sits inside the rounding band of capped
+    pairs. Both replicas below moved with the code on 2026-09-29; they floored at the minimum
+    itself, ``_mobius_boundary_floor²``, before.
+    """
+    return (0.5 * _mobius_boundary_floor(dtype, c)) ** 2
+
+
 def _mobius_denominator_reference(x_D: jnp.ndarray, y_D: jnp.ndarray, c: float) -> jnp.ndarray:
     """``1 + 2c⟨x,y⟩ + c²‖x‖²‖y‖²`` re-derived as the implementation now spells it (``c > 0``).
 
     The factored identity ``(1 - c·r_x·r_y)² + c·r_x·r_y·‖x̂ + ŷ‖²``, floored at
-    ``_boundary_floor²``. This replica moved with the code on 2026-09-08; before that it was the
-    literal difference floored at ``MIN_NORM``, which in float64 clamped legitimate near-boundary
+    ``_boundary_divisor_floor²``. This replica moved with the code on 2026-09-08; before that it was
+    the literal difference floored at ``MIN_NORM``, which in float64 clamped legitimate near-boundary
     pairs eight orders of magnitude too early.
     """
     r_x = jnp.maximum(jnp.sqrt(jnp.dot(x_D, x_D)), poincare_impl.MIN_NORM)
     r_y = jnp.maximum(jnp.sqrt(jnp.dot(y_D, y_D)), poincare_impl.MIN_NORM)
     t = c * r_x * r_y
     w_D = x_D / r_x + y_D / r_y
-    return jnp.maximum((1 - t) ** 2 + t * jnp.sum(w_D**2), _mobius_boundary_floor(x_D.dtype, c) ** 2)
+    return jnp.maximum((1 - t) ** 2 + t * jnp.sum(w_D**2), _mobius_denominator_floor(x_D.dtype, c))
 
 
 def _addition_reference(x_D: jnp.ndarray, y_D: jnp.ndarray, c: float) -> jnp.ndarray:
@@ -1561,10 +1572,10 @@ def _mobius_eps_grid(dtype: jnp.dtype, c: float) -> tuple[float, ...]:
 def _mobius_ref_f64(x_ND: jnp.ndarray, y_ND: jnp.ndarray, c: float, max_norm: float) -> np.ndarray:
     """float64 reference, clamped at the ceiling of the dtype under test.
 
-    The denominator is the factored form with the ``_boundary_floor²`` floor of the dtype under
-    test — this replica moved with the code on 2026-09-08. Keeping ``MIN_NORM`` here would have
-    made the reference itself wrong by up to eight orders of magnitude on the float64 rows of the
-    ``eps`` grid, where the true denominator is 1.3e-23.
+    The denominator is the factored form with the ``_boundary_divisor_floor²`` floor of the dtype
+    under test — this replica moved with the code on 2026-09-08. Keeping ``MIN_NORM`` here would
+    have made the reference itself wrong by up to eight orders of magnitude on the float64 rows of
+    the ``eps`` grid, where the true denominator is 1.3e-23.
     """
     x = np.asarray(x_ND, dtype=np.float64)
     y = np.asarray(y_ND, dtype=np.float64)
@@ -1578,7 +1589,7 @@ def _mobius_ref_f64(x_ND: jnp.ndarray, y_ND: jnp.ndarray, c: float, max_norm: fl
     w = x / r_x + y / r_y
     denom = np.maximum(
         (1.0 - t) ** 2 + t * np.sum(w * w, axis=1, keepdims=True),
-        _mobius_boundary_floor(x_ND.dtype, c) ** 2,
+        _mobius_denominator_floor(x_ND.dtype, c),
     )
     out = ((1.0 - c * x2) * s + (c * s2) * x) / denom
     nrm = np.linalg.norm(out, axis=1, keepdims=True)
