@@ -185,9 +185,11 @@ def _sample_radial_rejection(
     """Rejection sampling for radial component when n ≥ 3.
 
     Proposal: u ~ Uniform[0, u_max] where u = cosh(√c·r) - 1.
-    Acceptance: (u·(u+2) / u_max²)^{(n-2)/2}.
+    Acceptance: (u·(u+2) / (u_max·(u_max+2)))^{(n-2)/2}.
 
-    Uses jax.lax.while_loop for JIT compatibility.
+    Uses jax.lax.while_loop for JIT compatibility. Where u_max is not a normal float or u_max·(u_max+2)
+    overflows, the loop could never accept a draw; there the radius comes from the flat limit or the
+    exponential tail of p(r), both exact at the working precision.
     """
     sqrt_c = jnp.asarray(jnp.sqrt(c), dtype=dtype)
     # Half-angle form, as in `_sample_radial_n2`. The literal cosh(√c·R) - 1 rounded to 0 in float32
@@ -196,6 +198,14 @@ def _sample_radial_rejection(
     # Maximum of u*(u+2) over [0, u_max] is at u = u_max
     ref_val = u_max * (u_max + 2.0)
     exponent = (n - 2) / 2.0
+    # The loop accepts nothing outside this range, and it has no other exit. Below √c·R = 2.2e-19 (float32;
+    # 3.0e-154 in float64) u_max flushes to 0 on XLA:CPU and every acceptance ratio is 0/0; from √c·R = 45.05
+    # (355.6) ref_val overflows, and from 89.42 (710.5) u_max itself, so every ratio is 0 or NaN. `timeout 60`
+    # killed all three (logs/2026-09-29_cancellation-free/samplerhang/). A NaN c or R lands outside too and
+    # comes out as NaN radii.
+    finfo = jnp.finfo(dtype)
+    flat = u_max < finfo.tiny
+    loop_range = (u_max >= finfo.tiny) & (ref_val <= finfo.max)
 
     # Flatten shape for the while_loop, then reshape at the end
     total = 1
@@ -220,7 +230,8 @@ def _sample_radial_rejection(
         return ~jnp.all(accepted_T)
 
     init_state = (
-        jnp.zeros(total, dtype=jnp.bool_),
+        # Outside the loop's range every position starts accepted, so the body never runs (per lane under vmap).
+        jnp.full(total, ~loop_range),
         jnp.zeros(total, dtype=dtype),
         key,
     )
@@ -228,7 +239,20 @@ def _sample_radial_rejection(
     u_accepted_T = jnp.asarray(u_accepted_T, dtype=dtype)  # narrow type for pyright
 
     # acosh(1 + u) = 2·asinh(√(u/2)), exact where 1 + u rounds (see `_sample_radial_n2`).
-    r_T = 2.0 * safe_asinh(safe_sqrt(0.5 * u_accepted_T)) / sqrt_c
+    r_loop_T = 2.0 * safe_asinh(safe_sqrt(0.5 * u_accepted_T)) / sqrt_c
+
+    # Outside the loop's range p(r) has a closed form, inverted from y = -log V, V ~ U(0, 1]. The loop and
+    # these forms never both feed one output, so they can share `key`.
+    #   flat limit, u_max < tiny: sinh(√c·r) = √c·r·(1 + (√c·r)²/6 + ...) with (√c·R)²/6 < 8e-39 (float32),
+    #     so p(r) ∝ r^{n-1} and r = R·V^{1/n}.
+    #   exponential tail, ref_val overflows: sinh^{n-1}(√c·r) = (e^{√c·r}/2)^{n-1}·(1 - e^{-2√c·r})^{n-1}, and
+    #     dropping the last factor moves the law by a total variation of at most (1 + (n-1)²·√c·R)·e^{-2√c·R}
+    #     (1.3e-37 for n = 3 at √c·R = 45.05), so r = R - y/((n-1)·√c).
+    y_T = jax.random.exponential(key, shape=(total,), dtype=dtype)
+    R_arr = jnp.asarray(R, dtype=dtype)
+    r_flat_T = R_arr * jnp.exp(-y_T / n)
+    r_tail_T = R_arr - y_T / ((n - 1) * sqrt_c)
+    r_T = jnp.where(loop_range, r_loop_T, jnp.where(flat, r_flat_T, r_tail_T))
     return r_T.reshape(shape)
 
 
