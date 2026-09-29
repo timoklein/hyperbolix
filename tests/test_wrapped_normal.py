@@ -988,11 +988,15 @@ def test_sample_hyperboloid_float32_tracks_float64_at_scaled_radius_10() -> None
     Evidence: ``logs/2026-09-08_hyperboloid_tangent_primitives/probe_final_configs.py``.
 
     There is deliberately no ``log_prob`` leg: at this radius the float32 ``log_prob`` is finite
-    and the float64 one is finite for all 64 draws, but they differ by up to 6.1e-3 — the
-    ambient chart's own resolution, ``eps·cosh(10)·‖v‖²/σ² ≈ 6e-3``, not an implementation defect
-    (a tangent vector's ambient components are ``cosh(a)`` times its Riemannian length, so one
-    float32 ulp already costs that much). No configuration at ``a = 10`` reaches the 1e-3 that
-    leg would need.
+    and the float64 one is finite for all 64 draws, but they differ by up to 1.7e-3 (``|log_prob|``
+    ≈ 0.6). More than half of the earlier gap was the transport of ``u = log_μ(z)`` to the origin,
+    whose generic Cartesian form cancelled two ``O(cosh a)`` terms in the radial part (4.3e-3 on
+    these draws before 68419a6). What remains is the float32 representation of ``u`` itself: it is
+    formed from two points stored at scaled radius ``a``, so it carries ``≈ eps·cosh(a)`` = 1.3e-3
+    relative error — measured 5.4e-4 of ``‖u‖`` in its perpendicular part, which the transport hands
+    through unchanged — not an implementation defect. Over 512 draws with random mean directions the
+    gap is 2.2e-3 to 4.5e-3 (``logs/2026-09-29_cancellation-free/1c/probe_new.out``,
+    ``fixup/probe_item3.out``). No configuration at ``a = 10`` reaches the 1e-3 that leg would need.
     """
     c, n, n_draw, sigma = 0.5, 3, 64, 0.3
     a = 10.0
