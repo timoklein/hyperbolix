@@ -188,20 +188,21 @@ def _poincare_pp_forward(
 ) -> Float[Array, "batch out_dim"]:
     """Pure-function HNN++ forward pass.
 
-    Used by both HypLinearPoincarePP and HypConv2DPoincare. The final lift
+    Used by both HypLinearPoincarePP and HypConv2DPoincare. A tangent input is scored as
+    ``expmap_0`` would place it, without forming the ball point
+    (:meth:`~hyperbolix.manifolds.poincare.Poincare._compute_mlr_pp_tangent`). The final lift
     ``y = w / (1 + sqrt(1 + c‖w‖²))`` with ``w = sinh(√c·v)/√c`` is evaluated without squaring
     anything large, so the output stays finite and off the origin for every finite score ``v``
     (see :func:`_poincare_sinh_lift`).
     """
-    # Map to manifold if needed (static branch - JIT friendly)
+    # Static branch - JIT friendly
     if input_space == "tangent":
-        x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BI, c)
-
-    # Compute multinomial linear regression
-    v = manifold.compute_mlr_pp(x_BI, kernel_OI, bias_O1, c)
+        v_BO = manifold._compute_mlr_pp_tangent(x_BI, kernel_OI, bias_O1, c)
+    else:
+        v_BO = manifold.compute_mlr_pp(x_BI, kernel_OI, bias_O1, c)
 
     # Generalized linear transformation y = w / (1 + sqrt(1 + c‖w‖²)), w = sinh(√c·v)/√c.
-    s_BO = sinh(jnp.sqrt(c) * v)  # (B, O)
+    s_BO = sinh(jnp.sqrt(c) * v_BO)  # (B, O)
     res_BO = _poincare_sinh_lift(s_BO, c)
 
     # Project results to the manifold
@@ -215,8 +216,8 @@ class HypLinearPoincarePP(nnx.Module):
     Hyperbolic Neural Networks ++ fully connected layer (Poincaré ball model).
 
     Computation steps:
-        0) Project the input tensor onto the manifold (optional)
-        1) Compute the multinomial linear regression score(s)
+        1) Compute the multinomial linear regression score(s) — for a tangent input, of the point
+           ``expmap_0`` would place on the ball, evaluated from the tangent vector directly
         2) Calculate the generalized linear transformation from the regression score(s)
 
     Parameters
@@ -263,7 +264,7 @@ class HypLinearPoincarePP(nnx.Module):
         # Static configuration (treated as compile-time constants for JIT)
         validate_poincare_manifold(
             manifold_module,
-            required_methods=("proj", "addition", "expmap_0", "logmap_0", "compute_mlr_pp"),
+            required_methods=("proj", "compute_mlr_pp", "_compute_mlr_pp_tangent"),
         )
         self.manifold = manifold_module
         self.in_dim = in_dim

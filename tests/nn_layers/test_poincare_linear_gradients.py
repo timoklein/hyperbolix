@@ -279,6 +279,82 @@ def test_hyp_linear_poincare_pp_origin_jacobian_matches_closed_form(dtype, c):
     )
 
 
+def _max_rel_err(a, b):
+    """``max|a - b| / max|b|`` in float64 — the error relative to the largest reference entry."""
+    a, b = jnp.asarray(a, jnp.float64), jnp.asarray(b, jnp.float64)
+    return float(jnp.max(jnp.abs(a - b)) / jnp.max(jnp.abs(b)))
+
+
+def _tangent_rows(key, batch, in_dim, t, c):
+    """Float64 rows of scaled norm ``√c‖v‖ = t`` in random directions."""
+    u_BI = jax.random.normal(key, (batch, in_dim), dtype=jnp.float64)
+    return t / jnp.sqrt(c) * u_BI / jnp.linalg.norm(u_BI, axis=-1, keepdims=True)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_hyp_linear_poincare_pp_tangent_input_matches_the_ball_route(c):
+    """float64, t = √c‖v‖ ≤ 3: the tangent-input layer equals the route through the ball it replaced.
+
+    That route lifted v first — expmap_0 → compute_mlr_pp → sinh → _poincare_sinh_lift → proj —
+    and read the conformal factor back off the stored point. Outputs and input gradients agree to
+    1e-12 relative to their largest entry.
+    """
+    from hyperbolix.nn_layers.poincare_linear import _poincare_sinh_lift
+    from hyperbolix.utils.math_utils import sinh
+
+    dtype, batch, in_dim, out_dim = jnp.float64, 32, 12, 8
+    layer = HypLinearPoincarePP(poincare, in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dtype)
+    key_b, key_u, key_t, key_w = jax.random.split(jax.random.PRNGKey(1), 4)
+    layer.bias[...] = 0.3 * jax.random.normal(key_b, (out_dim, 1), dtype=dtype)
+    t_B1 = jax.random.uniform(key_t, (batch, 1), dtype=dtype, minval=0.05, maxval=3.0)
+    v_BI = _tangent_rows(key_u, batch, in_dim, t_B1, c)
+    w_BO = jax.random.normal(key_w, (batch, out_dim), dtype=dtype)
+
+    def ball_route(v_BI):
+        x_BI = jax.vmap(poincare.expmap_0, in_axes=(0, None))(v_BI, c)
+        s_BO = sinh(jnp.sqrt(c) * poincare.compute_mlr_pp(x_BI, layer.kernel[...], layer.bias[...], c))
+        return jax.vmap(poincare.proj, in_axes=(0, None))(_poincare_sinh_lift(s_BO, c), c)
+
+    y_err = _max_rel_err(layer(v_BI, c), ball_route(v_BI))
+    g_new_BI = jax.grad(lambda v: jnp.sum(w_BO * layer(v, c)))(v_BI)
+    g_old_BI = jax.grad(lambda v: jnp.sum(w_BO * ball_route(v)))(v_BI)
+    assert y_err < 1e-12, y_err
+    assert _max_rel_err(g_new_BI, g_old_BI) < 1e-12, _max_rel_err(g_new_BI, g_old_BI)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_hyp_linear_poincare_pp_tangent_input_far_point_f32(c):
+    """float32 at t = √c‖v‖ = 8: outputs and input gradients match float64 on the same inputs and parameters.
+
+    The lift onto the ball capped this input at t ≈ 6.33: outputs 8.0e-2 … 9.0e-2 and input
+    gradients 4.3e-2 off (probe_new.out, old-route columns); here 1.4e-6 / 3.3e-5 at most. The
+    kernel is scaled by 0.1 so the outputs land well inside the ball: at the default init they sit
+    on the float32 ``proj`` margin, which bounds the output's accuracy, not the input's. The
+    gradient bound is not eps-sized for the reason given in ``test_regression_layers.py::
+    test_hyp_regression_poincare_pp_tangent_input_far_point_f32``.
+    """
+    batch, in_dim, out_dim, t = 32, 16, 12, 8.0
+    layer32, layer64 = (
+        HypLinearPoincarePP(_manifold(dt), in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dt)
+        for dt in DTYPES
+    )
+    layer32.kernel[...] = 0.1 * layer32.kernel[...]
+    layer32.bias[...] = 0.2 * jax.random.normal(jax.random.PRNGKey(2), (out_dim, 1), dtype=jnp.float32)
+    layer64.kernel[...] = layer32.kernel[...].astype(jnp.float64)
+    layer64.bias[...] = layer32.bias[...].astype(jnp.float64)
+    v32_BI = _tangent_rows(jax.random.PRNGKey(0), batch, in_dim, t, c).astype(jnp.float32)
+    w32_BO = jax.random.normal(jax.random.PRNGKey(1), (batch, out_dim), dtype=jnp.float32)
+
+    def out_and_grad(layer, v_BI, w_BO):
+        return layer(v_BI, c), jax.grad(lambda v: jnp.sum(w_BO * layer(v, c)))(v_BI)
+
+    y32, g32 = out_and_grad(layer32, v32_BI, w32_BO)
+    y64, g64 = out_and_grad(layer64, v32_BI.astype(jnp.float64), w32_BO.astype(jnp.float64))
+
+    assert _max_rel_err(y32, y64) < 1e-5, _max_rel_err(y32, y64)
+    assert _max_rel_err(g32, g64) < 3e-4, _max_rel_err(g32, g64)
+
+
 @pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 def test_world_model_gradients_finite(dtype):
     """Full world model should produce finite gradients."""
