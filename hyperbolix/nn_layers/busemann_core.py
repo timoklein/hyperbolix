@@ -164,8 +164,9 @@ def busemann_fc_poincare_output(
     ``_assert_v_max_safe(v_max)``. The second line is evaluated by
     :func:`~hyperbolix.nn_layers.poincare_linear._poincare_sinh_lift` without forming ``‖ω‖²``,
     so it cannot overflow float32 for any ``v_max``, ``O`` or ``c``; saturated rows land at the
-    ball's edge, not the origin. The closed form lands inside the ball (``√c·‖y‖ < 1``), so the
-    caller's ``proj`` is defensive against float rounding only.
+    ball's edge, not the origin. In exact arithmetic the closed form lands strictly inside the
+    ball (``√c·‖y‖ < 1``); in float32 a saturated row can round onto or past the boundary, and the
+    caller's ``proj`` pulls it back.
 
     Parameters
     ----------
@@ -179,7 +180,7 @@ def busemann_fc_poincare_output(
     Returns
     -------
     Array, shape (B, O)
-        Points inside the Poincaré ball with curvature ``c`` (pre-projection).
+        Points in the Poincaré ball with curvature ``c``, before the caller's ``proj``.
     """
     sqrt_c = jnp.sqrt(c)
     # safe_sinh: expm1-form is an accuracy fix over XLA's CPU jnp.sinh (up to ~17-496 ulps off for

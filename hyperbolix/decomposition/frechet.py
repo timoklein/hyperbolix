@@ -60,6 +60,10 @@ def frechet_mean(
     overshoots once the batch spreads past ``√c·d ≈ 2`` (measured: no convergence in 100
     iterations); dividing by the mean ``a_i·coth(a_i)`` avoids that and reduces to
     ``η = step_size`` for a tight batch (or ``c = 0``).
+    For a ProductManifold, ``c`` in ``a_i`` is ``c_max``, the largest non-negative factor curvature. ½d²
+    is a sum over factors, so its Hessian is block-diagonal with blocks bounded by ``a_f·coth(a_f)``,
+    ``a_f = √c_f·d_f``; since ``√c_f·d_f ≤ √c_max·d`` and ``x·coth(x)`` is increasing, ``a = √c_max·d``
+    bounds every block (conservative: Euclidean factors have eigenvalue 1, spherical ones ≤ 1).
     The loop is not differentiated (``while_loop`` is not reverse-mode differentiable) — used
     purely as a numerical solver.
 
@@ -77,7 +81,8 @@ def frechet_mean(
         x_NR: Points on the manifold, shape (N, R). ``R`` is the ambient dim (d+1) for
             Hyperboloid, the spatial dim (d) for the other models.
         manifold: Manifold instance (satisfies the ``Manifold`` protocol).
-        c: Curvature (positive scalar for single manifolds).
+        c: Curvature: a positive scalar for single manifolds, or the per-factor sequence for a
+            ``ProductManifold`` (the step then uses the largest non-negative factor curvature).
         step_size: Multiplier on the curvature-aware step ``η`` (default 1.0).
         tol: Convergence tolerance on the Riemannian tangent-update norm (default 1e-8).
         max_iters: Maximum iterations (default 100).
@@ -112,7 +117,9 @@ def frechet_mean(
     # -- Karcher fixed-point iteration (lax.while_loop) ---------------------------------
     logmap_batched = jax.vmap(manifold.logmap, in_axes=(0, None, None))  # log_μ(x_i) for all i
     norm_batched = jax.vmap(manifold.tangent_norm, in_axes=(0, None, None))  # d(x_i, μ) for all i
-    sqrt_c = jnp.sqrt(jnp.maximum(jnp.asarray(c, dtype=dtype), 0.0))
+    # Largest non-negative curvature: a scalar for a scalar c and for a ProductManifold's per-factor sequence.
+    c_max = jnp.max(jnp.maximum(jnp.asarray(c, dtype=dtype), 0.0))
+    sqrt_c = jnp.sqrt(c_max)
 
     def cond_fn(carry: tuple[Array, Array, Array]) -> Array:
         _, delta, it = carry
@@ -121,7 +128,7 @@ def frechet_mean(
     def body_fn(carry: tuple[Array, Array, Array]) -> tuple[Array, Array, Array]:
         mean, _, it = carry
         logs_NR = logmap_batched(x_NR, mean, c)  # (N, R) tangents at mean
-        a_N = sqrt_c * norm_batched(logs_NR, mean, c)  # (N,) scaled distances √c·d(x_i, μ)
+        a_N = sqrt_c * norm_batched(logs_NR, mean, c)  # (N,) scaled distances √c_max·d(x_i, μ)
         # a·coth(a), with its series 1 + a²/3 below the seam (exactly 1 at a = 0, no 0/0).
         small_N = a_N < _ACOTH_SERIES_SEAM
         a_safe_N = jnp.where(small_N, 1.0, a_N)

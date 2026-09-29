@@ -8,6 +8,7 @@ Correctness anchors (all independent of the iteration itself):
 - Cross-model consistency: the Poincaré and hyperboloid means agree under the isometry.
 - The output dtype is preserved and an explicit ``init_D`` reaches the same fixed point.
 - The curvature-aware step converges on a batch spread past √c·d ≈ 2.
+- On a product manifold the mean is the concatenation of the factor means.
 """
 
 import jax
@@ -17,7 +18,7 @@ import pytest
 
 from hyperbolix.decomposition import frechet_mean
 from hyperbolix.distributions import wrapped_normal_hyperboloid as wn
-from hyperbolix.manifolds import Euclidean, HalfSpace, Hyperboloid, Klein, Poincare, ProperVelocity
+from hyperbolix.manifolds import Euclidean, HalfSpace, Hyperboloid, Klein, Poincare, ProductManifold, ProperVelocity
 from hyperbolix.manifolds import isometry_mappings as iso
 from hyperbolix.nn_layers.hyperboloid_core import lorentz_midpoint
 
@@ -220,8 +221,9 @@ def test_frechet_mean_converges_on_a_spread_batch(seed):
     Wrapped-normal cloud with tangent spread sigma·√D = 2 at c = 1, on the Hyperboloid and the same
     cloud in ProperVelocity. The Hessian of ½d² reaches a·coth(a) ≈ 2 in the non-radial directions
     there, so the old fixed step 1 overshoots. Measured residual after the default 100 iterations
-    (seeds 0 / 1): old fixed step 1.3 / 3.5e-3 (Hyperboloid) and 1.3 / 0.13 (PV); curvature-aware
-    step 1.1e-10 / 5.3e-10 and 1.1e-10 / 4.3e-10.
+    (seeds 0 / 1): old fixed step 1.3 / 3.4e-3 (Hyperboloid) and 1.3 / 0.13 (PV); curvature-aware
+    step 1.1e-10 / 5.3e-10 and 1.1e-10 / 4.3e-10
+    (logs/2026-09-29_follow-ups/4_fixes/frechet_spread_test_residuals.out).
     """
     dtype, c, dim = jnp.float64, 1.0, 16
     x_hyp = _hyp_points(seed, 64, dim, c, sigma=2.0 / np.sqrt(dim), dtype=dtype)
@@ -229,6 +231,28 @@ def test_frechet_mean_converges_on_a_spread_batch(seed):
     for manifold, x_NR in ((Hyperboloid(dtype=dtype), x_hyp), (ProperVelocity(dtype=dtype), x_pv)):
         mean_R = frechet_mean(x_NR, manifold, c)  # default step_size and max_iters
         assert _stationarity_residual(x_NR, manifold, mean_R, c) < 1e-6
+
+
+def test_frechet_mean_product_is_the_product_of_factor_means():
+    """On a ProductManifold with per-factor curvatures the mean is the concatenated factor means.
+
+    ½d² on a product is the sum of the factors' ½d², so its minimizer is the tuple of the factor
+    minimizers. The two factors have different curvatures (a per-factor ``c`` sequence), which is
+    what the curvature-aware step has to reduce to one scalar.
+    """
+    dtype, c_ball, c_hyp = jnp.float64, 1.0, 0.5
+    P, H = Poincare(dtype=dtype), Hyperboloid(dtype=dtype)
+    product = ProductManifold((P, 3), (H, 4), dtype=dtype)
+    x_ball = jax.vmap(iso.hyperboloid_to_poincare, in_axes=(0, None))(_hyp_points(10, 20, 3, c_ball, 0.5, dtype), c_ball)
+    x_hyp = _hyp_points(11, 20, 3, c_hyp, 0.5, dtype)
+    x_NR = jnp.concatenate([x_ball, x_hyp], axis=-1)  # (20, 3 + 4)
+
+    mean_R = frechet_mean(x_NR, product, (c_ball, c_hyp), max_iters=300)
+    factor_means_R = jnp.concatenate(
+        [frechet_mean(x_ball, P, c_ball, max_iters=300), frechet_mean(x_hyp, H, c_hyp, max_iters=300)]
+    )
+    assert mean_R.shape == (7,)
+    assert jnp.allclose(mean_R, factor_means_R, atol=1e-6)
 
 
 # =============================================================================================

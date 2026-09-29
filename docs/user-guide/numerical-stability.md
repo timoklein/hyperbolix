@@ -418,7 +418,7 @@ already-diverging model reaches, so the code is left as it is. Outputs checked i
 - **HRC (`HRCLayerNorm`, `HRCRMSNorm`, …):** reads only the spatial part, so the `inf` time slot of a point past the ceiling is dropped; the LayerNorm/RMSNorm mean of squares then overflows (`‖x_s‖ > 1.84e19`) and the row becomes the LayerNorm bias or the origin.
 - **`lorentz_residual` (`w_y ≤ 1`):** the `4h²/c` in its normalizer, `h = sinh(√c·d(x, y)/2)`, overflows once `h > √(min(c, 1)·FLT_MAX)/2` (9.2e18 at `c = 1`), and the output is the origin — e.g. two points at spatial radius 1.5e19, 120° apart.
 - **`lorentz_midpoint` with `c > 1`:** its normalizer, about `c·x₀²` times the weighted variance of the directions `x_s/x₀` (at most 1), overflows in a widely spread cloud from time coordinates of about `1.84e19/√c`, and the output is the origin. For `c ≤ 1` that is past the ceiling.
-- **FHCNN `normalize=True`:** a linear output whose spatial norm exceeds 1.84e19 gets spatial part 0 and a finite time slot — a finite point off the hyperboloid with zero gradient.
+- **FHCNN `normalize=True`:** a linear output whose spatial norm exceeds 1.84e19 gets spatial part 0 and a finite time slot — a finite point off the hyperboloid; its spatial part has zero gradient (the time slot's sigmoid gate still gets one).
 - **`HypLinearPoincarePP`/`HypConv2DPoincare`, `HypLinearPoincareBusemann`:** an `inf` score is clipped — by the `sinh` argument clip at `±0.99·ln FLT_MAX ≈ ±87.8`, or by `v_max` — to a finite point at the ball's edge, where the hyperboloid lift above passes it through.
 
 ### The Hyperboloid Origin Chart {#hyperboloid-origin-chart}

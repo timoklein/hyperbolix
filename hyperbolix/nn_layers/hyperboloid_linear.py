@@ -83,7 +83,8 @@ def _fhcnn_forward(
         # floored norm is 1e-15 <= 1e-5). `sum(x_rem**2)` overflows float32 past spatial coordinate
         # 1.8e19 -- geodesic radius ~45 at c = 1, ~139 at c = 0.1. Not loud here: the inf norm only
         # divides, so `res_rem` becomes 0 while the time slot `hypot(scale, 1/√c)` stays finite -- a
-        # finite point off the hyperboloid with zero gradient.
+        # finite point off the hyperboloid; its spatial part has zero gradient (the time slot's
+        # sigmoid gate still gets one).
         x_rem_norm_B1 = floor_at(safe_sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True)), MIN_NORM)  # (B, 1)
 
         # Learnable sigmoid scaling. capped_exp: scale_val is unconstrained — a runaway param
@@ -247,7 +248,7 @@ def _hyperboloid_plfc_forward(
 def _assert_v_max_safe(v_max: float) -> None:
     """Reject a ``v_max`` whose single clipped sinh entry cannot be squared in float32.
 
-    The check bounds one entry: ``sinh(v_max) < sqrt(finfo(float32).max)`` (≈1.84e19, ``v_max`` < 45.05).
+    The check bounds one entry: ``sinh(v_max) < sqrt(finfo(float32).max)`` (≈1.84e19, ``v_max`` ≲ 45.05).
     It cannot see the sum over the ``O`` outputs or the ``1/sqrt(c)`` factor (``c`` is only known at
     call time), so the hyperboloid time slot, reconstructed from ``sum(y_s**2)``, still overflows to
     ``inf`` (loudly) once ``O·sinh²(v_max)/c > finfo(float32).max``. The Poincaré Busemann output map

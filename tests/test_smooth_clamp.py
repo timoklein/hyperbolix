@@ -132,7 +132,7 @@ def test_plfc_extreme_input_finite_gradient_hard_clip(dtype):
 def test_v_max_overflow_assertion():
     """Constructing PLFC/ILNN with a v_max whose single sinh entry overflows float32 when squared raises.
 
-    The check bounds one entry, sinh(v_max) < sqrt(finfo(float32).max) (~1.84e19, v_max < 45.05). It
+    The check bounds one entry, sinh(v_max) < sqrt(finfo(float32).max) (~1.84e19, v_max ≲ 45.05). It
     does not bound the time reconstruction, which still overflows to inf once
     O·sinh²(v_max)/c > finfo(float32).max (O spatial outputs).
     """

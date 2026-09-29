@@ -132,9 +132,10 @@ distance matrix and squared ball norms.
 
 The Karcher fixed-point Fréchet (Riemannian center of mass) mean, used to center data before
 fitting. Manifold-generic — works for `Hyperboloid`, `Poincare`, `ProperVelocity`, `Klein`,
-`HalfSpace` and `Euclidean`. The step is divided by the mean of `a·coth(a)` over the points
-(`a = √c·d` to the current estimate), so it converges on widely spread batches where the plain
-Karcher step overshoots; `step_size` multiplies that step.
+`HalfSpace`, `Euclidean` and `ProductManifold` (pass the per-factor curvature sequence as `c`).
+The step is divided by the mean of `a·coth(a)` over the points (`a = √c·d` to the current
+estimate; for a product, `c` is the largest non-negative factor curvature), so it converges on
+widely spread batches where the plain Karcher step overshoots; `step_size` multiplies that step.
 
 ::: hyperbolix.decomposition.frechet.frechet_mean
     options:
