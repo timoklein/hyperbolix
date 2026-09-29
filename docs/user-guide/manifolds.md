@@ -254,14 +254,16 @@ class HypPolicy(nnx.Module):
         self.curvature = LearnableCurvature(
             init_c=0.1, parameterization="log",
         )
-        self.l1 = HypLinearPoincarePP(manifold, 4, 4, rngs=rngs)
+        # l1 takes the Euclidean observation as a tangent vector; l2 takes l1's ball point.
+        self.l1 = HypLinearPoincarePP(manifold, 4, 4, rngs=rngs, input_space="tangent")
         self.l2 = HypLinearPoincarePP(manifold, 4, 4, rngs=rngs)
 
-    def __call__(self, x):
+    def __call__(self, x):  # x: (B, 4) Euclidean observations
         c = self.curvature()
         h = self.l1(x, c)
         return self.l2(h, c)
 
+model = HypPolicy(nnx.Rngs(0))
 # Standard Euclidean optimizer — self.curvature.raw is updated like any param.
 optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 
