@@ -1710,7 +1710,7 @@
 <p>Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing manifold operations, neural network layers, and Riemannian optimizers for hyperbolic geometry. Built with Flax NNX and Optax for modern JAX workflows.</p>
 <h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>7 Manifolds</strong>: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), Klein (Beltrami–Klein ball — straight-chord geodesics, Einstein gyrovector operations), and Product Manifold (mixed-curvature composition) — all with complete geometric operations</li>
+<li><strong>8 Manifolds</strong>: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), Klein (Beltrami–Klein ball — straight-chord geodesics, Einstein gyrovector operations), Half-Space (Poincaré upper half-space — height as the last coordinate, Möbius gyrovector operations through the Cayley transform), and Product Manifold (mixed-curvature composition) — all with complete geometric operations</li>
 <li><strong>Learnable Curvature</strong>: <code>LearnableCurvature</code> module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp; works with any <code>nnx.Optimizer</code></li>
 <li><strong>Neural Network Layers</strong>: 40+ hyperbolic layers including linear, convolutional, regression, attention, normalization, and PV layers</li>
 <li><strong>Activation Functions</strong>: 5 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish, GELU)</li>
@@ -1859,6 +1859,11 @@
 </tr>
 <tr>
 <td>Klein manifold + isometry maps (Klein ↔ Poincaré / Hyperboloid / Proper Velocity)</td>
+<td>✅ Stable</td>
+<td>Unreleased</td>
+</tr>
+<tr>
+<td>Half-space manifold + isometry maps (Half-space ↔ Poincaré / Hyperboloid / Klein / Proper Velocity)</td>
 <td>✅ Stable</td>
 <td>Unreleased</td>
 </tr>

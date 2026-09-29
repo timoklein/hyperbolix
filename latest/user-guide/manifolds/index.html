@@ -1818,6 +1818,11 @@ patterns that aren't obvious from any single docstring.</p>
 <td>Geodesics are chords of the ball; <code>einstein_midpoint</code> is a closed-form weighted mean. Scaled radius <span class="arithmatex">\(\sqrt{c}\,d_0\)</span> is limited to 6.32 in float32 (13.86 in float64) at <code>c=1</code>, half the Poincaré ball's — see the <a href="../numerical-stability/#klein-numerics">numerical-stability guide</a></td>
 </tr>
 <tr>
+<td>Horosphere / vertical-geodesic structure (horospheres centred at infinity are the planes <span class="arithmatex">\(x_n = \text{const}\)</span>), or porting half-space code (HTorch)</td>
+<td><code>HalfSpace</code></td>
+<td>Conformal metric <span class="arithmatex">\(\lVert dx\rVert^2/(c\,x_n^2)\)</span> with the height as the last coordinate and origin <span class="arithmatex">\(e_n/\sqrt{c}\)</span>. Pairwise ops are cancellation-free, and points on the vertical axis through the origin are stored to full precision at every height in the dtype's normal range. Pairwise <code>dist</code>/<code>logmap</code> return <code>inf</code>/NaN past scaled distance <span class="arithmatex">\(\sqrt{c}\,d = 88.7\)</span> in float32 (709.8 in float64) — see the <a href="../numerical-stability/#halfspace-numerics">numerical-stability guide</a></td>
+</tr>
+<tr>
 <td>You don't know which to pick</td>
 <td><code>Hyperboloid</code> (or <code>ProperVelocity</code>)</td>
 <td>Robust at <code>c=1.0</code>; PV adds no-projection convenience</td>
@@ -1884,6 +1889,12 @@ different conventions:</p>
 <td><code>Klein</code> points and the <code>klein_to_*</code> / <code>*_to_klein</code> maps (no Klein layers)</td>
 <td>point shape</td>
 <td><strong>Spatial (d)</strong> — a ball point like Poincaré</td>
+<td><code>32</code></td>
+</tr>
+<tr>
+<td><code>HalfSpace</code> points and the <code>halfspace_to_*</code> / <code>*_to_halfspace</code> maps (no half-space layers)</td>
+<td>point shape</td>
+<td><strong>Spatial (d)</strong> — the height <span class="arithmatex">\(x_n &gt; 0\)</span> is the <strong>last</strong> coordinate; the origin is <span class="arithmatex">\(e_n/\sqrt{c}\)</span>, not 0</td>
 <td><code>32</code></td>
 </tr>
 <tr>
@@ -2228,12 +2239,25 @@ Use the direct isometries — they are exact and distance-preserving:</p>
 </span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23" href="#__codelineno-9-23"></a><span class="n">x_klein</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">hyperboloid_to_klein</span><span class="p">(</span><span class="n">x_hyperboloid</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># x_s/(√c·x₀)</span>
 </span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24" href="#__codelineno-9-24"></a><span class="n">x_pv</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">klein_to_pv</span><span class="p">(</span><span class="n">x_klein</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>                    <span class="c1"># k/√g</span>
 </span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25" href="#__codelineno-9-25"></a><span class="n">x_klein</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">pv_to_klein</span><span class="p">(</span><span class="n">x_pv</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>                    <span class="c1"># x/√(1 + c‖x‖²)</span>
+</span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26" href="#__codelineno-9-26"></a>
+</span><span id="__span-9-27"><a id="__codelineno-9-27" name="__codelineno-9-27" href="#__codelineno-9-27"></a><span class="c1"># Half-space (d, height last) ↔ Poincaré (d): the Cayley transform, origin e_n/√c ↦ 0</span>
+</span><span id="__span-9-28"><a id="__codelineno-9-28" name="__codelineno-9-28" href="#__codelineno-9-28"></a><span class="n">x_poincare</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">halfspace_to_poincare</span><span class="p">(</span><span class="n">x_halfspace</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-29"><a id="__codelineno-9-29" name="__codelineno-9-29" href="#__codelineno-9-29"></a><span class="n">x_halfspace</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">poincare_to_halfspace</span><span class="p">(</span><span class="n">x_poincare</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-30"><a id="__codelineno-9-30" name="__codelineno-9-30" href="#__codelineno-9-30"></a>
+</span><span id="__span-9-31"><a id="__codelineno-9-31" name="__codelineno-9-31" href="#__codelineno-9-31"></a><span class="c1"># Half-space (d) ↔ Hyperboloid (d+1), ↔ Klein (d) and ↔ Proper Velocity (d)</span>
+</span><span id="__span-9-32"><a id="__codelineno-9-32" name="__codelineno-9-32" href="#__codelineno-9-32"></a><span class="n">x_hyperboloid</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">halfspace_to_hyperboloid</span><span class="p">(</span><span class="n">x_halfspace</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-33"><a id="__codelineno-9-33" name="__codelineno-9-33" href="#__codelineno-9-33"></a><span class="n">x_halfspace</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">hyperboloid_to_halfspace</span><span class="p">(</span><span class="n">x_hyperboloid</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-34"><a id="__codelineno-9-34" name="__codelineno-9-34" href="#__codelineno-9-34"></a><span class="n">x_klein</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">halfspace_to_klein</span><span class="p">(</span><span class="n">x_halfspace</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-35"><a id="__codelineno-9-35" name="__codelineno-9-35" href="#__codelineno-9-35"></a><span class="n">x_halfspace</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">klein_to_halfspace</span><span class="p">(</span><span class="n">x_klein</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-9-36"><a id="__codelineno-9-36" name="__codelineno-9-36" href="#__codelineno-9-36"></a><span class="n">x_pv</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">halfspace_to_pv</span><span class="p">(</span><span class="n">x_halfspace</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>            <span class="c1"># spatial part of the hyperboloid point</span>
+</span><span id="__span-9-37"><a id="__codelineno-9-37" name="__codelineno-9-37" href="#__codelineno-9-37"></a><span class="n">x_halfspace</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">pv_to_halfspace</span><span class="p">(</span><span class="n">x_pv</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div>
 <p>All single-point functions; batch with <code>jax.vmap(fn, in_axes=(0, None))</code>.</p>
 <p>The <code>logmap → expmap</code> route is lossy (tangent-space round-trip accumulates
 numerical error) and slower. The isometries are exact and mutually consistent —
-<code>pv_to_hyperboloid</code> equals <code>poincare_to_hyperboloid ∘ pv_to_poincare</code>, and
-<code>klein_to_hyperboloid</code> is <code>pv_to_hyperboloid ∘ klein_to_pv</code>.</p>
+<code>pv_to_hyperboloid</code> equals <code>poincare_to_hyperboloid ∘ pv_to_poincare</code>,
+<code>klein_to_hyperboloid</code> is <code>pv_to_hyperboloid ∘ klein_to_pv</code>, and <code>halfspace_to_pv</code> is
+the spatial part of <code>halfspace_to_hyperboloid</code>.</p>
 <div class="admonition warning">
 <p class="admonition-title">Mapping into Klein halves the representable radius</p>
 <p>A point at scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d_0\)</span> has Klein norm <span class="arithmatex">\(\tanh(a)/\sqrt{c}\)</span> but
@@ -2247,6 +2271,36 @@ these points read as <span class="arithmatex">\(a \approx 6.32\)</span>. Map out
 you know lie inside that radius, and call <code>Klein.proj</code> after mapping far points in. See the
 <a href="../numerical-stability/#klein-chart-ceiling">numerical-stability guide</a>.</p>
 </div>
+<div class="admonition note">
+<p class="admonition-title">The half-space model: height last, origin at <span class="arithmatex">\(e_n/\sqrt{c}\)</span></p>
+<p>A <code>HalfSpace</code> point keeps its height <span class="arithmatex">\(x_n &gt; 0\)</span> in the last coordinate, and its origin is
+<span class="arithmatex">\(e_n/\sqrt{c}\)</span>, not 0. Code written for the zero origin of <code>Poincare</code>, <code>Klein</code> or
+<code>ProperVelocity</code> should use <code>expmap_0</code>/<code>logmap_0</code>, which start from <span class="arithmatex">\(e_n/\sqrt{c}\)</span>. None of the maps
+into the half-space projects; <code>hyperboloid_to_halfspace</code> and <code>pv_to_halfspace</code> return
+the height without a floor, and <code>HalfSpace.proj</code> floors it at the dtype's smallest normal
+number. <code>klein_to_halfspace</code> inherits the Klein chart's error floor
+<span class="arithmatex">\(\varepsilon\cosh^2(a)\)</span> (<a href="../numerical-stability/#klein-chart-ceiling">Klein's chart floor</a>).</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">HalfSpace</span><span class="p">,</span> <span class="n">Poincare</span><span class="p">,</span> <span class="n">isometry_mappings</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">halfspace</span> <span class="o">=</span> <span class="n">HalfSpace</span><span class="p">()</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">1.0</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">])</span>   <span class="c1"># (x_s, x_n): the height x_n &gt; 0 is the last coordinate</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">y</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">])</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="n">d</span> <span class="o">=</span> <span class="n">halfspace</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>                <span class="c1"># (2/√c)·asinh(‖r‖/2), cancellation-free</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="n">v</span> <span class="o">=</span> <span class="n">halfspace</span><span class="o">.</span><span class="n">logmap</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>              <span class="c1"># tangent_norm(v, x, c) equals d</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="n">y_rec</span> <span class="o">=</span> <span class="n">halfspace</span><span class="o">.</span><span class="n">expmap</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>          <span class="c1"># back to y</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="n">o</span> <span class="o">=</span> <span class="n">halfspace</span><span class="o">.</span><span class="n">expmap_0</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>    <span class="c1"># the origin e_n/√c = [0, 1]</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="c1"># The Cayley transform to the Poincaré ball preserves the distance</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="n">p_x</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">halfspace_to_poincare</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="n">p_y</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">halfspace_to_poincare</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="n">d_ball</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">p_x</span><span class="p">,</span> <span class="n">p_y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>                     <span class="c1"># equals d</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="n">x_back</span> <span class="o">=</span> <span class="n">isometry_mappings</span><span class="o">.</span><span class="n">poincare_to_halfspace</span><span class="p">(</span><span class="n">p_x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># round trip to x</span>
+</span></code></pre></div>
+</div>
 <div class="admonition tip">
 <p class="admonition-title">Why PV for numerically hard regimes</p>
 <p>The Poincaré ball is bounded (<code>‖y‖² &lt; 1/c</code>) and the hyperboloid time
@@ -2257,28 +2311,28 @@ near the boundary — at the cost of an unbounded coordinate, which is expected.
 </div>
 <h2 id="common-pitfalls">Common Pitfalls<a class="headerlink" href="#common-pitfalls" title="Permanent link">&para;</a></h2>
 <h3 id="1-raw-jnpacosh-jnpatanh-instead-of-the-hyperbolix-versions">1. Raw <code>jnp.acosh</code> / <code>jnp.atanh</code> instead of the hyperbolix versions<a class="headerlink" href="#1-raw-jnpacosh-jnpatanh-instead-of-the-hyperbolix-versions" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># ❌ NaN at domain boundaries (inner_product &lt; 1 for acosh, |x| &gt;= 1 for atanh)</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">d</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">acosh</span><span class="p">(</span><span class="n">inner_product</span><span class="p">)</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># ✅ Clamped and stable</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.math_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">acosh</span><span class="p">,</span> <span class="n">atanh</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">d</span> <span class="o">=</span> <span class="n">acosh</span><span class="p">(</span><span class="n">inner_product</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># ❌ NaN at domain boundaries (inner_product &lt; 1 for acosh, |x| &gt;= 1 for atanh)</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">d</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">acosh</span><span class="p">(</span><span class="n">inner_product</span><span class="p">)</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># ✅ Clamped and stable</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.utils.math_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">acosh</span><span class="p">,</span> <span class="n">atanh</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="n">d</span> <span class="o">=</span> <span class="n">acosh</span><span class="p">(</span><span class="n">inner_product</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Always use <code>hyperbolix.utils.math_utils</code> (<code>acosh</code>, <code>atanh</code>, <code>sinh</code>, <code>cosh</code>)
 when implementing custom hyperbolic ops.</p>
 <h3 id="2-re-implementing-distance-from-scratch">2. Re-implementing distance from scratch<a class="headerlink" href="#2-re-implementing-distance-from-scratch" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># ❌ Hand-rolled — likely numerically unstable</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">norm_sq</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">x</span> <span class="o">-</span> <span class="n">y</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">d</span> <span class="o">=</span> <span class="n">some_formula</span><span class="p">(</span><span class="n">norm_sq</span><span class="p">)</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="c1"># ✅ Use the manifold&#39;s vetted, dtype-aware implementation</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="n">d</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># ❌ Hand-rolled — likely numerically unstable</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">norm_sq</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">x</span> <span class="o">-</span> <span class="n">y</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">d</span> <span class="o">=</span> <span class="n">some_formula</span><span class="p">(</span><span class="n">norm_sq</span><span class="p">)</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="c1"># ✅ Use the manifold&#39;s vetted, dtype-aware implementation</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="n">d</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div>
 <h3 id="3-riemannian-optimizer-for-layers-that-dont-need-one">3. Riemannian optimizer for layers that don't need one<a class="headerlink" href="#3-riemannian-optimizer-for-layers-that-dont-need-one" title="Permanent link">&para;</a></h3>
 <p>Most modern layers (<code>FGG*</code>, <code>*PP</code>, <code>HRC*</code>, <code>HTC*</code>, <code>*PV</code>) parameterize weights
 in <strong>Euclidean space</strong> internally. They do NOT need a Riemannian optimizer:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># ✅ Standard Euclidean Adam works for all modern layers</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># ✅ Standard Euclidean Adam works for all modern layers</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Only use <code>riemannian_adam</code> / <code>riemannian_sgd</code> when parameters live <strong>directly
 on the manifold</strong> — typically hyperbolic embedding tables wrapped in
@@ -2293,7 +2347,7 @@ avoid the need entirely.</p>
 After several training steps, accumulated drift can violate
 <code>&lt;x, x&gt;_L = -1/c</code>. Periodic re-projection via <code>manifold.proj</code> is cheap and
 keeps points on-manifold:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">x</span> <span class="o">=</span> <span class="n">manifold</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># cheap; idempotent on already-valid points</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">x</span> <span class="o">=</span> <span class="n">manifold</span><span class="o">.</span><span class="n">proj</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>  <span class="c1"># cheap; idempotent on already-valid points</span>
 </span></code></pre></div>
 <h3 id="5-picking-a-slow-layer-when-a-fast-equivalent-exists">5. Picking a slow layer when a fast equivalent exists<a class="headerlink" href="#5-picking-a-slow-layer-when-a-fast-equivalent-exists" title="Permanent link">&para;</a></h3>
 <p>Within each layer family, prefer the variant with the highest reported speed

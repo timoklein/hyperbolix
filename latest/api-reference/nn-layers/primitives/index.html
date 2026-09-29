@@ -3199,8 +3199,12 @@ y   = ω / (1 + √(1 + c·‖ω‖²))
 </code></pre></div>
 <p>The <code>clip</code> is the same output-side overflow guard as the hyperboloid path
 (:func:<code>hyperboloid_core.sinh_lift_to_hyperboloid</code>); callers must
-<code>_assert_v_max_safe(v_max)</code>. The closed form always lands strictly inside the ball
-(<code>√c·‖y‖ &lt; 1</code>), so the caller's <code>proj</code> is defensive against float rounding only.</p>
+<code>_assert_v_max_safe(v_max)</code>. The second line is evaluated by
+:func:<code>~hyperbolix.nn_layers.poincare_linear._poincare_sinh_lift</code> without forming <code>‖ω‖²</code>,
+so it cannot overflow float32 for any <code>v_max</code>, <code>O</code> or <code>c</code>; saturated rows land at the
+ball's edge, not the origin. In exact arithmetic the closed form lands strictly inside the
+ball (<code>√c·‖y‖ &lt; 1</code>); in float32 a saturated row can round onto or past the boundary, and the
+caller's <code>proj</code> pulls it back.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -3281,7 +3285,7 @@ y   = ω / (1 + √(1 + c·‖ω‖²))
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Points inside the Poincaré ball with curvature <code>c</code> (pre-projection).</p>
+                <p>Points in the Poincaré ball with curvature <code>c</code>, before the caller's <code>proj</code>.</p>
               </div>
             </td>
           </tr>
@@ -3291,9 +3295,7 @@ y   = ω / (1 + √(1 + c·‖ω‖²))
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/busemann_core.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-148">148</a></span>
-<span class="normal"><a href="#__codelineno-0-149">149</a></span>
-<span class="normal"><a href="#__codelineno-0-150">150</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-150">150</a></span>
 <span class="normal"><a href="#__codelineno-0-151">151</a></span>
 <span class="normal"><a href="#__codelineno-0-152">152</a></span>
 <span class="normal"><a href="#__codelineno-0-153">153</a></span>
@@ -3328,44 +3330,50 @@ y   = ω / (1 + √(1 + c·‖ω‖²))
 <span class="normal"><a href="#__codelineno-0-182">182</a></span>
 <span class="normal"><a href="#__codelineno-0-183">183</a></span>
 <span class="normal"><a href="#__codelineno-0-184">184</a></span>
-<span class="normal"><a href="#__codelineno-0-185">185</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-148"><a id="__codelineno-0-148" name="__codelineno-0-148"></a><span class="k">def</span><span class="w"> </span><span class="nf">busemann_fc_poincare_output</span><span class="p">(</span>
-</span><span id="__span-0-149"><a id="__codelineno-0-149" name="__codelineno-0-149"></a>    <span class="n">u_BO</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_spatial&quot;</span><span class="p">],</span>
-</span><span id="__span-0-150"><a id="__codelineno-0-150" name="__codelineno-0-150"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="__span-0-151"><a id="__codelineno-0-151" name="__codelineno-0-151"></a>    <span class="n">v_max</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="__span-0-152"><a id="__codelineno-0-152" name="__codelineno-0-152"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_spatial&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-153"><a id="__codelineno-0-153" name="__codelineno-0-153"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Poincaré BFC output map (Chen et al. 2026, Thm. 4.1).</span>
-</span><span id="__span-0-154"><a id="__codelineno-0-154" name="__codelineno-0-154"></a>
-</span><span id="__span-0-155"><a id="__codelineno-0-155" name="__codelineno-0-155"></a><span class="sd">    Maps the (activated) Busemann logits to a Poincaré ball point::</span>
+<span class="normal"><a href="#__codelineno-0-185">185</a></span>
+<span class="normal"><a href="#__codelineno-0-186">186</a></span>
+<span class="normal"><a href="#__codelineno-0-187">187</a></span>
+<span class="normal"><a href="#__codelineno-0-188">188</a></span>
+<span class="normal"><a href="#__codelineno-0-189">189</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-150"><a id="__codelineno-0-150" name="__codelineno-0-150"></a><span class="k">def</span><span class="w"> </span><span class="nf">busemann_fc_poincare_output</span><span class="p">(</span>
+</span><span id="__span-0-151"><a id="__codelineno-0-151" name="__codelineno-0-151"></a>    <span class="n">u_BO</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_spatial&quot;</span><span class="p">],</span>
+</span><span id="__span-0-152"><a id="__codelineno-0-152" name="__codelineno-0-152"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-153"><a id="__codelineno-0-153" name="__codelineno-0-153"></a>    <span class="n">v_max</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-0-154"><a id="__codelineno-0-154" name="__codelineno-0-154"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_spatial&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-155"><a id="__codelineno-0-155" name="__codelineno-0-155"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Poincaré BFC output map (Chen et al. 2026, Thm. 4.1).</span>
 </span><span id="__span-0-156"><a id="__codelineno-0-156" name="__codelineno-0-156"></a>
-</span><span id="__span-0-157"><a id="__codelineno-0-157" name="__codelineno-0-157"></a><span class="sd">        ω   = sinh(clip(√c · u, ±v_max)) / √c</span>
-</span><span id="__span-0-158"><a id="__codelineno-0-158" name="__codelineno-0-158"></a><span class="sd">        y   = ω / (1 + √(1 + c·‖ω‖²))</span>
-</span><span id="__span-0-159"><a id="__codelineno-0-159" name="__codelineno-0-159"></a>
-</span><span id="__span-0-160"><a id="__codelineno-0-160" name="__codelineno-0-160"></a><span class="sd">    The ``clip`` is the same output-side overflow guard as the hyperboloid path</span>
-</span><span id="__span-0-161"><a id="__codelineno-0-161" name="__codelineno-0-161"></a><span class="sd">    (:func:`hyperboloid_core.sinh_lift_to_hyperboloid`); callers must</span>
-</span><span id="__span-0-162"><a id="__codelineno-0-162" name="__codelineno-0-162"></a><span class="sd">    ``_assert_v_max_safe(v_max)``. The closed form always lands strictly inside the ball</span>
-</span><span id="__span-0-163"><a id="__codelineno-0-163" name="__codelineno-0-163"></a><span class="sd">    (``√c·‖y‖ &lt; 1``), so the caller&#39;s ``proj`` is defensive against float rounding only.</span>
-</span><span id="__span-0-164"><a id="__codelineno-0-164" name="__codelineno-0-164"></a>
-</span><span id="__span-0-165"><a id="__codelineno-0-165" name="__codelineno-0-165"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-166"><a id="__codelineno-0-166" name="__codelineno-0-166"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-167"><a id="__codelineno-0-167" name="__codelineno-0-167"></a><span class="sd">    u_BO : Array, shape (B, O)</span>
-</span><span id="__span-0-168"><a id="__codelineno-0-168" name="__codelineno-0-168"></a><span class="sd">        Activated Busemann logits. ``O = out_spatial = out_dim`` (Poincaré has no time coord).</span>
-</span><span id="__span-0-169"><a id="__codelineno-0-169" name="__codelineno-0-169"></a><span class="sd">    c : float</span>
-</span><span id="__span-0-170"><a id="__codelineno-0-170" name="__codelineno-0-170"></a><span class="sd">        Curvature (positive).</span>
-</span><span id="__span-0-171"><a id="__codelineno-0-171" name="__codelineno-0-171"></a><span class="sd">    v_max : float</span>
-</span><span id="__span-0-172"><a id="__codelineno-0-172" name="__codelineno-0-172"></a><span class="sd">        Hard clip bound on ``√c · u`` (output-side overflow guard).</span>
-</span><span id="__span-0-173"><a id="__codelineno-0-173" name="__codelineno-0-173"></a>
-</span><span id="__span-0-174"><a id="__codelineno-0-174" name="__codelineno-0-174"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-175"><a id="__codelineno-0-175" name="__codelineno-0-175"></a><span class="sd">    -------</span>
-</span><span id="__span-0-176"><a id="__codelineno-0-176" name="__codelineno-0-176"></a><span class="sd">    Array, shape (B, O)</span>
-</span><span id="__span-0-177"><a id="__codelineno-0-177" name="__codelineno-0-177"></a><span class="sd">        Points inside the Poincaré ball with curvature ``c`` (pre-projection).</span>
-</span><span id="__span-0-178"><a id="__codelineno-0-178" name="__codelineno-0-178"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-179"><a id="__codelineno-0-179" name="__codelineno-0-179"></a>    <span class="n">sqrt_c</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
-</span><span id="__span-0-180"><a id="__codelineno-0-180" name="__codelineno-0-180"></a>    <span class="c1"># safe_sinh: expm1-form is an accuracy fix over XLA&#39;s CPU jnp.sinh (up to ~17-496 ulps off for</span>
-</span><span id="__span-0-181"><a id="__codelineno-0-181" name="__codelineno-0-181"></a>    <span class="c1"># |x| &gt;= 16), not just a clamp — the ±v_max clip here is still the output-side overflow guard.</span>
-</span><span id="__span-0-182"><a id="__codelineno-0-182" name="__codelineno-0-182"></a>    <span class="n">omega_BO</span> <span class="o">=</span> <span class="n">safe_sinh</span><span class="p">(</span><span class="n">clamp_to</span><span class="p">(</span><span class="n">sqrt_c</span> <span class="o">*</span> <span class="n">u_BO</span><span class="p">,</span> <span class="o">-</span><span class="n">v_max</span><span class="p">,</span> <span class="n">v_max</span><span class="p">))</span> <span class="o">/</span> <span class="n">sqrt_c</span>
-</span><span id="__span-0-183"><a id="__codelineno-0-183" name="__codelineno-0-183"></a>    <span class="n">omega_sqnorm_B1</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">omega_BO</span><span class="o">**</span><span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-0-184"><a id="__codelineno-0-184" name="__codelineno-0-184"></a>    <span class="n">denom_B1</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">+</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">1.0</span> <span class="o">+</span> <span class="n">c</span> <span class="o">*</span> <span class="n">omega_sqnorm_B1</span><span class="p">)</span>
-</span><span id="__span-0-185"><a id="__codelineno-0-185" name="__codelineno-0-185"></a>    <span class="k">return</span> <span class="n">omega_BO</span> <span class="o">/</span> <span class="n">denom_B1</span>
+</span><span id="__span-0-157"><a id="__codelineno-0-157" name="__codelineno-0-157"></a><span class="sd">    Maps the (activated) Busemann logits to a Poincaré ball point::</span>
+</span><span id="__span-0-158"><a id="__codelineno-0-158" name="__codelineno-0-158"></a>
+</span><span id="__span-0-159"><a id="__codelineno-0-159" name="__codelineno-0-159"></a><span class="sd">        ω   = sinh(clip(√c · u, ±v_max)) / √c</span>
+</span><span id="__span-0-160"><a id="__codelineno-0-160" name="__codelineno-0-160"></a><span class="sd">        y   = ω / (1 + √(1 + c·‖ω‖²))</span>
+</span><span id="__span-0-161"><a id="__codelineno-0-161" name="__codelineno-0-161"></a>
+</span><span id="__span-0-162"><a id="__codelineno-0-162" name="__codelineno-0-162"></a><span class="sd">    The ``clip`` is the same output-side overflow guard as the hyperboloid path</span>
+</span><span id="__span-0-163"><a id="__codelineno-0-163" name="__codelineno-0-163"></a><span class="sd">    (:func:`hyperboloid_core.sinh_lift_to_hyperboloid`); callers must</span>
+</span><span id="__span-0-164"><a id="__codelineno-0-164" name="__codelineno-0-164"></a><span class="sd">    ``_assert_v_max_safe(v_max)``. The second line is evaluated by</span>
+</span><span id="__span-0-165"><a id="__codelineno-0-165" name="__codelineno-0-165"></a><span class="sd">    :func:`~hyperbolix.nn_layers.poincare_linear._poincare_sinh_lift` without forming ``‖ω‖²``,</span>
+</span><span id="__span-0-166"><a id="__codelineno-0-166" name="__codelineno-0-166"></a><span class="sd">    so it cannot overflow float32 for any ``v_max``, ``O`` or ``c``; saturated rows land at the</span>
+</span><span id="__span-0-167"><a id="__codelineno-0-167" name="__codelineno-0-167"></a><span class="sd">    ball&#39;s edge, not the origin. In exact arithmetic the closed form lands strictly inside the</span>
+</span><span id="__span-0-168"><a id="__codelineno-0-168" name="__codelineno-0-168"></a><span class="sd">    ball (``√c·‖y‖ &lt; 1``); in float32 a saturated row can round onto or past the boundary, and the</span>
+</span><span id="__span-0-169"><a id="__codelineno-0-169" name="__codelineno-0-169"></a><span class="sd">    caller&#39;s ``proj`` pulls it back.</span>
+</span><span id="__span-0-170"><a id="__codelineno-0-170" name="__codelineno-0-170"></a>
+</span><span id="__span-0-171"><a id="__codelineno-0-171" name="__codelineno-0-171"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-172"><a id="__codelineno-0-172" name="__codelineno-0-172"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-173"><a id="__codelineno-0-173" name="__codelineno-0-173"></a><span class="sd">    u_BO : Array, shape (B, O)</span>
+</span><span id="__span-0-174"><a id="__codelineno-0-174" name="__codelineno-0-174"></a><span class="sd">        Activated Busemann logits. ``O = out_spatial = out_dim`` (Poincaré has no time coord).</span>
+</span><span id="__span-0-175"><a id="__codelineno-0-175" name="__codelineno-0-175"></a><span class="sd">    c : float</span>
+</span><span id="__span-0-176"><a id="__codelineno-0-176" name="__codelineno-0-176"></a><span class="sd">        Curvature (positive).</span>
+</span><span id="__span-0-177"><a id="__codelineno-0-177" name="__codelineno-0-177"></a><span class="sd">    v_max : float</span>
+</span><span id="__span-0-178"><a id="__codelineno-0-178" name="__codelineno-0-178"></a><span class="sd">        Hard clip bound on ``√c · u`` (output-side overflow guard).</span>
+</span><span id="__span-0-179"><a id="__codelineno-0-179" name="__codelineno-0-179"></a>
+</span><span id="__span-0-180"><a id="__codelineno-0-180" name="__codelineno-0-180"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-181"><a id="__codelineno-0-181" name="__codelineno-0-181"></a><span class="sd">    -------</span>
+</span><span id="__span-0-182"><a id="__codelineno-0-182" name="__codelineno-0-182"></a><span class="sd">    Array, shape (B, O)</span>
+</span><span id="__span-0-183"><a id="__codelineno-0-183" name="__codelineno-0-183"></a><span class="sd">        Points in the Poincaré ball with curvature ``c``, before the caller&#39;s ``proj``.</span>
+</span><span id="__span-0-184"><a id="__codelineno-0-184" name="__codelineno-0-184"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-185"><a id="__codelineno-0-185" name="__codelineno-0-185"></a>    <span class="n">sqrt_c</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
+</span><span id="__span-0-186"><a id="__codelineno-0-186" name="__codelineno-0-186"></a>    <span class="c1"># safe_sinh: expm1-form is an accuracy fix over XLA&#39;s CPU jnp.sinh (up to ~17-496 ulps off for</span>
+</span><span id="__span-0-187"><a id="__codelineno-0-187" name="__codelineno-0-187"></a>    <span class="c1"># |x| &gt;= 16), not just a clamp — the ±v_max clip here is still the output-side overflow guard.</span>
+</span><span id="__span-0-188"><a id="__codelineno-0-188" name="__codelineno-0-188"></a>    <span class="n">s_BO</span> <span class="o">=</span> <span class="n">safe_sinh</span><span class="p">(</span><span class="n">clamp_to</span><span class="p">(</span><span class="n">sqrt_c</span> <span class="o">*</span> <span class="n">u_BO</span><span class="p">,</span> <span class="o">-</span><span class="n">v_max</span><span class="p">,</span> <span class="n">v_max</span><span class="p">))</span>  <span class="c1"># (B, O), s = √c·ω</span>
+</span><span id="__span-0-189"><a id="__codelineno-0-189" name="__codelineno-0-189"></a>    <span class="k">return</span> <span class="n">_poincare_sinh_lift</span><span class="p">(</span><span class="n">s_BO</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>

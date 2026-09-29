@@ -1086,6 +1086,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#halfspace-numerics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Half-Space: Cancellation-Free Pairwise Operations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#hyperbolic-function-overflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2645,6 +2656,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#halfspace-numerics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Half-Space: Cancellation-Free Pairwise Operations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#hyperbolic-function-overflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3575,6 +3597,25 @@ input-side bound here, because a bound would put the silent saturation back (see
 <em>loud divergence over silent saturation</em> rule in <code>CLAUDE.md</code>). Monitor the per-row maximum input
 time coordinate — or <code>dist_0</code> of the input — at the layer's entry, and bound the trunk that feeds it
 in your own model.</p>
+<h4 id="silent-overflow-sites">Where Float32 Overflow Still Collapses Silently<a class="headerlink" href="#silent-overflow-sites" title="Permanent link">&para;</a></h4>
+<p>The library lets non-finite values propagate so that a diverging model fails loudly. At the sites
+below, a float32 sum of squares or a clip still turns an absurdly large finite input (or, for the
+Poincaré lifts, an <code>inf</code> score) into a finite point. Each needs an input at or near the float32
+coordinate ceiling <code>√FLT_MAX ≈ 1.84e19</code> (see <a href="#input-overflow-fingerprint">above</a>), which only an
+already-diverging model reaches, so the code is left as it is. Outputs checked in
+<code>logs/2026-09-29_follow-ups/2_docs/probe_silent_collapse.out</code>.</p>
+<ul>
+<li><strong>Poincaré and κ-stereographic <code>proj</code>:</strong> a finite <code>x</code> with <code>‖x‖ &gt; 1.84e19</code> becomes the zero vector (<a href="../../changelog/">changelog</a>, 1.2.1).</li>
+<li><strong><code>Poincare.expmap</code>, <code>Klein.expmap</code>:</strong> <code>‖v‖ &gt; 1.84e19</code> returns the base point.</li>
+<li><strong><code>Hyperboloid.expmap_0</code>:</strong> <code>‖v‖ &gt; 1.84e19</code> returns the origin; a shorter <code>v</code> whose image passes the ceiling gets an <code>inf</code> time slot, as intended.</li>
+<li><strong><code>HyperPPFeatureScaling</code>:</strong> the mean of squares in its Flax <code>RMSNorm</code> overflows for a row with <code>‖x‖ &gt; 1.84e19</code>; the row becomes zero, i.e. the origin after <code>expmap_0</code>.</li>
+<li><strong><code>HRCBatchNorm</code> (train mode):</strong> a feature whose batch sum of squares overflows equals its BatchNorm bias in every row, and its running variance becomes <code>inf</code> for good, so eval mode does the same from then on. With all <code>N</code> rows near one value <code>X</code> this starts at <code>X &gt; 1.84e19/√N</code> (1.15e18 at <code>N = 256</code>), below the ceiling.</li>
+<li><strong>HRC (<code>HRCLayerNorm</code>, <code>HRCRMSNorm</code>, …):</strong> reads only the spatial part, so the <code>inf</code> time slot of a point past the ceiling is dropped; the LayerNorm/RMSNorm mean of squares then overflows (<code>‖x_s‖ &gt; 1.84e19</code>) and the row becomes the LayerNorm bias or the origin.</li>
+<li><strong><code>lorentz_residual</code> (<code>w_y ≤ 1</code>):</strong> the <code>4h²/c</code> in its normalizer, <code>h = sinh(√c·d(x, y)/2)</code>, overflows once <code>h &gt; √(min(c, 1)·FLT_MAX)/2</code> (9.2e18 at <code>c = 1</code>), and the output is the origin — e.g. two points at spatial radius 1.5e19, 120° apart.</li>
+<li><strong><code>lorentz_midpoint</code> with <code>c &gt; 1</code>:</strong> its normalizer, about <code>c·x₀²</code> times the weighted variance of the directions <code>x_s/x₀</code> (at most 1), overflows in a widely spread cloud from time coordinates of about <code>1.84e19/√c</code>, and the output is the origin. For <code>c ≤ 1</code> that is past the ceiling.</li>
+<li><strong>FHCNN <code>normalize=True</code>:</strong> a linear output whose spatial norm exceeds 1.84e19 gets spatial part 0 and a finite time slot — a finite point off the hyperboloid; its spatial part has zero gradient (the time slot's sigmoid gate still gets one).</li>
+<li><strong><code>HypLinearPoincarePP</code>/<code>HypConv2DPoincare</code>, <code>HypLinearPoincareBusemann</code>:</strong> an <code>inf</code> score is clipped — by the <code>sinh</code> argument clip at <code>±0.99·ln FLT_MAX ≈ ±87.8</code>, or by <code>v_max</code> — to a finite point at the ball's edge, where the hyperboloid lift above passes it through.</li>
+</ul>
 <h3 id="hyperboloid-origin-chart">The Hyperboloid Origin Chart<a class="headerlink" href="#hyperboloid-origin-chart" title="Permanent link">&para;</a></h3>
 <p><code>dist_0</code> and <code>logmap_0</code> used to recover the geodesic radius from the ambient <strong>time</strong> coordinate
 <span class="arithmatex">\(x_0\)</span>, and that coordinate cannot resolve a small radius. On the sheet</p>
@@ -4218,6 +4259,7 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 <li><strong>Proper Velocity</strong>: unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span>, stable at large radii, exact Euclidean retraction (plain <code>optax.adam</code> / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large. Its tangent-space metric shares the hyperboloid's fix (see <a href="#pv-tangent-metric">below</a>), and <code>PV.dist</code>/<code>logmap</code> between two nearby points at large radius now go through the exact hyperboloid lift — see <a href="#pv-dist-lift">below</a>.</li>
 <li><strong>κ-Stereographic</strong>: identical numerics to the Poincaré ball for <span class="arithmatex">\(c &gt; 0\)</span> (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near <span class="arithmatex">\(c = 0\)</span> — see the <a href="#stereographic-near-zero-curvature">dedicated section below</a>.</li>
 <li><strong>Klein</strong>: the pairwise operations are cancellation-free, but the chart reaches its boundary at half the Poincaré radius (scaled radius 6.32 in float32, 13.86 in float64, at <span class="arithmatex">\(c = 1\)</span>) and its error floor grows as <span class="arithmatex">\(\varepsilon\cosh^2(a)\)</span> — see the <a href="#klein-numerics">dedicated section below</a>.</li>
+<li><strong>HalfSpace</strong>: no boundary at finite distance, and the pairwise operations are cancellation-free. The error floor is a stored point's rounding, which grows as <span class="arithmatex">\(\cosh(\sqrt{c}\,\delta)\)</span> with the distance <span class="arithmatex">\(\delta\)</span> to the vertical geodesic through the origin and stays at its minimum on that geodesic at every height. The pairwise operations return <code>inf</code>/NaN past a scaled distance of 88.7 in float32 (709.8 in float64) — see the <a href="#halfspace-numerics">dedicated section below</a>.</li>
 </ul>
 <div class="admonition note">
 <p class="admonition-title">Training PV layers</p>
@@ -4543,6 +4585,39 @@ along <span class="arithmatex">\(\pm v\)</span>, but by the wrong amount. In a f
 the far side of <span class="arithmatex">\(x\)</span> (<span class="arithmatex">\(t = -0.61\)</span> along <span class="arithmatex">\(v\)</span>, distance 1.368 instead of 1.749), and one landed at
 distance 0.317 instead of 0.504. All three <span class="arithmatex">\(c = 1\)</span> samples matched. <code>Klein.expmap</code> matches the hyperboloid
 exponential map to 1.748e-15 in the float64 oracle check above.</p>
+<h2 id="halfspace-numerics">Half-Space: Cancellation-Free Pairwise Operations<a class="headerlink" href="#halfspace-numerics" title="Permanent link">&para;</a></h2>
+<p><code>HalfSpace</code> (height <span class="arithmatex">\(x_n &gt; 0\)</span> in the last coordinate, metric <span class="arithmatex">\(\lVert dx\rVert^2/(c\,x_n^2)\)</span>,
+origin <span class="arithmatex">\(o = e_n/\sqrt{c}\)</span>) builds its two-point operations from <span class="arithmatex">\(w = y - x\)</span>, which is exact in
+floating point for close points. The textbook distance
+<span class="arithmatex">\(\operatorname{arcosh}\!\big(1 + \lVert y - x\rVert^2/(2x_n y_n)\big)/\sqrt{c}\)</span>, which the
+reference implementation (HTorch) uses, takes <code>acosh</code> of a number close to 1 for close pairs
+and loses the separation. <code>HalfSpace.dist</code> evaluates the same function as
+<span class="arithmatex">\((2/\sqrt{c})\operatorname{arsinh}(\lVert r\rVert/2)\)</span> with
+<span class="arithmatex">\(r = \big((y - x)/\sqrt{x_n}\big)/\sqrt{y_n}\)</span>, and <code>logmap</code> builds <span class="arithmatex">\(\theta/\sinh\theta\)</span> from the
+same <span class="arithmatex">\(r\)</span>. <code>expmap</code> evaluates its denominator in a non-cancelling form for near-vertical upward
+steps. <code>ptransp</code> is a rational formula: the conformal scale <span class="arithmatex">\(y_n/x_n\)</span> times a rotation by
+<span class="arithmatex">\(-2\arctan\big(\lVert w_s\rVert/(x_n + y_n)\big)\)</span>. In float32 at scaled separation <span class="arithmatex">\(10^{-5}\)</span>, the
+literal <code>acosh</code> has median relative error 1.00 (evaluated eagerly, or jitted on XLA:GPU; XLA:CPU's
+<code>jit</code> rewrites it into an accurate form), and <code>HalfSpace.dist</code> a median of at most 4.24e-8
+at scaled radii from 0.5 to 12, <span class="arithmatex">\(c = 1\)</span> (<code>logs/2026-09-28_halfspace-manifold/timing_pass/probe_final.out</code>).</p>
+<p>The error that remains is a stored point's own rounding, about
+<span class="arithmatex">\(0.4\,(\varepsilon/2)\cosh(\sqrt{c}\,\delta)/\sqrt{c}\)</span> as a distance, with <span class="arithmatex">\(\varepsilon\)</span> the machine
+epsilon and <span class="arithmatex">\(\delta\)</span> the distance to the vertical geodesic through <span class="arithmatex">\(o\)</span>, so along that axis it does
+not grow with the height.</p>
+<p>Three cases return <code>inf</code>/NaN instead of a finite wrong value. The squared chord
+<span class="arithmatex">\(\lVert r\rVert^2\)</span> overflows past a scaled distance <span class="arithmatex">\(\sqrt{c}\,d\)</span> of 88.72 in float32 (709.78 in
+float64); past it <code>dist</code> returns <code>inf</code>, and <code>logmap</code>, <code>ptransp</code> and <code>gyro_difference</code> return
+non-finite values (<code>timing_pass/ceiling_check.out</code>). <code>logmap</code> can return a non-finite vector
+earlier, once <span class="arithmatex">\(x_n e^{\sqrt{c}\,d}\)</span> passes the largest float
+(<code>test_fixes/logmap_overflow_repro_plain.out</code>). An exactly vertical upward <code>expmap</code> step
+longer than <span class="arithmatex">\(\theta = \ln(1/\text{tiny})\)</span>, where tiny is the smallest normal number (87.34 in
+float32, 708.40 in float64), returns an infinite height with NaN horizontal coordinates: the
+denominator <span class="arithmatex">\(e^{-\theta}\)</span> underflows to 0 while the true height <span class="arithmatex">\(x_n e^{\theta}\)</span> is still
+representable (<code>docs_checks/docs_checks.out</code>, CPU). The gyro operations inherit this limit
+through <span class="arithmatex">\(\exp_o\)</span>.</p>
+<p>HTorch's <code>ptransp</code> applies the ambient-hyperboloid transport formula to chart coordinates, which
+is not an isometry: it transports <span class="arithmatex">\((1, 0)\)</span> from <span class="arithmatex">\((0, 1)\)</span> to <span class="arithmatex">\((0, 2)\)</span> as <span class="arithmatex">\((1, 0)\)</span>, whose norm at
+the endpoint is 0.5, where the parallel transport is <span class="arithmatex">\((2, 0)\)</span> (<code>timing_pass/probe_final.out</code>).</p>
 <h2 id="hyperbolic-function-overflow">Hyperbolic Function Overflow<a class="headerlink" href="#hyperbolic-function-overflow" title="Permanent link">&para;</a></h2>
 <h3 id="the-problem">The Problem<a class="headerlink" href="#the-problem" title="Permanent link">&para;</a></h3>
 <p>Standard implementations of cosh, sinh can overflow:</p>
@@ -5497,6 +5572,9 @@ CPU table: about ±6% on a workload known to be unchanged.</p>
 </tbody>
 </table>
 <p>Total wall time: as-is 35.2 s, new 45.4 s.</p>
+<p>The <code>frechet_mean</code> row was measured before the 2026-09-29 step change (step
+<code>step_size / mean_i(a_i·coth a_i)</code>), which adds one batched <code>tangent_norm</code> per iteration and
+can change the iteration count; it is not the current per-call cost.</p>
 <h3 id="gpu-a100-pcie-40gb-device-0">GPU (A100-PCIE-40GB, device 0)<a class="headerlink" href="#gpu-a100-pcie-40gb-device-0" title="Permanent link">&para;</a></h3>
 <p><code>probe_cost_gpu_b586169.out</code> (as-is) vs <code>probe_cost_gpu_5b756df.out</code> (new). The <code>@REV</code> marker in the
 Busemann rows names the revision that produced each column: <code>@b586169</code> in the as-is columns,
