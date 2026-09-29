@@ -166,22 +166,22 @@ def _fhnn_forward(
     z0_B1 = z_BO[:, 0:1]  # (B, 1)
     z_rem_BD = z_BO[:, 1:]  # (B, D) where D = out_dim - 1
 
-    # Time coordinate via scaled sigmoid with floor at 1/sqrt(c)
-    # y0 > 1/sqrt(c) guaranteed by construction (additive floor, not max)
+    # Time coordinate via scaled sigmoid with floor at 1/sqrt(c): y0 = m + 1/sqrt(c), where the height
+    # m = exp(s)*sigmoid(z0) + eps > 0 by construction (additive floor, not max).
     # capped_exp: scale_val is unconstrained — see _fhcnn_forward above.
-    y0_B1 = capped_exp(scale_val) * jax.nn.sigmoid(z0_B1) + 1.0 / jnp.sqrt(c) + eps  # (B, 1)
+    inv_sqrt_c = jnp.asarray(1.0, dtype=z_BO.dtype) / jnp.sqrt(jnp.asarray(c, dtype=z_BO.dtype))
+    height_B1 = capped_exp(scale_val) * jax.nn.sigmoid(z0_B1) + eps  # (B, 1)
+    y0_B1 = height_B1 + inv_sqrt_c  # (B, 1)
 
-    # Target spatial norm from hyperboloid constraint: ||y_s||^2 = y0^2 - 1/c, factored as the
-    # difference of squares sqrt(y0 - 1/sqrt(c)) * sqrt(y0 + 1/sqrt(c)). Both factors are strictly
-    # positive because y0 > 1/sqrt(c) + eps by construction (additive floor above), so the result
-    # is real and the two forms agree to rounding. The factored form avoids the two failure modes
-    # of the direct one: `y0**2` overflows float32 to inf past y0 ~ 1.8e19, turning a point whose
-    # time slot is an ordinary float into an all-NaN row; and as y0 -> 1/sqrt(c) the subtraction
-    # y0^2 - 1/c cancels catastrophically, losing most of the significand of a quantity the
-    # rescaling below divides by. `Hyperboloid.proj` reconstructs the same constraint from the
-    # spatial side instead, where a single `sqrt(1/c + sum(x_s**2))` has neither failure mode.
-    inv_sqrt_c = jnp.asarray(1.0, dtype=y0_B1.dtype) / jnp.sqrt(jnp.asarray(c, dtype=y0_B1.dtype))
-    target_norm_B1 = jnp.sqrt(y0_B1 - inv_sqrt_c) * jnp.sqrt(y0_B1 + inv_sqrt_c)  # (B, 1)
+    # Target spatial norm from the hyperboloid constraint: ||y_s||^2 = y0^2 - 1/c
+    # = (y0 - 1/sqrt(c))(y0 + 1/sqrt(c)) = m*(m + 2/sqrt(c)), read off the height m directly rather than
+    # off y0. Adding 1/sqrt(c) to m and taking it away again rounded m to the ulp of 1/sqrt(c): at the
+    # eps floor (sigmoid(z0) -> 0, m ~ 1e-5) that left 6.8e-4 relative error on ||y_s|| in float32, and
+    # 2.4e-3 at m = 1.3e-5 (z0 = -15), where this form is at float32 rounding (<= 1.5e-7). Nothing is
+    # squared either, so y0 past sqrt(FLT_MAX) ~ 1.8e19 (which capped_exp allows) stays finite, and both
+    # factors are positive because m >= eps > 0. `Hyperboloid.proj` reconstructs the same constraint
+    # from the spatial side instead, where a single `sqrt(1/c + sum(x_s**2))` has neither failure mode.
+    target_norm_B1 = jnp.sqrt(height_B1) * jnp.sqrt(height_B1 + 2.0 * inv_sqrt_c)  # (B, 1)
 
     # Rescale spatial to satisfy hyperboloid constraint.
     # `safe_norm`: exact 0 with an exactly-zero VJP at zero spatial input (linalg.norm's VJP at 0
