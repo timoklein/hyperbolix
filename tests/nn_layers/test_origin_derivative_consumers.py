@@ -83,20 +83,6 @@ def test_lorentz_residual_origin_jacobians_match_literal_two_point_mean(dtype, o
     assert jnp.allclose(pullback(cotangent_A)[0], cotangent_A @ expected_AD, atol=atol, rtol=atol)
 
 
-def _radial_ratio_from_sq(sq: jax.Array, kind: str) -> jax.Array:
-    """Stable sinhc/asinhc as a function of the squared argument."""
-    small = sq < jnp.asarray(1e-6, dtype=sq.dtype)
-    safe_sq = jnp.where(small, jnp.ones_like(sq), sq)
-    z = jnp.sqrt(safe_sq)
-    if kind == "sinh":
-        ordinary = jnp.sinh(z) / z
-        series = 1.0 + sq / 6.0 + sq**2 / 120.0
-    else:
-        ordinary = jnp.arcsinh(z) / z
-        series = 1.0 - sq / 6.0 + 3.0 * sq**2 / 40.0
-    return jnp.where(small, series, ordinary)
-
-
 def _inverse_boost_spatial(x_D: jax.Array, y_D: jax.Array, c: float) -> jax.Array:
     """Spatial part of the inverse Lorentz boost ``Lambda_x^-1 y``."""
     inv_c = jnp.asarray(1.0 / c, dtype=x_D.dtype)

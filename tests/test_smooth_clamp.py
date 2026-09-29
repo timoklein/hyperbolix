@@ -130,10 +130,11 @@ def test_plfc_extreme_input_finite_gradient_hard_clip(dtype):
 # 3. v_max overflow assertion (PLFC/ILNN construction guard)
 # ==================================================================================================
 def test_v_max_overflow_assertion():
-    """Constructing PLFC/ILNN with a v_max that would overflow the float32 squared norm raises.
+    """Constructing PLFC/ILNN with a v_max whose single sinh entry overflows float32 when squared raises.
 
-    sinh(v_max) must stay below sqrt(finfo(float32).max) (~1.84e19, v_max <~ 45) so the sinh
-    output path cannot overflow the time reconstruction.
+    The check bounds one entry, sinh(v_max) < sqrt(finfo(float32).max) (~1.84e19, v_max < 45.05). It
+    does not bound the time reconstruction, which still overflows to inf once
+    O·sinh²(v_max)/c > finfo(float32).max (O spatial outputs).
     """
     manifold = Hyperboloid(dtype=jnp.float32)
     # Safe defaults construct fine.

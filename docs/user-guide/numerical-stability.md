@@ -401,6 +401,26 @@ input-side bound here, because a bound would put the silent saturation back (see
 time coordinate — or `dist_0` of the input — at the layer's entry, and bound the trunk that feeds it
 in your own model.
 
+#### Where Float32 Overflow Still Collapses Silently {#silent-overflow-sites}
+
+The library lets non-finite values propagate so that a diverging model fails loudly. At the sites
+below, a float32 sum of squares or a clip still turns an absurdly large finite input (or, for the
+Poincaré lifts, an `inf` score) into a finite point. Each needs an input at or near the float32
+coordinate ceiling `√FLT_MAX ≈ 1.84e19` (see [above](#input-overflow-fingerprint)), which only an
+already-diverging model reaches, so the code is left as it is. Outputs checked in
+`logs/2026-09-29_follow-ups/2_docs/probe_silent_collapse.out`.
+
+- **Poincaré and κ-stereographic `proj`:** a finite `x` with `‖x‖ > 1.84e19` becomes the zero vector ([changelog](../changelog.md), 1.2.1).
+- **`Poincare.expmap`, `Klein.expmap`:** `‖v‖ > 1.84e19` returns the base point.
+- **`Hyperboloid.expmap_0`:** `‖v‖ > 1.84e19` returns the origin; a shorter `v` whose image passes the ceiling gets an `inf` time slot, as intended.
+- **`HyperPPFeatureScaling`:** the mean of squares in its Flax `RMSNorm` overflows for a row with `‖x‖ > 1.84e19`; the row becomes zero, i.e. the origin after `expmap_0`.
+- **`HRCBatchNorm` (train mode):** a feature whose batch sum of squares overflows equals its BatchNorm bias in every row, and its running variance becomes `inf` for good, so eval mode does the same from then on. With all `N` rows near one value `X` this starts at `X > 1.84e19/√N` (1.15e18 at `N = 256`), below the ceiling.
+- **HRC (`HRCLayerNorm`, `HRCRMSNorm`, …):** reads only the spatial part, so the `inf` time slot of a point past the ceiling is dropped; the LayerNorm/RMSNorm mean of squares then overflows (`‖x_s‖ > 1.84e19`) and the row becomes the LayerNorm bias or the origin.
+- **`lorentz_residual` (`w_y ≤ 1`):** the `4h²/c` in its normalizer, `h = sinh(√c·d(x, y)/2)`, overflows once `h > √(min(c, 1)·FLT_MAX)/2` (9.2e18 at `c = 1`), and the output is the origin — e.g. two points at spatial radius 1.5e19, 120° apart.
+- **`lorentz_midpoint` with `c > 1`:** its normalizer, about `c·x₀²` times the weighted variance of the directions `x_s/x₀` (at most 1), overflows in a widely spread cloud from time coordinates of about `1.84e19/√c`, and the output is the origin. For `c ≤ 1` that is past the ceiling.
+- **FHCNN `normalize=True`:** a linear output whose spatial norm exceeds 1.84e19 gets spatial part 0 and a finite time slot — a finite point off the hyperboloid with zero gradient.
+- **`HypLinearPoincarePP`/`HypConv2DPoincare`, `HypLinearPoincareBusemann`:** an `inf` score is clipped — by the `sinh` argument clip at `±0.99·ln FLT_MAX ≈ ±87.8`, or by `v_max` — to a finite point at the ball's edge, where the hyperboloid lift above passes it through.
+
 ### The Hyperboloid Origin Chart {#hyperboloid-origin-chart}
 
 `dist_0` and `logmap_0` used to recover the geodesic radius from the ambient **time** coordinate
@@ -1747,6 +1767,10 @@ CPU table: about ±6% on a workload known to be unchanged.
 | prim lorentz_midpoint | 14 | 281.261 | 3.9228 | 21 | 487.023 | 111.3655 | 28.4 |
 
 Total wall time: as-is 35.2 s, new 45.4 s.
+
+The `frechet_mean` row was measured before the 2026-09-29 step change (step
+`step_size / mean_i(a_i·coth a_i)`), which adds one batched `tangent_norm` per iteration and
+can change the iteration count; it is not the current per-call cost.
 
 ### GPU (A100-PCIE-40GB, device 0)
 
