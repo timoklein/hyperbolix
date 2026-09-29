@@ -78,6 +78,30 @@ def _boundary_floor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, 
     return 2.0 * sqrt_abs_c * max_norm_eps - abs_c * max_norm_eps**2
 
 
+def _boundary_divisor_floor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """Floor for a ``1 - c‖x‖²`` that divides: half of :func:`_boundary_floor`, for ``c > 0``.
+
+    :func:`_boundary_floor` is where a capped point sits in exact arithmetic, not where its
+    *computed* ``1 - c‖x‖²`` lands. The cap (``_proj``, ``_expmap_0``'s scalar cap, ``_addition``'s
+    clamp) rounds the stored coordinates, and the computed value of a capped point falls within
+    about 6 eps of the analytic floor on either side: -6.2 to +6 eps over 20000 capped points per
+    producer, dtype and c in {0.1, 0.3, 1, 2.5}, below it for 11-76 % of them (mean 39 %;
+    ``logs/2026-09-29_cancellation-free/floorfix/probe_band.py``). A floor that binds returns a
+    constant, so every derivative through it is zero. On those points the dominant radial term
+    ``2c·x/(1 - c‖x‖²)`` of a distance gradient vanished, and ``dist``'s gradient came back with
+    relative error 1.0. CO-SNE, which throws most points onto the float64 cap, then diverged
+    between two runs 1e-15 apart (``tests/test_cosne.py``).
+
+    Half the analytic floor sits ``√c·eps**0.75`` below the cap value, 54 eps (float32) / 8192 eps
+    (float64) at c = 1. No projected point reaches it: with this floor the float64 ``dist``
+    gradient at capped points is bit-identical to the unfloored one. Only a point outside the
+    ball, one that was never projected, still meets the floor, which keeps the divisor positive
+    for it. The float32 margin exceeds the measured band only for c ≳ 0.013; below that a capped
+    point can reach this floor too.
+    """
+    return 0.5 * _boundary_floor(x, c)
+
+
 def _conformal_factor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """Conformal factor ``λ_x = 2 / (1 - c‖x‖²)``.
 

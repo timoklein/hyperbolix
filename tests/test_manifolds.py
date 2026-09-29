@@ -17,8 +17,9 @@ import pytest
 
 import hyperbolix as hj
 import hyperbolix.manifolds.poincare as poincare_impl
-from hyperbolix.manifolds import isometry_mappings
+from hyperbolix.manifolds import _gyrovector_core, isometry_mappings
 from hyperbolix.manifolds._base import default_atol
+from hyperbolix.utils.precision import MATMUL_PRECISION
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -2051,6 +2052,129 @@ def test_apollonian_dist_of_a_close_pair_near_the_boundary_is_float32_accurate(a
         got = float(manifold32.apollonian_dist(x_D, y_D, 1.0))
         x64_D, y64_D = jnp.asarray(np.asarray(x_D, np.float64)), jnp.asarray(np.asarray(y_D, np.float64))
         assert abs(got - float(manifold64.apollonian_dist(x64_D, y64_D, 1.0))) <= _APOLLONIAN_SHORT_STEP_ATOL[a]
+
+
+def _poincare_capped_points(manifold, c: float, n: int, seed: int) -> dict[str, jnp.ndarray]:
+    """``n`` points on the ball's cap from each capping producer: ``proj``, ``expmap_0``, ``addition``."""
+    dtype = manifold.dtype
+    key_u, key_r, key_w = jax.random.split(jax.random.PRNGKey(seed), 3)
+    u_ND = jax.random.normal(key_u, (n, 5), dtype=dtype)
+    u_ND = u_ND / jnp.linalg.norm(u_ND, axis=-1, keepdims=True)
+    # Radii from 1/√c (exactly, where 1 + e^-30 rounds to 1) to 3.7/√c, all past the cap.
+    r_N1 = (1.0 + jnp.exp(jax.random.uniform(key_r, (n, 1), dtype=dtype, minval=-30.0, maxval=1.0))) / np.sqrt(c)
+    near_ND = u_ND + 0.3 * jax.random.normal(key_w, (n, 5), dtype=dtype)
+    near_ND = near_ND / jnp.linalg.norm(near_ND, axis=-1, keepdims=True)
+    proj = jax.vmap(manifold.proj, in_axes=(0, None))
+    return {
+        "proj": proj(u_ND * r_N1, c),
+        # √c‖v‖ from 20 to 40: tanh is 1 in both dtypes, so the scalar cap binds.
+        "expmap_0": jax.vmap(manifold.expmap_0, in_axes=(0, None))(u_ND * (10.0 + 10.0 * r_N1), c),
+        # Two capped points 0.3 rad apart add to a point past the cap, which the clamp pulls back.
+        "addition": jax.vmap(manifold.addition, in_axes=(0, 0, None))(
+            proj(2.0 * u_ND / np.sqrt(c), c), proj(2.0 * near_ND / np.sqrt(c), c), c
+        ),
+    }
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_poincare_divisor_floor_sits_below_the_gap_of_every_capped_point(dtype: jnp.dtype, c: float) -> None:
+    """The computed ``1 - c‖x‖²`` of a capped point never falls below ``_boundary_divisor_floor``.
+
+    The gap is computed as the floored sites compute it: a HIGHEST dot, and the ``sum(x**2)`` of the
+    batched conformal factor. It lands within a few eps of the analytic cap value
+    ``_boundary_floor`` on either side, so a floor there binds for a share of the capped points
+    (11-76 % across producers, dtypes and c) and zeroes their gradient. The half floor must stay
+    slack for every one of them.
+    """
+    manifold = hj.manifolds.Poincare(dtype=dtype)
+    eps = float(jnp.finfo(dtype).eps)
+    probe_D = jnp.zeros(5, dtype=dtype)
+    analytic_floor = float(_gyrovector_core._boundary_floor(probe_D, c))
+    divisor_floor = float(_gyrovector_core._boundary_divisor_floor(probe_D, c))
+    gaps = {
+        "dot": jax.jit(jax.vmap(lambda p: 1.0 - c * jnp.dot(p, p, precision=MATMUL_PRECISION))),
+        "sum": jax.jit(jax.vmap(lambda p: 1.0 - c * jnp.sum(p**2))),
+    }
+    below_analytic = 0
+    for producer, x_ND in _poincare_capped_points(manifold, c, 2048, seed=5).items():
+        for spelling, gap in gaps.items():
+            gap_N = np.asarray(gap(x_ND), dtype=np.float64)
+            assert np.all(np.abs(gap_N - analytic_floor) <= 16 * eps), f"{producer}/{spelling}: not on the cap"
+            assert np.all(gap_N >= divisor_floor), f"{producer}/{spelling}: min {np.min(gap_N)} < {divisor_floor}"
+            below_analytic += int(np.sum(gap_N < analytic_floor))
+    assert below_analytic > 0  # the analytic value itself sits inside the rounding band
+
+
+def _capped_pair_reference(x_D: jnp.ndarray, y_D: jnp.ndarray, c: float) -> dict[str, np.ndarray]:
+    """Unfloored gradients of ``d``, ``‖logmap_x(y)‖₂`` and ``δ`` from the STORED coordinates, in longdouble.
+
+    With ``B = 1 - c‖·‖²``, ``s = ‖y - x‖`` and ``√t = √c·s/√(B_x·B_y)``: ``d = 2·asinh(√t)/√c``,
+    ``‖logmap_x(y)‖₂ = B_x·d/2`` (``= d/λ_x``) and ``δ = log((√c·s + G)/B_y)`` with
+    ``G = √(B_x·B_y + c·s²)``, differentiated by hand.
+    """
+    ld = np.longdouble
+    x, y, cc = np.asarray(x_D, dtype=ld), np.asarray(y_D, dtype=ld), ld(c)
+    sqrt_c = np.sqrt(cc)
+    b_x, b_y = 1 - cc * np.sum(x * x), 1 - cc * np.sum(y * y)
+    diff = y - x
+    s2 = np.sum(diff * diff)
+    s = np.sqrt(s2)
+    sqrt_t = sqrt_c * s / np.sqrt(b_x * b_y)
+    d = 2 * np.arcsinh(sqrt_t) / sqrt_c
+    slope = 2 / sqrt_c * sqrt_t / np.sqrt(1 + sqrt_t * sqrt_t)
+    dist_x, dist_y = slope * (-diff / s2 + cc * x / b_x), slope * (diff / s2 + cc * y / b_y)
+    g = np.sqrt(b_x * b_y + cc * s2)
+    apo = sqrt_c * s + g
+    return {
+        "B_min": min(b_x, b_y),
+        "dist": (dist_x, dist_y),
+        "logmap": (-cc * x * d + b_x / 2 * dist_x, b_x / 2 * dist_y),
+        "apollonian": (
+            (-sqrt_c * diff / s - cc * (b_y * x + diff) / g) / apo,
+            (sqrt_c * diff / s + cc * (diff - b_x * y) / g) / apo + 2 * cc * y / b_y,
+        ),
+    }
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_poincare_gradients_at_capped_points_match_the_unfloored_reference(dtype: jnp.dtype, c: float) -> None:
+    """``dist`` (slots 0 and 2), ``‖logmap_x(y)‖₂`` and ``apollonian_dist``, differentiated w.r.t. capped points.
+
+    Oracle: :func:`_capped_pair_reference`, exact on the stored inputs. The tolerance is the chart
+    floor, ``8·eps/min(B_x, B_y)``: a capped point's ``B`` is itself only known to a few eps. When
+    the floor on ``B`` sat at the analytic cap value it bound for about a third of the capped
+    points, and there the gradient lost its dominant ``2c·x/B`` term: relative error 1.0 (at c = 1,
+    for 55-67 % of the cap-cap pairs in float32 and float64 alike). Pairs are cap-cap, free-cap and
+    cap-free (free at scaled radius 2); only the derivative w.r.t. a capped point is checked.
+    """
+    manifold = hj.manifolds.Poincare(dtype=dtype)
+    eps = float(jnp.finfo(dtype).eps)
+    capped = _poincare_capped_points(manifold, c, 72, seed=17)["proj"]
+    cap_x_ND, cap_y_ND = capped[:24], capped[24:48]
+    free_ND = np.tanh(1.0) / np.sqrt(c) * capped[48:] / jnp.linalg.norm(capped[48:], axis=-1, keepdims=True)
+    pairs = {
+        "cap-cap": (cap_x_ND, cap_y_ND, (0, 1)),
+        "free-cap": (free_ND, cap_y_ND, (1,)),
+        "cap-free": (cap_x_ND, free_ND, (0,)),
+    }
+    grads = {
+        "dist": jax.vmap(jax.grad(lambda p, q: manifold.dist(p, q, c), argnums=(0, 1))),
+        "dist2": jax.vmap(jax.grad(lambda p, q: manifold.dist(p, q, c, version_idx=2), argnums=(0, 1))),
+        "logmap": jax.vmap(jax.grad(lambda p, q: jnp.linalg.norm(manifold.logmap(q, p, c)), argnums=(0, 1))),
+        "apollonian": jax.vmap(jax.grad(lambda p, q: manifold.apollonian_dist(p, q, c), argnums=(0, 1))),
+    }
+    for kind, (x_ND, y_ND, capped_args) in pairs.items():
+        refs = [_capped_pair_reference(x_D, y_D, c) for x_D, y_D in zip(x_ND, y_ND, strict=True)]
+        for name, grad_fn in grads.items():
+            got = [np.asarray(g, dtype=np.float64) for g in grad_fn(x_ND, y_ND)]
+            for i, ref in enumerate(refs):
+                tol = 8 * eps / float(ref["B_min"])
+                for arg in capped_args:
+                    ref_D = ref["dist" if name == "dist2" else name][arg]
+                    err = float(np.linalg.norm(got[arg][i] - ref_D) / np.linalg.norm(ref_D))
+                    assert err <= tol, f"{kind} {name} d/d{'xy'[arg]} pair {i}: {err:.2e} > {tol:.2e}"
 
 
 def test_ptransp_is_an_isometry_and_round_trips(

@@ -71,6 +71,7 @@ from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
+    _boundary_divisor_floor,
     _boundary_floor,
     _conformal_factor,
     _conformal_factor_batch,
@@ -174,10 +175,12 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Scala
     # the sqrt-gradient guard and it cost a 1e-15 floor on every genuinely small separation.
     # `dist(x, x)` is therefore an exact 0 with an exactly-zero gradient.
     num = safe_sqrt(jnp.sum((y - x) ** 2))
-    # B_x, B_y with `_conformal_factor`'s boundary clamp (the analytic minimum of 1 - c‖x‖² on a
-    # projected point), so an unprojected near-boundary point cannot drive the divisor to 0.
+    # B_x, B_y floored below the cap's rounding band (`_boundary_divisor_floor`), so an unprojected
+    # point outside the ball cannot drive the divisor to 0 while a capped one keeps its gradient.
+    # The analytic minimum `_boundary_floor` sat inside that band and bound for about a third of
+    # the capped points, zeroing the dominant 2c·x/B_x term of their gradient.
     # Taken directly rather than as `2/λ`, which would round twice.
-    floor_b = _boundary_floor(x, c)
+    floor_b = _boundary_divisor_floor(x, c)
     one_minus_cx = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), floor_b)
     one_minus_cy = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), floor_b)
     sqrt_t = sqrt_c * num / jnp.sqrt(one_minus_cx * one_minus_cy)
@@ -227,11 +230,11 @@ def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCu
     """
     sqrt_c = jnp.sqrt(c)
     diff_sqnorm = jnp.sum((x - y) ** 2)
-    # 1 - c‖x‖² and 1 - c‖y‖² (= 2/λ) with `_conformal_factor`'s boundary clamp, so the
-    # near-boundary floor matches the rest of the module (δ → ∞ as y → ∂ball is expected). Taken
+    # 1 - c‖x‖² and 1 - c‖y‖² (= 2/λ) floored below the cap's rounding band, as in
+    # `_dist_mobius_direct` (δ → ∞ as y → ∂ball is expected; see `_boundary_divisor_floor`). Taken
     # directly rather than as `2/λ`, whose two roundings left δ(x, x) one ulp off 0 (2.2e-16 in
     # float64 at scaled radius 3, 1.2e-7 in float32 at 12).
-    floor_b = _boundary_floor(x, c)
+    floor_b = _boundary_divisor_floor(x, c)
     one_minus_cx = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), floor_b)
     one_minus_cy = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), floor_b)
     # G = |c·x·ȳ - 1| generalized to ℝⁿ, i.e. G² = c²‖x‖²‖y‖² - 2c⟨x,y⟩ + 1, spelled as
@@ -478,8 +481,9 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1, x_sqnorm=x_sqnorm, y_sqnorm=y_sqnorm))
     sub_norm = num / denom
     c_norm_prod = floor_at(jnp.sqrt(c) * sub_norm, MIN_NORM)
-    # B_x = 1 - c‖x‖² = 2/λ_x and B_y, with `_conformal_factor`'s boundary clamp.
-    floor_b = _boundary_floor(x, c)
+    # B_x = 1 - c‖x‖² = 2/λ_x and B_y, floored below the cap's rounding band as in
+    # `_dist_mobius_direct` (see `_boundary_divisor_floor`).
+    floor_b = _boundary_divisor_floor(x, c)
     one_minus_cx = floor_at(1.0 - c * x_sqnorm, floor_b)
     one_minus_cy = floor_at(1.0 - c * y_sqnorm, floor_b)
     # The magnitude √c·d/2 = atanh(u), u = `c_norm_prod`, in its `asinh` form: 1 - u² = B_x·B_y/D₋
