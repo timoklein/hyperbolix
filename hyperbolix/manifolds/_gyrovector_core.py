@@ -74,8 +74,8 @@ def _boundary_floor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, 
 
     The direction flips once the value is **squared** into the Möbius denominator: 1.6e-10
     (float32) is above ``MIN_NORM`` but 1.3e-23 (float64) is eight orders below it, so there the
-    old floor was the one clamping legitimate pairs — from radius ≈ 18/√c, well inside the 27.7/√c
-    where the float64 chart itself ends. See :func:`_mobius_denominator`.
+    old floor was the one clamping legitimate pairs — from scaled radius √c·d ≈ 18, well inside the
+    float64 chart itself, which ends at √c·d ≈ 27.7 at c = 1. See :func:`_mobius_denominator`.
 
     Only ``x``'s dtype is read, never its values. Factored out of :func:`_conformal_factor`, whose
     historical spelling this is verbatim. No site floors at it any more: the floored divisors
@@ -126,8 +126,9 @@ def _conformal_factor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array
 
     ``λ`` grows like ``e^a`` at scaled radius ``a``, and every quantity that inherits it — the Möbius
     operations, the Poincaré MLR score, ``_conformal_factor_batch`` — shares this ball chart's
-    representation ceiling (``a ≈ 12.6`` float32 / ``27.7`` float64); the library adds no guard
-    beyond that floor, by design (loud divergence over silent saturation, see CLAUDE.md).
+    representation ceiling (``a ≈ 12.6`` float32 / ``27.7`` float64 at c = 1, 13.8 / 28.9 at
+    c = 0.1); the library adds no guard beyond that floor, by design (loud divergence over silent
+    saturation, see CLAUDE.md).
     """
     x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
     denom = floor_at(1.0 - c * x2, jnp.where(jnp.asarray(c) > 0, _boundary_divisor_floor(x, c), MIN_NORM))

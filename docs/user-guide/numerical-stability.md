@@ -8,7 +8,7 @@ Hyperbolic geometry presents unique numerical challenges due to the exponential 
 
 !!! warning "Key Challenges"
     - **Conformal factor explosion**: λ(x) grows exponentially as points approach the boundary
-    - **Float32 limitations**: ~7 significant digits, insufficient for large distances (>10)
+    - **Float32 limitations**: ~7 significant digits, not enough for critical operations past scaled radius $a = \sqrt{c}\,d \approx 10$ from the origin (see the [table](#precision-requirements-by-distance) below)
     - **Hyperbolic function overflow**: cosh/sinh overflow for large arguments
     - **Division by near-zero**: Operations involving 1 - c||x||² near the boundary
 
@@ -26,13 +26,15 @@ Hyperbolic geometry presents unique numerical challenges due to the exponential 
 ### When to Use Each
 
 **Float32 (default)**:
-- Sufficient for most applications with small to moderate distances (< 5)
+
+- Sufficient up to scaled radius $a = \sqrt{c}\,d \approx 7$, and up to $a \approx 10$ outside critical operations
 - 2-4x faster on GPU
 - Lower memory footprint (important for large models)
 - ~7 significant decimal digits
 
 **Float64 (high precision)**:
-- Required for large distances (> 10) or near-boundary points
+
+- Recommended for critical operations from $a \approx 10$; required past the float32 chart ceiling, $a \approx 12.65$ at $c = 1$ (13.80 at $c = 0.1$)
 - Better numerical stability in edge cases
 - ~15-16 significant decimal digits
 - Use for research, validation, or stability-critical applications
@@ -80,16 +82,33 @@ whose tested accuracy is described in [Hyperboloid](#the-hyperboloids-two-point-
 below.*
 
 !!! tip "Quick Check"
-    If your embeddings have distances from the origin > 7, switch to float64:
+    Compute the largest scaled radius $a = \sqrt{c}\,d_0$ of your embeddings with your own $c$.
+    From $a \approx 10$, use float64 for critical operations. A float32 point cannot sit past the
+    chart ceiling $2\,\mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$, 12.65 at $c = 1$ and
+    13.80 at $c = 0.1$ (14.33 below $c \approx 0.035$, where the `atanh` clip binds first; see
+    [The Round-Trip Ceiling](#poincare-roundtrip-ceiling)), so a maximum within ~0.1 of it means
+    the ball has capped points, and float64 is required:
 
     ```python
+    import math
+
+    import jax
+    import jax.numpy as jnp
     from hyperbolix.manifolds import Poincare
 
+    c = 0.1  # the curvature your model uses
     poincare = Poincare()
-    distances = jax.vmap(lambda x: poincare.dist_0(x, c=1.0))(x_batch)
-    max_dist = jnp.max(distances)
-    print(f"Max distance from origin: {max_dist:.2f}")
-    # If > 7, create Poincare(dtype=jnp.float64) instead
+    v_batch = jax.random.normal(jax.random.PRNGKey(0), (256, 16))  # stand-in for your features
+    x_batch = jax.vmap(lambda v: poincare.expmap_0(v, c))(v_batch)  # ... and embeddings
+
+    a = jnp.sqrt(c) * jax.vmap(lambda x: poincare.dist_0(x, c))(x_batch)  # scaled radius
+    eps = float(jnp.finfo(jnp.float32).eps)
+    # proj margin √c·eps**0.75; below c ≈ 0.035 the tanh/atanh clip 10·eps binds first
+    margin = max(math.sqrt(c) * eps**0.75, 10 * eps)
+    a_ceiling = 2 * math.atanh(1 - margin)  # float32: 12.65 at c = 1, 13.80 at c = 0.1
+    print(f"max a = {float(a.max()):.2f}, float32 ceiling = {a_ceiling:.2f}")
+    # max a > 10: create Poincare(dtype=jnp.float64) for critical ops;
+    # max a within ~0.1 of the ceiling: the ball has capped points, float64 is required
     ```
 
 ### TF32 on Ampere and Hopper GPUs
@@ -164,12 +183,12 @@ gradient-sensitive stack, set the global knob.
 
 ### The Hyperboloid's Two-Point Cancellation Failure Mode
 
-The distance-from-origin table above governs single-point operations (`dist_0`, `logmap_0`,
-`expmap_0`), which read the geodesic radius off the **spatial** part of the point and have their
-own near-origin story, described in [The Hyperboloid Origin Chart](#hyperboloid-origin-chart)
-below. Point-to-point operations (`dist`, `logmap`, `sqdist`, `tangent_norm`) are governed by a
-different, two-point quantity — being far from the origin is not itself the problem; two points
-far from the origin **and close together** is.
+The distance-from-origin table above is for the Poincaré ball. The hyperboloid's single-point
+operations (`dist_0`, `logmap_0`, `expmap_0`) are covered in
+[The Hyperboloid Origin Chart](#hyperboloid-origin-chart) below. Point-to-point operations
+(`dist`, `logmap`, `sqdist`, `tangent_norm`) are governed by a different, two-point quantity —
+being far from the origin is not itself the problem; two points far from the origin **and close
+together** is.
 
 Every one of these operations used to go through the Minkowski inner product
 $\langle x, y\rangle_L = -x_0y_0 + \langle x_s, y_s\rangle$, which for two hyperboloid points is a
@@ -710,40 +729,51 @@ $$
 $$
 
 This factor appears in:
+
 - Exponential map: scales tangent vectors
 - Logarithmic map: scales back to tangent space
 - Riemannian gradient: converts Euclidean to Riemannian gradients
 
 ### Exponential Growth
 
-As points move toward the boundary (||x|| → 1/√c), λ(x) explodes:
+As points move toward the boundary (||x|| → 1/√c), λ(x) explodes. A point at scaled radius
+$a = \sqrt{c}\,d_0$ has $\sqrt{c}\,\lVert x\rVert = \tanh(a/2)$, so
+$\lambda(x) = 2\cosh^2(a/2) = 1 + \cosh a$, which grows like $e^a/2$:
 
 ```python
 import jax.numpy as jnp
 from hyperbolix.manifolds import Poincare
 
 poincare = Poincare()
-c = 1.0
-distances = [0, 1, 2, 3, 5, 7, 10]
+c = 1.0  # at c = 1 the scaled radius a is the distance from the origin
 
-for d in distances:
-    # Point at distance d from origin
-    x = poincare.expmap_0(jnp.array([d, 0.0]), c=c)
+for a in [0, 2, 4, 6, 8, 10, 12, 14, 20]:
+    # expmap_0(v) lands at distance 2‖v‖ from the origin, so ask for ‖v‖ = a/2
+    x = poincare.expmap_0(jnp.array([a / 2, 0.0]), c=c)
     norm = jnp.linalg.norm(x)
     lambda_x = 2.0 / (1.0 - c * norm**2)
-    print(f"d={d:2d}: ||x||={norm:.6f}, λ(x)={lambda_x:10.1f}")
+    print(f"a={a:2d}: ||x||={norm:.6f}, λ(x)={lambda_x:9.1f}, dist_0(x)={poincare.dist_0(x, c):.4f}")
 ```
 
 Output:
 ```
-d= 0: ||x||=0.000000, λ(x)=       2.0
-d= 1: ||x||=0.761594, λ(x)=       3.6
-d= 2: ||x||=0.964028, λ(x)=      27.7
-d= 3: ||x||=0.995055, λ(x)=     202.0
-d= 5: ||x||=0.999909, λ(x)=   11013.2
-d= 7: ||x||=0.999991, λ(x)= 1096633.2
-d=10: ||x||=1.000000, λ(x)=       inf
+a= 0: ||x||=0.000000, λ(x)=      2.0, dist_0(x)=0.0000
+a= 2: ||x||=0.761594, λ(x)=      4.8, dist_0(x)=2.0000
+a= 4: ||x||=0.964028, λ(x)=     28.3, dist_0(x)=4.0000
+a= 6: ||x||=0.995055, λ(x)=    202.7, dist_0(x)=6.0000
+a= 8: ||x||=0.999329, λ(x)=   1491.6, dist_0(x)=8.0000
+a=10: ||x||=0.999909, λ(x)=  11008.7, dist_0(x)=9.9995
+a=12: ||x||=0.999988, λ(x)=  81442.8, dist_0(x)=12.0008
+a=14: ||x||=0.999994, λ(x)= 155344.6, dist_0(x)=12.6465
+a=20: ||x||=0.999994, λ(x)= 155344.6, dist_0(x)=12.6465
 ```
+
+From $a = 6$ to $a = 12$, each step of 2 in $a$ multiplies λ by about $e^2 \approx 7.4$. Float32
+misses the exact $1 + \cosh a$ by 5e-4 at $a = 10$ and 8e-4 at $a = 12$ (11014.2 and 81378.4):
+the stored point's own rounding, which $1 - c\lVert x\rVert^2$ amplifies (below). Past the float32
+[chart ceiling](#poincare-roundtrip-ceiling), $a \approx 12.65$ at $c = 1$, `expmap_0` caps the
+point at the `proj` margin: $a = 14$ and $a = 20$ give the same point, with λ = 155344.6 and
+`dist_0` = 12.6465 (`logs/2026-09-29_cancellation-free/docs_b3/run_doc_snippets.out`).
 
 ### Numerical Issues
 
@@ -812,24 +842,40 @@ dist_precise = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ### The Round-Trip Ceiling {#poincare-roundtrip-ceiling}
 
 `proj` keeps points inside $1/\sqrt{c}$ by a margin of `eps**0.75`
-(`_gyrovector_core._get_max_norm_eps`), which caps the largest tangent vector `expmap_0` can
-represent at $\|v\| = \mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$ — a geodesic radius of
-$d_0 = 2\,\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$, i.e. $12.65/\sqrt{c}$ in float32 and
-$27.7/\sqrt{c}$ in float64 (the factor 2 is the Poincaré metric's). Past that `expmap_0`
-saturates and `logmap_0(expmap_0(v))` hands back the ceiling instead of `v`. Measured ceilings
-(median returned $\|v\|$ on a round trip, in units of $1/\sqrt{c}$; double them for the geodesic
-radius):
+(`_gyrovector_core._max_norm`). The margin is absolute, not a fraction of $1/\sqrt{c}$, so a
+stored point has $\sqrt{c}\,\lVert x\rVert \le 1 - \sqrt{c}\,\varepsilon^{0.75}$, the largest
+tangent vector `expmap_0` can represent has
+$\sqrt{c}\,\lVert v\rVert = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$, and the ceiling in
+scaled radius is
+
+$$
+a_{\max} = \sqrt{c}\,d_0 = 2\,\mathrm{atanh}\bigl(1 - \sqrt{c}\,\varepsilon^{0.75}\bigr)
+$$
+
+(the factor 2 is the Poincaré metric's): 12.65 in float32 and 27.73 in float64 at $c = 1$, 13.80
+and 28.88 at $c = 0.1$. Because it depends on $c$,
+$2\,\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$ is the geodesic radius of the ceiling only at
+$c = 1$: at $c = 0.1$ it gives 40.0 in float32, where the ball reaches 43.6. Past the ceiling
+`expmap_0` saturates and `logmap_0(expmap_0(v))` hands back the ceiling instead of `v`. In
+float32 below $c \approx 0.035$, where $\sqrt{c}\,\varepsilon^{0.75} < 10\varepsilon$, the
+`tanh`/`atanh` wrappers' clip at $1 - 10\varepsilon$ binds first: `expmap_0` and `logmap_0` stop
+at $a \approx 14.33$, and the default `dist_0` reads every point that `proj` capped (out to
+$a \approx 14.9$ at $c = 0.01$) as 14.33. Measured ceilings (median returned
+$\sqrt{c}\,\lVert v\rVert$ on a round trip, at $c = 1$ unless marked; double them for $a$):
 
 | library | float32 | float64 | boundary margin |
 | --- | --- | --- | --- |
 | hyperbolix | 6.32 | 13.86 | `eps**0.75` |
+| hyperbolix, $c = 0.1$ | 6.90 | 14.44 | `eps**0.75` |
 | geoopt, hypLL | 3.11 | 6.10 | fixed 4e-3, fixed 1e-5 |
 | unguarded closed form | 8.66 | 18.72 | none |
 
-The margin is deliberate. It stops short of the unguarded limit so the conformal factor stays
-under ~3e5 (float32) / ~1e12 (float64), and it still leaves twice the radius the fixed margins
-used elsewhere allow. If your embeddings need larger radii, switch to the hyperboloid or to
-`ProperVelocity` rather than shrinking the margin.
+The margin is deliberate. It stops short of the unguarded limit, so the conformal factor tops out
+near $1/(\sqrt{c}\,\varepsilon^{0.75})$ — 1.6e5 (float32) and 5.5e11 (float64) at $c = 1$, 4.9e5
+and 1.7e12 at $c = 0.1$ — and it still leaves twice the radius the fixed margins used elsewhere
+allow. If your embeddings need larger radii, switch to the hyperboloid or to `ProperVelocity`
+rather than shrinking the margin. The ceilings, the conformal factors and the hyperbolix rows of
+the table are from `logs/2026-09-29_cancellation-free/docs_b3/probe_ceiling.out`.
 
 ### The Factored Möbius Denominator {#factored-mobius-denominator}
 
@@ -853,8 +899,8 @@ $d = 8$ and 2.866e-01 to 3.206e-04 at $d = 12$. In float64, `dist` error goes fr
 (again, the as-is value at $d = 20$ is essentially the whole 0.1 gap); `‖logmap‖` error goes from
 2.187e-03 to 2.324e-10 at $d = 18$ and 9.384e-02 to 1.243e-09 at $d = 20$. Both dtypes' fixed
 columns are still climbing as $d$ approaches the chart ceiling from below — the factoring removes
-the denominator's own cancellation, not the ball's inability to represent a point past
-$12.65/\sqrt{c}$ (float32) / $27.7/\sqrt{c}$ (float64) at all.
+the denominator's own cancellation, but it cannot make the ball represent a point past its
+ceiling, $a \approx 12.65$ (float32) / $27.73$ (float64) at $c = 1$.
 
 **Far pairs: `dist` and `logmap` in the asinh form.**{#poincare-far-pairs} The factoring fixes a
 close pair, not a far one. Slot 0 evaluated $d = 2\,\mathrm{atanh}(u)/\sqrt{c}$ with
@@ -925,7 +971,7 @@ covers the measured band only for $c \gtrsim (6.16/54)^2 \approx 0.013$; below t
 can reach the floor again. A point outside the ball, never projected, still meets the floor, which
 keeps its divisor positive. The Klein chart's gap $g_x$ and the gaps the isometry maps read off a
 Poincaré or Klein point take the same half floor; that is why a far Klein point now reads as
-$a \approx 6.67$ rather than at the `proj` ceiling 6.32 (see
+$a \approx 6.67$ rather than at the `proj` ceiling 6.32 (float32, $c = 1$; see
 [The Chart Ceiling and Floor](#klein-chart-ceiling)).
 
 ### Tangent Inputs to the HNN++ and Busemann Layers {#poincare-tangent-input}
@@ -933,18 +979,19 @@ $a \approx 6.67$ rather than at the `proj` ceiling 6.32 (see
 `HypRegressionPoincarePP` and `HypLinearPoincarePP` with `input_space="tangent"`, and
 `HypConv2DPoincare` (tangent in, tangent out), used to lift the tangent input with `expmap_0` and
 read the conformal factor back off the stored ball point; in float32 that lift stops at the
-ball's ceiling, $t = \sqrt{c}\,\lVert v\rVert \approx 6.33$, and past it the scores were those of
-the ceiling, with a zero radial gradient. They now score the tangent vector in closed form,
+ball's ceiling, $t = \sqrt{c}\,\lVert v\rVert \approx 6.33$ at $c = 1$ (6.64 at $c = 0.3$), and
+past it the scores were those of the ceiling, with a zero radial gradient. They now score the
+tangent vector in closed form,
 $\lambda_x\sqrt{c}\,\langle x, \hat{z}\rangle = \sinh(2t)\,\langle v, \hat{z}\rangle/\lVert v\rVert$
 and $\lambda_x - 1 = \cosh(2t)$, and `HypConv2DPoincare` also maps its output back with `logmap_0`
 of the lift in closed form, so neither ball point is formed. **This changes the output past
-$t \approx 6.33$**, and the conv output's norm is no longer capped. At $t = 8$, float32 against
+that ceiling**, and the conv output's norm is no longer capped. At $t = 8$, float32 against
 float64 on the same inputs (max-abs error over max-abs value, worst of $c = 0.3$ and $c = 1$;
 `logs/2026-09-29_cancellation-free/2_evidence/probes/1b_merged.out`): the regression head goes from
 2.0e-1 to 1.5e-6, `HypLinearPoincarePP` (kernel scaled by 0.1, so its output stays off the ball's
 edge) from 9.0e-2 to 9.7e-7, and the conv (identity or random weights) from 1.7e-1–6.9e-1 to
-≤ 1.6e-6; the conv output's largest $\sqrt{c}\,\lVert\text{out}\rVert$ is now 20.2, where the old
-route capped it at 6.33. In
+≤ 1.6e-6; the conv output's largest $\sqrt{c}\,\lVert\text{out}\rVert$ at $c = 1$ is now 20.2,
+where the old route capped it at 6.33. In
 float64 the new and old routes agree to ≤ 8.8e-11 for $t \le 8$, except the conv with random
 weights from $t = 5$ on, whose output ($\sqrt{c}\,\lVert\text{out}\rVert \ge 12.3$) is near or
 past the float64 ball's ceiling. The Poincaré Busemann layers
@@ -1546,6 +1593,7 @@ print(clamped)
 ```
 
 Benefits:
+
 - Differentiable everywhere (no gradient discontinuities)
 - Numerically stable (uses softplus internally)
 - Adjustable smoothing factor for trade-off between accuracy and gradient flow
@@ -2300,11 +2348,13 @@ Operations like addition, linear transformations can push points off the manifol
 ### When to Project
 
 **Always project**:
+
 - After Möbius addition: `poincare.addition(x, y, c)`
 - After neural network layers
 - After parameter updates in optimization
 
 **Usually don't need projection**:
+
 - After `expmap` (already on manifold)
 - After `proj` (redundant)
 

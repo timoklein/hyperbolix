@@ -9,7 +9,7 @@ reference computation flow:
 
 The expmap_0 and logmap_0 steps are evaluated in closed form on the tangent vectors, so the
 ball point is never formed: in float32 that round trip capped both the patch vector and the
-output at the ball's ceiling (``√c‖·‖ ≈ 6.33``) with a zero radial gradient.
+output at the ball's ceiling (``√c‖·‖ ≈ 6.33`` at c = 1) with a zero radial gradient.
 
 This avoids the numerically unstable logmap_0 round-trips in beta_concat
 that cause NaN when points approach the Poincaré ball boundary.
@@ -218,7 +218,7 @@ class HypConv2DPoincare(nnx.Module):
 
         # Step 4: expmap_0 → HNN++ FC → logmap_0, tangent (N, K²·C_in) → tangent (N, C_out). The FC
         # scores the patch vectors directly and returns logmap_0 of its lift in closed form; the
-        # ball round trip capped both ends at √c‖·‖ ≈ 6.33 in float32.
+        # ball round trip capped both ends at √c‖·‖ ≈ 6.33 in float32 at c = 1.
         patches_flat_NKC = patches_BHWKC.reshape(-1, concat_dim)  # (N, K²·C_in) where N=B*H*W
         tangent_out_NC = _poincare_pp_forward(
             patches_flat_NKC,

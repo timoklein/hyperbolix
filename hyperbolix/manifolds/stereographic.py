@@ -465,8 +465,8 @@ def _geodesic(t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"
     cap does not change; ``c ≤ 0`` and the Taylor band near ``c = 0`` are unchanged.
 
     What remains is the intermediate ``t ⊗ v``, a point at radius ``t·d``: past the ceiling
-    (``√c·t·d ≈ 12.6`` in float32) it is capped too, and no spelling of this formula can store
-    it. ``t = 1/2`` stays inside for every pair of representable points; ``t`` near 1 or past it
+    (``√c·t·d ≈ 12.6`` in float32 at c = 1) it is capped too, and no spelling of this formula can
+    store it. ``t = 1/2`` stays inside for every pair of representable points; ``t`` near 1 or past it
     on a far pair does not.
     """
     k = -c

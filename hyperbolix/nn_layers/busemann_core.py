@@ -126,8 +126,8 @@ def _busemann_score(
     busemann = cast("Hyperboloid | Poincare", manifold).busemann
     if input_space == "tangent" and isinstance(manifold, Poincare):
         # Scored without forming the ball point, whose float32 lift stops at the ceiling
-        # t = √c‖x‖ ≈ 6.33 (see `poincare._busemann_tangent`). The hyperboloid `expmap_0` below is
-        # exact to its coordinate ceiling, so that model keeps the lift.
+        # t = √c‖x‖ ≈ 6.33 at c = 1 (see `poincare._busemann_tangent`). The hyperboloid `expmap_0`
+        # below is exact to its coordinate ceiling, so that model keeps the lift.
         x_BI = x_BI.astype(manifold.dtype)  # the work dtype `expmap_0` gave the lifted input
         busemann = manifold._busemann_tangent
     elif input_space == "tangent":

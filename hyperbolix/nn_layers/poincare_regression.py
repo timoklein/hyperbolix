@@ -311,7 +311,8 @@ class HypRegressionPoincarePP(nnx.Module):
             Multinomial linear regression scores
         """
         # Static branch - JIT friendly. A tangent input is scored as expmap_0 would place it, without
-        # forming the ball point: in float32 that lift stopped at the ball's ceiling, √c‖v‖ ≈ 6.33.
+        # forming the ball point: in float32 that lift stopped at the ball's ceiling, √c‖v‖ ≈ 6.33
+        # at c = 1.
         if self.input_space == "tangent":
             return self.manifold._compute_mlr_pp_tangent(x, self.kernel[...], self.bias[...], c)
         return self.manifold.compute_mlr_pp(x, self.kernel[...], self.bias[...], c)

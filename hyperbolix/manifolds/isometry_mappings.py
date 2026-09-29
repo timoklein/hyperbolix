@@ -381,10 +381,10 @@ def _klein_gap(k: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     point, below the rounding band of a capped one. At the minimum itself the floor bound for 11-84 %
     of the points ``Klein.proj`` capped and zeroed the dominant term of every Klein map's Jacobian
     there (relative error 1.0). On a Klein point ``g_k = sech²(a)`` at scaled radius
-    ``a = √c·d(0, k)``, so the ``proj`` margin sits at ``a ≈ 6.3`` (float32) / ``13.9`` (float64) —
-    half the Poincaré chart's radius, whose gap is ``sech²(a/2)`` — and the floor at ``a ≈ 6.7`` /
-    ``14.2``. The cancellation in ``1 - c·||k||²`` costs a relative error of ``eps·cosh²(a)`` on
-    ``g_k``, the Klein chart's own representation floor.
+    ``a = √c·d(0, k)``, so at c = 1 the ``proj`` margin sits at ``a ≈ 6.3`` (float32) / ``13.9``
+    (float64) — half the Poincaré chart's radius, whose gap is ``sech²(a/2)`` — and the floor at
+    ``a ≈ 6.7`` / ``14.2``. The cancellation in ``1 - c·||k||²`` costs a relative error of
+    ``eps·cosh²(a)`` on ``g_k``, the Klein chart's own representation floor.
     """
     k_sqnorm = jnp.dot(k, k, precision=MATMUL_PRECISION)
     return floor_at(1.0 - c * k_sqnorm, _boundary_divisor_floor(k, c))
@@ -407,7 +407,7 @@ def klein_to_poincare(
     ``_boundary_divisor_floor(k, c)`` (see :func:`_klein_gap`). A Klein point has
     ``√c·||k|| = tanh(a)`` at scaled radius ``a = √c·d(0, k)`` where a Poincaré
     point has ``tanh(a/2)``, so the Klein chart runs out of float precision at
-    half the Poincaré radius (``a ≈ 6.3`` float32, ``13.9`` float64).
+    half the Poincaré radius (``a ≈ 6.3`` float32, ``13.9`` float64 at c = 1).
 
     Args:
         k: Point in the Klein ball, shape (dim,). Should satisfy ||k||² < 1/c.
@@ -678,10 +678,11 @@ def halfspace_to_poincare(
     so no floor is needed. ``q`` is written as a product so it does not cancel
     near the sphere ``c·||x||² = 1`` (the ball's equatorial plane ``p_n = 0``). The
     result is not projected: past the ball chart's ceiling (scaled radius
-    ``a ≈ 12.6`` float32 / ``27.7`` float64) ``||p||`` rounds to ``1/√c`` or just
-    beyond, as for every map into the ball — call ``Poincare.proj`` for such
-    points. Past float32 ``|s| ≈ 1.8e19`` the squares overflow and the output is
-    NaN, not a saturated point.
+    ``a ≈ 12.6`` float32 / ``27.7`` float64 at c = 1) ``||p||`` lands beyond the
+    ``proj`` margin, and in float32 from ``a ≈ 18`` on at ``1/√c`` up to rounding,
+    as for every map into the ball — call ``Poincare.proj`` for such points. Past
+    float32 ``|s| ≈ 1.8e19`` the squares overflow and the output is NaN, not a
+    saturated point.
 
     Args:
         x: Point in the half-space, shape (dim,). Should satisfy x_n > 0.
@@ -738,14 +739,15 @@ def poincare_to_halfspace(
     capped one — which keeps ``x_n > 0`` for an unprojected point outside the ball.
     At the minimum itself the floor bound for 12-76 % of the capped points and
     zeroed ``∂x_n/∂p = -2c·p/(√c·den) + …`` there (relative error 1.0).
-    The ball chart ends at scaled radius ``a ≈ 12.6`` (float32) / ``27.7``
-    (float64) at the ``proj`` margin; a point past it is wherever
+    The ball chart ends at the ``proj`` margin, scaled radius ``a ≈ 12.6``
+    (float32) / ``27.7`` (float64) at c = 1; a point past it is wherever
     ``Poincare.proj`` put it, and its image is the half-space point at that
     capped radius. ``den`` is not floored: it vanishes only at the north pole,
     a point the half-space cannot hold, so the output there is ``inf``/NaN —
     loud, not a clamped finite point. On a projected point
-    ``den ≥ (1 - ||s||)² ≥ eps**1.5`` (the ``proj`` margin squared), so the
-    division is finite everywhere the ball is.
+    ``den ≥ (1 - ||s||)²``, about ``c·eps**1.5`` at the margin (``√c·eps**0.75``
+    in the scaled ``s``, squared), so the division is finite everywhere the
+    ball is.
 
     Args:
         p: Point in the Poincaré ball, shape (dim,). Should satisfy ||p||² < 1/c.

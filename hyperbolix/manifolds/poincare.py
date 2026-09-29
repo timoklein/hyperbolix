@@ -776,7 +776,7 @@ def _compute_mlr_pp_tangent(
 
     so the ball point is never formed. That route read ``λ_x = 2/(1 - c‖x‖²)`` back off the stored
     point, a relative error ≈ ``eps·e^{2t}/4``, and in float32 its lift stopped at the ball's
-    ceiling ``t ≈ 6.33``, past which the scores were constant with a zero radial gradient.
+    ceiling ``t ≈ 6.33`` (c = 1), past which the scores were constant with a zero radial gradient.
     Measured through ``HypRegressionPoincarePP`` (float32 vs float64 on the same inputs, relative
     to the largest entry, c ∈ {0.3, 1}): at t = 6 scores 1.1e-3 → 8.4e-7 and input gradients
     1.4e-3 → 1.3e-5; at t = 8 2.0e-1 → 1.5e-6 and 3.8e-1 → 2.8e-5. What remains is the one float32
@@ -916,7 +916,7 @@ def _busemann_tangent(v: Float[Array, "dim"], omega: Float[Array, "dim"], c: Sca
 
     and the ball point is never formed. That route read ``1 - c‖x‖²`` back off the stored point, a
     relative error ≈ ``eps·e^{2t}/4``, and in float32 its lift stopped at the ball's ceiling
-    ``t ≈ 6.33``, past which the coordinate was constant with a zero radial gradient.
+    ``t ≈ 6.33`` (c = 1), past which the coordinate was constant with a zero radial gradient.
 
     The ``t > 1`` form is the cancellation-free one: every term is non-negative, ``‖ω - v̂‖²`` is a
     difference norm (exact near ``ω``, where ``1 - ⟨ω, v̂⟩`` cancels) and nothing overflows for any
