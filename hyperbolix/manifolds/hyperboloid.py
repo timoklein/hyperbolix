@@ -2103,12 +2103,13 @@ def _busemann_tangent(v: Float[Array, "dim_plus_1"], omega: Float[Array, "dim"],
 
     and the lifted point is never formed. The value and the derivative at ``v = 0`` and across the
     seam are handled by the core, and in float64 ``√c·B`` agrees with ``busemann(expmap_0(v))`` to
-    ≤ 1e-14.
+    ≤ 1e-14 for a random ``ω`` (an ``ω`` close to ``v̂`` is ill-conditioned there too, see below).
 
     In float32 that route's gradient broke first. The backward pass of the rationalized division in
-    :func:`_busemann_arg` multiplies the cotangent ``1/arg`` (~``e^{-t}`` for a generic ``ω``) by
-    ``(x₀ + q)^{-2}`` (~``e^{-2t}``), and that product drops below float32's smallest normal number
-    past ``t ≈ 29.6``. XLA:CPU flushes it to zero, so from ``t = 30`` the input and direction
+    :func:`_busemann_arg` (taken where ``q ≥ 0``) multiplies the cotangent ``1/arg`` (~``e^{-t}`` for a
+    generic ``ω``) by ``(x₀ + q)^{-2}`` (~``e^{-2t}``), and that product drops below float32's smallest
+    normal number past ``t ≈ 29.4`` at ``c = 0.3`` and ``29.8`` at ``c = 1`` (measured). XLA:CPU
+    flushes it to zero, so from ``t = 30`` the input and direction
     gradients of the Busemann layers were off by 5e-2 to 1.07 relative to their largest entry, with
     the scores still right. Past ``t ≈ 45`` (``c = 1``) the lifted point itself overflows and the
     scores are NaN. The closed form has neither limit. Its only non-finite case is a row exactly on
@@ -2123,9 +2124,9 @@ def _busemann_tangent(v: Float[Array, "dim_plus_1"], omega: Float[Array, "dim"],
     ``ω`` must be unit, as for :func:`_busemann`. Both forms use ``‖ω‖ = 1``, so the ``ω``-gradient
     differs from the lift route's by a multiple of ``ω``, which the row normalization of the Busemann
     layers projects out. At small ``t`` that multiple is ~``2ω`` against a tangential part of size
-    ~``t``, so after the projection the direction gradient carries a relative float32 error of
-    ~``eps/t``, as in the Poincaré form: through the regression head 1.0e-3 at ``t = 1e-3`` and
-    4.6e-6 at ``t = 0.1``, where the lift route had 2e-7.
+    ~``t``, so after the projection the direction gradient carries a relative float32 error that
+    grows like ``1/t`` (4 to 9 times ``eps/t``), as in the Poincaré form: through the regression head
+    1.0e-3 at ``t = 1e-3`` and 4.6e-6 at ``t = 0.1``, where the lift route had 2e-7.
 
     The time slot ``v[0]`` of a tangent vector at the origin is zero and is not read; ``expmap_0``
     folds a non-zero ``v[0]`` into a Minkowski norm instead.

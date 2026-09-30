@@ -281,7 +281,7 @@ factors, so a genuinely on-sheet point now passes a fixed `atol` far past the `a
 
 #### Known limits
 
-Four places still lose accuracy at large radius, for reasons the fix above does not remove:
+Five places still lose accuracy at large radius, for reasons the fix above does not remove:
 
 1. **`ptransp`'s direction below the float32 angular resolution.** A transported direction that
    differs from the identity by less than the point-representation floor `eps·sinh(a)/√c` is
@@ -316,6 +316,14 @@ Four places still lose accuracy at large radius, for reasons the fix above does 
    MLR the library keeps subtracts two terms of size `e^(a+ρ)`, with `ρ` the scaled hyperplane
    offset, so a large bias costs as many digits as a large input radius — see
    [The MLR Score at a Large Hyperplane Offset](#mlr-large-bias) below.
+5. **Busemann gradients at a far stored point.** `Hyperboloid.busemann` on a stored float32 point,
+   which is how the Busemann layers score manifold input, has the gradient underflow described
+   under [Tangent Inputs to the HNN++ and Busemann Layers](#poincare-tangent-input): from scaled
+   radius $a \approx 29.4$ at $c = 0.3$ and $a \approx 29.8$ at $c = 1$, the gradients of the
+   scores with $\langle x_s, \omega\rangle \ge 0$ with respect to the point and to $\omega$ are up to
+   0.90 and 0.92 off relative to their largest entry, while the scores stay right. Measured on CPU
+   (`logs/2026-09-29_cancellation-free/hbz/scan_old_grad.out`,
+   `logs/2026-09-29_cancellation-free/hbz_docs/scan_onset_jit.out`).
 
 Two more items that used to be on this list — gyro-centering with a near-identity partner, and
 `ProperVelocity.dist`/`logmap` between nearby points — were fixed in a later pass; see
@@ -1015,9 +1023,60 @@ past the float64 ball's ceiling. The Poincaré Busemann layers
 (`HypRegressionPoincareBusemann`, `HypLinearPoincareBusemann`) score a tangent input the same way,
 through `Poincare._busemann_tangent`: at $t = 8$ the regression scores go from 2.2e-1 to 2.0e-7 and
 the input gradients from 1.0 to ≤ 2.6e-7 (`logs/2026-09-29_cancellation-free/bz/probe_layers_v3.out`).
-They now list `_busemann_tangent` among the methods they require, so they reject a `Hyperboloid` or
-`Klein` manifold at construction
-(`logs/2026-09-29_cancellation-free/docs/check_busemann_validation_c2bfc6c.out`).
+
+The Hyperboloid Busemann layers (`HypRegressionHyperboloidBusemann`, `HypLinearHyperboloidBusemann`)
+with `input_space="tangent"` now score in closed form too, through `Hyperboloid._busemann_tangent`,
+which shares its closed form with `Poincare._busemann_tangent`. The hyperboloid's `expmap_0` places
+$v = (0, v_s)$ at scaled radius $t = \sqrt{c}\,\lVert v_s\rVert$, half the radius the ball's
+`expmap_0` reaches for the same norm, so for a unit $\omega$ the score is
+$\sqrt{c}\,B^\omega = \log(\cosh t - \sinh t\,\langle\omega, \hat v\rangle)$, the Poincaré tangent
+score with $2t$ replaced by $t$. The time slot $v_0$ is not read; for a tangent vector at the origin
+it is 0. The layers used to lift $v$ with `expmap_0` and call `busemann` on the stored point. The
+float32 `expmap_0` is accurate up to the coordinate ceiling, so the scores were right, but the
+gradients were not. For random directions $\omega$ the float32 input and kernel gradients broke
+from $t \approx 29.4$ at $c = 0.3$ and $t \approx 29.8$ at $c = 1$; at $t = 30$ and 40 they were off
+by 5.3e-2 to 1.07 relative to their largest entry, against ≤ 6.9e-7 up to $t = 20$. Only scores
+with $\langle x_s, \omega\rangle \ge 0$ break: there `_busemann_arg` divides, and the backward pass
+of that division multiplies a cotangent of size about $e^{-t}$ by the squared inverse denominator,
+about $e^{-2t}$. The product falls below float32's smallest normal number, and XLA:CPU flushes it
+to zero. Past the coordinate ceiling, $t \approx 45$, the lifted point overflows and the scores are
+NaN. The closed form has neither limit: for random $\omega$ the layers' float32 outputs and
+gradients stay within 1.2e-6 of float64 from $t = 1$ to $t = 50$, and in float64 they match the old
+route's to ≤ 2.2e-15 (`logs/2026-09-29_cancellation-free/hbz/probe_old.out`, `probe_new.out`,
+`compare_f64.out`, `scan_old_grad.out`;
+`logs/2026-09-29_cancellation-free/hbz_docs/scan_onset_jit.out`). All of this was measured on CPU;
+a GPU that keeps subnormal numbers may move the onset later.
+
+For $\omega$ within float32 rounding of $\hat v$, both routes still err at large $t$. Written as
+$\sqrt{c}\,B^\omega = \log\bigl(e^{-t} + (1 - \langle\omega, \hat v\rangle)\sinh t\bigr)$, the score
+takes the misalignment of $\omega$ and $\hat v$ times $\sinh t$, next to a term of size $e^{-t}$,
+and both routes read that misalignment off float32 directions, so its rounding limits either one.
+The closed form removes the part of the error that came from the stored point. At $t = 12$ the
+float32 $\sqrt{c}\,B$ is 8.6e-5 to 1.2e-4 off float64 in closed form and 3.0e-4 to 5.2e-4 through
+the lift, 2.6 to 6 times more, and the layer outputs are 2.4 to 3.2 times more accurate. At
+$t = 20$ the gain is about 2: $\sqrt{c}\,B$ is 1.7 to 1.9 off against 3.6 to 3.7 ($c = 0.3$ and 1;
+`probe_new.out`, `probe_old.out`).
+
+At small $t$ the float32 kernel gradient of both Busemann tangent paths has a relative error that
+grows like $1/t$. Through the Hyperboloid layers it is 1.0e-3 (regression head) and 8.1e-4 (linear
+layer) at $t = 10^{-3}$, and 4.6e-6 and 5.4e-6 at $t = 0.1$, against 1.5e-7 to 2.5e-7 through the old
+lift (`logs/2026-09-29_cancellation-free/hbz/probe_small_t.out`). The closed form's
+$\omega$-gradient is $2(\omega - w)/\lVert\omega - w\rVert^2$, where $w$ is $\sqrt{c}$ times the
+point's image in the ball, of norm $\tanh(t/2)$ here. At small $t$ it points almost along $\omega$.
+The layers' kernel normalization projects that component out, which leaves a part of size about $t$
+next to a rounding error of size about $\varepsilon$. The Poincaré layers evaluate the same closed
+form and give 4.8e-4 and 5.9e-4 at $t = \sqrt{c}\,\lVert v\rVert = 10^{-3}$; the ball route they
+replaced gave 4.8e-4 and 4.4e-4, since its $\omega$-gradient has the same form, so there the error
+is not new (`logs/2026-09-29_cancellation-free/hbz_docs/probe_small_t_poincare.out`).
+
+The four Busemann layers check the manifold by the names of the methods they call. `Klein` has
+neither `busemann` nor `_busemann_tangent`, so they reject it at construction with a `TypeError`,
+as they reject `HalfSpace`, `Stereographic`, `ProperVelocity` and `Euclidean`. `Hyperboloid` now
+has `_busemann_tangent` as well, so it passes the check of the Poincaré Busemann layers, as
+`Poincare` passes that of the Hyperboloid ones. Such a pair fails at the first call with a shape
+error, except at `in_dim = 2`: there a one-entry spatial part broadcasts against the kernel rows,
+and some of these calls run without an error
+(`logs/2026-09-29_cancellation-free/hbz_docs/check_busemann_validation.out`).
 
 ### `PoincareBatchNorm2D`'s Batch Mean at Large Radius {#poincare-batchnorm-mean}
 

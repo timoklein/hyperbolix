@@ -55,7 +55,11 @@ class HypLinearHyperboloidBusemann(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization.
     input_space : str
-        ``"manifold"`` (default) or ``"tangent"`` (lift via ``expmap_0`` first). Static for JIT.
+        ``"manifold"`` (default) or ``"tangent"``: a tangent vector at the origin, ``(0, v_s)`` (the
+        time slot is not read), scored where ``expmap_0`` would place it without forming the
+        hyperboloid point, through whose float32 lift the gradients underflow from
+        ``√c‖v_s‖ ≈ 29.4`` at c = 0.3 (``29.8`` at c = 1) and the point overflows at ``≈ 45``
+        (``Hyperboloid._busemann_tangent``). Static for JIT.
     activation : Callable or None
         Optional Euclidean activation ``φ`` applied to the Busemann logits (default: identity).
         Avoid ``relu`` when stacking several of these layers on high-dimensional input: at a

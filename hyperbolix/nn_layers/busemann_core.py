@@ -128,8 +128,8 @@ def _busemann_score(
     if input_space == "tangent":
         # Scored without forming the point `expmap_0` would give: the float32 ball lift stops at
         # the ceiling t = √c‖x‖ ≈ 6.33 at c = 1 (see `poincare._busemann_tangent`); through the
-        # float32 hyperboloid lift the score's gradient underflows from t ≈ 29.6 and the point
-        # overflows at t ≈ 45 (see `hyperboloid._busemann_tangent`).
+        # float32 hyperboloid lift the score's gradient underflows from t ≈ 29.4 at c = 0.3 (29.8 at
+        # c = 1) and the point overflows at t ≈ 45 (see `hyperboloid._busemann_tangent`).
         x_BI = x_BI.astype(horo_manifold.dtype)  # the work dtype `expmap_0` gave the lifted input
         busemann = horo_manifold._busemann_tangent
 
