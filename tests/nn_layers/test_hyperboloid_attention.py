@@ -184,7 +184,7 @@ def test_focus_higher_power_concentrates():
 
 
 def test_focus_temperature_gradient_finite():
-    """The learnable temperature receives a finite gradient."""
+    """The ``temperature`` argument of the public primitive receives a finite gradient."""
     x = jax.random.normal(jax.random.PRNGKey(8), (4, 8))
     t = jnp.array(1.0)
 
@@ -400,10 +400,11 @@ def _ref_full_attention(model, x_BNA, c_in, c_attn, c_out):
     return _ref_spatial_to_hyperboloid(averaged[..., 1:], c_attn, c_out, eps)
 
 
-def _ref_linear_attention(model, x_BNA, c_in, c_attn, c_out):
+def _ref_linear_attention(model, x_BNA, c_in, c_attn, c_out, temperature=1.0):
+    """``temperature`` is the focus temperature the layer used to learn (init 1.0); the layer now fixes it at 1."""
     q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
     eps = model.eps
-    temp = jnp.asarray(model.temperature[...], jnp.float64)
+    temp = jnp.asarray(temperature, jnp.float64)
     # focus_transform is a separately-tested public primitive; the roles (applied to
     # query and key, never to value) are what this oracle pins.
     fq = np.asarray(focus_transform(jnp.asarray(q[..., 1:]), temp, model.power, eps), np.float64)
@@ -417,18 +418,19 @@ def _ref_linear_attention(model, x_BNA, c_in, c_attn, c_out):
     return _ref_spatial_to_hyperboloid(out.mean(axis=2), c_attn, c_out, eps)
 
 
-def _ref_causal_linear_attention(model, x_BNA, c_in, c_attn, c_out):
+def _ref_causal_linear_attention(model, x_BNA, c_in, c_attn, c_out, temperature=1.0):
     """Naive O(N²) masked transcription of causal linear attention.
 
     The layer evaluates the causal case as a prefix scan (Katharopoulos et al. 2020):
     ``S_n = Σ_{m≤n} φ(k_m)·v_mᵀ``, ``z_n = Σ_{m≤n} φ(k_m)``, ``out_n = φ(q_n)S_n / (φ(q_n)·z_n + ε)``.
     Undoing the associativity reordering gives the quadratic form written here,
     ``out_n = Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩·v_m / (Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩ + ε)``, built from a
-    lower-triangular mask and two plain einsums — the scan is never called.
+    lower-triangular mask and two plain einsums — the scan is never called. ``temperature`` is
+    the focus temperature the layer used to learn (init 1.0); the layer now fixes it at 1.
     """
     q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
     eps = model.eps
-    temp = jnp.asarray(model.temperature[...], jnp.float64)
+    temp = jnp.asarray(temperature, jnp.float64)
     fq = np.asarray(focus_transform(jnp.asarray(q[..., 1:]), temp, model.power, eps), np.float64)
     fk = np.asarray(focus_transform(jnp.asarray(k[..., 1:]), temp, model.power, eps), np.float64)
     vs = v[..., 1:]
@@ -638,6 +640,39 @@ def test_causal_linear_attention_matches_naive_quadratic_form(seq_len):
     assert not jnp.allclose(got, _ref_linear_attention(model, x, c, c, c), atol=1e-4)
 
 
+def test_linear_attention_has_no_temperature_parameter():
+    """The focus temperature cancels in the kernel ratio, so the layer no longer carries it."""
+    layer = HyperbolicLinearAttention(7, 6, num_heads=2, rngs=nnx.Rngs(0))
+    assert not hasattr(layer, "temperature")
+    param_paths = [path for path, _ in nnx.to_flat_state(nnx.state(layer, nnx.Param))]
+    assert param_paths, "expected the projection and residual parameters"
+    assert not any("temperature" in str(key) for path in param_paths for key in path)
+
+
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize(("old_temperature", "atol"), [(1.0, 1e-12), (0.5, 1e-3), (2.0, 1e-3)])
+def test_linear_attention_matches_old_temperature_transcription(causal, old_temperature, atol):
+    """The layer without a temperature reproduces the float64 transcription of the old layer.
+
+    At the old init ``t = 1`` the layer computes exactly what the old one did, so the gap is
+    float64 round-off (``atol=1e-12``; measured ≤ 1.4e-15). At ``t = 0.5`` and ``t = 2`` the old
+    output differs only through the ``eps`` floors: the ``sqrt(eps) ≈ 3.2e-4`` floors of the two
+    norms inside ``focus_transform`` and the ``+ eps`` on the kernel-ratio denominator. That gap
+    measured ≤ 1.2e-4 over four seeds
+    (``logs/2026-09-30_attention-followups/measure_old_temperature_gap.out``), hence ``atol=1e-3``.
+    """
+    c = 1.0
+    model = HyperbolicLinearAttention(5, 4, num_heads=2, power=2.0, param_dtype=jnp.float64, rngs=nnx.Rngs(0))
+    raw = jax.random.normal(jax.random.PRNGKey(40), (2, 12, 5), dtype=jnp.float64) * 0.3
+    x = jax.vmap(jax.vmap(hyperboloid_f64.proj, in_axes=(0, None)), in_axes=(0, None))(raw, c)
+
+    reference = _ref_causal_linear_attention if causal else _ref_linear_attention
+    got = model(x, c_in=c, c_attn=c, c_out=c, causal=causal)
+    expected = reference(model, x, c, c, c, temperature=old_temperature)
+    assert got.dtype == jnp.float64
+    assert jnp.allclose(got, expected, rtol=0, atol=atol)
+
+
 @pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
 def test_causal_matches_truncated(cls):
     """Causal output at position n matches bidirectional output on tokens [0..n].
@@ -721,10 +756,10 @@ def test_full_attention_attend_preserves_float32(causal):
 def test_linear_attention_attend_preserves_float32(causal):
     """HyperbolicLinearAttention._attend keeps float32 inputs in float32.
 
-    Regression: the temperature param (JAX default dtype — float64 under x64)
+    Regression: the former temperature param (JAX default dtype — float64 under x64)
     and the causal scan carries (jnp.zeros without dtype) silently promoted
-    float32 activations to float64. The temperature is now cast to the compute
-    dtype at use; the carries derive their dtype from the focused keys.
+    float32 activations to float64. The fixed temperature is created in the compute
+    dtype; the carries derive their dtype from the focused keys.
 
     The residual projection is an nnx.Linear whose params follow the
     codebase-wide default-dtype convention (float64 under x64), so its params

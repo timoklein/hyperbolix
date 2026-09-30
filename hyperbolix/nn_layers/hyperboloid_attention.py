@@ -57,12 +57,17 @@ def focus_transform(
     Applies temperature-scaled ReLU followed by element-wise power sharpening
     while preserving the original norm.
 
+    Up to the ``eps`` floors, the output is ``phi(x) / (|t| + eps)`` with ``phi`` independent
+    of the temperature ``t``. In a linear-attention kernel ratio, where the query and key
+    features both carry the factor, it cancels; :class:`HyperbolicLinearAttention`
+    therefore has no temperature parameter and passes ``t = 1``.
+
     Parameters
     ----------
     x_D : Array, shape (..., D)
         Input spatial features.
     temperature : scalar Array
-        Learnable temperature parameter.
+        Temperature ``t``; the features are divided by ``|t| + eps``.
     power : float
         Sharpening exponent (``p > 1`` concentrates mass).
     eps : float, optional
@@ -227,6 +232,17 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
     The paper's main contribution: O(N) attention using the kernel trick in the
     spatial domain of the hyperboloid.  Focus function φ sharpens query and key.
 
+    Differences from Hypformer
+    --------------------------
+    - **No focus temperature.** Hypformer learns a temperature ``t`` inside the focus
+      function. :func:`focus_transform` is homogeneous of degree 1 in ``1/(|t| + eps)``,
+      so ``φ(Q)`` and ``φ(K)`` both scale by it, and the output
+      ``φ(Q)(φ(K)^T V) / (φ(Q)(φ(K)^T 1) + eps)`` sees ``t`` only through the ``eps``
+      floors, in the bidirectional and the causal form alike. Its gradient measured 5 to 7
+      orders of magnitude below the other parameters', so it stays near its init; the
+      parameter is omitted and the layer uses ``t = 1``, the old init, which leaves the
+      output at init unchanged.
+
     Parameters
     ----------
     in_features : int
@@ -273,7 +289,7 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
             rngs=rngs,
         )
         self.power = power
-        self.temperature = nnx.Param(jnp.array(1.0, dtype=param_dtype))
+        # No temperature parameter: it cancels in the kernel ratio (class docstring).
         # Spatial residual projection ψ: D → D (shared across heads). Its output is added to the
         # attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at
         # the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even
@@ -290,10 +306,9 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         key_spatial_BNHD = key_BNHA[..., 1:]
         value_spatial_BNHD = value_BNHA[..., 1:]
 
-        # Cast scalar param to compute dtype: storage (param_dtype) and compute
-        # (input/manifold dtype) are decoupled, so the param must not drag the
-        # computation to its storage dtype.
-        temperature = self.temperature[...].astype(query_spatial_BNHD.dtype)
+        # Fixed t = 1 in the compute dtype: a temperature scales phi(Q) and phi(K) alike and
+        # cancels in the ratio below (class docstring).
+        temperature = jnp.asarray(1.0, dtype=query_spatial_BNHD.dtype)
         focused_query_BNHD = focus_transform(query_spatial_BNHD, temperature, self.power, eps)
         focused_key_BNHD = focus_transform(key_spatial_BNHD, temperature, self.power, eps)
 
