@@ -360,8 +360,12 @@ at `linspace(0.1, 2.0, E)`; `expert_curvatures=[1.0] * E` reproduces the release
 
 `weight_parameterization="identity"` is there to reproduce HELM: its trainable `w_y` can go
 negative, which is outside the range where LResNet guarantees a valid output (Lemma 4.1 covers
-non-negative weights only), and a combination that turns spacelike then gives NaN. Outside a
-reproduction, keep the default softplus parameterization.
+non-negative weights only), and a combination that turns spacelike then gives NaN. Keep it in range
+with projected gradient descent: call `project_residual_weights(model)` right after
+`optimizer.update(model, grads)` (inside the same `nnx.jit` train step is fine). It sets every
+identity-mode `w_y` to `max(w_y, 0)` and leaves HELM's updates unchanged while `w_y >= 0`; `w_y = 0`
+is valid (the output is `x`) and its gradient is nonzero, so the weight can grow again. Outside a
+reproduction, keep the default softplus parameterization, which needs no projection.
 
 ## Common Pitfalls
 

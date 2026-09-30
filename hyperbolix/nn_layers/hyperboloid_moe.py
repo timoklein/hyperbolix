@@ -408,6 +408,8 @@ class LorentzMoE(nnx.Module):
         ...
         moe_out_BSA, stats = self.moe(h_BSA, c)  # h_BSA: the normalised block input
         x_BSA = self.ffn_res(x_BSA, moe_out_BSA, c=c)
+        # train step, after optimizer.update(model, grads): keeps the raw w_y >= 0
+        project_residual_weights(model)
 
     Load balancing, as the paper takes it from DeepSeek-V3, uses the returned ``stats``: add
     ``moe_sequence_balance_loss(stats, alpha)`` to the loss (HELM's ``alpha = 1e-4``), and after

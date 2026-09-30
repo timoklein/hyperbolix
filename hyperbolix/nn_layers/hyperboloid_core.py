@@ -679,7 +679,9 @@ def lorentz_residual(
     midpoint of ``x`` and ``y`` in any sense. One case stays silent: for ``w_y < -1``, ``ave``
     can be timelike but past-directed (``ave_0 < 0``); the normalizer is then finite and the
     time-coordinate rebuild below returns the upper-sheet point with spatial part
-    ``ave_s / sqrt(-c <ave, ave>_L)``, with no error.
+    ``ave_s / sqrt(-c <ave, ave>_L)``, with no error. To keep a trained identity-mode
+    ``LorentzResidual`` weight in the domain, call
+    :func:`~hyperbolix.nn_layers.project_residual_weights` after each optimizer step.
 
     The identity assumes ``x``, ``y`` are *exactly* on-sheet — an assumption float storage cannot
     honour at large radius, since ``x_0`` is only accurate to ``eps * x_0`` and the sheet constraint

@@ -5,11 +5,12 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from flax import nnx
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.nn_layers import LorentzResidual, lorentz_scale
+from hyperbolix.nn_layers import LorentzResidual, lorentz_scale, project_residual_weights
 from hyperbolix.nn_layers.hyperboloid_core import _lorentz_sqdist_polar, lorentz_residual, spatial_to_hyperboloid
 from hyperbolix.utils.math_utils import floor_at
 
@@ -679,3 +680,138 @@ def test_lorentz_residual_gradients_match_abs_floor_form(dtype, w_y, c):
                 else:
                     scale = float(jnp.max(jnp.abs(g_old)))
                     assert float(jnp.max(jnp.abs(g_new - g_old))) <= rtol * scale, msg
+
+
+# --------------------------------------------------------------------------- #
+# Projection of the identity-mode w_y onto w_y >= 0 (projected gradient descent)
+#
+# Dimension key: N points  A ambient dim (= D + 1)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_project_w_y_clips_identity_and_leaves_others(dtype):
+    """Identity mode: a negative raw w_y becomes exactly 0, a positive one is kept bit for bit.
+
+    Softplus mode (whose raw param may be negative) and a fixed weight are left untouched.
+    """
+    identity = LorentzResidual(weight_parameterization="identity", param_dtype=dtype)
+    identity.w_y_raw[...] = jnp.asarray(-0.3, dtype=dtype)
+    identity.project_w_y()
+    assert identity.w_y_raw[...].dtype == dtype
+    assert float(identity.w_y_raw[...]) == 0.0
+
+    identity.w_y_raw[...] = jnp.asarray(0.7, dtype=dtype)
+    before = np.asarray(identity.w_y_raw[...]).tobytes()
+    identity.project_w_y()
+    assert np.asarray(identity.w_y_raw[...]).tobytes() == before
+
+    softplus = LorentzResidual(init_w_y=0.1, param_dtype=dtype)  # raw = softplus^-1(0.1) < 0
+    assert float(softplus.w_y_raw[...]) < 0.0
+    before = np.asarray(softplus.w_y_raw[...]).tobytes()
+    softplus.project_w_y()
+    assert np.asarray(softplus.w_y_raw[...]).tobytes() == before
+
+    fixed = LorentzResidual(learnable_weight=False, init_w_y=0.4, weight_parameterization="identity")
+    fixed.project_w_y()
+    assert fixed.w_y_raw is None and fixed._w_y == 0.4
+
+
+class _InnerBlock(nnx.Module):
+    def __init__(self):
+        self.res = LorentzResidual(weight_parameterization="identity")
+
+
+class _OuterModel(nnx.Module):
+    def __init__(self):
+        self.res = LorentzResidual(weight_parameterization="identity")
+        self.blocks = nnx.List([_InnerBlock()])
+        self.softplus_res = LorentzResidual(init_w_y=0.1)
+
+
+def test_project_residual_weights_walks_nested_modules():
+    """`project_residual_weights` projects every identity-mode LorentzResidual, nested ones included."""
+    model = _OuterModel()
+    model.res.w_y_raw[...] = jnp.asarray(-0.5, dtype=jnp.float32)
+    model.blocks[0].res.w_y_raw[...] = jnp.asarray(-2.0, dtype=jnp.float32)
+    softplus_raw = float(model.softplus_res.w_y_raw[...])
+
+    project_residual_weights(model)
+
+    assert float(model.res.w_y_raw[...]) == 0.0
+    assert float(model.blocks[0].res.w_y_raw[...]) == 0.0
+    assert float(model.softplus_res.w_y_raw[...]) == softplus_raw
+
+
+class _ResidualModel(nnx.Module):
+    def __init__(self, dtype):
+        self.res = LorentzResidual(weight_parameterization="identity", param_dtype=dtype)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_project_residual_weights_in_jitted_train_step(dtype):
+    """SGD on a loss that pushes w_y down: without projection w_y goes negative and the output NaN.
+
+    With the projection after `optimizer.update` (inside `nnx.jit`), w_y stays >= 0 (it sits at 0),
+    the output stays finite and on the sheet, and w_y moves back up once the loss pulls it up.
+    """
+    atol = 4e-3 if dtype == jnp.float32 else 1e-7
+    c = 1.0
+    x_NA = _make_points(jax.random.PRNGKey(500), 8, 6, dtype, c)
+    y_NA = _make_points(jax.random.PRNGKey(501), 8, 6, dtype, c)
+
+    def dist_to_y(model):
+        return jnp.mean(_dists(model.res(x_NA, y_NA, c=c), y_NA, c, dtype))
+
+    def make_step(sign, project):
+        @nnx.jit
+        def step(model, optimizer):
+            grads = nnx.grad(lambda m: sign * dist_to_y(m))(model)
+            optimizer.update(model, grads)
+            if project:
+                project_residual_weights(model)
+
+        return step
+
+    for project in (False, True):
+        model = _ResidualModel(dtype)
+        optimizer = nnx.Optimizer(model, optax.sgd(1.0), wrt=nnx.Param)
+        step = make_step(-1.0, project)  # maximize the distance to y: pushes w_y down
+        w_y = []
+        for _ in range(10):
+            step(model, optimizer)
+            w_y.append(float(model.res.w_y_raw[...]))
+        out_NA = model.res(x_NA, y_NA, c=c)
+        if not project:
+            assert min(w for w in w_y if np.isfinite(w)) < 0.0, w_y
+            assert not jnp.isfinite(out_NA).all()
+        else:
+            assert min(w_y) >= 0.0 and w_y[-1] == 0.0, w_y
+            assert jnp.isfinite(out_NA).all()
+            assert _check_on_hyperboloid(out_NA, c=c, atol=atol)
+
+    # From w_y = 0, a loss that pulls toward y moves w_y back up.
+    step = make_step(1.0, True)
+    step(model, optimizer)
+    assert float(model.res.w_y_raw[...]) > 0.0
+
+
+def test_residual_w_y_gradient_nonzero_at_zero_matches_finite_differences():
+    """At w_y = 0 the gradient with respect to w_y is nonzero and matches central finite differences.
+
+    This is what lets a projected w_y leave 0 again. Float64; the oracle evaluates the forward
+    at w_y = +-h (the -h side is still timelike for these x != y).
+    """
+    dtype, c, h = jnp.float64, 1.0, 1e-6
+    x_NA = _make_points(jax.random.PRNGKey(502), 8, 6, dtype, c)
+    y_NA = _make_points(jax.random.PRNGKey(503), 8, 6, dtype, c)
+    cot_NA = jax.random.normal(jax.random.PRNGKey(504), x_NA.shape, dtype=dtype)
+    module = LorentzResidual(weight_parameterization="identity", init_w_y=0.0, param_dtype=dtype)
+
+    def loss(mod, weight=None):
+        return jnp.sum(cot_NA * mod(x_NA, y_NA, c=c, weight=weight))
+
+    grad_ad = float(nnx.grad(loss)(module).w_y_raw[...])
+    grad_fd = float((loss(module, h) - loss(module, -h)) / (2 * h))
+    assert abs(grad_fd) > 1e-2
+    assert np.isclose(grad_ad, grad_fd, rtol=1e-7)

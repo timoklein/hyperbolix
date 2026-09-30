@@ -93,7 +93,9 @@ class LorentzResidual(nnx.Module):
     with no error (see its Notes). A negative ``w_y`` is outside the domain of
     LResNet's Lemma 4.1, which bounds the normalizer only for
     ``(w_x, w_y) in R+ x R+ \\ {(0, 0)}``. Keep the default softplus
-    parameterization unless you are reproducing HELM.
+    parameterization unless you are reproducing HELM; there, call
+    :func:`project_residual_weights` (or :meth:`project_w_y`) after each
+    ``optimizer.update`` to project ``w_y`` back onto ``w_y >= 0``.
 
     Parameters
     ----------
@@ -126,7 +128,8 @@ class LorentzResidual(nnx.Module):
         How a learnable ``w_y`` is recovered from its raw parameter:
         ``"softplus"`` (default) gives ``w_y = softplus(raw) > 0``;
         ``"identity"`` gives ``w_y = raw``, unconstrained, initialized at
-        ``init_w_y`` (HELM's LResNet). Ignored when ``learnable_weight=False``.
+        ``init_w_y`` (HELM's LResNet; project it with :meth:`project_w_y`).
+        Ignored when ``learnable_weight=False``.
     scale_parameterization : {"softplus", "exp"}, optional
         How a learnable ``gamma`` is recovered from its raw parameter:
         ``"softplus"`` (default) gives ``gamma = softplus(raw)``; ``"exp"``
@@ -260,3 +263,43 @@ class LorentzResidual(nnx.Module):
             out = lorentz_scale(out, gamma=jnp.asarray(gamma, dtype=x.dtype), c=c, eps=self.eps)
 
         return out
+
+    def project_w_y(self) -> None:
+        """Project a learnable identity-mode ``w_y`` back onto ``w_y >= 0``, in place.
+
+        Call it after each ``optimizer.update(model, grads)`` (inside the same
+        ``nnx.jit`` train step is fine), or call :func:`project_residual_weights`
+        on the whole model. Together with the optimizer step this is projected
+        gradient descent: LResNet's Lemma 4.1 bounds the normalizer only for
+        ``w_y >= 0``, and a negative ``w_y`` can make the combination spacelike
+        (NaN). Inside the domain HELM's dynamics are unchanged. ``w_y = 0`` is
+        valid (the output is ``x``), and the gradient there is nonzero, so the
+        weight can move back up.
+
+        A no-op under the softplus parameterization (already ``> 0``) and for a
+        fixed weight (``learnable_weight=False``).
+        """
+        if self.w_y_raw is not None and self.weight_parameterization == "identity":
+            self.w_y_raw[...] = jnp.maximum(self.w_y_raw[...], 0)
+
+
+def project_residual_weights(model: nnx.Module) -> None:
+    """Call :meth:`LorentzResidual.project_w_y` on every ``LorentzResidual`` in ``model``.
+
+    Call it after each ``optimizer.update(model, grads)``, inside the same
+    ``nnx.jit`` train step if you like::
+
+        optimizer.update(model, grads)
+        project_residual_weights(model)
+
+    It keeps every identity-mode (HELM) ``w_y`` in the domain ``w_y >= 0`` of
+    LResNet's Lemma 4.1; softplus-mode and fixed weights are left unchanged.
+
+    Parameters
+    ----------
+    model : nnx.Module
+        Any module; its submodules are searched recursively, ``model`` included.
+    """
+    for _, module in nnx.iter_modules(model):
+        if isinstance(module, LorentzResidual):
+            module.project_w_y()
