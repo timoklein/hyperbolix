@@ -1005,8 +1005,8 @@ that ceiling**, and the conv output's norm is no longer capped. At $t = 8$, floa
 float64 on the same inputs (max-abs error over max-abs value, worst of $c = 0.3$ and $c = 1$;
 `logs/2026-09-29_cancellation-free/2_evidence/probes/1b_merged.out`): the regression head goes from
 2.0e-1 to 1.5e-6, `HypLinearPoincarePP` (kernel scaled by 0.1, so its output stays off the ball's
-edge) from 9.0e-2 to 9.7e-7, and the conv (identity or random weights) from 1.7e-1–6.9e-1 to
-≤ 1.6e-6; the conv output's largest $\sqrt{c}\,\lVert\text{out}\rVert$ at $c = 1$ is now 20.2,
+edge) from 9.0e-2 to 9.7e-7, and the conv from 2.3e-1 (identity weights) and 6.9e-1 (random
+weights) to ≤ 1.6e-6; the conv output's largest $\sqrt{c}\,\lVert\text{out}\rVert$ at $c = 1$ is now 20.2,
 where the old route capped it at the ceiling (6.3279 in that probe). In
 float64 the new and old routes agree to ≤ 8.8e-11 for $t \le 8$, except the conv with random
 weights from $t = 5$ on, whose output ($\sqrt{c}\,\lVert\text{out}\rVert \ge 12.3$) is near or
@@ -1061,8 +1061,9 @@ accuracy number is only meaningful with its backend quoted.
 $u = \cosh(\sqrt{c}\,r) - 1$ and inverts it, and it now evaluates both directions in half-angle
 forms, $2\sinh^2(\sqrt{c}\,r/2)$ and $2\operatorname{arcsinh}(\sqrt{u/2})/\sqrt{c}$: at
 $\sqrt{c}\,R = 10^{-3}$ every old float32 sample fell outside $R$ (max $1.54R$) and none does now,
-and at $10^{-4}$, where the old $n = 3$ rejection loop never terminated, the new samples give a
-Kolmogorov–Smirnov statistic of 0.0062 against the null's ≈ 0.006 ($N = 20000$;
+and at $10^{-4}$, where the old $n = 3$ rejection loop did not finish within 120 s, the new
+samples give a Kolmogorov–Smirnov statistic of 0.0062 against the null's ≈ 0.006 ($N = 20000$;
+old: `logs/2026-09-29_cancellation-free/1d/probe_old.out`, new:
 `logs/2026-09-29_cancellation-free/2_evidence/probes/fixup_merged.out`). Where that loop cannot
 accept any draw — float32 $\sqrt{c}\,R$ below 2.168e-19 or from 45.0546 on, float64 below
 2.983e-154 or from 355.5845 on — the radius now comes from the closed-form flat limit or
@@ -2283,7 +2284,8 @@ values, from three reductions over the dimension.
   and still saturates on far float32 pairs: 12.637328 for a true 14.4 (two points at scaled
   radius 7.2 on opposite sides, $c = 1$), with a gradient relative error of 1.0
   (`logs/2026-09-29_cancellation-free/2_evidence/probes/1a_merged.out`). Float64 moves the
-  saturation out to the float64 ceiling, $\sqrt{c}\,d \approx 27.7$ at $c = 1$: the same construction gives
+  saturation out to the float64 ceiling, $\sqrt{c}\,d \approx 27.7$ at $c = 1$: an analogous
+  construction ($x = r\,u$, $y = -x$, dim 8, which gives 12.655848 in float32 at radius 7.2) gives
   27.725826 for a true 29 and for a true 40, again with a gradient relative error of 1.0, while
   slots 0 and 2 return 29 and 40 to within 7.6e-8
   (`logs/2026-09-29_cancellation-free/docs_b1/probe_slot1_f64.out`).
