@@ -32,7 +32,7 @@ from hyperbolix.manifolds.poincare import Poincare
 
 # MIN_NORM is the library-wide floor for the init-time log-magnitude; the row normalization
 # itself uses ``safe_normalize``. Imported (not redefined) so there is one value library-wide.
-from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, clamp_to, safe_norm, safe_normalize
+from hyperbolix.utils.math_utils import MIN_NORM, clamp_to, safe_norm, safe_normalize
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 
 from .poincare_linear import _poincare_sinh_lift
@@ -127,7 +127,7 @@ def _busemann_score(
     busemann = horo_manifold.busemann
     if input_space == "tangent":
         # Scored without forming the point `expmap_0` would give: the float32 ball lift stops at
-        # the ceiling t = √c‖x‖ ≈ 6.33 at c = 1 (see `poincare._busemann_tangent`); through the
+        # the ceiling t = √c‖x‖ ≈ 6.32 at c = 1 (see `poincare._busemann_tangent`); through the
         # float32 hyperboloid lift the score's gradient underflows from t ≈ 29.4 at c = 0.3 (29.8 at
         # c = 1) and the point overflows at t ≈ 45 (see `hyperboloid._busemann_tangent`).
         x_BI = x_BI.astype(horo_manifold.dtype)  # the work dtype `expmap_0` gave the lifted input
@@ -140,9 +140,10 @@ def _busemann_score(
     # for a dead output channel, with an exactly-zero VJP instead of a 1e-15-floored one, and it
     # cannot overflow the sum of squares.
     v_unit_KI = safe_normalize(kernel_KI)
-    # capped_exp: log_scale_K is unconstrained — a runaway param must saturate finite, not
-    # overflow to inf and NaN the logits.
-    alpha_K = capped_exp(log_scale_K.astype(work_dtype))
+    # Plain `jnp.exp`: log_scale_K is unconstrained, and a runaway param past ~88.7 (float32)
+    # overflows alpha to inf, so the logits and the loss go non-finite at that step -- the intended
+    # signal, rather than a finite saturation with zero gradient.
+    alpha_K = jnp.exp(log_scale_K.astype(work_dtype))
     bias_K = bias_K.astype(work_dtype)
 
     # B^{v_k}(x_b): single-point `busemann` vmapped over classes (inner) and batch (outer).
@@ -175,6 +176,10 @@ def busemann_fc_poincare_output(
     ball (``√c·‖y‖ < 1``); in float32 a saturated row can round onto or past the boundary, and the
     caller's ``proj`` pulls it back.
 
+    The clip bounds *finite* logits only: an ``inf`` or NaN ``√c · u`` gives a NaN row, so a
+    runaway ``log_scale`` (``exp`` overflow) shows up as a NaN loss rather than a finite point at the
+    ball's edge with a zero gradient.
+
     Parameters
     ----------
     u_BO : Array, shape (B, O)
@@ -190,7 +195,13 @@ def busemann_fc_poincare_output(
         Points in the Poincaré ball with curvature ``c``, before the caller's ``proj``.
     """
     sqrt_c = jnp.sqrt(c)
+    arg_BO = sqrt_c * u_BO  # (B, O)
+    # `+ 0·arg` makes the clip loud: 0·(±inf) is NaN, so an overflowed logit (e.g. alpha = exp(log_scale)
+    # = inf) gives a NaN output instead of a finite point at ±v_max with a zero gradient. For finite
+    # arg, 0·arg is a zero with arg's sign, so value and gradient are bit-identical to the plain clip.
+    # (A NaN arg was already passed through by `clamp_to`.)
+    clipped_BO = clamp_to(arg_BO, -v_max, v_max) + 0.0 * arg_BO  # (B, O)
     # safe_sinh: expm1-form is an accuracy fix over XLA's CPU jnp.sinh (up to ~17-496 ulps off for
     # |x| >= 16), not just a clamp — the ±v_max clip here is still the output-side overflow guard.
-    s_BO = safe_sinh(clamp_to(sqrt_c * u_BO, -v_max, v_max))  # (B, O), s = √c·ω
+    s_BO = safe_sinh(clipped_BO)  # (B, O), s = √c·ω
     return _poincare_sinh_lift(s_BO, c)

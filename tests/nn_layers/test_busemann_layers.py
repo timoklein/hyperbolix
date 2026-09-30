@@ -359,6 +359,33 @@ def test_busemann_row_with_infinite_time_coordinate_stays_non_finite():
     assert np.asarray(y_BAo[:4]).tobytes() == np.asarray(good_only_BAo).tobytes()
 
 
+@pytest.mark.parametrize(
+    "layer_cls, manifold_fn, make_pts, in_dim",
+    [
+        (HypRegressionHyperboloidBusemann, get_hyperboloid, _make_hyperboloid_points, 5),
+        (HypLinearHyperboloidBusemann, get_hyperboloid, _make_hyperboloid_points, 5),
+        (HypRegressionPoincareBusemann, get_poincare, _make_ball_points, 4),
+        (HypLinearPoincareBusemann, get_poincare, _make_ball_points, 4),
+    ],
+    ids=["bmlr-hyperboloid", "bfc-hyperboloid", "bmlr-poincare", "bfc-poincare"],
+)
+def test_busemann_runaway_log_scale_is_non_finite_f32(layer_cls, manifold_fn, make_pts, in_dim):
+    """A ``log_scale`` past float32 ``exp`` overflow (~88.7) gives a non-finite output.
+
+    Regression: ``alpha = capped_exp(log_scale)`` saturated at ``exp(87.8)``, so a runaway parameter
+    gave a finite logit with an exactly-zero ``log_scale`` gradient. ``HypLinearPoincareBusemann``'s
+    output map clipped the resulting ``±inf`` logits to ``±v_max``, so it stayed finite.
+    """
+    dtype = jnp.float32
+    layer = layer_cls(manifold_fn(dtype), in_dim, 4, rngs=nnx.Rngs(0), param_dtype=dtype)
+    layer.log_scale[...] = jnp.full_like(layer.log_scale[...], 100.0)
+    x_BI = make_pts(jax.random.PRNGKey(0), 4, in_dim, dtype)
+
+    y_BO = layer(x_BI, c=C)
+
+    assert not bool(jnp.isfinite(y_BO).any()), f"runaway log_scale saturated finite: {y_BO}"
+
+
 @pytest.mark.parametrize("c", [0.01, 1.0])
 def test_bfc_poincare_saturated_scores_stay_at_boundary_f32(c):
     """Saturated Busemann scores must lift to the ball's edge in float32, not collapse to the origin.

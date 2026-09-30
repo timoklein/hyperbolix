@@ -4,17 +4,16 @@ Riemannian optimization algorithms for training neural networks with hyperbolic 
 
 ## Overview
 
-Hyperbolix provides two Riemannian optimizers that extend standard Euclidean optimizers to manifold-valued parameters:
+Hyperbolix provides two Riemannian optimizers for manifold-valued parameters:
 
 - **Riemannian SGD (RSGD)**: Stochastic gradient descent with momentum
-- **Riemannian Adam (RAdam)**: Adaptive learning rates with moment transport
+- **Riemannian Adam**: Adaptive learning rates with moment transport
 
-Both optimizers:
-
-- Follow the standard Optax `GradientTransformation` interface
-- Automatically detect manifold parameters via metadata
-- Support mixed Euclidean/Riemannian parameter optimization
-- Are compatible with `nnx.Optimizer` wrapper
+Both are Optax `GradientTransformation`s that work with `nnx.Optimizer`. They
+detect manifold-valued parameters (tagged with `ManifoldParam`) and give every
+other parameter a Euclidean update, so one optimizer covers a mixed model. Most
+layers keep all their weights Euclidean and need neither; see the
+[Riemannian Optimizers guide](../user-guide/optimizers.md) for when you do.
 
 ## Riemannian SGD
 
@@ -49,7 +48,8 @@ optimizer = nnx.Optimizer(
     wrt=nnx.Param
 )
 
-# Training step
+# Training step (use nnx.jit, not jax.jit, if you compile it:
+# a jax.jit step drops the in-place parameter and optimizer updates)
 def train_step(model, optimizer, x, y):
     def loss_fn(model):
         pred = model(x, c=1.0)
@@ -90,51 +90,18 @@ optimizer = nnx.Optimizer(
 
 ## Manifold Metadata System
 
-Hyperbolix uses `ManifoldParam`, an `nnx.Param` subclass, to tag parameters that live on a Riemannian manifold. The optimizers detect these via `isinstance` checks.
-
-### How It Works
-
-```python
-from hyperbolix.optim import ManifoldParam
-
-# Layer tags hyperbolic parameters using ManifoldParam
-class HypLinearPoincare(nnx.Module):
-    def __init__(self, manifold_module, in_dim, out_dim, *, rngs):
-        self.manifold = manifold_module
-
-        # Kernel is Euclidean (plain nnx.Param)
-        self.kernel = nnx.Param(
-            jax.random.normal(rngs.params(), (out_dim, in_dim)) * 0.01
-        )
-
-        # Bias lives on Poincaré ball (ManifoldParam)
-        self.bias = ManifoldParam(
-            jnp.zeros(out_dim),
-            manifold=manifold_module,
-            curvature=1.0,
-        )
-```
-
-The optimizer automatically:
-
-1. Detects `ManifoldParam` instances
-2. Applies Riemannian gradient updates (expmap/retraction)
-3. Performs parallel transport for momentum/adaptive moments
-4. Falls back to Euclidean updates for plain `nnx.Param` parameters
-
-**Dtype contract:** the Riemannian math (steps 2-3) runs in the manifold's
-`dtype`, but the returned updates and the moment buffers are cast back to each
-parameter's storage dtype before they leave the transformation. A float32
-parameter tagged with a float64 manifold keeps float32 weights and float32
-optimizer state across steps, while the geometry itself is computed in
-float64.
-
-### API Reference
+`ManifoldParam`, an `nnx.Param` subclass, tags a parameter that lives on a
+manifold; the optimizers detect it with `isinstance`. For a tagged parameter
+they convert the gradient to a Riemannian one, move along the manifold and
+transport the momentum or moments; every plain `nnx.Param` gets the Euclidean
+update. Riemannian math runs in the manifold's dtype; updates and moments keep
+each parameter's storage dtype (see
+[Storage vs. Compute Dtype](../user-guide/numerical-stability.md#storage-vs-compute-dtype)).
 
 ::: hyperbolix.optim.manifold_metadata
     options:
       show_source: true
-      heading_level: 4
+      heading_level: 3
       members:
         - ManifoldParam
         - mark_manifold_param
@@ -143,100 +110,26 @@ float64.
 
 ## Expmap vs Retraction
 
-Both optimizers support two update modes:
-
-- **Exponential map** (default): `expmap(x, -lr * grad)`
-  - Exact geodesic following
-  - Numerically stable for large steps
-  - Slightly slower
-
-- **Retraction**: `proj(x - lr * grad)`
-  - First-order approximation
-  - Faster computation
-  - Can be less stable for large learning rates
-
-### Choosing Update Mode
+Both optimizers take a `use_expmap` flag. The default, `True`, moves a manifold
+parameter with the manifold's `expmap`; `False` uses its `retraction`, a
+first-order approximation.
 
 ```python
-# Use exponential map (default, recommended)
-opt = riemannian_adam(learning_rate=0.001)
-
-# For extremely performance-critical applications,
-# you can experiment with retraction-based updates
-# by modifying the optimizer implementation
+opt = riemannian_adam(learning_rate=0.001)                    # expmap (default)
+opt = riemannian_adam(learning_rate=0.001, use_expmap=False)  # retraction
 ```
-
-In practice, exponential maps provide better stability and convergence, especially for hyperbolic neural networks.
 
 ## Mixed Optimization
 
-The optimizers seamlessly handle models with both Euclidean and hyperbolic parameters:
+On a model that mixes `nnx.Linear` layers with `HypLinearPoincare`,
+`riemannian_adam` will:
 
-```python
-from hyperbolix.manifolds import Poincare
-from hyperbolix.nn_layers import HypLinearPoincare
+- Apply standard Adam updates to the `nnx.Linear` parameters
+- Apply Riemannian Adam updates to `HypLinearPoincare.bias` (a `ManifoldParam`)
+- Apply Euclidean Adam updates to `HypLinearPoincare.kernel` (a plain `nnx.Param`)
 
-poincare = Poincare()
-
-class MixedModel(nnx.Module):
-    def __init__(self, rngs):
-        # Euclidean linear layer
-        self.fc1 = nnx.Linear(32, 64, rngs=rngs)
-
-        # Hyperbolic layer (bias has manifold metadata)
-        self.hyp = HypLinearPoincare(
-            manifold_module=poincare,
-            in_dim=64,
-            out_dim=16,
-            rngs=rngs
-        )
-
-        # Another Euclidean layer
-        self.fc2 = nnx.Linear(16, 10, rngs=rngs)
-
-# Optimizer handles all parameter types automatically
-optimizer = nnx.Optimizer(model, riemannian_adam(learning_rate=0.001), wrt=nnx.Param)
-```
-
-The optimizer will:
-
-- Apply standard Adam updates to `fc1` and `fc2` parameters
-- Apply Riemannian Adam updates to `hyp.bias` (tagged with metadata)
-- Apply Euclidean Adam updates to `hyp.kernel` (no metadata)
-
-## Performance Considerations
-
-!!! tip "JIT Compilation"
-    Both optimizers are JIT-compatible. For best performance:
-
-    ```python
-    @jax.jit
-    def train_step(model, optimizer, x, y):
-        def loss_fn(model):
-            return compute_loss(model, x, y)
-
-        loss, grads = nnx.value_and_grad(loss_fn)(model)
-        optimizer.update(model, grads)
-        return loss
-    ```
-
-!!! note "Curvature as Static Argument"
-    If curvature `c` is constant during training, pass it as a static argument to enable better JIT optimization:
-
-    ```python
-    @jax.jit
-    def forward(model, x):
-        return model(x, c=1.0)  # c is traced, not ideal
-
-    # Better: use partial application
-    from functools import partial
-
-    @partial(jax.jit, static_argnums=(2,))
-    def forward(model, x, c):
-        return model(x, c=c)
-
-    output = forward(model, x, 1.0)  # c=1.0 is static
-    ```
+The [user guide](../user-guide/optimizers.md#the-legacy-ganea-exception) covers these
+layers and tagging your own manifold-valued parameters.
 
 ## References
 
@@ -244,5 +137,3 @@ The Riemannian optimizers are based on:
 
 - Bécigneul, G., & Ganea, O. (2019). "Riemannian Adaptive Optimization Methods." ICLR 2019.
 - Bonnabel, S. (2013). "Stochastic gradient descent on Riemannian manifolds." IEEE TAC.
-
-See the [User Guide](../user-guide/optimizers.md) for detailed explanations and best practices.

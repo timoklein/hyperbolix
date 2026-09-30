@@ -184,7 +184,7 @@ def _poincare_sinh_logmap_0(s_BO: Float[Array, "batch out_dim"], c: float) -> Fl
 
     With ``‖s‖ = sinh(u)`` the lift lands at ``√c‖y‖ = tanh(u/2)`` along ``ŝ``, and ``logmap_0``
     reads that radius back as ``u/(2√c)``. Going through the ball, float32's ``proj`` margin capped
-    the result at ``√c‖out‖ ≈ 6.33`` (c = 1) with a zero radial gradient. Used by
+    the result at ``√c‖out‖ ≈ 6.32`` (c = 1) with a zero radial gradient. Used by
     :class:`~hyperbolix.nn_layers.poincare_conv.HypConv2DPoincare`; the Jacobian at ``s = 0`` is
     exactly ``I/(2√c)``. With the tangent-input scores, that layer's float32-vs-float64 error
     (relative to the largest entry, patch radius t ≤ 8, c ∈ {0.3, 1}) is ≤ 1.9e-6 on outputs and

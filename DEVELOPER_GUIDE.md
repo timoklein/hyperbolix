@@ -1,94 +1,76 @@
 # Developer Guide
 
-Quick reference for development workflows and tooling.
-
-## Initial Setup
+## Setup
 
 ```bash
-# Clone and install
-git clone <repo>
+git clone https://github.com/timoklein/hyperbolix.git
 cd hyperbolix
 uv sync --locked --dev
-
-# Install pre-commit hooks
 uv run pre-commit install
 ```
 
-## Project Structure
+Source is in `hyperbolix/` (`manifolds/`, `nn_layers/`, `optim/`,
+`decomposition/`, `distributions/`, `utils/`), tests in `tests/`, docs in `docs/`.
+Update dependencies with `uv lock --upgrade` (or `--upgrade-package jax`), then
+`uv sync --locked --dev`.
 
-```
-hyperbolix/
-├── hyperbolix/           # Source code
-│   ├── manifolds/        # Core geometry
-│   ├── nn_layers/        # Neural network layers
-│   ├── optim/            # Riemannian optimizers
-│   ├── decomposition/    # HoroPCA, CO-SNE, Fréchet mean
-│   ├── distributions/    # Probability distributions
-│   └── utils/            # Utilities
-├── tests/                # Test suite
-└── docs/                 # Documentation source
-```
+`main` is the released code; release tags follow `vMAJOR.MINOR.PATCH`. Branch
+as `feat/<short-name>` (e.g. `feat/klein-manifold`) or `fix/<short-name>` (e.g.
+`fix/float32-stability`). Contributions are welcome as pull requests with tests.
 
-## Development Workflow
+## Checks & tests
 
-### Before Committing
+Pre-commit hooks (`.pre-commit-config.yaml`) run on staged files:
 
-Pre-commit hooks will automatically run on staged files:
+- isort, Ruff lint (`--fix`) and Ruff format
+- Pyright on `hyperbolix/`
+- trailing whitespace, end-of-file, YAML/TOML syntax, merge-conflict markers, large files (>500 KB), debug statements
 
-- Ruff linting and formatting
-- Trailing whitespace removal
-- YAML/TOML validation
-- Large file checks
-
-To run manually on all files:
+If a hook fixes files, re-stage and commit again. Don't use `--no-verify`; fix
+the underlying problem.
 
 ```bash
-uv run pre-commit run --all-files
-```
-
-### Code Quality Checks
-
-```bash
-# Lint with Ruff
+uv run pre-commit run --all-files   # all hooks on all files (--verbose to debug)
 uv run ruff check hyperbolix tests
-
-# Format with Ruff
 uv run ruff format hyperbolix tests
-
-# Type check with Pyright
-uv run pyright hyperbolix
+uv run pyright hyperbolix           # or one file, e.g. hyperbolix/manifolds/poincare.py; --watch to re-check
 ```
 
-### Running Tests
+Pyright is configured in `pyproject.toml` (`[tool.pyright]`, `typeCheckingMode = "basic"`).
 
 ```bash
-# All tests
-uv run pytest
+# All tests, on all cores (~9 min on 48 workers; hours single-process)
+uv run pytest -n auto
 
-# Specific test suite
-uv run pytest tests/test_manifolds.py
-uv run pytest tests/nn_layers/                          # all NN layer tests
-uv run pytest tests/nn_layers/test_hyperboloid_fgg.py   # one file
+# A directory, a file, one test
+uv run pytest tests/nn_layers/
+uv run pytest tests/nn_layers/test_hyperboloid_fgg.py
+uv run pytest tests/test_manifolds.py::test_dist_properties -v
 
-# Fast slice of the dim-parametrized suites: dimension 2, float32 only
-# (the ids spell the dimension as a bare number, e.g. [PoincareBall-c1-2-float32-10],
-#  so "2-float32" is the selector; 78 of the 386 tests in tests/test_manifolds.py)
+# Fast slice: dimension 2, float32 only (ids spell the dimension as a bare
+# number, e.g. [PoincareBall-c1-2-float32-10]; 134 of 650 tests in test_manifolds.py)
 uv run pytest -k "2-float32"
-
-# Verbose output
-uv run pytest -v
-
-# Stop on first failure
-uv run pytest -x
 ```
 
-## Coding Conventions
+Out of memory: use fewer xdist workers (`-n 4`) or the `-k "2-float32"` slice.
+Passes locally but fails in CI: check `uv lock --check` and `.python-version`
+(the Python version CI uses).
 
-### Shape Suffixes
+## CI
 
-All tensor/array local variables in function bodies use **shape suffixes** — single capital letters appended to the variable name encoding each dimension. This makes shapes self-documenting and shape bugs immediately visible.
+CI (`.github/workflows/ci.yaml`) runs on every push: Lint (Ruff lint and format
+check), Type Check (Pyright) and Test (pytest, parallelized across test suites).
+All must pass before merging. The docs build
+(`.github/workflows/docs.yml`) runs on pushes to `main` and on pull requests to
+`main`, and deploys the site from `main`.
 
-**Dimension key** (used across the codebase):
+Caching is off: `uv sync --locked --dev` takes about 7 s with or without a cache
+(see the comment in `ci.yaml`).
+
+## Conventions
+
+Tensor/array local variables carry **shape suffixes**, one capital letter per
+dimension. The dimension key:
 
 | Letter | Dimension |
 |--------|-----------|
@@ -104,180 +86,21 @@ All tensor/array local variables in function bodies use **shape suffixes** — s
 | `S` | sequence length |
 | `F` | frequency dim (`d//2` in RoPE) |
 
-**Examples:**
-
 ```python
 # poincare_regression.py — MLR forward pass
-sub_PBD = addition_fn(p_neg_PD, x_BD, c)        # (P, B, D) from broadcasting
+sub_PBD = addition_fn(p_neg_PD, x, c)            # (P, B, D) from broadcasting
 sub_BPD = jnp.transpose(sub_PBD, (1, 0, 2))      # reorder to (B, P, D)
-res_BP  = lambda_p_P1.T * a_norm_P1.T * signed_dist2hyp_BP
 
-# hyperboloid_conv.py — patch extraction
-patches_BHWCkhkw = patches_flat_BHW_CKhKw.reshape(B, H, W, C, kh, kw)
-patches_BHWkhkwC = patches_BHWCkhkw.transpose(0, 1, 2, 4, 5, 3)
-
-# poincare.py — conformal factor broadcast
-res_BP = 2 * z_norm_1P * signed_dist2hyp_BP  # z_norm.T broadcasts (1,P) over (B,P)
+# poincare.py — MLR logits
+res_BP = 2 * z_norm_P1.T * signed_dist2hyp_BP  # z_norm.T broadcasts (1, P) over (B, P)
 ```
 
-**Rules:**
-- Use compound suffixes for flattened dims: `x_flat_NC` with a comment explaining the merge
-- `_B1` for `keepdims=True` results, `_1P` for transposed broadcast tensors
-- Add a dimension key docstring at the top of each file that uses shape suffixes
+- Flattened dims get compound suffixes (`x_flat_NC`) and a comment explaining the merge
+- `_B1` for `keepdims=True` results; `_P1.T` or `_1P` for transposed broadcasts
+- Each file that uses shape suffixes starts with a `Dimension key:` docstring listing its letters
 
-Each annotated file begins with a docstring like:
-
-```python
-"""
-Dimension key:
-  B: batch size     D: manifold dimension
-  P: output classes (hyperplanes)
-"""
-```
-
-## CI/CD Pipeline
-
-The CI pipeline runs automatically on push and pull requests:
-
-### Jobs
-
-1. **Lint** - Ruff linting and formatting checks
-2. **Type Check** - Pyright static type analysis
-3. **Test** - Pytest tests (parallelized across test suites)
-
-### Viewing Results
-
-- **All checks**: Must pass before merging
-
-### CI Caching
-
-The pipeline caches `uv` dependencies (speeds up installation). Cache keys are
-based on:
-
-- `uv.lock` file hash
-- OS and Python version
-
-## Common Tasks
-
-### Update Dependencies
-
-```bash
-# Update all dependencies
-uv lock --upgrade
-
-# Update specific package
-uv lock --upgrade-package jax
-
-# Sync environment with updated lock
-uv sync --locked --dev
-```
-
-### Add New Dependency
-
-```bash
-# Runtime dependency
-uv add <package>
-
-# Dev dependency
-uv add --dev <package>
-
-# Sync environment
-uv sync --locked --dev
-```
-
-### Fix Pre-commit Hook Issues
-
-```bash
-# Pre-commit failed? Hooks auto-fixed files. Re-stage and re-commit:
-git add <modified-files>
-git commit -m "your message"
-```
-
-Do not use `--no-verify` to bypass hook failures. Investigate the failure and
-fix the underlying issue — the hooks catch real problems (lint errors,
-type-check failures, large files).
-
-### Debug Test Failures
-
-```bash
-# Run with debugger
-uv run pytest tests/test_manifolds.py --pdb
-
-# Show print statements
-uv run pytest tests/test_manifolds.py -s
-
-# Show full diff for assertion failures
-uv run pytest tests/test_manifolds.py -vv
-
-# Run specific test
-uv run pytest tests/test_manifolds.py::test_dist -v
-```
-
-### Profile Performance
-
-```bash
-# Run with py-spy profiler
-uv run py-spy record -o profile.svg -- python your_script.py
-
-# View profile
-open profile.svg
-```
-
-## Type Checking
-
-### Running Pyright
-
-```bash
-# Check all code
-uv run pyright
-
-# Check specific file
-uv run pyright hyperbolix/manifolds/poincare.py
-
-# Watch mode (re-check on file changes)
-uv run pyright --watch
-```
-
-### Type Checking Levels
-
-Current setting: `typeCheckingMode = "basic"`
-
-- `"off"` - No type checking
-- `"basic"` - Standard type checking (current)
-- `"strict"` - Strict type checking (optional upgrade)
-
-### Common Type Issues
-
-```python
-# Missing type annotation
-def foo(x):  # ❌ Pyright error
-    return x * 2
-
-def foo(x: float) -> float:  # ✅ OK
-    return x * 2
-
-# Using jaxtyping for array shapes
-from jaxtyping import Float, Array
-
-def dist(x: Float[Array, "dim"], y: Float[Array, "dim"]) -> float:
-    return jnp.linalg.norm(x - y)
-```
-
-## Performance Tips
-
-### JIT Compilation Best Practices
-
-```python
-import jax
-
-# ✅ Good: JIT at top level, vmap for batching
-dist_fn = jax.jit(jax.vmap(manifold.dist, in_axes=(0, 0, None)))
-distances = dist_fn(x_batch, y_batch, c)
-
-# ❌ Bad: JIT inside loop (recompiles every time)
-for x, y in zip(x_batch, y_batch):
-    dist = jax.jit(manifold.dist)(x, y, c)  # Don't do this!
-```
+The numerics and weight-initialization rules are in `CLAUDE.md` at the
+repository root.
 
 ## Extending Hyperbolix
 
@@ -294,9 +117,9 @@ adding a neural network layer, and contributing documentation.
     - `addition`, `scalar_mul`, `retraction`
     - `ptransp`, `ptransp_0`
     - `tangent_inner`, `tangent_norm`, `tangent_proj`
-    - `egrad2rgrad`, `is_in_manifold`
-    - `c` property and `_cast` (inherit from `ManifoldBase` to get these
-      plus dtype-casting machinery for free)
+    - `egrad2rgrad`, `is_in_manifold`, `is_in_tangent_space`
+    - a `dtype` attribute and `_cast` (inherit from `ManifoldBase` to get
+      these, the `c` property and the dtype casting)
 2. **Add to exports**: `hyperbolix/manifolds/__init__.py`.
 3. **Wire into tests**: extend `manifold_and_c` in `tests/conftest.py` so
    your manifold gets exercised by the shared test suite (parametrized over
@@ -332,8 +155,7 @@ instance (an `nnx.Module`) on the *caller's* model and passing its output as
     - Accept `manifold_module` (a `Manifold`-protocol instance), not raw
       functions
     - Accept `rngs: nnx.Rngs` keyword-only
-    - Name trainable params `kernel` and `bias` (Flax NNX convention; the
-      `simplify-conv-layers` work standardized this across conv layers too)
+    - Name trainable params `kernel` and `bias`
     - Accept `c` (or `c_in` / `c_out`) at **call time**, not in `__init__`
 4. **Add tests** under `tests/nn_layers/test_<your_layer>.py`, parametrized
    over the standard fixtures (`seed_jax`, `dtype`, `manifold_and_c`).
@@ -348,11 +170,14 @@ instance (an `nnx.Module`) on the *caller's* model and passing its output as
     - User guide: add a row to the relevant decision table in
       `docs/user-guide/nn-layers.md`.
 
-### Documentation Workflow
+## Docs workflow
 
 The docs site is built with MkDocs + Material + mkdocstrings.
 
 ```bash
+# Once per checkout: vendor MathJax (gitignored)
+uv run python scripts/vendor_mathjax.py
+
 # Live-reload local preview
 uv run mkdocs serve
 
@@ -362,98 +187,13 @@ uv run mkdocs build --strict
 
 Where content goes:
 
-- **`docs/user-guide/`** — synthesis content. Decision tables, conventions,
-  composition patterns, pitfalls. *Not* per-symbol reference docs.
-- **`docs/api-reference/`** — mostly `:::` autoreference blocks. Add a
-  one-paragraph intro for each new module; mkdocstrings handles signatures
-  and docstrings automatically.
-- **`docs/getting-started.md` / `docs/index.md`** — only update for
-  user-facing feature launches (a new manifold counts; an internal refactor
-  doesn't).
-- **`docs/changelog.md`** — every feature, breaking change, or notable bug
-  fix gets an `[Unreleased]` entry under `### Added` / `### Changed` /
-  `### Fixed`.
+- **`docs/user-guide/`**: decision tables, conventions, composition patterns,
+  pitfalls; not per-symbol reference.
+- **`docs/api-reference/`**: `:::` autoreference blocks, plus a one-paragraph
+  intro per new module.
+- **`docs/getting-started.md` / `docs/index.md`**: only user-facing features
+  (a new manifold counts; an internal refactor doesn't).
+- **`docs/changelog.md`**: every feature, breaking change or notable bug fix
+  gets an `[Unreleased]` entry under `### Added` / `### Changed` / `### Fixed`.
 
-Always run `uv run mkdocs build --strict` before pushing docs changes — the
-CI docs build uses the same flag, and dead cross-links between guide pages
-fail the build.
-
-## Troubleshooting
-
-### Pre-commit Hook Fails
-
-```bash
-# See what failed
-git commit -m "message"  # Shows failing hooks
-
-# Run manually to debug
-uv run pre-commit run --all-files --verbose
-
-# Update hook versions
-uv run pre-commit autoupdate
-```
-
-### Tests Pass Locally, Fail in CI
-
-```bash
-# Check if it's a caching issue - clear caches in GitHub Actions
-# Check if it's a dependency issue - uv.lock might be out of sync
-uv lock --check
-
-# Check if it's a Python version issue - CI uses .python-version
-cat .python-version
-```
-
-### Out of Memory During Tests
-
-```bash
-# Run tests sequentially (no parallel)
-uv run pytest --maxprocesses=1
-
-# Run smaller test subset (dimension 2, float32)
-uv run pytest -k "2-float32"
-
-# Reduce batch sizes in conftest.py
-```
-
-## Git Workflow
-
-### Contributing
-
-Contributions are welcome:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with tests
-4. Run pre-commit checks
-5. Submit a pull request
-
-### Recommended Commit Flow
-
-```bash
-# Make changes
-git add <files>
-
-# Pre-commit hooks run automatically
-git commit -m "descriptive message"
-
-# If hooks modify files, stage and commit again
-git add <auto-fixed-files>
-git commit -m "descriptive message"
-
-# Push
-git push
-```
-
-### Branch Strategy
-
-- `main` — release-tracked production code; release tags follow `vMAJOR.MINOR.PATCH`
-- Feature branches — `feature/<short-name>` (e.g. `feature/product-manifolds`)
-- Fix branches — `fix/<short-name>` (e.g. `fix/float32-stability`)
-
-## Resources
-
-- **CI Pipeline**: `.github/workflows/ci.yaml`
-- **Pyright Config**: `pyproject.toml` → `[tool.pyright]`
-- **Pre-commit Config**: `.pre-commit-config.yaml`
-- **User Documentation**: `docs/` (built with `uv run mkdocs serve`)
+Run the strict build before pushing docs changes: CI uses the same flag.

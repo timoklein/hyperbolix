@@ -5,12 +5,14 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from flax import nnx
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.nn_layers import LorentzResidual, lorentz_scale
-from hyperbolix.nn_layers.hyperboloid_core import lorentz_residual
+from hyperbolix.nn_layers import LorentzResidual, lorentz_scale, project_residual_weights
+from hyperbolix.nn_layers.hyperboloid_core import _lorentz_sqdist_polar, lorentz_residual, spatial_to_hyperboloid
+from hyperbolix.utils.math_utils import floor_at
 
 
 def get_hyperboloid(dtype: jnp.dtype) -> Hyperboloid:
@@ -239,8 +241,9 @@ def test_residual_softplus_keeps_weight_safe(dtype):
     """Even a strongly negative raw weight stays on-manifold (softplus > 0).
 
     This is the whole reason for the module: a raw nnx.Param(w_y) could drift
-    negative and silently corrupt the geometry via the residual's abs()
-    normalizer; the softplus reparameterization makes that impossible.
+    negative, where the residual returns NaN (spacelike combination) or a
+    valid-looking but wrong point (past-directed combination); the softplus
+    reparameterization makes that impossible.
     """
     atol = 4e-3 if dtype == jnp.float32 else 1e-7
     c = 1.0
@@ -331,7 +334,7 @@ def test_lorentz_residual_matches_literal_definition_float64(c, w_y):
     """float64 ``lorentz_residual`` equals the literal definition, computed in NumPy.
 
     Definition pin rather than an accuracy pin: ``ave = x + w_y y``, then
-    ``z = ave / sqrt(c |<ave, ave>_L|)`` with the time slot rebuilt from the spatial part (what
+    ``z = ave / sqrt(-c <ave, ave>_L)`` with the time slot rebuilt from the spatial part (what
     ``spatial_to_hyperboloid`` does). It fixes what the function *means* independently of how
     the normalizer is spelled, so a future rewrite of the normalizer has to keep reproducing it.
 
@@ -350,7 +353,7 @@ def test_lorentz_residual_matches_literal_definition_float64(c, w_y):
 
     ave_A = np.asarray(x_A, np.float64) + w_y * np.asarray(y_A, np.float64)
     mink = -(ave_A[0] ** 2) + np.sum(ave_A[1:] ** 2)
-    z_s_D = ave_A[1:] / np.sqrt(c * abs(mink))
+    z_s_D = ave_A[1:] / np.sqrt(-c * mink)
     ref_A = jnp.asarray(np.concatenate([[np.sqrt(np.sum(z_s_D**2) + 1.0 / c)], z_s_D]))
 
     err = _geodesic(got_A, ref_A, c)
@@ -451,7 +454,11 @@ def test_residual_identity_exp_gradients(dtype):
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_residual_identity_allows_negative_weight(dtype):
-    """Under the identity parameterization a negative raw w_y is used as is (HELM), not squashed positive."""
+    """Under the identity parameterization a negative raw w_y is used as is (HELM), not squashed positive.
+
+    Rows where ``x - 0.5 y`` stays timelike give an on-sheet point; rows where it turns spacelike
+    give NaN (no ``abs()`` in the normalizer). A softplus-squashed weight would give neither NaN.
+    """
     atol = 4e-3 if dtype == jnp.float32 else 1e-7
     c = 1.0
     x = _make_points(jax.random.PRNGKey(48), 8, 6, dtype, c)
@@ -461,9 +468,13 @@ def test_residual_identity_allows_negative_weight(dtype):
     module.w_y_raw = nnx.Param(jnp.asarray(-0.5, dtype=dtype))
     out = module(x, y, c=c)
 
-    assert jnp.isfinite(out).all()
-    assert _check_on_hyperboloid(out, c=c, atol=atol)
-    assert jnp.allclose(out, lorentz_residual(x, y, -0.5, c), atol=1e-12 if dtype == jnp.float64 else 1e-6)
+    ave_BA = np.asarray(x, np.float64) - 0.5 * np.asarray(y, np.float64)
+    spacelike_B = np.sum(ave_BA[:, 1:] ** 2, axis=-1) - ave_BA[:, 0] ** 2 > 0.0
+    assert jnp.isnan(out[spacelike_B]).all()
+    assert jnp.isfinite(out[~spacelike_B]).all()
+    assert _check_on_hyperboloid(out[~spacelike_B], c=c, atol=atol)
+    tol = 1e-12 if dtype == jnp.float64 else 1e-6
+    assert jnp.allclose(out, lorentz_residual(x, y, -0.5, c), atol=tol, equal_nan=True)
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
@@ -480,11 +491,11 @@ def test_residual_call_time_weight_override(dtype):
 
     w_B = jax.random.uniform(jax.random.PRNGKey(52), (8,), minval=0.1, maxval=2.0, dtype=dtype)
     # Independent float64 NumPy oracle from the documented formula: ave = x + w y,
-    # out = ave / (sqrt(c) sqrt(|<ave, ave>_L|)), space *= gamma, time = sqrt(|space|^2 + 1/c).
+    # out = ave / (sqrt(c) sqrt(-<ave, ave>_L)), space *= gamma, time = sqrt(|space|^2 + 1/c).
     x_BA, y_BA = np.asarray(x, np.float64), np.asarray(y, np.float64)
     ave_BA = x_BA + np.asarray(w_B, np.float64)[:, None] * y_BA
     mink_B1 = -(ave_BA[:, :1] ** 2) + np.sum(ave_BA[:, 1:] ** 2, axis=-1, keepdims=True)
-    unit_BA = ave_BA / (np.sqrt(c) * np.sqrt(np.abs(mink_B1)))
+    unit_BA = ave_BA / (np.sqrt(c) * np.sqrt(-mink_B1))
     space_BD = 2.0 * unit_BA[:, 1:]
     time_B1 = np.sqrt(np.sum(space_BD**2, axis=-1, keepdims=True) + 1.0 / c)
     expected_BA = np.concatenate([time_B1, space_BD], axis=-1)
@@ -560,3 +571,247 @@ def test_residual_matches_helm_lresnet(dtype, c, config):
         ref = _helm_lresnet_numpy(x_NA, y_NA, 1.3, k, 0.4, learned_scale=True)
 
     np.testing.assert_allclose(np.asarray(got, np.float64), ref, rtol=rtol, atol=atol)
+
+
+# --------------------------------------------------------------------------- #
+# Normalizer without abs() / floor: bit-identical for w_y >= 0, NaN when spacelike
+#
+# Dimension key: N points  A ambient dim (= D + 1)  D spatial dim
+# --------------------------------------------------------------------------- #
+
+
+def _abs_floor_lorentz_residual(x_NA, y_NA, w_N1, c, eps=1e-7):
+    """The earlier ``lorentz_residual`` body, normalizing by ``sqrt(floor_at(c * |mink|, eps))``."""
+    ave_NA = x_NA + w_N1 * y_NA
+    dd_N1 = _lorentz_sqdist_polar(x_NA, y_NA, c)[..., None]
+    mink_N1 = -((1.0 + w_N1) ** 2) / c - w_N1 * dd_N1
+    denom_N1 = jnp.sqrt(floor_at(c * jnp.abs(mink_N1), eps))
+    return spatial_to_hyperboloid((ave_NA / denom_N1)[..., 1:], c_in=c, c_out=c, eps=eps)
+
+
+def _radius_pairs(c, dtype, d=6):
+    """Pairs at scaled radii 0.05 ... 8 (spatial norm up to sinh(8)/sqrt(0.1) = 4.7e3), shape (N, A)."""
+    a_R = [0.05, 1.0, 4.0, 7.6, 8.0]
+    x_NA = jnp.stack([_polar_point(a, _unit(100 + i, d), c, dtype) for i, a in enumerate(a_R)])
+    y_NA = jnp.stack([_polar_point(a, _unit(200 + i, d), c, dtype) for i, a in enumerate(a_R[::-1])])
+    return x_NA, y_NA
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("w_y", [0.0, 0.5, 1.0, 2.0])
+@pytest.mark.parametrize("c", [0.1, 1.0])
+def test_lorentz_residual_bit_identical_to_abs_floor_form(dtype, w_y, c):
+    """For ``w_y >= 0`` dropping the ``abs()`` and the floor changes no bit, eager or jitted.
+
+    ``-c<ave, ave>_L >= (1 + w_y)^2 >= 1`` there, so both were inactive. Checked with a scalar
+    weight and with per-point weights (shape ``(N,)``, compared with the ``(N, 1)`` old form).
+    """
+    x_NA, y_NA = _radius_pairs(c, dtype)
+    w_N = jnp.asarray([w_y, 0.3 * w_y, 5.0 * w_y, 1e-3 * w_y, w_y], dtype=dtype)
+    residual_jit = jax.jit(lorentz_residual, static_argnums=(3,))
+    old_jit = jax.jit(_abs_floor_lorentz_residual, static_argnums=(3,))
+    cases = [
+        (lorentz_residual(x_NA, y_NA, w_y, c), _abs_floor_lorentz_residual(x_NA, y_NA, w_y, c)),
+        (lorentz_residual(x_NA, y_NA, w_N, c), _abs_floor_lorentz_residual(x_NA, y_NA, w_N[:, None], c)),
+        (residual_jit(x_NA, y_NA, jnp.asarray(w_y, dtype), c), old_jit(x_NA, y_NA, jnp.asarray(w_y, dtype), c)),
+        (residual_jit(x_NA, y_NA, w_N, c), old_jit(x_NA, y_NA, w_N[:, None], c)),
+    ]
+    for i, (new_NA, old_NA) in enumerate(cases):
+        assert np.asarray(new_NA).tobytes() == np.asarray(old_NA).tobytes(), f"case {i}: {new_NA} != {old_NA}"
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("w_y,a_y", [(-1.0, 1.1), (-0.5, 1.5)])
+def test_lorentz_residual_spacelike_combination_is_nan(dtype, w_y, a_y):
+    """A negative ``w_y`` that makes ``x + w_y y`` spacelike gives NaN, not a hyperboloid point.
+
+    ``w_y = -1`` is spacelike for every ``x != y``; ``w_y = -0.5`` once the points are far enough
+    apart (here ~2.5 nats). Regression: the normalizer was ``sqrt(floor_at(c |<ave, ave>_L|, eps))``,
+    which turned the spacelike ``ave`` into a finite, valid-looking point, as the HELM / LResNet
+    reference's ``.abs()`` does. The identity-parameterized ``LorentzResidual`` inherits the NaN.
+    """
+    c, d = 1.0, 6
+    x_A = _polar_point(1.0, _unit(300, d), c, dtype)
+    y_A = _polar_point(a_y, _unit(301, d), c, dtype)
+    ave_A = np.asarray(x_A, np.float64) + w_y * np.asarray(y_A, np.float64)
+    assert np.sum(ave_A[1:] ** 2) - ave_A[0] ** 2 > 0.1  # the combination is clearly spacelike
+
+    assert jnp.isnan(lorentz_residual(x_A, y_A, w_y, c)).all()
+    assert jnp.isnan(jax.jit(lorentz_residual, static_argnums=(2, 3))(x_A, y_A, w_y, c)).all()
+
+    module = LorentzResidual(weight_parameterization="identity", param_dtype=dtype)
+    module.w_y_raw = nnx.Param(jnp.asarray(w_y, dtype=dtype))
+    assert jnp.isnan(module(x_A, y_A, c=c)).all()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("w_y", [0.0, 0.5, 1.0, 2.0])
+@pytest.mark.parametrize("c", [0.1, 1.0])
+def test_lorentz_residual_gradients_match_abs_floor_form(dtype, w_y, c):
+    """For ``w_y >= 0`` the gradients with respect to ``x``, ``y`` and ``w_y`` match the old form.
+
+    ``d(c |m|)/dm = -c`` for ``m < 0`` and the floor passes the gradient through above ``eps``,
+    so the backward multiplies by the same ``-c`` as ``d(-c m)/dm``: bit-identical in eager mode.
+    Under ``jit``, XLA compiles the two graphs differently (at ``c = 1`` it drops the multiply by
+    ``c``), and a few entries move by rounding: at most 1.5e-6 (float32) / 1.5e-15 (float64) of
+    the pair's largest entry over the probe grid, less than the old form's own eager-vs-jit gap
+    (up to 2.5e-5 / 2.1e-14). Under ``jit`` the test therefore bounds the difference instead.
+    """
+    x_NA, y_NA = _radius_pairs(c, dtype)
+    cot_NA = jax.random.normal(jax.random.PRNGKey(400), x_NA.shape, dtype=dtype)
+    w_N = jnp.asarray([w_y, 0.3 * w_y, 5.0 * w_y, 1e-3 * w_y, w_y], dtype=dtype)
+    rtol = 1e-5 if dtype == jnp.float32 else 1e-13
+
+    def new_loss(x, y, w):
+        return jnp.sum(cot_NA * lorentz_residual(x, y, w, c))
+
+    def old_loss(x, y, w):
+        return jnp.sum(cot_NA * _abs_floor_lorentz_residual(x, y, w[..., None] if jnp.ndim(w) else w, c))
+
+    for w in (jnp.asarray(w_y, dtype), w_N):
+        for jit in (False, True):
+            new_grad, old_grad = jax.grad(new_loss, argnums=(0, 1, 2)), jax.grad(old_loss, argnums=(0, 1, 2))
+            if jit:
+                new_grad, old_grad = jax.jit(new_grad), jax.jit(old_grad)
+            for name, g_new, g_old in zip("xyw", new_grad(x_NA, y_NA, w), old_grad(x_NA, y_NA, w), strict=True):
+                msg = f"d/d{name}, w.ndim={w.ndim}, jit={jit}"
+                if not jit:
+                    assert np.asarray(g_new).tobytes() == np.asarray(g_old).tobytes(), msg
+                else:
+                    scale = float(jnp.max(jnp.abs(g_old)))
+                    assert float(jnp.max(jnp.abs(g_new - g_old))) <= rtol * scale, msg
+
+
+# --------------------------------------------------------------------------- #
+# Projection of the identity-mode w_y onto w_y >= 0 (projected gradient descent)
+#
+# Dimension key: N points  A ambient dim (= D + 1)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_project_w_y_clips_identity_and_leaves_others(dtype):
+    """Identity mode: a negative raw w_y becomes exactly 0, a positive one is kept bit for bit.
+
+    Softplus mode (whose raw param may be negative) and a fixed weight are left untouched.
+    """
+    identity = LorentzResidual(weight_parameterization="identity", param_dtype=dtype)
+    identity.w_y_raw[...] = jnp.asarray(-0.3, dtype=dtype)
+    identity.project_w_y()
+    assert identity.w_y_raw[...].dtype == dtype
+    assert float(identity.w_y_raw[...]) == 0.0
+
+    identity.w_y_raw[...] = jnp.asarray(0.7, dtype=dtype)
+    before = np.asarray(identity.w_y_raw[...]).tobytes()
+    identity.project_w_y()
+    assert np.asarray(identity.w_y_raw[...]).tobytes() == before
+
+    softplus = LorentzResidual(init_w_y=0.1, param_dtype=dtype)  # raw = softplus^-1(0.1) < 0
+    assert float(softplus.w_y_raw[...]) < 0.0
+    before = np.asarray(softplus.w_y_raw[...]).tobytes()
+    softplus.project_w_y()
+    assert np.asarray(softplus.w_y_raw[...]).tobytes() == before
+
+    fixed = LorentzResidual(learnable_weight=False, init_w_y=0.4, weight_parameterization="identity")
+    fixed.project_w_y()
+    assert fixed.w_y_raw is None and fixed._w_y == 0.4
+
+
+class _InnerBlock(nnx.Module):
+    def __init__(self):
+        self.res = LorentzResidual(weight_parameterization="identity")
+
+
+class _OuterModel(nnx.Module):
+    def __init__(self):
+        self.res = LorentzResidual(weight_parameterization="identity")
+        self.blocks = nnx.List([_InnerBlock()])
+        self.softplus_res = LorentzResidual(init_w_y=0.1)
+
+
+def test_project_residual_weights_walks_nested_modules():
+    """`project_residual_weights` projects every identity-mode LorentzResidual, nested ones included."""
+    model = _OuterModel()
+    model.res.w_y_raw[...] = jnp.asarray(-0.5, dtype=jnp.float32)
+    model.blocks[0].res.w_y_raw[...] = jnp.asarray(-2.0, dtype=jnp.float32)
+    softplus_raw = float(model.softplus_res.w_y_raw[...])
+
+    project_residual_weights(model)
+
+    assert float(model.res.w_y_raw[...]) == 0.0
+    assert float(model.blocks[0].res.w_y_raw[...]) == 0.0
+    assert float(model.softplus_res.w_y_raw[...]) == softplus_raw
+
+
+class _ResidualModel(nnx.Module):
+    def __init__(self, dtype):
+        self.res = LorentzResidual(weight_parameterization="identity", param_dtype=dtype)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_project_residual_weights_in_jitted_train_step(dtype):
+    """SGD on a loss that pushes w_y down: without projection w_y goes negative and the output NaN.
+
+    With the projection after `optimizer.update` (inside `nnx.jit`), w_y stays >= 0 (it sits at 0),
+    the output stays finite and on the sheet, and w_y moves back up once the loss pulls it up.
+    """
+    atol = 4e-3 if dtype == jnp.float32 else 1e-7
+    c = 1.0
+    x_NA = _make_points(jax.random.PRNGKey(500), 8, 6, dtype, c)
+    y_NA = _make_points(jax.random.PRNGKey(501), 8, 6, dtype, c)
+
+    def dist_to_y(model):
+        return jnp.mean(_dists(model.res(x_NA, y_NA, c=c), y_NA, c, dtype))
+
+    def make_step(sign, project):
+        @nnx.jit
+        def step(model, optimizer):
+            grads = nnx.grad(lambda m: sign * dist_to_y(m))(model)
+            optimizer.update(model, grads)
+            if project:
+                project_residual_weights(model)
+
+        return step
+
+    for project in (False, True):
+        model = _ResidualModel(dtype)
+        optimizer = nnx.Optimizer(model, optax.sgd(1.0), wrt=nnx.Param)
+        step = make_step(-1.0, project)  # maximize the distance to y: pushes w_y down
+        w_y = []
+        for _ in range(10):
+            step(model, optimizer)
+            w_y.append(float(model.res.w_y_raw[...]))
+        out_NA = model.res(x_NA, y_NA, c=c)
+        if not project:
+            assert min(w for w in w_y if np.isfinite(w)) < 0.0, w_y
+            assert not jnp.isfinite(out_NA).all()
+        else:
+            assert min(w_y) >= 0.0 and w_y[-1] == 0.0, w_y
+            assert jnp.isfinite(out_NA).all()
+            assert _check_on_hyperboloid(out_NA, c=c, atol=atol)
+
+    # From w_y = 0, a loss that pulls toward y moves w_y back up.
+    step = make_step(1.0, True)
+    step(model, optimizer)
+    assert float(model.res.w_y_raw[...]) > 0.0
+
+
+def test_residual_w_y_gradient_nonzero_at_zero_matches_finite_differences():
+    """At w_y = 0 the gradient with respect to w_y is nonzero and matches central finite differences.
+
+    This is what lets a projected w_y leave 0 again. Float64; the oracle evaluates the forward
+    at w_y = +-h (the -h side is still timelike for these x != y).
+    """
+    dtype, c, h = jnp.float64, 1.0, 1e-6
+    x_NA = _make_points(jax.random.PRNGKey(502), 8, 6, dtype, c)
+    y_NA = _make_points(jax.random.PRNGKey(503), 8, 6, dtype, c)
+    cot_NA = jax.random.normal(jax.random.PRNGKey(504), x_NA.shape, dtype=dtype)
+    module = LorentzResidual(weight_parameterization="identity", init_w_y=0.0, param_dtype=dtype)
+
+    def loss(mod, weight=None):
+        return jnp.sum(cot_NA * mod(x_NA, y_NA, c=c, weight=weight))
+
+    grad_ad = float(nnx.grad(loss)(module).w_y_raw[...])
+    grad_fd = float((loss(module, h) - loss(module, -h)) / (2 * h))
+    assert abs(grad_fd) > 1e-2
+    assert np.isclose(grad_ad, grad_fd, rtol=1e-7)

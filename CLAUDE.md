@@ -32,8 +32,8 @@ uv run mkdocs build --strict
 Pure JAX on Flax NNX.
 
 - **Manifold ops take single points**, `(dim,) -> scalar` or `(dim,) -> (dim,)`; batch with an explicit `jax.vmap`. NN layers batch internally in `__call__`.
-- **Manifolds are plain Python classes** (not `nnx.Module`), instantiated with a dtype (`Poincare(dtype=jnp.float64)`). All but `ProductManifold` follow the scalar-`c` `Manifold` protocol in `manifolds/protocol.py`; `ProductManifold` intentionally doesn't (a per-factor `cs` sequence, no `c` attribute).
-- **Curvature `c` is passed at call time**, never stored on a layer. Trainable curvature is `LearnableCurvature` (`utils/curvature.py`): it lives on the user's `nnx.Module` and returns the (optionally clamped) `c`.
+- **Manifolds are plain Python classes** (not `nnx.Module`), instantiated with a dtype (`Poincare(dtype=jnp.float64)`). All manifolds satisfy the `Manifold` protocol in `manifolds/protocol.py`, which types `c` as a scalar. `ProductManifold` takes a per-factor `cs` sequence instead and has no `c` attribute.
+- **Curvature `c` is passed at call time**, never stored on a layer. Trainable curvature is `LearnableCurvature` (`utils/curvature.py`): it lives on the user's `nnx.Module` and returns the (optionally clamped) `c`. (The one exception is the `curvature=` tag on a `ManifoldParam`, which the Riemannian optimizers read; it must match the call-time `c`.)
 - **`version_idx`** selects an op variant. Keep it static under JIT (`functools.partial` or `static_argnums`): a traced index compiles every variant into one `lax.switch`.
 - **Layers take `manifold_module`** (a manifold instance), never raw functions, and name their parameters `kernel`/`bias`.
 - **`ManifoldParam`** (an `nnx.Param` subclass) tags manifold-valued parameters. The Riemannian optimizers in `optim/` detect it and give every other parameter a Euclidean update.

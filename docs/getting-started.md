@@ -25,6 +25,8 @@ For GPU support, install JAX with CUDA:
 uv pip install "jax[cuda12]"
 ```
 
+Then run with `uv run --no-sync …` so the lockfile sync does not remove the CUDA plugin.
+
 ## Quick Start: Distance Computation
 
 Let's compute distances on the Poincaré ball:
@@ -34,7 +36,7 @@ import jax
 import jax.numpy as jnp
 from hyperbolix.manifolds import Poincare
 
-# Create manifold instance (use dtype=jnp.float64 for higher precision)
+# Create manifold instance (dtype=jnp.float64 for higher precision, with jax_enable_x64 on)
 poincare = Poincare()
 
 # Create two points
@@ -89,7 +91,7 @@ Hyperbolix provides eight manifold types:
 
 ### Curvature Parameter
 
-The curvature `c` controls the "amount of hyperbolicity":
+The curvature `c` controls the "amount of hyperbolicity" (`c > 0` is the magnitude; the sectional curvature is `−c`):
 
 - `c = 0`: Euclidean space (flat)
 - `c = 1`: Unit curvature (standard hyperbolic space)
@@ -107,18 +109,7 @@ dist_c2 = poincare.dist(x, y, c=2.0)
 
 ### Version Parameter
 
-The Poincaré `dist` method accepts a `version_idx` parameter for numerical stability:
-
-```python
-from hyperbolix.manifolds.poincare import Poincare, VERSION_MOBIUS_DIRECT
-
-poincare = Poincare()
-
-# Poincaré distance has 3 versions
-dist_v0 = poincare.dist(x, y, c, version_idx=VERSION_MOBIUS_DIRECT)   # Default
-dist_v1 = poincare.dist(x, y, c, version_idx=1)                       # Möbius via addition; saturates on far pairs
-dist_v2 = poincare.dist(x, y, c, version_idx=2)                       # Metric tensor: the same function as slot 0
-```
+The Poincaré and Hyperboloid `dist` accept a `version_idx` that selects a formulation; the default is the recommended one. See the [Numerical Stability guide](user-guide/numerical-stability.md).
 
 ## Building a Neural Network
 
@@ -183,11 +174,12 @@ uv sync --dev
 
 ### Float32 Precision
 
-If you see `NaN` or `inf` values, try using float64:
+If you see `NaN` or `inf` values, compute in float64: enable x64 and give the manifold `dtype=jnp.float64`.
 
 ```python
-from jax import config
-config.update("jax_enable_x64", True)
+import jax
+jax.config.update("jax_enable_x64", True)
+poincare = Poincare(dtype=jnp.float64)  # the manifold casts to its own dtype
 ```
 
 See [Numerical Stability](user-guide/numerical-stability.md) for details.
@@ -197,9 +189,12 @@ See [Numerical Stability](user-guide/numerical-stability.md) for details.
 Manifold methods are JIT-compatible. Keep curvature `c` dynamic (not static) to support learnable curvature:
 
 ```python
+import jax
+import jax.numpy as jnp
 from hyperbolix.manifolds import Poincare
 
 poincare = Poincare()
+x, y = jnp.array([0.1, 0.2]), jnp.array([0.3, -0.1])
 
 # Good: c is dynamic (can vary without recompilation)
 @jax.jit

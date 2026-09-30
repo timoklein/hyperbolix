@@ -10,6 +10,7 @@ from flax import nnx
 
 from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Euclidean, Hyperboloid, Poincare, ProperVelocity
+from hyperbolix.utils import AUTO, Auto
 
 jax.config.update("jax_enable_x64", True)
 
@@ -303,6 +304,16 @@ class TestLearnableCurvatureClamping:
             assert float(c()) == float(jnp.float32(lo))
             c.raw[...] = jnp.array(1e4, dtype=jnp.float32)
             assert float(c()) == float(jnp.float32(hi))
+
+    def test_passing_the_public_auto_sentinel_equals_the_default(self):
+        """``hyperbolix.utils.AUTO`` is the default bound, so passing it explicitly (as ``LorentzMoE`` forwards it)
+        resolves exactly like omitting it. Its repr is the name users see in the rendered signature."""
+        assert isinstance(AUTO, Auto)
+        assert repr(AUTO) == "AUTO"
+        for parameterization in ("log", "softplus", "identity"):
+            default = LearnableCurvature(0.5, parameterization=parameterization)
+            explicit = LearnableCurvature(0.5, parameterization=parameterization, c_min=AUTO, c_max=AUTO)
+            assert (explicit._c_min, explicit._c_max) == (default._c_min, default._c_max)
 
 
 class TestLearnableCurvatureGradients:

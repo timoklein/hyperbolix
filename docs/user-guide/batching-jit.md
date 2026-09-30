@@ -1,289 +1,127 @@
 # Batching & JIT Guide
 
-Efficient JAX patterns for hyperbolic deep learning with vmap-native APIs and JIT compilation.
+How to batch and compile hyperbolix code.
 
 ## Overview
 
-Hyperbolix adopts a **vmap-native API design** where all manifold functions operate on single points/vectors. This design provides maximum flexibility and composability with JAX's transformation system.
-
-!!! success "Key Design Principles"
-    - Functions operate on **single points** with shape `(dim,)` or `(dim+1,)` (ambient)
-    - Use `jax.vmap` for batch operations
-    - Use `jax.jit` for compilation with appropriate static arguments
-    - No built-in `axis` or `keepdim` parameters — compose transformations explicitly
+Every manifold method operates on a **single point**, of shape `(dim,)` (or
+`(dim+1,)` ambient for the hyperboloid). There are no `axis` or `keepdim`
+arguments: batch with `jax.vmap`, compile with `jax.jit`, and keep `version_idx`
+static. NN layers are the exception: they batch internally.
 
 ## The vmap-Native API
 
-### Single Point Operations
-
-All manifold methods work with individual points:
-
 ```python
+import jax
 import jax.numpy as jnp
 from hyperbolix.manifolds import Poincare
 
 poincare = Poincare()
 
-# Single points (intrinsic coordinates)
-x = jnp.array([0.1, 0.2])  # Shape: (2,)
-y = jnp.array([0.3, 0.4])  # Shape: (2,)
+# Single points
+x = jnp.array([0.1, 0.2])
+y = jnp.array([0.3, 0.4])
+distance = poincare.dist(x, y, c=1.0)  # scalar
 
-# Compute distance between two points
-distance = poincare.dist(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
-print(distance)  # Scalar
-
-# Exponential map from origin
-v = jnp.array([0.5, 0.0])  # Tangent vector at origin
-point = poincare.expmap_0(v, c=1.0)
-print(point.shape)  # (2,)
-```
-
-### Batching with vmap
-
-Use `jax.vmap` to process batches efficiently:
-
-```python
-import jax
-
-poincare = Poincare()
-
-# Batch of points
+# Batches: map over the points, broadcast c with None
 x_batch = jnp.array([[0.1, 0.2], [0.15, 0.25], [0.05, 0.1]])  # (3, 2)
 y_batch = jnp.array([[0.3, 0.4], [0.35, 0.45], [0.2, 0.3]])   # (3, 2)
-
-# Option 1: Explicit vmap
-dist_fn = jax.vmap(poincare.dist, in_axes=(0, 0, None, None))
-distances = dist_fn(x_batch, y_batch, 1.0, poincare.VERSION_MOBIUS_DIRECT)
+distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(x_batch, y_batch, 1.0)
 print(distances.shape)  # (3,)
 
-# Option 2: Inline vmap
-distances = jax.vmap(
-    lambda x, y: poincare.dist(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
-)(x_batch, y_batch)
+# One fixed point against a batch: close over it
+origin = jnp.zeros(2)
+distances = jax.vmap(lambda p: poincare.dist(origin, p, c=1.0))(x_batch)
+
+# Batch of tangent vectors at one base point
+v_batch = 0.1 * jax.random.normal(jax.random.PRNGKey(0), (100, 2))
+points = jax.vmap(poincare.expmap, in_axes=(0, None, None))(v_batch, x, 1.0)
+print(points.shape)  # (100, 2)
 ```
 
-### Understanding in_axes
-
-The `in_axes` parameter specifies which axes to map over:
-
-```python
-# in_axes=(0, 0, None, None) means:
-# - Map over axis 0 of first argument (x_batch)
-# - Map over axis 0 of second argument (y_batch)
-# - Don't map over curvature (c) — use same value for all
-# - Don't map over version_idx (it indexes a fixed set of implementations, not data)
-```
-
-Common patterns:
-
-```python
-poincare = Poincare()
-
-# Project batch of points
-x_batch = jax.random.normal(jax.random.PRNGKey(0), (100, 16))
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
-
-# Compute distances from single point to batch
-origin = jnp.zeros(16)
-x_batch = jax.random.normal(jax.random.PRNGKey(0), (100, 16)) * 0.3
-distances = jax.vmap(
-    lambda x: poincare.dist(origin, x, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
-)(x_batch)
-print(distances.shape)  # (100,)
-
-# Exponential map with batch of tangent vectors
-v_batch = jax.random.normal(jax.random.PRNGKey(0), (100, 16))
-base_point = jnp.zeros(16)
-points = jax.vmap(
-    lambda v: poincare.expmap(v, base_point, c=1.0)
-)(v_batch)
-print(points.shape)  # (100, 16)
-```
+`in_axes` has one entry per positional argument: `0` maps over the leading axis,
+`None` passes the same value to every element.
 
 ## JIT Compilation
 
-### Basic JIT Usage
-
-Use `jax.jit` to compile functions and make repeated calls fast:
-
-```python
-from hyperbolix.manifolds import Poincare
-
-poincare = Poincare()
-
-# Without JIT
-distance = poincare.dist(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
-
-# With JIT (version_idx marked static here for compile size; a dynamic value also works via lax.switch)
-dist_jit = jax.jit(poincare.dist, static_argnames=['version_idx'])
-distance = dist_jit(x, y, c=1.0, version_idx=poincare.VERSION_MOBIUS_DIRECT)
-```
-
-!!! tip "JIT Performance"
-    - **First call**: Slow (compilation overhead, 100ms-1s)
-    - **Subsequent calls**: Fast (compiled XLA execution, no Python dispatch overhead)
-    - Most beneficial for large batches (1000+) and high dimensions (128+)
-
 ### Static vs Dynamic Arguments
 
-**Static arguments** are known at compile time and trigger recompilation if changed:
+`version_idx` selects an op variant. Keep it **static**, so only the selected
+variant compiles; a traced index compiles every variant into one `lax.switch`.
+The curvature `c` is **dynamic**: a new value reuses the compiled function. A new
+input shape or a new static `version_idx` triggers a recompile.
 
 ```python
-# version_idx is static (integer constant)
-dist_jit = jax.jit(poincare.dist, static_argnames=['version_idx'])
+dist_jit = jax.jit(poincare.dist, static_argnames=["version_idx"])
 
-# These compile once and reuse:
-d1 = dist_jit(x1, y1, c=1.0, version_idx=0)
-d2 = dist_jit(x2, y2, c=1.5, version_idx=0)  # Reuses compilation
-
-# This triggers recompilation (different version_idx):
-d3 = dist_jit(x3, y3, c=1.0, version_idx=1)
-```
-
-**Dynamic arguments** can change without recompilation:
-
-```python
-# Curvature 'c' is dynamic (can vary)
-d1 = dist_jit(x1, y1, c=1.0, version_idx=0)
-d2 = dist_jit(x2, y2, c=2.5, version_idx=0)  # No recompilation needed
+d1 = dist_jit(x, y, c=1.0, version_idx=0)
+d2 = dist_jit(x, y, c=2.5, version_idx=0)  # new c: no recompilation
+d3 = dist_jit(x, y, c=1.0, version_idx=1)  # new version_idx: recompiles
 ```
 
 !!! warning "Learnable Curvature"
-    Keep curvature parameter `c` **dynamic** (not static) to support gradient-based learning of curvature values during training.
+    Don't mark `c` static: it recompiles for every value and blocks gradients. Learnable curvature comes from a `LearnableCurvature` module called inside the model (see [Manifolds](manifolds.md#working-with-curvature)).
 
 ### Combining vmap and jit
 
-The order matters for performance:
+Put `jax.jit` outermost: vmap inside, jit around it (or around the whole train step).
 
 ```python
-from hyperbolix.manifolds import Poincare
+from functools import partial
 
-poincare = Poincare()
-
-# Pattern 1: JIT then vmap (RECOMMENDED)
-@jax.jit
-def distance_fn(x, y, c):
-    return poincare.dist(x, y, c, version_idx=poincare.VERSION_MOBIUS_DIRECT)
-
-distances = jax.vmap(distance_fn, in_axes=(0, 0, None))(x_batch, y_batch, 1.0)
-
-# Pattern 2: vmap then JIT
-dist_batched = jax.vmap(poincare.dist, in_axes=(0, 0, None, None))
-distances = jax.jit(dist_batched, static_argnames=['version_idx'])(
-    x_batch, y_batch, 1.0, poincare.VERSION_MOBIUS_DIRECT
+# version_idx is bound before jit, so it stays static
+dist_batched = jax.jit(
+    jax.vmap(
+        partial(poincare.dist, version_idx=poincare.VERSION_MOBIUS_DIRECT),
+        in_axes=(0, 0, None),
+    )
 )
-
-# Pattern 3: Combined (one-liner)
-distances = jax.jit(
-    jax.vmap(poincare.dist, in_axes=(0, 0, None, None)),
-    static_argnames=['version_idx']
-)(x_batch, y_batch, 1.0, poincare.VERSION_MOBIUS_DIRECT)
+distances = dist_batched(x_batch, y_batch, 1.0)
+print(distances.shape)  # (3,)
 ```
 
-!!! tip "Best Practice"
-    JIT the inner function and vmap the outer function for best performance and flexibility.
+!!! tip "Why jit goes outermost"
+    `jax.vmap(jax.jit(f))` gives the same numbers but traces the vmapped
+    function again on every call. On CPU (Poincaré `dist`, dim 16) it was
+    about 20x slower at batch 32 and 2.3x slower at batch 4096 than
+    `jax.jit(jax.vmap(f))`.
 
-## Neural Network Patterns
+## Neural Network Layers
 
-### Forward Pass
-
-Flax NNX layers automatically handle batching:
+Layers take a batch directly, with no `vmap`. The hyperboloid activations
+(`hyp_relu` and the others) take ambient points `(..., dim+1)` with any leading
+batch axes; they are for hyperboloid points only, not Poincaré ball points.
 
 ```python
 from flax import nnx
-from hyperbolix.nn_layers import HypLinearPoincare
-from hyperbolix.manifolds import Poincare
-
-poincare = Poincare()
-
-# Create layer
-layer = HypLinearPoincare(
-    manifold_module=poincare,
-    in_dim=128,
-    out_dim=64,
-    rngs=nnx.Rngs(0)
-)
-
-# Batch input: (batch_size, in_dim)
-x_batch = jax.random.normal(jax.random.PRNGKey(1), (32, 128)) * 0.3
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
-
-# Forward pass handles batching internally
-output = layer(x_proj, c=1.0)
-print(output.shape)  # (32, 64)
-```
-
-### Activations with vmap
-
-Hyperbolic activations are functional and need explicit batching:
-
-```python
-from hyperbolix.nn_layers import hyp_relu
-
-# Single point (ambient coordinates, d+1 dims for hyperboloid)
-x = jnp.array([1.5, 0.2, 0.3, 0.1])  # Ambient coordinates (4,)
-activated = hyp_relu(x, c=1.0)
-
-# Batch of points - use vmap
-x_batch = jax.random.normal(jax.random.PRNGKey(0), (32, 4))
-activated_batch = jax.vmap(lambda x: hyp_relu(x, c=1.0))(x_batch)
-print(activated_batch.shape)  # (32, 4)
-```
-
-### Complete Model with JIT
-
-```python
+from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers import HypLinearPoincare, hyp_relu
-from hyperbolix.manifolds import Poincare
 
-poincare = Poincare()
+layer = HypLinearPoincare(manifold_module=poincare, in_dim=128, out_dim=64, rngs=nnx.Rngs(0))
+x_in = jax.vmap(poincare.expmap_0, in_axes=(0, None))(
+    0.1 * jax.random.normal(jax.random.PRNGKey(1), (32, 128)), 1.0
+)
+print(layer(x_in, c=1.0).shape)  # (32, 64)
 
-class HyperbolicClassifier(nnx.Module):
-    def __init__(self, rngs):
-        self.layer1 = HypLinearPoincare(poincare, 784, 256, rngs=rngs)
-        self.layer2 = HypLinearPoincare(poincare, 256, 128, rngs=rngs)
-        self.layer3 = HypLinearPoincare(poincare, 128, 10, rngs=rngs)
-
-    def __call__(self, x, c=1.0):
-        x = self.layer1(x, c)
-        # vmap activation over batch
-        x = jax.vmap(lambda xi: hyp_relu(xi, c))(x)
-
-        x = self.layer2(x, c)
-        x = jax.vmap(lambda xi: hyp_relu(xi, c))(x)
-
-        x = self.layer3(x, c)
-        return x
-
-# Create model
-model = HyperbolicClassifier(rngs=nnx.Rngs(0))
-
-# JIT the forward pass
-@jax.jit
-def forward(model, x, c):
-    return model(x, c)
-
-# Use with batch
-x_batch = jax.random.normal(jax.random.PRNGKey(1), (32, 784)) * 0.1
-x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
-logits = forward(model, x_proj, c=1.0)
-print(logits.shape)  # (32, 10)
+h_batch = Hyperboloid().proj_batch(jax.random.normal(jax.random.PRNGKey(0), (32, 4)), 1.0)
+print(hyp_relu(h_batch, c=1.0).shape)  # (32, 4)
 ```
 
-## Training Loop Patterns
+## Training Step
 
-### Efficient Training Step
+Use `nnx.jit`, not `jax.jit`, for a train step: a `jax.jit` step drops the
+in-place parameter and optimizer updates, so the model never trains.
 
 ```python
-from flax import nnx
-from hyperbolix.manifolds import Poincare
-from hyperbolix.optim import riemannian_adam
+import optax
+from hyperbolix.nn_layers import HypLinearPoincarePP
 
-poincare = Poincare()
+model = HypLinearPoincarePP(manifold_module=poincare, in_dim=16, out_dim=4, rngs=nnx.Rngs(0))
+optimizer = nnx.Optimizer(model, optax.adam(1e-2), wrt=nnx.Param)
 
-@jax.jit
+
+@nnx.jit
 def train_step(model, optimizer, x_batch, y_batch, c):
-    """Single training step with JIT compilation."""
     def loss_fn(model):
         preds = model(x_batch, c)
         return jnp.mean((preds - y_batch) ** 2)
@@ -292,148 +130,25 @@ def train_step(model, optimizer, x_batch, y_batch, c):
     optimizer.update(model, grads)
     return loss
 
-# Training loop
-for epoch in range(num_epochs):
-    for x_batch, y_batch in dataloader:
-        # Project to manifold
-        x_batch = jax.vmap(poincare.proj, in_axes=(0, None))(x_batch, 1.0)
 
-        # Single JIT-compiled step
-        loss = train_step(model, optimizer, x_batch, y_batch, c=1.0)
-
-        print(f"Loss: {loss:.4f}")
-```
-
-## Performance Optimization Tips
-
-### 1. Profile Before Optimizing
-
-```python
-import time
-
-# Warmup JIT compilation
-_ = dist_jit(x, y, c=1.0, version_idx=0)
-
-# Time subsequent calls
-start = time.time()
-for _ in range(1000):
-    _ = dist_jit(x, y, c=1.0, version_idx=0)
-elapsed = time.time() - start
-print(f"Time per call: {elapsed/1000*1e6:.2f} µs")
-```
-
-### 2. Minimize Recompilation
-
-```python
-# BAD: Different shapes trigger recompilation
-d1 = dist_jit(x1, y1, c=1.0, version_idx=0)  # Compile for shape (16,)
-d2 = dist_jit(x2, y2, c=1.0, version_idx=0)  # Recompile for shape (32,)
-
-# GOOD: Use consistent shapes
-x_batch = jnp.array([[0.1, 0.2], [0.3, 0.4]])
-distances = jax.vmap(dist_jit, in_axes=(0, 0, None, None))(
-    x_batch[:, 0], x_batch[:, 1], 1.0, poincare.VERSION_MOBIUS_DIRECT
+x_train = jax.vmap(poincare.expmap_0, in_axes=(0, None))(
+    0.1 * jax.random.normal(jax.random.PRNGKey(0), (32, 16)), 1.0
 )
+y_train = 0.1 * jax.random.normal(jax.random.PRNGKey(1), (32, 4))
+for step in range(5):
+    loss = train_step(model, optimizer, x_train, y_train, 1.0)
+    print(f"step {step}: loss = {loss:.4f}")  # decreases step by step
 ```
 
-### 3. Use Static Arguments Appropriately
-
-```python
-# GOOD: Keep curvature dynamic
-@jax.jit
-def process_batch(x_batch, c):
-    return jax.vmap(
-        lambda x: poincare.proj(x, c)  # Simple projection
-    )(x_batch)
-
-# BAD: Making everything static reduces flexibility
-@jax.jit
-def process_batch_bad(x_batch):  # c=1.0 hardcoded
-    return jax.vmap(
-        lambda x: poincare.proj(x, c=1.0)
-    )(x_batch)  # Can't change curvature without recompilation
-```
-
-### 4. Batch Size Considerations
-
-```python
-# Small batches: Less JIT benefit
-x_small = jax.random.normal(jax.random.PRNGKey(0), (10, 128))
-# compilation overhead dominates relative to the small workload
-
-# Large batches: Maximum JIT benefit
-x_large = jax.random.normal(jax.random.PRNGKey(0), (1000, 128))
-# batched XLA kernel amortizes overhead across many more elements
-```
-
-### 5. Memory vs Computation Trade-offs
-
-```python
-# Memory-efficient: Process in chunks
-def process_large_batch(x_batch, chunk_size=1000):
-    n = len(x_batch)
-    results = []
-    for i in range(0, n, chunk_size):
-        chunk = x_batch[i:i+chunk_size]
-        results.append(jax.vmap(some_fn)(chunk))
-    return jnp.concatenate(results)
-
-# Compute-efficient: Process all at once (may OOM)
-def process_all_at_once(x_batch):
-    return jax.vmap(some_fn)(x_batch)
-```
+For a complete loop, see [Training Workflows](training-workflows.md).
 
 ## Common Pitfalls
 
-### Pitfall 1: Forgetting to vmap Activations
-
-```python
-# WRONG: Activation expects single point
-x = layer(x_batch, c=1.0)  # (batch, dim+1) for hyperboloid
-activated = hyp_relu(x, c=1.0)  # May work but semantics unclear
-
-# CORRECT: Explicit vmap
-activated = jax.vmap(lambda xi: hyp_relu(xi, c=1.0))(x)
-
-# ALSO CORRECT: hyp_relu handles batches
-activated = hyp_relu(x, c=1.0)  # Directly works on (batch, dim+1)
-```
-
-### Pitfall 2: Shape Mismatches with vmap
-
-```python
-# WRONG: Incompatible in_axes
-x_batch = jnp.array([[0.1, 0.2]])  # (1, 2)
-y_batch = jnp.array([[0.3, 0.4]])  # (1, 2)
-c_batch = jnp.array([1.0, 1.5])    # (2,)
-
-distances = jax.vmap(poincare.dist, in_axes=(0, 0, 0))(
-    x_batch, y_batch, c_batch  # Shape mismatch: (1,) vs (2,)
-)
-
-# CORRECT: Broadcast curvature or use same value
-distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(
-    x_batch, y_batch, 1.0
-)
-```
-
-### Pitfall 3: Static Curvature
-
-```python
-# WRONG: Can't learn curvature
-@jax.jit
-def model_forward(x, c=1.0):  # c fixed at compile time
-    return poincare.proj(x, c)
-
-# CORRECT: Keep c dynamic
-@jax.jit
-def model_forward(x, c):  # c can vary
-    return poincare.proj(x, c)
-```
-
-## Why JIT and vmap Help
-
-`jax.jit` removes per-call Python dispatch and tracing overhead by compiling a function to XLA once and reusing the compiled kernel on subsequent calls. `jax.vmap` replaces an explicit Python loop over single-point manifold operations with a single batched XLA kernel, avoiding per-element Python overhead. Both effects are largest for small, frequently-called per-point operations — exactly the vmap-native functions in this library — and matter less as the per-call workload (batch size, dimension) grows and Python overhead becomes a smaller fraction of total runtime. Actual speedups depend on hardware, batch size, and dimensionality; profile your own workload with a `jax.jit` warmup (see "Profile Before Optimizing" above) rather than assuming a fixed multiplier.
+- **Shape mismatch in `in_axes`.** Every argument mapped with `0` must have the
+  same leading size. A per-sample `c` needs one value per point; a shared `c` is
+  passed with `None`.
+- **`jax.jit` on an NNX train step.** It drops the parameter and optimizer
+  updates; use `nnx.jit` (see above).
 
 ## See Also
 

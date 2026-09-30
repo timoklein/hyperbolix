@@ -559,22 +559,16 @@ def capped_exp(x: Float[Array, "..."]) -> Float[Array, "..."]:
     """Exponential with an overflow cap on the argument. Domain=(-inf, inf).
 
     Computes ``exp(minimum(x, 0.99*log(finfo.max)))`` (cap ≈ 87.8 for f32, ≈ 702.7 for f64), so the
-    result cannot overflow to ``+inf``. Intended for ``exp`` of *unconstrained trainable parameters*
-    (e.g. log-scale reparameterizations): a runaway parameter would otherwise produce an ``inf``
-    that turns into NaN downstream (``inf - inf``, ``inf * 0``) and poisons every parameter within
-    one optimizer step. With the cap, a runaway saturates at a huge-but-finite value with finite
-    gradients, so the failure stays visible and recoverable instead of NaN-ing the run.
-
-    The argument is capped rather than the output (``clip(exp(x), max)``) deliberately: an output
-    clip still materializes ``exp(x) = inf`` in the forward pass and ``inf`` in its VJP, exactly
-    the non-finite values the guard exists to prevent.
+    result cannot overflow to ``+inf``. The argument is capped rather than the output
+    (``clip(exp(x), max)``): an output clip still materializes ``exp(x) = inf`` in the forward pass
+    and ``inf`` in its VJP.
 
     Below the cap this is a bitwise value- and gradient-identity to ``jnp.exp``. Above the cap the
-    gradient is exactly 0 (the ``minimum`` selects the constant side) — a parameter past the cap
-    receives no gradient signal to come back down. ``LearnableCurvature``'s ``"log"``
-    parameterization caps its exponent the same way. A scale parameter past the cap (≈87.8 in
-    float32, ≈702.7 in float64) means training has already diverged — the guard's job is
-    containment.
+    gradient is exactly 0 (the ``minimum`` selects the constant side), so a parameter past the cap
+    receives no gradient signal to come back down: the saturation hides the divergence and is not
+    recoverable. ``LearnableCurvature``'s ``"log"`` parameterization caps its exponent the same
+    way. The library's layers do not use ``capped_exp``: their scale parameters go through plain
+    ``jnp.exp``, so a runaway scale overflows to ``inf`` and shows up as a NaN loss.
 
     Args:
         x: Input array of any shape

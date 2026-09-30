@@ -22,18 +22,41 @@ Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
 Hyperbolic Space", 2025.
 """
 
-from typing import Literal
+import math
+from typing import Any, Literal, cast
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from flax.typing import TupleArg
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
-from hyperbolix.utils.math_utils import safe_hypot_norm
+from hyperbolix.utils.math_utils import floor_at, safe_hypot_norm
 
 from .hyperboloid_core import MATMUL_PRECISION, lorentz_midpoint, spatial_to_hyperboloid
 from .hyperboloid_linear import HTCLinear
+
+# Masked-score fill of HyperbolicSoftmaxAttention and HyperbolicFullAttention, the value LorentzMLA
+# uses. Finite, so a fully masked row softmaxes to a finite uniform row instead of NaN; it is
+# written in the (at least float32) score dtype, where it is representable.
+_MASK_FILL = -1e18
+
+
+def _cast_params_to_input_dtype(args: TupleArg, /, *, dtype: Any = None, inexact: bool = True) -> TupleArg:
+    """``promote_dtype`` hook for a wrapped ``nnx.Linear``: cast its parameters to the input's dtype.
+
+    Flax's default promotes the input and the parameters to a common dtype, so float32
+    parameters would lift a bfloat16/float16 input to float32. Casting the parameters to the
+    input's dtype at use, as :class:`HTCLinear` does, keeps compute in the input dtype. For
+    float32 and float64 inputs with float32 parameters it is the cast Flax does.
+    """
+    del inexact
+    inputs, *params = args
+    target_dtype = inputs.dtype if dtype is None else dtype
+    cast_args = (jnp.asarray(inputs, target_dtype), *(p if p is None else jnp.asarray(p, target_dtype) for p in params))
+    return cast(TupleArg, cast_args)
+
 
 # ---------------------------------------------------------------------------
 # Focus transform (Eq 19)
@@ -51,12 +74,17 @@ def focus_transform(
     Applies temperature-scaled ReLU followed by element-wise power sharpening
     while preserving the original norm.
 
+    Up to the ``eps`` floors, the output is ``phi(x) / (|t| + eps)`` with ``phi`` independent
+    of the temperature ``t``. In a linear-attention kernel ratio, where the query and key
+    features both carry the factor, it cancels; :class:`HyperbolicLinearAttention`
+    therefore has no temperature parameter and passes ``t = 1``.
+
     Parameters
     ----------
     x_D : Array, shape (..., D)
         Input spatial features.
     temperature : scalar Array
-        Learnable temperature parameter.
+        Temperature ``t``; the features are divided by ``|t| + eps``.
     power : float
         Sharpening exponent (``p > 1`` concentrates mass).
     eps : float, optional
@@ -81,6 +109,22 @@ def focus_transform(
     norm_sharpened = safe_hypot_norm(sharpened_D, sqrt_eps)[..., None]  # (..., 1)
 
     return (norm_scaled / norm_sharpened) * sharpened_D  # (..., D)
+
+
+def _kernel_ratio(numerator_D: Float[Array, "... D"], denominator: Float[Array, "... 1"]) -> Float[Array, "... D"]:
+    """Linear-attention output ``num / den``, returned in the numerator's dtype.
+
+    ``focus_transform`` is strictly positive, so ``den > 0``. The floor at the smallest normal
+    number acts only on an underflowed ``den``; then ``|num| <= den * max|v|`` has underflowed
+    too and the head output stays bounded by ``max|v|`` instead of ``0/0``. The division runs in
+    the working dtype promoted to at least float32: float16's smallest normal, 6.1e-5, lies
+    above the ``den`` of a query with a small ReLU part, where it would shrink the output as an
+    additive ``eps`` does. For float32 and float64 the casts are no-ops.
+    """
+    ratio_dtype = jnp.promote_types(denominator.dtype, jnp.float32)
+    tiny = jnp.asarray(jnp.finfo(ratio_dtype).tiny, dtype=ratio_dtype)
+    ratio_D = numerator_D.astype(ratio_dtype) / floor_at(denominator.astype(ratio_dtype), tiny)
+    return ratio_D.astype(numerator_D.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +265,24 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
     The paper's main contribution: O(N) attention using the kernel trick in the
     spatial domain of the hyperboloid.  Focus function φ sharpens query and key.
 
+    Differences from Hypformer
+    --------------------------
+    - **No focus temperature.** Hypformer learns a temperature ``t`` inside the focus
+      function. :func:`focus_transform` is homogeneous of degree 1 in ``1/(|t| + eps)``,
+      so ``φ(Q)`` and ``φ(K)`` both scale by it, and the output
+      ``φ(Q)(φ(K)^T V) / φ(Q)(φ(K)^T 1)`` sees ``t`` only through the ``eps`` floors
+      inside :func:`focus_transform`, in the bidirectional and the causal form alike. Its
+      gradient measured 5 to 7 orders of magnitude below the other parameters', so it stays
+      near its init; the parameter is omitted and the layer uses ``t = 1``, the old init,
+      which leaves the output at init unchanged.
+    - **No additive ``eps`` on the kernel-ratio denominator.** Hypformer divides by
+      ``den + 1e-6``. ``φ`` is strictly positive, so ``den > 0``, but a query whose spatial
+      part is ``≤ 0`` on a head has ``φ(Q) ≈ eps^power`` and ``den ~ 1e-13`` at the default
+      ``power = 2``, where ``+ eps`` returns ``≈ 0`` for that head instead of its attention
+      average. The layer divides by ``den`` floored at the smallest normal number of the
+      working dtype promoted to at least float32, a floor that acts only on an underflowed
+      ``den``.
+
     Parameters
     ----------
     in_features : int
@@ -267,13 +329,19 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
             rngs=rngs,
         )
         self.power = power
-        self.temperature = nnx.Param(jnp.array(1.0, dtype=param_dtype))
+        # No temperature parameter: it cancels in the kernel ratio (class docstring).
         # Spatial residual projection ψ: D → D (shared across heads). Its output is added to the
         # attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at
         # the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even
-        # when every attention einsum is already pinned (see hyperbolix.utils.precision).
+        # when every attention einsum is already pinned (see hyperbolix.utils.precision). Its
+        # parameters are cast to the input dtype at use, so they don't promote a bfloat16 input.
         self.residual_proj = nnx.Linear(
-            out_features, out_features, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs
+            out_features,
+            out_features,
+            param_dtype=param_dtype,
+            precision=MATMUL_PRECISION,
+            promote_dtype=_cast_params_to_input_dtype,
+            rngs=rngs,
         )
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
@@ -284,10 +352,9 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         key_spatial_BNHD = key_BNHA[..., 1:]
         value_spatial_BNHD = value_BNHA[..., 1:]
 
-        # Cast scalar param to compute dtype: storage (param_dtype) and compute
-        # (input/manifold dtype) are decoupled, so the param must not drag the
-        # computation to its storage dtype.
-        temperature = self.temperature[...].astype(query_spatial_BNHD.dtype)
+        # Fixed t = 1 in the compute dtype: a temperature scales phi(Q) and phi(K) alike and
+        # cancels in the ratio below (class docstring).
+        temperature = jnp.asarray(1.0, dtype=query_spatial_BNHD.dtype)
         focused_query_BNHD = focus_transform(query_spatial_BNHD, temperature, self.power, eps)
         focused_key_BNHD = focus_transform(key_spatial_BNHD, temperature, self.power, eps)
 
@@ -318,12 +385,12 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
             init_z = jnp.zeros((B_size, H, D), dtype=focused_key_BNHD.dtype)
             _, (S_cum_NBHDE, z_cum_NBHD) = jax.lax.scan(scan_step, (init_S, init_z), (fk_NBHD, fv_NBHD))
 
-            # output_n = Q_n @ S_n / (Q_n @ z_n + eps); attention geometry, pinned HIGHEST — the
+            # output_n = Q_n @ S_n / (Q_n @ z_n); attention geometry, pinned HIGHEST — the
             # causal-mask properties the tests assert (no future leakage, first token attends to
             # itself alone) are exact identities that TF32 breaks.
             num_NBHD = jnp.einsum("nbhd,nbhde->nbhe", fq_NBHD, S_cum_NBHDE, precision=MATMUL_PRECISION)  # (N, B, H, D)
             den_NBH1 = jnp.einsum("nbhd,nbhd->nbh", fq_NBHD, z_cum_NBHD, precision=MATMUL_PRECISION)[..., None]  # (N, B, H, 1)
-            output_spatial_BNHD = jnp.transpose(num_NBHD / (den_NBH1 + eps), (1, 0, 2, 3))  # (B, N, H, D)
+            output_spatial_BNHD = jnp.transpose(_kernel_ratio(num_NBHD, den_NBH1), (1, 0, 2, 3))  # (B, N, H, D)
         else:
             # 2. Bidirectional linear attention via kernel trick: φ(Q)(φ(K)^T V) / φ(Q)(φ(K)^T 1)
             # All three are attention geometry, pinned HIGHEST: the kernel trick replaces an
@@ -341,7 +408,7 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
                 ..., None
             ]  # (B, N, H, 1)
 
-            output_spatial_BNHD = numerator_BNHD / (denominator_BNH1 + eps)  # (B, N, H, D)
+            output_spatial_BNHD = _kernel_ratio(numerator_BNHD, denominator_BNH1)  # (B, N, H, D)
 
         # 3. Spatial residual: Z̃_s = Z_s + ψ(V_s)
         output_spatial_BNHD = output_spatial_BNHD + self.residual_proj(value_spatial_BNHD)
@@ -363,6 +430,10 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
     Standard scaled dot-product attention applied to spatial components of
     query, key, value, followed by the same HRC pipeline (residual + time
     calibration) as the linear variant.
+
+    The scores are scaled, masked and softmaxed in at least float32, and the weights
+    are cast back to the working dtype, so bfloat16/float16 inputs get a float32
+    softmax; float32 and float64 inputs are unaffected.
 
     Parameters
     ----------
@@ -409,10 +480,55 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         # Spatial residual projection ψ: D → D (shared across heads). Its output is added to the
         # attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at
         # the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even
-        # when every attention einsum is already pinned (see hyperbolix.utils.precision).
+        # when every attention einsum is already pinned (see hyperbolix.utils.precision). Its
+        # parameters are cast to the input dtype at use, so they don't promote a bfloat16 input.
         self.residual_proj = nnx.Linear(
-            out_features, out_features, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs
+            out_features,
+            out_features,
+            param_dtype=param_dtype,
+            precision=MATMUL_PRECISION,
+            promote_dtype=_cast_params_to_input_dtype,
+            rngs=rngs,
         )
+
+    def _attention_scores(
+        self,
+        query_spatial_BNHD: Float[Array, "B N H D"],
+        key_spatial_BNHD: Float[Array, "B N H D"],
+        causal: bool = False,
+    ) -> Float[Array, "B N H M"]:
+        """Masked scores ``<Q_s, K_s> / sqrt(D)``, in the working dtype promoted to at least float32.
+
+        The dot product runs in the working dtype; the ``1/sqrt(D)`` scale and the causal mask
+        run in the promoted dtype, as in :class:`HyperbolicFullAttention`. For float32 and
+        float64 inputs that is the working dtype throughout.
+        """
+        head_dim = query_spatial_BNHD.shape[-1]
+        # Both einsums of this layer are attention geometry, pinned HIGHEST: the scores go through
+        # a softmax, which turns a TF32 ~1e-3 absolute score error into a visibly wrong weight
+        # distribution, and the masked-position identities the causal tests assert are exact.
+        dots_BNHM = jnp.einsum(
+            "bnhd,bmhd->bnhm", query_spatial_BNHD, key_spatial_BNHD, precision=MATMUL_PRECISION
+        )  # (B, N, H, M)
+        # Scale and mask run in at least float32; this changes only bfloat16/float16 inputs.
+        arith_dtype = jnp.promote_types(dots_BNHM.dtype, jnp.float32)
+        scores_BNHM = dots_BNHM.astype(arith_dtype) / jnp.sqrt(float(head_dim))
+        if causal:
+            N = scores_BNHM.shape[1]
+            mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
+            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, jnp.asarray(_MASK_FILL, dtype=arith_dtype))
+        return scores_BNHM
+
+    def _attention_weights(
+        self,
+        query_spatial_BNHD: Float[Array, "B N H D"],
+        key_spatial_BNHD: Float[Array, "B N H D"],
+        causal: bool = False,
+    ) -> Float[Array, "B N H M"]:
+        """Softmax weights of :meth:`_attention_scores`, computed in at least float32 and cast to the working dtype."""
+        work_dtype = query_spatial_BNHD.dtype
+        scores_BNHM = self._attention_scores(query_spatial_BNHD, key_spatial_BNHD, causal)
+        return jax.nn.softmax(scores_BNHM, axis=-1).astype(work_dtype)  # (B, N, H, M)
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
@@ -421,20 +537,8 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         key_spatial_BNHD = key_BNHA[..., 1:]
         value_spatial_BNHD = value_BNHA[..., 1:]
 
-        head_dim = query_spatial_BNHD.shape[-1]
-
         # Scaled dot-product attention: softmax(Q_s K_s^T / √D) V_s
-        # Both einsums are attention geometry, pinned HIGHEST: the scores go through a softmax,
-        # which turns a TF32 ~1e-3 absolute score error into a visibly wrong weight distribution,
-        # and the masked-position identities the causal tests assert are exact.
-        scores_BNHM = jnp.einsum(
-            "bnhd,bmhd->bnhm", query_spatial_BNHD, key_spatial_BNHD, precision=MATMUL_PRECISION
-        ) / jnp.sqrt(float(head_dim))
-        if causal:
-            N = scores_BNHM.shape[1]
-            mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
-            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, -1e9)
-        attn_weights_BNHM = jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
+        attn_weights_BNHM = self._attention_weights(query_spatial_BNHD, key_spatial_BNHD, causal)  # (B, N, H, M)
         output_spatial_BNHD = jnp.einsum(
             "bnhm,bmhd->bnhd", attn_weights_BNHM, value_spatial_BNHD, precision=MATMUL_PRECISION
         )  # (B, N, H, D)
@@ -459,11 +563,32 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
     Uses the Lorentzian inner product for similarity and weighted Lorentzian
     midpoint for aggregation — operating on full hyperboloid points throughout.
 
+    The score of query ``Q`` and key ``K`` is ``(2/c + 2<Q,K>_L) / tau``, which is
+    ``-d_L^2(Q, K) / tau`` with ``d_L^2 = -2/c - 2<Q,K>_L`` the squared Lorentzian
+    distance. ``tau = exp(log_tau)`` is one learnable temperature shared by all heads.
+    The scores are masked and softmaxed in at least float32, and the weights are cast
+    back to the working dtype.
+
+    Differences from Hypformer
+    --------------------------
+    - **Temperature parameterization.** Hypformer divides by a raw learnable ``scale``.
+      Nothing keeps it positive: an optimizer step can drive it to 0 or below, and a
+      negative value flips the softmax so each query attends to its farthest keys. Here
+      the parameter is ``log_tau`` and ``tau = exp(log_tau)`` is positive for any
+      parameter value. The init is Hypformer's, ``tau = sqrt(out_features)`` (the
+      per-head spatial width), unless ``init_tau`` is given.
+    - **No score bias.** Hypformer adds one learnable scalar to every score. A constant
+      shared by all keys of a row cancels in the softmax, so that parameter changes
+      nothing and its gradient is exactly zero; it is omitted.
+    - **Curvature constant.** Hypformer writes ``2 + 2<Q,K>_L``, the ``c = 1`` form;
+      here it is ``2/c``. The constant cancels in the softmax as well, so the weights
+      are the same, but the score is the scaled negative squared distance for any ``c``.
+
     Float32 score floor
     -------------------
-    The scores are ``2 + 2<Q,K>_L`` with ``<Q,K>_L = -Q_0 K_0 + <Q_s, K_s>``, a
-    difference of two Minkowski terms each of size ``cosh(a_q) cosh(a_k) / c`` —
-    writing ``a = sqrt(c) d`` for the geodesic radius of a point in nats — whose O(1)
+    The score contains ``<Q,K>_L = -Q_0 K_0 + <Q_s, K_s>``, a difference of two
+    Minkowski terms each of size ``cosh(a_q) cosh(a_k) / c`` — writing
+    ``a = sqrt(c) d`` for the geodesic radius of a point in nats — whose O(1)
     difference is the only part the softmax sees. Unlike the other cancellations in
     the library this one has **no GEMM-compatible cancellation-free spelling**: any
     matrix product of the ambient coordinates returns the Gram matrix to absolute
@@ -471,12 +596,15 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
     ``eps sinh(a_q) sinh(a_k) / c``, the same order as the literal form. The absolute
     error on one score is therefore
 
-        eps * cosh(a_q) * cosh(a_k) / (c * scale)
+        eps * cosh(a_q) * cosh(a_k) / (c * tau)
 
-    which with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``scale = 1``) is about 4.8e-3
-    at ``a = 6``, 0.26 at ``a = 8`` and 2.0 at ``a = 9``: from ``a ≈ 8`` the error
-    exceeds the score spread the softmax is meant to resolve, and the weights are
-    wrong while staying perfectly finite. Three remedies, cheapest first: keep the
+    which with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``tau = 1``) is about 4.8e-3
+    at ``a = 6``, 0.26 at ``a = 8`` and 2.0 at ``a = 9``. The default
+    ``tau = sqrt(out_features)`` divides these numbers by ``tau``, but it divides the
+    score spread by the same factor, so the radius where the error overtakes the
+    spread does not move: from ``a ≈ 8`` the error exceeds the score spread the
+    softmax is meant to resolve, and the weights are wrong while staying perfectly
+    finite. Three remedies, cheapest first: keep the
     radius down (a :class:`HyperboloidGyroRMSNorm` in front of the layer), use a
     smaller ``c``, or pass ``score_dtype=jnp.float64`` to run the score computation as
     a float64 island. The island fixes the *arithmetic* only — float32 *storage* of
@@ -534,17 +662,32 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         This layer takes no ``manifold_module``, so compute precision follows the
         input array's dtype (the parameters are cast to it).
     score_dtype : DTypeLike or None
-        When set, the Lorentzian similarity and the ``2 + 2<Q,K>_L`` score are
-        computed in this dtype and the scores are cast back before the softmax — an
-        opt-in float64 island against the floor above (``jnp.float64`` needs
-        ``jax.config.update("jax_enable_x64", True)``); ``None`` (the default) leaves
-        the score path in the working dtype, unchanged op for op.
+        When set, the Lorentzian similarity and the ``(2/c + 2<Q,K>_L) / tau`` score
+        are computed in this dtype and the scores are cast to the softmax dtype (the
+        working dtype, promoted to at least float32) before the softmax — an opt-in
+        float64 island against the floor above (``jnp.float64`` needs
+        ``jax.config.update("jax_enable_x64", True)``). ``None`` (the default) computes
+        the similarity in the working dtype and the rest of the score in at least
+        float32.
     centroid_form : {"variance", "gemm"}
         ``form`` of the per-head :func:`lorentz_midpoint` that aggregates the values
         (default: ``"variance"``, the aggregation of earlier releases, bit for bit);
         see "Centroid form". ``"gemm"`` is the opt-in faster form for long sequences.
+    init_tau : float or None
+        Initial score temperature ``tau`` (must be positive; stored as
+        ``log(init_tau)``). ``None`` (the default) is Hypformer's
+        ``sqrt(out_features)``. ``init_tau=1.0`` gives the attention of earlier releases
+        at init (their ``scale = 1``, ``attn_bias = 0``) up to the ``+ eps`` their
+        divisor carried; ``init_tau=1.0 + eps`` matches it to rounding (bit for bit at
+        ``c = 1``).
     rngs : nnx.Rngs
         Random number generators.
+
+    Attributes
+    ----------
+    log_tau : nnx.Param
+        Scalar log temperature, init ``log(init_tau)``; the score temperature is
+        ``tau = exp(log_tau)``.
     """
 
     def __init__(
@@ -558,10 +701,14 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         param_dtype: DTypeLike = jnp.float32,
         score_dtype: DTypeLike | None = None,
         centroid_form: Literal["variance", "gemm"] = "variance",
+        init_tau: float | None = None,
         rngs: nnx.Rngs,
     ):
         if centroid_form not in ("variance", "gemm"):
             raise ValueError(f"centroid_form must be 'variance' or 'gemm', got {centroid_form!r}")
+        tau = init_tau if init_tau is not None else math.sqrt(out_features)
+        if not tau > 0.0:
+            raise ValueError(f"init_tau must be positive, got {init_tau}")
         super().__init__(
             in_features,
             out_features,
@@ -573,30 +720,28 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         )
         self.score_dtype = score_dtype
         self.centroid_form: Literal["variance", "gemm"] = centroid_form
-        self.scale = nnx.Param(jnp.array(1.0, dtype=param_dtype))
-        self.attn_bias = nnx.Param(jnp.array(0.0, dtype=param_dtype))
+        # tau = exp(log_tau) > 0 for any parameter value (Hypformer learns a raw scale; class docstring).
+        self.log_tau = nnx.Param(jnp.asarray(math.log(tau), dtype=param_dtype))
 
-    def _attention_weights(
+    def _attention_scores(
         self,
         query_BNHA: Float[Array, "B N H A"],
         key_BNHA: Float[Array, "B N H A"],
+        c: float,
         causal: bool = False,
     ) -> Float[Array, "B N H M"]:
-        """Softmax weights of the Lorentzian similarity score ``2 + 2<Q,K>_L``.
+        """Masked scores ``(2/c + 2<Q,K>_L) / tau``, the negative squared distance over ``tau``.
 
         Carries the float32 score floor documented on the class: the absolute error on
-        a score is ``eps * cosh(a_q) * cosh(a_k) / (c * scale)``, which crosses the
+        a score is ``eps * cosh(a_q) * cosh(a_k) / (c * tau)``, which crosses the
         softmax's resolution around a geodesic radius of ``sqrt(c) d ≈ 8``. With
-        ``self.score_dtype`` set, the two einsums and the ``2 + 2<Q,K>_L`` /
-        scale / bias / causal-mask arithmetic run in that dtype and the scores are cast
-        back to the working dtype before the softmax, so only this step changes
-        precision; with ``score_dtype=None`` the path is the working dtype throughout,
-        op for op.
+        ``self.score_dtype`` set, the two einsums and the constant / ``tau`` /
+        causal-mask arithmetic run in that dtype; with ``score_dtype=None`` the einsums
+        run in the working dtype and the arithmetic after them in at least float32. The
+        scores are returned in that arithmetic dtype.
         """
-        eps = self.eps
         score_dtype = self.score_dtype
         if score_dtype is not None:
-            work_dtype = query_BNHA.dtype
             query_BNHA = query_BNHA.astype(score_dtype)
             key_BNHA = key_BNHA.astype(score_dtype)
 
@@ -608,27 +753,45 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         lorentz_inner_BNHM = -jnp.einsum(
             "bnha,bmha->bnhm", query_BNHA[..., 0:1], key_BNHA[..., 0:1], precision=MATMUL_PRECISION
         ) + jnp.einsum("bnhd,bmhd->bnhm", query_BNHA[..., 1:], key_BNHA[..., 1:], precision=MATMUL_PRECISION)  # (B, N, H, M)
-        # Cast scalar params to compute dtype: storage (param_dtype) and compute
-        # (input/manifold dtype) are decoupled, so the params must not drag the
-        # scores to their storage dtype.
-        scale = self.scale[...].astype(lorentz_inner_BNHM.dtype)
-        attn_bias = self.attn_bias[...].astype(lorentz_inner_BNHM.dtype)
-        scores_BNHM = (2.0 + 2.0 * lorentz_inner_BNHM) / (scale + eps) + attn_bias
+        # Constant, temperature and mask run in at least float32, as in LorentzMLA; this changes
+        # only bfloat16/float16 inputs, and the float64 island stays float64. The scalar parameter
+        # is cast to this dtype so its storage dtype (param_dtype) does not drag the scores along.
+        arith_dtype = jnp.promote_types(lorentz_inner_BNHM.dtype, jnp.float32)
+        lorentz_inner_BNHM = lorentz_inner_BNHM.astype(arith_dtype)
+        inv_c = jnp.asarray(1.0, dtype=arith_dtype) / jnp.asarray(c, dtype=arith_dtype)
+        tau = jnp.exp(self.log_tau[...].astype(arith_dtype))
+        # No score bias: Hypformer's `+ self.bias` is one scalar for every key and cancels in the softmax.
+        scores_BNHM = (2.0 * inv_c + 2.0 * lorentz_inner_BNHM) / tau  # (B, N, H, M)
         if causal:
             N = scores_BNHM.shape[1]
             mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
-            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, -1e9)
+            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, jnp.asarray(_MASK_FILL, dtype=arith_dtype))
+        return scores_BNHM
 
-        if score_dtype is not None:
-            scores_BNHM = scores_BNHM.astype(work_dtype)
-        return jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
+    def _attention_weights(
+        self,
+        query_BNHA: Float[Array, "B N H A"],
+        key_BNHA: Float[Array, "B N H A"],
+        c: float,
+        causal: bool = False,
+    ) -> Float[Array, "B N H M"]:
+        """Softmax weights of :meth:`_attention_scores`, in the working dtype.
+
+        The softmax runs in the working dtype promoted to at least float32 (the float64
+        island's scores are cast down to it first), and the weights are cast back to the
+        working dtype. For float32 and float64 inputs that is the working dtype throughout.
+        """
+        work_dtype = query_BNHA.dtype
+        softmax_dtype = jnp.promote_types(work_dtype, jnp.float32)
+        scores_BNHM = self._attention_scores(query_BNHA, key_BNHA, c, causal).astype(softmax_dtype)
+        return jax.nn.softmax(scores_BNHM, axis=-1).astype(work_dtype)  # (B, N, H, M)
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
         B, N, H, _A = value_BNHA.shape
 
         # 1. Pairwise Lorentzian similarity → softmax weights
-        attn_weights_BNHM = self._attention_weights(query_BNHA, key_BNHA, causal)  # (B, N, H, M)
+        attn_weights_BNHM = self._attention_weights(query_BNHA, key_BNHA, c_attn, causal)  # (B, N, H, M)
 
         # 2. Weighted Lorentzian midpoint per head
         #    Transpose to (B, H, ...) layout for lorentz_midpoint which expects (..., M, A) and (..., N, M)

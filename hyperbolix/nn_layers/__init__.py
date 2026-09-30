@@ -70,7 +70,7 @@ from .hyperboloid_moe import (
 from .hyperboloid_positional import HyperbolicRoPE, HypformerPositionalEncoding, hope, hope_rotate_space
 from .hyperboloid_regression import FGGLorentzMLR, HypRegressionHyperboloid
 from .hyperboloid_regularization import FGGMeanOnlyBatchNorm, HRCBatchNorm, HRCDropout, HRCLayerNorm, HRCRMSNorm
-from .hyperboloid_residual import LorentzResidual
+from .hyperboloid_residual import LorentzResidual, project_residual_weights
 from .poincare_activations import poincare_leaky_relu, poincare_relu, poincare_tanh
 from .poincare_batchnorm import PoincareBatchNorm2D, frechet_variance, poincare_midpoint, poincare_weighted_midpoint
 from .poincare_conv import HypConv2DPoincare
@@ -166,6 +166,7 @@ __all__ = [
     "poincare_relu",
     "poincare_tanh",
     "poincare_weighted_midpoint",
+    "project_residual_weights",
     "sinh_lift_to_hyperboloid",
     "spatial_to_hyperboloid",
 ]

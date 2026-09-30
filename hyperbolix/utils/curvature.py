@@ -8,12 +8,12 @@ hyperbolic/Euclidean/spherical, for the ``Stereographic`` manifold) for ``identi
 
 Example::
 
+    from flax import nnx
     from hyperbolix import LearnableCurvature
-    from hyperbolix.manifolds import Hyperboloid
+    from hyperbolix.nn_layers import FGGLinear
 
     class Model(nnx.Module):
         def __init__(self, rngs):
-            self.manifold = Hyperboloid(c=1.0)
             self.curvature = LearnableCurvature(init_c=1.0)
             self.fc = FGGLinear(33, 65, rngs=rngs)
 
@@ -47,11 +47,22 @@ def _inv_softplus(x: float) -> float:
     return math.log(math.expm1(x))
 
 
-class _Auto:
-    """Sentinel type: 'resolve this clamp bound from the parameterization' (distinct from ``None`` = disabled)."""
+class Auto:
+    """Type of :data:`AUTO`, the default ``c_min``/``c_max`` of :class:`LearnableCurvature`.
+
+    ``AUTO`` means "resolve this clamp bound from the parameterization" (see
+    :class:`LearnableCurvature`), as opposed to ``None``, which disables the bound. Layers that
+    build ``LearnableCurvature`` instances, such as :class:`~hyperbolix.nn_layers.LorentzMoE`,
+    take ``AUTO`` as their default too and forward it. Test for it with
+    ``isinstance(bound, Auto)``.
+    """
+
+    def __repr__(self) -> str:
+        return "AUTO"
 
 
-_AUTO = _Auto()
+AUTO = Auto()
+"""Default ``c_min``/``c_max`` of :class:`LearnableCurvature`: resolve the bound from the parameterization."""
 
 # Default clamp bounds. softplus/log use the positive window ``[init_c / _SPAN, init_c * _SPAN]``, a decade either
 # side of ``init_c`` (PhyCLIP's range); the signed ``identity`` parameterization uses the symmetric cap
@@ -125,14 +136,15 @@ class LearnableCurvature(nnx.Module):
               :class:`~hyperbolix.manifolds.Stereographic` manifold; ``dc/draw = 1``,
               so it can cross zero. The only parameterization that reaches ``c<=0``.
 
-        c_min: Lower clamp applied to the recovered ``c``. Default resolves per
-            parameterization: ``init_c / 10`` for ``softplus``/``log`` (a decade
-            below the init, PhyCLIP's range), ``-10.0`` for the signed
+        c_min: Lower clamp applied to the recovered ``c``. The default,
+            :data:`AUTO`, resolves per parameterization: ``init_c / 10`` for
+            ``softplus``/``log`` (a decade below the init, PhyCLIP's range),
+            ``-10.0`` for the signed ``identity``. Pass ``None`` to disable, or a
+            float to override.
+        c_max: Upper clamp applied to the recovered ``c``. The default,
+            :data:`AUTO`, resolves to ``init_c * 10`` for ``softplus``/``log``
+            (``[0.1, 10]`` at the default ``init_c=1.0``), ``10.0`` for
             ``identity``. Pass ``None`` to disable, or a float to override.
-        c_max: Upper clamp applied to the recovered ``c``. Default resolves to
-            ``init_c * 10`` for ``softplus``/``log`` (``[0.1, 10]`` at the default
-            ``init_c=1.0``), ``10.0`` for ``identity``. Pass ``None`` to disable, or
-            a float to override.
         param_dtype: Storage dtype of the raw parameter (default:
             ``jnp.float32``), pinned so it does not become float64 under
             global ``jax_enable_x64``.
@@ -183,8 +195,8 @@ class LearnableCurvature(nnx.Module):
         init_c: float = 1.0,
         *,
         parameterization: Parameterization = "log",
-        c_min: float | None | _Auto = _AUTO,
-        c_max: float | None | _Auto = _AUTO,
+        c_min: float | None | Auto = AUTO,
+        c_max: float | None | Auto = AUTO,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if parameterization not in ("softplus", "log", "identity"):
@@ -203,9 +215,9 @@ class LearnableCurvature(nnx.Module):
         # Resolve sentinel clamp bounds from the parameterization: softplus/log default to a decade either side
         # of init_c; identity uses a symmetric magnitude cap [-10, 10]. Explicit None still disables a bound;
         # explicit numeric bounds are honored verbatim.
-        if isinstance(c_min, _Auto):
+        if isinstance(c_min, Auto):
             c_min = -_C_ABS_MAX if signed else init_c / _SPAN
-        if isinstance(c_max, _Auto):
+        if isinstance(c_max, Auto):
             c_max = _C_ABS_MAX if signed else init_c * _SPAN
 
         if c_min is not None and c_max is not None and c_min > c_max:

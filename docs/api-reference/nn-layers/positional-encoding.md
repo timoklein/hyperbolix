@@ -34,13 +34,17 @@ NNX module wrapper is here.
 !!! warning "Why `epsilon` is not learnable"
     The Hypformer reference keeps `epsilon` a plain (non-trainable) tensor fixed at
     1.0. Making it a parameter is unsafe: gradient descent can drive it below -1,
-    where `x + epsilon·p` leaves the upper hyperboloid sheet and the `abs()` in the
-    Lorentzian residual normalizer silently masks the violation instead of raising.
+    where `x + epsilon·p` leaves the upper hyperboloid sheet. A spacelike combination
+    then gives NaN, and a past-directed one a valid-looking but wrong point with no error.
     For the same reason, `lorentz_residual`'s `w_y` must always be non-negative.
 
 ## Lorentzian residual connection
 
 ::: hyperbolix.nn_layers.LorentzResidual
+    options:
+      heading_level: 3
+
+::: hyperbolix.nn_layers.project_residual_weights
     options:
       heading_level: 3
 

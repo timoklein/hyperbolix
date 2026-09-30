@@ -414,8 +414,8 @@ def test_hypformer_pe_fixed_epsilon():
     """epsilon is a fixed scalar (Hypformer reference), untouched by training.
 
     The reference keeps epsilon a plain tensor fixed at 1.0; a learnable
-    epsilon could be driven below -1, where lorentz_residual's abs()
-    silently masks a spacelike / lower-sheet point.
+    epsilon could be driven below -1, where lorentz_residual returns NaN for a
+    spacelike combination and a valid-looking but wrong point for a past-directed one.
     """
     d = 6
     in_features = d + 1

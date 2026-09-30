@@ -22,7 +22,7 @@ curvature, then `transform` points to their low-dimensional embedding. Poincaré
 `(N, D)` maps to `(N, K)` ball coordinates; Hyperboloid input `(N, A)` maps to `(N, K+1)`
 hyperboloid points; `ProperVelocity`, `Klein` and `HalfSpace` input `(N, D)` maps to `(N, K)`
 points of the same model. Every model is carried onto the hyperboloid by its direct isometry
-(Klein and HalfSpace points are projected first) and the result is carried back.
+(input is projected onto its model first; ProperVelocity needs no projection) and the result is carried back.
 
 ::: hyperbolix.decomposition.horopca.HoroPCA
     options:
@@ -68,6 +68,8 @@ The pure functions underneath `HoroPCA` — independently usable and JIT-friendl
         - horopca_loss
         - fit_horopca
         - transform_horopca
+        - lift_ideals
+        - orthonormalize_rows
 
 ## CO-SNE
 
@@ -78,7 +80,8 @@ A thin sklearn-style class over the functional core; being non-parametric it has
 `fit_transform` but no out-of-sample `transform` (matching sklearn's `TSNE`). Poincaré input
 `(N, D)` embeds to `(N, K)` ball coordinates; Hyperboloid input `(N, A)` embeds to `(N, K+1)`;
 `ProperVelocity`, `Klein` and `HalfSpace` input `(N, D)` embeds to `(N, K)` points of the same
-model (mapped onto the ball by the direct isometry, Klein and HalfSpace points projected first).
+model (mapped onto the ball by the direct isometry; input is projected onto its model first,
+except ProperVelocity, which needs no projection).
 
 !!! warning "Calibrated learning rate"
     The exact-autodiff gradients differ in scale from the reference's hand-derived gradients,
@@ -98,6 +101,8 @@ import jax
 import jax.numpy as jnp
 from hyperbolix.manifolds import Poincare
 from hyperbolix.decomposition import CoSNE
+
+jax.config.update("jax_enable_x64", True)
 
 manifold = Poincare(dtype=jnp.float64)
 key = jax.random.PRNGKey(0)
@@ -151,6 +156,8 @@ import jax.numpy as jnp
 from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.decomposition import frechet_mean
 
+jax.config.update("jax_enable_x64", True)
+
 manifold = Hyperboloid(dtype=jnp.float64)
 x = manifold.proj_batch(jax.random.normal(jax.random.PRNGKey(0), (64, 6), dtype=jnp.float64), c=1.0)
 
@@ -172,6 +179,6 @@ mean_jit = fmean(x)
 
 See also:
 
-- [Manifolds API](manifolds.md): the underlying geometry (`Hyperboloid.lorentz_boost`,
-  `Hyperboloid.busemann`).
+- [Manifolds API](manifolds.md): the underlying geometry (`Hyperboloid.gyro_difference`
+  for centering, `Hyperboloid.busemann`).
 - [Utilities API](utils.md): `compute_pairwise_distances` and delta-hyperbolicity metrics.

@@ -27,7 +27,7 @@ from hyperbolix.manifolds import Manifold
 # once-per-forward weight norms and the scalar compositions. Imported (not redefined) so there is
 # one value.
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, floor_at, safe_hypot, safe_norm, safe_sqrt
+from hyperbolix.utils.math_utils import MIN_NORM, floor_at, safe_hypot, safe_norm, safe_sqrt
 
 from ._helpers import validate_hyperboloid_manifold
 from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid
@@ -87,12 +87,13 @@ def _fhcnn_forward(
         # sigmoid gate still gets one).
         x_rem_norm_B1 = floor_at(safe_sqrt(jnp.sum(x_rem_BD**2, axis=-1, keepdims=True)), MIN_NORM)  # (B, 1)
 
-        # Learnable sigmoid scaling. capped_exp: scale_val is unconstrained — a runaway param
-        # must saturate finite, not overflow to inf and NaN the time coordinate.
-        scale_B1 = capped_exp(scale_val) * jax.nn.sigmoid(x0_B1)  # (B, 1)
+        # Learnable sigmoid scaling. Plain `jnp.exp`: scale_val is unconstrained, and a runaway
+        # param past ~88.7 (float32) overflows to inf, so the output and the loss go non-finite at
+        # that step -- the intended signal, rather than a finite saturation with zero gradient.
+        scale_B1 = jnp.exp(scale_val) * jax.nn.sigmoid(x0_B1)  # (B, 1)
 
-        # sqrt(scale^2 + 1/c + eps) as a two-leg hypot: nothing squared, so a saturated scale
-        # cannot overflow the time slot. Same value to rounding.
+        # sqrt(scale^2 + 1/c + eps) as a two-leg hypot: nothing squared, so a finite scale past
+        # sqrt(FLT_MAX) cannot overflow the time slot. Same value to rounding.
         res0_B1 = safe_hypot(scale_B1, jnp.sqrt(jnp.asarray(1 / c + eps, dtype=x_BO.dtype)))  # (B, 1)
         res_rem_BD = scale_B1 * x_rem_BD / x_rem_norm_B1  # (B, D)
 
@@ -168,9 +169,10 @@ def _fhnn_forward(
 
     # Time coordinate via scaled sigmoid with floor at 1/sqrt(c): y0 = m + 1/sqrt(c), where the height
     # m = exp(s)*sigmoid(z0) + eps > 0 by construction (additive floor, not max).
-    # capped_exp: scale_val is unconstrained — see _fhcnn_forward above.
+    # Plain `jnp.exp`: a runaway scale_val overflows to inf and the output goes non-finite -- see
+    # _fhcnn_forward above.
     inv_sqrt_c = jnp.asarray(1.0, dtype=z_BO.dtype) / jnp.sqrt(jnp.asarray(c, dtype=z_BO.dtype))
-    height_B1 = capped_exp(scale_val) * jax.nn.sigmoid(z0_B1) + eps  # (B, 1)
+    height_B1 = jnp.exp(scale_val) * jax.nn.sigmoid(z0_B1) + eps  # (B, 1)
     y0_B1 = height_B1 + inv_sqrt_c  # (B, 1)
 
     # Target spatial norm from the hyperboloid constraint: ||y_s||^2 = y0^2 - 1/c
@@ -178,8 +180,9 @@ def _fhnn_forward(
     # off y0. Adding 1/sqrt(c) to m and taking it away again rounded m to the ulp of 1/sqrt(c): at the
     # eps floor (sigmoid(z0) -> 0, m ~ 1e-5) that left 6.8e-4 relative error on ||y_s|| in float32, and
     # 2.4e-3 at m = 1.3e-5 (z0 = -15) at c = 0.5 and 1 (8.8e-5 at c = 2), where this form is at float32
-    # rounding (<= 1.5e-7). Nothing is squared either, so y0 past sqrt(FLT_MAX) ~ 1.8e19 (which
-    # capped_exp allows) stays finite, and both factors are positive because m >= eps > 0.
+    # rounding (<= 1.5e-7). Nothing is squared either, so a finite y0 past sqrt(FLT_MAX) ~ 1.8e19
+    # (exp(scale_val) reaches it from scale_val ~ 44) gives a finite norm; only an overflowed
+    # exp(scale_val) = inf makes it inf. Both factors are positive because m >= eps > 0.
     # `Hyperboloid.proj` reconstructs the same constraint from the spatial side instead, where a single
     # `sqrt(1/c + sum(x_s**2))` has neither failure mode.
     target_norm_B1 = jnp.sqrt(height_B1) * jnp.sqrt(height_B1 + 2.0 * inv_sqrt_c)  # (B, 1)

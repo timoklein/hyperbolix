@@ -21,17 +21,13 @@ def default_atol(dtype: DTypeLike) -> float:
     float64     2.22e-16       1.49e-8
     ==========  =============  ===========
 
-    ``sqrt(eps)`` is the standard slack for a quantity accumulated by a dot product: the
-    constraint residuals these checks look at (``⟨x, x⟩_L + 1/c`` on the hyperboloid,
-    ``c‖x‖² - 1`` on the ball) are differences of same-magnitude sums, so they carry roughly
-    half the mantissa. Half the mantissa is exactly ``sqrt(eps)``.
+    ``sqrt(eps)`` is the standard slack for a quantity accumulated by a dot product: a
+    constraint residual such as ``c‖x‖² - 1`` on the ball is a difference of same-magnitude
+    sums, so it carries roughly half the mantissa. Half the mantissa is exactly ``sqrt(eps)``.
 
-    Caveat: the tolerance is *absolute*, so it is calibrated for points within a few units of
-    the origin. Far from it the constraint residual grows with ``‖x‖²`` and a genuinely
-    on-manifold point stops passing. Measured on ``Hyperboloid.proj`` output at ``c = 1``:
-    float64 holds to hyperbolic distance ~10 (residual 6e-11 at 7) and fails past ~11
-    (residual 1.2e-7); float32 already fails around 7. Pass an explicit ``atol`` when checking
-    points that far out — which is also where the library recommends float64 in the first place.
+    On the hyperboloid the check compares the stored ``x₀`` with ``√(1/c + ‖x_s‖²)`` and uses
+    the tolerance as both ``rtol`` and ``atol``, so on-sheet points pass the default at any
+    radius.
 
     Args:
         dtype: dtype of the array being validated (e.g. ``x.dtype``).

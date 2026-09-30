@@ -15,14 +15,14 @@ For per-method signatures and full API surface, see the
 | Continuous-depth or unbounded radii | `Hyperboloid` or `ProperVelocity` | No boundary collapse for large norms |
 | Heterogeneous structure (mixed tree + cycles + flat) | `ProductManifold` | Mixed curvatures fit mixed-structure data (Gu et al. 2019) |
 | Cross-curvature transformations (`c_in != c_out`) | `Hyperboloid` + `HTCLinear` | Native cross-curvature support in HTC layers |
-| Drop-in numerical stability | `ProperVelocity` | Unconstrained $\mathbb{R}^n$; no projection or constraint drift |
+| No projection or constraint drift | `ProperVelocity` | Unconstrained $\mathbb{R}^n$; pairwise ops go through the hyperboloid, so the accuracy is the hyperboloid's |
 | Spherical / cyclic data, or learning the *sign* of curvature | `Stereographic` | One signed-`c` manifold spans hyperbolic (`c>0`), Euclidean (`c=0`), and spherical (`c<0`), differentiable across zero (Bachmann et al. 2020) |
 | Straight-line geodesics, Einstein midpoint aggregation, or porting Klein-model code (Mao et al. 2024; Zhang et al. 2026) | `Klein` | Geodesics are chords of the ball; `einstein_midpoint` is a closed-form weighted mean. Scaled radius $\sqrt{c}\,d_0$ is limited to 6.32 in float32 (13.86 in float64) at `c=1`, half the Poincaré ball's — see the [numerical-stability guide](numerical-stability.md#klein-numerics) |
 | Horosphere / vertical-geodesic structure (horospheres centred at infinity are the planes $x_n = \text{const}$), or porting half-space code (HTorch) | `HalfSpace` | Conformal metric $\lVert dx\rVert^2/(c\,x_n^2)$ with the height as the last coordinate and origin $e_n/\sqrt{c}$. Pairwise ops are cancellation-free, and points on the vertical axis through the origin are stored to full precision at every height in the dtype's normal range. Pairwise `dist`/`logmap` return `inf`/NaN past scaled distance $\sqrt{c}\,d = 88.7$ in float32 (709.8 in float64) — see the [numerical-stability guide](numerical-stability.md#halfspace-numerics) |
 | You don't know which to pick | `Hyperboloid` (or `ProperVelocity`) | Robust at `c=1.0`; PV adds no-projection convenience |
 
 !!! tip "Single best default"
-    Start with `Hyperboloid(c=1.0)` for new hyperbolic models. It's well-behaved
+    Start with `Hyperboloid()` and `c = 1.0` passed at call time for new hyperbolic models. It's well-behaved
     at the default curvature, has the fastest layers (`FGGLinear`, `LorentzConv2D`),
     and avoids the boundary-collapse issues of Poincaré at `c=1.0`.
 
@@ -38,8 +38,8 @@ different conventions:
 | `LorentzConv2D` | `in_channels` | **Ambient (d+1)** — includes time | `33` |
 | `HypLinearHyperboloid*` | `in_dim` | **Ambient (d+1)** — includes time | `33` |
 | `HRCBatchNorm`, `HRCLayerNorm` (Hyperboloid normalization) | `num_features` | **Spatial (d)** — excludes time | `32` |
-| `HypLinearPoincare*`, `HypConv2DPoincare`, `HypRegressionPoincare*` | `in_dim` | **Spatial (d)** — Poincaré has no time | `32` |
-| `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV` | `in_dim` | **Spatial (d)** | `32` |
+| `HypLinearPoincare*`, `HypConv2DPoincare`, `HypRegressionPoincare*` | `in_dim` (linear/regression), `in_channels` (conv) | **Spatial (d)** — Poincaré has no time | `32` |
+| `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV` | `in_dim` (linear/regression), `in_channels` (conv) | **Spatial (d)** | `32` |
 | `Klein` points and the `klein_to_*` / `*_to_klein` maps (no Klein layers) | point shape | **Spatial (d)** — a ball point like Poincaré | `32` |
 | `HalfSpace` points and the `halfspace_to_*` / `*_to_halfspace` maps (no half-space layers) | point shape | **Spatial (d)** — the height $x_n > 0$ is the **last** coordinate; the origin is $e_n/\sqrt{c}$, not 0 | `32` |
 | `hyp_avg_pool2d` (Hyperboloid global pool) | NHWC channels | **Ambient (d+1)** | `33` |
@@ -47,14 +47,10 @@ different conventions:
 | `ProductManifold` factor `dim` | per-factor | **Same as the factor's layer** (ambient for Hyperboloid, spatial otherwise) | `33` for `Hyperboloid`, `32` for `Poincare` |
 
 !!! warning "HRC vs HTC normalization"
-    Both `HRCBatchNorm` and the `HTC`-flavored normalizers exist, but they
-    take **different conventions**:
-
-    - **HRC** ops see only spatial components `x[..., 1:]` — pass spatial dim.
-    - **HTC** ops see the full ambient point — pass ambient dim.
-
-    Reconstructing a valid Hyperboloid point is handled internally for both;
-    you only have to get the channel argument right at construction.
+    `HRCBatchNorm`/`HRCLayerNorm`/`HRCRMSNorm` take the full hyperboloid point
+    but normalize only `x[..., 1:]`, so `num_features` is the spatial `d`.
+    `HTCLinear` acts on the full point, so `in_features` is `d+1`. Both rebuild
+    the time coordinate internally.
 
 Curvature convention is uniform across all manifolds: `c > 0` means sectional
 curvature $-c$ (so larger `c` → more curved). `Euclidean` ignores `c` entirely.
@@ -74,8 +70,11 @@ They hold a fixed curvature value. For **learnable curvature**, use the
 in your model:
 
 ```python
+from flax import nnx
+
 from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Hyperboloid, Poincare
+from hyperbolix.nn_layers import FGGLinear
 
 # Fixed curvature (default) — manifold.c is a Python float
 manifold = Hyperboloid(c=1.0)
@@ -97,6 +96,9 @@ The underlying raw parameter is Euclidean and works with any standard
 `nnx.Optimizer` (no Riemannian optimizer required):
 
 ```python
+import optax
+
+model = Model(nnx.Rngs(0))
 optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 # self.curvature.raw is optimized alongside other params automatically.
 ```
@@ -120,15 +122,10 @@ to a decade either side of `init_c`, `[init_c / 10, init_c * 10]` (`[0.1, 10]`
 at the default `init_c=1.0`), giving a hard stability guard. `"identity"`
 instead uses a symmetric magnitude cap `[-10.0, 10.0]` that *includes* `0`, so
 it never forbids the Euclidean/spherical half. Pass `c_min`/`c_max` to set other
-bounds, or `None` to disable one.
-
-The clamp does not freeze `c` on a bound. On a bound or outside
-`[c_min, c_max]` it blocks only a gradient that would push `c` out, so `c`
-rests on the bound while the loss pushes against it and comes off it once the
-loss pulls it back inside: projected gradient descent, with no extra call in
-the train step. The raw parameter stays within the step that crossed the bound
-(plus the optimizer's momentum), so leaving takes only the few steps that walk
-that back: 1 to 7 Adam steps at learning rate `1e-2` in a toy fit.
+bounds, or `None` to disable one. The clamp does not freeze `c` on a bound:
+it blocks only a gradient that would push `c` out, so `c` comes off the bound
+once the loss pulls it back inside (projected gradient descent, with no extra
+call in the train step).
 
 ### When `c=1.0` works and when it doesn't
 
@@ -136,23 +133,28 @@ that back: 1 to 7 Adam steps at learning rate `1e-2` in a toy fit.
 |---|---|---|
 | `Hyperboloid` | Stable across most workloads | Unbounded; no boundary collapse |
 | `ProperVelocity` | Stable | Unconstrained $\mathbb{R}^n$; PV's safe-norm formulation tolerates wide ranges |
-| `Poincare` | **Often too aggressive for deep nets** | Conformal factor $\lambda = 2/(1 - c\|x\|^2)$ collapses near boundary, killing MLR signal |
+| `Poincare` | **Often too aggressive for deep nets** | The conformal factor $\lambda = 2/(1 - c\|x\|^2)$ grows without bound near the boundary, and the ball chart stops at scaled radius ≈ 12.6 (float32) |
 
 For Poincaré in deep networks, **van Spengler et al. (2023)** report `c=0.1`
 as their best *fixed* curvature (Sec. 4.2 sweeps `c ∈ {1, 0.1, 0.01}`); their
 released code instead defaults to a *learnable* per-layer curvature via
 geoopt's softplus reparameterization. To reproduce that learnable-curvature
 setup at the same scale (one `LearnableCurvature` per layer — do **not**
-share a single instance across layers, see the compiled-loops note below):
+share a single instance across layers, see the compiled-loops note below).
+geoopt does not clamp `c`; pass `c_min=None, c_max=None` to match it exactly.
 
 ```python
+from flax import nnx
+
 from hyperbolix import LearnableCurvature
+from hyperbolix.manifolds import Poincare
+from hyperbolix.nn_layers import HypConv2DPoincare
 
 class HypResNetBlock(nnx.Module):
     def __init__(self, rngs: nnx.Rngs):
         self.manifold = Poincare(c=0.1)
-        self.curv_a = LearnableCurvature(init_c=0.1)
-        self.curv_b = LearnableCurvature(init_c=0.1)
+        self.curv_a = LearnableCurvature(init_c=0.1, parameterization="softplus")
+        self.curv_b = LearnableCurvature(init_c=0.1, parameterization="softplus")
         self.conv_a = HypConv2DPoincare(self.manifold, ..., rngs=rngs)
         self.conv_b = HypConv2DPoincare(self.manifold, ..., rngs=rngs)
 
@@ -169,10 +171,12 @@ of length `n_factors` — there is no scalar fallback, no default, and no `.c`
 attribute on the product. This is intentional: it forces the curvature choice
 to be explicit at every call site, and it makes static and learnable
 curvatures look identical to readers. The protocol-level `Curvature` type
-unions the scalar shape (used by `Poincare`/`Hyperboloid`/`ProperVelocity`/
-`Euclidean`) with the sequence shape (used by `ProductManifold`), so
-`ProductManifold` satisfies the `Manifold` protocol and generic code typed
-against `Manifold` accepts the product too.
+unions the scalar shape (used by every single manifold: `Poincare`,
+`Hyperboloid`, `ProperVelocity`, `Klein`, `HalfSpace`, `Stereographic`,
+`Euclidean`) with the sequence shape (used by `ProductManifold`).
+`isinstance(product, Manifold)` is `True`, but `Manifold` is typed with a
+scalar `c`; annotate code that passes a per-factor sequence as
+`ProductManifold`.
 
 ```python
 product.curvatures            # tuple of factor-stored curvatures — pass as c when static
@@ -184,8 +188,11 @@ product.component_dist(x, y, c)  # per-factor distance vector before reduction
 For **static** factor curvatures, pass `product.curvatures`:
 
 ```python
+from hyperbolix.manifolds import Hyperboloid, Poincare, ProductManifold
+
 product = ProductManifold((Hyperboloid(c=1.0), 5), (Poincare(c=0.1), 3))
 c = product.curvatures                   # (1.0, 0.1)
+x = y = product.origin(c)                # flat points of shape (8,)
 d = product.dist(x, y, c)
 ```
 
@@ -193,6 +200,8 @@ For **learnable** per-factor curvatures, instantiate one `LearnableCurvature`
 per factor on your model and build the sequence in `__call__`:
 
 ```python
+from flax import nnx
+
 from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Hyperboloid, Poincare, ProductManifold
 
@@ -227,30 +236,21 @@ points but constant curvatures.
 
 ### Learnable curvature in compiled training loops (`nnx.scan` / `nnx.fori_loop`)
 
-Long compiled training loops (RL agents, episode rollouts, multi-step
-training kernels) have two stability concerns that motivate the
-`LearnableCurvature` defaults:
-
-1. **Sharing rule**: Assigning the **same** `LearnableCurvature` instance
-   to multiple fields creates a shared reference in the NNX pytree, which
-   breaks `nnx.scan` / `nnx.fori_loop` with `ValueError: Dict key mismatch`.
-   This is the same failure mode that motivated the manifold refactor.
-   Always instantiate a fresh `LearnableCurvature` per location where you
-   want a distinct learnable `c`. (The manifold itself is a plain Python
-   class with no NNX state, so sharing the manifold across layers is
-   always safe.)
-
-2. **Clamp guard**: Over millions of gradient steps, an unclamped curvature
-   can drift to `c → 0` (effectively Euclidean) or `c → ∞` (numerical
-   blow-up). The default bounds, a decade either side of `init_c` and
-   applied directly to `c` rather than to the raw parameter, stop that drift;
-   pass wider bounds if `c` should range further. A `c` held on a bound still
-   gets the gradient that points back inside, so it comes off the bound when
-   the loss changes direction.
+Assigning the **same** `LearnableCurvature` instance to multiple fields
+creates a shared reference in the NNX pytree, which breaks `nnx.scan` /
+`nnx.fori_loop` with `ValueError: Dict key mismatch`. Instantiate a fresh
+`LearnableCurvature` per location where you want a distinct learnable `c`.
+The manifold is a plain Python class with no NNX state, so sharing it across
+layers is always safe. The default clamp (see
+[Choosing a parameterization](#choosing-a-parameterization)) keeps `c` from
+drifting over long runs.
 
 The recommended pattern for a compiled RL loop:
 
 ```python
+import optax
+from flax import nnx
+
 from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Poincare
 from hyperbolix.nn_layers import HypLinearPoincarePP
@@ -290,17 +290,18 @@ vector onto a hyperbolic manifold, and they are **not interchangeable**.
 | Pattern | When to use | Caveats |
 |---|---|---|
 | `manifold.expmap_0(v, c)` | Small-norm Euclidean features near the origin | `expmap_0` involves $\sinh$/$\cosh$; large norms blow up exponentially |
-| Constraint projection (Hyperboloid only): `[sqrt(\|\|x\|\|² + 1/c), x]` | Large-norm features, CNN feature maps, ImageNet-scale | Not a geodesic; just enforces the Lorentz constraint. Use when expmap_0 would saturate |
-| `manifold.proj(x, c)` | Cleaning up an already-near-manifold point (numerical drift) | Identity for Euclidean; clamp-to-ball for Poincaré; constraint enforcement for Hyperboloid |
+| Constraint projection (Hyperboloid only): `[sqrt(\|\|x\|\|² + 1/c), x]` | Large-norm features, CNN feature maps, ImageNet-scale | Not a geodesic; just enforces the Lorentz constraint. Use when expmap_0 would saturate (this is `pv_to_hyperboloid`: the features are read as PV coordinates) |
+| `manifold.proj(x, c)` | Cleaning up an already-near-manifold point (numerical drift) | Identity for Euclidean and ProperVelocity; clamp to the ball for Poincaré and Klein; height floor for HalfSpace; time coordinate rebuilt from the spatial part for Hyperboloid |
 | `manifold.expmap(v, x, c)` | Moving along a geodesic from an existing manifold point `x` | Requires `x` already on-manifold |
 
 ```python
 # Pattern A: small-norm features (typical for an embedding layer or MLP head)
 x_euclidean = nnx.Linear(input_dim, 32, rngs=rngs)(x)  # small-norm
-x_manifold = jax.vmap(lambda v: hyperboloid.expmap_0(jnp.concatenate([jnp.zeros(1), v]), c))(x_euclidean)
+x_manifold = jax.vmap(lambda v: hyperboloid.expmap_0(hyperboloid.embed_spatial_0(v), c))(x_euclidean)
 
 # Pattern B: large-norm features (typical for a CNN backbone)
 features = cnn_stem(images)                            # large activations
+# same as isometry_mappings.pv_to_hyperboloid per pixel
 time_coord = jnp.sqrt(jnp.sum(features**2, axis=-1, keepdims=True) + 1.0 / c)
 x_manifold = jnp.concatenate([time_coord, features], axis=-1)
 ```
@@ -327,21 +328,19 @@ x_hyperboloid = isometry_mappings.poincare_to_hyperboloid(x_poincare, c)
 x_pv = isometry_mappings.poincare_to_pv(x_poincare, c)
 x_poincare = isometry_mappings.pv_to_poincare(x_pv, c)
 
-# Proper Velocity (d) ↔ Hyperboloid (d+1) — direct: PV coords are the
-# space-like part of the 4-velocity, so this is just a concat / slice.
-x_hyperboloid = isometry_mappings.pv_to_hyperboloid(x_pv, c)        # add time = √(1/c + ‖x‖²)
-x_pv = isometry_mappings.hyperboloid_to_pv(x_hyperboloid, c)        # drop the time component
+# Proper Velocity (d) ↔ Hyperboloid (d+1): add / drop the time coordinate
+x_hyperboloid = isometry_mappings.pv_to_hyperboloid(x_pv, c)
+x_pv = isometry_mappings.hyperboloid_to_pv(x_hyperboloid, c)
 
-# Klein (d) ↔ Poincaré (d): the Einstein half k/(1 + √g) and the Möbius double 2p/(1 + c‖p‖²),
-# with g = 1 - c‖k‖². Einstein addition in Klein is Möbius addition in Poincaré under this pair.
+# Klein (d) ↔ Poincaré (d): Einstein addition in Klein is Möbius addition in Poincaré
 x_poincare = isometry_mappings.klein_to_poincare(x_klein, c)
 x_klein = isometry_mappings.poincare_to_klein(x_poincare, c)
 
 # Klein (d) ↔ Hyperboloid (d+1) and ↔ Proper Velocity (d)
-x_hyperboloid = isometry_mappings.klein_to_hyperboloid(x_klein, c)  # (1/(√c·√g), k/√g)
-x_klein = isometry_mappings.hyperboloid_to_klein(x_hyperboloid, c)  # x_s/(√c·x₀)
-x_pv = isometry_mappings.klein_to_pv(x_klein, c)                    # k/√g
-x_klein = isometry_mappings.pv_to_klein(x_pv, c)                    # x/√(1 + c‖x‖²)
+x_hyperboloid = isometry_mappings.klein_to_hyperboloid(x_klein, c)
+x_klein = isometry_mappings.hyperboloid_to_klein(x_hyperboloid, c)
+x_pv = isometry_mappings.klein_to_pv(x_klein, c)
+x_klein = isometry_mappings.pv_to_klein(x_pv, c)
 
 # Half-space (d, height last) ↔ Poincaré (d): the Cayley transform, origin e_n/√c ↦ 0
 x_poincare = isometry_mappings.halfspace_to_poincare(x_halfspace, c)
@@ -352,7 +351,7 @@ x_hyperboloid = isometry_mappings.halfspace_to_hyperboloid(x_halfspace, c)
 x_halfspace = isometry_mappings.hyperboloid_to_halfspace(x_hyperboloid, c)
 x_klein = isometry_mappings.halfspace_to_klein(x_halfspace, c)
 x_halfspace = isometry_mappings.klein_to_halfspace(x_klein, c)
-x_pv = isometry_mappings.halfspace_to_pv(x_halfspace, c)            # spatial part of the hyperboloid point
+x_pv = isometry_mappings.halfspace_to_pv(x_halfspace, c)
 x_halfspace = isometry_mappings.pv_to_halfspace(x_pv, c)
 ```
 
@@ -365,71 +364,36 @@ numerical error) and slower. The isometries are exact and mutually consistent �
 the spatial part of `halfspace_to_hyperboloid`.
 
 !!! warning "Mapping into Klein halves the representable radius"
-    A point at scaled radius $a = \sqrt{c}\,d_0$ has Klein norm $\tanh(a)/\sqrt{c}$ but
-    Poincaré norm $\tanh(a/2)/\sqrt{c}$, so `poincare_to_klein`, `hyperboloid_to_klein`
-    and `pv_to_klein` send every point past $a \approx 6.32$ (float32) / $13.86$ (float64),
-    at $c = 1$, beyond the `Klein.proj` margin. These maps do not project: in float32 at
-    $c = 1$ such points land between the margin ($\lVert k\rVert = 0.99999356$) and the
-    boundary, and from $a \approx 10$ on exactly on $\lVert k\rVert = 1/\sqrt{c}$. Klein
-    operations floor the gap $1 - c\lVert k\rVert^2$ at half its value on the margin, so
-    these points read at their own radius only up to $a \approx 6.67$, and as $a \approx 6.67$
-    beyond. Map out of Klein freely; map into it only points
-    you know lie inside that radius, and call `Klein.proj` after mapping far points in. See the
-    [numerical-stability guide](numerical-stability.md#klein-chart-ceiling).
+    Mapping into Klein halves the representable radius: a point past scaled radius 6.32
+    (float32) / 13.86 (float64), at $c = 1$, lands outside `Klein.proj`'s margin, and the
+    maps into Klein do not project. Call `Klein.proj` after mapping far points in. Details:
+    [Klein chart ceiling](numerical-stability.md#klein-chart-ceiling).
 
 !!! note "The half-space model: height last, origin at $e_n/\sqrt{c}$"
     A `HalfSpace` point keeps its height $x_n > 0$ in the last coordinate, and its origin is
     $e_n/\sqrt{c}$, not 0. Code written for the zero origin of `Poincare`, `Klein` or
     `ProperVelocity` should use `expmap_0`/`logmap_0`, which start from $e_n/\sqrt{c}$. None of the maps
-    into the half-space projects; `hyperboloid_to_halfspace` and `pv_to_halfspace` return
-    the height without a floor, and `HalfSpace.proj` floors it at the dtype's smallest normal
-    number. `klein_to_halfspace` inherits the Klein chart's error floor
-    $\varepsilon\cosh^2(a)$ ([Klein's chart floor](numerical-stability.md#klein-chart-ceiling)).
-
-    ```python
-    import jax.numpy as jnp
-    from hyperbolix.manifolds import HalfSpace, Poincare, isometry_mappings
-
-    halfspace = HalfSpace()
-    c = 1.0
-
-    x = jnp.array([0.1, 1.0])   # (x_s, x_n): the height x_n > 0 is the last coordinate
-    y = jnp.array([0.3, 0.5])
-
-    d = halfspace.dist(x, y, c)                # (2/√c)·asinh(‖r‖/2), cancellation-free
-    v = halfspace.logmap(y, x, c)              # tangent_norm(v, x, c) equals d
-    y_rec = halfspace.expmap(v, x, c)          # back to y
-    o = halfspace.expmap_0(jnp.zeros(2), c)    # the origin e_n/√c = [0, 1]
-
-    # The Cayley transform to the Poincaré ball preserves the distance
-    p_x = isometry_mappings.halfspace_to_poincare(x, c)
-    p_y = isometry_mappings.halfspace_to_poincare(y, c)
-    d_ball = Poincare().dist(p_x, p_y, c)                     # equals d
-    x_back = isometry_mappings.poincare_to_halfspace(p_x, c)  # round trip to x
-    ```
-
-!!! tip "Why PV for numerically hard regimes"
-    The Poincaré ball is bounded (`‖y‖² < 1/c`) and the hyperboloid time
-    component grows exponentially with distance, so both can be unstable far from
-    the origin. PV space is unconstrained `ℝⁿ`, so converting *to* PV
-    (`poincare_to_pv` / `hyperboloid_to_pv`) is a stable way to operate on points
-    near the boundary — at the cost of an unbounded coordinate, which is expected.
+    into the half-space projects; `HalfSpace.proj` floors the height at the dtype's smallest
+    normal number. A worked example is in the
+    [API reference](../api-reference/manifolds.md#halfspace-operations).
 
 ## Common Pitfalls
 
-### 1. Raw `jnp.acosh` / `jnp.atanh` instead of the hyperbolix versions
+### 1. Textbook `acosh` / `atanh` forms instead of the manifold's primitives
 
 ```python
-# ❌ NaN at domain boundaries (inner_product < 1 for acosh, |x| >= 1 for atanh)
-d = jnp.acosh(inner_product)
+# ❌ Loses small separations in float32, even with a domain clamp
+d = jnp.arccosh(-c * hyperboloid.minkowski_inner(x, y)) / jnp.sqrt(c)
 
-# ✅ Clamped and stable
-from hyperbolix.utils.math_utils import acosh, atanh
-d = acosh(inner_product)
+# ✅ Cancellation-free: use the manifold's own primitive
+d = hyperboloid.dist(x, y, c)
 ```
 
-Always use `hyperbolix.utils.math_utils` (`acosh`, `atanh`, `sinh`, `cosh`)
-when implementing custom hyperbolic ops.
+Build custom ops from the manifold's own primitives (`dist`, `logmap`,
+`gyro_difference`, `Hyperboloid.dist`), or from `asinh` forms. `acosh(1 + t)`
+and `atanh` near 1 lose small separations in float32 even with the
+`math_utils` domain clamp. Use `math_utils.acosh`/`atanh` only where the
+argument is far from 1.
 
 ### 2. Re-implementing distance from scratch
 
@@ -460,13 +424,12 @@ layers with a manifold-valued **bias** — their kernels stay Euclidean;
 prefer `HypLinearPoincarePP` / `HypRegressionPoincarePP` / `FGGLinear` to
 avoid the need entirely.
 
-### 4. Skipping `proj` after manual point construction
+### 4. Skipping `proj` after updating all ambient coordinates
 
-If you build a hyperboloid point by hand from spatial coordinates
-(`[sqrt(...), spatial...]`), it's correct in float64 but may drift in float32.
-After several training steps, accumulated drift can violate
-`<x, x>_L = -1/c`. Periodic re-projection via `manifold.proj` is cheap and
-keeps points on-manifold:
+Points drift off the hyperboloid when all ambient coordinates are updated,
+e.g. by a manual update of an embedding table. `manifold.proj(x, c)` rebuilds
+$x_0 = \sqrt{1/c + \lVert x_s\rVert^2}$ from the spatial part. A point you built
+that way yourself is already projected.
 
 ```python
 x = manifold.proj(x, c)  # cheap; idempotent on already-valid points
@@ -479,13 +442,13 @@ in the [API reference](../api-reference/nn-layers/index.md):
 
 | Family | Slow | Fast |
 |---|---|---|
-| Hyperboloid linear | `HypLinearHyperboloid*` | `FGGLinear` (~3× faster), `HTCLinear` (cross-curvature) |
+| Hyperboloid linear | `HypLinearHyperboloid*` | `FGGLinear`, `HTCLinear` (cross-curvature) |
 | Hyperboloid convolution | `HypConv2DHyperboloid` (HCat) | `LorentzConv2D` (~2.5× faster), `FGGConv2D` |
 | Poincaré convolution | `HypConv2DPoincare` | (no faster variant; this is the standard) |
 
 ## See Also
 
 - **[API Reference: Manifolds](../api-reference/manifolds.md)** — full method signatures and docstrings.
-- **[Numerical Stability Guide](numerical-stability.md)** — when to use float64, conformal factor pitfalls, clamping strategies.
+- **[Numerical Stability Guide](numerical-stability.md)** — when to use float64, the conformal factor, and where each model's chart stops.
 - **[Batching & JIT Guide](batching-jit.md)** — `jax.vmap` patterns, JIT static arguments, version_idx as a static vs. dynamic argument.
-- **[Training Workflows](training-workflows.md)** *(WIP)* — end-to-end training examples.
+- **[Training Workflows](training-workflows.md)** — end-to-end training examples.
