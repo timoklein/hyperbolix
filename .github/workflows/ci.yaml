@@ -102,6 +102,8 @@ jobs:
           - "nn_layers/test_hyperboloid_fgg.py"
           - "nn_layers/test_hyperboloid_core_stability.py"
           - "nn_layers/test_hypformer.py"
+          # HELM layers: latent attention, mixture of curvature experts, token embedding
+          - "nn_layers/test_hyperboloid_mla.py nn_layers/test_hyperboloid_moe.py nn_layers/test_hyperboloid_embedding.py"
           # NN layer tests: Poincare and proper-velocity families
           - "nn_layers/test_poincare_conv.py nn_layers/test_poincare_activations.py nn_layers/test_poincare_batchnorm.py"
           - "nn_layers/test_poincare_linear_gradients.py nn_layers/test_poincare_vq.py"

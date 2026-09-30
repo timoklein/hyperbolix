@@ -62,6 +62,9 @@ Both are quantizer *bottlenecks*: feed them encoder tangent features, add `outpu
 | Long sequences, linear-complexity attention | `HyperbolicLinearAttention` (O(N)) |
 | Most geometrically faithful attention | `HyperbolicFullAttention` (O(N²)) |
 | Softmax attention with hyperbolic queries/keys | `HyperbolicSoftmaxAttention` |
+| Language-model attention: low-rank latent keys/values, decoupled HOPE slice, causal/segment/padding masks (HELM) | `LorentzMLA`. Aggregates values with the single-GEMM centroid by default (`centroid_form="gemm"`, as HELM does); pass `"variance"` for short sequences or values far from the origin ([numerical stability](numerical-stability.md#attention-score-floor)) |
+| Feed-forward block of a language model: top-k mixture of experts, one curvature per expert (HELM-MiCE) | `LorentzMoE` (with `LorentzMoEGate`, `LorentzSwiGLU`); balance with `moe_sequence_balance_loss` and `update_bias` |
+| Token embedding on the hyperboloid | `LorentzEmbedding` — a `ManifoldParam` table trained with `riemannian_adam` (`parameterization="manifold"`), or a Euclidean spatial table (`"spatial"`); `c_out` maps the output onto another sheet |
 | Normalization between hyperboloid layers | `HRCLayerNorm`, `HRCRMSNorm`, `HRCBatchNorm` |
 | Normalization between Poincaré conv layers | `PoincareBatchNorm2D` |
 | Dropout on hyperboloid features | `HRCDropout` |
@@ -280,6 +283,41 @@ class HypTransformerBlock(nnx.Module):
         h = self.mlp_out(self.mlp_in(self.mlp_norm(x_BLAi, c), c), c)
         return lorentz_residual(x_BLAi, h, c)
 ```
+
+### Pattern 3b: HELM-style decoder block
+
+The block of HELM (He et al. 2025): pre-norm, latent attention, a mixture of curvature experts, and a
+Lorentzian residual after each. `hidden` is ambient, `x_BSA` has shape `(B, S, hidden)`.
+
+```python
+import math
+from hyperbolix.nn_layers import HRCRMSNorm, LorentzMLA, LorentzMoE, LorentzResidual
+
+class HELMBlock(nnx.Module):
+    def __init__(self, hidden: int, *, rngs: nnx.Rngs):
+        self.attn_norm = HRCRMSNorm(hidden - 1, rngs=rngs)              # SPATIAL
+        self.attn = LorentzMLA(
+            hidden, num_heads=8, kv_lora_rank=64, qk_nope_head_dim=32,
+            qk_rope_head_dim=17, v_head_dim=33, rngs=rngs,              # rope/v dims are AMBIENT
+        )
+        self.moe_norm = HRCRMSNorm(hidden - 1, rngs=rngs)
+        self.moe = LorentzMoE(hidden, inter_dim=512, num_routed=8, num_shared=1, top_k=2, rngs=rngs)
+        # HELM's residual: raw learnable weight, fixed output scale sqrt(hidden)
+        self.attn_res = LorentzResidual(weight_parameterization="identity", scale=True, init_gamma=math.sqrt(hidden))
+        self.moe_res = LorentzResidual(weight_parameterization="identity", scale=True, init_gamma=math.sqrt(hidden))
+
+    def __call__(self, x_BSA: jax.Array, c: float):
+        h = self.attn(self.attn_norm(x_BSA, c, c), c)                   # causal by default
+        x_BSA = self.attn_res(x_BSA, h, c=c)
+        h, stats = self.moe(self.moe_norm(x_BSA, c, c), c)
+        return self.moe_res(x_BSA, h, c=c), stats
+```
+
+Add `moe_sequence_balance_loss(stats, alpha=1e-4)` to the loss, and call
+`block.moe.update_bias(stats.mask, speed)` after each optimizer step (`RoutingBias` is not trained by
+gradient). The token table is a `LorentzEmbedding(vocab, hidden, rngs=rngs, c=c)`; train it with
+`riemannian_adam` inside the same `nnx.Optimizer` as the Euclidean weights. The expert curvatures start
+at `linspace(0.1, 2.0, E)`; `expert_curvatures=[1.0] * E` reproduces the released HELM checkpoint.
 
 ### Pattern 4: Per-layer learnable curvature (deep Poincaré nets)
 

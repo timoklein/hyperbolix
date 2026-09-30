@@ -25,7 +25,7 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 - ⚡ **5 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish, GELU
 - 📈 **Riemannian Optimizers**: RAdam and RSGD with automatic manifold detection
 - 🚀 **Pure JAX/Flax NNX**: vmap-native API, JIT-compatible
-- ✅ **7,000+ tests passing** (1,305 test functions, parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
+- ✅ **7,000+ tests passing** (1,390 test functions, parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
 
 ## Quick Start
 
