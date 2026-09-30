@@ -1170,6 +1170,91 @@ def test_halfspace_poincare_gradients_are_finite_and_correct():
         assert jnp.allclose(g_D, fd_D, rtol=1e-5, atol=1e-6 * jnp.max(jnp.abs(fd_D))), (z_D, g_D, fd_D)
 
 
+def _capped_ball_points(manifold: Poincare | Klein, c: float, n: int, seed: int) -> jnp.ndarray:
+    """``n`` points that ``manifold.proj`` caps: radii from 1/√c (where 1 + e^-30 rounds to 1) to 3.7/√c."""
+    key_u, key_r = jax.random.split(jax.random.PRNGKey(seed))
+    u_ND = jax.random.normal(key_u, (n, DIM), dtype=manifold.dtype)
+    u_ND = u_ND / jnp.linalg.norm(u_ND, axis=-1, keepdims=True)
+    r_N1 = (1.0 + jnp.exp(jax.random.uniform(key_r, (n, 1), dtype=manifold.dtype, minval=-30.0, maxval=1.0))) * c**-0.5
+    return jax.vmap(manifold.proj, in_axes=(0, None))(u_ND * r_N1, c)
+
+
+def test_ball_map_gradients_at_capped_points_match_the_unfloored_reference(curvature: float, dtype: jnp.dtype):
+    """Maps out of the two ball charts, differentiated w.r.t. a point that ``proj`` capped.
+
+    Each map reads the gap ``g = 1 - c‖·‖²`` of its input — ``poincare_to_hyperboloid``,
+    ``poincare_to_pv`` and ``poincare_to_halfspace`` the Poincaré one, the Klein maps
+    ``_klein_gap`` — and at the cap its Jacobian is dominated by the gap's derivative ``-2c·y``.
+    The computed gap of a capped point lands from 6.2 eps below its analytic value ``_boundary_floor``
+    to 6 eps above it (Poincaré ``expmap`` at c ≤ 0.3 also returns points farther inside, up to 17 eps
+    above in float32); floored at that value, the floor bound for 11-84 % of the capped points and
+    zeroed that term: relative error 1.0 for every map
+    (``logs/2026-09-29_cancellation-free/floorfix2/``). Checked: the vector-Jacobian product with a
+    fixed ambient ``w`` against its closed form in longdouble on the stored inputs, with the
+    curvature the dtype holds, within ``16·eps/g`` (the Jacobians carry the gap up to squared).
+    For ``poincare_to_halfspace`` the checked output is the height ``x_n = g/(√c·den)``, the one
+    coordinate that reads the gap.
+    """
+    c = curvature
+    eps = float(jnp.finfo(dtype).eps)
+    ld = np.longdouble
+    cc = ld(np.asarray(c, dtype=np.dtype(jnp.dtype(dtype).name)))  # the curvature `1 - c * y2` computes with
+    w_A = jnp.asarray([0.6, -0.3, 0.5, 0.55], dtype=dtype)  # ambient w = (w_0, w_s); spatial maps take w_s
+    w = np.asarray(w_A, dtype=ld)
+    w0, w_s = w[0], w[1:]
+    failures = []
+
+    def vjp(fn, w_out):
+        return jax.vmap(jax.grad(lambda z: jnp.dot(w_out, fn(z, c))))
+
+    # Poincaré inputs: B = 1 - c‖p‖²; den = ‖√c·p - e_n‖², the half-space map's denominator.
+    p_ND = _capped_ball_points(Poincare(dtype=dtype), c, 24, seed=31)
+    p = np.asarray(p_ND, dtype=ld)
+    b = 1 - cc * np.sum(p * p, -1, keepdims=True)
+    pw = np.sum(p * w_s, -1, keepdims=True)
+    den = cc * np.sum(p[:, :-1] ** 2, -1, keepdims=True) + (np.sqrt(cc) * p[:, -1:] - 1) ** 2
+    grad_den = np.concatenate([2 * cc * p[:, :-1], 2 * np.sqrt(cc) * (np.sqrt(cc) * p[:, -1:] - 1)], axis=-1)
+    e_n = jnp.zeros(DIM, dtype=dtype).at[-1].set(1.0)
+    ball_cases = {
+        "poincare_to_hyperboloid": (
+            vjp(iso.poincare_to_hyperboloid, w_A)(p_ND),
+            w0 * 4 * cc * p / (np.sqrt(cc) * b**2) + 2 * w_s / b + 4 * cc * pw * p / b**2,
+            b,
+        ),
+        "poincare_to_pv": (vjp(iso.poincare_to_pv, w_A[1:])(p_ND), 2 * w_s / b + 4 * cc * pw * p / b**2, b),
+        "poincare_to_halfspace x_n": (
+            vjp(iso.poincare_to_halfspace, e_n)(p_ND),
+            -2 * cc * p / (np.sqrt(cc) * den) - b * grad_den / (np.sqrt(cc) * den**2),
+            b,
+        ),
+    }
+    # Klein inputs: g = 1 - c‖k‖².
+    k_ND = _capped_ball_points(Klein(dtype=dtype), c, 24, seed=37)
+    k = np.asarray(k_ND, dtype=ld)
+    g = 1 - cc * np.sum(k * k, -1, keepdims=True)
+    kw = np.sum(k * w_s, -1, keepdims=True)
+    ball_cases |= {
+        "klein_to_poincare": (
+            vjp(iso.klein_to_poincare, w_A[1:])(k_ND),
+            w_s / (1 + np.sqrt(g)) + cc * kw * k / (np.sqrt(g) * (1 + np.sqrt(g)) ** 2),
+            g,
+        ),
+        "klein_to_pv": (vjp(iso.klein_to_pv, w_A[1:])(k_ND), w_s / np.sqrt(g) + cc * kw * k / g**1.5, g),
+        "klein_to_hyperboloid": (
+            vjp(iso.klein_to_hyperboloid, w_A)(k_ND),
+            w0 * np.sqrt(cc) * k / g**1.5 + w_s / np.sqrt(g) + cc * kw * k / g**1.5,
+            g,
+        ),
+    }
+    for name, (got_ND, ref_ND, gap_N1) in ball_cases.items():
+        ref_ND = np.asarray(ref_ND, dtype=np.float64)
+        err_N = np.linalg.norm(np.asarray(got_ND, np.float64) - ref_ND, axis=-1) / np.linalg.norm(ref_ND, axis=-1)
+        bad_N = err_N > 16 * eps / np.asarray(gap_N1[:, 0], np.float64)
+        if bad_N.any():
+            failures.append(f"{name}: {bad_N.sum()}/{bad_N.size} over tolerance, max error {err_N.max():.2e}")
+    assert not failures, "\n".join(failures)
+
+
 def test_halfspace_poincare_keeps_float32_under_x64(halfspace_points: jnp.ndarray, dtype: jnp.dtype):
     """float32 in → float32 out with x64 enabled, also for a float64 curvature array."""
     for c in (0.5, jnp.asarray(0.5, dtype=jnp.float64)):

@@ -703,29 +703,41 @@ def test_isometry_gradients_are_finite_at_the_origin(name: str, fn, x_at_origin)
     assert float(jnp.sum(jnp.abs(grad))) > 0.0, f"{name} gradient collapsed to zero at the origin"
 
 
-def test_isometry_gradients_are_finite_at_the_poincare_boundary():
+# c = 1, float64. Just inside the boundary the gap 1 - ‖x‖² is 2.0e-12, above the
+# `_boundary_divisor_floor` (1.82e-12), so the floor does not bind there; exactly on it the gap is 0
+# and only the floor keeps the divisor positive.
+_BOUNDARY_POINTS = [(1.0 - 1e-12, 0.0), (1.0, 0.0)]
+_BOUNDARY_IDS = ["inside", "on"]
+
+
+@pytest.mark.parametrize("point", _BOUNDARY_POINTS, ids=_BOUNDARY_IDS)
+def test_isometry_gradients_are_finite_at_the_poincare_boundary(point):
     """``poincare_to_pv`` blows up in value at ‖y‖ -> 1/√c but must keep a finite gradient.
 
-    The ``MIN_NORM`` floor is what makes this hold; removing it turns the boundary cotangent into
-    a NaN that propagates through any hybrid model touching the ball edge.
+    On the boundary the ``_boundary_divisor_floor`` on ``1 - c‖y‖²`` is what makes this hold;
+    removing it turns the boundary cotangent into a NaN that propagates through any hybrid model
+    touching the ball edge. The point just inside, where the floor does not bind, checks the
+    unfloored divisor next to the boundary.
     """
-    near_boundary_D = jnp.array([1.0 - 1e-12, 0.0], dtype=F64)
+    boundary_D = jnp.array(point, dtype=F64)
 
-    grad = jax.grad(lambda v: jnp.sum(iso.poincare_to_pv(v, 1.0)))(near_boundary_D)
+    grad = jax.grad(lambda v: jnp.sum(iso.poincare_to_pv(v, 1.0)))(boundary_D)
 
     assert bool(jnp.all(jnp.isfinite(grad)))
 
 
+@pytest.mark.parametrize("point", _BOUNDARY_POINTS, ids=_BOUNDARY_IDS)
 @pytest.mark.parametrize("fn", [iso.klein_to_pv, iso.klein_to_hyperboloid, iso.klein_to_poincare], ids=lambda f: f.__name__)
-def test_isometry_gradients_are_finite_at_the_klein_boundary(fn):
+def test_isometry_gradients_are_finite_at_the_klein_boundary(fn, point):
     """The Klein maps divide by ``√(1 - c‖k‖²)``, whose derivative is infinite at ‖k‖ -> 1/√c.
 
-    The ``_boundary_floor`` on the gap keeps the cotangent finite, as the floor does for
-    ``poincare_to_pv`` above.
+    On the boundary the ``_boundary_divisor_floor`` on the gap keeps the cotangent finite, as it
+    does for ``poincare_to_pv`` above; without it the gradient is NaN there. The point just inside,
+    where the floor does not bind, checks the unfloored gap next to the boundary.
     """
-    near_boundary_D = jnp.array([1.0 - 1e-12, 0.0], dtype=F64)
+    boundary_D = jnp.array(point, dtype=F64)
 
-    grad = jax.grad(lambda v: jnp.sum(fn(v, 1.0)))(near_boundary_D)
+    grad = jax.grad(lambda v: jnp.sum(fn(v, 1.0)))(boundary_D)
 
     assert bool(jnp.all(jnp.isfinite(grad)))
 
@@ -3108,8 +3120,8 @@ def _klein_gap_floor(c: float, dtype) -> float:
     """``_gyrovector_core._boundary_floor`` restated: the smallest gap on a ``_proj``-ected point.
 
     ``_proj`` caps the norm at ``1/√c - m`` with ``m = eps**0.75``, so ``1 - c‖x‖² ≥ 2√c·m - c·m²``.
-    The library floors ``g_x`` there; a case whose stored gap sits near it is past the chart's
-    ceiling and is skipped rather than measured against the floor.
+    The library floors ``g_x`` at half of it; a case whose stored gap sits near it is past the
+    chart's ceiling and is skipped rather than measured against the floor.
     """
     m = float(np.finfo(dtype).eps) ** 0.75
     return 2.0 * np.sqrt(c) * m - c * m * m
@@ -3639,7 +3651,7 @@ def test_klein_ptransp_matches_the_longdouble_hyperboloid_transport(c: float, ki
 
 _KLEIN_EXPMAP_STEPS = ((0.3, 1e-3), (0.3, 0.5), (0.3, 3.0), (2.0, 1.0), (3.0, 1e-3), (3.0, 0.1), (3.0, 1.0))
 """``(a, τ)``: base scaled radius and scaled Riemannian step ``τ = √c·‖v‖_x``. ``τ = 1e-3`` sits on
-the float64 series branch of ``_xcothx`` (threshold 6.9e-3); every target stays at scaled radius ≤ 4."""
+the float64 series branch of ``_xcothx_minus_x`` (threshold 6.9e-3); every target stays at scaled radius ≤ 4."""
 
 
 @pytest.mark.parametrize("c", [0.1, 1.0, 3.0])

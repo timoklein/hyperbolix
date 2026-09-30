@@ -404,6 +404,57 @@ def test_center_data_flow(dtype, c):
     assert jnp.allclose(z_transform, z_fit, atol=out_atol)
 
 
+# --- 19b. centering far from the origin -------------------------------------------------
+def _cluster_at_radius(a: float, c: float, dim: int, n: int, sigma: float, seed: int) -> jnp.ndarray:
+    """Float64 wrapped-normal cluster (``sigma`` at the origin) gyro-translated to a centre at scaled radius ``a``."""
+    H = Hyperboloid(dtype=jnp.float64)
+    u_D = np.random.default_rng(seed).normal(size=dim)
+    centre_A = jnp.asarray(np.concatenate([[np.cosh(a)], np.sinh(a) * u_D / np.linalg.norm(u_D)]) / np.sqrt(c))
+    x0_NA = _hyp_points(seed, n, dim, c, sigma, jnp.float64)
+    return jax.vmap(H.addition, in_axes=(None, 0, None))(centre_A, x0_NA, c)
+
+
+def test_centering_matches_boost_in_float64():
+    """In float64 at a moderate radius, centering on ``mean_`` is the boost ``x @ boost_ᵀ`` to rounding."""
+    c, dim = 0.5, 5
+    H = Hyperboloid(dtype=jnp.float64)
+    x = _cluster_at_radius(2.0, c, dim, 24, 0.5, seed=3)
+    model = HoroPCA(H, 2, max_steps=10).fit(x, c, jax.random.PRNGKey(1))
+    _, ball_boost_NK = transform_horopca(H.proj_batch(x @ model.boost_.T, c), model.components_, c)
+    z_boost = jax.vmap(iso.poincare_to_hyperboloid, in_axes=(0, None))(ball_boost_NK, c)
+    np.testing.assert_allclose(np.asarray(model.transform(x)), np.asarray(z_boost), atol=1e-12)
+
+
+def test_centering_at_large_radius_matches_float64():
+    """A tight cluster at scaled radius 8: the float32 fit and transform against float64 on the same inputs.
+
+    Centering is ``(⊖μ) ⊕ x`` (``Hyperboloid.gyro_difference``). The boost matrix is the same map, but
+    ``x @ Bᵀ`` forms each O(1) centred point from O(cosh a) entries, so its float32 error is ``eps·cosh²(a)``:
+    on this cluster the boost-centred transform was 0.60 nats off (median 0.13) and ``total_variance_``
+    6.7 % off, against 2.7e-4 nats and 3.8e-5 with the gyro-difference. ``total_variance_`` is the pairwise
+    variance of the centred points, which the centering isometry preserves. The transform check copies the
+    float32 fit's state into a float64 model, so both sides centre on the same mean and project onto the same
+    components.
+    """
+    c, dim = 1.0, 5
+    H32, H64 = Hyperboloid(dtype=jnp.float32), Hyperboloid(dtype=jnp.float64)
+    x32 = H32.proj_batch(_cluster_at_radius(8.0, c, dim, 64, 0.3, seed=11).astype(jnp.float32), c)
+    x64 = H64.proj_batch(x32.astype(jnp.float64), c)  # the same float32 points, time slot rebuilt in float64
+    model32 = HoroPCA(H32, 2, max_steps=20).fit(x32, c, jax.random.PRNGKey(0))
+
+    var64 = float(jnp.mean(compute_pairwise_distances(x64, H64, c, VERSION_DEFAULT) ** 2))
+    assert float(model32.total_variance_) == pytest.approx(var64, rel=1e-3)
+
+    model64 = HoroPCA(H64, 2)
+    model64.components_ = model32.components_.astype(jnp.float64)
+    model64.mean_ = H64.proj(model32.mean_.astype(jnp.float64), c)
+    model64.boost_ = H64.lorentz_boost(model64.mean_, c)
+    model64.c_ = c
+    z32 = H64.proj_batch(model32.transform(x32).astype(jnp.float64), c)
+    err_N = jax.vmap(H64.dist, in_axes=(0, 0, None))(z32, model64.transform(x64), c)
+    assert float(err_N.max()) < 2e-3, f"float32 transform {float(err_N.max()):.2e} geodesic from the float64 one"
+
+
 # --- 20. end-to-end recovery of a planted 2-D submanifold ------------------------------
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_end_to_end_recovery(dtype):

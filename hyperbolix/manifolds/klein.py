@@ -41,10 +41,10 @@ Ungar. "A Gyrovector Space Approach to Hyperbolic Geometry." 2009.
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import asinh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt, tanh
+from ..utils.math_utils import asinh, floor_at, safe_hypot_norm, safe_norm, safe_sqrt
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
-from ._gyrovector_core import _boundary_floor, _proj, _proj_batch
+from ._gyrovector_core import _boundary_divisor_floor, _proj, _proj_batch
 from .hyperboloid import _asinhc
 from .poincare import _expmap_0 as _poincare_expmap_0
 from .poincare import _scalar_mul as _poincare_scalar_mul
@@ -61,14 +61,27 @@ VERSION_DEFAULT = 0
 
 
 def _gap(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Boundary gap ``g_x = 1 - c‖x‖² = 1/gamma_x²``, floored at its analytic minimum on projected points.
+    """Boundary gap ``g_x = 1 - c‖x‖² = 1/gamma_x²``, floored below the rounding band of a capped point.
 
     The Klein chart is the same Euclidean ball as Poincaré's with the same ``eps**0.75`` margin
-    (:func:`_gyrovector_core._proj`), so :func:`_gyrovector_core._boundary_floor` is the same
-    analytic floor here.
+    (:func:`_gyrovector_core._proj`; :func:`_expmap_0` is Poincaré's), so it takes the Poincaré
+    floor, :func:`_gyrovector_core._boundary_divisor_floor`: half the gap's analytic value on the
+    margin. The computed gap of a capped point lands -4.6 to +5.3 eps from that analytic value and
+    below it for 11-84 % of the capped points (``logs/2026-09-29_cancellation-free/floorfix2/``).
+    Floored at the analytic value, as it was, the gap lost its derivative ``-2c·x`` there, the
+    dominant term of every gradient w.r.t. a capped point: relative error 1.0 for ``dist``,
+    ``logmap``, ``ptransp``, ``⊕``, ``tangent_norm``, ``egrad2rgrad`` and ``lorentz_factor``, up to
+    7.9 for ``expmap`` w.r.t. its base point (float64). With the half floor the gradients there are
+    bit-identical to the unfloored ones in both dtypes. On pairs of two capped points the float32 ``⊕``
+    gradient w.r.t. x drops from 1.0 to 2.8e-3 (c = 1) and 7.8e-3 (c = 0.3); w.r.t. y it stays at
+    6.9e-2 and 1.5e-2, as before. Two float32 errors remain, and they do not come from the floor, since
+    they are the same with no floor: ``⊕`` on pairs of one capped and one free point (0.47-1.3) and
+    ``expmap`` w.r.t. a capped base point (1.0). A point past the margin that was never projected
+    (the maps into Klein do not project) still meets the floor, which keeps the gap positive and reads
+    it at scaled radius ≈ 6.67 (float32) / 14.21 (float64) at c = 1.
     """
     x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
-    return floor_at(1.0 - c * x2, _boundary_floor(x, c))
+    return floor_at(1.0 - c * x2, _boundary_divisor_floor(x, c))
 
 
 def _pair(
@@ -91,22 +104,27 @@ def _pair(
     return g_x, g_y, w_D, s2
 
 
-def _xcothx(theta: Float[Array, "..."]) -> Float[Array, "..."]:
-    """``θ·coth θ`` — even, analytic, value ``1`` and slope ``0`` at ``θ = 0``.
+def _xcothx_minus_x(theta: Float[Array, "..."]) -> Float[Array, "..."]:
+    """``A(θ) = θ·coth θ - θ = 2θ·e^{-2θ}/(1 - e^{-2θ})`` for finite ``θ ≥ 0``: value 1, slope -1 at 0.
 
-    Below ``(945·eps/2)^(1/6)`` — 0.196 in float32, 6.9e-3 in float64, where the first dropped
-    term ``2θ⁶/945`` falls under one rounding — the series ``1 + θ²/3 - θ⁴/45`` is used. Double
-    ``where``: the direct branch is ``0/0`` at ``θ = 0``, so its *argument* is sanitised too, or the
-    NaN derivative would leak into the selected branch's cotangent.
+    Below ``(945·eps/2)^(1/6)`` — 0.196 in float32, 6.9e-3 in float64, where the first dropped term
+    ``2θ⁶/945`` of ``θ·coth θ`` falls under one rounding — the series ``1 - θ + θ²/3 - θ⁴/45`` is
+    used. Above it, the exponential form: ``e^{-2θ}`` only underflows, so value and derivative stay
+    finite for every finite θ (``2θ/expm1(2θ)`` has a NaN derivative past θ ≈ 44 in float32, 354 in
+    float64, where ``expm1`` overflows). Just above the threshold ``1 - e^{-2θ} ≈ 2θ`` cancels, so ``A``
+    is off by ``≈ eps/(2θ)`` relative — for a step of length θ that is ``eps/2`` nats, under the chart
+    floor (float64 steps measured ≤ 0.51 floors, from the tiny and short-step sets spanning the
+    threshold). Double ``where``: the exponential form is ``0/0`` at ``θ = 0``, so its *argument* is
+    sanitised too, or the NaN derivative would leak into the selected branch's cotangent. At
+    ``θ = inf`` the value is NaN (``inf·0``); :func:`_expmap` selects around it.
     """
     threshold = (945.0 / 2.0 * float(jnp.finfo(theta.dtype).eps)) ** (1.0 / 6.0)
     small = theta < threshold
     theta_safe = jnp.where(small, jnp.ones_like(theta), theta)
     t2 = theta * theta
-    series = 1.0 + t2 / 3.0 - t2 * t2 / 45.0
-    # `tanh` is the math_utils wrapper: its saturated tail returns 1 - 10·eps with zero slope,
-    # so for large θ this is θ/(1 - 10·eps) with derivative ≈ 1, the true limit.
-    return jnp.where(small, series, theta_safe / tanh(theta_safe))
+    series = 1.0 - theta + t2 / 3.0 - t2 * t2 / 45.0
+    e = jnp.exp(-2.0 * theta_safe)
+    return jnp.where(small, series, 2.0 * theta_safe * e / (1.0 - e))
 
 
 # ---------------------------------------------------------------------------
@@ -180,25 +198,52 @@ def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
 
 
 def _expmap(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-    """Exponential map ``exp_x(v) = x + v / (θ·coth θ + c(x·v)/g_x)``, ``θ = √c·‖v‖_x``.
+    """Exponential map ``exp_x(v) = x + v / (θ·coth θ + u)``, ``θ = √c·‖v‖_x``, ``u = c(x·v)/g_x``.
 
     Klein geodesics are chords, so ``exp_x(v)`` lies on the ray ``x + t·v``; the scalar follows
-    from the hyperboloid geodesic pulled back through the isometry. ``θ·coth θ`` is evaluated by
-    :func:`_xcothx`, so ``v = 0`` gives ``x`` with Jacobian exactly the identity. The denominator is
-    positive: ``θ·coth θ > θ ≥ c|x·v|/g_x``.
+    from the hyperboloid geodesic pulled back through the isometry. The denominator is positive:
+    ``θ·coth θ > θ ≥ |u|``.
+
+    The denominator is evaluated as a sum of two non-negative terms for either sign of ``u``::
+
+        θ·coth θ + u = A + B,      A = θ·coth θ - θ = 2θ·e^{-2θ}/(1 - e^{-2θ}),      B = θ + u
+
+    ``A`` by :func:`_xcothx_minus_x` (its series below the small-θ threshold, so ``v = 0`` gives ``x``
+    with Jacobian exactly the identity). For an outward step (``u ≥ 0``) ``B`` is the plain sum. For an
+    inward step (``u < 0``) the literal ``θ·coth θ + u`` is a difference of two ≈θ terms — a radial step
+    from scaled radius ``a`` keeps only ``θ·(1 - tanh a)``, and ``tanh`` saturates at 1 - 10·eps past
+    θ ≈ 7.2 — so ``B`` is formed from ``q = θ² - u² = c‖v‖²/g_x`` as ``q/(θ - u)``. ``q`` and ``θ - u``
+    share the factor ``1/g_x``, so it is ``c‖v‖²/(√c·√(g_x‖v‖² + c(x·v)²) - c(x·v))``, whose dominant
+    part never sees the rounding of ``g_x``. One exponential per step and no ``tanh``: single-threaded
+    on CPU (4096 points, dim 2/16/64) this runs at 0.93-1.00x the literal expression's time forward and
+    0.88-0.99x forward + backward, where rewriting only the inward steps (and keeping the literal form
+    for the rest) took 1.12-1.23x and 1.07-1.20x. Measured in float32 against the float64 hyperboloid
+    expmap of the same inputs: radial inward steps at ``c = 1`` 0.85 → 1.4e-4 nats at (a, θ) = (4, 8),
+    7.2e-4 → 5.4e-6 at (3, 6); oblique steps of either sign that stay inside the chart within ~11 times
+    the chart floor ``eps·cosh²(a)``, the rounding of ``g_x`` that θ and the stored result still carry,
+    outward ones within 0.9 of it (``logs/2026-09-29_cancellation-free/1d/``, ``fixup/``). Both forms of
+    ``B`` are exact identities of the same function; the double ``where`` on θ and on ``θ - u`` (zero
+    only at ``v = 0``) keeps the untaken branch finite in reverse mode.
 
     The Zhang et al. (2026) reference implementation's ``_klein_expmap`` (sc-zyl/Klein_hml,
     ``Hyperbolic/hmath.py``) omits the factor ``c`` in the denominator's second term (exact only
     at ``c = 1``).
 
     ``g_x‖v‖²`` overflows float32 past tangent coordinate ~1.8e19 (a diverging network); there
-    ``θ = inf`` and the result is the base point ``x``, as for ``Poincare.expmap``.
+    ``θ = inf``, the denominator is taken as θ itself, and the result is the base point ``x``, as for
+    ``Poincare.expmap``, with a NaN gradient (``A``'s ``inf·0`` reaches the cotangent).
     """
     g_x = _gap(x, c)
     xv = jnp.dot(x, v, precision=MATMUL_PRECISION)
     v2 = jnp.dot(v, v, precision=MATMUL_PRECISION)
-    theta = jnp.sqrt(c) * safe_sqrt(g_x * v2 + c * xv * xv) / g_x
-    return _proj(x + v / (_xcothx(theta) + c * xv / g_x), c)
+    m = c * xv
+    r = jnp.sqrt(c) * safe_sqrt(g_x * v2 + m * xv)  # g_x·θ
+    theta = r / g_x
+    inward = xv < 0
+    den_in = jnp.where(inward, r - m, jnp.ones_like(r))  # g_x·(θ - u), a sum of positives when inward
+    b = jnp.where(inward, c * v2 / den_in, (r + m) / g_x)  # θ + u
+    den = jnp.where(theta < jnp.inf, _xcothx_minus_x(theta) + b, theta)
+    return _proj(x + v / den, c)
 
 
 def _expmap_0(v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -230,9 +275,11 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
 def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
     """``log_0(y) = arsinhc(s)·y/√g_y``, ``s = √c‖y‖/√g_y`` (:func:`_logmap` at ``x = 0``)."""
     # Last-axis reductions with `keepdims` rather than `_gap`'s `jnp.dot`: like Poincaré's
-    # `_logmap_0`, an implicitly batched `(B, dim)` input must give the per-row result.
+    # `_logmap_0`, an implicitly batched `(B, dim)` input must give the per-row result. `_gap`'s floor,
+    # below the rounding band of a capped point (at the analytic cap value this spelling of the gap
+    # bound for 6-84 % of the capped points, and the gradient lost its dominant term).
     y2 = jnp.sum(y**2, axis=-1, keepdims=True)
-    sqrt_g_y = jnp.sqrt(floor_at(1.0 - c * y2, _boundary_floor(y, c)))
+    sqrt_g_y = jnp.sqrt(floor_at(1.0 - c * y2, _boundary_divisor_floor(y, c)))
     s = jnp.sqrt(c) * safe_norm(y)[..., None] / sqrt_g_y
     return _asinhc(s) * y / sqrt_g_y
 
@@ -344,7 +391,7 @@ def _einstein_midpoint(
     if weights_N is None:
         weights_N = jnp.ones(x_ND.shape[0], dtype=x_ND.dtype)
     x2_N = jnp.einsum("nd,nd->n", x_ND, x_ND, precision=MATMUL_PRECISION)  # (N,)
-    g_N = floor_at(1.0 - c * x2_N, _boundary_floor(x_ND, c))  # (N,)
+    g_N = floor_at(1.0 - c * x2_N, _boundary_divisor_floor(x_ND, c))  # (N,), `_gap`'s floor
     wg_N = weights_N / jnp.sqrt(g_N)  # (N,) wᵢ·gammaᵢ
     num_D = jnp.einsum("n,nd->d", wg_N, x_ND, precision=MATMUL_PRECISION)  # (D,)
     return _proj(num_D / jnp.sum(wg_N), c)

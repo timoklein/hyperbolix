@@ -32,9 +32,12 @@ Create a Poincare instance with desired dtype, then use its methods:
     >>> distance = dist_jit(x, y, c=1.0, version_idx=VERSION_MOBIUS_DIRECT)
 
 Version Constants:
-    VERSION_MOBIUS_DIRECT (0): Direct Möbius distance formula (fastest)
+    VERSION_MOBIUS_DIRECT (0): Direct Möbius distance formula (default)
     VERSION_MOBIUS (1): Möbius distance via addition
     VERSION_METRIC_TENSOR (2): Metric tensor induced distance
+
+For dist, slots 0 and 2 are the same function and run one body, the arcsinh form
+2·arcsinh(√c||x - y||/√(B_x·B_y))/√c with B_x = 1 - c||x||².
 
 Note: Keep curvature parameter 'c' dynamic to support learnable curvature.
 Use version_idx as static argument for JIT (static_argnames=['version_idx']).
@@ -50,13 +53,21 @@ grows exponentially as points approach the boundary:
 - At d(0,x) ≈ 10: λ(x) ≈ 10,000+
 
 Float32 (~7 significant digits) loses precision in operations like:
-- logmap/tangent_norm: divide by λ(x), then multiply by λ(x)
+- logmap/tangent_norm: scale by 1 - c||x||² = 2/λ(x), then by λ(x)
 - expmap: multiplies by large λ(x) values
 - addition: combines terms with vastly different scales
 
 For numerical accuracy with large distances or near-boundary points:
 - Use Poincare(dtype=jnp.float64)
-- Expect ~3% relative error with float32 for distances > 10
+- Far pairs: the default dist (slots 0 and 2), logmap and ptransp stay accurate up to the ball
+  chart's ceiling, scaled radius √c·d(0,x) ≈ 12.6 per point in float32 (27.7 in float64) at
+  c = 1. What is left is the rounding of 1 - c||x||², eps/(1 - c||x||²) relative (ptransp up to
+  1.7 times that). Two float32 points at scaled radius 7.2 on opposite sides (true √c·d = 14.4,
+  c = 1) give 14.400112.
+  VERSION_MOBIUS (1) takes the norm of the projected (-x) ⊕ y, which cannot pass the ceiling,
+  so in float32 it still saturates: 12.637328 for the same pair, and its gradient is lost
+  (relative error 1.0). In float64 it saturates once √c·d passes the float64 ceiling 27.7:
+  27.725826 for a true 29 or 40, with the same loss of gradient.
 - Consider projection after operations to maintain manifold constraints
 """
 
@@ -71,7 +82,7 @@ from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
-    _boundary_floor,
+    _boundary_divisor_floor,
     _conformal_factor,
     _conformal_factor_batch,
     _gyration,
@@ -135,7 +146,36 @@ def _embed_spatial_0(v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
 
 # Distance implementations for lax.switch
 def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Direct Möbius distance formula (fastest)."""
+    """Geodesic distance in the ``arcsinh`` form ``2·arcsinh(√t)/√c`` — version slots 0 **and** 2.
+
+    The Möbius form (slot 0) is ``2·atanh(u)/√c`` with ``u = √c‖x - y‖/√D₋`` and
+    ``D₋ = 1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²``. Writing ``B_x = 1 - c‖x‖²`` (``= 2/λ_x``), the identity
+    ``D₋ = B_x·B_y + c‖x - y‖²`` gives ``1 - u² = B_x·B_y/D₋``, and ``atanh(u) = arcsinh(u/√(1 - u²))``
+    turns the distance into::
+
+        √t = √c‖x - y‖ / √(B_x·B_y),   d(x, y) = 2·arcsinh(√t)/√c
+
+    The metric-tensor integral (slot 2, ``VERSION_METRIC_TENSOR``) gives ``acosh(1 + 2t)/√c`` with the
+    same ``t = c‖x - y‖²/((1 - c‖x‖²)(1 - c‖y‖²))``, and the half-angle identity
+    ``acosh(1 + 2t) = 2·arcsinh(√t)`` lands on the same expression, so both slots run this body. Each
+    literal spelling had its own defect. The ``atanh`` one saturated for far pairs, where ``u → 1``
+    and the float32 domain clip at ``1 - 10·eps`` took over: two points on opposite sides at scaled
+    radius 7.2 each (true ``√c·d = 14.4``, c = 1) came back 14.333 with an exactly zero gradient, and
+    at 9 each (true 18.0) still 14.333 — both pairs well inside the float32 chart. The ``acosh`` one
+    put the whole separation into a perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps``
+    domain clamp pinned every pair with ``t < 5·eps`` to a constant floor with a zero gradient (in
+    float32 closer than ``sqrt(5·eps/c)·(1 - c·r²)`` for two points at radius ``r``, 7.7e-4/√c at
+    the origin). ``arcsinh`` has no domain to clip and a derivative bounded by 1: the far float32
+    pairs now give 14.40011 and 17.99972 (float64 of the same inputs: 14.40006, 17.99968) with
+    gradients within 2.8e-5 and 2.3e-5 relative. What is left is the chart's own floor, the float32
+    rounding of ``B_x``, ``B_y`` (``eps/B`` relative).
+
+    It is also the cheaper body: three reductions (``‖x - y‖²``, ``‖x‖²``, ``‖y‖²``) where the
+    factored ``D₋`` took five with a traced ``c`` (its ``‖x‖²``, ``‖y‖²`` and both chord/sum
+    reductions of ``_mobius_denominator``) and slot 2's own body four (``safe_norm``'s max-scaling
+    pass, which a difference of two ball points does not need), plus a second rounding of each
+    ``B`` taken as ``2/λ``.
+    """
     sqrt_c = jnp.sqrt(c)
     # `safe_sqrt`, not `safe_norm`: the argument is a **ball point** (or a difference of two),
     # so `sum(.**2) <= 4/c` and the max-scaling `safe_norm` pays a second reduction for is
@@ -143,16 +183,19 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Scala
     # at 0 that the old `+ MIN_NORM**2` did, without its 1e-15 floor on the value.
     # This is a numerator, not a divisor, so no floor is needed: the old `+ MIN_NORM**2` was purely
     # the sqrt-gradient guard and it cost a 1e-15 floor on every genuinely small separation.
+    # `dist(x, x)` is therefore an exact 0 with an exactly-zero gradient.
     num = safe_sqrt(jnp.sum((y - x) ** 2))
-    # The denominator is `1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖²` = `(1 - c·r_x·r_y)² + c·r_x·r_y·‖x̂ - ŷ‖²`;
-    # spelled the first way it is an O(ε²) difference of O(1) terms and float32 has no bits left
-    # for it past geodesic radius ≈ 8 (measured on a radial pair 0.1 apart at radius 10, c = 1:
-    # 2.9e-2 nats wrong as-is, 4.3e-6 factored). Same three reductions either way — `⟨x,y⟩` is
-    # traded for the chord. See `_gyrovector_core._mobius_denominator`.
-    denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1))
-    xysum_norm = num / denom
-    dist_c = atanh(sqrt_c * xysum_norm)
-    return 2 * dist_c / sqrt_c
+    # B_x, B_y floored below the cap's rounding band (`_boundary_divisor_floor`), so an unprojected
+    # point outside the ball cannot drive the divisor to 0 while a capped one keeps its gradient.
+    # The analytic minimum `_boundary_floor` sat inside that band and bound for 11-76 % (mean 39 %;
+    # float32 and float64, c in {0.1, 0.3, 1, 2.5}) of the capped points, zeroing the dominant
+    # 2c·x/B_x term of their gradient.
+    # Taken directly rather than as `2/λ`, which would round twice.
+    floor_b = _boundary_divisor_floor(x, c)
+    one_minus_cx = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), floor_b)
+    one_minus_cy = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), floor_b)
+    sqrt_t = sqrt_c * num / jnp.sqrt(one_minus_cx * one_minus_cy)
+    return 2.0 * asinh(sqrt_t) / sqrt_c
 
 
 def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -167,46 +210,6 @@ def _dist_mobius(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvat
     diff_norm = safe_sqrt(jnp.sum(diff**2))
     dist_c = atanh(sqrt_c * diff_norm)
     return 2 * dist_c / sqrt_c
-
-
-def _dist_metric_tensor(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """Metric-tensor induced distance, in the ``arcsinh`` form: ``2·arcsinh(√t)/√c``.
-
-    The pairwise twin of :func:`_dist_0_metric_tensor`, and it had the same defect. The
-    metric-tensor integral gives ``acosh(1 + 2t)/√c`` with
-    ``t = c‖x - y‖²/((1 - c‖x‖²)(1 - c‖y‖²))``, so the whole separation signal sits in a
-    perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp pinned every
-    pair whose ``t`` fell below ``5·eps`` to a constant floor (killing the gradient), and an extra
-    ``arg < 1 + MIN_NORM`` short-circuit zeroed a second, smaller band below ``t = MIN_NORM/2``. For
-    two points at radius ``r`` the two ``(1 - c·r²)`` factors scale the threshold, so the float32
-    separation floor is ``sqrt(5·eps/c)·(1 - c·r²)`` — 7.7e-4/√c at the origin, tightening to
-    5.8e-4/√c at ``r = 0.5`` for ``c = 1``.
-
-    The half-angle identity ``acosh(1 + 2t) = 2·arcsinh(√t)`` moves the separation into an argument
-    *linear* in ``‖x - y‖``::
-
-        √t = √c‖x - y‖ / sqrt((1 - c‖x‖²)(1 - c‖y‖²)),   d(x, y) = 2·arcsinh(√t)/√c
-
-    ``arcsinh`` needs no domain clamp (its argument is a scaled norm) and its derivative is bounded
-    by 1, so both floors are gone rather than moved. The two forms are the same function, so slot 2
-    still means "metric-tensor distance" — this is not a new version slot.
-
-    Both boundary guards are unchanged: ``1 - c‖x‖²`` and ``1 - c‖y‖²`` still come from the clamped
-    conformal factors (= 2/λ), so an unprojected near-boundary point cannot drive the denominator to
-    0 and the representable ceiling is untouched.
-
-    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at ``x == y``, so
-    ``dist(x, x) == 0`` exactly and ``jax.grad`` there is finite without the ``where``-guard that
-    used to provide it (``test_precision.py::test_poincare_dist_grad_at_coincident_points``).
-    """
-    sqrt_c = jnp.sqrt(c)
-    diff_norm = safe_norm(x - y)
-    # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)). A bare 1 - c||x||² hits 0
-    # for an unprojected near-boundary point and blows up the divide; reuse the module-wide floor.
-    one_minus_cx = 2.0 / _conformal_factor(x, c)
-    one_minus_cy = 2.0 / _conformal_factor(y, c)
-    sqrt_t = sqrt_c * diff_norm / jnp.sqrt(one_minus_cx * one_minus_cy)
-    return 2.0 * asinh(sqrt_t) / sqrt_c
 
 
 def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -237,23 +240,31 @@ def _apollonian_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCu
         Papadopoulos & Troyanov. "Weak metrics on Euclidean domains." (Theorem 2.)
     """
     sqrt_c = jnp.sqrt(c)
-    x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
-    y2 = jnp.dot(y, y, precision=MATMUL_PRECISION)
-    xy = jnp.dot(x, y, precision=MATMUL_PRECISION)
-    # G = |c·x·ȳ - 1| generalized to ℝⁿ, i.e. G² = c²‖x‖²‖y‖² - 2c⟨x,y⟩ + 1. We use the
-    # Gram-determinant form (1 - c⟨x,y⟩)² + c²(‖x‖²‖y‖² - ⟨x,y⟩²): a sum of two non-negative
-    # terms (Cauchy-Schwarz ⇒ Gram det ≥ 0), so no catastrophic cancellation near the boundary.
-    # At x=y the Gram term is exactly 0, so G = 1 - c‖x‖² = denom and δ(x,x)=0 to machine precision.
-    gram = x2 * y2 - xy**2  # ‖x‖²‖y‖² - ⟨x,y⟩² ≥ 0 (squared area of the x,y parallelogram)
-    G = jnp.sqrt(floor_at((1.0 - c * xy) ** 2 + c**2 * gram, MIN_NORM))
+    diff_sqnorm = jnp.sum((x - y) ** 2)
+    # 1 - c‖x‖² and 1 - c‖y‖² (= 2/λ) floored below the cap's rounding band, as in
+    # `_dist_mobius_direct` (δ → ∞ as y → ∂ball is expected; see `_boundary_divisor_floor`). Taken
+    # directly rather than as `2/λ`, whose two roundings left δ(x, x) one ulp off 0 (2.2e-16 in
+    # float64 at scaled radius 3, 1.2e-7 in float32 at 12).
+    floor_b = _boundary_divisor_floor(x, c)
+    one_minus_cx = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), floor_b)
+    one_minus_cy = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), floor_b)
+    # G = |c·x·ȳ - 1| generalized to ℝⁿ, i.e. G² = c²‖x‖²‖y‖² - 2c⟨x,y⟩ + 1, spelled as
+    # (1 - c‖x‖²)(1 - c‖y‖²) + c‖x - y‖² (expand both to check): for c > 0 a sum of two
+    # non-negative terms, nothing cancels. The Gram-determinant form (1 - c⟨x,y⟩)² +
+    # c²(‖x‖²‖y‖² - ⟨x,y⟩²) used before only looked that way: its Gram determinant is itself a
+    # difference of O(1) terms that cancels for a close pair, and near the boundary G is
+    # O(1 - c‖x‖²), so float32 came back off by eps/(1 - c‖x‖²)² relative. Measured on a 0.05-nat
+    # pair (|δ| ≈ 0.03, max over 20 directions, float32 vs float64): 9.5e-4 absolute at scaled
+    # radius 5.7 and 6.7e-2 at 8 before, 5.3e-6 and 5.3e-5 after. It also reuses ‖x - y‖² and
+    # drops the ⟨x,y⟩ reduction (three instead of four). The sum is at least the squared floor, so
+    # the sqrt needs no guard, and at x = y the two factors are bitwise equal: G is exactly the
+    # denominator and δ(x, x) an exact 0.
+    G = jnp.sqrt(one_minus_cx * one_minus_cy + c * diff_sqnorm)
     # `safe_sqrt`, not `jnp.linalg.norm`: at x == y the latter's VJP is 0/0 = NaN, and 0*NaN
     # survives every downstream operation, so grad(delta)(x, x) was NaN. Both arguments are ball
     # points, so the sum of squares cannot overflow and no max-scaling is needed.
-    num = sqrt_c * safe_sqrt(jnp.sum((x - y) ** 2)) + G
-    # Denominator 1 - c‖y‖² = 2/λ(y); reuse the already-clamped conformal factor so the
-    # near-boundary floor matches the rest of the module (δ → ∞ as y → ∂ball is expected).
-    denom = 2.0 / _conformal_factor(y, c)
-    return jnp.log(num / denom)
+    num = sqrt_c * safe_sqrt(diff_sqnorm) + G
+    return jnp.log(num / one_minus_cy)
 
 
 def _dist(
@@ -276,7 +287,8 @@ def _dist(
     References:
         Ganea et al. "Hyperbolic neural networks." NeurIPS 2018.
     """
-    return lax.switch(version_idx, [_dist_mobius_direct, _dist_mobius, _dist_metric_tensor], x, y, c)
+    # Slot 2 (metric tensor) is the same function as slot 0 and runs its body; see _dist_mobius_direct.
+    return lax.switch(version_idx, [_dist_mobius_direct, _dist_mobius, _dist_mobius_direct], x, y, c)
 
 
 # Distance from origin implementations for lax.switch
@@ -318,19 +330,25 @@ def _dist_0_metric_tensor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[A
     two forms are algebraically the same function, so this is **not** a new version slot — slot 2 is
     the metric-tensor *distance*, and it is now computed accurately.
 
-    The boundary guard is unchanged: ``1 - c‖x‖²`` still comes from the clamped conformal factor
-    (= 2/λ(x)), so a point at or past the ball boundary gets the same floored denominator, and the
-    representable ceiling stays 2·arcsinh(1/sqrt(floor))/√c ≈ 12.1/√c (float32) / 27.8/√c (float64).
+    ``‖x‖`` and ``1 - c‖x‖²`` come from one reduction, as in the pairwise slot-2 body
+    (:func:`_dist_mobius_direct`): ``safe_sqrt`` of it, not ``safe_norm``, whose max-scaling pass a
+    ball point does not need, and ``1 - c‖x‖²`` taken directly, not as ``2/λ``, which rounds twice.
+    ``safe_sqrt`` supplies the exactly-zero value *and* exactly-zero VJP at the origin, so
+    ``jax.grad`` is finite there without the ``where``-guard that used to pin it, and ``d₀(0) = 0``
+    stays exact. Below float32 radius ≈ 1e-19 the squared norm underflows, exactly as in slot 0's
+    ``_dist_0_mobius``.
 
-    ``safe_norm`` supplies the exactly-zero value *and* exactly-zero VJP at the origin (the same
-    reason ``hyperboloid._dist_0_stable`` uses it), so ``jax.grad`` is finite there without the
-    ``where``-guard that used to pin it, and ``d₀(0) = 0`` stays exact.
+    ``1 - c‖x‖²`` is floored at :func:`_boundary_divisor_floor`, below every capped point's rounding
+    band. A capped point reads as the chart's ceiling, ``√c·d₀ ≈ 12.6`` (float32) / ``27.7``
+    (float64) at c = 1, with its gradient intact. At ``_boundary_floor``, the floor bound for 11-76 %
+    (mean 39 %; float32 and float64, c in {0.1, 0.3, 1, 2.5}) of the capped points and zeroed the
+    dominant ``2c·x/(1 - c‖x‖²)`` term of the gradient (relative error 1.0). Only a point past the
+    cap, never projected, meets the floor.
     """
     sqrt_c = jnp.sqrt(c)
-    x_norm = safe_norm(x)
-    # 1 - c||x||² via the boundary-clamped conformal factor (= 2/λ(x)) so a near-boundary point
-    # cannot drive the denominator to 0; consistent with _dist_metric_tensor and _apollonian_dist.
-    one_minus_cx = 2.0 / _conformal_factor(x, c)
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
+    x_norm = safe_sqrt(x_sqnorm)
+    one_minus_cx = floor_at(1.0 - c * x_sqnorm, _boundary_divisor_floor(x, c))
     sqrt_t = sqrt_c * x_norm / jnp.sqrt(one_minus_cx)
     return 2.0 * asinh(sqrt_t) / sqrt_c
 
@@ -473,13 +491,30 @@ def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) 
     # _dist_mobius_direct's num -- keep the two consistent. No floor here: `c_norm_prod` below
     # already carries the explicit divisor floor.
     num = safe_sqrt(jnp.sum((y - x) ** 2))
-    # Same factored denominator as `_dist_mobius_direct` -- the two must stay consistent, since
-    # `sub_norm` is exactly that function's `xysum_norm`.
-    denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1))
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
+    y_sqnorm = jnp.dot(y, y, precision=MATMUL_PRECISION)
+    # ‖(-x) ⊕ y‖ = ‖y - x‖/√D₋ with the factored denominator: the normalization of `sub`. The
+    # norms are reduced once and shared with it and with B_x, B_y below.
+    denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1, x_sqnorm=x_sqnorm, y_sqnorm=y_sqnorm))
     sub_norm = num / denom
     c_norm_prod = floor_at(jnp.sqrt(c) * sub_norm, MIN_NORM)
-    lambda_x = _conformal_factor(x, c)
-    res = 2 * atanh(c_norm_prod) / (c_norm_prod * lambda_x) * sub
+    # B_x = 1 - c‖x‖² = 2/λ_x and B_y, floored below the cap's rounding band as in
+    # `_dist_mobius_direct` (see `_boundary_divisor_floor`).
+    floor_b = _boundary_divisor_floor(x, c)
+    one_minus_cx = floor_at(1.0 - c * x_sqnorm, floor_b)
+    one_minus_cy = floor_at(1.0 - c * y_sqnorm, floor_b)
+    # The magnitude √c·d/2 = atanh(u), u = `c_norm_prod`, in its `asinh` form: 1 - u² = B_x·B_y/D₋
+    # (because D₋ = B_x·B_y + c‖x - y‖²), so atanh(u) = asinh(u·√D₋/√(B_x·B_y)) — which for u
+    # unfloored is asinh(√c‖y - x‖/√(B_x·B_y)), slot 0's `dist` argument. For far pairs u → 1 and
+    # `atanh` hit its float32 domain clip: ‖logmap‖ came back 4.7e-3 (two points on opposite sides
+    # at scaled radius 7.2 each, c = 1) and 0.20 (at 9 each) relative too short; 2.9e-5 and 2.6e-5
+    # after. The argument is formed from the *floored* u, so the ratio asinh(·)/u below is 1 at
+    # y = x, as atanh(u)/u was, and the Jacobian ∂logmap_x(y)/∂y there stays the identity. Built
+    # from the unfloored √c‖y - x‖ instead, the value would still be right (0) but that Jacobian
+    # would be 0.
+    half_dist = asinh(c_norm_prod * denom / jnp.sqrt(one_minus_cx * one_minus_cy))
+    # 2·half_dist/(u·λ_x) · sub with 2/λ_x = B_x.
+    res = one_minus_cx * half_dist / c_norm_prod * sub
     return res
 
 
@@ -728,6 +763,68 @@ def _compute_mlr_pp(
     return res_BP
 
 
+def _compute_mlr_pp_tangent(
+    v: Float[Array, "batch in_dim"],
+    z: Float[Array, "out_dim in_dim"],
+    r: Float[Array, "out_dim 1"],
+    c: ScalarCurvature,
+    min_enorm: float = 1e-15,
+) -> Float[Array, "batch out_dim"]:
+    """:func:`_compute_mlr_pp` of ``x = expmap_0(v)``, evaluated on the tangent vector ``v`` itself.
+
+    With ``t = √c‖v‖`` the point ``x`` sits at scaled radius ``2t``, and both conformal-factor
+    terms of the HNN++ argument are closed-form in ``t``::
+
+        λ_x·√c·⟨x, ẑ⟩ = sinh(2t)·⟨v, ẑ⟩/‖v‖,        λ_x - 1 = cosh(2t)
+
+    so the ball point is never formed. That route read ``λ_x = 2/(1 - c‖x‖²)`` back off the stored
+    point, a relative error ≈ ``eps·e^{2t}/4``, and in float32 its lift stopped at the ball's
+    ceiling ``t ≈ 6.33`` (c = 1), past which the scores were constant with a zero radial gradient.
+    Measured through ``HypRegressionPoincarePP`` (float32 vs float64 on the same inputs, relative
+    to the largest entry, c ∈ {0.3, 1}): at t = 6 scores 1.1e-3 → 8.4e-7 and input gradients
+    1.4e-3 → 1.3e-5; at t = 8 2.0e-1 → 1.5e-6 and 3.8e-1 → 2.8e-5. What remains is bounded above by
+    one float32 rounding of ``⟨v, ẑ⟩``, amplified by ≈ ``e^{2t}/2`` in a cell near its hyperplane —
+    the point-representation floor, which the ball route shared. The bound is loose: 1.3e-2 in the
+    worst cell at t = 8 (c = 1, 20 seeds), where 8.5e-4 was measured.
+
+    Args:
+        v: Tangent vector(s) at the origin, shape (batch, in_dim)
+        z: Hyperplane tangent normals at origin, shape (out_dim, in_dim)
+        r: Hyperplane translations, shape (out_dim, 1)
+        c: Manifold curvature (positive)
+        min_enorm: Minimum norm to avoid division by zero
+
+    Returns:
+        MLR scores, shape (batch, out_dim)
+
+    References:
+        Shimizu et al. "Hyperbolic neural networks++." arXiv:2006.08210 (2020).
+    """
+    sqrt_c = jnp.sqrt(c)
+    sqrt_c2r_1P = 2 * sqrt_c * r.T  # (1, P) — r is (P, 1), .T broadcasts
+    z_norm_P1 = floor_at(safe_norm(z)[:, None], min_enorm)  # (P, 1), as in `_compute_mlr_pp`
+
+    # The only reduction over the input. `safe_norm`, for the reason `_expmap_0` gives: `v` is a
+    # tangent vector of unbounded magnitude. The route through the ball paid the same two passes
+    # inside `_expmap_0` plus λ's `sum(x**2)`. The floor sits on `v_norm` and the sinhc below
+    # divides by that same floored quantity, so `sinh(2t)/‖v‖ = 2√c` at v = 0 and the Jacobian
+    # there is 4·z, as through the ball.
+    v_norm_B1 = floor_at(safe_norm(v)[:, None], MIN_NORM)  # (B, 1)
+    two_t_B1 = 2 * sqrt_c * v_norm_B1  # (B, 1): scaled radius of expmap_0(v)
+
+    # Pinned HIGHEST: the decision quantity of `_compute_mlr_pp`'s einsum, now taken on v.
+    z_unitv_BP = jnp.einsum("bi,oi->bo", v, z / z_norm_P1, precision=MATMUL_PRECISION)  # (B, P)
+    asinh_arg_BP = (sinh(two_t_B1) / v_norm_B1) * z_unitv_BP * cosh(sqrt_c2r_1P) - cosh(two_t_B1) * sinh(sqrt_c2r_1P)  # (B, P)
+
+    # No clamp on the asinh argument, as in `_compute_mlr_pp`. Both terms grow like
+    # e^{2t + 2√c|r|}/4: their product overflows float32 once that exponent passes ≈ 89, far past
+    # anything the float32 ball held (2t ≈ 12.7), and the score is then ±inf or NaN. Short of that,
+    # `2t` past the sinh/cosh argument clip (87.8) saturates with a zero radial gradient.
+    signed_dist2hyp_BP = asinh(asinh_arg_BP) / sqrt_c  # (B, P)
+    res_BP = 2 * z_norm_P1.T * signed_dist2hyp_BP  # z_norm.T broadcasts (1, P) over (B, P)
+    return res_BP
+
+
 # ---------------------------------------------------------------------------
 # Beta-concatenation (HNN++, Shimizu et al. 2020)
 # ---------------------------------------------------------------------------
@@ -800,13 +897,109 @@ def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature
     """
     sqrt_c = jnp.sqrt(c)
     num = jnp.sum((v - sqrt_c * x) ** 2)
-    # `_boundary_floor`, not `MIN_NORM`: this is the `1 - c‖x‖²` of `_conformal_factor`, and the
-    # docstring above has always claimed the same floor. `MIN_NORM = 1e-15` sits below the analytic
-    # minimum of this quantity in both dtypes (1.3e-5 float32 / 3.6e-12 float64 at c = 1), so it
-    # never bit: a float32 point at the ball ceiling could reach the divisor with pure rounding
-    # noise and return a Busemann coordinate tens of nats too large.
-    denom = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), _boundary_floor(x, c))
+    # `_boundary_divisor_floor`, not `MIN_NORM`: this is the `1 - c‖x‖²` of `_conformal_factor`, and
+    # the docstring above has always claimed the same floor. `MIN_NORM = 1e-15` sits below the
+    # analytic minimum of this quantity in both dtypes (1.3e-5 float32 / 3.6e-12 float64 at c = 1),
+    # so it never bit: a float32 point at the ball ceiling could reach the divisor with pure rounding
+    # noise and return a Busemann coordinate tens of nats too large. That analytic minimum itself
+    # bound for 11-76 % of the capped points and zeroed the dominant 2c·x/B term of ∂B^v/∂x there
+    # (relative error 1.0); half of it is below every capped point's rounding band.
+    denom = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), _boundary_divisor_floor(x, c))
     return jnp.log(num / denom) / sqrt_c
+
+
+def _busemann_tangent_core(
+    h: Float[Array, ""], v_norm: Float[Array, ""], v: Float[Array, "dim"], omega: Float[Array, "dim"]
+) -> Float[Array, ""]:
+    """``√c·B^ω`` of the point at scaled radius ``2h`` in direction ``v/v_norm``, without forming it.
+
+    The shared core of the two tangent-input Busemann paths: :func:`_busemann_tangent` here, with
+    ``h = √c‖v‖`` (the ball's origin metric is ``4·I``, so ``expmap_0`` reaches scaled radius
+    ``2√c‖v‖``), and ``hyperboloid._busemann_tangent``, with ``h = √c‖v_s‖/2``. In the ball the point
+    is ``√c·x = tanh(h)·v̂``, the two models' Busemann functions agree under the isometry, and for a
+    unit ``ω``::
+
+        √c·B^ω = log(cosh 2h - sinh 2h·⟨ω, v̂⟩)
+               = log(cosh²(h)·‖ω - tanh(h)·v̂‖²)                   h ≤ 1
+               = 2h + log(e^{-4h} + (1 - e^{-4h})·‖ω - v̂‖²/4)      h > 1
+
+    ``v_norm`` is ``‖v‖`` floored at ``MIN_NORM`` by the caller, and ``h`` a fixed multiple of that
+    same floored value, so ``tanh(h)/v_norm`` is finite and equals its limit at ``v = 0``. Why each
+    form is used on its side of ``h = 1``: :func:`_busemann_tangent`.
+
+    Args:
+        h: Half the point's scaled radius, built from ``v_norm``
+        v_norm: ``‖v‖`` floored at ``MIN_NORM``
+        v: Direction vector (only ``v/v_norm`` enters), shape (dim,)
+        omega: Unit ideal direction, shape (dim,)
+
+    Returns:
+        ``√c·B^ω`` of that point, scalar
+    """
+    far = h > 1.0
+    tanh_h = tanh(h)
+    # Scaled per point, so the pair below pays one difference norm, as `_busemann` does.
+    w = (jnp.where(far, 1.0, tanh_h) / v_norm) * v  # h > 1: v̂;  h ≤ 1: tanh(h)·v̂
+    n = jnp.sum((omega - w) ** 2)
+    # Both forms as `offset + log(n + shift)` with per-point `offset` and `shift`, so the pair's
+    # cotangent is 1/(n + shift). Spelled `log(a + b·n)`, the per-point `b` in that cotangent was
+    # fused into the backward pass over the (pair, dim) difference and recomputed for every element.
+    # The h > 1 form reads `h` floored at the seam: it divides by 1 - e^{-4h} = 0 at v = 0, and the
+    # unselected branch of a `where` must stay finite, or its zero cotangent times an infinite
+    # derivative is a NaN gradient. The h ≤ 1 offset 2·log(cosh h) = -log(1 - tanh²h) reuses the
+    # tanh of `w`, finite on every row because `tanh` caps its output at 1 - 10·eps.
+    exp_m4h = jnp.exp(-4.0 * floor_at(h, 1.0))
+    offset = jnp.where(far, 2.0 * h + jnp.log(0.25 * (1.0 - exp_m4h)), -jnp.log1p(-(tanh_h**2)))
+    shift = jnp.where(far, 4.0 * exp_m4h / (1.0 - exp_m4h), 0.0)
+    return offset + jnp.log(n + shift)
+
+
+def _busemann_tangent(v: Float[Array, "dim"], omega: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """:func:`_busemann` of ``x = expmap_0(v)``, evaluated on the tangent vector ``v`` itself.
+
+    With ``t = √c‖v‖`` the point sits at scaled radius ``2t``, ``√c·x = tanh(t)·v̂`` and
+    ``1 - c‖x‖² = 1/cosh²(t)``, so for a unit ``ω`` both forms below equal
+    ``√c·B^ω(x) = log(cosh 2t - sinh 2t·⟨ω, v̂⟩)``::
+
+        t ≤ 1:  log(cosh²(t) · ‖ω - tanh(t)·v̂‖²)
+        t > 1:  2t + log(e^{-4t} + (1 - e^{-4t}) · ‖ω - v̂‖²/4)
+
+    and the ball point is never formed. That route read ``1 - c‖x‖²`` back off the stored point, a
+    relative error ≈ ``eps·e^{2t}/4``, and in float32 its lift stopped at the ball's ceiling
+    ``t ≈ 6.33`` (c = 1), past which the coordinate was constant with a zero radial gradient.
+
+    The ``t > 1`` form is the cancellation-free one: every term is non-negative, ``‖ω - v̂‖²`` is a
+    difference norm (exact near ``ω``, where ``1 - ⟨ω, v̂⟩`` cancels) and nothing overflows for any
+    ``t``; only a row exactly on ``ω`` (``‖ω - v̂‖ = 0``) past t ≈ 22 in float32, where ``e^{-4t}``
+    underflows, returns ``-inf``. Its pieces ``t`` and ``v̂`` have cone singularities at ``v = 0`` that cancel only in the
+    sum, so autodiff there returns 0 instead of ``-2ω``. The ``t ≤ 1`` form is the ball route's own
+    ratio with the denominator in closed form: ``tanh(t)/‖v‖·v = √c·expmap_0(v)`` is smooth through
+    the origin, and ``‖ω - tanh(t)·v̂‖ ≥ 1 - tanh(1) = 0.24`` bounds its rounding amplification.
+    Both forms are exact identities, so the value and its derivative are continuous across the
+    seam. Measured through ``HypRegressionPoincareBusemann`` (float32 vs float64 on the same inputs
+    and parameters, relative to the largest entry, c ∈ {0.3, 1}, random ``ω``): at t = 5 scores
+    2.3e-4 → 2.4e-7 and input gradients 1.4e-3 → 2.1e-7; at t = 8 2.2e-1 → 2.0e-7 and 1.0 (no radial
+    derivative) → 2.6e-7. For ``ω`` aligned with ``v̂`` the input and kernel gradients are off by 0.1
+    or more from t = 5, on the ball route too.
+
+    ``ω`` must be unit, as for :func:`_busemann`. The ``t > 1`` form uses ``‖ω‖ = 1``, so its
+    ``ω``-gradient differs from the ball route's by a multiple of ``ω``, which the row normalization
+    of the Busemann layers projects out.
+
+    Args:
+        v: Tangent vector at the origin, shape (dim,)
+        omega: Unit ideal direction, shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Busemann coordinate B^omega(expmap_0(v)), scalar
+    """
+    sqrt_c = jnp.sqrt(c)
+    # The only reduction over the point: the ball route paid `_expmap_0`'s `safe_norm` plus the
+    # `sum(x**2)` of `_busemann`. The floor makes `tanh(t)/‖v‖ = √c` at v = 0.
+    v_norm = floor_at(safe_norm(v), MIN_NORM)
+    # h = t: this `expmap_0` reaches scaled radius 2t, and `w` is then √c·expmap_0(v) for t ≤ 1.
+    return _busemann_tangent_core(sqrt_c * v_norm, v_norm, v, omega) / sqrt_c
 
 
 # ---------------------------------------------------------------------------
@@ -975,6 +1168,20 @@ class Poincare(ManifoldBase):
         """Compute HNN++ multinomial linear regression on the Poincare ball."""
         return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)
 
+    def _compute_mlr_pp_tangent(
+        self,
+        v: Float[Array, "batch in_dim"],
+        z: Float[Array, "out_dim in_dim"],
+        r: Float[Array, "out_dim 1"],
+        c: ScalarCurvature,
+        min_enorm: float = 1e-15,
+    ) -> Float[Array, "batch out_dim"]:
+        """``compute_mlr_pp(expmap_0(v), z, r, c)`` from the tangent vector ``v``, without the ball point.
+
+        Private: the tangent-input path of the HNN++ layers (see :func:`_compute_mlr_pp_tangent`).
+        """
+        return _compute_mlr_pp_tangent(self._cast(v), self._cast(z), self._cast(r), c, min_enorm)
+
     def beta_concat(self, points: Float[Array, "M n_i"], c: ScalarCurvature) -> Float[Array, "n"]:
         """Beta-concatenation of M equal-dimensional Poincaré ball points."""
         return _beta_concat(self._cast(points), c)
@@ -995,3 +1202,11 @@ class Poincare(ManifoldBase):
         ``√c·dist``) and cannot deliver circulation.
         """
         return _busemann(self._cast(x), self._cast(v), c)
+
+    def _busemann_tangent(self, v: Float[Array, "dim"], omega: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+        """``busemann(expmap_0(v), omega, c)`` from the tangent vector ``v``, without the ball point.
+
+        Private: the tangent-input path of the Busemann layers (see :func:`_busemann_tangent`).
+        ``omega`` must be a unit direction.
+        """
+        return _busemann_tangent(self._cast(v), self._cast(omega), c)

@@ -43,7 +43,6 @@ from ..manifolds.hyperboloid import (
     _expmap_0,
     _minkowski_inner,
     _proj,
-    _proj_batch,
 )
 from ..manifolds.isometry_mappings import hyperboloid_to_poincare
 from ..manifolds.protocol import ScalarCurvature
@@ -353,7 +352,8 @@ class HoroPCA:
         components_: Row-orthonormal ideal directions, shape (K, D).
         mean_: Fréchet mean on the hyperboloid, shape (A,) (origin if not centering).
         boost_: Lorentz boost sending ``mean_`` to the origin, shape (A, A) (identity if not
-            centering).
+            centering). The centering itself applies the same map as ``(⊖mean_) ⊕ x``
+            (``Hyperboloid.gyro_difference``), which does not cancel far from the origin.
         c_: Curvature used at fit time.
         losses_: Per-step loss trace, shape (S,).
         total_variance_: Mean squared pairwise (default) distance of the working points.
@@ -414,6 +414,19 @@ class HoroPCA:
         x_clean = clean(self._input_model, x_cast, c)
         return map_batch(self._input_model.to_hyperboloid, x_clean, c)
 
+    def _center(self, mean_A: Float[Array, "A"], x_NA: Float[Array, "N A"], c: ScalarCurvature) -> Float[Array, "N A"]:
+        """Carry ``mean_A`` to the origin: ``(⊖mean) ⊕ x`` for every row, on the sheet.
+
+        The same map as the Lorentz boost ``boost_`` (``Λ_mean⁻¹``), evaluated by
+        ``Hyperboloid.gyro_difference`` rather than as ``x @ boost_ᵀ``: the matrix product forms each
+        O(1) centred point from O(cosh a) entries and cancels to ``eps·cosh²(a)``. Measured on a
+        cluster of spread 0.3 in float32 (median / max geodesic error against float64 on the same inputs):
+        7.0e-4 / 2.3e-3 at scaled radius a = 5.2 and 0.16 / 0.58 at a = 8 for the boost, against
+        4.8e-6 / 1.9e-5 and 1.4e-4 / 3.7e-4 here (``logs/2026-09-29_cancellation-free/1d/``). In
+        float64 the two agree to 4.5e-15 at a = 2.
+        """
+        return jax.vmap(self._hyperboloid.gyro_difference, in_axes=(None, 0, None))(mean_A, x_NA, c)
+
     def fit(self, x_ND: Float[Array, "N R"], c: ScalarCurvature, key: PRNGKeyArray) -> "HoroPCA":
         """Fit the components on ``x_ND`` at curvature ``c``.
 
@@ -443,7 +456,7 @@ class HoroPCA:
                 max_iters=self.frechet_max_iters,
             )
             boost_AA = self._hyperboloid.lorentz_boost(mean_A, c)
-            x_work_NA = _proj_batch(jnp.matmul(x_hyp_NA, boost_AA.T, precision=MATMUL_PRECISION), c)
+            x_work_NA = self._center(mean_A, x_hyp_NA, c)
         else:
             ambient = x_hyp_NA.shape[1]
             mean_A = _create_origin(c, ambient - 1, self.manifold.dtype)
@@ -474,7 +487,7 @@ class HoroPCA:
     def transform(self, x_ND: Float[Array, "N R"]) -> Float[Array, "N out"]:
         """Project ``x_ND`` onto the fitted components and return the low-dim embedding.
 
-        Reuses the stored curvature and boost from :meth:`fit` (the fitted state is tied to
+        Reuses the stored curvature and mean from :meth:`fit` (the fitted state is tied to
         the fit-time ``c``).
 
         Args:
@@ -484,12 +497,12 @@ class HoroPCA:
             Points of the input's model: hyperboloid points ``(N, K+1)`` for Hyperboloid input,
             ``(N, K)`` coordinates otherwise.
         """
-        if self.components_ is None or self.c_ is None or self.boost_ is None:
+        if self.components_ is None or self.c_ is None or self.mean_ is None:
             raise ValueError("HoroPCA must be fitted before calling transform().")
 
         c = self.c_
         x_hyp_NA = self._to_hyperboloid(x_ND, c)
-        x_work_NA = _proj_batch(jnp.matmul(x_hyp_NA, self.boost_.T, precision=MATMUL_PRECISION), c)
+        x_work_NA = self._center(self.mean_, x_hyp_NA, c)
         _, ball_NK = _transform_jit(x_work_NA, self.components_, c)
         return map_batch(self._input_model.from_ball, ball_NK, c)  # (N, K+1) hyperboloid, else (N, K)
 

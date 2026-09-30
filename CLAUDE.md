@@ -2,115 +2,104 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Quick Reference Commands
+## Commands
 
 ```bash
-# Install
 uv sync --locked --dev
 
-# Run all tests (6,985 items across 1,249 test functions) on all cores (pytest-xdist; ~9 min on 48 CPU workers,
-# hours single-process: the suite is JAX-compile-heavy)
+# Full suite on all cores: ~9 min on 48 CPU workers, hours single-process (the suite is JAX-compile-heavy)
 uv run pytest -n auto
 
-# Run a single test file
-uv run pytest tests/test_manifolds.py -v
+# One file, and its dim-2 float32 slice while iterating
+# (the ids spell the dimension as a bare number, e.g. [PoincareBall-c1-2-float32-10])
+uv run pytest tests/test_manifolds.py -x -v
+uv run pytest tests/test_manifolds.py -k "2-float32"
 
-# Run a single test function
-uv run pytest tests/test_manifolds.py::test_dist -v
-
-# Run the dim-2 float32 slice of the dim-parametrized suites (134/614 in test_manifolds.py)
-# The parametrization ids spell the dimension as a bare number, e.g. [PoincareBall-c1-2-float32-10]
-uv run pytest -k "2-float32"
-
-# Lint and format
 uv run ruff check hyperbolix tests
 uv run ruff format hyperbolix tests
-
-# Type check
 uv run pyright hyperbolix
-
-# All pre-commit hooks
 uv run pre-commit run --all-files
-
-# Docs
-uv run mkdocs serve
 uv run mkdocs build --strict
 ```
 
 ## Verification
 
-After making changes, run the test files that cover the affected code:
-```bash
-uv run pytest tests/<relevant_test_file>.py -x -v
-```
-Anything larger than one or two files gets `-n auto` (pytest-xdist); never run the full suite single-process.
-On a GPU box the xdist workers must not preallocate, or they exhaust the device before any test runs — `tests/conftest.py` now defaults `XLA_PYTHON_CLIENT_PREALLOCATE=false`, so nothing extra is needed; set `JAX_PLATFORMS=cpu` instead when the GPU is busy with someone else's job.
-For example: manifold changes → `test_manifolds.py`, optimizer changes → `test_optimizers.py`, FGG layer changes → `nn_layers/test_hyperboloid_fgg.py`. Use `-k "2-float32"` to speed up dim-parametrized tests during iteration (134 of the 614 tests in `test_manifolds.py`); it selects only ids whose dimension slot is `2` and whose dtype slot is `float32`.
+- Run the test files that cover the change (manifolds → `test_manifolds.py`, optimizers → `test_optimizers.py`, FGG layers → `nn_layers/test_hyperboloid_fgg.py`). More than one or two files get `-n auto`; never run the full suite single-process.
+- When someone else's job holds the GPU, set `JAX_PLATFORMS=cpu`. Nothing else is needed on a GPU box: `tests/conftest.py` already stops the xdist workers from preallocating.
 
 ## Architecture
 
-**hyperbolix** is a pure JAX library for hyperbolic deep learning built on Flax NNX.
+Pure JAX on Flax NNX.
 
-### Core design: vmap-native, single-point manifold operations
-
-Manifold methods (`dist`, `expmap`, `logmap`, `proj`, `ptransp`) operate on **single points** `(dim,) -> scalar` or `(dim,) -> (dim,)`. Batching is always explicit via `jax.vmap`. NN layers handle batching internally in their `__call__`.
-
-### Module layout
-
-- **`manifolds/`** — Plain Python classes (not `nnx.Module`): `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `Klein`, `HalfSpace`, `ProductManifold`. Each is instantiated with a dtype (`Poincare(dtype=jnp.float64)`). `Poincare`, `Hyperboloid`, `Euclidean`, `ProperVelocity`, `Klein`, `HalfSpace` conform to the scalar-`c` `Manifold` protocol in `protocol.py`; `ProductManifold` intentionally does **not** (it takes a per-factor `cs: Sequence[Curvature]` sequence instead of a scalar `c`, and has no `c` attribute). `_base.py` has shared `ManifoldBase`.
-- **`nn_layers/`** — Flax NNX layers (`nnx.Module`). Two families:
-  - *Poincare*: `HypLinearPoincare`, `HypLinearPoincarePP`, `HypConv2DPoincare`, `PoincareBatchNorm2D`, `HypRegressionPoincare` (Ganea et al. 2018, Shimizu et al. 2020, van Spengler et al. 2023)
-  - *Hyperboloid*: `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `HTCLinear`, `HypLinearHyperboloidPLFC`, `LorentzConv2D` (Klis et al. 2026, Shimizu et al. 2020, Shi et al. 2026), attention layers, positional encodings, normalization
-  - *Hybrid*: `HyperPPFeatureScaling` — Euclidean-space feature scaling applied before `expmap_0` in hybrid networks (RMSNorm + activation + dim scaling + optional learned rescaling)
-  - `hyperboloid_core.py` has foundational ops: `hrc()`, `htc()`, `build_spacelike_V()`, `lorentz_midpoint()`
-- **`optim/`** — Riemannian optimizers (`riemannian_sgd`, `riemannian_adam`). Uses `ManifoldParam` (subclass of `nnx.Param`) to tag hyperbolic parameters. `_riemannian_base.py` has shared `make_riemannian_optimizer()`.
-- **`distributions/`** — Wrapped normal (Poincare/Hyperboloid) and uniform Poincare sampling.
-- **`utils/`** — Numerically stable math (`atanh`, `acosh`, `smooth_clamp`), the `LearnableCurvature` module for trainable curvature, and other utilities.
-
-### Key patterns
-
-- **Curvature `c`** is passed dynamically at call time (not stored on layers), enabling learnable curvature via the `LearnableCurvature` module from `hyperbolix.utils.curvature`. Manifolds are plain Python classes with static `c`; `LearnableCurvature` lives on the user's `nnx.Module` and is called at runtime to produce the (optionally clamped) curvature value.
-- **`version_idx`** selects distance/operation variants and should be **static** for JIT (compile-size; `lax.switch` also accepts a traced index; use `functools.partial` or `static_argnums`).
-- **`ManifoldParam`** tags params for Riemannian optimization. The optimizer auto-detects these and applies Riemannian gradients + projection; all other `nnx.Param`s get standard Euclidean updates.
-- **Layers accept `manifold_module`** (a manifold class instance) — never raw functions.
-- **NN layer parameter naming** follows Flax NNX conventions: `kernel` (not `weight`), `bias`.
+- **Manifold ops take single points**, `(dim,) -> scalar` or `(dim,) -> (dim,)`; batch with an explicit `jax.vmap`. NN layers batch internally in `__call__`.
+- **Manifolds are plain Python classes** (not `nnx.Module`), instantiated with a dtype (`Poincare(dtype=jnp.float64)`). All but `ProductManifold` follow the scalar-`c` `Manifold` protocol in `manifolds/protocol.py`; `ProductManifold` intentionally doesn't (a per-factor `cs` sequence, no `c` attribute).
+- **Curvature `c` is passed at call time**, never stored on a layer. Trainable curvature is `LearnableCurvature` (`utils/curvature.py`): it lives on the user's `nnx.Module` and returns the (optionally clamped) `c`.
+- **`version_idx`** selects an op variant. Keep it static under JIT (`functools.partial` or `static_argnums`): a traced index compiles every variant into one `lax.switch`.
+- **Layers take `manifold_module`** (a manifold instance), never raw functions, and name their parameters `kernel`/`bias`.
+- **`ManifoldParam`** (an `nnx.Param` subclass) tags manifold-valued parameters. The Riemannian optimizers in `optim/` detect it and give every other parameter a Euclidean update.
+- New hyperboloid layers reuse the shared ops in `nn_layers/hyperboloid_core.py` (`hrc`, `htc`, `lorentz_midpoint`, …).
 
 ### Weight initialization
 
-- FGG layers (`FGGLinear`, `FGGConv2D`): default `reset_params="fan_out"` (Gaussian `std = sqrt(1/out_spatial)`) + `init_bias=0.0` + `gain=1.0` — **norm-preserving** (`‖z‖ ≈ gain·‖x_spatial‖`), a deliberate deviation from the Klis et al. 2026 BatchNorm-regime reference to keep unnormalized stacks off a bounded projection's ceiling. `gain` is a no-op for `"eye"` and renormalized away under `use_weight_norm=True`. Restore the reference init via `reset_params="eye"` (linear) / `"lorentz_kaiming"` (conv) + `init_bias=0.5`. The other `reset_params` schemes (`xavier`, `kaiming`, `lorentz_kaiming`, `mlr`) use fan-in `std` from **ambient** dims. `FGGLorentzMLR` is unchanged (`reset_params="mlr"`, bias `0.5`)
-- FHCNN layers: small uniform `U(-0.02, 0.02)` (Chen 2021 / Bdeir 2023 reference). `HTCLinear` (and the attention/positional wrappers forwarding `init_bound=None`): fan-in-aware uniform `U(-√(3/in), √(3/in))` — norm-preserving (per-layer Jacobian gain ≈ 1), though the time coordinate still feeds the kernel, so a stack's spatial norm grows ≈√2 per layer and its geodesic radius by ≈0.35 nats at large radius (log√2; measured mean 0.36–0.45) (see `utils/precision.py`); the old fixed `0.02` contracted depth-≥2 stacks below the float32 noise floor (frozen training). `init_bound=0.02` restores the old init bit-for-bit
-- HypLinearHyperboloidPLFC: small normal `std = 0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init); `kernel_init_std=1.0` recovers the old HNN++-style init (Shimizu et al. 2020). It has no LogCat, so it keeps the reference value
-- `HypConv2DHyperboloidILNN` (formerly `HypConv2DHyperboloidPP`; LogCat via `log_radius_concat` + PLFC, origin padding): fan-out normal `std = sqrt(1/out_spatial)` via `kernel_init_std=None` — **norm-preserving** (the PLFC chain linearizes to `y_spatial ≈ W @ u_spatial` at the origin and the fixed LogCat hands over the per-pixel spatial radius, so gain ≈ 1; probe-measured per-layer ratio 0.82–0.95 at depth 3). Coupled to the 2026-07-31 LogCat digamma sign fix: the old fixed `0.02` was tuned against the pre-fix ~√N amplification and is strongly contractive (ratio 0.05–0.15/layer → origin collapse) under the corrected shrink. `kernel_init_std=0.02` restores the Shi et al. 2026 regime bit-for-bit, which implicitly assumed the pre-fix amplification
-- Poincare linear layers (`HypLinearPoincare`, `HypLinearPoincarePP`): fan-in normal `std = 1/sqrt(in_dim)`; Poincare regression heads (`HypRegressionPoincare`, `HypRegressionPoincarePP`): scaled normal `std = (2 * in_dim * out_dim)^{-0.5}` (van Spengler et al. 2023)
-- Standard inits (He, Xavier) are too large for hyperbolic layers
+Standard inits (He, Xavier) are too large for hyperbolic layers, and a too-small init freezes a stack without any NaN (the per-layer gain compounds below float32 resolution). Several defaults therefore deviate from their paper's init on purpose, to stay norm-preserving, and each keeps a switch that restores the reference bit-for-bit. Don't revert them to the reference:
 
-### Float precision
+- `FGGLinear`/`FGGConv2D`: `reset_params="fan_out"`, `init_bias=0.0`. The Klis et al. 2026 reference (BatchNorm regime) is `reset_params="eye"` (linear) / `"lorentz_kaiming"` (conv) with `init_bias=0.5`.
+- `HTCLinear`: fan-in uniform `U(-√(3/in), √(3/in))`. `init_bound=0.02` restores the old init, which froze depth-≥2 stacks.
+- `HypConv2DHyperboloidILNN`: fan-out normal (`kernel_init_std=None`). `kernel_init_std=0.02` restores Shi et al. 2026, which was tuned against the LogCat digamma sign bug and collapses to the origin now that the sign is fixed.
+- `HypLinearHyperboloidPLFC` keeps the reference `std=0.02`: it has no LogCat.
 
-- Hyperboloid tangent primitives (`dist`, `logmap`, `sqdist`, `tangent_norm`, `expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, `egrad2rgrad`, gyro `addition`, `gyro_difference`, `busemann`) are cancellation-free and accurate to the point-representation floor `eps·sinh(a)/sqrt(c)` at scaled radius `a = sqrt(c)*d` — float32 good to `a ≈ 16.6`, float64 much further
-- Poincaré pairwise `dist`/`logmap` (the factored Möbius denominator) are accurate up to the ball chart's own representation ceiling — `a ≈ 12.6` in float32, `≈ 27.7` in float64 — past which the ball cannot represent the point at all
-- `Klein` pairwise `dist`/`logmap`/`ptransp`/`gyro_difference` are cancellation-free (asinh form built from `w = y - x`), but the chart holds half the Poincaré radius — `a ≈ 6.32` in float32, `≈ 13.86` in float64 at `c = 1` (`√c‖x‖ = tanh(a)` vs Poincaré's `tanh(a/2)`) — and its relative error floor is the rounding of `g_x = 1 - c‖x‖²`, `eps·cosh²(a)` (float32 `a = 4`: 8.9e-5). `poincare_to_klein`/`hyperboloid_to_klein`/`pv_to_klein` do not project: past the ceiling they return points outside the `proj` margin (float32: `‖k‖ = 1/√c` exactly from `a ≈ 10`), which Klein ops read as `a ≈ 6.32` — call `Klein.proj` after mapping far points in
-- `HalfSpace` pairwise `dist`/`logmap`/`ptransp`/`gyro_difference` are cancellation-free; the floor is a stored point's rounding `≈ 0.4·(eps/2)·cosh(√c·δ)/√c`, `δ` the distance to the vertical axis through `o = e_n/√c`. Pairwise ops return `inf`/NaN past `√c·d ≈ 88.7` (f32) / `709.8` (f64), as does an exactly vertical upward `expmap` step past `θ ≈ 87.3` / `708.4`. `klein_to_halfspace` is limited by the Klein chart's `eps·cosh²(a)`
-- Exceptions that still cancel at large radius: `HyperbolicFullAttention`'s GEMM-formed scores and a `ptransp` step below the representation floor — see `docs/user-guide/numerical-stability.md`
-- Conformal factor lambda grows exponentially near Poincare ball boundary
-- Tests parametrize both dtypes with tolerances: `atol=4e-3` (f32), `atol=1e-7` (f64)
-- **Loud divergence over silent saturation.** A guard that maps an already non-finite input (an `inf` time coordinate, a point past the float32 manifold) onto a finite, plausible output hides the divergence; a NaN loss is the intended signal. Do not add clamps or saturations whose only remaining job is finiteness on inputs that are already non-finite, and propose removing such guards when found (the MLR `asinh` clamp inherited from the PyTorch code was removed for this reason). Guards that fix real float32 rounding on finite inputs (`floor_at` on divisors, `safe_sqrt` at zero) are a different matter and stay
+Full table: `docs/user-guide/nn-layers.md#initialization-scales`.
 
-### Test structure
+## Numerics
 
-- `tests/conftest.py`: global fixtures — `seed_jax` (enables float64), `rng`, `dtype`, `tolerance`, `manifold_and_c`, `uniform_points`
-- Tests parametrized across seeds (10-12), dtypes (f32/f64), dims (2,5,10,15), manifolds with random curvatures
-- CI runs 24 matrix jobs in parallel, each a group of test files (`.github/workflows/ci.yaml`)
+### Rules
 
-## Dimension naming convention
+- **Pairwise ops are cancellation-free**, down to the stored point's own rounding or the chart's ceiling. Build new ones from the existing forms, not the textbook ones:
+  - the Poincaré `asinh` distance `2·asinh(√c‖x−y‖/√(B_x·B_y))/√c`, `B_x = 1 − c‖x‖²`;
+  - the gyration regrouped in `s = x + y`;
+  - the hyperboloid primitives (`dist`, `logmap`, `ptransp`, `gyro_difference`, `busemann`), never the literal `minkowski_inner`;
+  - `floor_at` on divisors, `safe_sqrt` at zero.
 
-All tensor variables use capital letter suffixes: `logits_BLV`, `hidden_BD`, `x_BI`. Define a dimension key at the top of each file.
+  A layer with tangent input and output computes in closed form from the tangent vector, not through a round trip via a stored ball point.
+- **Loud divergence over silent saturation, without extra checks.** Don't map an already non-finite input (an `inf` time coordinate, a point past the float32 manifold) onto a finite, plausible output: a NaN loss is the intended signal. Remove guards whose only job is finiteness on already non-finite input; the MLR `asinh` clamp went for this reason. Loud means *don't hide*, not *detect everything*:
+  - add no `isfinite`/`where` conditions just to make failures loud, except in critical training code (the PV layers, the hyperboloid);
+  - never add them in the transcendentals: the `math_utils.sinh`/`cosh` clips have too many downstream uses;
+  - arithmetic that overflows on its own stays, and is documented.
 
-## Flax NNX API (v0.12.0+)
+  Guards that fix real float32 rounding on finite inputs (`floor_at`, `safe_sqrt`) stay.
+- **No custom JVPs unless really necessary, and then only on critical training paths** (the hyperboloid, PV). The same holds for benchmark campaigns and ulp-level audits. A model included for completeness (e.g. HalfSpace) gets the cancellation-free formulas that come cheap, plain autodiff, the usual tests and a short docs note.
+- **Derivative tests need independent oracles.** A spelling that normalizes a direction or switches branches (`safe_normalize`, `where(r > 0, …)`) can be value-correct yet have a zero or wrong-sign derivative at the origin, at coincident points or at `c = 0`. Float32-vs-float64 tests don't catch it. Test such a site against central finite differences at those inputs. They are reachable: zero-init residual branches, padding, `LearnableCurvature(init_c=0.0, parameterization="identity")`.
+- **Geometry dots stay `precision=MATMUL_PRECISION`** (`HIGHEST`): MLR logits, Lorentz midpoints, attention scores, point-to-hyperplane kernels. Their results cancel, and TF32 on Ampere/Hopper costs ~2000× accuracy there. Weight GEMMs on tangent vectors follow the JAX default.
 
-- `nnx.Optimizer` requires `wrt=nnx.Param`
-- `optimizer.update()` takes `(model, grads)` not just `(grads)`
-- Lists of modules must use `nnx.List([...])` not plain Python `list`
+### Speed against accuracy
 
-## Pre-commit hooks
+- Trade-offs between speed and precision or stability are the maintainer's call, made on measured timings; kernel counts are only a proxy. Put both costs in one table, with a recommendation.
+- A fix that reaches the training regime and costs ≤ ~20 % at the layer level is worth it; one at ~2× is not. A fix for a regime training never reaches becomes a docs paragraph instead.
+- Per-PR timing gates (new/old ≤ 1.06 on CPU, ≤ 1.10 on an A100) are soft. A row a few percent over the gate with an accuracy gain is kept and reported, not reworked to pass the number.
+- A100 A/A runs have reached 1.11 at B = 4096. Interleave old and new in alternating processes, and read the ratio against an A/A run.
+- Keep code that measured no slower, and don't convert a site to a "faster" spelling without a measurement. Never unpin a geometry dot to pass a gate.
 
-Ruff auto-formats on commit (e.g., `x ** 2` -> `x**2`). When editing files after creation, match the reformatted content. Unused imports are auto-removed — always add imports and their usage in the same edit.
+### Where each model stops
+
+Pairwise ops hold to the scaled radius `a = √c·d` below (float32 / float64, `c = 1`). Past it the chart cannot represent the point, which is not a bug. Mechanisms and numbers: `docs/user-guide/numerical-stability.md`.
+
+| Model | Good to `a` | Limit |
+|---|---|---|
+| Hyperboloid | 16.6 / much further | the storage floor `eps·sinh(a)/√c` |
+| Poincaré | 12.6 / 27.7 (13.8 / 28.9 at `c = 0.1`) | the ball chart's ceiling. `dist` slot 1 (`VERSION_MOBIUS`) saturates there: 12.637 for a true 14.4, gradient relative error 1.0 |
+| Klein | 6.32 / 13.86 | half the Poincaré radius, and the floor `eps·cosh²(a)`. The maps into Klein don't project, so call `Klein.proj` after mapping far points in |
+| HalfSpace | `inf`/NaN past 88.7 / 709.8 | the floor `≈ 0.4·(eps/2)·cosh(√c·δ)/√c`, where `δ` is the distance to the vertical axis through `e_n/√c` |
+
+Two things still cancel at large radius: `HyperbolicFullAttention`'s GEMM-formed scores, and a `ptransp` step below the storage floor.
+
+## Tests
+
+- Fixtures (`tests/conftest.py`): `seed_jax` (enables float64), `rng`, `dtype`, `tolerance`, `manifold_and_c`, `uniform_points`. Tests cover both dtypes, with `atol=4e-3` (f32) and `1e-7` (f64).
+- A numerics regression test compares float32 with float64 at the input that failed, and fails on the code before the fix.
+- CI runs only the test files listed in the `test-suite` matrix of `.github/workflows/ci.yaml`: add each new test file to an entry.
+
+## Conventions
+
+- Shape suffixes on tensor names, one capital letter per dimension (`logits_BLV`, `hidden_BD`), with a dimension key at the top of each file.
+- Flax NNX (v0.12+): `nnx.Optimizer(..., wrt=nnx.Param)`; `optimizer.update(model, grads)`; lists of modules are `nnx.List([...])`.
+- Pre-commit runs ruff. It reformats on commit (`x ** 2` → `x**2`), so match the reformatted text in later edits, and it strips unused imports, so add an import together with its first use.

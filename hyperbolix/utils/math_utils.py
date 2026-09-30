@@ -572,11 +572,9 @@ def capped_exp(x: Float[Array, "..."]) -> Float[Array, "..."]:
     Below the cap this is a bitwise value- and gradient-identity to ``jnp.exp``. Above the cap the
     gradient is exactly 0 (the ``minimum`` selects the constant side) — a parameter past the cap
     receives no gradient signal to come back down. ``LearnableCurvature``'s ``"log"``
-    parameterization offers an opt-in straight-through backward for that regime; here the plain cap
-    is kept because the straight-through form trades forward-value exactness for it (its
-    ``stop_gradient`` arithmetic rounds through the raw parameter's magnitude), and a scale
-    parameter past the cap (≈87.8 in float32, ≈702.7 in float64) means training has already
-    diverged — the guard's job is containment.
+    parameterization caps its exponent the same way. A scale parameter past the cap (≈87.8 in
+    float32, ≈702.7 in float64) means training has already diverged — the guard's job is
+    containment.
 
     Args:
         x: Input array of any shape

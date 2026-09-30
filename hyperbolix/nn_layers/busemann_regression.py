@@ -41,7 +41,11 @@ class HypRegressionHyperboloidBusemann(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization.
     input_space : str
-        ``"manifold"`` (default) or ``"tangent"`` (lift via ``expmap_0`` first). Static for JIT.
+        ``"manifold"`` (default) or ``"tangent"``: a tangent vector at the origin, ``(0, v_s)`` (the
+        time slot is not read), scored where ``expmap_0`` would place it without forming the
+        hyperboloid point, through whose float32 lift the gradients underflow from
+        ``√c‖v_s‖ ≈ 29.4`` at c = 0.3 (``29.8`` at c = 1) and the point overflows at ``≈ 45``
+        (``Hyperboloid._busemann_tangent``). Static for JIT.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32). Compute precision
         of manifold operations is set by ``manifold.dtype``.
@@ -69,7 +73,13 @@ class HypRegressionHyperboloidBusemann(nnx.Module):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
-        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "busemann"))
+        validate_hyperboloid_manifold(manifold_module, required_methods=("busemann", "_busemann_tangent"))
+        # `Poincare` has `busemann` and `_busemann_tangent` too: the method names above cannot tell the models apart.
+        if not isinstance(manifold_module, Hyperboloid):
+            raise TypeError(
+                "The Hyperboloid Busemann layers need a class-based Hyperboloid manifold instance "
+                f"(e.g., hyperbolix.manifolds.Hyperboloid()), got {type(manifold_module).__name__}."
+            )
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -107,7 +117,9 @@ class HypRegressionPoincareBusemann(nnx.Module):
     rngs : nnx.Rngs
         Random number generators for parameter initialization.
     input_space : str
-        ``"manifold"`` (default) or ``"tangent"`` (lift via ``expmap_0`` first). Static for JIT.
+        ``"manifold"`` (default) or ``"tangent"``: a tangent vector at the origin, scored where
+        ``expmap_0`` would place it without forming the ball point, whose float32 lift stops at the
+        ceiling ``√c‖v‖ ≈ 6.33`` at c = 1 (``Poincare._busemann_tangent``). Static for JIT.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32). Compute precision
         of manifold operations is set by ``manifold.dtype``.
@@ -130,7 +142,13 @@ class HypRegressionPoincareBusemann(nnx.Module):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
-        validate_poincare_manifold(manifold_module, required_methods=("expmap_0", "busemann"))
+        validate_poincare_manifold(manifold_module, required_methods=("busemann", "_busemann_tangent"))
+        # `Hyperboloid` has `busemann` and `_busemann_tangent` too: the method names above cannot tell the models apart.
+        if not isinstance(manifold_module, Poincare):
+            raise TypeError(
+                "The Poincare Busemann layers need a class-based Poincare manifold instance "
+                f"(e.g., hyperbolix.manifolds.Poincare()), got {type(manifold_module).__name__}."
+            )
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim

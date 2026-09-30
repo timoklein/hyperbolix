@@ -703,6 +703,144 @@ def test_float32_grads_match_float64(c):
 
 
 # ---------------------------------------------------------------------------
+# 8b. expmap: inward steps (x·v < 0)
+# ---------------------------------------------------------------------------
+
+
+def _np_expmap_oracle(x_D: np.ndarray, v_D: np.ndarray, c: float) -> np.ndarray:
+    """Long-double hyperboloid geodesic of the lifted ``(x, v)``, mapped back with ``k = Y_s/(√c·Y₀)``.
+
+    ``V = (√c(x·v)/g^{3/2}, v/√g + c(x·v)·x/g^{3/2})`` is the differential of :func:`_np_lift`, and
+    ``exp_X(V) = cosh(θ)·X + sinh(θ)/θ·V`` with ``θ = √c·‖v‖_x`` from the literal Klein metric (the lift
+    is an isometry).
+    """
+    ld = np.longdouble
+    x, v, c_ld = x_D.astype(ld), v_D.astype(ld), ld(c)
+    g = 1 - c_ld * (x @ x)
+    xv = x @ v
+    lift_x = np.concatenate([[1 / (np.sqrt(c_ld) * np.sqrt(g))], x / np.sqrt(g)])
+    lift_v = np.concatenate([[np.sqrt(c_ld) * xv / g**1.5], v / np.sqrt(g) + c_ld * xv * x / g**1.5])
+    theta = np.sqrt(c_ld) * np.sqrt((v @ v) / g + c_ld * xv**2 / g**2)
+    y = np.cosh(theta) * lift_x + np.sinh(theta) / theta * lift_v
+    return y[1:] / (np.sqrt(c_ld) * y[0])
+
+
+def _inward_step(a: float, theta: float, phi: float, c: float, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    """Float64 base point at scaled radius ``a`` and a step of scaled length ``θ`` at ``φ`` radians off ``-x̂`` (dim 5)."""
+    x_hat = rng.normal(size=5)
+    x_hat /= np.linalg.norm(x_hat)
+    n_D = rng.normal(size=5)
+    n_D -= (n_D @ x_hat) * x_hat
+    n_D /= np.linalg.norm(n_D)
+    x_D = x_hat * math.tanh(a) / math.sqrt(c)
+    u_D = -math.cos(phi) * x_hat + math.sin(phi) * n_D
+    return x_D, u_D * (theta / (math.sqrt(c) * math.sqrt(_np_klein_inner(u_D, u_D, x_D, c))))
+
+
+@pytest.mark.parametrize(("a", "theta"), [(4.0, 8.0), (3.0, 6.0)])
+def test_expmap_inward_step_float32_matches_oracle(c, a, theta):
+    """Float32 steps through the origin against the long-double geodesic of the same float32 inputs.
+
+    Radial and near-radial (φ ≤ 3e-2) steps from scaled radius ``a`` land at ≈ ``θ - a`` on the far side,
+    inside the float32 chart. For ``x·v < 0`` the literal denominator ``θ·coth θ + u`` (``u = c(x·v)/g_x``)
+    is a difference of two ≈θ terms — and past θ ≈ 7.2 the saturated ``tanh`` inside ``_xcothx`` adds
+    ``10·eps·θ`` to it: the worst step of this battery was 0.84 nats off at (a, θ) = (4, 8) and 2.7e-3
+    at (3, 6). What remains is the chart's floor, the rounding of ``g = 1 - c‖x‖²`` (relative
+    ``eps·cosh²(a)``, 8.9e-5 at a = 4): measured worst 5.1e-4 (5.7 floors) and 2.9e-5 (2.5 floors).
+    Tolerance 16 floors.
+    """
+    k32 = Klein(dtype=jnp.float32)
+    rng = np.random.default_rng(31)
+    atol = 16 * float(jnp.finfo(jnp.float32).eps) * math.cosh(a) ** 2
+    for phi in (0.0, 1e-3, 1e-2, 3e-2):
+        x_D, v_D = _inward_step(a, theta, phi, c, rng)
+        x32 = k32.proj(jnp.asarray(x_D, jnp.float32), c)
+        v32 = jnp.asarray(v_D, jnp.float32)
+        y_D = np.asarray(k32.expmap(v32, x32, c), np.float64)
+        y_ref_D = _np_expmap_oracle(np.asarray(x32, np.float64), np.asarray(v32, np.float64), c)
+        err = math.sqrt(c) * _np_dist(y_D, y_ref_D, c)
+        assert err < atol, f"φ = {phi}: {err:.2e} nats (tolerance {atol:.1e})"
+
+
+def test_expmap_outward_and_short_steps_float32_match_oracle(c):
+    """Outward (``x·v > 0``) and short (θ ≤ 0.45) float32 steps against the long-double geodesic of the same inputs.
+
+    They share the inward steps' denominator ``A + B`` (``B = θ + u`` a plain sum when outward), so the bound is
+    the inward battery's: 16 chart floors ``eps·cosh²(a)``, with ``a`` the larger of the base and destination
+    radius — for an outward step the destination, which stays inside the float32 chart (scaled radius ≤ 5).
+    θ = 0.1 and 1e-3 fall below the float32 small-θ threshold 0.196, where ``A`` is its series. Measured worst
+    0.69 floors (0.53 for the literal ``θ·coth θ + u`` these steps evaluated before, on the same inputs); over a
+    random battery of 248 outward steps 0.88, against 1.5 for the literal (``logs/2026-09-29_cancellation-free/fixup/``).
+    """
+    k32 = Klein(dtype=jnp.float32)
+    rng = np.random.default_rng(32)
+    eps = float(jnp.finfo(jnp.float32).eps)
+    outward = [(0.5, 3.0), (2.0, 1.5), (3.0, 2.0), (2.0, 0.1), (3.0, 1e-3)]  # (a, θ)
+    inward = [(1.0, 0.3), (4.0, 0.45), (2.0, 0.1), (3.0, 1e-3)]
+    for sign, cases in ((-1.0, outward), (1.0, inward)):  # sign -1 flips _inward_step's step outward
+        for a, theta in cases:
+            for phi in (0.0, 0.4, 1.2):
+                x_D, v_D = _inward_step(a, theta, phi, c, rng)
+                x32 = k32.proj(jnp.asarray(x_D, jnp.float32), c)
+                v32 = jnp.asarray(sign * v_D, jnp.float32)
+                y_D = np.asarray(k32.expmap(v32, x32, c), np.float64)
+                y_ref_D = _np_expmap_oracle(np.asarray(x32, np.float64), np.asarray(v32, np.float64), c)
+                a_dest = math.sqrt(c) * _np_dist(np.zeros(5), y_ref_D, c)
+                atol = 16 * eps * math.cosh(max(a, a_dest)) ** 2
+                err = math.sqrt(c) * _np_dist(y_D, y_ref_D, c)
+                assert err < atol, f"(a, θ, sign, φ) = ({a}, {theta}, {sign}, {phi}): {err:.2e} nats (tol {atol:.1e})"
+
+
+@pytest.mark.parametrize("theta", [3.0, 0.5])
+def test_expmap_inward_grads_match_central_differences(c, theta):
+    """Float64 derivatives of an inward step w.r.t. ``v``, ``x`` and ``c``, and of ``v = 0``, against central differences.
+
+    θ = 3 runs the rewritten inward branch, θ = 0.5 sits on its switch. At ``v = 0`` the gradient is taken in
+    reverse mode, where a NaN derivative of the untaken branch would reach the cotangent.
+    """
+    rng = np.random.default_rng(33)
+    x_D, v_D = _inward_step(2.0, theta, 0.4, c, rng)
+    w = jnp.asarray(rng.normal(size=5))
+    x, v = jnp.asarray(x_D), jnp.asarray(v_D)
+    checks = [
+        (lambda p: w @ _K64.expmap(p, x, c), v_D),
+        (lambda p: w @ _K64.expmap(v, p, c), x_D),
+        (lambda p: w @ _K64.expmap(p, x, c), np.zeros(5)),
+    ]
+    for f, at_D in checks:
+        got = np.asarray(jax.grad(f)(jnp.asarray(at_D)))
+        np.testing.assert_allclose(got, _central_diff_grad(jax.jit(f), at_D), rtol=1e-6, atol=1e-8)
+    f_c = jax.jit(lambda cc: w @ _K64.expmap(v, x, cc))
+    h = 1e-6 * c
+    fd = (float(f_c(jnp.asarray(c + h))) - float(f_c(jnp.asarray(c - h)))) / (2 * h)
+    np.testing.assert_allclose(float(jax.grad(f_c)(jnp.asarray(c, jnp.float64))), fd, rtol=1e-6, atol=1e-8)
+
+
+@pytest.mark.parametrize(
+    ("theta", "phi"),
+    [(3.0, math.pi - 0.4), (1.4e-2, math.pi - 0.4), (3.5e-3, math.pi - 0.4), (1.0, math.pi / 2), (3.5e-3, math.pi / 2)],
+)
+def test_expmap_outward_and_switch_grads_match_central_differences(c, theta, phi):
+    """Float64 derivatives of outward steps and of steps on the switch ``x·v = 0``, against central differences.
+
+    The denominator ``A + B`` changes form twice: ``B = θ + u`` with the sign of ``x·v`` (φ = π/2 sits on it, so
+    the central difference straddles both forms) and ``A`` at the float64 small-θ threshold 6.9e-3 (θ = 1.4e-2 and
+    3.5e-3 lie on either side). φ = π - 0.4 is an outward step.
+    """
+    rng = np.random.default_rng(34)
+    x_D, v_D = _inward_step(2.0, theta, phi, c, rng)
+    w = jnp.asarray(rng.normal(size=5))
+    x, v = jnp.asarray(x_D), jnp.asarray(v_D)
+    for f, at_D in ((lambda p: w @ _K64.expmap(p, x, c), v_D), (lambda p: w @ _K64.expmap(v, p, c), x_D)):
+        got = np.asarray(jax.grad(f)(jnp.asarray(at_D)))
+        np.testing.assert_allclose(got, _central_diff_grad(jax.jit(f), at_D), rtol=1e-6, atol=1e-8)
+    f_c = jax.jit(lambda cc: w @ _K64.expmap(v, x, cc))
+    h = 1e-6 * c
+    fd = (float(f_c(jnp.asarray(c + h))) - float(f_c(jnp.asarray(c - h)))) / (2 * h)
+    np.testing.assert_allclose(float(jax.grad(f_c)(jnp.asarray(c, jnp.float64))), fd, rtol=1e-6, atol=1e-8)
+
+
+# ---------------------------------------------------------------------------
 # 9. Chart ceiling
 # ---------------------------------------------------------------------------
 
@@ -738,6 +876,104 @@ def test_expmap0_huge_vector_saturates_at_margin(manifold, c, dim, rng, dtype):
     base_D = jnp.asarray((0.5 / sqrt_c * np.ones(dim) / math.sqrt(dim)).astype(_np_dtype(dtype)))
     far_D = manifold.expmap(v_D, base_D, c)
     assert bool(jnp.all(jnp.isfinite(far_D))) and bool(manifold.is_in_manifold(far_D, c))
+
+
+def _capped_points(manifold: Klein, c: float, n: int, seed: int) -> jnp.ndarray:
+    """``n`` points that ``proj`` caps, dim 5: radii from 1/√c (where 1 + e^-30 rounds to 1) to 3.7/√c."""
+    key_u, key_r = jax.random.split(jax.random.PRNGKey(seed))
+    u_ND = jax.random.normal(key_u, (n, 5), dtype=manifold.dtype)
+    u_ND = u_ND / jnp.linalg.norm(u_ND, axis=-1, keepdims=True)
+    r_N1 = (1.0 + jnp.exp(jax.random.uniform(key_r, (n, 1), dtype=manifold.dtype, minval=-30.0, maxval=1.0))) / math.sqrt(c)
+    return jax.vmap(manifold.proj, in_axes=(0, None))(u_ND * r_N1, c)
+
+
+# Tolerance of each gradient below in units of the chart floor eps/g: 8 where the gradient carries
+# the gap g = 1 - c‖x‖² once, 16 where it carries a higher power (g^-3/2, g^-2).
+_CAPPED_TOL = {"dist": 8, "einstein_midpoint": 16, "dist_0": 8, "logmap_0": 8, "lorentz_factor": 16, "tangent_norm": 16}
+
+
+def test_gradients_at_capped_points_match_the_unfloored_reference(manifold, c, dtype):
+    """``dist``, ``einstein_midpoint``, ``dist_0``, ``‖logmap_0‖₂``, ``lorentz_factor``, ``tangent_norm`` w.r.t. capped points.
+
+    Each reads the gap ``g = 1 - c‖x‖²``, and at the cap its gradient is dominated by the gap's
+    derivative ``-2c·x``. The computed gap of a capped point lands -4.6 to +5.3 eps from its analytic
+    value ``_boundary_floor``; floored at that value (``_gap``, ``_logmap_0``,
+    ``_einstein_midpoint``), the floor bound for 6-84 % of the capped points and zeroed that term:
+    relative error 1.0 for all six (``logs/2026-09-29_cancellation-free/floorfix2/``). Oracle: the
+    closed forms in longdouble on the stored inputs, with the curvature the dtype holds. Tolerance:
+    ``_CAPPED_TOL`` times the chart floor ``eps/g``. Pairs are cap-cap, free-cap and cap-free (free
+    at scaled radius 1); only the derivative w.r.t. a capped point is checked.
+    """
+    eps = float(jnp.finfo(dtype).eps)
+    ld = np.longdouble
+    cc = ld(np.asarray(c, dtype=_np_dtype(dtype)))  # the curvature `1 - c * x2` computes with
+    capped_ND = _capped_points(manifold, c, 72, seed=17)
+    free_ND = (math.tanh(1.0) / math.sqrt(c)) * capped_ND[48:] / jnp.linalg.norm(capped_ND[48:], axis=-1, keepdims=True)
+    u_np = np.linspace(1.0, -0.5, 5) / np.linalg.norm(np.linspace(1.0, -0.5, 5))
+    u_D, u = jnp.asarray(u_np, dtype=dtype), np.asarray(np.asarray(u_np, dtype=_np_dtype(dtype)), dtype=ld)
+    failures = []
+
+    def check(label, got_ND, ref_ND, g_N):
+        err_N = np.linalg.norm(np.asarray(got_ND, np.float64) - np.asarray(ref_ND, np.float64), axis=-1)
+        err_N = err_N / np.linalg.norm(np.asarray(ref_ND, np.float64), axis=-1)
+        bad_N = err_N > _CAPPED_TOL[label.split()[1]] * eps / np.asarray(g_N, np.float64)
+        if bad_N.any():
+            failures.append(f"{label}: {bad_N.sum()}/{bad_N.size} over tolerance, max error {err_N.max():.2e}")
+
+    pair_grads = {
+        "dist": jax.vmap(jax.grad(lambda p, q: manifold.dist(p, q, c), argnums=(0, 1))),
+        "einstein_midpoint": jax.vmap(
+            jax.grad(lambda p, q: jnp.dot(u_D, manifold.einstein_midpoint(jnp.stack([p, q]), None, c)), argnums=(0, 1))
+        ),
+    }
+    pairs = {
+        "cap-cap": (capped_ND[:24], capped_ND[24:48], (0, 1)),
+        "free-cap": (free_ND, capped_ND[24:48], (1,)),
+        "cap-free": (capped_ND[:24], free_ND, (0,)),
+    }
+    for kind, (x_ND, y_ND, capped_args) in pairs.items():
+        x, y = np.asarray(x_ND, dtype=ld), np.asarray(y_ND, dtype=ld)
+        g_x, g_y = 1 - cc * np.sum(x * x, -1, keepdims=True), 1 - cc * np.sum(y * y, -1, keepdims=True)
+        w = y - x
+        # sinh(√c·d) and cosh(√c·d) from the cancellation-free pair quantity N = g_x‖w‖² + c(x·w)².
+        s = np.sqrt(cc * (g_x * np.sum(w * w, -1, keepdims=True) + cc * np.sum(x * w, -1, keepdims=True) ** 2) / (g_x * g_y))
+        cosh, root = np.sqrt(1 + s * s), np.sqrt(g_x * g_y)
+        gam_x, gam_y = 1 / np.sqrt(g_x), 1 / np.sqrt(g_y)
+        m = (gam_x * x + gam_y * y) / (gam_x + gam_y)
+        refs = {
+            "dist": (
+                (cosh * cc * x / g_x - cc * y / root) / (np.sqrt(cc) * s),
+                (cosh * cc * y / g_y - cc * x / root) / (np.sqrt(cc) * s),
+            ),
+            "einstein_midpoint": tuple(
+                (gam * u + np.sum(u * (p - m), -1, keepdims=True) * cc * p * gam**3) / (gam_x + gam_y)
+                for p, gam in ((x, gam_x), (y, gam_y))
+            ),
+        }
+        for name, grad_fn in pair_grads.items():
+            got = grad_fn(x_ND, y_ND)
+            for arg in capped_args:
+                check(f"{kind} {name} d/d{'xy'[arg]}", got[arg], refs[name][arg], np.minimum(g_x, g_y)[:, 0])
+
+    point_grads = {
+        "dist_0": jax.vmap(jax.grad(lambda p: manifold.dist_0(p, c))),
+        "logmap_0": jax.vmap(jax.grad(lambda p: jnp.linalg.norm(manifold.logmap_0(p, c)))),
+        "lorentz_factor": jax.vmap(jax.grad(lambda p: manifold.lorentz_factor(p, c))),
+        "tangent_norm": jax.vmap(jax.grad(lambda p: manifold.tangent_norm(u_D, p, c))),
+    }
+    x = np.asarray(capped_ND, dtype=ld)
+    g, r = 1 - cc * np.sum(x * x, -1, keepdims=True), np.sqrt(np.sum(x * x, -1, keepdims=True))
+    q = g * np.sum(u * u) + cc * np.sum(x * u, -1, keepdims=True) ** 2  # g²·‖u‖_x²
+    refs = {
+        "dist_0": x / (r * g),  # d₀ = artanh(√c·r)/√c
+        "logmap_0": x / (r * g),  # ‖log_0(x)‖₂ = d₀: the metric at the origin is the identity
+        "lorentz_factor": cc * x / g**1.5,
+        "tangent_norm": cc * (np.sum(x * u, -1, keepdims=True) * u - np.sum(u * u) * x) / (np.sqrt(q) * g)
+        + 2 * cc * np.sqrt(q) * x / g**2,
+    }
+    for name, grad_fn in point_grads.items():
+        check(f"cap {name} d/dx", grad_fn(capped_ND), refs[name], g[:, 0])
+    assert not failures, "\n".join(failures)
 
 
 # ---------------------------------------------------------------------------

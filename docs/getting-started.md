@@ -115,9 +115,9 @@ from hyperbolix.manifolds.poincare import Poincare, VERSION_MOBIUS_DIRECT
 poincare = Poincare()
 
 # Poincaré distance has 3 versions
-dist_v0 = poincare.dist(x, y, c, version_idx=VERSION_MOBIUS_DIRECT)   # Fastest (default)
-dist_v1 = poincare.dist(x, y, c, version_idx=1)                       # Möbius via addition
-dist_v2 = poincare.dist(x, y, c, version_idx=2)                       # Metric tensor
+dist_v0 = poincare.dist(x, y, c, version_idx=VERSION_MOBIUS_DIRECT)   # Default
+dist_v1 = poincare.dist(x, y, c, version_idx=1)                       # Möbius via addition; saturates on far pairs
+dist_v2 = poincare.dist(x, y, c, version_idx=2)                       # Metric tensor: the same function as slot 0
 ```
 
 ## Building a Neural Network

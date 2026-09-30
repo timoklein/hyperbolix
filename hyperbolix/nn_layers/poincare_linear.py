@@ -15,10 +15,11 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.manifolds.hyperboloid import _asinhc
 from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import ManifoldParam
-from ..utils.math_utils import _pow2_divisor, floor_at, safe_hypot_norm, sinh
+from ..utils.math_utils import _pow2_divisor, floor_at, safe_hypot_norm, safe_sqrt, sinh
 from ._helpers import validate_poincare_manifold
 
 
@@ -178,6 +179,42 @@ def _poincare_sinh_lift(s_BO: Float[Array, "batch out_dim"], c: float) -> Float[
     return t_BO / (sqrt_c * denom_B1)  # (B, 1) broadcasts over (B, O)
 
 
+def _poincare_sinh_logmap_0(s_BO: Float[Array, "batch out_dim"], c: float) -> Float[Array, "batch out_dim"]:
+    """``logmap_0(_poincare_sinh_lift(s))`` without the ball point: ``asinh(‖s‖)/(2√c‖s‖)·s``.
+
+    With ``‖s‖ = sinh(u)`` the lift lands at ``√c‖y‖ = tanh(u/2)`` along ``ŝ``, and ``logmap_0``
+    reads that radius back as ``u/(2√c)``. Going through the ball, float32's ``proj`` margin capped
+    the result at ``√c‖out‖ ≈ 6.33`` (c = 1) with a zero radial gradient. Used by
+    :class:`~hyperbolix.nn_layers.poincare_conv.HypConv2DPoincare`; the Jacobian at ``s = 0`` is
+    exactly ``I/(2√c)``. With the tangent-input scores, that layer's float32-vs-float64 error
+    (relative to the largest entry, patch radius t ≤ 8, c ∈ {0.3, 1}) is ≤ 1.9e-6 on outputs and
+    ≤ 3.6e-6 on input gradients; through the ball it was 1.7e-1 … 6.9e-1 / 2.0e-1 … 8.6e-1 at t = 8.
+    """
+    # The power-of-two rescale of _poincare_sinh_lift, t = s·(1/D): past the sinh clip one entry can
+    # be ≈ 7e37, so ‖s‖² -- and ‖s‖ itself for a wide row -- overflows for a finite s. |t| < 2, so the
+    # plain sum of squares cannot, and that one reduction gives both ‖t‖ and hypot(‖t‖, 1/D). The
+    # route through the ball paid five reductions over (B, O) here (three in the lift, then proj and
+    # logmap_0); this pays two.
+    sqrt_c = jnp.sqrt(c)
+    one = jnp.asarray(1.0, dtype=s_BO.dtype)
+    scale_B1 = jax.lax.stop_gradient(floor_at(jnp.max(jnp.abs(s_BO), axis=-1, keepdims=True), one))  # (B, 1)
+    divisor_B1 = _pow2_divisor(scale_B1)  # (B, 1), exact power of two >= 1
+    inv_divisor_B1 = one / divisor_B1
+    t_BO = s_BO * inv_divisor_B1  # exact unless subnormal (see _poincare_sinh_lift)
+    t_sq_B1 = jnp.sum(t_BO**2, axis=-1, keepdims=True)  # (B, 1), < 4·O
+    t_norm_B1 = safe_sqrt(t_sq_B1)  # exact 0 with a zero VJP at s = 0
+    # asinh(‖s‖)/‖t‖ in two branches on the per-row divisor, both exact:
+    #  * D > 1: ‖t‖ >= 1 and asinh(‖s‖) = log D + log(‖t‖ + sqrt(‖t‖² + 1/D²)), a sum of non-negative
+    #    terms. Where D = 1, ‖t‖ can be 0, so it is replaced by 1 there *before* the division: the
+    #    untaken branch's 0/0 never reaches the VJP (double `where`).
+    #  * D = 1: t = s, and asinh(‖s‖)/‖s‖ is `_asinhc`, analytic at 0 (value 1, slope 0).
+    rescaled_B1 = divisor_B1 > one
+    t_norm_safe_B1 = jnp.where(rescaled_B1, t_norm_B1, one)
+    asinh_s_B1 = jnp.log(divisor_B1) + jnp.log(t_norm_safe_B1 + jnp.sqrt(t_sq_B1 + inv_divisor_B1**2))
+    ratio_B1 = jnp.where(rescaled_B1, asinh_s_B1 / t_norm_safe_B1, _asinhc(t_norm_B1))  # asinh(‖s‖)/‖t‖
+    return t_BO * (ratio_B1 / (2 * sqrt_c))  # (B, 1) broadcasts over (B, O)
+
+
 def _poincare_pp_forward(
     x_BI: Float[Array, "batch in_dim"],
     kernel_OI: Array,
@@ -185,23 +222,29 @@ def _poincare_pp_forward(
     manifold: Poincare,
     c: float,
     input_space: str,
+    *,
+    tangent_output: bool = False,
 ) -> Float[Array, "batch out_dim"]:
     """Pure-function HNN++ forward pass.
 
-    Used by both HypLinearPoincarePP and HypConv2DPoincare. The final lift
+    Used by both HypLinearPoincarePP and HypConv2DPoincare. A tangent input is scored as
+    ``expmap_0`` would place it, without forming the ball point
+    (:meth:`~hyperbolix.manifolds.poincare.Poincare._compute_mlr_pp_tangent`). The final lift
     ``y = w / (1 + sqrt(1 + c‖w‖²))`` with ``w = sinh(√c·v)/√c`` is evaluated without squaring
     anything large, so the output stays finite and off the origin for every finite score ``v``
-    (see :func:`_poincare_sinh_lift`).
+    (see :func:`_poincare_sinh_lift`). ``tangent_output=True`` returns ``logmap_0`` of that lift
+    instead, again without the ball point (:func:`_poincare_sinh_logmap_0`).
     """
-    # Map to manifold if needed (static branch - JIT friendly)
+    # Static branch - JIT friendly
     if input_space == "tangent":
-        x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BI, c)
-
-    # Compute multinomial linear regression
-    v = manifold.compute_mlr_pp(x_BI, kernel_OI, bias_O1, c)
+        v_BO = manifold._compute_mlr_pp_tangent(x_BI, kernel_OI, bias_O1, c)
+    else:
+        v_BO = manifold.compute_mlr_pp(x_BI, kernel_OI, bias_O1, c)
 
     # Generalized linear transformation y = w / (1 + sqrt(1 + c‖w‖²)), w = sinh(√c·v)/√c.
-    s_BO = sinh(jnp.sqrt(c) * v)  # (B, O)
+    s_BO = sinh(jnp.sqrt(c) * v_BO)  # (B, O)
+    if tangent_output:
+        return _poincare_sinh_logmap_0(s_BO, c)
     res_BO = _poincare_sinh_lift(s_BO, c)
 
     # Project results to the manifold
@@ -215,8 +258,8 @@ class HypLinearPoincarePP(nnx.Module):
     Hyperbolic Neural Networks ++ fully connected layer (Poincaré ball model).
 
     Computation steps:
-        0) Project the input tensor onto the manifold (optional)
-        1) Compute the multinomial linear regression score(s)
+        1) Compute the multinomial linear regression score(s) — for a tangent input, of the point
+           ``expmap_0`` would place on the ball, evaluated from the tangent vector directly
         2) Calculate the generalized linear transformation from the regression score(s)
 
     Parameters
@@ -263,7 +306,7 @@ class HypLinearPoincarePP(nnx.Module):
         # Static configuration (treated as compile-time constants for JIT)
         validate_poincare_manifold(
             manifold_module,
-            required_methods=("proj", "addition", "expmap_0", "logmap_0", "compute_mlr_pp"),
+            required_methods=("proj", "compute_mlr_pp", "_compute_mlr_pp_tangent"),
         )
         self.manifold = manifold_module
         self.in_dim = in_dim

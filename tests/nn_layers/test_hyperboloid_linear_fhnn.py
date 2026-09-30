@@ -242,6 +242,38 @@ def test_fhnn_target_norm_matches_old_expression_in_range(c, scale):
     np.testing.assert_allclose(new_norm, np.asarray(old_norm, dtype=np.float64), rtol=1e-5)
 
 
+@pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
+def test_fhnn_spatial_norm_float32_tracks_float64_at_the_eps_floor(c):
+    """sigmoid(z0) -> 0 puts y0 on its floor 1/sqrt(c) + eps; float32 ||y_s|| must still track float64.
+
+    There ||y_s|| = sqrt(m)*sqrt(m + 2/sqrt(c)) is set by the height m = y0 - 1/sqrt(c) ~ eps = 1e-5.
+    Forming y0 first and taking 1/sqrt(c) back off rounds m to the ulp of 1/sqrt(c): the old spelling
+    was 6.8e-4 off at m = eps and 2.4e-3 at z0 = -15 for c ≤ 1 (8.8e-5 at c = 2), where m itself is
+    exact to float32 rounding.
+    """
+    in_dim, out_dim = 4, 4
+    z0_B = np.asarray([-40.0, -30.0, -20.0, -15.0, -12.0], dtype=np.float32)
+    x_BI = np.zeros((len(z0_B), in_dim), dtype=np.float32)
+    x_BI[:, 1] = z0_B  # the time logit reads input column 1; the spatial logits are the bias
+    kernel_OI = np.zeros((out_dim, in_dim), dtype=np.float32)
+    kernel_OI[0, 1] = 1.0
+    bias_1O = np.asarray([[0.0, 1.0, -2.0, 3.0]], dtype=np.float32)
+
+    ys_norm = {}
+    for dtype in (jnp.float32, jnp.float64):
+        layer = HypLinearHyperboloidFHNN(get_hyperboloid(dtype), in_dim, out_dim, rngs=nnx.Rngs(0), param_dtype=dtype)
+        layer.kernel[...] = jnp.asarray(kernel_OI, dtype=dtype)
+        layer.bias[...] = jnp.asarray(bias_1O, dtype=dtype)
+        layer.scale[...] = jnp.asarray(np.float32(2.3), dtype=dtype)  # the same float32 number in both legs
+        y = layer(jnp.asarray(x_BI, dtype=dtype), c=c)
+        assert y.dtype == dtype
+        ys_norm[dtype] = np.linalg.norm(np.asarray(y[:, 1:], dtype=np.float64), axis=-1)
+
+    # The case is the floor: the target norm is ~sqrt(2*eps/sqrt(c)), not an O(1) radius.
+    assert np.all(ys_norm[jnp.float64] < 2e-2)
+    np.testing.assert_allclose(ys_norm[jnp.float32], ys_norm[jnp.float64], rtol=1e-5)
+
+
 # --------------------------------------------------------------------------- #
 # Forward value oracles (audit A6-02): independent NumPy transcriptions of the
 # published formulas, so a sign flip or a collapsed spatial output fails here.

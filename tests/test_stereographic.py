@@ -217,6 +217,43 @@ def test_gyration_gyrocommutative_law(manifold, points, c, tolerance):
     assert jnp.allclose(lhs, rhs, atol=atol, rtol=rtol)
 
 
+@pytest.mark.parametrize("c_val", [-1.3, -0.2, 0.0, 0.3, 1.0, 2.5])
+def test_gyration_and_ptransp_match_the_literal_formula_at_every_curvature_sign(c_val: float) -> None:
+    """``gyration``/``ptransp`` equal the literal ``z + 2(A·x + B·y)/D`` in float64, value and ``∂/∂c``.
+
+    The shared ``_gyration`` groups its numerator in ``s = x + y`` (``A·x + B·y = (A - B)·x + B·s``),
+    an identity for every real ``c``; this pins it on the signed-curvature path, which no Poincaré
+    test reaches. The literal form is the historical expression, denominator included, and
+    ``ptransp(v, x, y) = gyr[y, -x]v · λ_x/λ_y``. The curvature derivative is checked against a
+    central difference of the literal form, ``c = 0`` included.
+    """
+    manifold = Stereographic(dtype=jnp.float64)
+    rng = np.random.default_rng(5)
+    bound = 0.85 / math.sqrt(abs(c_val)) if c_val != 0.0 else 1.0
+
+    def literal_gyration(x, y, z, c):
+        x2, y2, xy, xz, yz = x @ x, y @ y, x @ y, x @ z, y @ z
+        a_coef = -(c**2) * xz * y2 + c * yz + 2 * c**2 * xy * yz
+        b_coef = -(c**2) * yz * x2 - c * xz
+        return z + 2 * (a_coef * x + b_coef * y) / (1 + 2 * c * xy + c**2 * x2 * y2)
+
+    for _ in range(20):
+        x, y = (rng.normal(size=6) for _ in range(2))
+        x, y = (p / np.linalg.norm(p) * rng.uniform(0.0, bound) for p in (x, y))
+        z = rng.normal(size=6)
+        got = np.asarray(manifold.gyration(jnp.asarray(x), jnp.asarray(y), jnp.asarray(z), c_val))
+        np.testing.assert_allclose(got, literal_gyration(x, y, z, c_val), rtol=1e-12, atol=1e-12)
+
+        lam_ratio = (1.0 - c_val * (y @ y)) / (1.0 - c_val * (x @ x))  # λ_x/λ_y
+        got_pt = np.asarray(manifold.ptransp(jnp.asarray(z), jnp.asarray(x), jnp.asarray(y), c_val))
+        np.testing.assert_allclose(got_pt, literal_gyration(y, -x, z, c_val) * lam_ratio, rtol=1e-12, atol=1e-12)
+
+        x_j, y_j, z_j = jnp.asarray(x), jnp.asarray(y), jnp.asarray(z)
+        d_dc = np.asarray(jax.jacfwd(lambda cc, a=x_j, b=y_j, w=z_j: manifold.gyration(a, b, w, cc))(c_val))
+        fd = (literal_gyration(x, y, z, c_val + 1e-6) - literal_gyration(x, y, z, c_val - 1e-6)) / 2e-6
+        np.testing.assert_allclose(d_dc, fd, rtol=1e-6, atol=1e-7)
+
+
 def test_addition_left_cancellation(manifold, points, c, tolerance):
     """``(-x) ⊕ (x ⊕ y) = y`` — the gyrogroup left-cancellation law, in every curvature regime."""
     atol, rtol = tolerance
@@ -954,3 +991,146 @@ def test_riemannian_adam_on_stereographic_embedding(c_val):
     assert jnp.all(jnp.isfinite(param[...]))
     assert final_loss < 0.1 * initial_loss, f"loss did not decrease: {initial_loss} -> {final_loss}"
     assert bool(manifold.is_in_manifold(param[...], c_val))
+
+
+# ---------------------------------------------------------------------------
+# Far pairs at c > 0. The Möbius difference (-x) ⊕ y sits at the full pair distance from the
+# origin, past float32's ball ceiling (√c·d ≈ 12.66) for a pair whose endpoints are both well
+# inside it; dist, logmap and geodesic take the half distance from asinh(√c‖x - y‖/√(B_x·B_y)).
+# ---------------------------------------------------------------------------
+
+
+def _far_pair(c: float, rho: float, angle_deg: float) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Two points at geodesic radius ``rho`` from the origin, ``angle_deg`` apart (180°: distance
+    ``2·rho``), in float32 and as the same float32 values upcast, so a float64 reference sees the
+    same inputs and every error measured is the op's own."""
+    rng = np.random.default_rng(0)
+    u = rng.standard_normal(8)
+    u /= np.linalg.norm(u)
+    w = rng.standard_normal(8)
+    w -= w.dot(u) * u
+    w /= np.linalg.norm(w)
+    theta = math.radians(angle_deg)
+    radius = math.tanh(math.sqrt(c) * rho / 2.0) / math.sqrt(c)
+    x32 = jnp.asarray(radius * u, dtype=jnp.float32)
+    y32 = jnp.asarray(radius * (math.cos(theta) * u + math.sin(theta) * w), dtype=jnp.float32)
+    return x32, y32, x32.astype(jnp.float64), y32.astype(jnp.float64)
+
+
+def _rel_err(got: jnp.ndarray, ref: jnp.ndarray) -> float:
+    got_np, ref_np = np.asarray(got, dtype=np.float64), np.asarray(ref, dtype=np.float64)
+    return float(np.linalg.norm(got_np - ref_np) / np.linalg.norm(ref_np))
+
+
+@pytest.mark.parametrize("rho", [7.2, 9.0], ids=["d14.4", "d18"])
+def test_far_pair_dist_and_logmap_float32_match_float64(rho):
+    """Regression: two points at scaled radius ``rho`` on opposite sides (c = 1), true distance
+    ``2·rho``. Both are well inside the float32 chart, but ``(-x) ⊕ y`` is at radius ``2·rho``, past
+    its ceiling: ``dist`` came back 12.656 (true 14.4) and 12.628 (true 18), its gradient was 1.0
+    relative wrong (norm 0.037 instead of 671), and ``logmap`` was 12 % and 30 % short."""
+    c = 1.0
+    x32, y32, x64, y64 = _far_pair(c, rho, 180.0)
+    m32, m64 = Stereographic(dtype=jnp.float32), Stereographic(dtype=jnp.float64)
+    d64 = m64.dist(x64, y64, c)
+    assert float(d64) == pytest.approx(2.0 * rho, rel=1e-4)  # the construction
+    assert _rel_err(m32.dist(x32, y32, c), d64) < 1e-4
+    g32 = jax.grad(lambda a: m32.dist(a, y32, c))(x32)
+    g64 = jax.grad(lambda a: m64.dist(a, y64, c))(x64)
+    assert _rel_err(g32, g64) < 1e-3
+    assert _rel_err(m32.logmap(y32, x32, c), m64.logmap(y64, x64, c)) < 1e-3
+
+
+@pytest.mark.parametrize(("rho", "angle"), [(7.2, 180.0), (9.0, 180.0), (9.0, 150.0)])
+def test_far_pair_geodesic_midpoint_float32(rho, angle):
+    """Regression: ``geodesic(0.5)`` of a far pair took its half distance from the capped
+    ``(-x) ⊕ y``, which put the float32 midpoint 0.87 (d = 14.4) and 2.7 (d = 18) away from the
+    float64 one. The midpoint, ``d/2`` from each endpoint, is representable. Checked against the
+    float64 run and, independently of it, by equidistance from the two endpoints."""
+    c = 1.0
+    x32, y32, x64, y64 = _far_pair(c, rho, angle)
+    m32, m64 = Stereographic(dtype=jnp.float32), Stereographic(dtype=jnp.float64)
+    mid = m32.geodesic(0.5, x32, y32, c).astype(jnp.float64)
+    assert float(m64.dist(mid, m64.geodesic(0.5, x64, y64, c), c)) < 5e-3
+    half = 0.5 * float(m64.dist(x64, y64, c))
+    assert float(m64.dist(x64, mid, c)) == pytest.approx(half, abs=5e-3)
+    assert float(m64.dist(mid, y64, c)) == pytest.approx(half, abs=5e-3)
+
+
+_FD_POINTS = {
+    "generic": ([0.25, -0.40, 0.15], [-0.30, 0.10, 0.45]),
+    "coincident": ([0.25, -0.40, 0.15], [0.25, -0.40, 0.15]),
+    "x_at_origin": ([0.0, 0.0, 0.0], [-0.30, 0.10, 0.45]),
+    "y_at_origin": ([0.25, -0.40, 0.15], [0.0, 0.0, 0.0]),
+}
+
+
+def _central_difference(fn, at: np.ndarray, h: float = 1e-6) -> np.ndarray:
+    """Float64 central differences of ``fn`` at ``at``: output shape + (number of inputs,)."""
+    at = np.atleast_1d(np.asarray(at, dtype=np.float64))
+    cols = []
+    for i in range(at.size):
+        step = np.zeros_like(at)
+        step[i] = h
+        cols.append((np.asarray(fn(at + step)) - np.asarray(fn(at - step))) / (2.0 * h))
+    return np.stack(cols, axis=-1)
+
+
+@pytest.mark.parametrize("c_val", [0.0, 1e-3, -1e-3, 1.0, -1.0])
+@pytest.mark.parametrize("case", list(_FD_POINTS))
+def test_dist_logmap_derivatives_match_finite_differences(case, c_val):
+    """Derivatives of ``dist`` and ``log_x(y)`` in the points and in ``c`` against an independent
+    oracle, float64 central differences, at c ∈ {0, ±1e-3, ±1}: at a generic pair, at coincident
+    points and with either point at the origin. Where-fallback spellings elsewhere in the library
+    were value-correct with zero or wrong-signed derivatives at c = 0. At c = 0 the difference
+    quotient straddles the two closed forms (c ± 1e-6 is outside the float64 Taylor band) while
+    autodiff runs the series. At x = y, ``dist`` is a cone: exactly 0 there, with the zero
+    subgradient."""
+    m = Stereographic(dtype=jnp.float64)
+    x, y = (jnp.asarray(p, dtype=jnp.float64) for p in _FD_POINTS[case])
+    c = jnp.float64(c_val)
+
+    def close(ad, fd, what):
+        np.testing.assert_allclose(np.asarray(ad).reshape(fd.shape), fd, rtol=1e-7, atol=1e-7, err_msg=what)
+
+    ad_dist_x, ad_dist_c = jax.grad(m.dist, argnums=(0, 2))(x, y, c)
+    if case == "coincident":
+        assert float(m.dist(x, y, c)) == 0.0
+        assert np.all(np.asarray(ad_dist_x) == 0.0)
+    else:
+        close(ad_dist_x, _central_difference(lambda a: m.dist(jnp.asarray(a), y, c), x), "d dist / dx")
+    close(ad_dist_c, _central_difference(lambda cc: m.dist(x, y, jnp.float64(cc[0])), c), "d dist / dc")
+
+    ad_log_y, ad_log_x, ad_log_c = jax.jacfwd(m.logmap, argnums=(0, 1, 2))(y, x, c)
+    close(ad_log_y, _central_difference(lambda a: m.logmap(jnp.asarray(a), x, c), y), "d log_x(y) / dy")
+    close(ad_log_x, _central_difference(lambda a: m.logmap(y, jnp.asarray(a), c), x), "d log_x(y) / dx")
+    close(ad_log_c, _central_difference(lambda cc: m.logmap(y, x, jnp.float64(cc[0])), c), "d log_x(y) / dc")
+
+
+@pytest.mark.parametrize("test_dtype", [jnp.float32, jnp.float64], ids=["float32", "float64"])
+def test_traced_curvature_crossing_zero_gradients(test_dtype):
+    """``c`` a traced argument of one compiled program, swept across 0 through both Taylor bands, so
+    every branch of the κ-trig ``where``s is evaluated at every ``c``: the value and the gradients in
+    ``x``, ``y`` and ``c`` of ``dist + ⟨w, log_x(y)⟩`` are finite, and the curvature gradient matches
+    float64 central differences. float32 gets the 1e-2 of
+    ``test_curvature_gradient_correct_near_zero_float32``: just outside its Taylor band the
+    closed-form κ-gradient loses digits to cancellation, by design of the cutover."""
+    cs = np.array([-1e-3, -1e-6, -1e-12, 0.0, 1e-12, 1e-6, 1e-3])
+    x_np, y_np = (np.asarray(p) for p in _FD_POINTS["generic"])
+    w_np = np.array([0.2, -0.7, 0.5])
+
+    def loss_for(dtype):
+        m = Stereographic(dtype=dtype)
+        w = jnp.asarray(w_np, dtype=dtype)
+        return lambda x, y, c: m.dist(x, y, c) + jnp.vdot(w, m.logmap(y, x, c))
+
+    x, y = jnp.asarray(x_np, dtype=test_dtype), jnp.asarray(y_np, dtype=test_dtype)
+    value_and_grads = jax.jit(jax.vmap(jax.value_and_grad(loss_for(test_dtype), argnums=(0, 1, 2)), in_axes=(None, None, 0)))
+    values, (g_x, g_y, g_c) = value_and_grads(x, y, jnp.asarray(cs, dtype=test_dtype))
+    for arr in (values, g_x, g_y, g_c):
+        assert bool(jnp.all(jnp.isfinite(arr)))
+
+    loss64 = loss_for(jnp.float64)
+    x64, y64 = jnp.asarray(x_np), jnp.asarray(y_np)
+    fd = np.array([_central_difference(lambda cc: loss64(x64, y64, jnp.float64(cc[0])), cv)[0] for cv in cs])
+    tol = 1e-2 if test_dtype == jnp.float32 else 1e-7
+    np.testing.assert_allclose(np.asarray(g_c, dtype=np.float64), fd, rtol=tol, atol=tol)

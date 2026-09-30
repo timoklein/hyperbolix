@@ -13,7 +13,7 @@ import pytest
 import scipy.stats
 
 from hyperbolix.distributions import uniform_poincare
-from hyperbolix.distributions.uniform_poincare import _sample_uniform_direction
+from hyperbolix.distributions.uniform_poincare import _sample_radial, _sample_uniform_direction
 from hyperbolix.manifolds.poincare import Poincare
 
 
@@ -468,3 +468,77 @@ def test_rejection_sampler_terminates_in_high_dimension(n: int, R: float) -> Non
     # here the point is termination, so the bound only has to exclude a degenerate output.)
     statistic = scipy.stats.kstest(radii_N, lambda r: _radial_cdf_reference(r, c, R, n)).statistic
     assert statistic < 0.2, f"KS statistic {statistic:.4f}: radii do not follow the target law"
+
+
+# =============================================================================================
+# Small radius in float32
+# =============================================================================================
+
+
+@pytest.mark.parametrize("n", [2, 3])
+def test_small_radius_float32_samples_stay_inside_and_follow_the_law(n: int) -> None:
+    """√c·R = 1e-3 in float32: every sample lies in B(0, R) and the radii follow p(r) ∝ sinh^{n-1}(√c·r).
+
+    ``u = cosh(√c·r) - 1`` is evaluated as ``2·sinh²(√c·r/2)`` and inverted as ``2·asinh(√(u/2))``. The literal
+    ``cosh(√c·R) - 1`` and ``acosh(1 + u)`` round ``1 + u`` in float32, and ``acosh``'s domain clamp at
+    ``1 + 10·eps`` returned ``√(20·eps)/√c ≈ 1.5e-3/√c`` for every draw below it: at √c·R = 1e-3 all samples
+    landed at 1.54·R (KS statistic 1.0); with the half-angle forms the statistic is 0.011 (n = 2) and 0.012
+    (n = 3). Radii are measured in float64 from the float32 samples.
+    """
+    c = 0.5
+    R = float(1e-3 / np.sqrt(c))
+    manifold = Poincare(dtype=_F64)
+    samples_ND = uniform_poincare.sample(jax.random.PRNGKey(24), n=n, c=c, R=R, sample_shape=(_KS_N,), dtype=jnp.float32)
+    radii_N = np.asarray(jax.vmap(lambda x_D: manifold.dist_0(x_D, c))(samples_ND.astype(_F64)))
+    assert np.all(radii_N <= R * (1 + 4 * np.finfo(np.float32).eps)), f"max radius {radii_N.max() / R:.4f}·R"
+    statistic = scipy.stats.kstest(radii_N, lambda r: _radial_cdf_reference(r, c, R, n)).statistic
+    assert statistic < _KS_MAX_D, f"KS statistic {statistic:.4f} against p(r) ∝ sinh^{n - 1}(√c·r)"
+
+
+# =============================================================================================
+# Rejection sampler outside its float range (n >= 3)
+# =============================================================================================
+
+
+@pytest.mark.parametrize("scaled_R", [0.0, 1e-30, 50.0, 100.0])
+def test_rejection_sampler_terminates_outside_its_float32_range(scaled_R: float) -> None:
+    """√c·R = 0, 1e-30, 50 and 100 in float32 (n = 3): ``sample`` terminates with finite points in B(0, R).
+
+    The rejection loop has no iteration cap and accepts nothing where ``u_max = 2·sinh²(√c·R/2)`` flushes to 0
+    (√c·R < 2.2e-19 on XLA:CPU) or ``u_max·(u_max + 2)`` overflows (√c·R ≥ 45.05; ``u_max`` itself from 89.42).
+    ``timeout 60`` killed all four cases (c = 1) while the loop ran there; with the flat limit and the exponential
+    tail taking over, each process exits within 7.6 s, JAX import and compilation included
+    (``logs/2026-09-29_cancellation-free/samplerhang/``). As in ``test_rejection_sampler_terminates_in_high_dimension``,
+    termination is the assertion. Past √c·R ≈ 13.0 (c = 0.5) the float32 points sit at the chart edge.
+    """
+    c = 0.5
+    R = float(scaled_R / np.sqrt(c))
+    samples_ND = uniform_poincare.sample(jax.random.PRNGKey(25), n=3, c=c, R=R, sample_shape=(64,), dtype=jnp.float32)
+    assert samples_ND.shape == (64, 3)
+    assert bool(jnp.isfinite(samples_ND).all())
+
+    manifold = Poincare(dtype=_F64)
+    radii_N = np.asarray(jax.vmap(lambda x_D: manifold.dist_0(x_D, c))(samples_ND.astype(_F64)))
+    assert np.all(radii_N <= R * (1 + 4 * np.finfo(np.float32).eps)), f"max radius {radii_N.max()} exceeds R = {R}"
+    if R > 0.0:
+        assert np.all(radii_N > 0.0), "a sample collapsed onto the center"
+
+
+@pytest.mark.parametrize("scaled_R", [0.0, 1e-30, 50.0, 100.0])
+def test_rejection_sampler_radii_outside_its_float32_range(scaled_R: float) -> None:
+    """The radii behind those points lie in [0, R] and follow p(r) ∝ sinh²(√c·r) (float32, n = 3).
+
+    Outside the loop's range ``_sample_radial`` inverts a closed form from ``V ~ U(0, 1]``: the flat limit
+    ``R·V^{1/n}`` (√c·R = 0, 1e-30) or the exponential tail ``R + log(V)/((n-1)·√c)`` (√c·R = 50, 100), whose
+    largest value is R itself. Read from ``_sample_radial`` directly, since ``dist_0`` of a saturated point cannot
+    recover a radius past √c·R ≈ 13.0 (c = 0.5). The KS statistic is 0.0082 in each case with R > 0; the flat
+    law with exponent n - 1, or the tail with rate n in place of n - 1, would give 0.15.
+    """
+    c, n = 0.5, 3
+    R = float(np.float32(scaled_R / np.sqrt(c)))  # the float32 radius the sampler works with
+    radii_N = np.asarray(_sample_radial(jax.random.PRNGKey(26), c, n, R, (_KS_N,), jnp.float32), np.float64)
+    assert np.all(np.isfinite(radii_N))
+    assert np.all((radii_N >= 0.0) & (radii_N <= R)), f"radii in [{radii_N.min()}, {radii_N.max()}], R = {R}"
+    if R > 0.0:
+        statistic = scipy.stats.kstest(radii_N, lambda r: _radial_cdf_reference(r, c, R, n)).statistic
+        assert statistic < _KS_MAX_D, f"KS statistic {statistic:.4f} against p(r) ∝ sinh²(√c·r)"

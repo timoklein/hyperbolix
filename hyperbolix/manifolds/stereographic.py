@@ -13,7 +13,7 @@ across zero):
 ======  =========================  ===================================================
  ``c``   sectional curvature        geometry
 ======  =========================  ===================================================
-``> 0``  ``< 0``                    hyperbolic — **identical to** ``Poincare(c)``; open ball ‖x‖ < 1/√c
+``> 0``  ``< 0``                    hyperbolic — ``Poincare(c)``'s geometry (see below); open ball ‖x‖ < 1/√c
 ``= 0``  ``0``                      Euclidean (see the factor-2 note below)
 ``< 0``  ``> 0``                    spherical (projected sphere); no boundary, all of R^d
 ======  =========================  ===================================================
@@ -21,7 +21,11 @@ across zero):
 Internally the paper's curvature ``κ = -c``. Every private function sets ``k = -c`` once and then
 follows the geoopt/Bachmann formulas verbatim. **This is sign-flipped from the paper/geoopt ``κ``**
 (their ``κ > 0`` = spherical ↔ our ``c < 0`` = spherical): the sign is chosen so ``c`` matches every
-other hyperbolix manifold and so ``Stereographic(c)`` reproduces ``Poincare(c)`` exactly for ``c > 0``.
+other hyperbolix manifold and so ``Stereographic(c)`` matches ``Poincare(c)`` for ``c > 0``. ``addition``, ``gyration``,
+``proj``, the conformal factor, ``ptransp``, ``ptransp_0``, ``tangent_inner``, ``tangent_norm``, ``egrad2rgrad``,
+``retraction`` and ``dist_0`` return ``Poincare``'s bits; ``dist``, ``logmap``, ``expmap``, ``expmap_0``, ``logmap_0``
+and ``scalar_mul`` agree only to rounding (float32: ``logmap`` within 1.1e-5 relative at scaled radius 6-11, the others
+within 3.7e-7).
 
 Euclidean-limit factor of 2 (a classic gyrovector-space gotcha)
 ---------------------------------------------------------------
@@ -42,7 +46,7 @@ Numerical precision
 Bachmann et al. strongly recommend double precision. Prefer ``Stereographic(dtype=jnp.float64)`` for
 distances ≳ 7 (hyperbolic boundary) or spherical points near the ``tan`` pole; float32 is fine for
 moderate points. See :mod:`hyperbolix.manifolds.poincare` for the near-boundary conformal-factor caveats,
-which apply identically to the ``c > 0`` regime here.
+which apply to the ``c > 0`` regime here as well (the conformal factor is the same function).
 
 JIT / batching example::
 
@@ -50,7 +54,7 @@ JIT / batching example::
     >>> from hyperbolix.manifolds import Stereographic
     >>> m = Stereographic(dtype=jnp.float64)
     >>> x, y = jnp.array([0.1, 0.2]), jnp.array([0.3, 0.4])
-    >>> d_hyp = m.dist(x, y, c=1.0)     # hyperbolic  (== Poincare(c=1).dist)
+    >>> d_hyp = m.dist(x, y, c=1.0)     # hyperbolic  (Poincare's dist, to rounding)
     >>> d_sph = m.dist(x, y, c=-1.0)    # spherical
     >>> dist_batched = jax.vmap(m.dist, in_axes=(0, 0, None))   # batch over points
 
@@ -69,14 +73,16 @@ References:
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..utils.math_utils import MIN_NORM, atanh, clamp_to, floor_at, safe_norm, tanh
+from ..utils.math_utils import MIN_NORM, asinh, atanh, clamp_to, floor_at, safe_norm, tanh
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
 from ._gyrovector_core import (
     _addition,
+    _boundary_divisor_floor,
     _conformal_factor,
     _conformal_factor_batch,
     _gyration,
+    _mobius_denominator,
     _proj,
 )
 from .protocol import ScalarCurvature
@@ -199,6 +205,73 @@ def _artan_k(x: Float[Array, "..."], k: ScalarCurvature) -> Float[Array, "..."]:
     return jnp.where(_use_taylor(x, k), _artan_k_zero_taylor(x, k), nonzero)
 
 
+def _artan_k_pair(r: Float[Array, "..."], s: Float[Array, "..."], k: ScalarCurvature) -> Float[Array, "..."]:
+    """``tan_κ⁻¹(r)`` of a Möbius-difference norm ``r = ‖(-x) ⊕_κ y‖``, far-pair safe for ``c > 0``.
+
+    :func:`_artan_k` with its hyperbolic branch (``k < 0``, i.e. ``c > 0``) spelled
+    ``asinh(√c·s)/√c``, where the caller passes ``s = ‖x - y‖/√(B_x·B_y)``, ``B = 1 - c‖·‖²``,
+    formed from the two input points rather than from ``r``. With ``G²`` the Möbius denominator
+    ``1 - 2c⟨x,y⟩ + c²‖x‖²‖y‖² = B_x·B_y + c‖x - y‖²``, the norm is ``r = ‖x - y‖/G``, so
+    ``1 - c·r² = B_x·B_y/G²`` and ``s = r/√(1 - c·r²)`` exactly, at every sign of ``c``; that makes
+    ``atanh(√c·r) = asinh(√c·s)``. With ``d`` the pair distance, ``√c·r = tanh(√c·d/2)`` is stuck
+    below 1, and ``atanh`` of it needs the ``1 - √c·r`` that float32 stops resolving well inside the
+    chart: at ``√c·d ≈ 12.66`` (c = 1) the Möbius difference reaches the ball's representation
+    ceiling although both points are far from it. ``√c·s = sinh(√c·d/2)`` has no ceiling.
+
+    The other two branches and the gate are :func:`_artan_k`'s, on ``r``, unchanged: the Taylor
+    series near ``c = 0`` (κ-gradient rationale at ``_K_ZERO_EPS_F32`` and ``_TAYLOR_MAX_U``) and
+    ``arctan(√|c|·r)/√|c|`` for ``c < 0``. There ``s = r/√(1 + |c|·r²)`` would give the ``asin``
+    form, which loses accuracy near antipodal points, so the spherical branch keeps ``r``.
+
+    Each branch is finite at every ``c``, so the ``where`` pair never meets a NaN or ``inf`` in the
+    branch it discards, in value or gradient: ``√|k|`` is floored (:func:`_sqrt_abs_k`), the series
+    clamps its ``u``, and ``s`` is finite because both ``B`` factors are floored positive for ``c > 0``
+    and are ``≥ 1`` for ``c ≤ 0`` (:func:`_one_minus_c_sqnorm`).
+    """
+    sqrt_abs_k = _sqrt_abs_k(k)
+    neg = asinh(sqrt_abs_k * s) / sqrt_abs_k
+    pos = jnp.arctan(sqrt_abs_k * r) / sqrt_abs_k
+    nonzero = jnp.where(jnp.asarray(k) > 0, pos, neg)
+    return jnp.where(_use_taylor(r, k), _artan_k_zero_taylor(r, k), nonzero)
+
+
+def _one_minus_c_sqnorm(sqnorm: Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """``B = 1 - c·sqnorm``, floored like :func:`_conformal_factor`'s divisor (``x`` gives the dtype).
+
+    For ``c > 0`` the floor sits below the cap's rounding band (:func:`_boundary_divisor_floor`), so
+    an unprojected point cannot drive the divisor to 0 while a capped one keeps its gradient; for
+    ``c ≤ 0``, ``B ≥ 1`` and the ``MIN_NORM`` floor never binds.
+    """
+    floor_b = jnp.where(jnp.asarray(c) > 0, _boundary_divisor_floor(x, c), MIN_NORM)
+    return floor_at(1.0 - c * sqnorm, floor_b)
+
+
+def _sin_k_half_dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """``s = ‖x - y‖/√(B_x·B_y)``, floored at ``MIN_NORM``, for :func:`_artan_k_pair` in the ops that
+    also build ``(-x) ⊕_κ y`` (:func:`_logmap`, :func:`_geodesic`).
+
+    ``‖y - x‖²``, ``‖x‖²`` and ``‖y‖²`` are reduced exactly as :func:`_addition` reduces them for
+    ``(-x) ⊕ y`` (the sum ``(-x) + y``, dots at ``MATMUL_PRECISION``), so XLA computes each once for
+    both. A ``safe_norm`` of ``y - x`` would add two passes over the inputs, and neither of its
+    guards matters here: ``_addition`` squares ``y - x`` anyway, and the floor below absorbs the
+    underflow.
+
+    The floor is there because the caller divides by the Möbius-difference norm, floored at
+    ``MIN_NORM`` itself: at ``y = x`` both then sit on ``MIN_NORM``, the hyperbolic
+    ``tan_κ⁻¹(r)/r`` is 1 as it was, and the Jacobian in ``y`` keeps its value (the identity for
+    ``log_x``, ``t·I`` for the geodesic) instead of 0. It is applied to the square so that the
+    square root never meets an exact 0, whose infinite derivative would reach the gradient as
+    ``0·inf``.
+    """
+    neg_x = -x
+    diff_D = neg_x + y
+    diff_sqnorm = jnp.dot(diff_D, diff_D, precision=MATMUL_PRECISION)
+    x_sqnorm = jnp.dot(neg_x, neg_x, precision=MATMUL_PRECISION)
+    y_sqnorm = jnp.dot(y, y, precision=MATMUL_PRECISION)
+    b_prod = _one_minus_c_sqnorm(x_sqnorm, x, c) * _one_minus_c_sqnorm(y_sqnorm, x, c)
+    return jnp.sqrt(floor_at(diff_sqnorm / b_prod, MIN_NORM**2))
+
+
 # ---------------------------------------------------------------------------
 # Manifold operations (single point, shape (dim,)). Each takes signed `c` and bridges to k = -c.
 # For c > 0 the shared gyrovector core (_addition/_gyration/_proj/_conformal_factor) is bit-identical to
@@ -223,12 +296,34 @@ def _dist(x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) ->
     """Geodesic distance ``d_κ(x, y) = 2·tan_κ⁻¹(‖(-x) ⊕_κ y‖)`` (paper Eq. 4, ``κ = -c``).
 
     Reduces to ``2‖x - y‖`` as ``c → 0`` (the metric is ``4·I`` at the origin — see module docstring).
+
+    The Möbius difference is never formed as a point. Its norm is ``r = ‖x - y‖/G`` with ``G²``
+    the Möbius denominator, and for ``c > 0`` the distance is ``2·asinh(√c‖x - y‖/√(B_x·B_y))/√c``,
+    ``B = 1 - c‖·‖²`` (:func:`_artan_k_pair`), the expression ``Poincare``'s slot 0 evaluates. The
+    point ``(-x) ⊕ y`` sits at the full pair distance from the origin, so for a far pair float32
+    could not store it even with both inputs well inside the chart: two points at scaled radius 7.2
+    on opposite sides (true ``√c·d = 14.4``, c = 1) came back 12.656 with a gradient norm of 0.037
+    instead of 671, and at 9 each (true 18) 12.628. Now they give 14.39999 and 18.00020, as
+    ``Poincare`` does; what is left is the chart's own floor, the float32 rounding of ``B_x`` and
+    ``B_y`` (``eps/B`` relative). ``c ≤ 0`` and the Taylor band near ``c = 0`` keep
+    :func:`_artan_k`'s forms, on ``r``.
+
+    It is also cheaper: ``(-x) ⊕ y`` and its norm took seven reductions over the inputs with a
+    static ``c > 0`` and eight with a traced ``c``; this takes four (``‖y - x‖`` as a ``safe_norm``,
+    which is two passes, ``‖x‖²`` and ``‖y‖²``) and six (plus the chord and the sum of
+    :func:`_mobius_denominator`, which only the ``r`` branches read). ``dist(x, x)`` is an exact 0
+    with an exactly-zero gradient: ``‖y - x‖`` is a ``safe_norm`` and nothing is floored.
     """
-    k = -c
-    diff = _addition(-x, y, c)
-    # `safe_norm`: exact 0 and exactly-zero VJP at x == y; not a divisor, so no floor.
-    diff_norm = safe_norm(diff)
-    return 2.0 * _artan_k(diff_norm, k)
+    # `safe_norm`: exact 0 and exactly-zero VJP at x == y, and no overflow in the unbounded c < 0
+    # chart; not a divisor, so no floor.
+    num = safe_norm(y - x)
+    x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
+    y_sqnorm = jnp.dot(y, y, precision=MATMUL_PRECISION)
+    # G from the factored denominator: no cancellation at either sign of c (for c < 0 it is 0 at the
+    # antipode, where B_x·B_y + c‖x - y‖² would cancel), and the literal slope dG²/dc = -2⟨x,y⟩ at c = 0.
+    denom = jnp.sqrt(_mobius_denominator(x, y, c, sign=-1, x_sqnorm=x_sqnorm, y_sqnorm=y_sqnorm))
+    sqrt_bb = jnp.sqrt(_one_minus_c_sqnorm(x_sqnorm, x, c) * _one_minus_c_sqnorm(y_sqnorm, x, c))
+    return 2.0 * _artan_k_pair(num / denom, num / sqrt_bb, -c)
 
 
 def _dist_0(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -266,13 +361,22 @@ def _retraction(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvatu
 
 
 def _logmap(y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-    """Logarithmic map ``log^κ_x(y) = (2/λ^κ_x)·tan_κ⁻¹(‖s‖)·s/‖s‖`` with ``s = (-x) ⊕_κ y`` (paper Eq. 7)."""
+    """Logarithmic map ``log^κ_x(y) = (2/λ^κ_x)·tan_κ⁻¹(‖s‖)·s/‖s‖`` with ``s = (-x) ⊕_κ y`` (paper Eq. 7).
+
+    The direction is ``s/‖s‖`` from the stored point, as before. For ``c > 0`` the magnitude
+    ``tan_κ⁻¹(‖s‖)`` is the ``asinh`` form of :func:`_artan_k_pair`, built from
+    ``‖x - y‖/√(B_x·B_y)`` (:func:`_sin_k_half_dist`) rather than from ``‖s‖``: for a far pair ``s``
+    lies past float32's representation ceiling and is capped there, which cost ``‖log_x(y)‖``
+    12 % (two points at scaled radius 7.2 on opposite sides, c = 1) and 30 % (at 9 each). The cap
+    keeps the direction of ``s``, so the direction is unaffected. ``c ≤ 0`` and the Taylor band
+    near ``c = 0`` still read ``‖s‖``, unchanged.
+    """
     k = -c
     sub = _addition(-x, y, c)
     # `safe_norm` + `floor_at`: `sub_norm` divides below, so the floor stays; see _scalar_mul.
     sub_norm = floor_at(safe_norm(sub)[..., None], MIN_NORM)
     lam = _conformal_factor(x, c)
-    return 2.0 * _artan_k(sub_norm, k) * (sub / (lam * sub_norm))
+    return 2.0 * _artan_k_pair(sub_norm, _sin_k_half_dist(x, y, c), k) * (sub / (lam * sub_norm))
 
 
 def _logmap_0(y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
@@ -354,9 +458,27 @@ def _is_in_tangent_space(
 
 
 def _geodesic(t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
-    """Point at time ``t`` on the geodesic ``x → y``: ``gamma(t) = x ⊕_κ (t ⊗_κ ((-x) ⊕_κ y))`` (paper Eq. 5)."""
+    """Point at time ``t`` on the geodesic ``x → y``: ``gamma(t) = x ⊕_κ (t ⊗_κ ((-x) ⊕_κ y))`` (paper Eq. 5).
+
+    ``t ⊗ v = tan_κ(t·tan_κ⁻¹(‖v‖))·v/‖v‖`` for ``v = (-x) ⊕ y`` is :func:`_scalar_mul` written out,
+    with the half distance ``tan_κ⁻¹(‖v‖)`` taken from :func:`_artan_k_pair`, whose ``c > 0``
+    branch reads ``‖x - y‖/√(B_x·B_y)`` (:func:`_sin_k_half_dist`) instead of ``‖v‖``. ``v`` sits
+    at the full pair distance ``d`` from the origin and is capped at float32's ceiling for a far
+    pair, which put the midpoint of two points at scaled radius 7.2 on opposite sides (c = 1) 0.87
+    away from the float64 one, and 2.7 at radius 9 each. The direction stays ``v/‖v‖``, which the
+    cap does not change; ``c ≤ 0`` and the Taylor band near ``c = 0`` are unchanged.
+
+    What remains is the intermediate ``t ⊗ v``, a point at radius ``t·d``: past the ceiling
+    (``√c·t·d ≈ 12.6`` in float32 at c = 1) it is capped too, and no spelling of this formula can
+    store it. ``t = 1/2`` stays inside for every pair of representable points; ``t`` near 1 or past it
+    on a far pair does not.
+    """
+    k = -c
     v = _addition(-x, y, c)
-    tv = _scalar_mul(t, v, c)
+    # `safe_norm` + `floor_at`, as in `_scalar_mul`: `v_norm` divides below, so the floor stays.
+    v_norm = floor_at(safe_norm(v)[..., None], MIN_NORM)
+    half_dist = _artan_k_pair(v_norm, _sin_k_half_dist(x, y, c), k)
+    tv = _proj(_tan_k(t * half_dist, k) * (v / v_norm), c)
     return _addition(x, tv, c)
 
 
@@ -408,10 +530,11 @@ class Stereographic(ManifoldBase):
     """κ-Stereographic manifold (Bachmann et al. 2020) with automatic dtype casting.
 
     A single constant-curvature manifold spanning hyperbolic, Euclidean, and spherical geometry via a
-    **signed** curvature ``c`` (sectional curvature ``= -c``): ``c > 0`` hyperbolic (identical to
-    :class:`~hyperbolix.manifolds.Poincare`), ``c = 0`` Euclidean (with the gyrovector factor-2 metric —
-    see the module docstring), ``c < 0`` spherical. See the module docstring for the full convention
-    table, the Euclidean-limit factor-2 gotcha, and precision notes.
+    **signed** curvature ``c`` (sectional curvature ``= -c``): ``c > 0`` hyperbolic (the geometry of
+    :class:`~hyperbolix.manifolds.Poincare`; some ops agree with it only to rounding), ``c = 0`` Euclidean
+    (with the gyrovector factor-2 metric — see the module docstring), ``c < 0`` spherical. See the module
+    docstring for the full convention table, which ops match ``Poincare`` bit for bit, the Euclidean-limit
+    factor-2 gotcha, and precision notes.
 
     Args:
         dtype: Target JAX dtype for computations (default: ``jnp.float32``; float64 recommended).

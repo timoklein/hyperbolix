@@ -40,9 +40,10 @@ into Klein (``poincare_to_klein``, ``hyperboloid_to_klein``, ``pv_to_klein``) do
 project. A point farther out than that lands between the ``proj`` margin and the
 boundary (float32, c = 1: ``||k|| = 0.9999983`` at a = 7 against the margin
 0.99999356), and from a ≈ 10 on ``||k||`` rounds to exactly ``1/√c`` (at a = 12 for all
-three maps). Klein operations floor ``1 - c·||k||²`` at the
-``_boundary_floor`` value, so all such points read as a ≈ 6.32 (float32, c = 1). Call
-``Klein.proj`` after mapping far points into Klein.
+three maps). Klein operations floor ``1 - c·||k||²`` at half the ``_boundary_floor``
+value (``_boundary_divisor_floor``, below the rounding band of a capped point), so such a
+point reads at its own radius up to a ≈ 6.67 and as a ≈ 6.67 beyond (float32, c = 1;
+float64: 14.21). Call ``Klein.proj`` after mapping far points into Klein.
 
 JIT Compilation & Batching
 ---------------------------
@@ -78,7 +79,7 @@ from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, floor_at, safe_hypot_norm
 from ..utils.precision import MATMUL_PRECISION
-from ._gyrovector_core import _boundary_floor
+from ._gyrovector_core import _boundary_divisor_floor
 from .protocol import ScalarCurvature
 
 
@@ -167,10 +168,14 @@ def poincare_to_hyperboloid(
     # Curvature-aware inverse stereographic projection. The spatial part scales
     # by the Poincaré conformal factor 1/(1 - c·||y||²); only the time component
     # carries the extra 1/√c, so the two denominators differ.
-    # `_boundary_floor` is the same dtype-aware floor `_conformal_factor` puts on this quantity —
-    # the analytic minimum over projected points, below which any value is rounding noise.
-    # `MIN_NORM = 1e-15` sits below that minimum in both dtypes, so it never bit.
-    one_minus = floor_at(1.0 - c * y_sqnorm, _boundary_floor(y, c))
+    # `_boundary_divisor_floor` is the floor `_conformal_factor` puts on this quantity: half its
+    # analytic minimum over projected points. The computed value of a capped point lands from 6.2 eps
+    # below that minimum to 6 eps above it (Poincaré expmap at c <= 0.3 also returns points farther
+    # inside, up to 17 eps above in float32); floored at the minimum itself, as it was, it bound for
+    # 12-76 % of the capped points and zeroed the Jacobian's dominant 4c·y/(1 - c‖y‖²)² terms
+    # (relative gradient error 1.0; logs/2026-09-29_cancellation-free/floorfix2/). The half floor
+    # still keeps an unprojected point outside the ball finite.
+    one_minus = floor_at(1.0 - c * y_sqnorm, _boundary_divisor_floor(y, c))
 
     t = (1.0 + c * y_sqnorm) / (one_minus * sqrt_c)
     x_spatial = 2.0 * y / one_minus
@@ -243,8 +248,9 @@ def poincare_to_pv(
     where λ(y) = 2/(1 - c·||y||²) is the Poincaré conformal factor. As y
     approaches the ball boundary (||y||² → 1/c) the image grows without bound —
     expected, since PV is the *unconstrained* R^n model. The denominator is
-    floored at ``_boundary_floor(y, c)`` — the smallest value it can take on a
-    projected ball point — to avoid division by zero at the boundary.
+    floored at ``_boundary_divisor_floor(y, c)`` — half the smallest value it can
+    take on a projected ball point, below the rounding band of a capped one (see
+    :func:`poincare_to_hyperboloid`) — to avoid division by zero at the boundary.
 
     Args:
         y: Point in the Poincaré ball, shape (dim,). Should satisfy ||y||² < 1/c.
@@ -265,9 +271,9 @@ def poincare_to_pv(
     References:
         Chen et al. "Proper Velocity Neural Networks." ICLR 2026, Eq. 4.
     """
-    # `_boundary_floor`: the dtype-aware floor `_conformal_factor` puts on `1 - c‖y‖²`; see
+    # `_boundary_divisor_floor`: the floor `_conformal_factor` puts on `1 - c‖y‖²`; see
     # :func:`poincare_to_hyperboloid`.
-    denominator = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), _boundary_floor(y, c))
+    denominator = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), _boundary_divisor_floor(y, c))
     return 2.0 * y / denominator
 
 
@@ -369,17 +375,20 @@ def hyperboloid_to_pv(
 
 
 def _klein_gap(k: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
-    """``g_k = 1 - c·||k||²`` floored at ``_boundary_floor(k, c)``, the inverse squared Lorentz factor 1/gamma_k².
+    """``g_k = 1 - c·||k||²`` floored at ``_boundary_divisor_floor(k, c)``, the inverse squared Lorentz factor 1/gamma_k².
 
-    Same floor, and for the same reason, as the ``1 - c·||y||²`` of :func:`poincare_to_hyperboloid`:
-    it is the analytic minimum on a projected ball point, so anything below it is rounding noise.
-    On a Klein point ``g_k = sech²(a)`` at scaled radius ``a = √c·d(0, k)``, so the floor is
-    reached at ``a ≈ 6.3`` (float32) / ``13.9`` (float64) — half the Poincaré chart's radius,
-    whose gap is ``sech²(a/2)``. The cancellation in ``1 - c·||k||²`` costs a relative error of
+    Same floor, and for the same reason, as the ``1 - c·||y||²`` of :func:`poincare_to_hyperboloid`
+    and the Klein chart's own gap (``klein._gap``): half the analytic minimum on a projected ball
+    point, below the rounding band of a capped one. At the minimum itself the floor bound for 11-84 %
+    of the points ``Klein.proj`` capped and zeroed the dominant term of every Klein map's Jacobian
+    there (relative error 1.0). On a Klein point ``g_k = sech²(a)`` at scaled radius
+    ``a = √c·d(0, k)``, so at c = 1 the ``proj`` margin sits at ``a ≈ 6.3`` (float32) / ``13.9``
+    (float64) — half the Poincaré chart's radius, whose gap is ``sech²(a/2)`` — and the floor at
+    ``a ≈ 6.7`` / ``14.2``. The cancellation in ``1 - c·||k||²`` costs a relative error of
     ``eps·cosh²(a)`` on ``g_k``, the Klein chart's own representation floor.
     """
     k_sqnorm = jnp.dot(k, k, precision=MATMUL_PRECISION)
-    return floor_at(1.0 - c * k_sqnorm, _boundary_floor(k, c))
+    return floor_at(1.0 - c * k_sqnorm, _boundary_divisor_floor(k, c))
 
 
 def klein_to_poincare(
@@ -396,10 +405,10 @@ def klein_to_poincare(
 
     Both models use the radius-1/√c ball (curvature -c). The denominator is in
     [1, 2], so the map is well-conditioned; ``1 - c·||k||²`` is floored at
-    ``_boundary_floor(k, c)`` (see :func:`_klein_gap`). A Klein point has
+    ``_boundary_divisor_floor(k, c)`` (see :func:`_klein_gap`). A Klein point has
     ``√c·||k|| = tanh(a)`` at scaled radius ``a = √c·d(0, k)`` where a Poincaré
     point has ``tanh(a/2)``, so the Klein chart runs out of float precision at
-    half the Poincaré radius (``a ≈ 6.3`` float32, ``13.9`` float64).
+    half the Poincaré radius (``a ≈ 6.3`` float32, ``13.9`` float64 at c = 1).
 
     Args:
         k: Point in the Klein ball, shape (dim,). Should satisfy ||k||² < 1/c.
@@ -440,7 +449,7 @@ def poincare_to_klein(
     The denominator is in [1, 2], so no floor is needed. The result is not
     projected. Since ``√c·||k|| = tanh(a)`` with ``a = √c·d(0, p)``, a Poincaré point
     beyond scaled radius ≈ 6.3 (float32) / 13.9 (float64) at c = 1 lands past the
-    ``Klein.proj`` margin, and Klein operations read it as radius ≈ 6.3 / 13.9 (see
+    ``Klein.proj`` margin, and Klein operations read it at radius ≤ 6.67 / 14.21 (see
     the module docstring). Call ``Klein.proj`` on the result for such points.
 
     Args:
@@ -524,8 +533,8 @@ def hyperboloid_to_klein(
     that is the unit-ball Klein coordinate ``√c·k``. Since ``√c·||k|| =
     ||x_s||/x₀ = tanh(a)`` at scaled radius ``a = √c·d(0, x)``, points beyond
     ``a ≈ 6.3`` (float32) / ``13.9`` (float64) at c = 1 land past the ``Klein.proj``
-    margin (the result is not projected), and Klein operations read them as radius
-    ≈ 6.3 / 13.9 (see the module docstring). Call ``Klein.proj`` on the result for
+    margin (the result is not projected), and Klein operations read them at radius
+    ≤ 6.67 / 14.21 (see the module docstring). Call ``Klein.proj`` on the result for
     such points.
 
     Args:
@@ -567,9 +576,9 @@ def klein_to_pv(
         x = gamma_k·k = k / √(1 - c·||k||²)
 
     The image grows without bound as k approaches the boundary (PV is the
-    unconstrained model); ``1 - c·||k||²`` is floored at ``_boundary_floor(k, c)``
-    (see :func:`_klein_gap`), reached at scaled radius ``a ≈ 6.3`` (float32) /
-    ``13.9`` (float64).
+    unconstrained model); ``1 - c·||k||²`` is floored at ``_boundary_divisor_floor(k, c)``
+    (see :func:`_klein_gap`), reached at scaled radius ``a ≈ 6.7`` (float32) /
+    ``14.2`` (float64) at c = 1.
 
     Args:
         k: Point in the Klein ball, shape (dim,). Should satisfy ||k||² < 1/c.
@@ -611,7 +620,7 @@ def pv_to_klein(
     Every finite PV point lands inside the Klein ball in exact arithmetic. The
     result is not projected: in floating point a point beyond scaled radius ≈ 6.3
     (float32) / 13.9 (float64) at c = 1 lands past the ``Klein.proj`` margin, and
-    Klein operations read it as radius ≈ 6.3 / 13.9 (see the module docstring).
+    Klein operations read it at radius ≤ 6.67 / 14.21 (see the module docstring).
     Call ``Klein.proj`` on the result for such points.
 
     Args:
@@ -670,10 +679,11 @@ def halfspace_to_poincare(
     so no floor is needed. ``q`` is written as a product so it does not cancel
     near the sphere ``c·||x||² = 1`` (the ball's equatorial plane ``p_n = 0``). The
     result is not projected: past the ball chart's ceiling (scaled radius
-    ``a ≈ 12.6`` float32 / ``27.7`` float64) ``||p||`` rounds to ``1/√c`` or just
-    beyond, as for every map into the ball — call ``Poincare.proj`` for such
-    points. Past float32 ``|s| ≈ 1.8e19`` the squares overflow and the output is
-    NaN, not a saturated point.
+    ``a ≈ 12.6`` float32 / ``27.7`` float64 at c = 1) ``||p||`` lands beyond the
+    ``proj`` margin, and in float32 from ``a ≈ 18`` on at ``1/√c`` up to rounding,
+    as for every map into the ball — call ``Poincare.proj`` for such points. Past
+    float32 ``|s| ≈ 1.8e19`` the squares overflow and the output is NaN, not a
+    saturated point.
 
     Args:
         x: Point in the half-space, shape (dim,). Should satisfy x_n > 0.
@@ -724,17 +734,21 @@ def poincare_to_halfspace(
     ``e_n/√c`` is the half-space's point at infinity and every other boundary
     point lands on ``x_n = 0``.
 
-    Numerics: ``g`` is floored at ``_boundary_floor(p, c)`` exactly as
-    :func:`poincare_to_hyperboloid` floors ``1 - c·||y||²`` — the analytic minimum
-    on a ``Poincare.proj``-projected point, so anything below it is rounding
-    noise. The ball chart ends at scaled radius ``a ≈ 12.6`` (float32) / ``27.7``
-    (float64) at the ``proj`` margin; a point past it is wherever
+    Numerics: ``g`` is floored at ``_boundary_divisor_floor(p, c)`` exactly as
+    :func:`poincare_to_hyperboloid` floors ``1 - c·||y||²`` — half the analytic
+    minimum on a ``Poincare.proj``-projected point, below the rounding band of a
+    capped one — which keeps ``x_n > 0`` for an unprojected point outside the ball.
+    At the minimum itself the floor bound for 12-76 % of the capped points and
+    zeroed ``∂x_n/∂p = -2c·p/(√c·den) + …`` there (relative error 1.0).
+    The ball chart ends at the ``proj`` margin, scaled radius ``a ≈ 12.6``
+    (float32) / ``27.7`` (float64) at c = 1; a point past it is wherever
     ``Poincare.proj`` put it, and its image is the half-space point at that
     capped radius. ``den`` is not floored: it vanishes only at the north pole,
     a point the half-space cannot hold, so the output there is ``inf``/NaN —
     loud, not a clamped finite point. On a projected point
-    ``den ≥ (1 - ||s||)² ≥ eps**1.5`` (the ``proj`` margin squared), so the
-    division is finite everywhere the ball is.
+    ``den ≥ (1 - ||s||)²``, about ``c·eps**1.5`` at the margin (``√c·eps**0.75``
+    in the scaled ``s``, squared), so the division is finite everywhere the
+    ball is.
 
     Args:
         p: Point in the Poincaré ball, shape (dim,). Should satisfy ||p||² < 1/c.
@@ -762,9 +776,9 @@ def poincare_to_halfspace(
     s_n = sqrt_c * p[-1]
     s_s_sqnorm = jnp.dot(s_s, s_s, precision=MATMUL_PRECISION)
 
-    # `_boundary_floor`: the dtype-aware floor `_conformal_factor` puts on `1 - c‖p‖²`; see
-    # `poincare_to_hyperboloid`.
-    gap = floor_at(1.0 - c * jnp.dot(p, p, precision=MATMUL_PRECISION), _boundary_floor(p, c))
+    # `_boundary_divisor_floor`: the floor `_conformal_factor` puts on `1 - c‖p‖²`; see
+    # `poincare_to_hyperboloid`. Here the gap is a numerator: the floor keeps `x_n > 0`.
+    gap = floor_at(1.0 - c * jnp.dot(p, p, precision=MATMUL_PRECISION), _boundary_divisor_floor(p, c))
     den = s_s_sqnorm + (s_n - 1.0) ** 2  # zero only at the north pole (x_n = ∞): no floor
     return jnp.concatenate([2.0 * s_s, gap[None]]) / (sqrt_c * den)
 
@@ -925,7 +939,7 @@ def halfspace_to_klein(
 
     The result is not projected. Since ``√c·||k|| = tanh(a)`` with ``a = √c·d(o, x)``, a point
     beyond scaled radius ≈ 6.3 (float32) / 13.9 (float64) at c = 1 lands past the ``Klein.proj``
-    margin, and Klein operations read it as radius ≈ 6.3 / 13.9 (see the module docstring). Call
+    margin, and Klein operations read it at radius ≤ 6.67 / 14.21 (see the module docstring). Call
     ``Klein.proj`` on the result for such points. Past ``√c·||x|| ≈ 1.8e19`` (float32, scaled
     radius ≈ 44) ``c·||x||²`` overflows and ``k_n`` is NaN.
 
@@ -980,9 +994,9 @@ def klein_to_halfspace(
     gap-based form above only removes the extra rounding that the literal ``1 - √c·k_n`` adds on
     top of it.
 
-    ``g_k`` is floored at ``_boundary_floor(k, c)``, so every point of the closed ball maps to a
-    finite half-space point with ``x_n > 0``: a Klein point past the chart ceiling, the north
-    pole itself included, lands at the scaled radius ≈ 6.3 (float32) / 13.9 (float64) at c = 1
+    ``g_k`` is floored at ``_boundary_divisor_floor(k, c)``, so every point of the closed ball maps
+    to a finite half-space point with ``x_n > 0``: a Klein point past the floor's radius, the north
+    pole itself included, lands at the scaled radius ≈ 6.67 (float32) / 14.21 (float64) at c = 1
     that the Klein operations read it at.
 
     Args:

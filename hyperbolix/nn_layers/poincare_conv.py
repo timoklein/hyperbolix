@@ -7,6 +7,10 @@ reference computation flow:
 
     tangent input → beta-scale → unfold patches → expmap_0 → HNN++ FC → logmap_0 → tangent output
 
+The expmap_0 and logmap_0 steps are evaluated in closed form on the tangent vectors, so the
+ball point is never formed: in float32 that round trip capped both the patch vector and the
+output at the ball's ceiling (``√c‖·‖ ≈ 6.33`` at c = 1) with a zero radial gradient.
+
 This avoids the numerically unstable logmap_0 round-trips in beta_concat
 that cause NaN when points approach the Poincaré ball boundary.
 
@@ -48,9 +52,9 @@ class HypConv2DPoincare(nnx.Module):
         1) Map to tangent space if input is on manifold
         2) Scale tangent vectors by beta function ratio (beta-concatenation scaling)
         3) Extract patches via im2col (zero-padding in tangent space)
-        4) Map concatenated patch vectors to manifold via expmap_0
-        5) Apply HNN++ fully-connected layer
-        6) Map back to tangent space via logmap_0
+        4) Apply the HNN++ fully-connected layer to the patch vectors mapped to the manifold via
+           expmap_0, and map its output back to tangent space via logmap_0 — both maps evaluated
+           in closed form on the tangent vectors, without forming the ball points
 
     Parameters
     ----------
@@ -123,7 +127,7 @@ class HypConv2DPoincare(nnx.Module):
         # Static configuration
         validate_poincare_manifold(
             manifold_module,
-            required_methods=("expmap_0", "logmap_0", "compute_mlr_pp"),
+            required_methods=("logmap_0", "_compute_mlr_pp_tangent"),
         )
         self.manifold = manifold_module
         self.in_channels = in_channels
@@ -165,7 +169,8 @@ class HypConv2DPoincare(nnx.Module):
         Forward pass through the Poincaré convolutional layer.
 
         Follows the reference computation flow: tangent-space beta-scaling,
-        patch extraction, expmap_0, HNN++ FC, logmap_0.
+        patch extraction, expmap_0, HNN++ FC, logmap_0 — with expmap_0 and logmap_0
+        evaluated on the tangent vectors, never forming the ball points.
 
         Parameters
         ----------
@@ -211,24 +216,19 @@ class HypConv2DPoincare(nnx.Module):
 
         batch, out_h, out_w, concat_dim = patches_BHWKC.shape
 
-        # Step 4: Map concatenated patch vectors to manifold via expmap_0
+        # Step 4: expmap_0 → HNN++ FC → logmap_0, tangent (N, K²·C_in) → tangent (N, C_out). The FC
+        # scores the patch vectors directly and returns logmap_0 of its lift in closed form; the
+        # ball round trip capped both ends at √c‖·‖ ≈ 6.33 in float32 at c = 1.
         patches_flat_NKC = patches_BHWKC.reshape(-1, concat_dim)  # (N, K²·C_in) where N=B*H*W
-        manifold_pts_NKC = jax.vmap(self.manifold.expmap_0, in_axes=(0, None))(
-            patches_flat_NKC, c
-        )  # (N, K²·C_in) on Poincaré ball
-
-        # Step 5: HNN++ FC — (N, K²·C_in) on manifold → (N, C_out) on manifold
-        fc_out_NC = _poincare_pp_forward(
-            manifold_pts_NKC,
+        tangent_out_NC = _poincare_pp_forward(
+            patches_flat_NKC,
             self.kernel[...],
             self.bias[...],
             self.manifold,
             c,
-            "manifold",
-        )
-
-        # Step 6: Map back to tangent space
-        tangent_out_NC = jax.vmap(self.manifold.logmap_0, in_axes=(0, None))(fc_out_NC, c)  # (N, C_out)
+            "tangent",
+            tangent_output=True,
+        )  # (N, C_out)
 
         # Reshape to spatial output
         output_BHWC = tangent_out_NC.reshape(batch, out_h, out_w, self.out_channels)

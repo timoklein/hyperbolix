@@ -59,8 +59,8 @@ different conventions:
 Curvature convention is uniform across all manifolds: `c > 0` means sectional
 curvature $-c$ (so larger `c` → more curved). `Euclidean` ignores `c` entirely.
 The one exception is `Stereographic`, which takes a **signed** `c` that *extends*
-this same convention across zero: `c > 0` hyperbolic (identical to `Poincare(c)`),
-`c = 0` Euclidean, `c < 0` spherical. See the
+this same convention across zero: `c > 0` hyperbolic (the `Poincare(c)` geometry,
+with some ops equal only to rounding), `c = 0` Euclidean, `c < 0` spherical. See the
 [κ-Stereographic API reference](../api-reference/manifolds.md) for the factor-2
 Euclidean-limit caveat and the sign-flip relative to the paper's $\kappa$.
 
@@ -89,7 +89,7 @@ class Model(nnx.Module):
         self.fc = FGGLinear(33, 65, rngs=rngs)
 
     def __call__(self, x):
-        c = self.curvature()                              # softplus → positive, clamped
+        c = self.curvature()                              # exp → positive, clamped
         return self.fc(x, c=c)
 ```
 
@@ -115,11 +115,20 @@ self.curvature = LearnableCurvature(init_c=1.0, parameterization="log")
 self.kappa = LearnableCurvature(init_c=-1.0, parameterization="identity")
 ```
 
-The positive parameterizations apply the default clamp `[0.1, 10.0]` to the
-recovered `c` (not the raw parameter), giving a hard stability guard.
-`"identity"` instead uses a symmetric magnitude cap `[-10.0, 10.0]` that
-*includes* `0`, so it never forbids the Euclidean/spherical half. Pass
-`c_min=None, c_max=None` to disable, or set tighter bounds to fit your workload.
+The positive parameterizations clamp the recovered `c` (not the raw parameter)
+to a decade either side of `init_c`, `[init_c / 10, init_c * 10]` (`[0.1, 10]`
+at the default `init_c=1.0`), giving a hard stability guard. `"identity"`
+instead uses a symmetric magnitude cap `[-10.0, 10.0]` that *includes* `0`, so
+it never forbids the Euclidean/spherical half. Pass `c_min`/`c_max` to set other
+bounds, or `None` to disable one.
+
+The clamp does not freeze `c` on a bound. On a bound or outside
+`[c_min, c_max]` it blocks only a gradient that would push `c` out, so `c`
+rests on the bound while the loss pushes against it and comes off it once the
+loss pulls it back inside: projected gradient descent, with no extra call in
+the train step. The raw parameter stays within the step that crossed the bound
+(plus the optimizer's momentum), so leaving takes only the few steps that walk
+that back: 1 to 7 Adam steps at learning rate `1e-2` in a toy fit.
 
 ### When `c=1.0` works and when it doesn't
 
@@ -233,9 +242,11 @@ training kernels) have two stability concerns that motivate the
 
 2. **Clamp guard**: Over millions of gradient steps, an unclamped curvature
    can drift to `c → 0` (effectively Euclidean) or `c → ∞` (numerical
-   blow-up). The default `[0.1, 10.0]` bounds — applied directly to `c`,
-   not to the raw parameter — cover the entire useful hyperbolic geometry
-   range without losing expressivity.
+   blow-up). The default bounds, a decade either side of `init_c` and
+   applied directly to `c` rather than to the raw parameter, stop that drift;
+   pass wider bounds if `c` should range further. A `c` held on a bound still
+   gets the gradient that points back inside, so it comes off the bound when
+   the loss changes direction.
 
 The recommended pattern for a compiled RL loop:
 
@@ -250,18 +261,18 @@ class HypPolicy(nnx.Module):
     def __init__(self, rngs: nnx.Rngs):
         self.manifold = manifold
         # Log parameterization: scale-invariant gradient (dc/draw = c).
-        # Default clamp [0.1, 10.0] is the stability guard.
-        self.curvature = LearnableCurvature(
-            init_c=0.1, parameterization="log",
-        )
-        self.l1 = HypLinearPoincarePP(manifold, 4, 4, rngs=rngs)
+        # The default clamp [0.01, 1.0], a decade either side of init_c, is the stability guard.
+        self.curvature = LearnableCurvature(init_c=0.1, parameterization="log")
+        # l1 takes the Euclidean observation as a tangent vector; l2 takes l1's ball point.
+        self.l1 = HypLinearPoincarePP(manifold, 4, 4, rngs=rngs, input_space="tangent")
         self.l2 = HypLinearPoincarePP(manifold, 4, 4, rngs=rngs)
 
-    def __call__(self, x):
+    def __call__(self, x):  # x: (B, 4) Euclidean observations
         c = self.curvature()
         h = self.l1(x, c)
         return self.l2(h, c)
 
+model = HypPolicy(nnx.Rngs(0))
 # Standard Euclidean optimizer — self.curvature.raw is updated like any param.
 optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 
@@ -360,8 +371,9 @@ the spatial part of `halfspace_to_hyperboloid`.
     at $c = 1$, beyond the `Klein.proj` margin. These maps do not project: in float32 at
     $c = 1$ such points land between the margin ($\lVert k\rVert = 0.99999356$) and the
     boundary, and from $a \approx 10$ on exactly on $\lVert k\rVert = 1/\sqrt{c}$. Klein
-    operations floor the gap $1 - c\lVert k\rVert^2$ at its value on the margin, so all of
-    these points read as $a \approx 6.32$. Map out of Klein freely; map into it only points
+    operations floor the gap $1 - c\lVert k\rVert^2$ at half its value on the margin, so
+    these points read at their own radius only up to $a \approx 6.67$, and as $a \approx 6.67$
+    beyond. Map out of Klein freely; map into it only points
     you know lie inside that radius, and call `Klein.proj` after mapping far points in. See the
     [numerical-stability guide](numerical-stability.md#klein-chart-ceiling).
 

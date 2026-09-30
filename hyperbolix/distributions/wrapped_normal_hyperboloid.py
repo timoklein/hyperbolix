@@ -16,7 +16,7 @@ References:
 
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ..manifolds.hyperboloid import Hyperboloid
+from ..manifolds.hyperboloid import Hyperboloid, _ptransp_to_0
 from ..utils.math_utils import safe_norm
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
@@ -191,11 +191,14 @@ def log_prob(
 
     u_SBA = _vmap_sample_and_batch(_logmap_single, n_sample_dims, n_batch_dims)(z, mu)
 
-    # Step 2: Parallel transport from mu to origin: v = PT_{μ→μ₀}(u)
-    mu_0_A = manifold.create_origin(c, n)
-
+    # Step 2: Parallel transport from mu to origin: v = PT_{μ→μ₀}(u). `_ptransp_to_0`, not the generic
+    # `manifold.ptransp(u, mu, origin)`: with the origin as an endpoint that one takes its Cartesian
+    # chart, whose radial component cancels two O(cosh a) terms down to u_r/cosh a — the float32
+    # log_prob error it caused grows like eps·cosh(a): 5.5e-3..1.1e-2 at scaled radius a = 10 for
+    # radial displacements, below 5e-5 now with an isotropic sigma (see `_ptransp_to_0`). The mean is
+    # cast to the manifold dtype here because the helper, unlike the class method, does not cast.
     def _ptransp_single(u_A, mu_A):
-        return manifold.ptransp(u_A, mu_A, mu_0_A, c)
+        return _ptransp_to_0(u_A, manifold._cast(mu_A), c)
 
     v_SBA = _vmap_sample_and_batch(_ptransp_single, n_sample_dims, n_batch_dims)(u_SBA, mu)
 

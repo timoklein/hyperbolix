@@ -157,7 +157,7 @@ boundary** between Euclidean and hyperbolic computation:
 | Pattern | Boundary location | Typical use case |
 |---|---|---|
 | **Fully hyperbolic** | Inputs are already on-manifold (e.g. embedding table on Poincaré) | Knowledge graph embeddings, hierarchy learning |
-| **Hyperbolic head** | After a Euclidean backbone (CNN/Transformer) → `expmap_0` or constraint projection → hyperbolic classifier | ImageNet-scale CNNs with hyperbolic MLR (van Spengler 2023) |
+| **Hyperbolic head** | After a Euclidean backbone (CNN/Transformer) → `expmap_0` or constraint projection → hyperbolic classifier; a Poincaré PP or Busemann head takes the features directly with `input_space="tangent"` ([Pattern 2](#pattern-2-hybrid-cnn-backbone-poincare-head)) | ImageNet-scale CNNs with hyperbolic MLR (van Spengler 2023) |
 | **Hyperbolic backbone** | At input via `expmap_0` per-pixel, then fully-hyperbolic through to a Euclidean logits layer | FullyHyperbolicCNN on MNIST |
 | **Hybrid (sandwiched)** | Euclidean stem → small Euclidean embed → `expmap_0` → hyperbolic block → `logmap_0` → Euclidean head | When you want hyperbolic geometry only mid-network |
 
@@ -169,10 +169,8 @@ recipe to prepare Euclidean features before `expmap_0`:
 ```python
 from hyperbolix.nn_layers import HyperPPFeatureScaling
 
-scale = HyperPPFeatureScaling(
-    dim=feature_dim, manifold_module=hyperboloid, rngs=rngs,
-)
-x_euclidean = scale(x_euclidean)               # RMSNorm + activation + dim scaling
+scale = HyperPPFeatureScaling(dim=feature_dim, rngs=rngs)
+x_euclidean = scale(x_euclidean, c)            # RMSNorm + activation + dim scaling
 x_manifold = jax.vmap(lambda v: hyperboloid.expmap_0(
     jnp.concatenate([jnp.zeros(1), v]), c
 ))(x_euclidean)
@@ -226,6 +224,19 @@ class HTCClassifier(nnx.Module):
 
 ### Pattern 2: Hybrid CNN backbone + Poincaré head
 
+Pass the Euclidean features to the head as they are, with `input_space="tangent"`, instead of
+lifting them with `expmap_0` first. The head then scores the point `expmap_0` would give, in closed
+form, without storing that point. A lifted float32 point stops at the ball's ceiling: a longer
+feature vector is scored as if it sat on the ceiling, with a zero radial gradient. The tangent path
+stays accurate past it; at $\sqrt{c}\,\lVert v\rVert = 8$ the float32 error of the scores drops from
+2.0e-1 to 1.5e-6 (see
+[Tangent Inputs to the HNN++ and Busemann Layers](numerical-stability.md#poincare-tangent-input)).
+`HypLinearPoincarePP`, `HypRegressionPoincareBusemann` and `HypLinearPoincareBusemann` take the same
+flag. Keep the default `input_space="manifold"` when the input is already a ball point, such as the
+output of an earlier Poincaré layer. `HypConv2DPoincare` already defaults to `input_space="tangent"`
+and always returns tangent vectors, so a stack of these convs takes the tangent path without
+setting the flag.
+
 ```python
 from hyperbolix import LearnableCurvature
 
@@ -238,15 +249,13 @@ class HybridCNN(nnx.Module):
         self.head = HypRegressionPoincarePP(
             manifold_module=self.poincare,
             in_dim=64, out_dim=num_classes, rngs=rngs,
+            input_space="tangent",  # takes the Euclidean features, no expmap_0
         )
 
     def __call__(self, images: jax.Array) -> jax.Array:
         c = self.curvature()
         features = self.pool(jax.nn.relu(self.stem(images)))  # (B, 64) Euclidean
-        x_poincare = jax.vmap(self.poincare.expmap_0, in_axes=(0, None))(
-            features, c,
-        )
-        return self.head(x_poincare, c)
+        return self.head(features, c)                          # (B, num_classes) logits
 ```
 
 ### Pattern 3: Hyperbolic transformer block

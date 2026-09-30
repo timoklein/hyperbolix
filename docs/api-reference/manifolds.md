@@ -54,7 +54,7 @@ The Poincaré ball model with Möbius operations.
 !!! note "Distance Versions"
     The Poincaré `dist` method has a `version_idx` parameter selecting between 3 formulations:
 
-    - `VERSION_MOBIUS_DIRECT` (0): Möbius addition formula (default, fastest)
+    - `VERSION_MOBIUS_DIRECT` (0): direct Möbius distance formula (default)
     - `VERSION_MOBIUS` (1): Möbius via addition
     - `VERSION_METRIC_TENSOR` (2): Direct metric tensor integration
 
@@ -67,6 +67,19 @@ The Poincaré ball model with Möbius operations.
     to floor every small radius (`dist_0`) and every small separation (`dist`). See
     [slot 2 reads the radius through `arcsinh`](
     ../user-guide/numerical-stability.md#poincare-metric-tensor-dist-0).
+
+    For `dist`, the `arcsinh` form is also the direct Möbius distance, so slots 0 and 2 run one body:
+
+    $$d(x, y) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x-y\rVert}{\sqrt{(1-c\lVert x\rVert^2)(1-c\lVert y\rVert^2)}}\right)$$
+
+    The literal Möbius form $\frac{2}{\sqrt{c}}\operatorname{atanh}(\sqrt{c}\,\lVert(-x)\oplus y\rVert)$
+    hit `atanh`'s float32 domain clip for far pairs; this one has no domain to clip and stays
+    accurate up to the ball chart's ceiling. In float32 at $c = 1$, two points at scaled radius 7.2
+    on opposite sides (true $\sqrt{c}\,d = 14.4$) give 14.400112. `logmap` takes its magnitude from
+    the same argument. Slot 1 takes the norm of the projected $(-x)\oplus y$, which cannot pass the
+    ceiling, so in float32 it still saturates: the same pair gives 12.637328, and its gradient is
+    lost (relative error 1.0). In float64 it saturates once $\sqrt{c}\,d$ passes the float64
+    ceiling, 27.7: 27.725826 for a true 29 or 40, with the same loss of gradient.
 
 !!! note "Apollonian weak metric"
     `apollonian_dist(x, y, c)` is the **non-symmetric** Apollonian weak metric $\delta$
@@ -108,11 +121,11 @@ A single constant-curvature manifold spanning **hyperbolic, Euclidean, and spher
 
     | `c` | sectional curvature | geometry |
     |---|---|---|
-    | $> 0$ | $< 0$ | hyperbolic — **identical to `Poincare(c)`** |
+    | $> 0$ | $< 0$ | hyperbolic — the `Poincare(c)` geometry (see below) |
     | $= 0$ | $0$ | Euclidean (factor-2 limit; see below) |
     | $< 0$ | $> 0$ | spherical (stereographic projection of the sphere) |
 
-    Internally the paper's $\kappa = -c$. This is **sign-flipped from the paper/geoopt $\kappa$** (their $\kappa > 0$ = spherical), chosen so `c` matches every other hyperbolix manifold and so `Stereographic(c)` reproduces `Poincare(c)` exactly for $c > 0$.
+    Internally the paper's $\kappa = -c$. This is **sign-flipped from the paper/geoopt $\kappa$** (their $\kappa > 0$ = spherical), chosen so `c` matches every other hyperbolix manifold and so `Stereographic(c)` matches `Poincare(c)` for $c > 0$: `addition`, `gyration`, `proj`, the conformal factor, `ptransp`, `ptransp_0`, `tangent_inner`, `tangent_norm`, `egrad2rgrad`, `retraction` and `dist_0` return `Poincare`'s bits, while `dist`, `logmap`, `expmap`, `expmap_0`, `logmap_0` and `scalar_mul` agree only to rounding (float32: `logmap` within 1.1e-5 relative at scaled radius 6–11, the others within 3.7e-7; see [κ-Stereographic numerics](../user-guide/numerical-stability.md#stereographic-near-zero-curvature)).
 
 !!! warning "The Euclidean limit carries a factor of 2"
     The conformal factor is $\lambda^\kappa_x = 2/(1 - c\lVert x\rVert^2)$, so $\lambda^\kappa_0 = 2$ and the metric at $c = 0$ is $4\cdot I$, **not** $I$. As $c \to 0$: `addition`/`expmap`/`logmap` reduce to the *bare* Euclidean $x{+}y$ / $x{+}v$ / $y{-}x$, but `dist` $\to 2\lVert x-y\rVert$ and `tangent_norm` $\to 2\lVert v\rVert$ (paper Thm. 3). This matches Poincaré's own `dist_0` $\to 2\lVert x\rVert$, and therefore does **not** equal the separate `Euclidean` manifold's `dist` (bare metric $I$). Use `Euclidean` for un-scaled flat geometry; use `Stereographic` at $c=0$ only as the *continuous limit* of the curved family.
@@ -248,7 +261,7 @@ The gyrovector structure is Ungar's Einstein gyrovector space (Ungar 2009): `add
     - `einstein_midpoint(x_ND, weights_N, c)`: $\sum_i w_i \gamma_i x_i / \sum_i w_i \gamma_i$ (`weights_N=None` for uniform weights), equal to the normalized weighted Lorentz centroid mapped to the Klein ball
 
 !!! warning "Half the Poincaré ball's radius range"
-    `proj` uses the Poincaré ball's `eps**0.75` boundary margin, but because a Klein point sits at $\tanh(a)$ rather than $\tanh(a/2)$ ($a = \sqrt{c}\,d_0$, the scaled radius), the projection ceiling at $c = 1$ is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$ = **6.32** in float32 and **13.86** in float64, half of Poincaré's 12.65 / 27.7. In float32, Klein points can be stored farther out (at $c = 1$, a point at $a = 8$ has $\lVert x\rVert = 0.99999976$, above the margin $0.99999356$), but `proj` and the floor on $g_x$ cap every such point at $a = 6.32$. The margin $\varepsilon^{0.75}$ is absolute, so for general $c$ the ceiling is $a = \operatorname{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$ and depends mildly on $c$: at $c = 0.1$ it is 6.90 in float32 and 14.44 in float64. The maps into Klein (`poincare_to_klein`, `hyperboloid_to_klein`, `pv_to_klein`) do not project; call `proj` after mapping far points in. See [the chart ceiling and floor](../user-guide/numerical-stability.md#klein-chart-ceiling).
+    `proj` uses the Poincaré ball's `eps**0.75` boundary margin, but because a Klein point sits at $\tanh(a)$ rather than $\tanh(a/2)$ ($a = \sqrt{c}\,d_0$, the scaled radius), the projection ceiling at $c = 1$ is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$ = **6.32** in float32 and **13.86** in float64, half of Poincaré's 12.65 / 27.7. In float32, Klein points can be stored farther out (at $c = 1$, a point at $a = 8$ has $\lVert x\rVert = 0.99999976$, above the margin $0.99999356$), but `proj` caps every such point at $a = 6.32$, and the floor on $g_x$, at half its value on the margin, reads an unprojected one at $a \le 6.67$. The margin $\varepsilon^{0.75}$ is absolute, so for general $c$ the ceiling is $a = \operatorname{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$ and depends mildly on $c$: at $c = 0.1$ it is 6.90 in float32 and 14.44 in float64. The maps into Klein (`poincare_to_klein`, `hyperboloid_to_klein`, `pv_to_klein`) do not project; call `proj` after mapping far points in. See [the chart ceiling and floor](../user-guide/numerical-stability.md#klein-chart-ceiling).
 
 ::: hyperbolix.manifolds.klein.Klein
     options:

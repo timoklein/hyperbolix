@@ -76,6 +76,32 @@ class TestEuclidean:
 # 3. LearnableCurvature module
 # ===========================================================================
 
+# init_c on a clamp bound: (parameterization, c_min, c_max, init_c), with explicit bounds so the cases do not depend
+# on the default bounds. Rounding the inverse of init_c to the storage dtype puts the recovered c one float outside
+# the bound for five of these 22 dtype cases on XLA:CPU (float32 log at 0.1 and 0.2, float32 softplus at 0.2 and
+# float64 softplus at 0.3 below c_min; float64 log at 10 above c_max), one float inside it for two (float64 log and
+# softplus at 0.1, above c_min), and exactly on it for the other 15, every identity case among them.
+INIT_ON_BOUND_CASES = [
+    ("log", 0.1, 10.0, 0.1),
+    ("log", 0.1, 10.0, 10.0),
+    ("log", 0.2, 5.0, 0.2),
+    ("log", 0.2, 5.0, 5.0),
+    ("softplus", 0.1, 10.0, 0.1),
+    ("softplus", 0.1, 10.0, 10.0),
+    ("softplus", 0.2, 5.0, 0.2),
+    ("softplus", 0.3, 3.0, 0.3),
+    ("identity", -10.0, 10.0, -10.0),
+    ("identity", -10.0, 10.0, 10.0),
+    ("identity", -3.0, 0.3, 0.3),
+]
+UNCLAMPED = {"log": jnp.exp, "softplus": jax.nn.softplus, "identity": lambda raw: raw}
+INVERSE = {"log": math.log, "softplus": lambda c: math.log(math.expm1(c)), "identity": lambda c: c}  # for c <= 20
+
+
+def _dc_draw(parameterization: str, raw: float) -> float:
+    """The unclamped map's derivative at ``raw``, in Python float64: the oracle for every gradient below."""
+    return {"log": math.exp(raw), "softplus": 1.0 / (1.0 + math.exp(-raw)), "identity": 1.0}[parameterization]
+
 
 class TestLearnableCurvatureInit:
     @pytest.mark.parametrize("init_c", [0.1, 0.5, 1.0, 5.0, 10.0])
@@ -89,6 +115,18 @@ class TestLearnableCurvatureInit:
     def test_init_recovery_with_disabled_clamp(self, init_c, parameterization):
         c = LearnableCurvature(init_c, parameterization=parameterization, c_min=None, c_max=None)
         assert jnp.allclose(c(), init_c, atol=1e-4)
+
+    @pytest.mark.parametrize("init_c", [25.0, 50.0])
+    def test_softplus_init_recovery_above_20_is_exact_in_float64(self, init_c):
+        """Above 20 the inverse is ``x + log1p(-exp(-x))``, not ``x``: float64 softplus recovers ``init_c`` to a few ulps.
+
+        With ``return x`` the forward gave ``25 + e^-25 = 25.000000000013888`` for ``init_c = 25`` (3909 ulps off). At
+        ``init_c = 50``, ``e^-50`` is below half an ulp, so both inverses pass there.
+        """
+        curvature = LearnableCurvature(init_c, parameterization="softplus", c_max=1000.0, param_dtype=jnp.float64)
+        c = curvature()
+        assert c.dtype == jnp.float64
+        assert abs(float(c) - init_c) <= 4 * math.ulp(init_c)
 
     def test_raw_is_nnx_param(self):
         c = LearnableCurvature(0.1)
@@ -137,6 +175,78 @@ class TestLearnableCurvatureInit:
             LearnableCurvature(1.0, parameterization=parameterization, param_dtype=jnp.float64).raw[...].dtype == jnp.float64
         )
 
+    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["float32", "float64"])
+    @pytest.mark.parametrize(("parameterization", "c_min", "c_max", "init_c"), INIT_ON_BOUND_CASES)
+    def test_init_on_a_bound_passes_the_inward_gradient_and_blocks_the_outward_one(
+        self, parameterization, c_min, c_max, init_c, dtype
+    ):
+        """At step 0 a loss that pulls ``c`` inside gets the analytic ``dL/draw``; one that pushes it out gets exactly 0.
+
+        ``raw`` is the plain inverse of ``init_c`` rounded to the storage dtype, so the recovered ``c`` can land one
+        float outside the bound: on XLA:CPU float32 ``exp(float32(log 0.1)) = 0.099999994 < 0.1``, which froze
+        ``LearnableCurvature(init_c=0.1)`` under the old hard clamp. The clamp maps it onto the bound, passes the
+        inward gradient and blocks the outward one. A ``c`` that rounds exactly onto the bound gets the same
+        projected-gradient treatment, so the outward gradient passes only where ``c`` rounds inside the interval.
+        The oracle is ``±dc/draw`` in Python float64 at the stored ``raw``.
+        """
+        curvature = LearnableCurvature(init_c, parameterization=parameterization, c_min=c_min, c_max=c_max, param_dtype=dtype)
+        plain_inverse = jnp.array(INVERSE[parameterization](init_c), dtype=dtype)
+        assert curvature.raw[...] == plain_inverse  # no construction-time nudge
+        on_floor = init_c == c_min
+        bound = jnp.asarray(c_min if on_floor else c_max, dtype=dtype)
+        unclamped = UNCLAMPED[parameterization](curvature.raw[...])
+        outside = bool(unclamped < bound) if on_floor else bool(unclamped > bound)
+        on_or_outside = bool(unclamped <= bound) if on_floor else bool(unclamped >= bound)
+        assert curvature() == (bound if outside else unclamped)
+
+        inward = -1.0 if on_floor else 1.0  # dL/dc under which a descent step moves c into the interval
+        grad_in = nnx.grad(lambda m: inward * m())(curvature).raw[...]
+        grad_out = nnx.grad(lambda m: -inward * m())(curvature).raw[...]
+        dc_draw = _dc_draw(parameterization, float(curvature.raw[...]))
+        rel = 1e-6 if dtype == jnp.float32 else 1e-12
+        assert grad_in.dtype == dtype
+        assert float(grad_in) == pytest.approx(inward * dc_draw, rel=rel)
+        if on_or_outside:
+            assert float(grad_out) == 0.0
+        else:
+            assert float(grad_out) == pytest.approx(-inward * dc_draw, rel=rel)
+
+    def test_builds_under_jit_vmap_and_eval_shape_and_its_clamp_gradient_batches(self):
+        """Construction under ``nnx.jit``, ``nnx.vmap`` and ``nnx.eval_shape``; the clamp's backward under ``jit``/``vmap``.
+
+        The batched gradient covers ``c`` below ``c_min``, inside twice and above ``c_max``, for both loss directions,
+        and must match the unbatched gradient element by element.
+        """
+        bounds = {"c_min": 0.1, "c_max": 10.0}
+        eager = LearnableCurvature(0.1, **bounds)
+        assert nnx.jit(lambda: LearnableCurvature(0.1, **bounds))().raw[...] == eager.raw[...]
+        abstract = nnx.eval_shape(lambda: LearnableCurvature(0.1, **bounds))
+        assert jax.tree.leaves(nnx.state(abstract))[0].dtype == jnp.float32
+
+        raws = jnp.array([-3.5, 0.0, 1.0, 3.5], dtype=jnp.float32)  # c = 0.03, 1, 2.7, 33
+
+        @nnx.vmap(in_axes=0, out_axes=0)
+        def build(raw):
+            curvature = LearnableCurvature(0.1, **bounds)
+            curvature.raw[...] = raw
+            return curvature
+
+        @nnx.jit
+        @nnx.vmap(in_axes=(0, None), out_axes=0)
+        def batched_grad(curvature, sign):
+            return nnx.grad(lambda m: sign * m())(curvature).raw[...]
+
+        ensemble = build(raws)
+        assert ensemble.raw[...].shape == (4,)
+        for sign, blocked in ((1.0, [True, False, False, False]), (-1.0, [False, False, False, True])):
+            batched = batched_grad(ensemble, sign)
+            assert [bool(g == 0.0) for g in batched] == blocked
+            for raw, grad in zip(raws, batched, strict=True):
+                single = LearnableCurvature(0.1, **bounds)
+                single.raw[...] = raw
+                expected = nnx.grad(lambda m, s=sign: s * m())(single).raw[...]
+                assert float(grad) == pytest.approx(float(expected), rel=1e-6)
+
 
 class TestLearnableCurvatureClamping:
     """Clamping applies to the recovered c, not the raw param."""
@@ -168,6 +278,31 @@ class TestLearnableCurvatureClamping:
         assert float(c()) == pytest.approx(2.0)
         c.raw[...] = jnp.array(-10.0, dtype=jnp.float32)
         assert float(c()) == pytest.approx(0.2)
+
+    @pytest.mark.parametrize("init_c", [0.1, 1.0, 2.5, 50.0])
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_default_bounds_sit_a_decade_either_side_of_init_c(self, parameterization, init_c):
+        """Without explicit bounds, softplus/log clamp to ``[init_c / 10, init_c * 10]``: ``[0.1, 10]`` at ``init_c = 1``."""
+        c = LearnableCurvature(init_c, parameterization=parameterization)
+        c.raw[...] = jnp.array(-1e4, dtype=jnp.float32)  # c = 0 for both parameterizations
+        assert float(c()) == float(jnp.float32(init_c / 10))
+        c.raw[...] = jnp.array(1e4, dtype=jnp.float32)  # c = 1e4 (softplus), ~1.4e38 (log, exponent cap)
+        assert float(c()) == float(jnp.float32(init_c * 10))
+
+    def test_explicit_bounds_win_over_the_init_relative_default(self):
+        """A given bound is used verbatim and ``None`` disables it; the other bound keeps its default. ``identity``
+        keeps its symmetric ``[-10, 10]`` whatever the init."""
+        cases = [
+            (LearnableCurvature(0.1, c_min=0.05, c_max=2.0), 0.05, 2.0),
+            (LearnableCurvature(0.1, parameterization="softplus", c_min=0.02), 0.02, 1.0),
+            (LearnableCurvature(0.1, c_min=None), 0.0, 1.0),  # exp(-1e4) = 0, no floor
+            (LearnableCurvature(2.5, parameterization="identity"), -10.0, 10.0),
+        ]
+        for c, lo, hi in cases:
+            c.raw[...] = jnp.array(-1e4, dtype=jnp.float32)
+            assert float(c()) == float(jnp.float32(lo))
+            c.raw[...] = jnp.array(1e4, dtype=jnp.float32)
+            assert float(c()) == float(jnp.float32(hi))
 
 
 class TestLearnableCurvatureGradients:
@@ -211,214 +346,181 @@ class TestLearnableCurvatureGradients:
         assert jnp.allclose(grads.raw[...], expected, atol=1e-5)
 
     @pytest.mark.parametrize("parameterization", ["softplus", "log"])
-    def test_default_clamp_is_gradient_dead_past_boundary(self, parameterization):
-        """Documents current default behavior: plain jnp.clip zeroes the gradient
-        once c exits [c_min, c_max] -- c is pinned, not chosen."""
+    def test_clamp_blocks_an_outward_gradient_past_c_max(self, parameterization):
+        """Past ``c_max`` a loss that would raise ``c`` further gets exactly 0, so ``raw`` does not drift outward.
+
+        The old hard clamp zeroed the gradient in both directions here, which pinned ``c`` for good; the new clamp
+        keeps only this outward half (the inward half is the next test).
+        """
         c = LearnableCurvature(1.0, parameterization=parameterization)
         # raw=15.0 pushes c well past c_max=10.0 for both parameterizations (softplus(15)~=15,
         # exp(15)~=3.3e6). (The former exp() overflow at large raw is now guarded — see
         # test_log_parameterization_no_nan_gradient_on_exp_overflow.)
         c.raw[...] = jnp.array(15.0, dtype=jnp.float32)
 
-        def fn(m):
-            return m()
-
-        _val, grads = nnx.value_and_grad(fn)(c)
+        val, grads = nnx.value_and_grad(lambda m: -m())(c)
+        assert float(val) == pytest.approx(-10.0)  # forward value clamped
         assert float(grads.raw[...]) == 0.0
 
     @pytest.mark.parametrize("parameterization", ["softplus", "log"])
-    def test_straight_through_clamp_keeps_gradient_nonzero_past_boundary(self, parameterization):
-        """straight_through_clamp=True fixes the gradient-dead ratchet: the forward
-        value stays clamped, but the gradient keeps flowing past the boundary.
+    def test_clamp_passes_an_inward_gradient_past_c_max_undamped(self, parameterization):
+        """Past ``c_max`` a loss that lowers ``c`` gets the unclamped map's own ``dc/draw``, written out as a value.
 
-        The pass-through gradient is a VALUE contract, not merely a "nonzero" one. An implementation
-        returning any other multiple of the intended gradient (e.g.
-        ``stop_gradient(c_clipped) + 0.001*(c - stop_gradient(c))``) satisfies ``!= 0.0`` while
-        silently rescaling every curvature update, so the expected value is written out here.
-
-        Past a bound the pass-through gradient is the parameterization's own ``dc/draw`` divided by
-        ``max(dc/draw, 1)``. ``softplus``'s gain is ``sigmoid(15) ~= 1``, under the guard, so it is
-        handed through untouched; ``log``'s is ``exp(15) ~= 3.3e6``, so it is damped to exactly 1.
-        Without that damping a single plain-SGD step clears the whole clamp interval — see
-        ``test_straight_through_clamp_lets_curvature_re_enter_the_interval_over_many_steps``.
+        A ``!= 0`` check would pass any rescaled gradient. The removed ``straight_through_clamp`` divided this one by
+        ``max(dc/draw, 1)``, to 1 for ``log`` at ``raw = 15``, because its ``raw`` kept drifting outward while the
+        loss pushed ``c`` out. The new clamp blocks that push, so in training ``raw`` stays within the crossing step
+        (and the optimizer's momentum) of the bound and needs no damping; ``raw = 15`` is set by hand here.
         """
-        c = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=True)
-        # raw=15.0 pushes c well past c_max=10.0 for both parameterizations (softplus(15)~=15,
-        # exp(15)~=3.3e6). (The former exp() overflow at large raw is now guarded — see
-        # test_log_parameterization_no_nan_gradient_on_exp_overflow.)
-        c.raw[...] = jnp.array(15.0, dtype=jnp.float32)
+        c = LearnableCurvature(1.0, parameterization=parameterization)
+        c.raw[...] = jnp.array(15.0, dtype=jnp.float32)  # softplus(15)~=15, exp(15)~=3.3e6
 
-        def fn(m):
-            return m()
+        val, grads = nnx.value_and_grad(lambda m: m())(c)
+        assert float(val) == pytest.approx(10.0)  # forward value clamped
+        assert float(grads.raw[...]) == pytest.approx(_dc_draw(parameterization, 15.0), rel=1e-6)
 
-        val, grads = nnx.value_and_grad(fn)(c)
-        assert float(val) == pytest.approx(10.0)  # forward value still clamped
-        assert jnp.isfinite(grads.raw[...])
-        expected = {
-            "softplus": float(jax.nn.sigmoid(jnp.float32(15.0))),  # dc/draw <= 1: guard inactive, exact no-op
-            "log": 1.0,  # dc/draw = exp(15) ≈ 3.269e6, damped by max(dc/draw, 1) to exactly 1
-        }[parameterization]
-        assert float(grads.raw[...]) == pytest.approx(expected, rel=1e-4)
+    @pytest.mark.parametrize("side", ["below_c_min", "above_c_max"])
+    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["float32", "float64"])
+    @pytest.mark.parametrize("parameterization", ["softplus", "log", "identity"])
+    def test_clamp_outside_passes_the_inward_gradient_and_blocks_the_outward_one(self, parameterization, dtype, side):
+        """``c`` pushed outside by a large step (``raw`` one unit past the bound's inverse), in both dtypes.
 
-    @pytest.mark.parametrize("straight_through", [False, True])
-    def test_log_parameterization_no_nan_gradient_on_exp_overflow(self, straight_through):
-        # Regression: exp(raw) overflowed float32 to +inf for large raw, making the clip's out-of-range
-        # cotangent 0*inf = NaN (and, under straight_through, NaN-ing the forward via inf + (-inf)). The
-        # exponent cap + numerically-stable straight-through must keep the forward pinned at c_max and the
-        # gradient finite even where exp() would have overflowed.
-        c = LearnableCurvature(1.0, parameterization="log", straight_through_clamp=straight_through)
+        A loss that pulls ``c`` back inside gets the analytic ``dL/draw`` of the unclamped map at the stored ``raw``,
+        one that pushes it further out gets exactly 0. The old hard clamp gave 0 to both.
+        """
+        c_min, c_max = (-10.0, 10.0) if parameterization == "identity" else (0.1, 10.0)
+        curvature = LearnableCurvature(1.0, parameterization=parameterization, c_min=c_min, c_max=c_max, param_dtype=dtype)
+        inverse = INVERSE[parameterization]
+        below = side == "below_c_min"
+        curvature.raw[...] = jnp.array(inverse(c_min) - 1.0 if below else inverse(c_max) + 1.0, dtype=dtype)
+        assert curvature() == jnp.asarray(c_min if below else c_max, dtype=dtype)
+
+        inward = -1.0 if below else 1.0  # dL/dc under which a descent step moves c back into the interval
+        grad_in = nnx.grad(lambda m: inward * m())(curvature).raw[...]
+        grad_out = nnx.grad(lambda m: -inward * m())(curvature).raw[...]
+        dc_draw = _dc_draw(parameterization, float(curvature.raw[...]))
+        assert grad_in.dtype == dtype
+        assert float(grad_in) == pytest.approx(inward * dc_draw, rel=1e-6 if dtype == jnp.float32 else 1e-12)
+        assert float(grad_out) == 0.0
+
+    def test_log_parameterization_no_nan_gradient_on_exp_overflow(self):
+        # Regression: exp(raw) overflowed float32 to +inf for large raw, making the clamp's cotangent times dc/draw
+        # 0*inf = NaN. The exponent cap must keep the forward pinned at c_max and the gradient finite even where
+        # exp() would have overflowed, for a loss that lowers c and one that raises it. Both gradients are 0 here,
+        # from the cap's own zero derivative above it; raw only gets this far when set by hand.
+        c = LearnableCurvature(1.0, parameterization="log")
         c.raw[...] = jnp.array(100.0, dtype=jnp.float32)  # exp(100) overflows float32
 
-        def fn(m):
-            return m()
+        for sign in (1.0, -1.0):
+            val, grads = nnx.value_and_grad(lambda m, s=sign: s * m())(c)
+            assert jnp.isfinite(val) and float(val) == pytest.approx(10.0 * sign)  # forward pinned at c_max, not NaN/0
+            assert jnp.isfinite(grads.raw[...])
 
-        val, grads = nnx.value_and_grad(fn)(c)
-        assert jnp.isfinite(val) and float(val) == pytest.approx(10.0)  # forward pinned at c_max, not NaN/0
-        assert jnp.isfinite(grads.raw[...])
-        if straight_through:
-            # The straight-through contract must survive the exponent cap: the gradient stays nonzero
-            # so a raw stranded past the cap can re-enter. A plain jnp.minimum satisfies the isfinite
-            # check above with gradient 0 — a permanent freeze — which is exactly the regression this
-            # pins. Pin the VALUE, not just non-zeroness: c is past c_max with dc/draw = exp(capped
-            # exponent) ≈ 1.4e38, so the max(dc/draw, 1) damping normalizes it to exactly 1.
-            #
-            # This is also why the damping is implemented by swapping the gradient's carrier to
-            # `raw - stop_gradient(raw)` rather than by multiplying `c - stop_gradient(c)` by
-            # `1/dc/draw`: at this gain the multiplier is 7e-39, a float32 subnormal that XLA flushes
-            # to zero, which would re-freeze the gradient here at exactly the value 0 this test rules out.
-            assert float(grads.raw[...]) == pytest.approx(1.0, rel=1e-4)
+    @pytest.mark.parametrize(("parameterization", "lr"), [("softplus", 5e-2), ("log", 2e-3)])
+    def test_clamp_lets_curvature_re_enter_the_interval_over_many_steps(self, parameterization, lr):
+        """The ratchet was a *multi-step* failure: once ``c`` left the interval under the old hard clamp it never came back.
+
+        Plain SGD on ``(c - target)**2`` with bounds ``[0.1, 10]``: 60 steps with the target at 12, past ``c_max``,
+        then 200 steps with it at 5. ``c`` reaches the ceiling and rests there, and while the loss pushes outward the
+        gradient is exactly 0, so ``raw`` stays where the crossing step left it instead of drifting on (the removed
+        ``straight_through_clamp`` let it drift, and needed a re-entry damping for that). Once the target moves
+        inside, the first step brings ``c`` off the ceiling, undamped and without overshooting the interval, and
+        ``c`` converges to 5. The learning rates differ because ``log``'s ``dc/draw = c`` is ~10 near the ceiling.
+        """
+        curvature = LearnableCurvature(5.0, parameterization=parameterization, c_min=0.1, c_max=10.0)
+        optimizer = nnx.Optimizer(curvature, optax.sgd(lr), wrt=nnx.Param)
+
+        def run(target: float, n_steps: int) -> tuple[list[float], list[float]]:
+            cs, raws = [], []
+            for _ in range(n_steps):
+                grads = nnx.grad(lambda m: (m() - target) ** 2)(curvature)
+                optimizer.update(curvature, grads)
+                cs.append(float(curvature()))
+                raws.append(float(curvature.raw[...]))
+            return cs, raws
+
+        cs, raws = run(12.0, 60)
+        first_on_ceiling = cs.index(10.0)  # raises if c never reached c_max
+        assert first_on_ceiling < 20
+        assert set(cs[first_on_ceiling:]) == {10.0}
+        assert set(raws[first_on_ceiling:]) == {raws[first_on_ceiling]}  # no drift past the bound
+        cs, _ = run(5.0, 200)
+        assert 0.1 < cs[0] < 10.0  # one step brings c back inside
+        assert cs[-1] == pytest.approx(5.0, abs=0.05)
 
     @pytest.mark.parametrize("parameterization", ["softplus", "log"])
-    def test_straight_through_clamp_lets_curvature_re_enter_the_interval_over_many_steps(self, parameterization):
-        """The ratchet is a *multi-step* failure mode; this is the multi-step test for it.
+    def test_curvature_started_on_the_floor_leaves_it_as_soon_as_the_target_moves_inside(self, parameterization):
+        """Toy fit: Adam(1e-2) on ``(c - target)**2``, float32, ``c`` started on ``c_min = 0.1``.
 
-        The two single-step tests above establish the local fact (gradient 0 vs gradient nonzero
-        past the boundary). What actually bites in training is the consequence: once ``c`` leaves
-        ``[c_min, c_max]`` under a plain clip it can never come back, however hard the loss pulls,
-        because every subsequent gradient is also 0. That is invisible to a one-step check — a
-        straight-through implementation that produced a *correct but tiny* gradient would pass the
-        single-step test and still be stuck for any realistic number of steps.
-
-        Setup: start ``raw`` well past the upper clamp (c ~ c_max), then run 200 plain SGD steps on
-        a loss whose minimum sits at ``c_target = 1.0``, far inside the interval. The
-        straight-through model must come off the ``c_max`` pin; the plain-clip control must not
-        move at all. Both legs are asserted, so the test also fails if straight-through silently
-        became the default (the control would then move too).
-
-        Both parameterizations must land on ``c_target``, and for ``log`` that is only true because
-        the out-of-interval pass-through gradient is damped by ``max(dc/draw, 1)``:
-
-        - ``softplus`` has a bounded ``dc/draw = sigmoid(raw) <= 1``, so the descent is well scaled
-          with or without the damping (which is an exact no-op for it).
-        - ``log`` has the scale-invariant ``dc/draw = c``, which is ~3.3e6 at ``raw = 15``. Handing
-          that through undamped made the very first SGD step overshoot the entire interval, leaving
-          ``c`` pinned at the *lower* clamp for all 200 steps — the upper pin traded for a lower one.
-          Damped, the step past the boundary is sized by the loss gradient alone (``d(c_out)/d(raw)
-          = 1``), ``c`` walks back into the interval, and the genuine scale-invariant gradient takes
-          over from there.
+        20 steps with the target at 0.05, below the floor, then 30 with it at 0.3. ``c`` rests on the floor while
+        the loss pushes it out and leaves it on the first step after the target moves inside, for both: on XLA:CPU
+        ``log``'s init lands one float below the floor and ``softplus``'s exactly on it, the clamp blocks every
+        outward step in both cases, and ``raw`` never moves. While a tie still passed the outward gradient,
+        ``softplus`` took 7 steps: the first outward step passed and Adam's momentum carried ``raw`` 0.05 on. Under
+        the old hard clamp ``c`` stayed at exactly 0.1 for good; under the removed ``straight_through_clamp`` it left
+        only after ``raw`` had walked back from 0.85 nats below (55 steps, after 100 steps below the floor).
         """
-        c_target = 1.0
-        n_steps, lr = 200, 0.05
+        curvature = LearnableCurvature(0.1, parameterization=parameterization, c_min=0.1, c_max=10.0)
+        optimizer = nnx.Optimizer(curvature, optax.adam(1e-2), wrt=nnx.Param)
+        floor = float(jnp.float32(0.1))
 
-        def run(straight_through: bool) -> tuple[float, float]:
-            curvature = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=straight_through)
-            curvature.raw[...] = jnp.array(15.0, dtype=jnp.float32)  # softplus(15)~=15, exp(15)~=3.3e6
-            raw_start = float(curvature.raw[...])
-            optimizer = nnx.Optimizer(curvature, optax.sgd(lr), wrt=nnx.Param)
+        def step(target: float) -> float:
+            grads = nnx.grad(lambda m: (m() - target) ** 2)(curvature)
+            optimizer.update(curvature, grads)
+            return float(curvature())
 
-            def loss_fn(m):
-                return (m() - c_target) ** 2
-
-            for _ in range(n_steps):
-                grads = nnx.grad(loss_fn)(curvature)
-                optimizer.update(curvature, grads)
-            return raw_start, float(curvature())
-
-        raw_start_st, c_straight_through = run(True)
-        raw_start_plain, c_plain = run(False)
-
-        assert raw_start_st == raw_start_plain == 15.0
-        # Plain clip: gradient is identically 0 past the boundary, so c is pinned at c_max forever.
-        assert c_plain == pytest.approx(10.0, rel=1e-6), f"plain clip unexpectedly moved (c={c_plain})"
-        # Straight-through: the gradient keeps flowing, so c comes off the c_max pin and lands
-        # strictly inside the clamp interval. This is the leg that fails if the straight-through
-        # branch is removed or its gradient rescaled to ~0.
-        assert 0.1 <= c_straight_through <= 10.0
-        assert c_straight_through < 9.0, (
-            f"straight_through_clamp never left the c_max pin in {n_steps} steps (c={c_straight_through})"
-        )
-        # Converged, not merely un-pinned: the c_min endpoint (0.1) that `log` used to land on is
-        # inside the two bounds asserted above, so only this assertion separates the two behaviors.
-        assert c_straight_through == pytest.approx(c_target, abs=0.05)
+        assert [step(0.05) for _ in range(20)] == [floor] * 20
+        cs = [step(0.3) for _ in range(30)]
+        assert cs[9] > floor  # left the floor within 10 steps
+        assert all(cs[i + 1] > cs[i] for i in range(9, len(cs) - 1))
+        assert cs[-1] > 0.12
 
     @pytest.mark.parametrize("raw_value", [-1.5, -0.5, 0.0, 0.7, 1.5])
+    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["float32", "float64"])
     @pytest.mark.parametrize("parameterization", ["softplus", "log", "identity"])
-    def test_straight_through_clamp_leaves_interior_gradients_untouched(self, parameterization, raw_value):
-        """The out-of-interval damping must not reach gradients taken while ``c`` is strictly inside.
+    def test_clamp_leaves_interior_gradients_untouched(self, parameterization, dtype, raw_value):
+        """Strictly inside ``[c_min, c_max]`` the gradient is the full chain rule, whichever way the loss pulls ``c``.
 
-        Only the pass-through gradient outside ``[c_min, c_max]`` is a fake signal (the forward value is
-        pinned there, so any gradient is invented). Inside, the gradient is the real chain rule, and
-        ``log``'s scale-invariant ``dc/draw = c`` is the entire reason to pick that parameterization (the
-        MERU convention). Damping unconditionally would quietly turn every interior ``log`` update into a
-        ``softplus``-shaped one — a change no clamp-boundary test would catch, which is what this pins.
+        ``log``'s scale-invariant ``dc/draw = c`` is the reason to pick that parameterization (the MERU convention),
+        so the custom backward must hand it through untouched in both directions and both dtypes.
         """
-        analytic = {
-            "softplus": float(jax.nn.sigmoid(jnp.float32(raw_value))),
-            "log": math.exp(raw_value),
-            "identity": 1.0,
-        }[parameterization]
+        c = LearnableCurvature(1.0, parameterization=parameterization, param_dtype=dtype)
+        c.raw[...] = jnp.array(raw_value, dtype=dtype)
         lower_bound = -10.0 if parameterization == "identity" else 0.1  # identity's clamp is symmetric
-
-        def fn(m):
-            return m()
-
-        grads = {}
-        for straight_through in (False, True):
-            c = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=straight_through)
-            c.raw[...] = jnp.array(raw_value, dtype=jnp.float32)
-            val, g = nnx.value_and_grad(fn)(c)
-            assert lower_bound < float(val) < 10.0, "this raw_value must leave c strictly inside the clamp interval"
-            grads[straight_through] = float(g.raw[...])
-
-        assert grads[True] == pytest.approx(analytic, rel=1e-5)
-        assert grads[True] == grads[False]  # bit-identical to the plain clip's in-range gradient
+        dc_draw = _dc_draw(parameterization, float(c.raw[...]))
+        rel = 1e-6 if dtype == jnp.float32 else 1e-12
+        for sign in (1.0, -1.0):
+            val, g = nnx.value_and_grad(lambda m, s=sign: s * m())(c)
+            assert lower_bound < sign * float(val) < 10.0, "this raw_value must leave c strictly inside the clamp interval"
+            assert float(g.raw[...]) == pytest.approx(sign * dc_draw, rel=rel)
 
     @pytest.mark.parametrize("raw_value", [-100.0, -12.0, -3.0, 0.0, 0.5, 2.0, 15.0, 100.0])
     @pytest.mark.parametrize("parameterization", ["softplus", "log", "identity"])
-    def test_straight_through_clamp_leaves_the_forward_value_unchanged(self, parameterization, raw_value):
-        """straight_through_clamp is a gradient-only contract: the forward value must equal the plain
-        clip's bit for bit at every raw — inside the interval, past either bound where the pass-through
-        gradient is damped (raw=15, 100), and past the log exponent cap. This holds because the
-        straight-through term is ``y - stop_gradient(y)``, exactly 0.0, so whichever carrier the damping
-        selects the sum is unchanged; the algebraically-equivalent ``c + stop_gradient(c_clipped - c)``
-        would instead cancel catastrophically at raw=100 and return 0.
+    def test_clamp_forward_value_is_the_plain_clip(self, parameterization, raw_value):
+        """The custom backward is a gradient-only contract: ``c()`` equals ``jnp.clip`` of the unclamped map bit for bit.
+
+        At every ``raw``: inside the interval, past either bound, and past the ``log`` exponent cap, where the
+        reference's ``exp(100)`` overflows to ``inf`` and clips to the same ``c_max``.
         """
-        forward = {}
-        for straight_through in (False, True):
-            c = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=straight_through)
-            c.raw[...] = jnp.array(raw_value, dtype=jnp.float32)
-            forward[straight_through] = float(c())
-        assert forward[True] == forward[False]
+        c = LearnableCurvature(1.0, parameterization=parameterization)
+        c.raw[...] = jnp.array(raw_value, dtype=jnp.float32)
+        lower_bound = -10.0 if parameterization == "identity" else 0.1
+        assert float(c()) == float(jnp.clip(UNCLAMPED[parameterization](c.raw[...]), lower_bound, 10.0))
 
     @pytest.mark.parametrize("parameterization", ["softplus", "log"])
-    def test_straight_through_pass_through_is_not_amplified_below_the_lower_bound(self, parameterization):
-        """The damping divides by ``max(dc/draw, 1)``, never by ``dc/draw`` itself — one-sided on purpose.
+    def test_clamp_passes_the_inward_gradient_below_the_lower_bound_unscaled(self, parameterization):
+        """Far below ``c_min`` the inward gradient is the unclamped ``dc/draw`` itself, neither rescaled nor amplified.
 
-        Below ``c_min`` every parameterization's gain collapses toward 0 (``exp(-20) = 2.06e-9``,
-        ``sigmoid(-20) = 2.06e-9``), so a two-sided ``1 / (dc/draw)`` would multiply the pass-through
-        gradient by ~5e8 there — the mirror image of the overshoot the damping exists to fix. A gain
-        already below 1 must be handed through untouched.
+        Every parameterization's gain collapses toward 0 there (``exp(-20) = 2.06e-9``, ``sigmoid(-20) =
+        2.06e-9``); the gradient is that gain, and the outward one is 0.
         """
-        c = LearnableCurvature(1.0, parameterization=parameterization, straight_through_clamp=True)
+        c = LearnableCurvature(1.0, parameterization=parameterization)
         c.raw[...] = jnp.array(-20.0, dtype=jnp.float32)  # c ≈ 2.06e-9, far under c_min = 0.1
 
-        def fn(m):
-            return m()
-
-        val, grads = nnx.value_and_grad(fn)(c)
-        assert float(val) == pytest.approx(0.1)  # forward pinned at c_min
-        expected = {"softplus": float(jax.nn.sigmoid(jnp.float32(-20.0))), "log": math.exp(-20.0)}[parameterization]
-        assert float(grads.raw[...]) == pytest.approx(expected, rel=1e-4)
+        val, grads_in = nnx.value_and_grad(lambda m: -m())(c)
+        grads_out = nnx.grad(lambda m: m())(c)
+        assert float(val) == pytest.approx(-0.1)  # forward pinned at c_min
+        assert float(grads_in.raw[...]) == pytest.approx(-_dc_draw(parameterization, -20.0), rel=1e-4)
+        assert float(grads_out.raw[...]) == 0.0
 
 
 # ===========================================================================
@@ -728,19 +830,17 @@ class TestLearnableCurvatureIdentity:
         assert jnp.isfinite(val)
         assert jnp.isfinite(grads.raw[...])
 
-    def test_identity_straight_through_clamp_keeps_gradient(self):
-        c = LearnableCurvature(0.0, parameterization="identity", straight_through_clamp=True)
+    def test_identity_clamp_keeps_the_inward_gradient(self):
+        c = LearnableCurvature(0.0, parameterization="identity")
         c.raw[...] = jnp.array(-100.0, dtype=jnp.float32)  # past the -10 lower bound
 
-        def fn(m):
-            return m()
-
-        val, grads = nnx.value_and_grad(fn)(c)
-        assert float(val) == pytest.approx(-10.0)  # forward value still clamped
-        assert jnp.isfinite(grads.raw[...])
-        # For the identity parameterization the unclamped derivative is exactly 1.0; a rescaled
-        # straight-through (any nonzero multiple) would pass a bare `!= 0.0` check.
-        assert float(grads.raw[...]) == pytest.approx(1.0, rel=1e-6)
+        val, grads_in = nnx.value_and_grad(lambda m: -m())(c)
+        grads_out = nnx.grad(lambda m: m())(c)
+        assert float(val) == pytest.approx(10.0)  # forward value clamped to -10
+        # For the identity parameterization the unclamped derivative is exactly 1.0; a rescaled gradient (any
+        # nonzero multiple) would pass a bare `!= 0.0` check. The loss that lowers c further gets exactly 0.
+        assert float(grads_in.raw[...]) == -1.0
+        assert float(grads_out.raw[...]) == 0.0
 
 
 class TestStereographicCurvatureTraining:

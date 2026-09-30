@@ -265,3 +265,106 @@ def test_hyperboloid_mlr_gradient_survives_a_far_point():
 
     assert g_far > 0.0, "a far point must still receive a gradient"
     assert g_far > 0.1 * g_near, f"far-point gradient collapsed: {g_far} vs {g_near} at radius 1"
+
+
+# --------------------------------------------------------------------------- #
+# HypRegressionPoincarePP scores a tangent input without lifting it onto the ball
+#
+# With x = expmap_0(v) and t = √c‖v‖, the HNN++ argument's λ_x·√c·⟨x, ẑ⟩ is sinh(2t)·⟨v, ẑ⟩/‖v‖ and
+# λ_x - 1 is cosh(2t), so `input_space="tangent"` evaluates the score from v itself. The old route
+# (expmap_0, then λ read back off the stored point) capped float32 inputs at the ball ceiling
+# t ≈ 6.33 (c = 1), past which the scores were constant with a zero radial gradient
+# (logs/2026-09-29_cancellation-free/1b/).
+# --------------------------------------------------------------------------- #
+
+
+def _max_rel_err(a, b):
+    """``max|a - b| / max|b|`` in float64 — the error relative to the largest reference entry."""
+    a, b = jnp.asarray(a, jnp.float64), jnp.asarray(b, jnp.float64)
+    return float(jnp.max(jnp.abs(a - b)) / jnp.max(jnp.abs(b)))
+
+
+def _tangent_rows(key, batch, in_dim, t_B1, c):
+    """Rows of scaled norm ``√c‖v‖ = t`` in random directions, float64."""
+    u_BI = jax.random.normal(key, (batch, in_dim), dtype=jnp.float64)
+    return t_B1 / jnp.sqrt(c) * u_BI / jnp.linalg.norm(u_BI, axis=-1, keepdims=True)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_hyp_regression_poincare_pp_tangent_input_matches_the_expmap_route(c):
+    """float64, t ≤ 3: scores and input gradients equal ``compute_mlr_pp(expmap_0(v))`` to 1e-12."""
+    dtype, batch, in_dim, out_dim = jnp.float64, 32, 16, 10
+    manifold = get_poincare(dtype)
+    layer = HypRegressionPoincarePP(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dtype)
+    layer.bias[...] = 0.3 * jax.random.normal(jax.random.PRNGKey(1), (out_dim, 1), dtype=dtype)
+    key_u, key_t, key_w = jax.random.split(jax.random.PRNGKey(2), 3)
+    t_B1 = jax.random.uniform(key_t, (batch, 1), dtype=dtype, minval=0.05, maxval=3.0)
+    v_BI = _tangent_rows(key_u, batch, in_dim, t_B1, c)
+    w_BO = jax.random.normal(key_w, (batch, out_dim), dtype=dtype)
+
+    def expmap_route(v_BI):
+        x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None))(v_BI, c)
+        return manifold.compute_mlr_pp(x_BI, layer.kernel[...], layer.bias[...], c)
+
+    y_err = _max_rel_err(layer(v_BI, c), expmap_route(v_BI))
+    g_new_BI = jax.grad(lambda v: jnp.sum(w_BO * layer(v, c)))(v_BI)
+    g_old_BI = jax.grad(lambda v: jnp.sum(w_BO * expmap_route(v)))(v_BI)
+    assert y_err < 1e-12, y_err
+    assert _max_rel_err(g_new_BI, g_old_BI) < 1e-12, _max_rel_err(g_new_BI, g_old_BI)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0, 2.5])
+def test_hyp_regression_poincare_pp_tangent_input_origin_jacobian(c):
+    """At v = 0 the tangent-input Jacobian is 4·kernel for any bias, and matches central differences.
+
+    At v = 0 the argument's slope is 2√c·cosh(2√c·r)·ẑ and asinh' is 1/cosh(2√c·r), so
+    d score/dv = (2‖z‖/√c)·2√c·ẑ = 4·z. That needs sinh(2t)/‖v‖ → 2√c from the floored norm: a floor
+    on the divisor alone scales it by √c, and a normalized spelling gives 0.
+    """
+    dtype, in_dim, out_dim = jnp.float64, 6, 4
+    layer = HypRegressionPoincarePP(
+        get_poincare(dtype), in_dim, out_dim, rngs=nnx.Rngs(3), input_space="tangent", param_dtype=dtype
+    )
+    layer.bias[...] = 0.4 * jax.random.normal(jax.random.PRNGKey(4), (out_dim, 1), dtype=dtype)
+
+    def scores_O(v_I):
+        return layer(v_I[None, :], c)[0]
+
+    jac_OI = jax.jacrev(scores_O)(jnp.zeros((in_dim,), dtype=dtype))
+    h = 1e-6
+    fd_OI = jnp.stack([(scores_O(h * e_I) - scores_O(-h * e_I)) / (2 * h) for e_I in jnp.eye(in_dim, dtype=dtype)], axis=1)
+
+    assert jnp.allclose(jac_OI, fd_OI, rtol=0.0, atol=1e-8), jnp.max(jnp.abs(jac_OI - fd_OI))
+    assert jnp.allclose(jac_OI, 4.0 * layer.kernel[...], rtol=0.0, atol=1e-12), jnp.max(
+        jnp.abs(jac_OI - 4.0 * layer.kernel[...])
+    )
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+def test_hyp_regression_poincare_pp_tangent_input_far_point_f32(c):
+    """float32 at t = √c‖v‖ = 8 scores like float64 on the same inputs and parameters.
+
+    The ball lift capped this input at t ≈ 6.33 (c = 1): scores 1.7e-1 … 2.0e-1 off relative to the
+    largest one, input gradients 1.1e-1 … 3.8e-1 (probe_old.out). Here 1.0e-6 / 1.2e-5 at most. The bounds
+    are not eps-sized because at radius 2t = 16 one float32 rounding of ⟨v, ẑ⟩ is amplified by
+    ≈ e^{2t}/2 in a cell near its hyperplane; other input seeds reach 1e-4 / 1.5e-3 there, the same
+    with the float64 dot rounded once to float32 (logs/2026-09-29_cancellation-free/1b/).
+    """
+    batch, in_dim, out_dim, t = 32, 16, 10, 8.0
+    head32, head64 = (
+        HypRegressionPoincarePP(get_poincare(dt), in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dt)
+        for dt in (jnp.float32, jnp.float64)
+    )
+    head64.kernel[...] = head32.kernel[...].astype(jnp.float64)
+    head64.bias[...] = head32.bias[...].astype(jnp.float64)
+    v32_BI = _tangent_rows(jax.random.PRNGKey(0), batch, in_dim, t, c).astype(jnp.float32)
+    w32_BO = jax.random.normal(jax.random.PRNGKey(1), (batch, out_dim), dtype=jnp.float32)
+
+    def scores_and_grad(head, v_BI, w_BO):
+        return head(v_BI, c), jax.grad(lambda v: jnp.sum(w_BO * head(v, c)))(v_BI)
+
+    y32, g32 = scores_and_grad(head32, v32_BI, w32_BO)
+    y64, g64 = scores_and_grad(head64, v32_BI.astype(jnp.float64), w32_BO.astype(jnp.float64))
+
+    assert _max_rel_err(y32, y64) < 1e-5, _max_rel_err(y32, y64)
+    assert _max_rel_err(g32, g64) < 3e-4, _max_rel_err(g32, g64)
