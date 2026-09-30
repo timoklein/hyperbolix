@@ -389,24 +389,14 @@ layer_f64 = HypLinearPoincarePP(manifold, 64, 32, rngs=nnx.Rngs(0), param_dtype=
 
 ## The Conformal Factor Problem
 
-### Understanding λ(x)
-
-The **conformal factor** in Poincaré ball geometry is:
-
-$$
-\lambda(x) = \frac{2}{1 - c||x||^2}
-$$
-
-This factor appears in:
-
-- Exponential map: scales tangent vectors
-- Logarithmic map: scales back to tangent space
-- Riemannian gradient: converts Euclidean to Riemannian gradients
+The **conformal factor** of the Poincaré ball, $\lambda(x) = 2/(1 - c\lVert x\rVert^2)$, scales
+tangent vectors in the exponential and logarithmic maps and converts Euclidean gradients to
+Riemannian ones.
 
 ### Exponential Growth
 
-As points move toward the boundary (||x|| → 1/√c), λ(x) explodes. A point at scaled radius
-$a = \sqrt{c}\,d_0$ has $\sqrt{c}\,\lVert x\rVert = \tanh(a/2)$, so
+As points move toward the boundary ($\lVert x\rVert \to 1/\sqrt{c}$), λ(x) explodes. A point at
+scaled radius $a = \sqrt{c}\,d_0$ has $\sqrt{c}\,\lVert x\rVert = \tanh(a/2)$, so
 $\lambda(x) = 2\cosh^2(a/2) = 1 + \cosh a$, which grows like $e^a/2$:
 
 ```python
@@ -437,397 +427,117 @@ a=14: ||x||=0.999994, λ(x)= 155344.6, dist_0(x)=12.6465
 a=20: ||x||=0.999994, λ(x)= 155344.6, dist_0(x)=12.6465
 ```
 
-From $a = 6$ to $a = 12$, each step of 2 in $a$ multiplies λ by about $e^2 \approx 7.4$. Float32
-misses the exact $1 + \cosh a$ by 5e-4 at $a = 10$ and 8e-4 at $a = 12$ (11014.2 and 81378.4):
-the stored point's own rounding, which $1 - c\lVert x\rVert^2$ amplifies (below). Past the float32
-[chart ceiling](#poincare-roundtrip-ceiling), $a \approx 12.65$ at $c = 1$, `expmap_0` caps the
-point at the `proj` margin: $a = 14$ and $a = 20$ give the same point, with λ = 155344.6 and
-`dist_0` = 12.6465 (`logs/2026-09-29_cancellation-free/docs_b3/run_doc_snippets.out`).
+Each step of 2 in $a$ multiplies λ by about $e^2 \approx 7.4$. Past the float32 [chart ceiling](#poincare-roundtrip-ceiling),
+$a \approx 12.65$ at $c = 1$, `expmap_0` caps the point, so $a = 14$ and $a = 20$ give the same
+point.
 
-### Numerical Issues
+Pick the dtype from the scaled radius ([table above](#precision-requirements-by-distance)); for
+float64, enable `jax_enable_x64` and use `Poincare(dtype=jnp.float64)`. `addition`, `expmap` and
+the layers already project their outputs.
 
-**Problem 1: Precision loss in logmap**
-
-```python
-# logmap divides by λ(x), then later operations multiply by λ(x)
-# With float32 and λ(x) ≈ 10,000:
-# - Division by 10,000 loses 4 digits of precision
-# - Multiplication by 10,000 doesn't recover them
-# Result: ~3 digits of precision remaining (out of 7)
-```
-
-**Problem 2: Cancellation in 1 - c||x||²**
-
-```python
-# Near boundary: ||x||² ≈ 0.999999
-# Computing 1 - c||x||² loses significant digits due to catastrophic cancellation
-# Float32: 1.0 - 0.999999 = 0.000001 (but stored imprecisely!)
-```
-
-### Mitigation Strategies
-
-**1. Use projection after operations**
-
-```python
-from hyperbolix.manifolds import Poincare
-
-poincare = Poincare()
-
-# After Möbius addition or other operations
-result = poincare.addition(x, y, c=1.0)
-result = poincare.proj(result, c=1.0)  # Project back to manifold
-```
-
-**2. Keep points away from boundary**
-
-```python
-from hyperbolix.manifolds import Poincare
-
-poincare = Poincare()
-
-# During initialization
-def init_hyperbolic_embeddings(key, n_points, dim, max_norm=0.8):
-    """Initialize embeddings safely away from boundary."""
-    x = jax.random.normal(key, (n_points, dim)) * 0.1
-    x_proj = jax.vmap(poincare.proj, in_axes=(0, None))(x, 1.0)
-
-    # Clip to max_norm to avoid boundary
-    norms = jnp.linalg.norm(x_proj, axis=-1, keepdims=True)
-    x_clipped = jnp.where(norms > max_norm, x_proj * max_norm / norms, x_proj)
-    return x_clipped
-```
-
-**3. Use float64 manifold for critical operations**
-
-```python
-from hyperbolix.manifolds import Poincare
-import jax.numpy as jnp
-
-# Create a float64 manifold — inputs are automatically cast
-poincare_f64 = Poincare(dtype=jnp.float64)
-dist_precise = poincare_f64.dist(x, y, c=1.0)  # returns float64
-```
+Near the origin, float32 accuracy depends on the backend's transcendental kernels, which are a few
+ulps off; hyperbolix's own `tanh`/`atanh` wrappers (float32: odd series below 1/8, `expm1`/`log1p`
+forms above) make the CPU backend match the GPU there.
 
 ### The Round-Trip Ceiling {#poincare-roundtrip-ceiling}
 
-`proj` keeps points inside $1/\sqrt{c}$ by a margin of `eps**0.75`
-(`_gyrovector_core._max_norm`). The margin is absolute, not a fraction of $1/\sqrt{c}$, so a
-stored point has $\sqrt{c}\,\lVert x\rVert \le 1 - \sqrt{c}\,\varepsilon^{0.75}$, the largest
-tangent vector `expmap_0` can represent has
-$\sqrt{c}\,\lVert v\rVert = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$, and the ceiling in
-scaled radius is
+`proj` keeps points inside $1/\sqrt{c}$ by an absolute margin of `eps**0.75`
+(`_gyrovector_core._max_norm`). A stored point therefore has
+$\sqrt{c}\,\lVert x\rVert \le 1 - \sqrt{c}\,\varepsilon^{0.75}$, and the ceiling in scaled radius
+is
 
 $$
-a_{\max} = \sqrt{c}\,d_0 = 2\,\mathrm{atanh}\bigl(1 - \sqrt{c}\,\varepsilon^{0.75}\bigr)
+a_{\max} = \sqrt{c}\,d_0 = 2\,\mathrm{atanh}\bigl(1 - \sqrt{c}\,\varepsilon^{0.75}\bigr).
 $$
 
-(the factor 2 is the Poincaré metric's): 12.65 in float32 and 27.73 in float64 at $c = 1$, 13.80
-and 28.88 at $c = 0.1$. Because it depends on $c$,
-$2\,\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}$ is the geodesic radius of the ceiling only at
-$c = 1$: at $c = 0.1$ it gives 40.0 in float32, where the ball reaches 43.6. Past the ceiling
-`expmap_0` saturates and `logmap_0(expmap_0(v))` hands back the ceiling instead of `v`. In
-float32 below $c \approx 0.035$, where $\sqrt{c}\,\varepsilon^{0.75} < 10\varepsilon$, the
-`tanh`/`atanh` wrappers' clip at $1 - 10\varepsilon$ binds first: `expmap_0` and `logmap_0` stop
-at $a \approx 14.33$, and the default `dist_0` reads every point that `proj` capped (out to
-$a \approx 14.9$ at $c = 0.01$) as 14.33. Measured ceilings (median returned
-$\sqrt{c}\,\lVert v\rVert$ on a round trip, at $c = 1$ unless marked; double them for $a$):
+| $c$ | float32 | float64 |
+| --- | --- | --- |
+| 1 | 12.65 | 27.73 |
+| 0.1 | 13.80 | 28.88 |
 
-| library | float32 | float64 | boundary margin |
-| --- | --- | --- | --- |
-| hyperbolix | 6.32 | 13.86 | `eps**0.75` |
-| hyperbolix, $c = 0.1$ | 6.90 | 14.44 | `eps**0.75` |
-| geoopt, hypLL | 3.11 | 6.10 | fixed 4e-3, fixed 1e-5 |
-| unguarded closed form | 8.66 | 18.72 | none |
+Past the ceiling `expmap_0` saturates, and `logmap_0(expmap_0(v))` returns the ceiling instead of
+`v`. In float32 below $c \approx 0.035$ the `tanh`/`atanh` wrappers' clip at $1 - 10\varepsilon$
+binds first, and `expmap_0`, `logmap_0` and `dist_0` stop at $a \approx 14.33$.
 
-The margin is deliberate. It stops short of the unguarded limit, so the conformal factor tops out
-near $1/(\sqrt{c}\,\varepsilon^{0.75})$ — 1.6e5 (float32) and 5.5e11 (float64) at $c = 1$, 4.9e5
-and 1.7e12 at $c = 0.1$ — and it still leaves twice the radius the fixed margins used elsewhere
-allow. If your embeddings need larger radii, switch to the hyperboloid or to `ProperVelocity`
-rather than shrinking the margin. The ceilings, the conformal factors and the hyperbolix rows of
-the table are from `logs/2026-09-29_cancellation-free/docs_b3/probe_ceiling.out`.
+The margin caps the conformal factor near $1/(\sqrt{c}\,\varepsilon^{0.75})$: 1.6e5 in float32 and
+5.5e11 in float64 at $c = 1$. If your embeddings need larger radii, switch to the hyperboloid or
+to `ProperVelocity` rather than shrinking the margin.
 
-### The Factored Möbius Denominator {#factored-mobius-denominator}
+### Pairwise Operations Near the Boundary {#factored-mobius-denominator}
 
-Every gyrovector op that needs $x \oplus y$ — `logmap`, `addition`, `gyr`, and `dist` in slot 1 —
-divides by the Möbius denominator $1 + \mathrm{sign}\cdot 2c\langle x,y\rangle + c^2\lVert
-x\rVert^2\lVert y\rVert^2$, and the literal spelling is a difference of two terms that both grow
-like the ball chart's own ceiling squared as $x, y$ approach the boundary. `_mobius_denominator`
-instead uses $1 + t^2 = (1-t)^2 + 2t$ with $t = \lvert c\rvert\,r_x r_y$: the subtraction $1 - t$
-happens *before* the square, so an $O(1)$ result stops being the difference of two large numbers.
-The pairwise `logmap` uses it at every radius, and so did the default `dist` (slot 0) until the
-[asinh form](#poincare-far-pairs) below replaced it; it is what the
-[chart ceiling](#poincare-roundtrip-ceiling) above ultimately bounds. Radii below are the geodesic
-distance from the origin ($c = 1$, so $a = d$).
+<a id="poincare-far-pairs"></a>
 
-Measured on a radial pair with a geodesic gap of 0.1 (`probe_poincare_mobius_ebebd09.out`, table
-D.i, medians over 4 seeds; `dist` still in the factored form): in float32, `dist` error goes
-from 2.816e-03 to 2.086e-06 at $d = 8$, 6.506e-02 to 1.958e-05 at $d = 10$, and 1.423e+01 to 1.044e-04 at $d = 12$ (the as-is value at
-$d = 12$ is the whole geodesic gap, lost); `‖logmap‖` error goes from 5.523e-03 to 8.799e-07 at
-$d = 8$ and 2.866e-01 to 3.206e-04 at $d = 12$. In float64, `dist` error goes from 1.101e-03 to
-1.584e-10 at $d = 18$, 7.519e-02 to 5.367e-10 at $d = 20$, and 9.664e-02 to 2.105e-09 at $d = 22$
-(again, the as-is value at $d = 20$ is essentially the whole 0.1 gap); `‖logmap‖` error goes from
-2.187e-03 to 2.324e-10 at $d = 18$ and 9.384e-02 to 1.243e-09 at $d = 20$. Both dtypes' fixed
-columns are still climbing as $d$ approaches the chart ceiling from below — the factoring removes
-the denominator's own cancellation, but it cannot make the ball represent a point past its
-ceiling, $a \approx 12.65$ (float32) / $27.73$ (float64) at $c = 1$.
+The Poincaré pairwise operations are cancellation-free up to the chart ceiling; past it the ball
+cannot store the point.
 
-**Far pairs: `dist` and `logmap` in the asinh form.**{#poincare-far-pairs} The factoring fixes a
-close pair, not a far one. Slot 0 evaluated $d = 2\,\mathrm{atanh}(u)/\sqrt{c}$ with
-$u = \sqrt{c}\,\lVert x - y\rVert/\sqrt{D_-}$, $D_-$ the Möbius denominator above with sign $-1$,
-and for a far pair $u \to 1$, where float32
-`atanh`'s domain clip at $1 - 10\varepsilon$ took over. With $B_x = 1 - c\lVert x\rVert^2$, the
-identity $D_- = B_x B_y + c\lVert x - y\rVert^2$ gives $1 - u^2 = B_x B_y/D_-$, so
+- **Distance.** `dist` slots 0 and 2 (the default and the metric-tensor slot) evaluate, with
+  $B_x = 1 - c\lVert x\rVert^2$,
 
-$$
-d(x, y) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x - y\rVert}{\sqrt{B_x B_y}}\right),
-$$
+    $$
+    d(x, y) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x - y\rVert}{\sqrt{B_x B_y}}\right),
+    $$
 
-which has no domain to clip. Two points on opposite sides at scaled radius 7.2 each (true
-$\sqrt{c}\,d = 14.4$, $c = 1$) came back 14.333 in float32 with an exactly zero gradient; they now
-give 14.400112. At 9 each (true 18.0) the old value was still 14.333; it is now 17.999722
-(`logs/2026-09-29_cancellation-free/1a/probe_old.out`,
-`logs/2026-09-29_cancellation-free/2_evidence/probes/1a_merged.out`). This is the metric-tensor
-distance of [slot 2](#poincare-metric-tensor-dist-0), the same function, so slots 0 and 2 now run
-one body (see [Which Version to Use?](#which-version-to-use)). `logmap` keeps the factored
-denominator for its direction and takes its length from the same `arcsinh` argument: the float32
-relative error of $\lVert\log_x(y)\rVert$ on those pairs goes from 4.7e-3 to 2.9e-5 at 7.2 and from
-0.20 to 2.6e-5 at 9.
+    which has no domain to clip. Two float32 points on opposite sides at scaled radius 7.2 each
+    (true $\sqrt{c}\,d = 14.4$, $c = 1$) give 14.400112. Slot 1 (`VERSION_MOBIUS`) forms
+    $(-x) \oplus y$, a point at the full pair distance, and saturates at the ceiling: 12.637 for a
+    true 14.4, with gradient relative error 1.0.
+- **Möbius denominator.** `logmap`, `addition` and `gyr` divide by
+  $1 + 2sc\langle x, y\rangle + c^2\lVert x\rVert^2\lVert y\rVert^2$. `_mobius_denominator`
+  rewrites $1 + t^2$ as $(1 - t)^2 + 2t$ with $t = c\,r_x r_y$, so the subtraction $1 - t$ happens
+  before the square. `logmap` takes its length from the same `arcsinh` argument as `dist`.
+- **Transport.** `ptransp` uses the gyration regrouped in $s = x + y$ ($= y - x$ for the transport), where each coefficient is
+  $O(1 - c\lVert x\rVert^2)$ on its own; `ptransp(v, x, x)` returns `v` exactly.
+- **`apollonian_dist`** writes its $G^2$ as $B_x B_y + c\lVert x - y\rVert^2$, a sum of two
+  non-negative terms.
 
-**Transport: the regrouped gyration.** `ptransp(v, x, y)` is $\mathrm{gyr}[y, -x]\,v$ scaled by
-$\lambda_x/\lambda_y$, and the gyration's numerator $A\,x + B\,y$ was two $O(1)$ terms cancelling
-down to $O(1 - c\lVert x\rVert^2)$ for two nearby points near the boundary, then divided by a
-denominator of size $O((1 - c\lVert x\rVert^2)^2)$. `_gyration` now writes it as
-$(A - B)\,x + B\,s$ with $s = x + y$ ($= y - x$ for the transport), where each coefficient is
-$O(1 - c\lVert x\rVert^2)$ on its own. On a 0.05-nat step ($c = 1$, float32 against float64, max
-over 20 directions) the relative error goes from 1.9e-1 to 6.6e-5 at scaled radius 8 — the float32
-floor $\varepsilon/(1 - c\lVert x\rVert^2) = \varepsilon\cosh^2(4)$ is 8.9e-5 there — and from 6.6
-to 1.1e-3 at 10. At $s = 0$ the correction is exactly zero, so `ptransp(v, x, x)` returns `v`
-bit for bit; it was 8.4e-2 off in float32.
+### Gradients at Capped Points {#poincare-divisor-floors}
 
-**The Apollonian $G$.** `apollonian_dist` needs
-$G = \sqrt{c^2\lVert x\rVert^2\lVert y\rVert^2 - 2c\langle x, y\rangle + 1}$. It now uses the same
-identity, $G^2 = B_x B_y + c\lVert x - y\rVert^2$, a sum of two non-negative terms, where the
-Gram-determinant spelling it replaced cancelled for a close pair. On a 0.05-nat pair (float32
-against float64, max over 20 directions) the absolute error goes from 9.5e-4 to 5.3e-6 at scaled
-radius 5.7 and from 6.7e-2 to 5.3e-5 at 8.
-
-**Reductions.** The asinh form reads three reductions over the dimension —
-$\lVert x - y\rVert^2$, $\lVert x\rVert^2$, $\lVert y\rVert^2$ — where slot 0's factored form took
-five and slot 2's old body four (the max-scaled norm's second pass, which a difference of two ball
-points does not need); the Apollonian $G$ takes three instead of four. Numbers in this and the two
-paragraphs above: `logs/2026-09-29_cancellation-free/1a/probe_old.out` (before) and
-`logs/2026-09-29_cancellation-free/2_evidence/probes/1a_merged.out` (after).
-
-### Divisor Floors Below the Cap's Rounding Band {#poincare-divisor-floors}
-
-`proj` caps a point at $\lVert x\rVert = 1/\sqrt{c} - \varepsilon^{0.75}$, where
-$B = 1 - c\lVert x\rVert^2$ takes the analytic value `_boundary_floor`, and every divisor built
-from $B$ — the $B_x$, $B_y$ above, $\lambda_x = 2/B_x$, the Busemann divisor, and the Möbius
-denominator (at the square of that value) — used to be floored at exactly that value. Over float32
-and float64 and $c \in \{0.1, 0.3, 1, 2.5\}$, the *computed* $B$ of a capped point lands from
-$6.2\,\varepsilon$ below that value to $6\,\varepsilon$ above it (Poincaré `expmap` at $c \le 0.3$
-also returns points farther inside, up to $17\,\varepsilon$ above in float32), and below it for
-11–76 % of the capped points (mean 39 %; `logs/2026-09-29_cancellation-free/floorfix/probe_band.out`,
-`logs/2026-09-29_cancellation-free/floorfix/summarize_band.out`). A floor that binds returns a
-constant, so every derivative through it is zero: the float32 `dist` gradient at capped points came
-back with relative error up to 1.0 (measured at the intermediate commit 9b16f31, where `dist`
-already had the asinh form). The floors now sit at half the cap value
-(`_boundary_divisor_floor`; the Möbius denominator's squared floor at a quarter),
-$\sqrt{c}\,\varepsilon^{0.75}$ below the cap — $54\sqrt{c}\,\varepsilon$ in float32,
-$8192\sqrt{c}\,\varepsilon$ in float64 — which no projected point reaches. Against a float64
-unfloored reference, the float32 `dist` gradient error at capped points is now 1.6e-2 in $x$ and
-1.8e-2 in $y$, and in float64 the gradient is bit-identical to the unfloored one
-(`logs/2026-09-29_cancellation-free/floorfix/probe_grad_9b16f31.summary`). The float32 margin
-covers the measured band only for $c \gtrsim (6.16/54)^2 \approx 0.013$; below that a capped point
-can reach the floor again. Measured at smaller $c$ in float32, the half floor first binds at
-$c = 0.005$, for 0.03 % of the capped points; at $c = 0.02$–$0.05$ up to 97–99 % of them sit below
-the analytic value, where the old floor would have bound, while the half floor stays slack
-(`logs/2026-09-29_cancellation-free/wave4/audit_F/probe_small_c.out`). A point outside the ball,
-never projected, still meets the floor, which keeps its divisor positive. The Klein chart's gap
-$g_x$ and the gaps the isometry maps read off a Poincaré or Klein point take the same half floor;
-that is why a far Klein point now reads as $a \approx 6.67$ rather than at the `proj` ceiling 6.32
-(float32, $c = 1$; see [The Chart Ceiling and Floor](#klein-chart-ceiling)).
-
-Some float32 gradients at capped points stay wrong: Poincaré `expmap` with respect to its base
-point and Poincaré `addition` with respect to $y$ keep relative errors up to 1.0, Klein `expmap`
-with respect to its base point up to 1.0 (above 0.1 on 40–48 % of the pairs), and Klein
-`addition` up to 1.3 on pairs of one capped and one free point (on pairs of two capped points its
-gradient with respect to $x$ is fixed, 1.0 → 2.8e-3 at $c = 1$ and 7.8e-3 at $c = 0.3$, while the
-one with respect to $y$ stays at 6.9e-2 and 1.5e-2, as before). The floor is not the cause: the gradients with the half floor and with no
-floor are identical (`logs/2026-09-29_cancellation-free/floorfix/probe_grad_commit2.out`,
-`logs/2026-09-29_cancellation-free/floorfix2/summary_grad2_fix.out`,
-`logs/2026-09-29_cancellation-free/docs_b4b/check_floor_not_cause.out`).
+Divisors built from $B = 1 - c\lVert x\rVert^2$ are floored at half the value `proj` leaves at the
+cap (`_boundary_divisor_floor`), which no projected point reaches, so the floor does not zero the
+gradients of capped points. Some float32 gradients at capped points stay wrong, with relative error
+up to 1.0 (1.3 for Klein `addition`): Poincaré `expmap` with respect to its base point, Poincaré `addition` with respect to
+$y$, Klein `expmap` with respect to its base point, and Klein `addition` on pairs of one capped and
+one free point. The floor is not the cause.
 
 ### Tangent Inputs to the HNN++ and Busemann Layers {#poincare-tangent-input}
 
-`HypRegressionPoincarePP` and `HypLinearPoincarePP` with `input_space="tangent"`, and
-`HypConv2DPoincare` (tangent in, tangent out), used to lift the tangent input with `expmap_0` and
-read the conformal factor back off the stored ball point; in float32 that lift stops at the
-ball's ceiling, $t = \sqrt{c}\,\lVert v\rVert = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$,
-≈ 6.33 at $c = 1$ and ≈ 6.63 at $c = 0.3$ (the conv's old output map measured 6.3233 and 6.6256;
-`logs/2026-09-29_cancellation-free/docs_a1/probe_conv_inf_score.out`), and
-past it the scores were those of the ceiling, with a zero radial gradient. They now score the
-tangent vector in closed form,
+`HypRegressionPoincarePP` and `HypLinearPoincarePP` with `input_space="tangent"`,
+`HypConv2DPoincare` (tangent in, tangent out), and the four Busemann layers with
+`input_space="tangent"` score the tangent vector in closed form and never form the ball point.
+For the Poincaré layers, with $t = \sqrt{c}\,\lVert v\rVert$, the scores use
 $\lambda_x\sqrt{c}\,\langle x, \hat{z}\rangle = \sinh(2t)\,\langle v, \hat{z}\rangle/\lVert v\rVert$
-and $\lambda_x - 1 = \cosh(2t)$, and `HypConv2DPoincare` also maps its output back with `logmap_0`
-of the lift in closed form, so neither ball point is formed. **This changes the output past
-that ceiling**, and the conv output's norm is no longer capped. At $t = 8$, float32 against
-float64 on the same inputs (max-abs error over max-abs value, worst of $c = 0.3$ and $c = 1$;
-`logs/2026-09-29_cancellation-free/2_evidence/probes/1b_merged.out`): the regression head goes from
-2.0e-1 to 1.5e-6, `HypLinearPoincarePP` (kernel scaled by 0.1, so its output stays off the ball's
-edge) from 9.0e-2 to 9.7e-7, and the conv from 2.3e-1 (identity weights) and 6.9e-1 (random
-weights) to ≤ 1.6e-6; the conv output's largest $\sqrt{c}\,\lVert\text{out}\rVert$ at $c = 1$ is now 20.2,
-where the old route capped it at the ceiling (6.3279 in that probe). In
-float64 the new and old routes agree to ≤ 8.8e-11 for $t \le 8$, except the conv with random
-weights from $t = 5$ on, whose output ($\sqrt{c}\,\lVert\text{out}\rVert \ge 12.28$) is near or
-past the float64 ball's ceiling. The Poincaré Busemann layers
-(`HypRegressionPoincareBusemann`, `HypLinearPoincareBusemann`) score a tangent input the same way,
-through `Poincare._busemann_tangent`: at $t = 8$, with random $\omega$, the regression scores go from
-2.2e-1 to 2.0e-7 and the input gradients from 1.0 to ≤ 2.6e-7
-(`logs/2026-09-29_cancellation-free/bz/probe_layers_v3.out`). For $\omega$ within float32 rounding of
-$\hat v$, the input and kernel gradients are off by 0.1 or more from $t = 5$ on both routes
-(`logs/2026-09-29_cancellation-free/poincare_small_t/probe_branch.out`, `probe_main.out`).
+and $\lambda_x - 1 = \cosh(2t)$, and `HypConv2DPoincare` maps its output back with `logmap_0` of
+the lift in closed form.
 
-The Hyperboloid Busemann layers (`HypRegressionHyperboloidBusemann`, `HypLinearHyperboloidBusemann`)
-with `input_space="tangent"` now score in closed form too, through `Hyperboloid._busemann_tangent`,
-which shares its closed form with `Poincare._busemann_tangent`. The hyperboloid's `expmap_0` places
-$v = (0, v_s)$ at scaled radius $t = \sqrt{c}\,\lVert v_s\rVert$, half the radius the ball's
-`expmap_0` reaches for the same norm, so for a unit $\omega$ the score is
-$\sqrt{c}\,B^\omega = \log(\cosh t - \sinh t\,\langle\omega, \hat v\rangle)$, the Poincaré tangent
-score with $2t$ replaced by $t$. The time slot $v_0$ is not read; for a tangent vector at the origin
-it is 0. The layers used to lift $v$ with `expmap_0` and call `busemann` on the stored point. The
-float32 `expmap_0` is accurate up to the coordinate ceiling, so the scores were right, but the
-gradients were not. For random directions $\omega$ the float32 input and kernel gradients broke
-from $t \approx 29.4$ at $c = 0.3$ and $t \approx 29.8$ at $c = 1$; at $t = 30$ and 40 they were off
-by 5.3e-2 to 1.07 relative to their largest entry, against ≤ 6.9e-7 up to $t = 20$. Only scores
-with $\langle x_s, \omega\rangle \ge 0$ break: there `_busemann_arg` divides, and the backward pass
-of that division multiplies a cotangent of size about $e^{-t}$ by the squared inverse denominator,
-about $e^{-2t}$. The product falls below float32's smallest normal number, and XLA:CPU flushes it
-to zero. Past the coordinate ceiling, $t \approx 45$, the lifted point overflows and the scores are
-NaN. The closed form has neither limit: for random $\omega$ the layers' float32 outputs and
-gradients stay within 1.2e-6 of float64 from $t = 1$ to $t = 50$, and in float64 they match the old
-route's to ≤ 2.2e-15 (`logs/2026-09-29_cancellation-free/hbz/probe_old.out`, `probe_new.out`,
-`compare_f64.out`, `scan_old_grad.out`;
-`logs/2026-09-29_cancellation-free/hbz_docs/scan_onset_jit.out`). All of this was measured on CPU;
-a GPU that keeps subnormal numbers may move the onset later.
+These layers are therefore not bound by the ball's ceiling,
+$t = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$ ≈ 6.33 at $c = 1$: past it the scores keep
+growing, and the conv output's norm is not capped. At $t = 8$ the float32
+outputs match float64 to ≤ 1.6e-6 (max-abs error over max-abs value).
 
-For $\omega$ within float32 rounding of $\hat v$, both routes still err at large $t$. Written as
-$\sqrt{c}\,B^\omega = \log\bigl(e^{-t} + (1 - \langle\omega, \hat v\rangle)\sinh t\bigr)$, the score
-takes the misalignment of $\omega$ and $\hat v$ times $\sinh t$, next to a term of size $e^{-t}$,
-and both routes read that misalignment off float32 directions, so its rounding limits either one.
-The closed form removes the part of the error that came from the stored point. At $t = 12$ the
-float32 $\sqrt{c}\,B$ is 8.6e-5 to 1.2e-4 off float64 in closed form and 3.0e-4 to 5.2e-4 through
-the lift, 2.6 to 6 times more, and the layer outputs are 2.4 to 3.2 times more accurate. At
-$t = 20$ the gain is about 2: $\sqrt{c}\,B$ is 1.7 to 1.9 off against 3.6 to 3.7 ($c = 0.3$ and 1;
-`probe_new.out`, `probe_old.out`).
+The Hyperboloid Busemann layers place $v = (0, v_s)$ at scaled radius $t = \sqrt{c}\,\lVert v_s\rVert$
+and score $\sqrt{c}\,B^\omega = \log(\cosh t - \sinh t\,\langle\omega, \hat v\rangle)$. For random $\omega$ their float32 outputs and gradients stay within 1.2e-6 of float64 from
+$t = 1$ to $t = 50$. One limit remains on every route: for $\omega$ within float32 rounding of
+$\hat v$, the score depends on the misalignment of $\omega$ and $\hat v$ times $\sinh t$, which
+float32 cannot resolve at large $t$ (at $t = 20$, $\sqrt{c}\,B$ is off by 1.7 to 1.9).
 
-At small $t$ the float32 kernel gradient of both Busemann tangent paths has a relative error that
-grows like $1/t$. Through the Hyperboloid layers it is 1.0e-3 (regression head) and 8.1e-4 (linear
-layer) at $t = 10^{-3}$, and 4.6e-6 and 5.4e-6 at $t = 0.1$, against 1.5e-7 to 2.5e-7 through the old
-lift (`logs/2026-09-29_cancellation-free/hbz/probe_small_t.out`). The closed form's
-$\omega$-gradient is $2(\omega - w)/\lVert\omega - w\rVert^2$, where $w$ is $\sqrt{c}$ times the
-point's image in the ball, of norm $\tanh(t/2)$ here. At small $t$ it points almost along $\omega$.
-The layers' kernel normalization projects that component out, which leaves a part of size about $t$
-next to a rounding error of size about $\varepsilon$. The Poincaré layers evaluate the same closed
-form and give 4.8e-4 and 5.9e-4 at $t = \sqrt{c}\,\lVert v\rVert = 10^{-3}$; the ball route they
-replaced gave 4.8e-4 and 4.4e-4, since its $\omega$-gradient has the same form, so there the error
-is not new (`logs/2026-09-29_cancellation-free/hbz_docs/probe_small_t_poincare.out`).
-
-The four Busemann layers check the manifold at construction, and a wrong one raises a `TypeError`.
-The first check is by the names of the methods they call. `Klein`, `HalfSpace`, `Stereographic`,
-`ProperVelocity` and `Euclidean` have neither `busemann` nor `_busemann_tangent`, so it rejects
-them. It cannot tell `Poincare` from `Hyperboloid`, which have both, so each layer also checks the
-class: the Poincaré Busemann layers (`HypRegressionPoincareBusemann`, `HypLinearPoincareBusemann`)
-accept only a `Poincare`, and the Hyperboloid ones (`HypRegressionHyperboloidBusemann`,
-`HypLinearHyperboloidBusemann`) only a `Hyperboloid`. Before that check, the other model passed
-construction and failed at the first call with a shape error, except at `in_dim = 2`: there a
-one-entry spatial part broadcasts against the kernel rows, and some of these calls ran without an
-error (`logs/2026-09-29_cancellation-free/hbz_docs/check_busemann_validation.out`; after the check:
-`logs/2026-09-29_cancellation-free/busemann_type/check_busemann_validation_new.out`).
+The Busemann layers check the manifold at construction and raise a `TypeError` for a wrong one:
+`HypRegressionPoincareBusemann` and `HypLinearPoincareBusemann` accept only a `Poincare`,
+`HypRegressionHyperboloidBusemann` and `HypLinearHyperboloidBusemann` only a `Hyperboloid`.
 
 ### `PoincareBatchNorm2D`'s Batch Mean at Large Radius {#poincare-batchnorm-mean}
 
 `PoincareBatchNorm2D` averages the batch in Klein coordinates, $\sum\lambda x/\sum(\lambda - 1)$,
-and projects that average with `proj` before the Möbius half-scaling, so the batch mean cannot sit
-farther out than the Klein chart's ceiling, $\operatorname{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$:
-6.3250 at $c = 1$ and 6.9006 at $c = 0.1$ in float32 (13.86 and 14.44 in float64). Measured on
-clusters at scaled radius $a \in \{5, 6, 7, 8\}$ (spread 0.3, $N = 256$, $C = 16$, max over 4
-seeds; float32 against float64 and an independent longdouble Lorentz-centroid reference;
-`logs/2026-09-29_cancellation-free/docs/probe_batchnorm_midpoint.out`): at $c = 1$ the batch-mean
-error $\sqrt{c}\,d(\mu_{32}, \mu_{64})$ is 7.3e-4, 6.0e-3, 0.683 and 1.688 at $a = 5, 6, 7, 8$ —
-at $a = 7$ and 8 the float32 mean reads 6.31–6.33, the cap. The relative error of the Fréchet
-variance is 3.9e-6, 4.2e-4, 5.3 and 32, and that of the layer output 1.9e-3, 1.4e-2, 1.1 and 1.4;
-the output's batch mean sits 0.89 ($a = 7$) and 0.99 ($a = 8$) from the learned mean, against
-2.6e-3 in float64. At $c = 0.1$ the float32 mean reads 6.86–6.92 at $a = 7, 8$ and the mean errors
-are 8.2e-4, 8.2e-3, 0.142 and 1.10. The float64 path matches the independent reference to
-≤ 1.5e-9. In float32, keep this layer's inputs inside scaled radius ≈ 6, or run it in float64.
-
-### Float32 Accuracy Near the Origin Depends on the Backend
-
-XLA's float32 transcendental kernels are a few ulps off, and near the origin that is the whole
-error budget of a Poincaré round trip. Exact bit-pattern ulp error against a float64 reference
-(20k inputs in $[10^{-4}, 0.9]$, max / mean):
-
-| function | XLA GPU | XLA CPU | torch CPU | torch CUDA |
-| --- | --- | --- | --- | --- |
-| `tanh` | 4 / 0.85 | 4 / 0.90 | 1 / 0.01 | 2 / 0.17 |
-| `atanh` | 3 / 0.45 | 2 / 0.25 | 1 / 0.00 | 3 / 0.45 |
-| `arcsinh` | 2 | 2 | 2 | 2 |
-| `expm1` | 1 | 5 | n/a | n/a |
-
-Consequence: float32 `logmap_0(expmap_0(v))` at radius $10^{-3}$ (dim 32, median relative error)
-was 2.4e-7 on the CPU backend with raw XLA kernels and exactly 0 on GPU; hyperbolix's own `tanh`
-and `atanh` wrappers (series below 1/8, `expm1` form above) bring the CPU backend to exactly 0 as
-well, see the changelog. A torch-based library reaches ~1.5e-8 on CPU with raw kernels,
-because torch's CPU `tanh`/`atanh` are correctly rounded; on CUDA it has no such edge (torch's
-CUDA `atanh` is bit-identical to XLA's). The closed forms are the same in both cases, so this is
-a kernel difference rather than a formula difference, but it does mean that a near-origin float32
-accuracy number is only meaningful with its backend quoted.
-
-**`uniform_poincare.sample` at small and extreme radii.** The sampler draws
-$u = \cosh(\sqrt{c}\,r) - 1$ and inverts it, and it now evaluates both directions in half-angle
-forms, $2\sinh^2(\sqrt{c}\,r/2)$ and $2\operatorname{arcsinh}(\sqrt{u/2})/\sqrt{c}$: at
-$\sqrt{c}\,R = 10^{-3}$ every old float32 sample fell outside $R$ (max $1.54R$) and none does now,
-and at $10^{-4}$, where the old $n = 3$ rejection loop did not finish within 120 s, the new
-samples give a Kolmogorov–Smirnov statistic of 0.0062 against the null's ≈ 0.006 ($N = 20000$;
-old: `logs/2026-09-29_cancellation-free/1d/probe_old.out`, new:
-`logs/2026-09-29_cancellation-free/2_evidence/probes/fixup_merged.out`). Where that loop cannot
-accept any draw — float32 $\sqrt{c}\,R$ below 2.168e-19 or from 45.0546 on, float64 below
-2.983e-154 or from 355.5845 on — the radius now comes from the closed-form flat limit or
-exponential tail of its density instead of the loop, which used to hang there
-(`logs/2026-09-29_cancellation-free/samplerhang/thresholds.out`).
-
-### Cost {#poincare-pass-cost}
-
-Old `3a43701` against new `9b16f31`, time ratios new/old
-(`logs/2026-09-29_cancellation-free/2_evidence/timing/final_table.out`). The new snapshot predates
-three changes described on this page: the Busemann tangent scores, the sampler's closed-form
-fallback and the half floors. Every row is an AOT-compiled float32 function at $c = 1$, and each
-ratio is the median over 8 old/new process pairs. On the CPU each process is pinned to one core
-with single-threaded XLA. There are two runs, plus a third (re-time) of the rows that came out more
-than 6 % slower on the CPU or 10 % on the GPU.
-
-- **Slower.** `ptransp` forward is about 11 % slower on the CPU (1.112 and 1.117, re-time 1.114),
-  forward+backward 1.104 and 1.086 (re-time 1.046). On the A100 the `ptransp` forward is not
-  resolved: 1.120, 1.199 and 0.984 in three runs, while an A/A run with identical code on both
-  sides gave ratios from 0.814 to 1.113 on the same small Poincaré rows
-  (`logs/2026-09-29_cancellation-free/2_evidence/timing/analyze_all.out`). The $n = 2$ sampler is
-  about 8 % slower on the CPU (1.063, 1.081, re-time 1.091), and `logmap` forward+backward
-  measured 1.031 and 1.027.
-- **Faster on the CPU.** Slot 0 `dist` forward 0.671 / 0.651 and forward+backward 0.335 / 0.292;
-  slot 2 `dist` forward 0.676 / 0.635 and forward+backward 0.782 / 0.786; `apollonian_dist`
-  forward 0.777 / 0.770 and forward+backward 0.758 / 0.748. Forward+backward:
-  `HypRegressionPoincarePP` with tangent input 0.802 / 0.793, `HypLinearPoincarePP` with tangent
-  input 0.938 / 0.929, `HypConv2DPoincare` 0.837 / 0.840, the wrapped-normal `log_prob`
-  0.787 / 0.844, and `PoincareBatchNorm2D` in training mode 0.905 / 0.906. `HoroPCA.fit`
-  0.957 / 0.963.
+and projects that average with `proj`, so the batch mean cannot sit farther out than the Klein
+chart's ceiling: 6.33 at $c = 1$ and 6.90 at $c = 0.1$ in float32 (13.86 and 14.44 in float64).
+For a cluster at scaled radius 7 ($c = 1$), the float32 batch mean reads 6.31–6.33 and lies 0.68
+from the float64 one. In float32, keep this layer's inputs inside scaled radius ≈ 6, or run it in
+float64.
 
 ## Init Scale vs. Depth
 
 Weight-init failures on hyperbolic layers come in two flavors, and only one of
-them is loud. A **too-large** init pushes first-layer outputs toward the
-Poincaré boundary or far up the hyperboloid — distances and gradients explode
-and you see `NaN` within a few steps. A **too-small** init fails *silently*:
+them is loud. A **too-large** init pushes outputs toward the Poincaré
+boundary or far up the hyperboloid, and you see `NaN` within a few steps. A **too-small** init fails *silently*:
 for a linear-in-the-matmul layer (e.g. `HTCLinear`, whose `htc` tail applies no
 nonlinearity), the per-layer input-Jacobian gain is
 
@@ -835,14 +545,14 @@ $$
 g \approx \sigma_w \cdot \sqrt{\text{fan\_in}},
 $$
 
-and a stack compounds it as $g^{\text{depth}}$. When $g < 1$, pairwise
-distances between outputs shrink geometrically until they fall below the
-float32 resolution of the distance computation itself: near the origin the
-hyperboloid distance passes through $\mathrm{acosh}(1 + c\,d^2/2)$, and once
-$c\,d^2/2 < \varepsilon_{f32} \approx 1.19 \times 10^{-7}$ the computed
-distance quantizes to exactly zero. The stack is then a constant map —
-gradients are ≈0 from step 0 and training never starts, with no `NaN` or
-warning to point at.
+and a stack compounds it as $g^{\text{depth}}$. When $g < 1$, the input variation the outputs
+carry shrinks geometrically until float32 rounds it away. The stack is then a constant map:
+gradients are ≈0 from step 0 and training never starts, with no `NaN` or warning to point at. This
+freeze was observed: `HTCLinear` with `init_bound=0.02` froze stacks of depth ≥ 2. The distance is not the cause
+(`Hyperboloid.dist` resolves a spatial gap of 1e-6 in float32). A likely cause, not yet measured:
+`htc` multiplies the full point, time coordinate included, so every output carries an $O(1)$
+offset from $x_0 \approx 1/\sqrt{c}$, and variation smaller than $\varepsilon$ times that offset is
+rounded away.
 
 !!! warning "Fixed bounds cannot be width-independent"
     A hard-coded init bound bakes in a width: `U(-0.02, 0.02)` has
@@ -857,16 +567,13 @@ each layer family's default and how to recover reference inits.
 
 ## Flattening a Conv Feature Map: Use LogCat, Not `reshape` {#logcat-flatten}
 
-At the **conv → FC boundary** of a hyperboloid CNN you have an `(B, H', W', C)`
-feature map — one hyperboloid point per pixel — and need one point per sample for
-the classification head. The reflex from Euclidean code is
-`x.reshape(B, H' * W' * C)`, and on the hyperboloid that is wrong twice over: it
-concatenates `H'·W'` time coordinates as if they were features, and even the
-correct-by-construction version (`Hyperboloid.hcat`, which stacks only the spatial
-parts and rebuilds one time coordinate) inflates the radius.
+At the **conv → FC boundary** of a hyperboloid CNN, an `(B, H', W', C)` feature map (one point
+per pixel) must become one point per sample. `x.reshape(B, H' * W' * C)` concatenates `H'·W'`
+time coordinates as if they were features. `Hyperboloid.hcat`, which stacks only the spatial parts
+and rebuilds one time coordinate, stays on the manifold but inflates the radius.
 
-The inflation is a dimension effect, not a bug in `hcat`. For Gaussian-ish spatial
-parts $\|v\|^2 \sim \chi^2_k$, so
+The inflation is a dimension effect. For Gaussian-ish spatial parts
+$\|v\|^2 \sim \chi^2_k$, so
 
 $$
 \mathbb{E}[\log \|v\|] = \tfrac{1}{2}\left(\psi(k/2) + \log 2\right),
@@ -885,12 +592,12 @@ $$
 then recomputing the time coordinate so the result stays on the (widened) hyperboloid.
 
 !!! warning "Why this bites harder at the FC boundary than inside a conv"
-    `HypConv2DHyperboloidILNN` already applies LogCat to each receptive field, where
-    $N = 9$ for a 3×3 kernel. At the flatten, $N$ is the **entire feature map** —
-    tens to low hundreds — so the naive flatten hands the head a point whose radius
-    is an order of magnitude past what its weights were initialized for. The
-    observed symptom is an MLR head sitting at 100% saturation-cap occupancy at
-    step 0 (logits pinned, gradients ≈ 0), which clears when the flatten uses LogCat.
+    Inside `HypConv2DHyperboloidILNN`, LogCat covers a receptive field of $N = 9$. At the
+    flatten, $N$ is the **entire feature map** (tens to low hundreds), so a naive flatten
+    hands the head a point an order of magnitude farther out than its init expects. The
+    observed symptom, from before the MLR `asinh` clamp was removed, was an MLR head
+    whose logits all sat at that clamp at step 0 with near-zero gradients. The
+    symptom cleared when the flatten used LogCat.
 
 Use `hyp_flatten2d`, which reshapes the grid to the per-sample point sequence and
 applies LogCat for you:
@@ -923,34 +630,25 @@ logits = head(flat, c)                     # (8, 10)
 ```
 
 **Width bookkeeping.** `hyp_flatten2d` grows the ambient dimension from `A` per pixel
-to `H'·W'·(A − 1) + 1`, so size the head accordingly (`in_dim = 4*4*8 + 1 = 129`
-above). If that width is impractical, use `hyp_avg_pool2d` instead — it averages the
-spatial parts over the grid and keeps the width at `A`, at the cost of discarding
-spatial layout. Both are documented on the
+to `H'·W'·(A − 1) + 1`; size the head for it (`in_dim = 129` above). `hyp_avg_pool2d` keeps
+the width at `A` but discards the spatial layout. Both are on the
 [convolutional API page](../api-reference/nn-layers/convolutional.md#pooling-flattening-conv-fc-bridge).
 
-## Proper Velocity: An Unconstrained Alternative
+## Proper Velocity: The Hyperboloid Without a Constraint
 
-The Proper Velocity (PV) model (Chen et al. 2026) sidesteps the conformal-factor and boundary problems above by representing hyperbolic geometry in **unconstrained $\mathbb{R}^n$**. Points carry no norm constraint, so there is no boundary to drift toward and no $\lambda(x) \to \infty$ singularity.
+The Proper Velocity (PV) model (Chen et al. 2026) stores a point as the spatial part of a
+hyperboloid point, in **unconstrained $\mathbb{R}^n$**: any finite vector is a valid point. It has
+the hyperboloid's accuracy, and no better: `dist` and `logmap` go through the exact hyperboloid
+lift (see [below](#pv-dist-lift)), and its tangent-space metric shares the hyperboloid's
+formulation (see [below](#pv-tangent-metric)). What PV adds is convenience:
 
-Use `ProperVelocity` when your features or embeddings reach large geodesic distances from the origin and float32 precision must be preserved.
+- no projection and no constraint drift after an update;
+- a bounded factor $\beta_x = 1/\sqrt{1 + c\|x\|^2} \in (0, 1]$ in place of a conformal factor
+  that blows up at a boundary;
+- plain `optax` optimizers train PV layers without a Riemannian wrapper.
 
-### Why PV Stays Stable at Large Radii
-
-| Issue (Poincaré / Hyperboloid) | PV behavior |
-|--------------------------------|-------------|
-| $\lambda(x) = 2/(1 - c\|x\|^2) \to \infty$ near boundary | $\beta_x = 1/\sqrt{1 + c\|x\|^2}$, bounded in $(0, 1]$, smooth everywhere |
-| Catastrophic cancellation in $1 - c\|x\|^2$ | No boundary; $1 + c\|x\|^2$ grows monotonically |
-| Hyperboloid constraint drift after Euclidean update | PV is $\mathbb{R}^n$ — any finite vector is a valid point |
-| `atanh` clamp required at the boundary | Geodesic distance uses `asinh`, stable on all of $\mathbb{R}$ |
-
-The PV distance formula
-$$
-d(0, x) = \frac{1}{\sqrt{c}} \cdot \mathrm{asinh}(\sqrt{c}\,\|x\|)
-$$
-remains finite and accurate in float32 for $\|x\|$ up to at least $10^2$ — covered by `test_pv_stability_at_large_norms` in the test suite.
-
-### Example
+The PV distance from the origin, $d(0, x) = \mathrm{asinh}(\sqrt{c}\,\|x\|)/\sqrt{c}$, stays finite
+in float32 for $\|x\|$ up to at least $10^2$ (checked by `test_pv_stability_at_large_norms`).
 
 ```python
 import jax
@@ -960,53 +658,45 @@ from hyperbolix.manifolds import ProperVelocity
 pv = ProperVelocity()
 c = 1.0
 
-# PV tolerates large-norm inputs where Poincaré would hit the boundary.
+# Any finite vector is a PV point; there is no boundary to project onto.
 x_large = jnp.array([50.0, 0.0, 0.0])
-d = pv.dist_0(x_large, c)      # ~ 4.61 — finite, accurate
+d = pv.dist_0(x_large, c)      # asinh(50) ≈ 4.61
 y = pv.logmap_0(x_large, c)    # finite tangent vector
 x_rec = pv.expmap_0(y, c)      # round-trips to x_large
 ```
 
-### Choosing a Manifold for Stability
-
-- **Poincaré ball**: compact, bounded — float32 is fine up to scaled radius $a = \sqrt{c}\,d \approx 7$ and for visualization; use float64 for critical operations from $a \approx 10$, and float64 is required past the float32 chart ceiling ($a \approx 12.65$ at $c = 1$; see the [table](#precision-requirements-by-distance)).
-- **Hyperboloid**: unbounded radius, and `dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/`tangent_inner`/`egrad2rgrad`/gyro `addition`/`busemann` are all cancellation-free, designed to avoid the identified cancellation, with accuracy limited by the operation and stored inputs (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)). The constraint $\langle x, x\rangle_L = -1/c$ must still be maintained and can drift under Euclidean updates — see [The `atol` Convention](#the-atol-convention) — and a handful of places still lose accuracy for reasons the fix does not remove, listed under [Known Limitations](#hyperboloid-known-limitations).
-- **Proper Velocity**: unconstrained $\mathbb{R}^n$, stable at large radii, exact Euclidean retraction (plain `optax.adam` / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large. Its tangent-space metric shares the hyperboloid's fix (see [below](#pv-tangent-metric)), and `PV.dist`/`logmap` between two nearby points at large radius now go through the exact hyperboloid lift — see [below](#pv-dist-lift).
-- **κ-Stereographic**: the Poincaré ball's numerics for $c > 0$: it shares the gyrovector core (`addition`, `gyration`, `proj`, the conformal factor), and `dist`, `logmap` and `geodesic` use the far-pair asinh form of Poincaré's default `dist`. It adds the flat and spherical regimes and a Taylor-series switchover near $c = 0$ — see the [dedicated section below](#stereographic-near-zero-curvature).
-- **Klein**: the pairwise operations are cancellation-free, but the chart reaches its boundary at half the Poincaré radius (scaled radius 6.32 in float32, 13.86 in float64, at $c = 1$) and its error floor grows as $\varepsilon\cosh^2(a)$ — see the [dedicated section below](#klein-numerics).
-- **HalfSpace**: no boundary at finite distance, and the pairwise operations are cancellation-free. The error floor is a stored point's rounding, which grows as $\cosh(\sqrt{c}\,\delta)$ with the distance $\delta$ to the vertical geodesic through the origin and stays at its minimum on that geodesic at every height. The pairwise operations return `inf`/NaN past a scaled distance of 88.7 in float32 (709.8 in float64) — see the [dedicated section below](#halfspace-numerics).
-
 !!! note "Training PV layers"
     `HypLinearPV`, `HypConv2DPV`, and `HypRegressionPV` store their weights as plain `nnx.Param` (not `ManifoldParam`). Use a standard `nnx.Optimizer(model, optax.adam(lr), wrt=nnx.Param)` — no `riemannian_adam` / `riemannian_sgd` wrapper is required.
 
+### Where Each Model Stops
+
+Pairwise operations hold to the scaled radius $a = \sqrt{c}\,d$ below ($c = 1$). Past it the chart
+cannot represent the point, which is not a bug. To choose a manifold by use case, see
+[Choosing a manifold](manifolds.md#choosing-a-manifold).
+
+| Model | Good to $a$ (float32 / float64) | Limit |
+| --- | --- | --- |
+| Hyperboloid | 16.6 / much further | the storage floor $\varepsilon\sinh(a)/\sqrt{c}$; the constraint can drift under Euclidean updates ([The `atol` Convention](#the-atol-convention), [Known Limitations](#hyperboloid-known-limitations)) |
+| ProperVelocity | as the hyperboloid | the hyperboloid's storage floor |
+| Poincaré | 12.65 / 27.73 (13.80 / 28.88 at $c = 0.1$) | the [ball chart's ceiling](#poincare-roundtrip-ceiling); float32 is fine to $a \approx 7$ ([table](#precision-requirements-by-distance)) |
+| κ-Stereographic, $c > 0$ | as Poincaré | plus the Taylor band near $c = 0$ ([below](#stereographic-near-zero-curvature)) |
+| Klein | 6.33 / 13.86 | half the Poincaré radius, and the floor $\varepsilon\cosh^2(a)$ ([below](#klein-numerics)) |
+| HalfSpace | `inf`/NaN past 88.7 / 709.8 | the floor $\approx 0.4\,(\varepsilon/2)\cosh(\sqrt{c}\,\delta)/\sqrt{c}$ ([below](#halfspace-numerics)) |
+
 ## κ-Stereographic: Numerics Near Zero Curvature {#stereographic-near-zero-curvature}
 
-The `Stereographic` manifold's signed curvature introduces one numerical regime the other manifolds don't have: the neighborhood of $c = 0$, where every closed-form expression becomes $0/0$ and the implementation switches to Taylor series. The switching logic is internal, but its consequences matter when you train a *signed* learnable curvature that may cross zero.
+Signed curvature adds a regime the other manifolds lack: near $c = 0$ every closed form becomes
+$0/0$, and `Stereographic` switches to Taylor series. This matters when you train a *signed*
+learnable curvature that may cross zero.
 
-For $c > 0$ the Poincaré sections above apply. `addition`, `gyration`, `proj` and the conformal
-factor are the functions `Poincare` calls, and `ptransp` (with the
-[regrouped gyration](#factored-mobius-denominator)), `ptransp_0`, `tangent_inner`, `tangent_norm`,
-`egrad2rgrad`, `retraction` and `dist_0` return `Poincare`'s bits (checked at $c = 0.3$, 1 and 2.5
-in both dtypes). `dist`, `logmap` and `geodesic` take the half distance in the
-[asinh form](#poincare-far-pairs) of Poincaré's default `dist`, not from the norm of
-$(-x) \oplus y$: that point lies at the full pair distance from the origin, so float32 caps it at
-the ball's ceiling while both inputs are still well inside. Two float32 points at scaled radius 7.2
-on opposite sides ($c = 1$, true $\sqrt{c}\,d = 14.4$) gave `dist` 12.656 with a gradient norm of
-0.037; they now give 14.39999 with 670.7, as `Poincare` does. `dist`, `logmap`, `expmap`,
-`expmap_0`, `logmap_0` and `scalar_mul` agree with `Poincare`'s to rounding, but not always bit for
-bit (float32: `logmap` within 1.1e-5 relative on pairs at scaled radius 6 to 11, the rest within
-3.7e-7). Two things differ.
-`geodesic(t, x, y)` still stores $t \otimes ((-x) \oplus y)$, a point at radius $t\,d$ that float32
-caps once $\sqrt{c}\,t\,d$ passes the [chart ceiling](#poincare-roundtrip-ceiling) (12.65 at $c = 1$,
-13.80 at $c = 0.1$); $t = 1/2$ stays inside for any two points the ball stores.
-And `dist` has no counterpart of Poincaré's saturating slot 1. For $c \le 0$ and in the Taylor band
-near $c = 0$ the formulas are unchanged: `logmap` and `geodesic` return the same bits as before, and
-`dist`, which now takes the norm of $(-x) \oplus y$ from the Möbius denominator without forming the
-point, moves by at most 3.1e-7 relative in float32 (5.6e-16 in float64). Measured in
-`logs/2026-09-29_cancellation-free/stereo_fix/` (`probe_old.out`, `probe_new.out`,
-`diff_old_new.out`) and `logs/2026-09-29_cancellation-free/docs_b1/probe_stereo_vs_poincare.out`.
-See the [κ-Stereographic API reference](../api-reference/manifolds.md) for the sign convention and
-the factor-2 flat limit.
+For $c > 0$ the Poincaré sections above apply: `addition`, `gyration`, `proj` and the conformal
+factor are the functions `Poincare` calls, and `dist`, `logmap` and `geodesic` use the
+[asinh form](#poincare-far-pairs) of Poincaré's default `dist`. `dist` has no counterpart of
+Poincaré's saturating slot 1. `geodesic(t, x, y)` stores $t \otimes ((-x) \oplus y)$, a point at
+radius $t\,d$ that float32 caps once $\sqrt{c}\,t\,d$ passes the
+[chart ceiling](#poincare-roundtrip-ceiling); $t = 1/2$ stays inside for any two points the ball
+stores. See the [κ-Stereographic API reference](../api-reference/manifolds.md) for the sign
+convention and the factor-2 flat limit.
 
 ### The Taylor Cutover Is dtype-Dependent
 
@@ -1017,21 +707,18 @@ The curvature-generalized trig functions ($\tan_\kappa$, $\tan_\kappa^{-1}$) use
 | float64 | $\lvert\kappa\rvert < 10^{-9}$ | closed forms accurate down to ~$10^{-9}$ |
 | float32 | $\lvert\kappa\rvert < 10^{-5}$ | catastrophic cancellation in the closed-form **curvature gradient** below this |
 
-In float32 the *values* stay accurate well below $10^{-5}$; it is $\partial(\cdot)/\partial c$ computed through the closed forms that degrades. The wider float32 window trades a small seam error (worst-case measured relative error of the curvature gradient just above the cutover: ~2.4%, sign always correct) for finite, well-behaved gradients everywhere.
+In float32 the *values* stay accurate well below $10^{-5}$; it is $\partial(\cdot)/\partial c$
+computed through the closed forms that degrades. The wider float32 window gives finite,
+well-behaved gradients below the cutover at the cost of a seam just above it: there the curvature
+gradient has relative error of order $\varepsilon/(\lvert\kappa\rvert\,\lVert x\rVert^2)$, with
+median 1–2 % and worst case 8–30 % over 200 points with $\lVert x\rVert \approx 0.85$, and
+`logmap`'s gradient changed sign on 1–2 of them.
 
 The Taylor branch is additionally gated on its convergence region $\lvert\kappa\rvert\,\lVert x\rVert^2 < 0.01$: points at extreme chart radii ($\lVert x\rVert \sim 1/\sqrt{\lvert\kappa\rvert}$, e.g. spherical points far from the chart origin) always keep the exact closed form, no matter how small $\lvert\kappa\rvert$ is.
 
-### Möbius Denominators at Exactly Zero Curvature
-
-The stable Möbius denominator has separate signed factorizations for $c>0$
-and $c\le0$. Both equal the literal polynomial
-$1+2s c\langle x,y\rangle+c^2\lVert x\rVert^2\lVert y\rVert^2$, where $s$
-is the operation's sign. For nonzero operands the selected branch has the literal
-curvature slope $2s\langle x,y\rangle$ at $c=0$. If an operand is exactly zero,
-the existing `MIN_NORM` radial floors leave a bounded residual instead of a
-machine-exact identity. The earlier `abs(c)` factorization gave the wrong
-one-sided slope at zero, which could send a signed learnable curvature in the
-wrong direction on its flat step even though fixed-curvature values looked correct.
+At exactly $c = 0$ the Möbius denominator's signed factorizations have the literal curvature slope
+$2s\langle x, y\rangle$ for nonzero operands, so a signed learnable curvature gets a gradient of
+the right sign on its flat step.
 
 ### Spherical Regime ($c < 0$) Cautions
 
@@ -1045,36 +732,20 @@ wrong direction on its flat step even though fixed-curvature values looked corre
 
 ## Klein: Cancellation-Free Distance on a Half-Radius Chart {#klein-numerics}
 
-`Klein` stores points in the same Euclidean ball as `Poincare` and uses the same `proj`, but
-its two-point operations (`dist`, `logmap`, `ptransp`, `gyro_difference`) are written so that no
-digits cancel. What limits it is the chart: a Klein point reaches the boundary at half the
-Poincaré radius, and the one quantity every formula divides by, $g_x = 1 - c\lVert x\rVert^2$,
-cannot be computed more accurately than its own rounding. Below, $a = \sqrt{c}\,d_0$ is the
-scaled radius (geodesic distance from the origin times $\sqrt{c}$), and $\varepsilon$ is the
-machine epsilon (1.19e-7 in float32, 2.22e-16 in float64). Measurements are from
-`logs/2026-09-28_klein-manifold/probe_klein.out`.
+`Klein` stores points in the same Euclidean ball as `Poincare`, with the same `proj`, and its
+two-point operations (`dist`, `logmap`, `ptransp`, `gyro_difference`) are cancellation-free. The
+chart limits it: a Klein point reaches the boundary at half the Poincaré radius, and
+$g_x = 1 - c\lVert x\rVert^2$, which every formula divides by, is only as accurate as its own
+rounding. Below, $a = \sqrt{c}\,d_0$ is the scaled radius and
+$\varepsilon$ the machine epsilon (1.19e-7 in float32, 2.22e-16 in float64).
 
 ### The Distance Without Cancellation
 
-Two textbook spellings of the Klein distance lose digits:
-
-- The hyperboloid form lifted to Klein, $\cosh(\sqrt{c}\,d) = (1 - c\langle x, y\rangle)/\sqrt{g_x g_y}$,
-  takes `acosh` of a number close to 1 when the points are close — the hyperboloid's
-  [two-point cancellation](#the-hyperboloids-two-point-cancellation-failure-mode) again.
-- Zhang et al. (2026), Eq. 4, $d = \operatorname{artanh}\!\big(\sqrt{c}\,\lVert(-x)\oplus_E y\rVert\big)/\sqrt{c}$,
-  builds the Einstein sum from $O(1)$ terms that cancel when $x$ and $y$ are close, and divides by
-  $1 - c\langle x, y\rangle$, which is itself a small difference of $O(1)$ terms near the boundary.
-
-`Klein.dist` follows the derivation in Zhang et al. (2026), Appendix Eqs. 12 and 14. Let
-$w = y - x$ (exact in floating point for close points, by Sterbenz's lemma). Two identities do
-the work: the Lagrange identity
-$\lVert x\rVert^2\lVert y\rVert^2 - \langle x, y\rangle^2 = \lVert x\rVert^2\lVert w\rVert^2 - \langle x, w\rangle^2$,
-and the Einstein gamma identity
-$1 - c\lVert(-x)\oplus_E y\rVert^2 = g_x g_y/(1 - c\langle x, y\rangle)^2$. The second says
-$\operatorname{sech}^2(\sqrt{c}\,d) = g_x g_y/(1 - c\langle x, y\rangle)^2$, so
-$\sinh^2(\sqrt{c}\,d) = \big[(1 - c\langle x, y\rangle)^2 - g_x g_y\big]/(g_x g_y)$. Expanding the
-bracket gives $c\lVert w\rVert^2 - c^2\big(\lVert x\rVert^2\lVert y\rVert^2 - \langle x, y\rangle^2\big)$,
-and the Lagrange identity turns it into $c\,N$ with
+The textbook spellings lose digits: the hyperboloid form lifted to Klein takes `acosh` of a number
+close to 1 for close points, and the Einstein-sum form of Zhang et al. (2026), Eq. 4, builds
+$(-x)\oplus_E y$ from $O(1)$ terms that cancel. `Klein.dist` follows Zhang et al. (2026), Appendix
+Eqs. 12 and 14. With $w = y - x$ (exact for close points, by Sterbenz's lemma), the Lagrange and
+Einstein gamma identities give
 
 $$
 N = g_x\lVert w\rVert^2 + c\,\langle x, w\rangle^2, \qquad
@@ -1082,182 +753,82 @@ S^2 = \sinh^2(\sqrt{c}\,d) = \frac{c\,N}{g_x\, g_y}, \qquad
 d(x, y) = \frac{\operatorname{arsinh}(S)}{\sqrt{c}}.
 $$
 
-$N$ is a sum of two non-negative terms built from $w$, the factor $1 - c\langle x, y\rangle$ has
-cancelled out, and no `acosh` or `atanh` is evaluated near 1. At $x = y$, $w$ is exactly zero,
-so `dist` is exactly 0 and its gradient is a finite zero. The same $N$ gives the other pairwise
-operations in closed form:
-
-- tangent norm of the chord: $\lVert w\rVert_x = \sqrt{N}/g_x$
-- `logmap`: $\log_x(y) = \operatorname{arsinhc}(S)\,\sqrt{g_x/g_y}\;w$, with
-  $\operatorname{arsinhc}(s) = \operatorname{arsinh}(s)/s$ (analytic at $s = 0$)
-- `ptransp`: $\sqrt{g_y/g_x}\,(v - \kappa\, w)$, with
-  $\kappa = \big[c\langle x, v\rangle/g_x + c\langle y, v\rangle/\sqrt{g_x g_y}\big]/\big(1 + \sqrt{1 + S^2}\big)$
-
-In float64, against independent NumPy oracles (dimension 5, 200 pairs per curvature, error
-$\lVert a - b\rVert/\max(\lVert b\rVert, 1)$, maximum over pairs), all 30 checks pass the 1e-11
-threshold; for example `dist` against the hyperboloid `acosh` is 4.510e-15, `logmap` against the
-hyperboloid log 4.493e-15, `ptransp` against the hyperboloid transport 1.310e-15, and
-`einstein_midpoint` against the normalized Lorentz centroid 4.415e-16.
+$N$ is a sum of two non-negative terms, and no `acosh` or `atanh` is evaluated near 1. At $x = y$,
+$w$ is exactly zero, so `dist` is exactly 0 with a finite zero gradient. `logmap` and `ptransp` are
+built from the same $N$.
 
 ### Measured Accuracy
 
-The accuracy probe places $x$ at scaled radius $a$, $x = \tanh(a)/\sqrt{c}\cdot\hat{x}$, and
-$y = x + t\,(1 - \tanh a)/\sqrt{c}\cdot\hat{v}$ with random unit $\hat{x}, \hat{v}$ (dimension 8,
-200 pairs per cell). So $t$ is the step as a fraction of $x$'s Euclidean gap to the boundary: at
-$c = 1$, $a = 4$, the gap is $1 - \tanh 4 = 6.7\times10^{-4}$ and $t = 10^{-2}$ moves $y$ by
-$6.7\times10^{-6}$. The reference is a 90-digit `Decimal` evaluation at the **stored**
-(already rounded) points, so the table measures the error of the formula, not the error of
-storing the points. Median / max relative error of `dist`, $c = 1$, $t = 10^{-2}$:
+Float32 relative error of `dist` (median / max over 200 pairs, dimension 8, $c = 1$), for $y$ a
+step of 1 % of $x$'s Euclidean gap to the boundary, against a high-precision evaluation at the
+stored points:
 
-| dtype | $a$ | `Klein.dist` | literal `acosh` | Zhang et al. Eq. 4 (`artanh`) | `Klein.logmap` | $\varepsilon\cosh^2(a)$ |
-|---|---|---|---|---|---|---|
-| float32 | 0.5 | 3.35e-08 / 1.48e-07 | 1.18e-03 / 4.29e-03 | 5.44e-07 / 2.57e-06 | 3.79e-08 / 1.74e-07 | 1.5e-07 |
-| float32 | 2 | 1.94e-07 / 8.29e-07 | 7.73e-02 / 1.00e+00 | 1.42e-04 / 9.33e-04 | 2.27e-07 / 1.15e-06 | 1.7e-06 |
-| float32 | 4 | 1.19e-05 / 5.15e-05 | 1.00e+00 / 4.23e+01 | 4.33e-02 / 3.58e-01 | 1.41e-05 / 5.20e-05 | 8.9e-05 |
-| float32 | 6 | 7.48e-04 / 3.01e-03 | 1.00e+00 / 1.04e+03 | 9.97e-01 / 9.21e+01 | 6.93e-04 / 3.16e-03 | 4.9e-03 |
-| float64 | 0.5 | 5.87e-17 / 2.77e-16 | 1.78e-12 / 7.10e-12 | 1.88e-15 / 8.15e-15 | 8.14e-17 / 2.94e-16 | 2.8e-16 |
-| float64 | 2 | 3.31e-16 / 1.84e-15 | 1.56e-10 / 1.15e-09 | 2.44e-13 / 1.43e-12 | 3.97e-16 / 1.86e-15 | 3.1e-15 |
-| float64 | 4 | 1.97e-14 / 9.33e-14 | 2.58e-08 / 2.04e-06 | 4.50e-11 / 3.88e-10 | 2.47e-14 / 1.25e-13 | 1.7e-13 |
-| float64 | 6 | 1.24e-12 / 4.92e-12 | 7.01e-07 / 3.62e-04 | 2.15e-09 / 4.28e-08 | 1.51e-12 / 5.49e-12 | 9.0e-12 |
-| float64 | 10 | 3.74e-09 / 1.82e-08 | 2.55e-03 / 1.01e+00 | 7.99e-06 / 3.08e-03 | 3.34e-09 / 1.71e-08 | 2.7e-08 |
-| float64 | 13 | 1.54e-06 / 5.58e-06 | 1.00e+00 / 6.89e+02 | 3.11e-03 / 1.87e-01 | 1.74e-06 / 5.81e-06 | 1.1e-05 |
+| $a$ | `Klein.dist` | literal `acosh` | Zhang et al. Eq. 4 (`artanh`) | $\varepsilon\cosh^2(a)$ |
+|---|---|---|---|---|
+| 0.5 | 3.35e-08 / 1.48e-07 | 1.18e-03 / 4.29e-03 | 5.44e-07 / 2.57e-06 | 1.5e-07 |
+| 2 | 1.94e-07 / 8.29e-07 | 7.73e-02 / 1.00e+00 | 1.42e-04 / 9.33e-04 | 1.7e-06 |
+| 4 | 1.19e-05 / 5.15e-05 | 1.00e+00 / 4.23e+01 | 4.33e-02 / 3.58e-01 | 8.9e-05 |
+| 6 | 7.48e-04 / 3.01e-03 | 1.00e+00 / 1.04e+03 | 9.97e-01 / 9.21e+01 | 4.9e-03 |
 
-The last column is the chart's floor, explained [below](#klein-chart-ceiling). The full grid in
-the probe output also covers $c = 0.1$ and $t \in \{10^{-4}, 0.3\}$. What it shows:
-
-- **`Klein.dist` does not depend on the separation.** At float32, $c = 1$, $a = 4$ the median
-  is 1.17e-05, 1.19e-05 and 1.25e-05 for $t = 10^{-4}, 10^{-2}, 0.3$. The literal `acosh`
-  loses the whole distance on close pairs (median 1.00e+00 at $t = 10^{-4}$ for every float32 $a$), and
-  the Eq. 4 form has median 2.97e+00 in the same float32, $a = 4$, $t = 10^{-4}$ cell.
-- **Its error is the chart floor.** From $a = 2$ on, the maximum `Klein.dist` error is below
-  $\varepsilon\cosh^2(a)$ in 47 of the 48 cells (both dtypes, both $c$, all three $t$); the
-  exception is float32, $c = 0.1$, $a = 6$, $t = 10^{-4}$ at 5.26e-03, 1.08× the floor. At
-  $a = 0.5$ the maximum is under $2\varepsilon$ (2.11e-07 in float32, 3.81e-16 in float64).
-  `logmap`'s error is the same size as `dist`'s in every cell except float32, $a = 6$,
-  $t = 10^{-4}$ (both $c$), described next.
-- At float32, $a = 6$, $t = 10^{-4}$, the step $10^{-4}(1 - \tanh 6) = 1.2\times10^{-9}$ is
-  below the float32 spacing of the coordinates, and 137 of 200 stored $y$ equal $x$ at $c = 1$
-  (131 at $c = 0.1$); those pairs have no relative error and are skipped.
+`Klein.dist`'s error does not depend on the separation, and it stays at or below the chart
+floor $\varepsilon\cosh^2(a)$ (last column, explained [below](#klein-chart-ceiling)). `Klein.logmap`'s error is the
+same size. `Klein.dist` forward+backward also runs in about half the
+time of the Eq. 4 spelling on an A100.
 
 ### The Chart Ceiling and Floor {#klein-chart-ceiling}
 
 **Ceiling.** `proj` caps $\lVert x\rVert$ at $1/\sqrt{c} - \varepsilon^{0.75}$, the Poincaré
 ball's [margin](#poincare-roundtrip-ceiling). A Klein point has
 $\sqrt{c}\,\lVert x\rVert = \tanh(a)$ where a Poincaré point has $\tanh(a/2)$, so at $c = 1$ the
-projection ceiling is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$
-= **6.32** in float32 and **13.86** in float64 — half the Poincaré ball's 12.65 / 27.7.
+ceiling is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$ = **6.33** in float32 and
+**13.86** in float64, half the Poincaré ball's 12.65 / 27.73.
 
-`poincare_to_klein`, `hyperboloid_to_klein` and `pv_to_klein` do not project. A point farther
-out than the ceiling lands between the `proj` margin and the boundary, not on the margin: in
-float32 at $c = 1$ the margin is $\lVert k\rVert = 1 - \varepsilon^{0.75} = 0.99999356$, and the
-three maps give $\lVert k\rVert$ = 0.9999983 at $a = 7$ and 0.99999976 at $a = 8$. From $a = 10$
-on, $\lVert k\rVert$ rounds to exactly $1/\sqrt{c}$ (at $a = 10$ for `poincare_to_klein` and
-`pv_to_klein`, at $a = 12$ for all three). Klein operations floor the gap $g_k$ at half its
-value on the margin: the computed gap of a point that `proj` capped lands within a few $\varepsilon$
-of that value on either side, and a floor there would zero the gradient of every point it binds
-on. So a mapped-in point reads at its own radius up to $a \approx 6.67$ and as $a \approx 6.67$
-beyond: `Klein.dist` to the origin is 6.51 at $a = 6.5$ and 6.67 for all three maps at
-$a = 7, 8, 10, 12$ (float64: 14.21 from $a = 15$ on;
-`logs/2026-09-29_cancellation-free/floorfix2/probe_far_reading.out`). The radius beyond that is
-lost either way; call `Klein.proj` after mapping far points in, so that the stored point is the
-one the operations actually use.
+`poincare_to_klein`, `hyperboloid_to_klein` and `pv_to_klein` do not project. Because the Klein operations floor the gap $g_k$
+at half its value on the margin, a mapped-in point reads at its own radius up to $a \approx 6.67$
+and as 6.67 beyond (float32, $c = 1$; float64: 14.21). **Call `Klein.proj` after
+mapping far points in**, so that the stored point is the one the operations use.
 
 **Floor.** $g_x = 1 - c\lVert x\rVert^2 = \operatorname{sech}^2(a)$. Computing it subtracts
 $c\lVert x\rVert^2 \approx 1$ from 1, so $g_x$ carries an absolute error of about $\varepsilon$,
-a relative error of $\varepsilon/g_x = \varepsilon\cosh^2(a)$. The pairwise formulas and the
-metric divide by $g_x$ or its square root, so this is the relative error floor of the chart. Worked example,
-float32 at $a = 4$: $1.19\times10^{-7}\cdot\cosh^2 4 = 1.19\times10^{-7}\cdot 745.7 = 8.9\times10^{-5}$,
-against a measured `Klein.dist` median of 1.19e-05 and maximum of 5.15e-05 ($c = 1$,
-$t = 10^{-2}$). Since $\cosh^2(a) \approx e^{2a}/4$, the Klein radial floor scales as $e^{2a}$,
-where the floor of the Poincaré ball and the hyperboloid scales as $e^{a}$ (constants dropped).
-The rewrite above removes every other cancellation, so the rounding of $g_x$ is the error that
-remains.
+a relative error of $\varepsilon/g_x = \varepsilon\cosh^2(a)$. The pairwise formulas and the metric
+divide by $g_x$ or its square root, so this is the chart's relative error floor. It scales as
+$e^{2a}$, where the Poincaré ball's and the hyperboloid's scale as $e^{a}$.
 
-In practice: float32 `Klein` is accurate to about 1e-5 at $a = 4$ and 1e-3 at $a = 6$ (medians
-1.19e-05 and 7.48e-04 above). For larger radii use `Klein(dtype=jnp.float64)`, or the
-hyperboloid, whose floor scales as $e^{a}$.
+In practice, float32 `Klein` is accurate to about 1e-5 at $a = 4$ and 1e-3 at $a = 6$. For larger
+radii use `Klein(dtype=jnp.float64)`, or the hyperboloid.
 
-### Cost
-
-`jit(vmap(dist))` over $10^6$ pairs, float32, $c = 1$, radius $\le 0.9/\sqrt{c}$, median of 25 runs
-after warm-up (jax 0.9.1, NVIDIA A100-PCIE-40GB, shared with other processes during the runs);
-the ratio is to the Eq. 4 form, the reference Einstein `artanh` spelling. One run
-(`logs/2026-09-28_klein-manifold/probe_klein.out`):
-
-| dim | mode | `Klein.dist` ms | Eq. 4 `artanh` ms | literal `acosh` ms |
-|---|---|---|---|---|
-| 16 | fwd | 0.383 (0.94×) | 0.407 (1.00×) | 0.363 (0.89×) |
-| 16 | fwd+bwd | 0.535 (0.53×) | 1.016 (1.00×) | 0.519 (0.51×) |
-| 128 | fwd | 1.051 (0.58×) | 1.812 (1.00×) | 1.024 (0.56×) |
-| 128 | fwd+bwd | 2.493 (0.42×) | 5.925 (1.00×) | 2.426 (0.41×) |
-
-Over five runs (this one, `probe_klein_after_logmap0_fix.out`, and three in
-`logs/2026-09-28_klein_audit/timing_rerun.out`), `Klein.dist` forward+backward takes
-0.48–0.53× the Eq. 4 time at dim 16 and 0.42–0.45× at dim 128, and the dim-128 forward takes
-0.55–0.59×. The dim-16 forward ratio ranged from 0.91× to 1.44×, within run-to-run noise on
-the shared GPU, so no speed difference is claimed there.
-
-### The Reference `_klein_expmap` Is Exact Only at $c = 1$
-
-`Klein.expmap` is $\exp_x(v) = x + v/\big(\theta\coth\theta + c\langle x, v\rangle/g_x\big)$ with
-$\theta = \sqrt{c}\,\lVert v\rVert_x$. The reference implementation
-(github.com/sc-zyl/Klein_hml, `Hyperbolic/hmath.py`, `_klein_expmap`) omits the factor $c$ in the
-second denominator term. The two agree at $c = 1$. For $c \ne 1$ the reference still moves $x$
-along $\pm v$, but by the wrong amount. In a float64 check at $c = 0.1$ with three random samples
-(`logs/2026-09-28_klein-manifold/probe_ref_expmap.out`,
-`logs/2026-09-28_klein_audit/audit_ref_expmap_nan.out`), one result landed outside the ball
-($c\lVert\cdot\rVert^2 = 1.055$, NaN distance, where $\lVert v\rVert_x = 2.117$), one landed on
-the far side of $x$ ($t = -0.61$ along $v$, distance 1.368 instead of 1.749), and one landed at
-distance 0.317 instead of 0.504. All three $c = 1$ samples matched. `Klein.expmap` matches the hyperboloid
-exponential map to 1.748e-15 in the float64 oracle check above.
-
-On an inward step ($u = c\langle x, v\rangle/g_x < 0$) the two denominator terms have opposite
-signs, and `Klein.expmap` now evaluates the denominator as a sum of non-negative terms for either
-direction, $\theta\coth\theta + u = 2\theta e^{-2\theta}/(1 - e^{-2\theta}) + (\theta + u)$ with
-$\theta + u = c\lVert v\rVert^2/(g_x(\theta - u))$ on an inward step: a radial inward step
-$\theta = 8$ from $a = 4$ ($c = 1$, float32 against the float64 hyperboloid `expmap`) landed 0.85
-scaled nats off before and lands 1.4e-4 off now, against the chart floor
-$\varepsilon\cosh^2(4) = 8.9\text{e-}5$
-(`logs/2026-09-29_cancellation-free/1d/probe_old.out`,
-`logs/2026-09-29_cancellation-free/2_evidence/probes/fixup_merged.out`).
+`Klein.expmap` evaluates its denominator as a sum of non-negative terms, so inward steps also stay near
+the chart floor. It keeps the factor $c$ that the reference implementation's `_klein_expmap` omits,
+so it is correct for every $c$, not only $c = 1$.
 
 ## Half-Space: Cancellation-Free Pairwise Operations {#halfspace-numerics}
 
 `HalfSpace` (height $x_n > 0$ in the last coordinate, metric $\lVert dx\rVert^2/(c\,x_n^2)$,
 origin $o = e_n/\sqrt{c}$) builds its two-point operations from $w = y - x$, which is exact in
 floating point for close points. The textbook distance
-$\operatorname{arcosh}\!\big(1 + \lVert y - x\rVert^2/(2x_n y_n)\big)/\sqrt{c}$, which the
-reference implementation (HTorch) uses, takes `acosh` of a number close to 1 for close pairs
-and loses the separation. `HalfSpace.dist` evaluates the same function as
-$(2/\sqrt{c})\operatorname{arsinh}(\lVert r\rVert/2)$ with
+$\operatorname{arcosh}\!\big(1 + \lVert y - x\rVert^2/(2x_n y_n)\big)/\sqrt{c}$ takes `acosh` of a
+number close to 1 for close pairs and loses the separation. `HalfSpace.dist` evaluates the same
+function as $(2/\sqrt{c})\operatorname{arsinh}(\lVert r\rVert/2)$ with
 $r = \big((y - x)/\sqrt{x_n}\big)/\sqrt{y_n}$, and `logmap` builds $\theta/\sinh\theta$ from the
-same $r$. `expmap` evaluates its denominator in a non-cancelling form for near-vertical upward
-steps. `ptransp` is a rational formula: the conformal scale $y_n/x_n$ times a rotation by
-$-2\arctan\big(\lVert w_s\rVert/(x_n + y_n)\big)$. In float32 at scaled separation $10^{-5}$, the
-literal `acosh` has median relative error 1.00 (evaluated eagerly, or jitted on XLA:GPU; XLA:CPU's
-`jit` rewrites it into an accurate form), and `HalfSpace.dist` a median of at most 4.24e-8
-at scaled radii from 0.5 to 12, $c = 1$ (`logs/2026-09-28_halfspace-manifold/timing_pass/probe_final.out`).
+same $r$. In float32 at scaled separation $10^{-5}$, the
+literal `acosh` has median relative error 1.00 (eager, or jitted on GPU), and `HalfSpace.dist` a median of at most 4.24e-8
+at scaled radii from 0.5 to 12, $c = 1$. (The reference implementation, HTorch, uses the literal
+`acosh`, and its `ptransp` is not an isometry; hyperbolix implements the correct transport.)
 
-The error that remains is a stored point's own rounding, about
-$0.4\,(\varepsilon/2)\cosh(\sqrt{c}\,\delta)/\sqrt{c}$ as a distance, with $\varepsilon$ the machine
-epsilon and $\delta$ the distance to the vertical geodesic through $o$, so along that axis it does
-not grow with the height.
+The remaining error is a stored point's own rounding, about
+$0.4\,(\varepsilon/2)\cosh(\sqrt{c}\,\delta)/\sqrt{c}$, with $\delta$ the distance to the vertical
+geodesic through $o$; along that axis it does not grow with the height.
 
-Three cases return `inf`/NaN instead of a finite wrong value. The squared chord
-$\lVert r\rVert^2$ overflows past a scaled distance $\sqrt{c}\,d$ of 88.72 in float32 (709.78 in
-float64); past it `dist` returns `inf`, and `logmap`, `ptransp` and `gyro_difference` return
-non-finite values (`timing_pass/ceiling_check.out`). `logmap` can return a non-finite vector
-earlier, once $x_n e^{\sqrt{c}\,d}$ passes the largest float
-(`test_fixes/logmap_overflow_repro_plain.out`). An exactly vertical upward `expmap` step
-longer than $\theta = \ln(1/\text{tiny})$, where tiny is the smallest normal number (87.34 in
-float32, 708.40 in float64), returns an infinite height with NaN horizontal coordinates: the
-denominator $e^{-\theta}$ underflows to 0 while the true height $x_n e^{\theta}$ is still
-representable (`docs_checks/docs_checks.out`, CPU). The gyro operations inherit this limit
-through $\exp_o$.
+Three cases return `inf`/NaN instead of a finite wrong value:
 
-HTorch's `ptransp` applies the ambient-hyperboloid transport formula to chart coordinates, which
-is not an isometry: it transports $(1, 0)$ from $(0, 1)$ to $(0, 2)$ as $(1, 0)$, whose norm at
-the endpoint is 0.5, where the parallel transport is $(2, 0)$ (`timing_pass/probe_final.out`).
+- the squared chord $\lVert r\rVert^2$ overflows past a scaled distance $\sqrt{c}\,d$ of 88.72 in
+  float32 (709.78 in float64); past it `dist` returns `inf`, and `logmap`, `ptransp` and
+  `gyro_difference` return non-finite values;
+- `logmap` can return a non-finite vector earlier, once $x_n e^{\sqrt{c}\,d}$ passes the largest
+  float;
+- an exactly vertical upward `expmap` step longer than $\theta = \ln(1/\text{tiny})$, where tiny is
+  the smallest normal number (87.34 in float32, 708.40 in float64), returns an infinite height with
+  NaN horizontal coordinates. The gyro operations inherit this limit through $\exp_o$.
 
 ## The `math_utils` Wrappers {#hyperbolic-function-overflow}
 
