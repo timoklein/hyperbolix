@@ -277,6 +277,31 @@ class TestLearnableCurvatureClamping:
         c.raw[...] = jnp.array(-10.0, dtype=jnp.float32)
         assert float(c()) == pytest.approx(0.2)
 
+    @pytest.mark.parametrize("init_c", [0.1, 1.0, 2.5, 50.0])
+    @pytest.mark.parametrize("parameterization", ["softplus", "log"])
+    def test_default_bounds_sit_a_decade_either_side_of_init_c(self, parameterization, init_c):
+        """Without explicit bounds, softplus/log clamp to ``[init_c / 10, init_c * 10]``: ``[0.1, 10]`` at ``init_c = 1``."""
+        c = LearnableCurvature(init_c, parameterization=parameterization)
+        c.raw[...] = jnp.array(-1e4, dtype=jnp.float32)  # c = 0 for both parameterizations
+        assert float(c()) == float(jnp.float32(init_c / 10))
+        c.raw[...] = jnp.array(1e4, dtype=jnp.float32)  # c = 1e4 (softplus), ~1.4e38 (log, exponent cap)
+        assert float(c()) == float(jnp.float32(init_c * 10))
+
+    def test_explicit_bounds_win_over_the_init_relative_default(self):
+        """A given bound is used verbatim and ``None`` disables it; the other bound keeps its default. ``identity``
+        keeps its symmetric ``[-10, 10]`` whatever the init."""
+        cases = [
+            (LearnableCurvature(0.1, c_min=0.05, c_max=2.0), 0.05, 2.0),
+            (LearnableCurvature(0.1, parameterization="softplus", c_min=0.02), 0.02, 1.0),
+            (LearnableCurvature(0.1, c_min=None), 0.0, 1.0),  # exp(-1e4) = 0, no floor
+            (LearnableCurvature(2.5, parameterization="identity"), -10.0, 10.0),
+        ]
+        for c, lo, hi in cases:
+            c.raw[...] = jnp.array(-1e4, dtype=jnp.float32)
+            assert float(c()) == float(jnp.float32(lo))
+            c.raw[...] = jnp.array(1e4, dtype=jnp.float32)
+            assert float(c()) == float(jnp.float32(hi))
+
 
 class TestLearnableCurvatureGradients:
     @pytest.mark.parametrize("parameterization", ["softplus", "log"])

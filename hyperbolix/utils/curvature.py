@@ -53,10 +53,11 @@ class _Auto:
 
 _AUTO = _Auto()
 
-# Default clamp magnitudes. softplus/log use the positive window ``[_C_MIN_POS, _C_ABS_MAX]``; the signed
-# ``identity`` parameterization uses the symmetric cap ``[-_C_ABS_MAX, +_C_ABS_MAX]``, which INCLUDES 0 (the
-# Euclidean point) so it caps ``|c|`` against blow-up without ever forbidding the Euclidean/spherical half.
-_C_MIN_POS = 0.1
+# Default clamp bounds. softplus/log use the positive window ``[init_c / _SPAN, init_c * _SPAN]``, a decade either
+# side of ``init_c`` (PhyCLIP's range); the signed ``identity`` parameterization uses the symmetric cap
+# ``[-_C_ABS_MAX, +_C_ABS_MAX]``, which INCLUDES 0 (the Euclidean point) so it caps ``|c|`` against blow-up without
+# ever forbidding the Euclidean/spherical half.
+_SPAN = 10.0
 _C_ABS_MAX = 10.0
 
 
@@ -124,10 +125,13 @@ class LearnableCurvature(nnx.Module):
               so it can cross zero. The only parameterization that reaches ``c<=0``.
 
         c_min: Lower clamp applied to the recovered ``c``. Default resolves per
-            parameterization: ``0.1`` for ``softplus``/``log``, ``-10.0`` for the
-            signed ``identity``. Pass ``None`` to disable, or a float to override.
+            parameterization: ``init_c / 10`` for ``softplus``/``log`` (a decade
+            below the init, PhyCLIP's range), ``-10.0`` for the signed
+            ``identity``. Pass ``None`` to disable, or a float to override.
         c_max: Upper clamp applied to the recovered ``c``. Default resolves to
-            ``10.0``. Pass ``None`` to disable, or a float to override.
+            ``init_c * 10`` for ``softplus``/``log`` (``[0.1, 10]`` at the default
+            ``init_c=1.0``), ``10.0`` for ``identity``. Pass ``None`` to disable, or
+            a float to override.
         param_dtype: Storage dtype of the raw parameter (default:
             ``jnp.float32``), pinned so it does not become float64 under
             global ``jax_enable_x64``.
@@ -173,14 +177,6 @@ class LearnableCurvature(nnx.Module):
             raise ValueError(f"parameterization must be 'softplus', 'log', or 'identity', got {parameterization!r}")
         signed = parameterization == "identity"
 
-        # Resolve sentinel clamp bounds from the parameterization: softplus/log keep the historical positive
-        # window [0.1, 10]; identity uses a symmetric magnitude cap [-10, 10]. Explicit None still disables
-        # the clamp; explicit numeric bounds are honored verbatim.
-        if isinstance(c_min, _Auto):
-            c_min = -_C_ABS_MAX if signed else _C_MIN_POS
-        if isinstance(c_max, _Auto):
-            c_max = _C_ABS_MAX
-
         # NaN slips through every range check below (all comparisons with NaN are False), silently storing
         # a NaN raw param that poisons the whole model — reject it up front.
         if not math.isfinite(init_c):
@@ -189,6 +185,15 @@ class LearnableCurvature(nnx.Module):
         # there. identity is signed and accepts any init_c (including 0.0 and negatives).
         if not signed and init_c <= 0:
             raise ValueError(f"LearnableCurvature requires init_c > 0 for parameterization {parameterization!r}, got {init_c}")
+
+        # Resolve sentinel clamp bounds from the parameterization: softplus/log default to a decade either side
+        # of init_c; identity uses a symmetric magnitude cap [-10, 10]. Explicit None still disables a bound;
+        # explicit numeric bounds are honored verbatim.
+        if isinstance(c_min, _Auto):
+            c_min = -_C_ABS_MAX if signed else init_c / _SPAN
+        if isinstance(c_max, _Auto):
+            c_max = _C_ABS_MAX if signed else init_c * _SPAN
+
         if c_min is not None and c_max is not None and c_min > c_max:
             raise ValueError(f"c_min ({c_min}) must be <= c_max ({c_max})")
         if c_min is not None and init_c < c_min:
