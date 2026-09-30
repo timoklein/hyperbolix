@@ -456,8 +456,9 @@ class LorentzMoE(nnx.Module):
     - **Curvature init.** The code builds every expert at ``Lorentz(c=1.0, learnable=args.train_curv)``;
       its ``np.linspace(0.1, 2.0, ...)`` list is unused. Here ``c_i = linspace(0.1, 2.0, E)``.
       The released HELM 120M checkpoint (Zenodo record 18729608) follows the code: with its one
-      optimizer step after training undone, every expert curvature is ``k = 1`` (``c = 1``), so
-      to match that checkpoint pass ``expert_curvatures=[1.0] * num_routed``.
+      optimizer step after training undone, every expert curvature is exactly ``k = 1``
+      (``c = 1``), so the published run kept the curvatures fixed. To match that checkpoint pass
+      ``expert_curvatures=[1.0] * num_routed, learnable_curvature=False``.
     - **Shared experts** are ``R`` separate SwiGLU experts, each with weight 1 in the centroid
       (the paper's ``sum_j z_j``); the code has one ``LorentzFeedForward`` of width
       ``n_shared_experts * moe_inter_dim``. They agree for ``R = 1``.
