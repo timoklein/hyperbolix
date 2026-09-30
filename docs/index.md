@@ -7,19 +7,19 @@
 
 Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing manifold operations, neural network layers, and Riemannian optimizers for hyperbolic geometry. Built with Flax NNX and Optax for modern JAX workflows.
 
+**Status:** Stable, v1.3.0; see the [Changelog](changelog.md).
+
 ## Features
 
-- **8 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), Klein (Beltrami–Klein ball — straight-chord geodesics, Einstein gyrovector operations), Half-Space (Poincaré upper half-space — height as the last coordinate, Möbius gyrovector operations through the Cayley transform), and Product Manifold (mixed-curvature composition) — all with complete geometric operations
+- **8 Manifolds**: Euclidean, Poincaré Ball, Hyperboloid, Proper Velocity, κ-Stereographic (signed curvature — hyperbolic, flat, and spherical in one manifold), Klein (Beltrami–Klein ball), Half-Space (Poincaré upper half-space), and Product Manifold (mixed-curvature composition)
 - **Learnable Curvature**: `LearnableCurvature` module bundles parameter + reparameterization (softplus, log/exp, or signed identity) + optional clamp; works with any `nnx.Optimizer`
 - **Neural Network Layers**: 40+ hyperbolic layers including linear, convolutional, regression, attention, normalization, and PV layers
 - **Activation Functions**: 5 hyperbolic activations (ReLU, Leaky ReLU, Tanh, Swish, GELU)
 - **Riemannian Optimizers**: RAdam and RSGD with automatic manifold parameter detection
 - **Wrapped Normal Distributions**: For probabilistic modeling on hyperbolic manifolds
-- **Dimensionality Reduction**: HoroPCA (Chami et al. 2021), CO-SNE (Guo et al. 2022, hyperbolic t-SNE), and the Fréchet-mean centering primitive — hyperbolic analogues of PCA and t-SNE
-- **Pure JAX/Flax NNX**: No PyTorch dependency, fully compatible with JAX ecosystem
-- **vmap-native API**: Efficient batching through JAX's functional paradigm
-- **JIT-compatible**: All operations support JIT compilation for performance
-- **Comprehensive Test Suite**: 7,000+ tests (parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
+- **Dimensionality Reduction**: HoroPCA (Chami et al. 2021), CO-SNE (Guo et al. 2022, hyperbolic t-SNE), and the Fréchet-mean centering primitive
+- **Pure JAX/Flax NNX**: No PyTorch dependency; operations work on single points, batch with `jax.vmap`, and support JIT compilation
+- **Test Suite**: 7,000+ tests (parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
 
 ## Quick Example
 
@@ -62,150 +62,10 @@ uv sync  # or pip install -e .
 
 Requirements: Python 3.12+, JAX 0.9+, Flax 0.12+, Optax 0.2.6+
 
-## Architecture
-
-Hyperbolix follows a **class-based manifold design** with functional transformations:
-
-```python
-# Manifold classes with automatic dtype casting
-from hyperbolix.manifolds import Poincare
-import jax
-import jax.numpy as jnp
-
-jax.config.update("jax_enable_x64", True)  # float64 needs x64 enabled
-poincare = Poincare(dtype=jnp.float64)  # Optional float64 precision
-x, y = jnp.array([0.1, 0.2]), jnp.array([0.3, -0.1])
-distance = poincare.dist(x, y, c=1.0)
-
-# Neural network layers as Flax NNX modules
-from flax import nnx
-from hyperbolix.nn_layers import HypLinearPoincare
-
-model = HypLinearPoincare(
-    manifold_module=poincare,
-    in_dim=32,
-    out_dim=16,
-    rngs=nnx.Rngs(0)
-)
-input_data = jnp.full((4, 32), 0.01)  # (B, in_dim) points in the ball
-output = model(input_data, c=1.0)  # (4, 16)
-```
-
-## Project Status
-
-**Stable — current release: v1.3.0.** The public API is complete and stable, reaching functional parity with the broader hyperbolic deep learning ecosystem; changes follow semantic versioning and new layers and manifolds continue to be added. See the [Changelog](changelog.md) for the full release history.
-
-| Capability | Status | Shipped in |
-|---|---|---|
-| Class-based manifolds (Euclidean, Poincaré, Hyperboloid) | ✅ Stable | v0.3.0 |
-| Riemannian optimizers (RSGD, RAdam) | ✅ Stable | v0.1.4 |
-| Hyperbolic linear / convolutional layers | ✅ Stable | v0.1.4 |
-| Hyperboloid attention + hyperbolic transformer blocks | ✅ Stable | v0.2.0 |
-| Isometry mappings (Poincaré ↔ Hyperboloid) | ✅ Stable | v0.1.4 |
-| FGG-LNN layers (Klis et al. 2026) | ✅ Stable | v0.3.0 |
-| Poincaré BatchNorm2d, FHCNN layers, hyperbolic avg-pool | ✅ Stable | v0.5.x |
-| Proper Velocity manifold + PV layers (Chen et al. 2026) | ✅ Stable | v0.6.0 |
-| Learnable curvature (`LearnableCurvature`: softplus / log reparam) | ✅ Stable | v0.7.0 |
-| Product manifolds (Gu et al. 2019, mixed-curvature composition) | ✅ Stable | v0.7.0 |
-| Isometry mappings (Poincaré ↔ Proper Velocity ↔ Hyperboloid) | ✅ Stable | v0.8.0 |
-| Poincaré vector quantization (VQ-VAE / HyperVQ) layers | ✅ Stable | v0.8.0 |
-| κ-Stereographic manifold (Bachmann et al. 2020, signed learnable curvature) | ✅ Stable | v0.11.0 |
-| Dimensionality reduction (HoroPCA, CO-SNE, Fréchet mean) | ✅ Stable | v1.0.0 |
-| Klein manifold + isometry maps (Klein ↔ Poincaré / Hyperboloid / Proper Velocity) | ✅ Stable | Unreleased |
-| Half-space manifold + isometry maps (Half-space ↔ Poincaré / Hyperboloid / Klein / Proper Velocity) | ✅ Stable | Unreleased |
-| CI/CD pipeline | ✅ Stable | v0.1.4 |
-
-## Key Concepts
-
-### vmap-native API
-
-Methods operate on **single points** by design. Use `jax.vmap` for batching:
-
-```python
-poincare = Poincare()
-
-# Single point operation
-result = poincare.expmap(x, v, c)
-
-# Batched operation
-batch_result = jax.vmap(poincare.expmap, in_axes=(0, 0, None))(x_batch, v_batch, c)
-```
-
-This design enables efficient JIT compilation and clear semantics.
-
-### Curvature Parameter
-
-The curvature `c` is passed at **call time**, not stored in the manifold:
-
-```python
-poincare = Poincare()
-
-# Different curvatures for different calls
-dist_c1 = poincare.dist(x, y, c=1.0)
-dist_c2 = poincare.dist(x, y, c=2.0)
-```
-
-### Learnable Curvature
-
-Curvature can be made trainable via the `LearnableCurvature` module.
-Instantiate one per distinct curvature in your model and call it at runtime:
-
-```python
-from flax import nnx
-from hyperbolix import LearnableCurvature
-from hyperbolix.manifolds import Hyperboloid
-from hyperbolix.nn_layers import FGGLinear
-
-class Model(nnx.Module):
-    def __init__(self, rngs):
-        self.manifold = Hyperboloid(c=1.0)
-        self.curvature = LearnableCurvature(init_c=1.0)  # nnx.Module on the model
-        self.fc = FGGLinear(33, 65, rngs=rngs)
-
-    def __call__(self, x):
-        c = self.curvature()                             # positive, clamped to [0.1, 10.0]
-        return self.fc(x, c=c)
-```
-
-The default is `parameterization="log"`. You can select `"softplus"`
-explicitly, while `"identity"` gives a signed curvature for the `Stereographic`
-manifold. See the [Manifolds guide](user-guide/manifolds.md#choosing-a-parameterization)
-for details.
-
-### Mixed-Curvature Product Spaces
-
-Compose heterogeneous factors (each with its own curvature) into a single
-product manifold (Gu et al. 2019). Curvature is supplied at call time as a
-per-factor sequence — pass `product.curvatures` for static factors, or
-build the sequence from `LearnableCurvature` calls for trainable factors:
-
-```python
-from hyperbolix.manifolds import ProductManifold, Hyperboloid, Poincare, Euclidean
-
-product = ProductManifold(
-    (Hyperboloid(c=1.0), 5),   # hyperbolic factor
-    (Poincare(c=0.1), 3),      # Poincaré factor
-    (Euclidean(), 4),          # flat factor
-)
-c = product.curvatures               # (1.0, 0.1, 0.0)
-x = y = product.origin(c)            # (12,) points
-d = product.dist(x, y, c)            # sqrt(sum d_i^2) over factors
-```
-
-### Manifold Operations
-
-Each manifold provides:
-
-- **proj**: Project points onto the manifold
-- **dist**: Geodesic distance (Poincaré and Hyperboloid offer several formulations via `version_idx`)
-- **expmap/logmap**: Exponential and logarithmic maps
-- **ptransp**: Parallel transport
-- **egrad2rgrad**: Convert Euclidean to Riemannian gradients
-
 ## Next Steps
 
 - [Getting Started](getting-started.md): Installation and first examples
-- [User Guide](user-guide/manifolds.md): Core concepts and patterns
+- [User Guide](user-guide/manifolds.md): Core concepts and patterns, including learnable curvature and product manifolds
 - [Training Workflows](user-guide/training-workflows.md): Hands-on training examples
 - [API Reference](api-reference/manifolds.md): Complete API documentation
 
@@ -228,9 +88,4 @@ MIT License. See LICENSE for details.
 
 ## Acknowledgments
 
-This library implements methods from several research papers:
-
-- Ganea et al. (2018): "Hyperbolic Neural Networks"
-- Bécigneul & Ganea (2019): "Riemannian Adaptive Optimization Methods"
-- Bdeir et al. (2023): "Fully Hyperbolic Convolutional Neural Networks"
-- And many others (see references in individual modules)
+This library implements methods from several research papers, among them Ganea et al. (2018), "Hyperbolic Neural Networks"; Bécigneul & Ganea (2019), "Riemannian Adaptive Optimization Methods"; and Bdeir et al. (2023), "Fully Hyperbolic Convolutional Neural Networks". See the references in individual modules for the others.
