@@ -52,7 +52,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float, Int
 
 from hyperbolix.manifolds.protocol import ScalarCurvature
-from hyperbolix.utils.curvature import _AUTO, LearnableCurvature, Parameterization, _Auto
+from hyperbolix.utils.curvature import AUTO, Auto, LearnableCurvature, Parameterization
 from hyperbolix.utils.math_utils import floor_at
 
 from .hyperboloid_core import lorentz_midpoint, spatial_to_hyperboloid
@@ -508,10 +508,11 @@ class LorentzMoE(nnx.Module):
         Train the routed experts' curvatures (default: True). If False they stay fixed.
     curvature_parameterization : {"log", "softplus", "identity"}, optional
         Passed to each ``LearnableCurvature`` (default: "log").
-    c_min, c_max : float or None, optional
-        Clamp of each learnable expert curvature, passed to ``LearnableCurvature``. The default
-        is LearnableCurvature's own, per expert: ``[c_i / 10, c_i * 10]`` for ``log``/``softplus``
-        (see "Curvatures" above), ``[-10, 10]`` for ``identity``. The expert maps need
+    c_min, c_max : float, None or AUTO, optional
+        Clamp of each learnable expert curvature, passed to ``LearnableCurvature``. The default,
+        :data:`~hyperbolix.utils.curvature.AUTO`, is LearnableCurvature's own, per expert:
+        ``[c_i / 10, c_i * 10]`` for ``log``/``softplus`` (see "Curvatures" above),
+        ``[-10, 10]`` for ``identity``. The expert maps need
         ``c_i > 0``, so with ``identity`` pass a positive ``c_min``. A float is used as given
         for every expert; ``None`` disables that side.
     init_bound : float or None, optional
@@ -548,8 +549,8 @@ class LorentzMoE(nnx.Module):
         expert_curvatures: Sequence[float] | None = None,
         learnable_curvature: bool = True,
         curvature_parameterization: Parameterization = "log",
-        c_min: float | None | _Auto = _AUTO,
-        c_max: float | None | _Auto = _AUTO,
+        c_min: float | None | Auto = AUTO,
+        c_max: float | None | Auto = AUTO,
         init_bound: float | None = None,
         param_dtype: DTypeLike = jnp.float32,
         eps: float = 1e-7,

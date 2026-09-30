@@ -1,6 +1,6 @@
 """JAX utilities for hyperbolix."""
 
-from .curvature import LearnableCurvature
+from .curvature import AUTO, Auto, LearnableCurvature
 from .helpers import compute_hyperbolic_delta, compute_pairwise_distances, get_delta
 from .math_utils import (
     acosh,
@@ -21,6 +21,8 @@ from .math_utils import (
 )
 
 __all__ = [
+    "AUTO",
+    "Auto",
     "LearnableCurvature",
     "acosh",
     "asinh",
