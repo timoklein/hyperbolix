@@ -1021,8 +1021,11 @@ float64 the new and old routes agree to ≤ 8.8e-11 for $t \le 8$, except the co
 weights from $t = 5$ on, whose output ($\sqrt{c}\,\lVert\text{out}\rVert \ge 12.28$) is near or
 past the float64 ball's ceiling. The Poincaré Busemann layers
 (`HypRegressionPoincareBusemann`, `HypLinearPoincareBusemann`) score a tangent input the same way,
-through `Poincare._busemann_tangent`: at $t = 8$ the regression scores go from 2.2e-1 to 2.0e-7 and
-the input gradients from 1.0 to ≤ 2.6e-7 (`logs/2026-09-29_cancellation-free/bz/probe_layers_v3.out`).
+through `Poincare._busemann_tangent`: at $t = 8$, with random $\omega$, the regression scores go from
+2.2e-1 to 2.0e-7 and the input gradients from 1.0 to ≤ 2.6e-7
+(`logs/2026-09-29_cancellation-free/bz/probe_layers_v3.out`). For $\omega$ within float32 rounding of
+$\hat v$, the input and kernel gradients are off by 0.1 or more from $t = 5$ on both routes
+(`logs/2026-09-29_cancellation-free/poincare_small_t/probe_branch.out`, `probe_main.out`).
 
 The Hyperboloid Busemann layers (`HypRegressionHyperboloidBusemann`, `HypLinearHyperboloidBusemann`)
 with `input_space="tangent"` now score in closed form too, through `Hyperboloid._busemann_tangent`,
