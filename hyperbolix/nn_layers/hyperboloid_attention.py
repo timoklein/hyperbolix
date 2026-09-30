@@ -36,9 +36,9 @@ from hyperbolix.utils.math_utils import safe_hypot_norm
 from .hyperboloid_core import MATMUL_PRECISION, lorentz_midpoint, spatial_to_hyperboloid
 from .hyperboloid_linear import HTCLinear
 
-# Masked-score fill of HyperbolicFullAttention, the value LorentzMLA uses. Finite, so a fully
-# masked row softmaxes to a finite uniform row instead of NaN; it is written in the (at least
-# float32) score dtype, where it is representable.
+# Masked-score fill of HyperbolicSoftmaxAttention and HyperbolicFullAttention, the value LorentzMLA
+# uses. Finite, so a fully masked row softmaxes to a finite uniform row instead of NaN; it is
+# written in the (at least float32) score dtype, where it is representable.
 _MASK_FILL = -1e18
 
 # ---------------------------------------------------------------------------
@@ -370,6 +370,10 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
     query, key, value, followed by the same HRC pipeline (residual + time
     calibration) as the linear variant.
 
+    The scores are scaled, masked and softmaxed in at least float32, and the weights
+    are cast back to the working dtype, so bfloat16/float16 inputs get a float32
+    softmax; float32 and float64 inputs are unaffected.
+
     Parameters
     ----------
     in_features : int
@@ -420,6 +424,45 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
             out_features, out_features, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs
         )
 
+    def _attention_scores(
+        self,
+        query_spatial_BNHD: Float[Array, "B N H D"],
+        key_spatial_BNHD: Float[Array, "B N H D"],
+        causal: bool = False,
+    ) -> Float[Array, "B N H M"]:
+        """Masked scores ``<Q_s, K_s> / sqrt(D)``, in the working dtype promoted to at least float32.
+
+        The dot product runs in the working dtype; the ``1/sqrt(D)`` scale and the causal mask
+        run in the promoted dtype, as in :class:`HyperbolicFullAttention`. For float32 and
+        float64 inputs that is the working dtype throughout.
+        """
+        head_dim = query_spatial_BNHD.shape[-1]
+        # Both einsums of this layer are attention geometry, pinned HIGHEST: the scores go through
+        # a softmax, which turns a TF32 ~1e-3 absolute score error into a visibly wrong weight
+        # distribution, and the masked-position identities the causal tests assert are exact.
+        dots_BNHM = jnp.einsum(
+            "bnhd,bmhd->bnhm", query_spatial_BNHD, key_spatial_BNHD, precision=MATMUL_PRECISION
+        )  # (B, N, H, M)
+        # Scale and mask run in at least float32; this changes only bfloat16/float16 inputs.
+        arith_dtype = jnp.promote_types(dots_BNHM.dtype, jnp.float32)
+        scores_BNHM = dots_BNHM.astype(arith_dtype) / jnp.sqrt(float(head_dim))
+        if causal:
+            N = scores_BNHM.shape[1]
+            mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
+            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, jnp.asarray(_MASK_FILL, dtype=arith_dtype))
+        return scores_BNHM
+
+    def _attention_weights(
+        self,
+        query_spatial_BNHD: Float[Array, "B N H D"],
+        key_spatial_BNHD: Float[Array, "B N H D"],
+        causal: bool = False,
+    ) -> Float[Array, "B N H M"]:
+        """Softmax weights of :meth:`_attention_scores`, computed in at least float32 and cast to the working dtype."""
+        work_dtype = query_spatial_BNHD.dtype
+        scores_BNHM = self._attention_scores(query_spatial_BNHD, key_spatial_BNHD, causal)
+        return jax.nn.softmax(scores_BNHM, axis=-1).astype(work_dtype)  # (B, N, H, M)
+
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
 
@@ -427,20 +470,8 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         key_spatial_BNHD = key_BNHA[..., 1:]
         value_spatial_BNHD = value_BNHA[..., 1:]
 
-        head_dim = query_spatial_BNHD.shape[-1]
-
         # Scaled dot-product attention: softmax(Q_s K_s^T / √D) V_s
-        # Both einsums are attention geometry, pinned HIGHEST: the scores go through a softmax,
-        # which turns a TF32 ~1e-3 absolute score error into a visibly wrong weight distribution,
-        # and the masked-position identities the causal tests assert are exact.
-        scores_BNHM = jnp.einsum(
-            "bnhd,bmhd->bnhm", query_spatial_BNHD, key_spatial_BNHD, precision=MATMUL_PRECISION
-        ) / jnp.sqrt(float(head_dim))
-        if causal:
-            N = scores_BNHM.shape[1]
-            mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
-            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, -1e9)
-        attn_weights_BNHM = jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
+        attn_weights_BNHM = self._attention_weights(query_spatial_BNHD, key_spatial_BNHD, causal)  # (B, N, H, M)
         output_spatial_BNHD = jnp.einsum(
             "bnhm,bmhd->bnhd", attn_weights_BNHM, value_spatial_BNHD, precision=MATMUL_PRECISION
         )  # (B, N, H, D)

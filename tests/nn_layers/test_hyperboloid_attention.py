@@ -1144,3 +1144,32 @@ def test_full_attention_bfloat16_softmax_runs_in_float32():
     out_BNA = layer(x_BNA)
     assert out_BNA.dtype == jnp.bfloat16
     assert bool(jnp.all(jnp.isfinite(out_BNA.astype(jnp.float32))))
+
+
+@pytest.mark.parametrize("causal", [False, True])
+def test_softmax_attention_bfloat16_softmax_runs_in_float32(causal):
+    """HyperbolicSoftmaxAttention: bfloat16 input, float32 scores and softmax, bfloat16 weights.
+
+    Non-vacuity: a softmax of the same scores rounded to bfloat16 gives different weights.
+    """
+    layer = HyperbolicSoftmaxAttention(7, 6, num_heads=2, rngs=nnx.Rngs(0))
+    x_BNA = _make_hyp_points(jax.random.PRNGKey(6), 2, 16, 7, c=1.0).astype(jnp.bfloat16)
+    query_BNHA, key_BNHA, _ = layer._project_qkv(x_BNA, 1.0, 1.0)
+    assert query_BNHA.dtype == jnp.bfloat16
+    query_spatial_BNHD, key_spatial_BNHD = query_BNHA[..., 1:], key_BNHA[..., 1:]
+
+    scores_BNHM = layer._attention_scores(query_spatial_BNHD, key_spatial_BNHD, causal)
+    weights_BNHM = layer._attention_weights(query_spatial_BNHD, key_spatial_BNHD, causal)
+    assert scores_BNHM.dtype == jnp.float32
+    assert weights_BNHM.dtype == jnp.bfloat16
+    if causal:
+        N = scores_BNHM.shape[1]
+        visible_BNHM = np.broadcast_to(np.tril(np.ones((N, N), dtype=bool))[None, :, None, :], scores_BNHM.shape)
+        assert np.all(np.asarray(scores_BNHM)[~visible_BNHM] == np.float32(-1e18))
+        assert np.all(np.asarray(weights_BNHM.astype(jnp.float32))[~visible_BNHM] == 0.0)
+    assert bool(jnp.array_equal(weights_BNHM, jax.nn.softmax(scores_BNHM, axis=-1).astype(jnp.bfloat16)))
+    assert not bool(jnp.array_equal(weights_BNHM, jax.nn.softmax(scores_BNHM.astype(jnp.bfloat16), axis=-1)))
+
+    # The output dtype is not asserted: the float32 residual_proj (an nnx.Linear) promotes it.
+    out_BNA = layer(x_BNA, causal=causal)
+    assert bool(jnp.all(jnp.isfinite(out_BNA.astype(jnp.float32))))
