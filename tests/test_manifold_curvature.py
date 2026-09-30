@@ -76,6 +76,29 @@ class TestEuclidean:
 # 3. LearnableCurvature module
 # ===========================================================================
 
+# init_c on a clamp bound, plus one interior point per parameterization: (parameterization, c_min, c_max, init_c),
+# c_min None = the default bounds. Before the construction-time nudge, rounding the inverse of init_c to the
+# storage dtype put the recovered c outside the clamp for several of these (float32 exp(float32(log 0.1)) < 0.1;
+# float64 exp(float64(log 10)) > 10; float32 softplus at 0.2, float64 softplus at 0.3) and exactly on the bound
+# for most of the rest.
+INIT_ON_BOUND_CASES = [
+    ("log", None, None, 0.1),
+    ("log", None, None, 10.0),
+    ("log", None, None, 1.0),
+    ("log", 0.2, 5.0, 0.2),
+    ("log", 0.2, 5.0, 5.0),
+    ("softplus", None, None, 0.1),
+    ("softplus", None, None, 10.0),
+    ("softplus", None, None, 1.0),
+    ("softplus", 0.2, 5.0, 0.2),
+    ("softplus", 0.3, 3.0, 0.3),
+    ("identity", None, None, -10.0),
+    ("identity", None, None, 10.0),
+    ("identity", None, None, 0.0),
+    ("identity", -3.0, 0.3, 0.3),
+]
+DEFAULT_BOUNDS = {"log": (0.1, 10.0), "softplus": (0.1, 10.0), "identity": (-10.0, 10.0)}
+
 
 class TestLearnableCurvatureInit:
     @pytest.mark.parametrize("init_c", [0.1, 0.5, 1.0, 5.0, 10.0])
@@ -136,6 +159,75 @@ class TestLearnableCurvatureInit:
         assert (
             LearnableCurvature(1.0, parameterization=parameterization, param_dtype=jnp.float64).raw[...].dtype == jnp.float64
         )
+
+    @pytest.mark.parametrize("straight_through", [False, True], ids=["clamp", "straight_through"])
+    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["float32", "float64"])
+    @pytest.mark.parametrize(("parameterization", "c_min", "c_max", "init_c"), INIT_ON_BOUND_CASES)
+    def test_init_on_a_bound_gets_the_analytic_derivative(
+        self, parameterization, c_min, c_max, init_c, dtype, straight_through
+    ):
+        """At init, ``d c / d raw`` is the parameterization's own derivative at the stored ``raw`` — not 0, not halved.
+
+        The oracle does not go through JAX: ``exp(raw)``, ``1 / (1 + exp(-raw))`` or ``1`` in Python float64 at
+        the stored ``raw``. Before the construction-time nudge, float32 ``log`` at ``init_c = 0.1`` (the docs'
+        init) got exactly 0 here — ``c`` started strictly below ``c_min`` and never moved — and float64 ``log``
+        at ``init_c = 10`` got 0 under the default clamp and 1 instead of 10 under straight-through (damped as
+        if past ``c_max``). A ``jnp.clip``-style clamp would hand over half the derivative on a tie.
+        """
+        bounds = {} if c_min is None else {"c_min": c_min, "c_max": c_max}
+        curvature = LearnableCurvature(
+            init_c, parameterization=parameterization, straight_through_clamp=straight_through, param_dtype=dtype, **bounds
+        )
+        raw = float(curvature.raw[...])
+        analytic = {"log": math.exp(raw), "softplus": 1.0 / (1.0 + math.exp(-raw)), "identity": 1.0}[parameterization]
+        grad = nnx.grad(lambda m: m())(curvature).raw[...]
+        assert grad.dtype == dtype
+        assert float(grad) == pytest.approx(analytic, rel=1e-6 if dtype == jnp.float32 else 1e-12)
+
+    @pytest.mark.parametrize("straight_through", [False, True], ids=["clamp", "straight_through"])
+    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["float32", "float64"])
+    @pytest.mark.parametrize(("parameterization", "c_min", "c_max", "init_c"), INIT_ON_BOUND_CASES)
+    def test_init_on_a_bound_recovers_c_strictly_inside_within_a_few_ulp(
+        self, parameterization, c_min, c_max, init_c, dtype, straight_through
+    ):
+        """The recovered ``c`` lies strictly inside ``[c_min, c_max]`` and within a few ulps of ``init_c``.
+
+        Strictly: on a tie this clamp passes the full gradient, but a ``jnp.clip``-style clamp halves it, and a
+        backend whose ``exp`` rounds one ulp differently could put a tie outside. A few ulps: the nudge moves
+        ``raw`` by the fewest ulps that bring ``c`` inside, and one ``raw`` ulp moves ``c`` by at most ~3.3 of
+        its own ulps at these values (4 is the largest move measured here on CPU).
+        """
+        bounds = {} if c_min is None else {"c_min": c_min, "c_max": c_max}
+        curvature = LearnableCurvature(
+            init_c, parameterization=parameterization, straight_through_clamp=straight_through, param_dtype=dtype, **bounds
+        )
+        lo, hi = (c_min, c_max) if c_min is not None else DEFAULT_BOUNDS[parameterization]
+        c = curvature()
+        assert c.dtype == dtype
+        # Strictly inside means the clamp is not engaged, so the forward value is the unclamped curvature.
+        assert float(jnp.asarray(lo, dtype=dtype)) < float(c) < float(jnp.asarray(hi, dtype=dtype))
+        if init_c == 0.0:
+            assert float(c) == 0.0
+        else:
+            init_rounded = float(jnp.asarray(init_c, dtype=dtype))
+            ulp = 2.0 ** (math.floor(math.log2(abs(init_rounded))) - jnp.finfo(dtype).nmant)
+            assert abs(float(c) - init_rounded) <= 6 * ulp
+
+    @pytest.mark.parametrize("parameterization", ["softplus", "log", "identity"])
+    def test_interior_init_keeps_the_plain_inverse_bit_for_bit(self, parameterization):
+        """The nudge touches only an init whose recovered ``c`` is not strictly inside; every other ``raw`` is unchanged."""
+        for init_c in (0.5, 1.0, 5.0):
+            inverse = {"log": math.log(init_c), "softplus": math.log(math.expm1(init_c)), "identity": init_c}
+            curvature = LearnableCurvature(init_c, parameterization=parameterization)
+            assert curvature.raw[...] == jnp.array(inverse[parameterization], dtype=jnp.float32)
+
+    def test_init_nudge_runs_under_jit_and_eval_shape(self):
+        """The nudge evaluates the forward on concrete values, so building the module under a trace still works."""
+        eager = LearnableCurvature(0.1)
+        traced = nnx.jit(lambda: LearnableCurvature(0.1))()
+        assert traced.raw[...] == eager.raw[...]
+        abstract = nnx.eval_shape(lambda: LearnableCurvature(0.1))
+        assert jax.tree.leaves(nnx.state(abstract))[0].dtype == jnp.float32
 
 
 class TestLearnableCurvatureClamping:
