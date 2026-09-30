@@ -509,7 +509,7 @@ and $\lambda_x - 1 = \cosh(2t)$, and `HypConv2DPoincare` maps its output back wi
 the lift in closed form.
 
 These layers are therefore not bound by the ball's ceiling,
-$t = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$ ≈ 6.33 at $c = 1$: past it the scores keep
+$t = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$ ≈ 6.32 at $c = 1$: past it the scores keep
 growing, and the conv output's norm is not capped. At $t = 8$ the float32
 outputs match float64 to ≤ 1.6e-6 (max-abs error over max-abs value).
 
@@ -527,7 +527,7 @@ The Busemann layers check the manifold at construction and raise a `TypeError` f
 
 `PoincareBatchNorm2D` averages the batch in Klein coordinates, $\sum\lambda x/\sum(\lambda - 1)$,
 and projects that average with `proj`, so the batch mean cannot sit farther out than the Klein
-chart's ceiling: 6.33 at $c = 1$ and 6.90 at $c = 0.1$ in float32 (13.86 and 14.44 in float64).
+chart's ceiling: 6.32 at $c = 1$ and 6.90 at $c = 0.1$ in float32 (13.86 and 14.44 in float64).
 For a cluster at scaled radius 7 ($c = 1$), the float32 batch mean reads 6.31–6.33 and lies 0.68
 from the float64 one. In float32, keep this layer's inputs inside scaled radius ≈ 6, or run it in
 float64.
@@ -679,7 +679,7 @@ cannot represent the point, which is not a bug. To choose a manifold by use case
 | ProperVelocity | as the hyperboloid | the hyperboloid's storage floor |
 | Poincaré | 12.65 / 27.73 (13.80 / 28.88 at $c = 0.1$) | the [ball chart's ceiling](#poincare-roundtrip-ceiling); float32 is fine to $a \approx 7$ ([table](#precision-requirements-by-distance)) |
 | κ-Stereographic, $c > 0$ | as Poincaré | plus the Taylor band near $c = 0$ ([below](#stereographic-near-zero-curvature)) |
-| Klein | 6.33 / 13.86 | half the Poincaré radius, and the floor $\varepsilon\cosh^2(a)$ ([below](#klein-numerics)) |
+| Klein | 6.32 / 13.86 | half the Poincaré radius, and the floor $\varepsilon\cosh^2(a)$ ([below](#klein-numerics)) |
 | HalfSpace | `inf`/NaN past 88.7 / 709.8 | the floor $\approx 0.4\,(\varepsilon/2)\cosh(\sqrt{c}\,\delta)/\sqrt{c}$ ([below](#halfspace-numerics)) |
 
 ## κ-Stereographic: Numerics Near Zero Curvature {#stereographic-near-zero-curvature}
@@ -710,8 +710,8 @@ In float32 the *values* stay accurate well below $10^{-5}$; it is $\partial(\cdo
 computed through the closed forms that degrades. The wider float32 window gives finite,
 well-behaved gradients below the cutover at the cost of a seam just above it: there the curvature
 gradient has relative error of order $\varepsilon/(\lvert\kappa\rvert\,\lVert x\rVert^2)$, with
-median 1–2 % and worst case 8–30 % over 200 points with $\lVert x\rVert \approx 0.85$, and
-`logmap`'s gradient changed sign on 1–2 of them.
+median 1–2 % and worst case 8–30 % (up to 450 % for `logmap`) over 200 points with
+$\lVert x\rVert \approx 0.85$, and `logmap`'s gradient changed sign on 1–2 of them.
 
 The Taylor branch is additionally gated on its convergence region $\lvert\kappa\rvert\,\lVert x\rVert^2 < 0.01$: points at extreme chart radii ($\lVert x\rVert \sim 1/\sqrt{\lvert\kappa\rvert}$, e.g. spherical points far from the chart origin) always keep the exact closed form, no matter how small $\lvert\kappa\rvert$ is.
 
@@ -779,7 +779,7 @@ time of the Eq. 4 spelling on an A100.
 **Ceiling.** `proj` caps $\lVert x\rVert$ at $1/\sqrt{c} - \varepsilon^{0.75}$, the Poincaré
 ball's [margin](#poincare-roundtrip-ceiling). A Klein point has
 $\sqrt{c}\,\lVert x\rVert = \tanh(a)$ where a Poincaré point has $\tanh(a/2)$, so at $c = 1$ the
-ceiling is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$ = **6.33** in float32 and
+ceiling is $a = \operatorname{atanh}(1 - \varepsilon^{0.75})$ = **6.32** in float32 and
 **13.86** in float64, half the Poincaré ball's 12.65 / 27.73.
 
 `poincare_to_klein`, `hyperboloid_to_klein` and `pv_to_klein` do not project. Because the Klein operations floor the gap $g_k$
@@ -1016,7 +1016,7 @@ angular resolution.
 Measured at $c = 0.5$: the float32 `dist` of a radial step of length 0.1 at $a = 10$ has relative
 error 8e-7 along a coordinate axis, about the storage floor of the input pair (1.1e-4 for one
 random direction, whose floor is 1.4e-5), and the unit radial tangent's
-$\lvert\langle v,v\rangle - 1\rvert$ is 5.2e-5 at $a = 12$. `dist(x, x)` and `logmap(x, x)` are
+$\lvert\langle v,v\rangle - 1\rvert$ has median 5.2e-5 at $a = 12$. `dist(x, x)` and `logmap(x, x)` are
 exactly 0, with a finite gradient. Code built on PV `dist` inherits this, e.g.
 `utils.helpers.compute_pairwise_distances` and `nn_layers.poincare_batchnorm.frechet_variance`
 (called by `ProperVelocityGyroBatchNorm`).
