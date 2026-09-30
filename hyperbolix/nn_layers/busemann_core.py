@@ -176,6 +176,10 @@ def busemann_fc_poincare_output(
     ball (``√c·‖y‖ < 1``); in float32 a saturated row can round onto or past the boundary, and the
     caller's ``proj`` pulls it back.
 
+    The clip bounds *finite* logits only: an ``inf`` or NaN ``√c · u`` gives a NaN row, so a
+    runaway ``log_scale`` (``exp`` overflow) shows up as a NaN loss rather than a finite point at the
+    ball's edge with a zero gradient.
+
     Parameters
     ----------
     u_BO : Array, shape (B, O)
@@ -191,7 +195,13 @@ def busemann_fc_poincare_output(
         Points in the Poincaré ball with curvature ``c``, before the caller's ``proj``.
     """
     sqrt_c = jnp.sqrt(c)
+    arg_BO = sqrt_c * u_BO  # (B, O)
+    # `+ 0·arg` makes the clip loud: 0·(±inf) is NaN, so an overflowed logit (e.g. alpha = exp(log_scale)
+    # = inf) gives a NaN output instead of a finite point at ±v_max with a zero gradient. For finite
+    # arg, 0·arg is a zero with arg's sign, so value and gradient are bit-identical to the plain clip.
+    # (A NaN arg was already passed through by `clamp_to`.)
+    clipped_BO = clamp_to(arg_BO, -v_max, v_max) + 0.0 * arg_BO  # (B, O)
     # safe_sinh: expm1-form is an accuracy fix over XLA's CPU jnp.sinh (up to ~17-496 ulps off for
     # |x| >= 16), not just a clamp — the ±v_max clip here is still the output-side overflow guard.
-    s_BO = safe_sinh(clamp_to(sqrt_c * u_BO, -v_max, v_max))  # (B, O), s = √c·ω
+    s_BO = safe_sinh(clipped_BO)  # (B, O), s = √c·ω
     return _poincare_sinh_lift(s_BO, c)
