@@ -32,9 +32,9 @@ The neural network layers implement methods from:
 - **Shimizu et al. (2020)**: "Hyperbolic Neural Networks++" — enhanced Poincaré operations and the linearized-kernel conv formulation (`HypLinearPoincarePP`; basis of `HypLinearHyperboloidPLFC` and `HypConv2DHyperboloidILNN`)
 - **Bdeir et al. (2023)**: "Fully Hyperbolic Convolutional Neural Networks for Computer Vision" — HCat-based convolutions (`HypConv2DHyperboloid`)
 - **Chen et al. (2022)**: "Fully Hyperbolic Neural Networks" — FHCNN linear layers
-- **LResNet (2023)**: "Lorentzian ResNet" — HRC-based convolutions (`LorentzConv2D`)
+- **He, Yang & Ying (2025)**: "Lorentzian Residual Neural Networks" (KDD 2025) — HRC-based convolutions (`LorentzConv2D`)
 - **Hypformer (Yang et al. 2025)**: "Hyperbolic Transformers" — HTC/HRC components with curvature-change support
-- **Chen et al. (2024)**: "Hyperbolic Embeddings for Learning on Manifolds (HELM)" — HOPE positional encoding and Lorentzian residual connections
+- **He et al. (2025)**: "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts" (arXiv:2505.24722) — HOPE positional encoding and Lorentzian residual connections
 - **Klis et al. (2026)**: "Fast and Geometrically Grounded Lorentz Neural Networks" — `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `FGGMeanOnlyBatchNorm`; sinh/arcsinh cancellation for linear hyperbolic distance growth
 - **Chen et al. (2026)**: "Proper Velocity Neural Networks" — `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV`; unconstrained $\mathbb{R}^n$ model with exact Euclidean retraction
 - **Chen, Schölkopf & Sebe (2026)**: "Hyperbolic Busemann Neural Networks" (arXiv:2602.18858) — Busemann MLR heads and BFC layers; closed-form point-to-horosphere Busemann function (`Hyperboloid.busemann`, `Poincare.busemann`)

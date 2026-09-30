@@ -10,7 +10,7 @@ This module provides positional encoding layers for hyperbolic Transformers:
 
 References
 ----------
-Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
 Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
 Hyperbolic Space", 2025.
 """
@@ -74,7 +74,7 @@ class HypformerPositionalEncoding(nnx.Module):
 
     References
     ----------
-    Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+    He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
     Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
     Hyperbolic Space", 2025.
     """
@@ -192,7 +192,7 @@ def hope(
 
     References
     ----------
-    Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+    He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
     """
     spatial_SD = z[..., 1:]  # (..., S, D) where S=seq, D=spatial dim
     d = spatial_SD.shape[-1]
@@ -233,7 +233,7 @@ class HyperbolicRoPE(nnx.Module):
 
     References
     ----------
-    Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+    He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
     """
 
     def __init__(

@@ -437,7 +437,7 @@ def lorentz_midpoint(
     arbitrary weighted combination used by full attention aggregation and
     multi-head averaging.
 
-    Formula (HELM, Chen et al. 2024):
+    Formula (HELM, He et al. 2025):
         ``h = weights @ points``  (weighted sum)
         ``mu = h / (sqrt(c) * ||h||_L)``
 
@@ -634,7 +634,7 @@ def lorentz_residual(
     ----------
     He, Neil, Menglin Yang, and Rex Ying. "Lorentzian residual neural networks."
     Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 1. 2025.
-    (Also adopted as the residual connection in HELM, Chen et al. 2024, Eq. 2.)
+    (Also adopted as the residual connection in HELM, He et al. 2025.)
     """
     ave_A = x + w_y * y  # (..., A) where A = d+1
     # Exact for on-sheet x, y:  <x + w y, x + w y>_L = -(1+w)^2/c - w <x-y, x-y>_L.

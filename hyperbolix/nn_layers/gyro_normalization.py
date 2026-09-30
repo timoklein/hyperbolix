@@ -243,7 +243,7 @@ class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
 
     Inputs are ambient ``(..., D+1)`` hyperboloid points; ``num_features`` is the
     spatial dimension ``D``. The batch mean is the closed-form Lorentz centroid
-    (HELM, Chen et al. 2024) via :func:`lorentz_midpoint` — exact and JIT-friendly,
+    (HELM, He et al. 2025) via :func:`lorentz_midpoint` — exact and JIT-friendly,
     matching the estimator the ILNN GyroBN reference uses in practice.
 
     Centering uses :meth:`Hyperboloid.gyro_difference`. The general spelling
