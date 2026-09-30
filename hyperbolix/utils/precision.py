@@ -62,9 +62,8 @@ A deep, fully hyperbolic stack is a good reason to do so: the pinned sites keep 
 honest, but a TF32 error introduced in an early layer's weight GEMM is carried forward by
 every layer after it. Measured on an A100 (jax 0.9.1, ambient dim 33, batch 64,
 ``c in {0.1, 1.0}`` x spatial radius ``in {0.5, 5, 20}``, float32 against a float64 reference):
-``FGGLinear`` 2.6e-4 under TF32 against 6.8e-8 under ``HIGHEST``, ``FGGLorentzMLR``
-1.3e-4 … 3.6e-4 against 3.6e-8 … 9.6e-8 — roughly ~1e-4 against ~1e-7 on the layers, three of
-float32's seven significant digits.
+``FGGLinear`` 2.6e-4 under TF32 against 6.8e-8 under ``HIGHEST`` — roughly ~1e-4 against
+~1e-7 on the layers, three of float32's seven significant digits.
 
 Depth decides whether that matters, and at depth 2 it does not. An independent teacher-student
 comparison (5 seeds per arm, ``D = 128``, ``B = 256``, ``c = 1``, 2 000 Adam updates,

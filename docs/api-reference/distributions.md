@@ -4,7 +4,7 @@ Probability distributions on hyperbolic manifolds.
 
 ## Overview
 
-Hyperbolix provides wrapped normal distributions for probabilistic modeling on hyperbolic manifolds via functional interfaces. These distributions are essential for:
+Hyperbolix provides wrapped normal distributions (Poincaré ball, hyperboloid) and a Riemannian-uniform distribution on a Poincaré geodesic ball, as plain functions. Uses include:
 
 - Variational Autoencoders (VAEs) with hyperbolic latent spaces
 - Bayesian neural networks on manifolds
@@ -22,7 +22,7 @@ Hyperbolix provides wrapped normal distributions for probabilistic modeling on h
 Samples uniformly with respect to the Riemannian volume measure within a geodesic ball $B(\text{center}, R)$ on the Poincaré ball. Uses geodesic polar decomposition: direction from $S^{n-1}$ (Muller method), radial component from $p(r) \propto \sinh^{n-1}(\sqrt{c}\,r)$.
 
 - For $n=2$: closed-form radial sampling via $u = \cosh(\sqrt{c}\,r) - 1$
-- For $n \geq 3$: rejection sampling with `jax.lax.while_loop` (JIT-compatible)
+- For $n \geq 3$: rejection sampling with `jax.lax.while_loop` (JIT-compatible); for radii too small or too large for the loop, the radius is drawn in closed form.
 
 **Usage:**
 
@@ -41,8 +41,8 @@ samples = uniform_poincare.sample(key, n=2, c=1.0, R=1.0, sample_shape=(100,))
 print(samples.shape)  # (100, 2)
 
 # All samples inside the geodesic ball
-is_valid = jax.vmap(poincare.is_in_manifold, in_axes=(0, None))(samples, 1.0)
-print(is_valid.all())  # True
+inside = jax.vmap(poincare.dist_0, in_axes=(0, None))(samples, 1.0) <= 1.0
+print(inside.all())  # True
 
 # Volume of geodesic ball (2D closed-form: 2π(cosh R - 1)/c)
 vol = uniform_poincare.volume(c=1.0, n=2, R=1.0)
@@ -53,7 +53,7 @@ log_p = uniform_poincare.log_prob(samples, c=1.0, R=1.0)
 print(jnp.allclose(log_p, log_p[0]))  # True — uniform
 ```
 
-**Use cases**: Uniform priors for hyperbolic VAEs, test/validation sampling, hyperparameter search in hyperbolic spaces.
+**Use cases**: uniform priors for hyperbolic VAEs, and test points spread evenly over a geodesic ball.
 
 ## Wrapped Normal Distribution
 
@@ -151,152 +151,98 @@ log_probs = jax.vmap(
 
 ## VAE Example
 
-Using wrapped normal distributions in a Variational Autoencoder:
+A sketch of a Poincaré VAE: the encoder gives a tangent vector that `expmap_0` puts on the ball as
+the mean, a second head gives the log standard deviation, the latent code is drawn with
+`wrapped_normal_poincare.sample`, and the KL term is a one-sample Monte Carlo estimate from
+`log_prob`.
 
 ```python
-from flax import nnx
-from hyperbolix.distributions import wrapped_normal_poincare
-from hyperbolix.nn_layers import HypLinearPoincare
-from hyperbolix.manifolds import Poincare
 import jax
 import jax.numpy as jnp
+import optax
+from flax import nnx
+from hyperbolix.distributions import wrapped_normal_poincare
+from hyperbolix.manifolds import Poincare
 
 poincare = Poincare()
+c = 1.0
+
 
 class HyperbolicVAE(nnx.Module):
-    def __init__(self, latent_dim, rngs):
-        self.latent_dim = latent_dim
+    def __init__(self, in_dim, latent_dim, rngs):
+        self.encoder = nnx.Linear(in_dim, 128, rngs=rngs)
+        self.mean_head = nnx.Linear(128, latent_dim, rngs=rngs)  # tangent vector at the origin
+        self.log_std_head = nnx.Linear(128, latent_dim, rngs=rngs)  # trained with the rest
+        self.decoder = nnx.Linear(latent_dim, in_dim, rngs=rngs)
 
-        # Encoder: Euclidean → Hyperbolic
-        self.encoder = nnx.Linear(784, 128, rngs=rngs)
-        self.enc_hyp = HypLinearPoincare(
-            manifold_module=poincare,
-            in_dim=128,
-            out_dim=latent_dim,
-            rngs=rngs
-        )
-
-        # Decoder: Hyperbolic → Euclidean
-        self.dec_hyp = HypLinearPoincare(
-            manifold_module=poincare,
-            in_dim=latent_dim,
-            out_dim=128,
-            rngs=rngs
-        )
-        self.decoder = nnx.Linear(128, 784, rngs=rngs)
-
-    def encode(self, x, c):
-        # Returns mean and std for latent distribution
+    def __call__(self, x, key):
         h = jax.nn.relu(self.encoder(x))
+        mean = jax.vmap(poincare.expmap_0, in_axes=(0, None))(self.mean_head(h), c)  # on the ball
+        std = jnp.exp(self.log_std_head(h))  # per-axis standard deviation
+        # A vector sigma is a per-axis std, so vmap over the batch (a 2-D sigma is a covariance)
+        keys = jax.random.split(key, x.shape[0])
+        z = jax.vmap(lambda k, m, s: wrapped_normal_poincare.sample(k, m, s, c))(keys, mean, std)
+        recon = self.decoder(jax.vmap(poincare.logmap_0, in_axes=(0, None))(z, c))
+        # One-sample Monte Carlo KL(q(z|x) || p(z)), prior = wrapped normal at the origin, sigma = 1
+        log_q = jax.vmap(lambda z_, m, s: wrapped_normal_poincare.log_prob(z_, m, s, c))(z, mean, std)
+        log_p = wrapped_normal_poincare.log_prob(z, jnp.zeros(z.shape[-1]), 1.0, c)
+        return recon, log_q - log_p
 
-        # Project to Poincaré ball
-        h_proj = jax.vmap(poincare.proj, in_axes=(0, None))(h, c)
 
-        # Mean on Poincaré ball
-        mean = self.enc_hyp(h_proj, c)
+def loss_fn(model, x, key):
+    recon, kl = model(x, key)
+    return jnp.mean(jnp.sum((x - recon) ** 2, axis=-1) + kl)
 
-        # Std in tangent space (Euclidean)
-        log_std_layer = nnx.Linear(128, self.latent_dim, rngs=nnx.Rngs(0))
-        log_std = log_std_layer(h)
-        std = jnp.exp(log_std)
 
-        return mean, std
+model = HyperbolicVAE(in_dim=784, latent_dim=2, rngs=nnx.Rngs(0))
+optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 
-    def decode(self, z, c):
-        h = self.dec_hyp(z, c)
 
-        # Logmap to tangent space for Euclidean decoder
-        h_tangent = jax.vmap(poincare.logmap, in_axes=(None, 0, None))(
-            jnp.zeros(self.latent_dim), h, c
-        )
+@nnx.jit
+def train_step(model, optimizer, x, key):
+    loss, grads = nnx.value_and_grad(loss_fn)(model, x, key)
+    optimizer.update(model, grads)
+    return loss
 
-        return jax.nn.sigmoid(self.decoder(h_tangent))
 
-    def __call__(self, x, key, c=1.0):
-        # Encode
-        mean, std = self.encode(x, c)
-
-        # Sample latent code
-        keys = jax.random.split(key, mean.shape[0])
-        z = jax.vmap(
-            lambda k, m, s: wrapped_normal_poincare.sample(k, m, s, c, (), manifold_module=poincare)
-        )(keys, mean, std)
-
-        # Decode
-        recon = self.decode(z, c)
-
-        return recon, mean, std, z
-
-# Loss function
-def vae_loss(model, x, key, c):
-    recon, mean, std, z = model(x, key, c)
-
-    # Reconstruction loss
-    recon_loss = jnp.mean((x - recon) ** 2)
-
-    # KL divergence (approximate for wrapped normal)
-    # Use standard Gaussian prior in tangent space at origin
-    kl_loss = -0.5 * jnp.mean(
-        1 + 2 * jnp.log(std) - jnp.sum(mean**2, axis=-1) - std**2
-    )
-
-    return recon_loss + kl_loss
+x = jax.random.uniform(jax.random.PRNGKey(1), (32, 784))  # stand-in for a data batch
+print(train_step(model, optimizer, x, jax.random.PRNGKey(2)))
 ```
 
 ## Mathematical Background
 
 ### Wrapped Normal Definition
 
-Given a mean $\mu \in \mathcal{M}$ on manifold $\mathcal{M}$ and standard deviation $\sigma$, the wrapped normal distribution is defined as:
+Given a mean $\mu \in \mathcal{M}$ and scale σ (a scalar or per-axis standard deviation, or an
+$(n, n)$ covariance matrix $\Sigma$), a sample is drawn as follows:
 
-1. Sample $v \sim \mathcal{N}(0, \sigma^2 I)$ in tangent space $T_\mu \mathcal{M}$
-2. Wrap to manifold: $x = \exp_\mu(v)$
+1. Sample $v \sim \mathcal{N}(0, \Sigma)$ in the tangent space at the origin
+2. Carry it to $\mu$ and wrap it onto the manifold: $x = \exp_\mu(\mathrm{PT}_{0\to\mu}(v))$
 
 The log probability is:
 
 $$
-\log p(x) = -\frac{1}{2\sigma^2} \|\log_\mu(x)\|^2 - \frac{d}{2}\log(2\pi\sigma^2)
+\log p(x) = \log \mathcal{N}(v;\,0,\Sigma) - (n-1)\log\frac{\sinh(\sqrt{c}\,r)}{\sqrt{c}\,r},\qquad v = \mathrm{PT}_{\mu\to 0}(\log_\mu x),\ r = \|v\|
 $$
 
-where $\log_\mu$ is the logarithmic map at $\mu$.
-
-### Sampling Algorithm
-
-```python
-# Conceptual implementation (simplified)
-def sample_concept(key, mean, std, c, sample_shape, manifold):
-    # 1. Sample in tangent space at mean
-    tangent_sample = std * jax.random.normal(key, sample_shape + mean.shape)
-
-    # 2. Exponential map to manifold
-    manifold_sample = manifold.expmap(tangent_sample, mean, c)
-
-    return manifold_sample
-```
+where $n$ is the manifold dimension and $r$ the Riemannian norm of $v$.
 
 ## Numerical Considerations
 
-!!! warning "Numerical Stability"
-    For small standard deviations and/or high curvatures, the exponential map can become numerically unstable. Consider:
+In float32, `log_prob` stays within ~1e-4 relative of float64 down to σ ≈ 1e-4; below that the
+float32 rounding of the stored sample is a noticeable fraction of σ, so use float64.
 
-    - Using float64 for very small $\sigma$ (< 0.01)
-    - Clipping standard deviations to reasonable range: $\sigma \in [0.01, 1.0]$
-    - Using version parameter in manifold operations for better stability
-
-!!! tip "Curvature Choice"
-    The curvature parameter $c$ affects the distribution:
-
-    - Higher $c$ → More concentrated distributions
-    - Lower $c$ → More spread out distributions
-
-    Tune $c$ based on your application's needs.
+!!! note "Curvature"
+    For a fixed σ, the geodesic distance of a sample from μ has the same distribution for every
+    $c$. The curvature changes only the ball coordinates (the ball has radius $1/\sqrt{c}$) and
+    the volume correction in `log_prob`.
 
 ## References
 
 Wrapped distributions on manifolds are discussed in:
 
 - Nagano, Y., et al. (2019). "A Wrapped Normal Distribution on Hyperbolic Space for Gradient-Based Learning"
-- Davidson, T., et al. (2018). "Hyperspherical Variational Auto-Encoders"
+- Mathieu, E., et al. (2019). "Continuous Hierarchical Representations with Poincaré Variational Auto-Encoders." NeurIPS.
 
 See also:
 

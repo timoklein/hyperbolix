@@ -4,16 +4,14 @@ Utility functions for hyperbolic deep learning.
 
 ## Math Utilities
 
-Numerically stable implementations of hyperbolic functions.
+Hyperbolic functions with domain and overflow guards: `acosh`/`atanh` clamp their argument into
+the open domain, `cosh`/`sinh` clip it at ±0.99·log(finfo.max), and `asinh`/`acosh` have
+overflow-free derivatives.
 
-Note which norm primitive goes where. On the **hot path** — every per-sample norm inside `proj`,
-`expmap`, `logmap`, the distances and the layer forwards — the library takes a single reduction:
-`safe_sqrt(sum(v**2))` when the input can be exactly zero, a plain `sqrt(const + sum(v**2))` when a
-strictly positive constant is added, and `floor_at(..., MIN_NORM)` around either when the norm is a
-divisor. `safe_norm`, `safe_hypot_norm` and `safe_normalize` are max-scaled and read the input
-twice; they are used for the **weight** norms, computed once per forward over a kernel rather than
-once per sample, and they are the right choice in user code that needs the full float32 exponent
-range. See
+Most per-sample norms in the library use the max-scaled `safe_norm` / `safe_hypot_norm` /
+`safe_normalize`, which read the input twice and are safe over the full float32 range; use them in
+your own code. A few hot operations (`proj`, `Hyperboloid.dist_0`, `Poincare.expmap`, `HTCLinear`
+and the FHCNN/FGG linears) use a single reduction instead. See
 [Norms: one reduction, gradient-safe at zero](../user-guide/numerical-stability.md#safe-norms).
 
 ::: hyperbolix.utils.math_utils
@@ -25,6 +23,7 @@ range. See
         - sinh
         - tanh
         - acosh
+        - asinh
         - atanh
         - safe_norm
         - safe_normalize
@@ -39,17 +38,15 @@ range. See
 ### Usage Example
 
 ```python
-from hyperbolix.utils.math_utils import acosh, atanh, smooth_clamp
+from hyperbolix.utils.math_utils import acosh
 import jax.numpy as jnp
 
-# Numerically stable hyperbolic functions
 x = jnp.array([1.5, 2.0, 10.0])
-y = acosh(x)  # Handles edge cases near 1.0
-
-# Smooth clamping for stability
-z = jnp.array([0.99, 1.0, 1.01])
-z_clamped = smooth_clamp(z, min_value=0.0, max_value=1.0)
+y = acosh(x)  # argument clamped into the open domain near 1.0
 ```
+
+`smooth_clamp` is a differentiable clamp for user code (e.g. bounding a parameter); the library
+itself does not use it.
 
 Use `capped_exp` instead of `jnp.exp` whenever you `exp()` an unconstrained trainable parameter
 (a log-scale reparameterization, for example) — a runaway parameter saturates to a large finite
@@ -65,9 +62,9 @@ capped_exp(log_scale)  # finite, saturates at exp(0.99*log(finfo.max))
 
 ## Matmul Precision
 
-`MATMUL_PRECISION` pins the **geometry** to `jax.lax.Precision.HIGHEST`, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on. It is not user-configurable. Pinned: the vector-vector reductions inside `manifolds/` and the `decomposition/` (HoroPCA) contractions; `lorentz_midpoint` and `poincare_weighted_midpoint`; the conv patch extraction (a 0/1-filter convolution, so a pure data copy); the attention score and aggregation einsums and the spatial residual projection added to that aggregate; and the MLR heads (`HypRegressionHyperboloid` and the three `_compute_mlr` einsums in `manifolds/`), which are decision quantities.
+`MATMUL_PRECISION` pins the **geometry** to `jax.lax.Precision.HIGHEST`, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on. It is not user-configurable. Pinned: the vector-vector reductions inside `manifolds/` and the `decomposition/` (HoroPCA) contractions; `lorentz_midpoint` and `poincare_weighted_midpoint`; the conv patch extraction (a 0/1-filter convolution, so a pure data copy); the attention score and aggregation einsums and the spatial residual projection added to that aggregate; and the MLR heads (`HypRegressionHyperboloid` and the `_compute_mlr*` einsums in `manifolds/`), which are decision quantities, and the PLFC, Poincaré++ and proper-velocity linear and convolution layers, whose weight GEMM is that einsum.
 
-The **layer weight GEMMs** pass no `precision` keyword at all — `HTCLinear` (including the attention Q/K/V projections), `FGGLinear`/`FGGConv2D`, the FHCNN/FHNN and PLFC linears, the Poincaré and proper-velocity linear and convolution layers, `HypVQMLRPoincare`'s codebook matmul, `hybrid_regularization`'s `nnx.Linear`. These follow JAX's own `jax_default_matmul_precision`, which on Ampere/Hopper means TF32. That is where `HIGHEST` actually costs throughput (one TF32 pass becomes a three-pass float32 emulation; measured +5.5 % on a jitted hyperbolic attention forward), so the trade is yours to make:
+The **layer weight GEMMs** pass no `precision` keyword at all — `HTCLinear` (including the attention Q/K/V projections), `FGGLinear`/`FGGConv2D`, the FHCNN/FHNN linears, `HypLinearPoincare`, `HypVQMLRPoincare`'s codebook matmul, `hybrid_regularization`'s `nnx.Linear`. These follow JAX's own `jax_default_matmul_precision`, which on Ampere/Hopper means TF32. That is where `HIGHEST` actually costs throughput (one TF32 pass becomes a three-pass float32 emulation; measured +5.5 % on a jitted hyperbolic attention forward), so the trade is yours to make:
 
 ```python
 # JAX-wide (jit-cache aware — changing it re-traces)
@@ -87,7 +84,7 @@ A deep, fully hyperbolic stack is a good reason to set it: a TF32 error introduc
 
 ## Learnable Curvature
 
-`LearnableCurvature` is an `nnx.Module` that bundles a Euclidean raw parameter, a curvature reparameterization (positive `softplus`/`log`, or the **signed** `identity` — `c = raw` — for the `Stereographic` manifold), and an optional `[c_min, c_max]` clamp into one object. Assign one instance per distinct curvature on your model and call it in the forward pass to obtain the (optionally clamped) curvature.
+`LearnableCurvature` is an `nnx.Module` that bundles a Euclidean raw parameter, a curvature reparameterization (positive `softplus`/`log`, or the **signed** `identity` — `c = raw` — for the `Stereographic` manifold), and a `[c_min, c_max]` clamp (on by default: `[init_c/10, init_c·10]` for `softplus`/`log`, `[-10, 10]` for `identity`; pass `None` to disable) into one object. Assign one instance per distinct curvature on your model and call it in the forward pass to obtain the (optionally clamped) curvature.
 
 ::: hyperbolix.utils.curvature.LearnableCurvature
     options:
@@ -120,6 +117,7 @@ class Model(nnx.Module):
 
 
 # Updated by any standard Euclidean optimizer — no Riemannian optimizer needed.
+model = Model(nnx.Rngs(0))
 optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 ```
 
@@ -194,7 +192,7 @@ delta, diameter, rel_delta = get_delta(
     points_proj,
     manifold_module=poincare,
     c=1.0,
-    sample_size=500,  # Points subsampled before the pairwise distance matrix
+    sample_size=500,  # at most this many points are used (default 1500)
     key=jax.random.PRNGKey(42),  # Only used when len(points) > sample_size
 )
 
@@ -212,10 +210,12 @@ The Gromov delta quantifies tree-likeness:
 ## Performance Tips
 
 !!! tip "JIT Compilation"
-    All utility functions support JIT compilation:
+    The helpers can be jitted by closing over the manifold, as below:
 
     ```python
+    import jax
     from hyperbolix.manifolds import Poincare
+    from hyperbolix.utils.helpers import compute_pairwise_distances
 
     poincare = Poincare()
 
@@ -229,17 +229,16 @@ The Gromov delta quantifies tree-likeness:
         )
     ```
 
-!!! note "Batching"
-    For large datasets, consider batching delta-hyperbolicity computation:
+!!! note "Subsampling"
+    For large datasets, a smaller `sample_size` makes delta-hyperbolicity faster:
 
     ```python
-    # Use smaller sample_size for faster computation
     delta, diameter, rel_delta = get_delta(
         points,
         manifold_module=poincare,
         c=1.0,
-        sample_size=100,  # Reduce from 500 for speed
-        seed=42
+        sample_size=100,  # default sample_size is 1500
+        key=jax.random.PRNGKey(42),
     )
     ```
 
