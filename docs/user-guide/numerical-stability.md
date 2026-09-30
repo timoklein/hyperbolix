@@ -302,7 +302,7 @@ Four places still lose accuracy at large radius, for reasons the fix above does 
    own transport to the origin: it splits $u$ into radial and perpendicular parts along
    $\hat\mu = \mu_s/\lVert\mu_s\rVert$, divides the radial part by $\cosh a = \sqrt{c}\,\mu_0$, and
    subtracts the rounding residue the perpendicular part carries along $\hat\mu$. Its radial error
-   is 2.3e-7 at $a = 10$, and $\lvert\log p_{32} - \log p_{64}\rvert$ at $a = 10$ (max over 512
+   is 2.3e-7 to 2.6e-7 at $a = 10$, and $\lvert\log p_{32} - \log p_{64}\rvert$ at $a = 10$ (max over 512
    draws, $D = 3$; $\sigma = 0.1, 0.3, 1$ and a diagonal $\sigma$ at $c = 1$, $\sigma = 0.3$ at
    $c = 0.5$) goes from 1.3e-2–2.0e-2 to 2.2e-3–4.5e-3
    (`logs/2026-09-29_cancellation-free/1c/probe_old.out`,
@@ -961,7 +961,8 @@ also returns points farther inside, up to $17\,\varepsilon$ above in float32), a
 11–76 % of the capped points (mean 39 %; `logs/2026-09-29_cancellation-free/floorfix/probe_band.out`,
 `logs/2026-09-29_cancellation-free/floorfix/summarize_band.out`). A floor that binds returns a
 constant, so every derivative through it is zero: the float32 `dist` gradient at capped points came
-back with relative error up to 1.0. The floors now sit at half the cap value
+back with relative error up to 1.0 (measured at the intermediate commit 9b16f31, where `dist`
+already had the asinh form). The floors now sit at half the cap value
 (`_boundary_divisor_floor`; the Möbius denominator's squared floor at a quarter),
 $\sqrt{c}\,\varepsilon^{0.75}$ below the cap — $54\sqrt{c}\,\varepsilon$ in float32,
 $8192\sqrt{c}\,\varepsilon$ in float64 — which no projected point reaches. Against a float64
@@ -981,7 +982,8 @@ that is why a far Klein point now reads as $a \approx 6.67$ rather than at the `
 Some float32 gradients at capped points stay wrong: Poincaré `expmap` with respect to its base
 point and Poincaré `addition` with respect to $y$ keep relative errors up to 1.0, Klein `expmap`
 with respect to its base point up to 1.0 (above 0.1 on 40–48 % of the pairs), and Klein
-`addition` up to 1.3. The floor is not the cause: the gradients with the half floor and with no
+`addition` up to 1.3 on pairs of one capped and one free point (on pairs of two capped points it
+is fixed, 1.0 → 2.8e-3). The floor is not the cause: the gradients with the half floor and with no
 floor are identical (`logs/2026-09-29_cancellation-free/floorfix/probe_grad_commit2.out`,
 `logs/2026-09-29_cancellation-free/floorfix2/summary_grad2_fix.out`,
 `logs/2026-09-29_cancellation-free/docs_b4b/check_floor_not_cause.out`).
