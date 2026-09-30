@@ -42,7 +42,7 @@ def _inv_softplus(x: float) -> float:
     if x <= 0:
         raise ValueError(f"inv_softplus requires x > 0, got {x}")
     if x > 20.0:
-        return x
+        return x + math.log1p(-math.exp(-x))
     return math.log(math.expm1(x))
 
 
@@ -259,8 +259,7 @@ class LearnableCurvature(nnx.Module):
         the interior by the fewest ulps that bring ``c`` strictly inside (``c`` is increasing in ``raw`` for
         every parameterization): a galloping search over 1, 2, 4, ... ulps, then a bisection back to the first
         step that crosses. It searches ``raw`` itself rather than inverting
-        nearby curvatures, so it does not rely on the inverse being accurate to the last ulp (in float64,
-        ``_inv_softplus`` is not, above 20).
+        nearby curvatures, so it does not rely on the inverse being accurate to the last ulp.
 
         Strictly inside, not on a bound: the clamp here passes the full gradient at a tie, but a
         ``jnp.clip``-style clamp halves it there, and a backend whose ``exp``/``softplus`` rounds one ulp

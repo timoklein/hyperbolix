@@ -113,6 +113,18 @@ class TestLearnableCurvatureInit:
         c = LearnableCurvature(init_c, parameterization=parameterization, c_min=None, c_max=None)
         assert jnp.allclose(c(), init_c, atol=1e-4)
 
+    @pytest.mark.parametrize("init_c", [25.0, 50.0])
+    def test_softplus_init_recovery_above_20_is_exact_in_float64(self, init_c):
+        """Above 20 the inverse is ``x + log1p(-exp(-x))``, not ``x``: float64 softplus recovers ``init_c`` to a few ulps.
+
+        With ``return x`` the forward gave ``25 + e^-25 = 25.000000000013888`` for ``init_c = 25`` (3909 ulps off). At
+        ``init_c = 50``, ``e^-50`` is below half an ulp, so both inverses pass there.
+        """
+        curvature = LearnableCurvature(init_c, parameterization="softplus", c_max=1000.0, param_dtype=jnp.float64)
+        c = curvature()
+        assert c.dtype == jnp.float64
+        assert abs(float(c) - init_c) <= 4 * math.ulp(init_c)
+
     def test_raw_is_nnx_param(self):
         c = LearnableCurvature(0.1)
         assert isinstance(c.raw, nnx.Param)
