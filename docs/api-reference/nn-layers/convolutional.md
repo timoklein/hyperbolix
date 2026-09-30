@@ -9,7 +9,7 @@ Velocity models. For **which** conv to pick see the
     dimensionality via the HCat operation, but only as an *intermediate*
     step: a `d+1`-ambient input is HCat-concatenated over the receptive field
     into a `(d×N)+1`-ambient point (`N = kernel_height × kernel_width` — a
-    3×3 kernel over a 3D input builds a 28D intermediate), which the layer's
+    3×3 kernel over a 4-wide ambient input (d = 3) builds a 28-wide intermediate), which the layer's
     kernel then projects down to `out_channels`. The **output** ambient width
     is always `out_channels`, a free hyperparameter independent of kernel
     size — large kernels cost more parameters and compute in that
@@ -23,8 +23,8 @@ Velocity models. For **which** conv to pick see the
 `HypConv2DHyperboloid` (the robust default) uses HCat patch extraction + Lorentz FC
 (Bdeir et al. 2023). `HypConv2DHyperboloidILNN` is the intrinsic Lorentz conv (Shi
 et al. 2026): LogCat (log-radius-preserving concatenation) + PLFC, with origin
-padding. `LorentzConv2D` is the dimension-preserving HRC-based variant (faster, lower
-accuracy — legacy/benchmarking).
+padding. `LorentzConv2D` is the HRC-based variant (Euclidean conv on the spatial part; faster,
+lower accuracy — legacy/benchmarking).
 
 ::: hyperbolix.nn_layers.HypConv2DHyperboloid
     options:
@@ -49,8 +49,9 @@ accuracy — legacy/benchmarking).
 ## Poincaré
 
 `HypConv2DPoincare` extracts patches, applies beta-concatenation (HNN++, Shimizu
-et al. 2020) over the receptive field, then a `HypLinearPoincarePP` layer. Dimension
-is preserved (`K² × C_in → C_out`); I/O is in tangent space by default.
+et al. 2020) over the receptive field, then a `HypLinearPoincarePP` layer. The
+concatenated `K²·C_in` patch is mapped to `C_out`. Input is tangent by default
+(`input_space="manifold"` accepts ball points); output is always tangent vectors.
 
 ::: hyperbolix.nn_layers.HypConv2DPoincare
     options:
@@ -60,7 +61,7 @@ is preserved (`K² × C_in → C_out`); I/O is in tangent space by default.
 
 `HypConv2DPV` (Chen et al. 2026, Sec 5.3). Because PV geometry is unconstrained
 $\mathbb{R}^n$, patch concatenation coincides with Euclidean concatenation — **no
-beta-scaling step** and no dimension growth. Outputs live on the PV manifold, so
+beta-scaling step**; the output width is `out_channels`. Outputs live on the PV manifold, so
 Euclidean activations apply directly between conv layers.
 
 ::: hyperbolix.nn_layers.HypConv2DPV

@@ -1,9 +1,10 @@
 # Neural Network Layers API
 
-Hyperbolic neural network layers built with Flax NNX — 30+ layer classes and the
+Hyperbolic neural network layers built with Flax NNX — 40+ layer classes and the
 activation/primitive functions that support them, across the Poincaré, Hyperboloid,
-and Proper Velocity models. All layers follow Flax NNX conventions and store a
-manifold-module reference.
+and Proper Velocity models. All layers are Flax NNX modules. Layers tied to a manifold
+class take a `manifold_module`; the HTC/HRC, FGG, attention, positional, MoE, MLA and
+embedding layers compute on the hyperboloid directly and take none.
 
 !!! tip "Looking for *which* layer to use?"
     This API reference documents signatures and call semantics. For **layer
@@ -32,8 +33,8 @@ The neural network layers implement methods from:
 
 - **Ganea et al. (2018)**: "Hyperbolic Neural Networks" — Poincaré linear layers and activations
 - **Shimizu et al. (2020)**: "Hyperbolic Neural Networks++" — enhanced Poincaré operations and the linearized-kernel conv formulation (`HypLinearPoincarePP`; basis of `HypLinearHyperboloidPLFC` and `HypConv2DHyperboloidILNN`)
-- **Bdeir et al. (2023)**: "Fully Hyperbolic Convolutional Neural Networks for Computer Vision" — HCat-based convolutions (`HypConv2DHyperboloid`)
-- **Chen et al. (2022)**: "Fully Hyperbolic Neural Networks" — FHCNN linear layers
+- **Bdeir et al. (2023)**: "Fully Hyperbolic Convolutional Neural Networks for Computer Vision" — HCat-based convolutions (`HypConv2DHyperboloid`) and `HypLinearHyperboloidFHCNN`
+- **Chen et al. (2022)**: "Fully Hyperbolic Neural Networks" — `HypLinearHyperboloidFHNN`, `HypConv2DHyperboloidFHNN`
 - **He, Yang & Ying (2025)**: "Lorentzian Residual Neural Networks" (KDD 2025) — HRC-based convolutions (`LorentzConv2D`)
 - **Hypformer (Yang et al. 2025)**: "Hyperbolic Transformers" — HTC/HRC components with curvature-change support
 - **He et al. (2025)**: "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts" (arXiv:2505.24722) — `LorentzMLA`, `LorentzMoE` (with `LorentzMoEGate`, `LorentzSwiGLU`), `LorentzEmbedding`, HOPE positional encoding and Lorentzian residual connections

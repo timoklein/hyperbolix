@@ -1,11 +1,36 @@
 # Neural Network Layers User Guide
 
-Synthesis content for building hyperbolic networks — choosing among the 20+
+Synthesis content for building hyperbolic networks — choosing among the 40+
 layers, the boundary between Euclidean and hyperbolic computation, and the
 composition patterns that aren't obvious from any single layer's docstring.
 
 For per-layer signatures, init defaults, and call semantics, see the
 [NN Layers API reference](../api-reference/nn-layers/index.md).
+
+The code examples on this page assume these imports:
+
+```python
+import jax
+import jax.numpy as jnp
+from flax import nnx
+
+from hyperbolix import LearnableCurvature
+from hyperbolix.manifolds import Hyperboloid, Poincare
+from hyperbolix.nn_layers import (
+    FGGLinear,
+    HRCLayerNorm,
+    HTCLinear,
+    HyperbolicSoftmaxAttention,
+    HypConv2DPoincare,
+    HyperPPFeatureScaling,
+    HypRegressionHyperboloid,
+    HypRegressionPoincarePP,
+    PoincareBatchNorm2D,
+    lorentz_residual,
+)
+
+rngs = nnx.Rngs(0)
+```
 
 ## Choosing a Layer
 
@@ -18,11 +43,13 @@ tables below collapse this into per-task decisions.
 | Layer | Manifold | When to pick |
 |---|---|---|
 | `HTCLinear` | Hyperboloid | **Default** for hyperboloid FC — simple, robust, just works. Also supports cross-curvature (`c_in != c_out`) for Hypformer blocks |
-| `FGGLinear` | Hyperboloid | Advanced — ~3× faster but init-sensitive. Defaults to the norm-preserving `fan_out` init (`init_bias=0.0`), which suits unnormalized stacks feeding a bounded projection; pass `reset_params="eye", init_bias=0.5` for the reference (BatchNorm-regime) init. Use once you have a working HTC baseline |
+| `FGGLinear` | Hyperboloid | Advanced — ~3× faster than the FHNN layer in Klis et al., but init-sensitive. Defaults to the norm-preserving `fan_out` init (`init_bias=0.0`), which suits unnormalized stacks feeding a bounded projection; pass `reset_params="eye", init_bias=0.5` for the reference (BatchNorm-regime) init. Use once you have a working HTC baseline |
 | `HypLinearHyperboloidPLFC` | Hyperboloid | Deep hyperboloid networks — point-to-hyperplane Lorentz FC (PLFC, Shi et al. 2026), the Lorentz analog of the HNN++ formulation. Optional intrinsic gyro-bias via `use_gyro_bias=True` |
 | `HypLinearPoincarePP` | Poincaré | **Default** for Poincaré FC — Euclidean-parameterized weights, works with `optax.adam` |
 | `HypLinearPoincare` | Poincaré | Legacy Ganea 2018 — manifold-valued bias, requires `riemannian_adam`. Prefer `PP` |
 | `HypLinearPV` | Proper Velocity | PV networks — Euclidean weights, He init |
+| `HypLinearPoincareBusemann` / `HypLinearHyperboloidBusemann` | Poincaré / Hyperboloid | Busemann FC (Chen, Schölkopf & Sebe 2026) — point-to-horosphere scores; the Poincaré one takes `input_space="tangent"` |
+| `HypLinearHyperboloidFHNN` / `HypLinearHyperboloidFHCNN` | Hyperboloid | Reproducing Chen et al. 2022 / Bdeir et al. 2023 |
 
 ### Convolutional
 
@@ -45,6 +72,7 @@ tables below collapse this into per-task decisions.
 | `HypRegressionPoincarePP` | **Default** for Poincaré classification — HNN++ formulation |
 | `HypRegressionPV` | PV classification head — small `std=1e-2` init |
 | `HypRegressionPoincare` | Legacy Ganea — prefer `PP` |
+| `HypRegressionPoincareBusemann` / `HypRegressionHyperboloidBusemann` | Busemann (point-to-horosphere) heads |
 
 ### Vector Quantization (Poincaré)
 
@@ -67,7 +95,10 @@ Both are quantizer *bottlenecks*: feed them encoder tangent features, add `outpu
 | Token embedding on the hyperboloid | `LorentzEmbedding` — a `ManifoldParam` table trained with `riemannian_adam` (`parameterization="manifold"`), or a Euclidean spatial table (`"spatial"`); `c_out` maps the output onto another sheet |
 | Normalization between hyperboloid layers | `HRCLayerNorm`, `HRCRMSNorm`, `HRCBatchNorm` |
 | Normalization between Poincaré conv layers | `PoincareBatchNorm2D` |
+| Intrinsic batch norm (Hyperboloid, PV) | `HyperboloidGyroBatchNorm`, `ProperVelocityGyroBatchNorm` |
+| Per-sample radial norm (batch-free, RL) | `HyperboloidGyroRMSNorm`, `ProperVelocityGyroRMSNorm`, `PoincareGyroRMSNorm` |
 | Dropout on hyperboloid features | `HRCDropout` |
+| Residual connection (hyperboloid) | `LorentzResidual` / `lorentz_residual` |
 | Rotary positional encoding (hyperbolic) | `HyperbolicRoPE` / `hope` |
 | Learnable positional encoding (Hypformer-style) | `HypformerPositionalEncoding` |
 
@@ -81,22 +112,22 @@ Both are quantizer *bottlenecks*: feed them encoder tangent features, add `outpu
 
 ## Layer Families at a Glance
 
-The four families differ in what space the *weights* live in, which controls
+The families differ in what space the *weights* live in, which controls
 optimizer choice:
 
 | Family | Weight space | Optimizer | Examples | Role |
 |---|---|---|---|---|
 | **HRC / HTC** (Hypformer) | Euclidean | `optax.adam` | `HTCLinear`, `HRC*`, normalization | **Robust starting family** |
 | **HCat** (Bdeir 2023) | Euclidean | `optax.adam` | `HypConv2DHyperboloid*` | **Robust conv family** |
-| **HNN++** (Shimizu 2020 / van Spengler 2023) | Euclidean | `optax.adam` | `*PP` variants on both manifolds | Standard for Poincaré |
+| **HNN++** (Shimizu 2020 / van Spengler 2023) | Euclidean | `optax.adam` | Poincaré `*PP` layers; `HypLinearHyperboloidPLFC` is the hyperboloid analog | Standard for Poincaré |
 | **PV** (Chen et al. 2026) | Euclidean | `optax.adam` | `HypLinearPV`, `HypConv2DPV` | Use when you want PV's unconstrained $\mathbb{R}^n$ |
-| **FGG** (Klis et al. 2026) | Euclidean | `optax.adam` | `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR` | Advanced — fastest, but init-sensitive |
+| **FGG** (Klis et al. 2026) | Euclidean | `optax.adam` | `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR` | Advanced — fast, but init-sensitive |
 | **Ganea (legacy)** | Bias on Poincaré, kernel Euclidean | `riemannian_adam` | `HypLinearPoincare`, `HypRegressionPoincare` | Legacy — prefer `PP` |
 
 **Bottom line:** every modern layer parameterizes weights in Euclidean space,
 and even the legacy Ganea layers keep their *kernel* Euclidean — only the
 *bias* is manifold-valued. Standard `optax.adam` works for everything except
-that one bias. See the [Riemannian Optimizers guide](optimizers.md) *(WIP)*
+that one bias. See the [Riemannian Optimizers guide](optimizers.md)
 for the rare cases where a manifold-valued parameter appears.
 
 ## Channel Conventions
@@ -105,7 +136,7 @@ The single most common bug in layer construction is passing the wrong channel
 count — ambient (d+1) vs. spatial (d). The full table lives in the
 [Manifolds guide](manifolds.md#convention-cheat-sheet); the short form:
 
-- **Hyperboloid layers** (`FGGLinear`, `LorentzConv2D`, `HTCLinear`, `HypLinearHyperboloid*`) take **ambient (d+1)** for their input channel arg. Exception: `HTCLinear.out_features` is **spatial (d)** — its output is `(B, out_features + 1)` ambient.
+- **Hyperboloid layers** (`FGGLinear`, `LorentzConv2D`, `HTCLinear`, `HypLinearHyperboloid*`) take **ambient (d+1)** for their input channel arg. Exception: `out_features` of `HTCLinear`, the three attention layers and `HypformerPositionalEncoding` is **spatial (d)** — their output is `out_features + 1` ambient.
 - **HRC normalization** (`HRCLayerNorm`, `HRCBatchNorm`, etc.) takes **spatial (d)**.
 - **Poincaré and PV layers** take **spatial (d)** (no time component).
 
@@ -120,9 +151,10 @@ fc2 = FGGLinear(in_features=33, out_features=33, rngs=rngs)   # ambient
 
 ## Initialization Scales
 
-Standard Euclidean inits (He, Xavier) are **too large for hyperbolic layers**:
+Standard Euclidean inits (He, Xavier) are **too large for Poincaré and hyperboloid layers**:
 they push the first-layer output toward the Poincaré boundary or far up the
-hyperboloid, where distances and gradients explode. Each family ships with a
+hyperboloid, where distances and gradients explode; the defaults below hold the
+per-layer gain near 1 instead. Each family ships with a
 hyperbolic-aware default — keep it unless you have a reason to change it.
 
 | Family | Default init | Rationale |
@@ -132,16 +164,16 @@ hyperbolic-aware default — keep it unless you have a reason to change it.
 | `HypLinearHyperboloidPLFC` | Small normal `std=0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init) | `kernel_init_std=1.0` recovers the old HNN++-style init (Shimizu et al. 2020) |
 | `HypLinearPoincare` / `HypLinearPoincarePP` | Fan-in normal `std=1/sqrt(in_dim)` | Keeps row norms small so outputs stay away from the boundary |
 | `HypRegressionPoincare` / `HypRegressionPoincarePP` | Scaled normal `std=(2·in·out)^{-0.5}` (van Spengler 2023) | Sibling-scaled: an unscaled `N(0,1)` kernel gives row norms ≈ `sqrt(in_dim)`, which overwhelms the MLR output scaling |
-| `HTCLinear` | Fan-in uniform `U(-√(3/in), √(3/in))` | Norm-preserving (per-layer Jacobian gain ≈ 1), though the time coordinate still feeds the kernel, so a stack's spatial norm grows ≈√2 per layer and its geodesic radius by ≈0.35 nats at large radius (log√2; measured mean 0.36–0.45) (see [TF32 and depth](numerical-stability.md#tf32-on-ampere-and-hopper-gpus)): `htc` applies no nonlinearity, so a fixed bound is contractive at realistic widths — the old `U(-0.02, 0.02)` froze depth-≥2 stacks. The Hypformer reference (Xavier·√2, `bound = 2√(3/(in+out))`) assumes ReLU + LayerNorm between layers; pass it explicitly to recover |
+| `HTCLinear` | Fan-in uniform `U(-√(3/in), √(3/in))` | Norm-preserving (per-layer gain ≈ 1). The old `U(-0.02, 0.02)` froze depth-≥2 stacks (`init_bound=0.02` restores it). The Hypformer reference bound `2√(3/(in+out))` assumes ReLU + LayerNorm between layers; pass it as `init_bound` to recover |
 | `HypLinearHyperboloidFHCNN` | Small uniform `U(-0.02, 0.02)` | Keeps points near the apex `[1/sqrt(c), 0, …]` initially (matches the Bdeir et al. 2023 reference) |
 | `HypLinear*PV` | He init | PV is unconstrained $\mathbb{R}^n$; standard scales work |
 | `HypRegressionPV` | `std=1e-2` | MLR head: small scores at init |
 
 !!! warning "Don't override init with He/Xavier on hyperbolic layers"
-    If you wrap a hyperbolic layer in code that auto-applies a default Flax
-    init, you will see `NaN` losses within the first few steps. The
-    constructor's `kernel_init` argument exists for tuning, not for swapping
-    in a Euclidean default.
+    If you wrap a hyperbolic layer in code that re-initializes its parameters
+    with a default Flax init, the first-layer outputs can land far from the
+    origin and training diverges. Tune the init with the layer's own arguments
+    (`kernel_init_std`, `init_bound`, `reset_params`, `init_bias`).
 
 !!! warning "Too small is as fatal as too large — and quieter"
     A too-small init doesn't NaN; it *freezes*. If a layer's per-layer gain
@@ -172,6 +204,9 @@ recipe to prepare Euclidean features before `expmap_0`:
 ```python
 from hyperbolix.nn_layers import HyperPPFeatureScaling
 
+hyperboloid, c, feature_dim = Hyperboloid(), 1.0, 16
+x_euclidean = jax.random.normal(jax.random.PRNGKey(0), (4, feature_dim))  # backbone output
+
 scale = HyperPPFeatureScaling(dim=feature_dim, rngs=rngs)
 x_euclidean = scale(x_euclidean, c)            # RMSNorm + activation + dim scaling
 x_manifold = jax.vmap(lambda v: hyperboloid.expmap_0(
@@ -188,7 +223,7 @@ there's no "outside the manifold" to project from. Whether you apply
 | Architecture | Apply `expmap_0` at input? | Why |
 |---|---|---|
 | **Fully hyperbolic PV** (PV layers all the way through) | ✅ **Yes**, once at the beginning | Establishes the proper-velocity coordinate frame; downstream PV layers assume their inputs were lifted from Euclidean tangent vectors |
-| **Hybrid PV** (Euclidean backbone → PV head, or Euclidean ↔ PV alternating) | ❌ **No** — pass Euclidean features directly to PV layers | The PV layer's metric already accounts for the geometry of its inputs; an explicit `expmap_0` here is redundant and can hurt training |
+| **Hybrid PV** (Euclidean backbone → PV head, or Euclidean ↔ PV alternating) | ❌ **No** — pass Euclidean features directly to PV layers | PV layers accept any point of $\mathbb{R}^n$, so Euclidean features are valid inputs; an `expmap_0` is not needed |
 
 In other words: `expmap_0` is the **once-per-network** entry into the PV
 coordinate frame, not a per-layer adapter. If your network has a Euclidean
@@ -223,6 +258,11 @@ class HTCClassifier(nnx.Module):
         h = self.norm(h, c)
         h = self.fc2(h, c)
         return self.head(h, c)  # (B, num_classes) Euclidean logits
+
+
+model = HTCClassifier(in_dim=33, hidden=32, num_classes=10, rngs=rngs)
+x_BAi = Hyperboloid().proj_batch(jnp.ones((4, 33)), 1.0)  # (4, 33) points
+logits = model(x_BAi)                                     # (4, 10)
 ```
 
 ### Pattern 2: Hybrid CNN backbone + Poincaré head
@@ -259,6 +299,10 @@ class HybridCNN(nnx.Module):
         c = self.curvature()
         features = self.pool(jax.nn.relu(self.stem(images)))  # (B, 64) Euclidean
         return self.head(features, c)                          # (B, num_classes) logits
+
+
+model = HybridCNN(num_classes=10, rngs=rngs)
+logits = model(jnp.ones((2, 8, 8, 3)))  # (2, 10)
 ```
 
 ### Pattern 3: Hyperbolic transformer block
@@ -272,16 +316,22 @@ class HypTransformerBlock(nnx.Module):
             in_features=dim_ambient, out_features=d_spatial, num_heads=n_heads, rngs=rngs,
         )
         self.mlp_norm = HRCLayerNorm(num_features=d_spatial, rngs=rngs)
+        # HTCLinear.out_features is spatial: mlp_in returns 4 * d_spatial + 1 ambient
         self.mlp_in = HTCLinear(in_features=dim_ambient,
-                                out_features=4 * dim_ambient, rngs=rngs)
-        self.mlp_out = HTCLinear(in_features=4 * dim_ambient,
-                                 out_features=dim_ambient, rngs=rngs)
+                                out_features=4 * d_spatial, rngs=rngs)
+        self.mlp_out = HTCLinear(in_features=4 * d_spatial + 1,
+                                 out_features=d_spatial, rngs=rngs)
 
     def __call__(self, x_BLAi: jax.Array, c: float) -> jax.Array:
         h = self.attn(self.attn_norm(x_BLAi, c), c)
-        x_BLAi = lorentz_residual(x_BLAi, h, c)              # Möbius-style residual
+        x_BLAi = lorentz_residual(x_BLAi, h, w_y=1.0, c=c)  # weighted Lorentzian midpoint
         h = self.mlp_out(self.mlp_in(self.mlp_norm(x_BLAi, c), c), c)
-        return lorentz_residual(x_BLAi, h, c)
+        return lorentz_residual(x_BLAi, h, w_y=1.0, c=c)
+
+
+block = HypTransformerBlock(dim_ambient=9, n_heads=2, rngs=rngs)
+x_BLAi = Hyperboloid().proj_batch(jnp.ones((2, 5, 9)), 1.0)  # (B=2, L=5, A=9) points
+y_BLAi = block(x_BLAi, c=1.0)                                  # (2, 5, 9)
 ```
 
 ### Pattern 3b: HELM-style decoder block
@@ -353,24 +403,13 @@ spatial dim (`d`) where it wanted ambient (`d+1`), or vice versa.
 Modern layers don't need one. The Euclidean defaults — `optax.adam`,
 `optax.adamw` — work for FGG, HNN++, HRC/HTC, and PV layers. Use
 `riemannian_adam` only when parameters live directly on a manifold (typically a
-hyperbolic embedding table); see the [Optimizers guide](optimizers.md) *(WIP)*.
+hyperbolic embedding table); see the [Optimizers guide](optimizers.md).
 
 ### 3. Leaving `version_idx` dynamic under JIT
 
-Several Poincaré ops (`dist`, `expmap`, `logmap`) take a `version_idx` selecting
-between multiple formulations. `jax.lax.switch` accepts a traced index, so this
-argument does not have to be static. Marking it static is still recommended:
-it compiles only the selected variant instead of every arm.
-
-```python
-# Works, but compiles every variant into one lax.switch
-jit_fn = jax.jit(lambda x, y, idx: poincare.dist(x, y, c=1.0, version_idx=idx))
-
-# Recommended: bind the variant before JIT-ing, compiles only that arm
-from functools import partial
-dist_v0 = partial(poincare.dist, version_idx=0)
-jit_fn = jax.jit(dist_v0)
-```
+`Poincare.dist` and `dist_0` take a `version_idx` selecting between formulations.
+Keep it static under JIT, so only the selected variant compiles; see
+[Static vs Dynamic Arguments](batching-jit.md#static-vs-dynamic-arguments).
 
 ### 4. Mixing layer families incoherently
 
@@ -397,7 +436,10 @@ Euclidean backbone) and feed it to a hyperbolic layer, float32 drift can violate
 the Lorentz constraint after a few training steps. Cheap insurance:
 
 ```python
-x_BAi = jax.vmap(self.manifold.proj, in_axes=(0, None))(x_BAi, c)
+hyperboloid, c = Hyperboloid(), 1.0
+x_BAi = jnp.concatenate([jnp.ones((4, 1)), 0.1 * jnp.ones((4, 32))], axis=-1)  # hand-built, (4, 33)
+
+x_BAi = jax.vmap(hyperboloid.proj, in_axes=(0, None))(x_BAi, c)
 # ... feed into hyperbolic layers
 ```
 
@@ -407,5 +449,5 @@ x_BAi = jax.vmap(self.manifold.proj, in_axes=(0, None))(x_BAi, c)
 
 - **[API Reference: NN Layers](../api-reference/nn-layers/index.md)** — full constructor and call signatures
 - **[Manifolds Guide](manifolds.md)** — convention cheat-sheet, Euclidean→manifold lifts, isometry mappings
-- **[Numerical Stability Guide](numerical-stability.md)** — when to use float64, clamping, safe norms
-- **[Riemannian Optimizers Guide](optimizers.md)** *(WIP)* — when (rarely) you need Riemannian optimization
+- **[Numerical Stability Guide](numerical-stability.md)** — when to use float64, where each model's chart stops, safe norms
+- **[Riemannian Optimizers Guide](optimizers.md)** — when (rarely) you need Riemannian optimization

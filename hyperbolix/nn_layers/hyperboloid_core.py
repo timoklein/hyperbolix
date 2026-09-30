@@ -882,7 +882,8 @@ def hyp_flatten2d(
     point's spatial radius (and hence its geodesic radius from the origin) inflates by
     ``≈ √(H·W)``. At a conv → FC boundary ``N`` is the whole feature map — tens to low
     hundreds — so the inflation is far larger than the ``√9`` of a single 3x3 receptive
-    field, and an MLR head fed such a point sits pinned at its saturation cap at init.
+    field. Before the MLR ``asinh`` clamp was removed, an MLR head fed such a point sat
+    pinned at that clamp at init, with near-zero gradients.
     LogCat rescales every block by the digamma ratio
     ``s = exp(½·(ψ(D/2) - ψ(N·D/2))) ≈ 1/√N`` before concatenating and then recomputes
     the time coordinate, so the expected log spatial radius of the flattened point

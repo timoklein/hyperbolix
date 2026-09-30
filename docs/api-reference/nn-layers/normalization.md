@@ -1,7 +1,6 @@
 # Normalization
 
-All hyperbolic normalization layers in one place — previously these were scattered
-across the convolution and Hypformer sections. For **which** normalizer to use
+All hyperbolic normalization layers. For **which** normalizer to use
 between which layers, see the
 [NN Layers guide](../../user-guide/nn-layers.md#attention-normalization-positional-encoding).
 
@@ -34,15 +33,9 @@ above); the per-sample radial RMSNorm covers all three.
   *Centers* by gyro-translating with the inverse batch mean, *scales* by the inverse
   Fréchet standard deviation, *biases* with a learned manifold point, and keeps
   running statistics for evaluation (`use_running_average`). Both use the closed-form
-  Lorentz centroid as the batch mean; the PV layer takes it on the exact hyperboloid
-  lift of its points (PV coordinates are the hyperboloid's spatial part). The centroid
-  commutes with the gyro-translation used for centering, so the output's Fréchet mean
-  lies close to the bias point; the log-Euclidean mean the PV layer used before did
-  not. Both center with `gyro_difference`: the Hyperboloid operation
-  uses a Cartesian inverse boost when either endpoint has scaled spatial radius at
-  most 1e-1 and the stable polar frame otherwise, while the PV operation inherits both
-  branches through its exact Hyperboloid lift. This also preserves derivatives with
-  respect to an origin mean. Use for faithful hyperbolic ResNets.
+  Lorentz centroid as the batch mean (the PV layer on the exact hyperboloid lift of
+  its points) and center with `gyro_difference`, so the output's Fréchet mean lies
+  close to the bias point. Use for faithful hyperbolic ResNets.
 - **Gyro radial RMSNorm** (`HyperboloidGyroRMSNorm`, `ProperVelocityGyroRMSNorm`,
   `PoincareGyroRMSNorm`) — a *per-sample*, batch-independent normalizer (no running
   statistics, identical in train and eval, valid at batch size 1 — the properties RL
