@@ -32,7 +32,7 @@ from flax.typing import TupleArg
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
-from hyperbolix.utils.math_utils import safe_hypot_norm
+from hyperbolix.utils.math_utils import floor_at, safe_hypot_norm
 
 from .hyperboloid_core import MATMUL_PRECISION, lorentz_midpoint, spatial_to_hyperboloid
 from .hyperboloid_linear import HTCLinear
@@ -109,6 +109,22 @@ def focus_transform(
     norm_sharpened = safe_hypot_norm(sharpened_D, sqrt_eps)[..., None]  # (..., 1)
 
     return (norm_scaled / norm_sharpened) * sharpened_D  # (..., D)
+
+
+def _kernel_ratio(numerator_D: Float[Array, "... D"], denominator: Float[Array, "... 1"]) -> Float[Array, "... D"]:
+    """Linear-attention output ``num / den``, returned in the numerator's dtype.
+
+    ``focus_transform`` is strictly positive, so ``den > 0``. The floor at the smallest normal
+    number acts only on an underflowed ``den``; then ``|num| <= den * max|v|`` has underflowed
+    too and the head output stays bounded by ``max|v|`` instead of ``0/0``. The division runs in
+    the working dtype promoted to at least float32: float16's smallest normal, 6.1e-5, lies
+    above the ``den`` of a query with a small ReLU part, where it would shrink the output as an
+    additive ``eps`` does. For float32 and float64 the casts are no-ops.
+    """
+    ratio_dtype = jnp.promote_types(denominator.dtype, jnp.float32)
+    tiny = jnp.asarray(jnp.finfo(ratio_dtype).tiny, dtype=ratio_dtype)
+    ratio_D = numerator_D.astype(ratio_dtype) / floor_at(denominator.astype(ratio_dtype), tiny)
+    return ratio_D.astype(numerator_D.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -254,11 +270,18 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
     - **No focus temperature.** Hypformer learns a temperature ``t`` inside the focus
       function. :func:`focus_transform` is homogeneous of degree 1 in ``1/(|t| + eps)``,
       so ``φ(Q)`` and ``φ(K)`` both scale by it, and the output
-      ``φ(Q)(φ(K)^T V) / (φ(Q)(φ(K)^T 1) + eps)`` sees ``t`` only through the ``eps``
-      floors, in the bidirectional and the causal form alike. Its gradient measured 5 to 7
-      orders of magnitude below the other parameters', so it stays near its init; the
-      parameter is omitted and the layer uses ``t = 1``, the old init, which leaves the
-      output at init unchanged.
+      ``φ(Q)(φ(K)^T V) / φ(Q)(φ(K)^T 1)`` sees ``t`` only through the ``eps`` floors
+      inside :func:`focus_transform`, in the bidirectional and the causal form alike. Its
+      gradient measured 5 to 7 orders of magnitude below the other parameters', so it stays
+      near its init; the parameter is omitted and the layer uses ``t = 1``, the old init,
+      which leaves the output at init unchanged.
+    - **No additive ``eps`` on the kernel-ratio denominator.** Hypformer divides by
+      ``den + 1e-6``. ``φ`` is strictly positive, so ``den > 0``, but a query whose spatial
+      part is ``≤ 0`` on a head has ``φ(Q) ≈ eps^power`` and ``den ~ 1e-13`` at the default
+      ``power = 2``, where ``+ eps`` returns ``≈ 0`` for that head instead of its attention
+      average. The layer divides by ``den`` floored at the smallest normal number of the
+      working dtype promoted to at least float32, a floor that acts only on an underflowed
+      ``den``.
 
     Parameters
     ----------
@@ -362,12 +385,12 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
             init_z = jnp.zeros((B_size, H, D), dtype=focused_key_BNHD.dtype)
             _, (S_cum_NBHDE, z_cum_NBHD) = jax.lax.scan(scan_step, (init_S, init_z), (fk_NBHD, fv_NBHD))
 
-            # output_n = Q_n @ S_n / (Q_n @ z_n + eps); attention geometry, pinned HIGHEST — the
+            # output_n = Q_n @ S_n / (Q_n @ z_n); attention geometry, pinned HIGHEST — the
             # causal-mask properties the tests assert (no future leakage, first token attends to
             # itself alone) are exact identities that TF32 breaks.
             num_NBHD = jnp.einsum("nbhd,nbhde->nbhe", fq_NBHD, S_cum_NBHDE, precision=MATMUL_PRECISION)  # (N, B, H, D)
             den_NBH1 = jnp.einsum("nbhd,nbhd->nbh", fq_NBHD, z_cum_NBHD, precision=MATMUL_PRECISION)[..., None]  # (N, B, H, 1)
-            output_spatial_BNHD = jnp.transpose(num_NBHD / (den_NBH1 + eps), (1, 0, 2, 3))  # (B, N, H, D)
+            output_spatial_BNHD = jnp.transpose(_kernel_ratio(num_NBHD, den_NBH1), (1, 0, 2, 3))  # (B, N, H, D)
         else:
             # 2. Bidirectional linear attention via kernel trick: φ(Q)(φ(K)^T V) / φ(Q)(φ(K)^T 1)
             # All three are attention geometry, pinned HIGHEST: the kernel trick replaces an
@@ -385,7 +408,7 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
                 ..., None
             ]  # (B, N, H, 1)
 
-            output_spatial_BNHD = numerator_BNHD / (denominator_BNH1 + eps)  # (B, N, H, D)
+            output_spatial_BNHD = _kernel_ratio(numerator_BNHD, denominator_BNH1)  # (B, N, H, D)
 
         # 3. Spatial residual: Z̃_s = Z_s + ψ(V_s)
         output_spatial_BNHD = output_spatial_BNHD + self.residual_proj(value_spatial_BNHD)

@@ -400,9 +400,19 @@ def _ref_full_attention(model, x_BNA, c_in, c_attn, c_out):
     return _ref_spatial_to_hyperboloid(averaged[..., 1:], c_attn, c_out, eps)
 
 
-def _ref_linear_attention(model, x_BNA, c_in, c_attn, c_out, temperature=1.0):
-    """``temperature`` is the focus temperature the layer used to learn (init 1.0); the layer now fixes it at 1."""
+def _ref_linear_attention(model, x_BNA, c_in, c_attn, c_out, temperature=1.0, den_eps=0.0):
+    """``temperature`` is the focus temperature the layer used to learn (init 1.0); the layer now fixes it at 1.
+
+    ``den_eps`` is the additive ``+ eps`` the layer used to put on the kernel-ratio denominator
+    (``model.eps``); the layer now divides by the denominator itself.
+    """
     q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
+    return _ref_linear_attend(model, q, k, v, c_attn, c_out, temperature=temperature, den_eps=den_eps)
+
+
+def _ref_linear_attend(model, q, k, v, c_attn, c_out, temperature=1.0, den_eps=0.0):
+    """Bidirectional linear attention from per-head ``(B, N, H, A)`` q/k/v (see ``_ref_linear_attention``)."""
+    q, k, v = (np.asarray(a, np.float64) for a in (q, k, v))
     eps = model.eps
     temp = jnp.asarray(temperature, jnp.float64)
     # focus_transform is a separately-tested public primitive; the roles (applied to
@@ -414,21 +424,28 @@ def _ref_linear_attention(model, x_BNA, c_in, c_attn, c_out, temperature=1.0):
     kv = np.einsum("bnhd,bnhe->bhde", fk, vs)
     num = np.einsum("bnhd,bhde->bnhe", fq, kv)
     den = np.einsum("bnhd,bhd->bnh", fq, fk.sum(axis=1))[..., None]
-    out = num / (den + eps) + _ref_dense(vs, model.residual_proj)
+    out = num / (den + den_eps) + _ref_dense(vs, model.residual_proj)
     return _ref_spatial_to_hyperboloid(out.mean(axis=2), c_attn, c_out, eps)
 
 
-def _ref_causal_linear_attention(model, x_BNA, c_in, c_attn, c_out, temperature=1.0):
+def _ref_causal_linear_attention(model, x_BNA, c_in, c_attn, c_out, temperature=1.0, den_eps=0.0):
     """Naive O(N²) masked transcription of causal linear attention.
 
     The layer evaluates the causal case as a prefix scan (Katharopoulos et al. 2020):
-    ``S_n = Σ_{m≤n} φ(k_m)·v_mᵀ``, ``z_n = Σ_{m≤n} φ(k_m)``, ``out_n = φ(q_n)S_n / (φ(q_n)·z_n + ε)``.
+    ``S_n = Σ_{m≤n} φ(k_m)·v_mᵀ``, ``z_n = Σ_{m≤n} φ(k_m)``, ``out_n = φ(q_n)S_n / (φ(q_n)·z_n)``.
     Undoing the associativity reordering gives the quadratic form written here,
-    ``out_n = Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩·v_m / (Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩ + ε)``, built from a
+    ``out_n = Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩·v_m / Σ_{m≤n} ⟨φ(q_n), φ(k_m)⟩``, built from a
     lower-triangular mask and two plain einsums — the scan is never called. ``temperature`` is
     the focus temperature the layer used to learn (init 1.0); the layer now fixes it at 1.
+    ``den_eps`` is the additive ``+ eps`` the layer used to put on the denominator (``model.eps``).
     """
     q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
+    return _ref_causal_linear_attend(model, q, k, v, c_attn, c_out, temperature=temperature, den_eps=den_eps)
+
+
+def _ref_causal_linear_attend(model, q, k, v, c_attn, c_out, temperature=1.0, den_eps=0.0):
+    """Causal linear attention from per-head ``(B, N, H, A)`` q/k/v (see ``_ref_causal_linear_attention``)."""
+    q, k, v = (np.asarray(a, np.float64) for a in (q, k, v))
     eps = model.eps
     temp = jnp.asarray(temperature, jnp.float64)
     fq = np.asarray(focus_transform(jnp.asarray(q[..., 1:]), temp, model.power, eps), np.float64)
@@ -440,7 +457,7 @@ def _ref_causal_linear_attention(model, x_BNA, c_in, c_attn, c_out, temperature=
     scores_BNHM = np.einsum("bnhd,bmhd->bnhm", fq, fk) * mask_NM[None, :, None, :]
     num_BNHD = np.einsum("bnhm,bmhe->bnhe", scores_BNHM, vs)
     den_BNH1 = scores_BNHM.sum(-1)[..., None]
-    out = num_BNHD / (den_BNH1 + eps) + _ref_dense(vs, model.residual_proj)
+    out = num_BNHD / (den_BNH1 + den_eps) + _ref_dense(vs, model.residual_proj)
     return _ref_spatial_to_hyperboloid(out.mean(axis=2), c_attn, c_out, eps)
 
 
@@ -656,10 +673,10 @@ def test_linear_attention_matches_old_temperature_transcription(causal, old_temp
 
     At the old init ``t = 1`` the layer computes exactly what the old one did, so the gap is
     float64 round-off (``atol=1e-12``; measured ≤ 1.4e-15). At ``t = 0.5`` and ``t = 2`` the old
-    output differs only through the ``eps`` floors: the ``sqrt(eps) ≈ 3.2e-4`` floors of the two
-    norms inside ``focus_transform`` and the ``+ eps`` on the kernel-ratio denominator. That gap
-    measured ≤ 1.2e-4 over four seeds
-    (``logs/2026-09-30_attention-followups/measure_old_temperature_gap.out``), hence ``atol=1e-3``.
+    output differs only through the ``sqrt(eps) ≈ 3.2e-4`` floors of the two norms inside
+    ``focus_transform``. That gap measured ≤ 1.2e-4 over four seeds with the old ``+ eps`` on the
+    kernel-ratio denominator in both (``logs/2026-09-30_attention-followups/measure_old_temperature_gap.out``)
+    and ≤ 1.9e-4 without it (``measure_den_floor_gap.out``, same directory), hence ``atol=1e-3``.
     """
     c = 1.0
     model = HyperbolicLinearAttention(5, 4, num_heads=2, power=2.0, param_dtype=jnp.float64, rngs=nnx.Rngs(0))
@@ -671,6 +688,138 @@ def test_linear_attention_matches_old_temperature_transcription(causal, old_temp
     expected = reference(model, x, c, c, c, temperature=old_temperature)
     assert got.dtype == jnp.float64
     assert jnp.allclose(got, expected, rtol=0, atol=atol)
+
+
+# Token and head of the query whose spatial part is ≤ 0 in ``_degenerate_query_qkv``.
+_DEGENERATE_TOKEN, _DEGENERATE_HEAD = 2, 1
+
+
+def _degenerate_query_qkv(dtype):
+    """Per-head hyperboloid ``(q, k, v)`` at ``c = 1``, each ``(1, 6, 2, 6)``, for ``_attend``.
+
+    The query at ``_DEGENERATE_TOKEN`` has a spatial part ``≤ 0`` (one entry exactly 0) on
+    ``_DEGENERATE_HEAD``, so ``φ(q) ≈ eps²`` per entry there and the kernel-ratio denominator is
+    ``≈ 1e-13``, far below ``eps = 1e-7``. Everything else is random.
+    """
+    rng = np.random.default_rng(0)
+    spatial_RBNHD = rng.normal(size=(3, 1, 6, 2, 5)) * 0.8  # (role, B, N, H, D)
+    spatial_RBNHD[0, 0, _DEGENERATE_TOKEN, _DEGENERATE_HEAD] = -np.abs(
+        spatial_RBNHD[0, 0, _DEGENERATE_TOKEN, _DEGENERATE_HEAD]
+    )
+    spatial_RBNHD[0, 0, _DEGENERATE_TOKEN, _DEGENERATE_HEAD, 0] = 0.0
+    time_RBNH1 = np.sqrt((spatial_RBNHD**2).sum(-1, keepdims=True) + 1.0)
+    points_RBNHA = np.concatenate([time_RBNH1, spatial_RBNHD], axis=-1)
+    return tuple(jnp.asarray(p_BNHA, dtype) for p_BNHA in points_RBNHA)
+
+
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize(("dtype", "atol"), [(jnp.float64, 1e-12), (jnp.float32, 1e-5)], ids=["float64", "float32"])
+def test_linear_attention_degenerate_query_gets_attention_average(dtype, atol, causal):
+    """A query with spatial part ``≤ 0`` on a head gets that head's kernel-ratio average ``num / den``.
+
+    Regression: the layer divided by ``den + eps``. There ``den ≈ 1e-13 ≪ eps``, so the head
+    returned ``≈ num / eps ≈ 0`` instead of its attention average, an O(1) error in the output
+    (float32 and float64 alike). The oracle is the float64 transcription of ``num / den`` with no
+    ``eps``; the float32 layer matches it to 1e-5 (measured 1.6e-7,
+    ``logs/2026-09-30_attention-followups/measure_den_floor_tests.out``).
+    """
+    model = HyperbolicLinearAttention(6, 5, num_heads=2, power=2.0, param_dtype=jnp.float64, rngs=nnx.Rngs(0))
+    q, k, v = _degenerate_query_qkv(dtype)
+    reference = _ref_causal_linear_attend if causal else _ref_linear_attend
+
+    got = model._attend(q, k, v, 1.0, 1.0, causal=causal)
+    expected = reference(model, q, k, v, 1.0, 1.0)
+    assert got.dtype == dtype
+    assert jnp.allclose(got, expected, rtol=0, atol=atol)
+    # The input exercises the failure: the pre-fix ``+ eps`` spelling is O(1) off at that token.
+    old_spelling = reference(model, q, k, v, 1.0, 1.0, den_eps=model.eps)
+    assert np.max(np.abs(old_spelling - expected)[:, _DEGENERATE_TOKEN]) > 0.1
+
+
+@pytest.mark.parametrize("causal", [False, True])
+def test_linear_attention_output_unchanged_where_denominator_is_large(causal):
+    """Where every ``den ≫ eps``, dropping the ``+ eps`` changes the output by at most ``eps / den``.
+
+    Per head, ``num/den - num/(den + eps) = (num/den) · eps / (den + eps)``, and ``num/den`` is a
+    convex combination of the values, so the change is at most ``max|v| · eps / min(den)``; the
+    head mean keeps that bound and the time lift multiplies it by at most ``sqrt(D)``. The input
+    has ``min(den) ≥ 1e3 · eps`` (asserted; 7.1e-2 bidirectional, 1.0e-3 causal), where that bound
+    is 4.5e-6 and 3.1e-4; the change measured 4.3e-7 and 2.4e-5
+    (``logs/2026-09-30_attention-followups/measure_den_floor_gap.out``, seed 0).
+    """
+    c = 1.0
+    model = HyperbolicLinearAttention(5, 4, num_heads=2, power=2.0, param_dtype=jnp.float64, rngs=nnx.Rngs(0))
+    raw = jax.random.normal(jax.random.PRNGKey(40), (2, 12, 5), dtype=jnp.float64) * 0.3
+    x = jax.vmap(jax.vmap(hyperboloid_f64.proj, in_axes=(0, None)), in_axes=(0, None))(raw, c)
+
+    q, k, v = _ref_project_qkv(model, x, c, c)
+    one = jnp.asarray(1.0, jnp.float64)
+    fq_BNHD = np.asarray(focus_transform(jnp.asarray(q[..., 1:]), one, model.power, model.eps))
+    fk_BNHD = np.asarray(focus_transform(jnp.asarray(k[..., 1:]), one, model.power, model.eps))
+    seq_len = fq_BNHD.shape[1]
+    mask_NM = np.tril(np.ones((seq_len, seq_len))) if causal else np.ones((seq_len, seq_len))
+    den_BNH = (np.einsum("bnhd,bmhd->bnhm", fq_BNHD, fk_BNHD) * mask_NM[None, :, None, :]).sum(-1)
+    assert den_BNH.min() >= 1e3 * model.eps
+    bound = np.sqrt(fq_BNHD.shape[-1]) * np.abs(v[..., 1:]).max() * model.eps / den_BNH.min()
+
+    reference = _ref_causal_linear_attention if causal else _ref_linear_attention
+    got = model(x, c_in=c, c_attn=c, c_out=c, causal=causal)
+    change = np.max(np.abs(np.asarray(got) - reference(model, x, c, c, c, den_eps=model.eps)))
+    # Nonzero: the ``+ eps`` is really gone (float64 round-off is ~1e-16).
+    assert 1e-9 < change <= bound
+
+
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["float32", "float64"])
+def test_linear_attention_degenerate_query_gradients_finite(dtype, causal):
+    """Gradients w.r.t. q, k and v stay finite at the degenerate query (spatial part ``≤ 0``)."""
+    model = HyperbolicLinearAttention(6, 5, num_heads=2, power=2.0, param_dtype=jnp.float64, rngs=nnx.Rngs(0))
+    q, k, v = _degenerate_query_qkv(dtype)
+
+    def loss(q, k, v):
+        return jnp.sum(model._attend(q, k, v, 1.0, 1.0, causal=causal) ** 2)
+
+    for grad_BNHA in jax.grad(loss, argnums=(0, 1, 2))(q, k, v):
+        assert bool(jnp.all(jnp.isfinite(grad_BNHA)))
+
+
+@pytest.mark.parametrize("causal", [False, True])
+def test_linear_attention_degenerate_query_key_value_gradient_matches_finite_differences(causal):
+    """``d out / d(k, v)`` at the degenerate query matches central finite differences (float64).
+
+    The loss reads only the degenerate token's output, whose head carries the kernel ratio at
+    ``den ≈ 1e-13``, so the floored division's derivative is checked where it acts. Step
+    ``h = 1e-6``: truncation ``O(h²)`` and round-off ``O(1e-16 / h)`` are both ~1e-10 here
+    (measured max gap 3.9e-10 against gradients of size ~0.5,
+    ``logs/2026-09-30_attention-followups/measure_den_floor_tests.out``), hence ``atol=1e-8``.
+    The nearest key entry to a ReLU kink sits at 3.9e-2 ≫ ``h``. The query is left out: its
+    spatial part includes an exact 0, a ReLU kink where central differences and autodiff
+    legitimately differ.
+    """
+    model = HyperbolicLinearAttention(6, 5, num_heads=2, power=2.0, param_dtype=jnp.float64, rngs=nnx.Rngs(0))
+    q, k, v = _degenerate_query_qkv(jnp.float64)
+    weights_A = jax.random.normal(jax.random.PRNGKey(50), (6,), dtype=jnp.float64)
+
+    @jax.jit
+    def loss(k, v):
+        out_BNA = model._attend(q, k, v, 1.0, 1.0, causal=causal)
+        return jnp.sum(out_BNA[:, _DEGENERATE_TOKEN] * weights_A)
+
+    grad_k, grad_v = jax.grad(loss, argnums=(0, 1))(k, v)
+    h = 1e-6
+    for arg_index, (point, grad) in enumerate(((k, grad_k), (v, grad_v))):
+        flat = np.asarray(point).ravel()
+        fd = np.zeros_like(flat)
+        for i in range(flat.size):
+            step = np.zeros_like(flat)
+            step[i] = h
+            args_plus = [k, v]
+            args_minus = [k, v]
+            args_plus[arg_index] = jnp.asarray((flat + step).reshape(point.shape))
+            args_minus[arg_index] = jnp.asarray((flat - step).reshape(point.shape))
+            fd[i] = (float(loss(*args_plus)) - float(loss(*args_minus))) / (2 * h)
+        assert np.abs(fd).max() > 1e-3, "the loss must depend on the keys and values"
+        np.testing.assert_allclose(np.asarray(grad).ravel(), fd, rtol=0, atol=1e-8)
 
 
 @pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
