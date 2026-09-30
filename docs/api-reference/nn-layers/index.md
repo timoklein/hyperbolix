@@ -1,6 +1,6 @@
 # Neural Network Layers API
 
-Hyperbolic neural network layers built with Flax NNX — 20+ layer classes and the
+Hyperbolic neural network layers built with Flax NNX — 30+ layer classes and the
 activation/primitive functions that support them, across the Poincaré, Hyperboloid,
 and Proper Velocity models. All layers follow Flax NNX conventions and store a
 manifold-module reference.
@@ -17,10 +17,12 @@ manifold-module reference.
 | [Linear](linear.md) | Poincaré / Hyperboloid / PV fully-connected layers, including `HTCLinear`, `FGGLinear`, and Busemann FC |
 | [Convolutional](convolutional.md) | HCat, intrinsic-Lorentz (ILNN), FGG, Poincaré, and PV 2D convolutions + the conv → FC bridges `hyp_avg_pool2d` / `hyp_flatten2d` |
 | [Normalization](normalization.md) | Poincaré BatchNorm, gyro batch/RMS norm (Hyperboloid & PV), HRC norms + dropout, FGG mean-only BN, Euclidean input scaling |
-| [Attention & Transformer](attention.md) | Linear O(N), softmax O(N²), and full Lorentzian O(N²) attention with causal masking |
+| [Attention & Transformer](attention.md) | Linear O(N), softmax O(N²), and full Lorentzian O(N²) attention with causal masking; HELM latent attention (`LorentzMLA`) |
 | [Regression & MLR](regression.md) | Point-to-hyperplane and Busemann (point-to-horosphere) classification heads |
 | [Activations](activations.md) | Curvature-preserving `hyp_*`, Poincaré, and curvature-changing `hrc_*` |
-| [Positional Encoding](positional-encoding.md) | HOPE rotary PE, Hypformer learnable PE, Lorentzian residual |
+| [Positional Encoding](positional-encoding.md) | HOPE rotary PE (`hope`, `hope_rotate_space`, `HyperbolicRoPE`), Hypformer learnable PE, Lorentzian residual |
+| [Embedding](embedding.md) | HELM hyperboloid token embedding (`LorentzEmbedding`, `lorentz_embedding_init`) |
+| [Mixture of Curvature Experts](moe.md) | HELM-MiCE feed-forward block: `LorentzMoE`, `LorentzMoEGate`, `LorentzSwiGLU`, sequence balance loss and routing statistics |
 | [Vector Quantization](vector-quantization.md) | Poincaré VQ-VAE bottlenecks (EMA codebook, MLR-implicit codebook) |
 | [Primitives & Helpers](primitives.md) | HTC/HRC components, point assembly, midpoints, residuals, Fréchet variance |
 
@@ -34,7 +36,7 @@ The neural network layers implement methods from:
 - **Chen et al. (2022)**: "Fully Hyperbolic Neural Networks" — FHCNN linear layers
 - **He, Yang & Ying (2025)**: "Lorentzian Residual Neural Networks" (KDD 2025) — HRC-based convolutions (`LorentzConv2D`)
 - **Hypformer (Yang et al. 2025)**: "Hyperbolic Transformers" — HTC/HRC components with curvature-change support
-- **He et al. (2025)**: "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts" (arXiv:2505.24722) — HOPE positional encoding and Lorentzian residual connections
+- **He et al. (2025)**: "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts" (arXiv:2505.24722) — `LorentzMLA`, `LorentzMoE` (with `LorentzMoEGate`, `LorentzSwiGLU`), `LorentzEmbedding`, HOPE positional encoding and Lorentzian residual connections
 - **Klis et al. (2026)**: "Fast and Geometrically Grounded Lorentz Neural Networks" — `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR`, `FGGMeanOnlyBatchNorm`; sinh/arcsinh cancellation for linear hyperbolic distance growth
 - **Chen et al. (2026)**: "Proper Velocity Neural Networks" — `HypLinearPV`, `HypConv2DPV`, `HypRegressionPV`; unconstrained $\mathbb{R}^n$ model with exact Euclidean retraction
 - **Chen, Schölkopf & Sebe (2026)**: "Hyperbolic Busemann Neural Networks" (arXiv:2602.18858) — Busemann MLR heads and BFC layers; closed-form point-to-horosphere Busemann function (`Hyperboloid.busemann`, `Poincare.busemann`)

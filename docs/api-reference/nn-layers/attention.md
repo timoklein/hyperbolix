@@ -26,6 +26,21 @@ transformation component `HTCLinear` (used for MLP sublayers) is on the
     options:
       heading_level: 3
 
+## Latent attention (HELM)
+
+`LorentzMLA` is the attention block of HELM (He et al. 2025): DeepSeek-style
+multi-head latent attention on the hyperboloid. Keys and values are decompressed from
+one low-rank latent point per token, queries and keys carry a decoupled
+[HOPE](positional-encoding.md)-rotated slice, and each head averages its values with
+the weighted Lorentzian centroid. It takes one model curvature `c` and supports
+causal, packed-sequence (`segment_ids`) and padding (`attention_mask`) masks. The
+mixture-of-curvature feed-forward block that pairs with it is on the
+[Mixture of Curvature Experts](moe.md) page.
+
+::: hyperbolix.nn_layers.LorentzMLA
+    options:
+      heading_level: 3
+
 ## Causal (autoregressive) masking
 
 All three variants support `causal=True`: position `n` attends only to positions

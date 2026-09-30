@@ -34,8 +34,14 @@ from hyperbolix.nn_layers import (
     HypLinearPoincarePP,
     HypVQEmbeddingPoincare,
     LorentzConv2D,
+    LorentzEmbedding,
+    LorentzMLA,
+    LorentzMoE,
+    LorentzMoEGate,
+    LorentzSwiGLU,
     PoincareBatchNorm2D,
     hope,
+    hope_rotate_space,
 )
 from hyperbolix.optim import mark_manifold_param, riemannian_adam, riemannian_sgd
 
@@ -66,11 +72,56 @@ def test_hope_respects_float32():
     assert out.dtype == F32
 
 
+def test_hope_rotate_space_respects_float32():
+    # The rotation angles positions * theta come from jnp.arange / a float base; they must not promote.
+    space = jax.random.normal(jax.random.PRNGKey(0), (2, 6, 8), dtype=F32)
+    assert hope_rotate_space(space, jnp.arange(6)).dtype == F32  # (S,) positions
+    assert hope_rotate_space(space, jnp.tile(jnp.arange(6), (2, 1))).dtype == F32  # (B, S) positions
+
+
 def test_htclinear_respects_float32():
     # HTCLinear: out = z @ kernel; kernel is float64 under x64 without the cast.
     x = _hyperboloid_points(jax.random.PRNGKey(1), batch=8, ambient=5)
     layer = HTCLinear(in_features=5, out_features=8, rngs=nnx.Rngs(0))
     assert layer(x, c_in=1.0, c_out=1.0).dtype == F32
+
+
+def test_lorentz_mla_respects_float32():
+    # HOPE angles, the score temperature, the softmax and the centroid all mix float32 data with
+    # scalars/tables that are float64 under x64 unless cast.
+    x = _hyperboloid_points(jax.random.PRNGKey(10), batch=2 * 5, ambient=9).reshape(2, 5, 9)
+    layer = LorentzMLA(9, 2, 4, 3, 5, 4, rngs=nnx.Rngs(0))
+    assert layer(x, c=1.0).dtype == F32
+    assert layer(x, c=1.0, positions=jnp.tile(jnp.arange(5), (2, 1))).dtype == F32
+
+
+def test_lorentz_moe_respects_float32():
+    # Learnable expert curvatures are float32 params; the gate scores, one-hot weights and the
+    # stacked-expert vmap must keep the float32 activations.
+    x = _hyperboloid_points(jax.random.PRNGKey(11), batch=2 * 5, ambient=9).reshape(2, 5, 9)
+    moe = LorentzMoE(9, 6, 4, 1, 2, rngs=nnx.Rngs(0))
+    out, stats = moe(x, c=1.0)
+    assert out.dtype == F32
+    assert stats.affinity.dtype == F32
+    assert stats.mask.dtype == F32
+    weights, _, _ = moe.gate(x.reshape(-1, 9))
+    assert weights.dtype == F32
+
+
+def test_lorentz_swiglu_respects_float32():
+    x = _hyperboloid_points(jax.random.PRNGKey(12), batch=8, ambient=9)
+    expert = LorentzSwiGLU(9, 6, rngs=nnx.Rngs(0))
+    assert expert(x, 0.5, 1.0).dtype == F32
+
+
+@pytest.mark.parametrize("parameterization", ["manifold", "spatial"])
+def test_lorentz_embedding_respects_float32(parameterization):
+    # The table init (jax.random.normal) and the sqrt(c / c_out) map are the promotion sites.
+    emb = LorentzEmbedding(16, 9, rngs=nnx.Rngs(0), parameterization=parameterization)
+    ids = jnp.arange(6).reshape(2, 3)
+    assert emb.embedding[...].dtype == F32
+    assert emb(ids).dtype == F32
+    assert emb(ids, c_out=0.5).dtype == F32
 
 
 def test_fhcnn_linear_respects_float32():
@@ -190,6 +241,12 @@ def test_param_storage_float32_with_float64_manifold():
         LorentzConv2D(h64, 4, 8, (3, 3), rngs=nnx.Rngs(0)),
         HyperbolicFullAttention(5, 4, num_heads=2, rngs=nnx.Rngs(0)),
         HRCBatchNorm(8, rngs=nnx.Rngs(0)),
+        LorentzMLA(9, 2, 4, 3, 5, 4, rngs=nnx.Rngs(0)),
+        LorentzMoE(9, 6, 4, 1, 2, rngs=nnx.Rngs(0)),
+        LorentzSwiGLU(9, 6, rngs=nnx.Rngs(0)),
+        LorentzMoEGate(9, 4, 2, rngs=nnx.Rngs(0)),
+        LorentzEmbedding(16, 9, rngs=nnx.Rngs(0)),
+        LorentzEmbedding(16, 9, rngs=nnx.Rngs(0), parameterization="spatial"),
     ]
     for layer in layers:
         _assert_param_leaves(layer, F32)
@@ -290,6 +347,12 @@ def test_param_dtype_float64_opt_in():
     _assert_param_leaves(layer, F64)
     bn = PoincareBatchNorm2D(p64, num_features=8, param_dtype=F64)
     assert bn.running_mean[...].dtype == F64
+    mla = LorentzMLA(9, 2, 4, 3, 5, 4, rngs=nnx.Rngs(0), param_dtype=F64)
+    _assert_param_leaves(mla, F64)
+    # The routed experts' raw curvatures stay float32 by design, so fix them here.
+    moe = LorentzMoE(9, 6, 4, 1, 2, rngs=nnx.Rngs(0), param_dtype=F64, learnable_curvature=False)
+    _assert_param_leaves(moe, F64)
+    _assert_param_leaves(LorentzEmbedding(16, 9, rngs=nnx.Rngs(0), param_dtype=F64), F64)
     fgg_bn = FGGMeanOnlyBatchNorm(8, param_dtype=F64)
     assert fgg_bn.bias[...].dtype == F64
     assert fgg_bn.running_mean[...].dtype == F64
