@@ -865,10 +865,54 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#poincare-divisor-floors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Divisor Floors Below the Cap's Rounding Band
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poincare-tangent-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tangent Inputs to the HNN++ and Busemann Layers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poincare-batchnorm-mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PoincareBatchNorm2D's Batch Mean at Large Radius
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#float32-accuracy-near-the-origin-depends-on-the-backend" class="md-nav__link">
     <span class="md-ellipsis">
       
         Float32 Accuracy Near the Origin Depends on the Backend
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poincare-pass-cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost
       
     </span>
   </a>
@@ -2435,10 +2479,54 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#poincare-divisor-floors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Divisor Floors Below the Cap's Rounding Band
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poincare-tangent-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tangent Inputs to the HNN++ and Busemann Layers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poincare-batchnorm-mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PoincareBatchNorm2D's Batch Mean at Large Radius
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#float32-accuracy-near-the-origin-depends-on-the-backend" class="md-nav__link">
     <span class="md-ellipsis">
       
         Float32 Accuracy Near the Origin Depends on the Backend
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poincare-pass-cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost
       
     </span>
   </a>
@@ -3182,7 +3270,7 @@
 <p class="admonition-title">Key Challenges</p>
 <ul>
 <li><strong>Conformal factor explosion</strong>: λ(x) grows exponentially as points approach the boundary</li>
-<li><strong>Float32 limitations</strong>: ~7 significant digits, insufficient for large distances (&gt;10)</li>
+<li><strong>Float32 limitations</strong>: ~7 significant digits, not enough for critical operations past scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d \approx 10\)</span> from the origin (see the <a href="#precision-requirements-by-distance">table</a> below)</li>
 <li><strong>Hyperbolic function overflow</strong>: cosh/sinh overflow for large arguments</li>
 <li><strong>Division by near-zero</strong>: Operations involving 1 - c||x||² near the boundary</li>
 </ul>
@@ -3198,16 +3286,20 @@ older directories are not duplicated in the working tree.</p>
 </div>
 <h2 id="float-precision-float32-vs-float64">Float Precision: Float32 vs Float64<a class="headerlink" href="#float-precision-float32-vs-float64" title="Permanent link">&para;</a></h2>
 <h3 id="when-to-use-each">When to Use Each<a class="headerlink" href="#when-to-use-each" title="Permanent link">&para;</a></h3>
-<p><strong>Float32 (default)</strong>:
-- Sufficient for most applications with small to moderate distances (&lt; 5)
-- 2-4x faster on GPU
-- Lower memory footprint (important for large models)
-- ~7 significant decimal digits</p>
-<p><strong>Float64 (high precision)</strong>:
-- Required for large distances (&gt; 10) or near-boundary points
-- Better numerical stability in edge cases
-- ~15-16 significant decimal digits
-- Use for research, validation, or stability-critical applications</p>
+<p><strong>Float32 (default)</strong>:</p>
+<ul>
+<li>Sufficient up to scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d \approx 7\)</span>, and up to <span class="arithmatex">\(a \approx 10\)</span> outside critical operations</li>
+<li>2-4x faster on GPU</li>
+<li>Lower memory footprint (important for large models)</li>
+<li>~7 significant decimal digits</li>
+</ul>
+<p><strong>Float64 (high precision)</strong>:</p>
+<ul>
+<li>Recommended for critical operations from <span class="arithmatex">\(a \approx 10\)</span>; required past the float32 chart ceiling, <span class="arithmatex">\(a \approx 12.65\)</span> at <span class="arithmatex">\(c = 1\)</span> (13.80 at <span class="arithmatex">\(c = 0.1\)</span>)</li>
+<li>Better numerical stability in edge cases</li>
+<li>~15-16 significant decimal digits</li>
+<li>Use for research, validation, or stability-critical applications</li>
+</ul>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
@@ -3225,45 +3317,94 @@ older directories are not duplicated in the working tree.</p>
 <table>
 <thead>
 <tr>
-<th>Distance from Origin</th>
-<th>Float32 Accuracy</th>
+<th>Scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d\)</span></th>
+<th>Float32 relative error, median / max</th>
 <th>Recommended Precision</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>d &lt; 3</td>
-<td>Excellent (&lt; 0.01% error)</td>
+<td>1</td>
+<td>6.1e-8 / 2.5e-7</td>
 <td>float32</td>
 </tr>
 <tr>
-<td>3 ≤ d &lt; 5</td>
-<td>Good (&lt; 0.1% error)</td>
+<td>3</td>
+<td>1.2e-7 / 5.1e-7</td>
 <td>float32</td>
 </tr>
 <tr>
-<td>5 ≤ d &lt; 10</td>
-<td>Moderate (&lt; 3% error)</td>
+<td>5</td>
+<td>2.7e-7 / 2.4e-6</td>
+<td>float32</td>
+</tr>
+<tr>
+<td>7</td>
+<td>5.8e-6 / 1.5e-5</td>
+<td>float32</td>
+</tr>
+<tr>
+<td>10</td>
+<td>4.6e-5 / 2.2e-4</td>
+<td>float32; float64 for critical ops</td>
+</tr>
+<tr>
+<td>12</td>
+<td>4.8e-4 / 1.1e-3</td>
 <td>float64 for critical ops</td>
 </tr>
 <tr>
-<td>d ≥ 10</td>
-<td>Poor (&gt; 3% error)</td>
+<td>12.5</td>
+<td>8.2e-4 / 2.5e-3</td>
+<td>float64 for critical ops</td>
+</tr>
+<tr>
+<td>≥ 12.65</td>
+<td>past the float32 chart ceiling: the ball cannot store the point</td>
 <td><strong>float64 required</strong></td>
 </tr>
 </tbody>
 </table>
-<p><em>Table scoped to the Poincaré ball. <code>Hyperboloid.dist</code>/<code>logmap</code>/<code>sqdist</code>/<code>tangent_norm</code>/<code>expmap</code>/<code>ptransp</code>/<code>tangent_proj</code>/<code>tangent_inner</code>/<code>egrad2rgrad</code>/gyro <code>addition</code>/<code>busemann</code> under <code>VERSION_DEFAULT</code> are evaluated with stable formulas whose tested accuracy is described below — see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">Hyperboloid</a> below.</em></p>
+<p><em>Float32 relative error against float64 on the same float32 input, for the single-point
+operations <code>dist_0</code>, <code>logmap_0</code> (vector error), <code>expmap_0</code> (error of the output's scaled radius)
+and the round trip <code>logmap_0(expmap_0(v))</code> against <code>v</code>: median and max over 256 random directions
+in 16 dimensions, the worst of the four operations and of <span class="arithmatex">\(c \in \{0.1, 1\}\)</span>
+(<code>logs/2026-09-29_cancellation-free/docs_b2/probe_precision_table.out</code>). At <span class="arithmatex">\(c = 1\)</span>, <span class="arithmatex">\(a\)</span> is the
+distance <span class="arithmatex">\(d\)</span> itself. The last row is the ceiling at <span class="arithmatex">\(c = 1\)</span> (see
+<a href="#poincare-roundtrip-ceiling">The Round-Trip Ceiling</a>); at <span class="arithmatex">\(c = 0.1\)</span> the float32 ceiling is
+<span class="arithmatex">\(a \approx 13.8\)</span>. Table scoped to the Poincaré ball: for the hyperboloid's <code>dist_0</code> and <code>logmap_0</code> see
+<a href="#hyperboloid-origin-chart">The Hyperboloid Origin Chart</a>, and
+<code>Hyperboloid.dist</code>/<code>logmap</code>/<code>sqdist</code>/<code>tangent_norm</code>/<code>expmap</code>/<code>ptransp</code>/<code>tangent_proj</code>/<code>tangent_inner</code>/<code>egrad2rgrad</code>/gyro
+<code>addition</code>/<code>gyro_difference</code>/<code>busemann</code> under <code>VERSION_DEFAULT</code> are evaluated with stable formulas
+whose tested accuracy is described in <a href="#the-hyperboloids-two-point-cancellation-failure-mode">Hyperboloid</a>
+below.</em></p>
 <div class="admonition tip">
 <p class="admonition-title">Quick Check</p>
-<p>If your embeddings have distances from the origin &gt; 7, switch to float64:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+<p>Compute the largest scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d_0\)</span> of your embeddings with your own <span class="arithmatex">\(c\)</span>.
+From <span class="arithmatex">\(a \approx 10\)</span>, use float64 for critical operations. A float32 point cannot sit past the
+chart ceiling <span class="arithmatex">\(2\,\mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})\)</span>, 12.65 at <span class="arithmatex">\(c = 1\)</span> and
+13.80 at <span class="arithmatex">\(c = 0.1\)</span> (14.33 below <span class="arithmatex">\(c \approx 0.035\)</span>, where the <code>atanh</code> clip binds first; see
+<a href="#poincare-roundtrip-ceiling">The Round-Trip Ceiling</a>), so a maximum within ~0.1 of it means
+the ball has capped points, and float64 is required:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">distances</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist_0</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">))(</span><span class="n">x_batch</span><span class="p">)</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">max_dist</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">distances</span><span class="p">)</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Max distance from origin: </span><span class="si">{</span><span class="n">max_dist</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># If &gt; 7, create Poincare(dtype=jnp.float64) instead</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">0.1</span>  <span class="c1"># the curvature your model uses</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">v_batch</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">PRNGKey</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">256</span><span class="p">,</span> <span class="mi">16</span><span class="p">))</span>  <span class="c1"># stand-in for your features</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="n">x_batch</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">v</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">expmap_0</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">c</span><span class="p">))(</span><span class="n">v_batch</span><span class="p">)</span>  <span class="c1"># ... and embeddings</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="n">a</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="o">*</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist_0</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">))(</span><span class="n">x_batch</span><span class="p">)</span>  <span class="c1"># scaled radius</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="n">eps</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="c1"># proj margin √c·eps**0.75; below c ≈ 0.035 the tanh/atanh clip 10·eps binds first</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="n">margin</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="o">*</span> <span class="n">eps</span><span class="o">**</span><span class="mf">0.75</span><span class="p">,</span> <span class="mi">10</span> <span class="o">*</span> <span class="n">eps</span><span class="p">)</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="n">a_ceiling</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">atanh</span><span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">margin</span><span class="p">)</span>  <span class="c1"># float32: 12.65 at c = 1, 13.80 at c = 0.1</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;max a = </span><span class="si">{</span><span class="nb">float</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">max</span><span class="p">())</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">, float32 ceiling = </span><span class="si">{</span><span class="n">a_ceiling</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="c1"># max a &gt; 10: create Poincare(dtype=jnp.float64) for critical ops;</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="c1"># max a within ~0.1 of the ceiling: the ball has capped points, float64 is required</span>
 </span></code></pre></div>
 </div>
 <h3 id="tf32-on-ampere-and-hopper-gpus">TF32 on Ampere and Hopper GPUs<a class="headerlink" href="#tf32-on-ampere-and-hopper-gpus" title="Permanent link">&para;</a></h3>
@@ -3328,12 +3469,12 @@ gap. At depth 2 the HTC/FGG ratios are 0.87–0.97, which is not an ordering. Fo
 gradient-sensitive stack, set the global knob.</p>
 <p><code>HIGHEST</code> is a no-op on CPU (there is no TF32 path) and for float64 anywhere.</p>
 <h3 id="the-hyperboloids-two-point-cancellation-failure-mode">The Hyperboloid's Two-Point Cancellation Failure Mode<a class="headerlink" href="#the-hyperboloids-two-point-cancellation-failure-mode" title="Permanent link">&para;</a></h3>
-<p>The distance-from-origin table above governs single-point operations (<code>dist_0</code>, <code>logmap_0</code>,
-<code>expmap_0</code>), which read the geodesic radius off the <strong>spatial</strong> part of the point and have their
-own near-origin story, described in <a href="#hyperboloid-origin-chart">The Hyperboloid Origin Chart</a>
-below. Point-to-point operations (<code>dist</code>, <code>logmap</code>, <code>sqdist</code>, <code>tangent_norm</code>) are governed by a
-different, two-point quantity — being far from the origin is not itself the problem; two points
-far from the origin <strong>and close together</strong> is.</p>
+<p>The distance-from-origin table above is for the Poincaré ball. The hyperboloid's single-point
+operations (<code>dist_0</code>, <code>logmap_0</code>, <code>expmap_0</code>) are covered in
+<a href="#hyperboloid-origin-chart">The Hyperboloid Origin Chart</a> below. Point-to-point operations
+(<code>dist</code>, <code>logmap</code>, <code>sqdist</code>, <code>tangent_norm</code>) are governed by a different, two-point quantity —
+being far from the origin is not itself the problem; two points far from the origin <strong>and close
+together</strong> is.</p>
 <p>Every one of these operations used to go through the Minkowski inner product
 <span class="arithmatex">\(\langle x, y\rangle_L = -x_0y_0 + \langle x_s, y_s\rangle\)</span>, which for two hyperboloid points is a
 subtraction of two positive terms each roughly <span class="arithmatex">\(e^{\sqrt{c}\,(d_0(x) + d_0(y))}\)</span> in size, leaving a
@@ -3414,7 +3555,7 @@ obtained as a difference of two <code>O(cosh²a)</code> numbers; reading the tim
 factors, so a genuinely on-sheet point now passes a fixed <code>atol</code> far past the <code>a ≈ 7</code> (float32) /
 <code>a ≈ 11</code> (float64) ceiling the old check imposed — see <a href="#the-atol-convention">The <code>atol</code> Convention</a>.</p>
 <h4 id="known-limits">Known limits<a class="headerlink" href="#known-limits" title="Permanent link">&para;</a></h4>
-<p>Four places still lose accuracy at large radius, for reasons the fix above does not remove:</p>
+<p>Five places still lose accuracy at large radius, for reasons the fix above does not remove:</p>
 <ol>
 <li><strong><code>ptransp</code>'s direction below the float32 angular resolution.</strong> A transported direction that
    differs from the identity by less than the point-representation floor <code>eps·sinh(a)/√c</code> is
@@ -3426,13 +3567,37 @@ factors, so a genuinely on-sheet point now passes a fixed <code>atol</code> far 
    <code>HyperbolicFullAttention</code> still forms <code>2 + 2⟨Q,K⟩_L</code> from a matrix product, and a GEMM cannot be
    made cancellation-free the way a single pairwise <code>dist</code> can — see
    <a href="#attention-score-floor">Full Attention's Float32 Score Floor</a> below.</li>
-<li><strong>The wrapped-normal <code>log_prob</code> on the hyperboloid.</strong> Its density involves the same
-   <code>⟨x,x⟩_L</code>-style terms, so float32 and float64 diverge by roughly <code>eps·cosh(a)·‖v‖²/σ²</code> at large
-   radius — qualitative, no probe in this pass isolates it.</li>
+<li><strong>The wrapped-normal <code>log_prob</code> on the hyperboloid, through its tangent vector.</strong> <code>log_prob</code>
+   transports the sample's tangent vector <span class="arithmatex">\(u = \log_\mu(z)\)</span> from <span class="arithmatex">\(\mu\)</span> to the origin. The generic
+   <code>Hyperboloid.ptransp(u, μ, origin)</code> always takes its Cartesian chart when one endpoint is the
+   origin, and that chart's radial component is <span class="arithmatex">\(u_r - u_r(1 - 1/\cosh a)\)</span>: two <span class="arithmatex">\(O(u_r)\)</span> terms
+   cancelling down to <span class="arithmatex">\(u_r/\cosh a\)</span>, a float32 radial error of 1.95e-3 at scaled radius 10
+   (<span class="arithmatex">\(1.5\,\varepsilon\cosh a\)</span>, with <span class="arithmatex">\(\varepsilon\cosh a = 1.3\text{e-}3\)</span>). <code>log_prob</code> now uses its
+   own transport to the origin: it splits <span class="arithmatex">\(u\)</span> into radial and perpendicular parts along
+   <span class="arithmatex">\(\hat\mu = \mu_s/\lVert\mu_s\rVert\)</span>, divides the radial part by <span class="arithmatex">\(\cosh a = \sqrt{c}\,\mu_0\)</span>, and
+   subtracts the rounding residue the perpendicular part carries along <span class="arithmatex">\(\hat\mu\)</span>. Its radial error
+   is 2.3e-7 to 2.6e-7 at <span class="arithmatex">\(a = 10\)</span>, and <span class="arithmatex">\(\lvert\log p_{32} - \log p_{64}\rvert\)</span> at <span class="arithmatex">\(a = 10\)</span> (max over 512
+   draws, <span class="arithmatex">\(D = 3\)</span>; <span class="arithmatex">\(\sigma = 0.1, 0.3, 1\)</span> and a diagonal <span class="arithmatex">\(\sigma\)</span> at <span class="arithmatex">\(c = 1\)</span>, <span class="arithmatex">\(\sigma = 0.3\)</span> at
+   <span class="arithmatex">\(c = 0.5\)</span>) goes from 1.3e-2–2.0e-2 to 2.2e-3–4.5e-3
+   (<code>logs/2026-09-29_cancellation-free/1c/probe_old.out</code>,
+   <code>logs/2026-09-29_cancellation-free/2_evidence/probes/1c_merged.out</code>). What remains is the
+   float32 representation of <span class="arithmatex">\(u\)</span> itself: the <code>logmap</code> output that feeds the transport is
+   7.6e-4–1.3e-3 relative off at <span class="arithmatex">\(a = 10\)</span>, and the transport's perpendicular error, 5.3e-4–5.5e-4,
+   is of the same order — the ambient chart stores a tangent vector's components at <span class="arithmatex">\(\cosh a\)</span> times
+   its length. User code that calls the generic <code>Hyperboloid.ptransp(v, far_point, origin)</code> still
+   takes the Cartesian chart and still cancels.</li>
 <li><strong>The MLR score, when the hyperplane itself sits far from the origin.</strong> The reference Lorentz
    MLR the library keeps subtracts two terms of size <code>e^(a+ρ)</code>, with <code>ρ</code> the scaled hyperplane
    offset, so a large bias costs as many digits as a large input radius — see
    <a href="#mlr-large-bias">The MLR Score at a Large Hyperplane Offset</a> below.</li>
+<li><strong>Busemann gradients at a far stored point.</strong> <code>Hyperboloid.busemann</code> on a stored float32 point,
+   which is how the Busemann layers score manifold input, has the gradient underflow described
+   under <a href="#poincare-tangent-input">Tangent Inputs to the HNN++ and Busemann Layers</a>: from scaled
+   radius <span class="arithmatex">\(a \approx 29.4\)</span> at <span class="arithmatex">\(c = 0.3\)</span> and <span class="arithmatex">\(a \approx 29.8\)</span> at <span class="arithmatex">\(c = 1\)</span>, the gradients of the
+   scores with <span class="arithmatex">\(\langle x_s, \omega\rangle \ge 0\)</span> with respect to the point and to <span class="arithmatex">\(\omega\)</span> are up to
+   0.90 and 0.92 off relative to their largest entry, while the scores stay right. Measured on CPU
+   (<code>logs/2026-09-29_cancellation-free/hbz/scan_old_grad.out</code>,
+   <code>logs/2026-09-29_cancellation-free/hbz_docs/scan_onset_jit.out</code>).</li>
 </ol>
 <p>Two more items that used to be on this list — gyro-centering with a near-identity partner, and
 <code>ProperVelocity.dist</code>/<code>logmap</code> between nearby points — were fixed in a later pass; see
@@ -3614,7 +3779,8 @@ already-diverging model reaches, so the code is left as it is. Outputs checked i
 <li><strong><code>lorentz_residual</code> (<code>w_y ≤ 1</code>):</strong> the <code>4h²/c</code> in its normalizer, <code>h = sinh(√c·d(x, y)/2)</code>, overflows once <code>h &gt; √(min(c, 1)·FLT_MAX)/2</code> (9.2e18 at <code>c = 1</code>), and the output is the origin — e.g. two points at spatial radius 1.5e19, 120° apart.</li>
 <li><strong><code>lorentz_midpoint</code> with <code>c &gt; 1</code>:</strong> its normalizer, about <code>c·x₀²</code> times the weighted variance of the directions <code>x_s/x₀</code> (at most 1), overflows in a widely spread cloud from time coordinates of about <code>1.84e19/√c</code>, and the output is the origin. For <code>c ≤ 1</code> that is past the ceiling.</li>
 <li><strong>FHCNN <code>normalize=True</code>:</strong> a linear output whose spatial norm exceeds 1.84e19 gets spatial part 0 and a finite time slot — a finite point off the hyperboloid; its spatial part has zero gradient (the time slot's sigmoid gate still gets one).</li>
-<li><strong><code>HypLinearPoincarePP</code>/<code>HypConv2DPoincare</code>, <code>HypLinearPoincareBusemann</code>:</strong> an <code>inf</code> score is clipped — by the <code>sinh</code> argument clip at <code>±0.99·ln FLT_MAX ≈ ±87.8</code>, or by <code>v_max</code> — to a finite point at the ball's edge, where the hyperboloid lift above passes it through.</li>
+<li><strong><code>HypLinearPoincarePP</code>, <code>HypLinearPoincareBusemann</code>:</strong> an <code>inf</code> score is clipped — by the <code>sinh</code> argument clip at <code>±0.99·ln FLT_MAX ≈ ±87.8</code>, or by <code>v_max</code> — to a finite point at the ball's edge, where the hyperboloid lift above passes it through.</li>
+<li><strong><code>HypConv2DPoincare</code>:</strong> the same <code>sinh</code> clip, but the layer now returns <code>logmap_0</code> of the lift in closed form, so an <code>inf</code> score comes out as a finite tangent vector along its channel with <code>√c‖out‖ = 43.9178</code>, half the clip, at both <code>c = 0.3</code> and <code>c = 1</code>, i.e. <code>‖out‖ = 43.9/√c</code> (80.18 at <code>c = 0.3</code>); the ball round trip it replaced returned the ball's ceiling, <code>√c‖out‖ = 6.3233</code> at <code>c = 1</code> and <code>6.6256</code> at <code>c = 0.3</code> (<code>logs/2026-09-29_cancellation-free/docs_a1/probe_conv_inf_score.out</code>).</li>
 </ul>
 <h3 id="hyperboloid-origin-chart">The Hyperboloid Origin Chart<a class="headerlink" href="#hyperboloid-origin-chart" title="Permanent link">&para;</a></h3>
 <p><code>dist_0</code> and <code>logmap_0</code> used to recover the geodesic radius from the ambient <strong>time</strong> coordinate
@@ -3698,6 +3864,14 @@ trained with it pinned to the origin.</p>
 <p>Operations that inherit the fix without any change of their own: gyro <code>addition</code>, <code>scalar_mul</code>,
 <code>logmap</code>'s origin fallback, and <code>HyperboloidGyroRMSNorm</code>, which divides by <code>dist_0</code> and so
 mis-normalised every float32 sample inside radius 1.5e-3.</p>
+<p><code>HypLinearHyperboloidFHNN</code> had the same problem near the origin in its own spelling: it builds the
+time slot as <span class="arithmatex">\(y_0 = m + 1/\sqrt{c}\)</span> from a positive height <span class="arithmatex">\(m\)</span> and read the target spatial norm
+back as <span class="arithmatex">\(\sqrt{y_0 - 1/\sqrt{c}}\,\sqrt{y_0 + 1/\sqrt{c}}\)</span>, which rounds <span class="arithmatex">\(m\)</span> to the ulp of
+<span class="arithmatex">\(1/\sqrt{c}\)</span>; it now reads it off the height, <span class="arithmatex">\(\sqrt{m}\,\sqrt{m + 2/\sqrt{c}}\)</span>, and the float32
+relative error of <span class="arithmatex">\(\lVert y_s\rVert\)</span> goes from 6.8e-4 to ≤ 7.0e-8 at the layer's floor
+<span class="arithmatex">\(m = 10^{-5}\)</span> and from 2.4e-3 to ≤ 1.0e-7 at <span class="arithmatex">\(m = 1.3\times10^{-5}\)</span>
+(<code>logs/2026-09-29_cancellation-free/1c/probe_old.out</code>,
+<code>logs/2026-09-29_cancellation-free/2_evidence/probes/1c_merged.out</code>, section C).</p>
 <div class="admonition note">
 <p class="admonition-title">An infinitely far point gives an infinite tangent vector, not NaN</p>
 <p>A spatial entry that is <code>inf</code> passes through the radius as <code>inf</code> on purpose, so an out-of-range
@@ -3750,9 +3924,13 @@ hyperboloid <code>logmap_0</code> (which measured <em>faster</em> in 1.2.0), the
 frame, hyperboloid and Poincaré <code>tangent_norm</code>, <code>Poincare.expmap_0</code> (no measured change either
 way), the FHNN linear forward, the linear-attention <code>focus_transform</code> (converting it measured no
 speedup of its own), every <code>ProperVelocity</code> operation and the proper-velocity isometry
-maps, the Poincaré metric-tensor distances, the rest of <code>Stereographic</code>, <code>Euclidean</code> and
-<code>ProductManifold</code>, the wrapped-normal <code>log_prob</code>, and every weight norm. Where nothing was
-measured slower there is no cost to trade the full-range guarantee against.</p>
+maps, the rest of <code>Stereographic</code>, <code>Euclidean</code> and <code>ProductManifold</code>, the wrapped-normal
+<code>log_prob</code>, and every weight norm. Where nothing was measured slower there is no cost to trade the
+full-range guarantee against. The Poincaré metric-tensor distances left this list later: the
+pairwise <code>dist</code> in slot 2 now runs slot 0's body and <code>dist_0</code> in slot 2 reads <span class="arithmatex">\(\lVert x\rVert\)</span> and
+<span class="arithmatex">\(1 - c\lVert x\rVert^2\)</span> from one reduction, both through <code>safe_sqrt</code>, since the sum of squares of
+a ball point (or of the difference of two) cannot overflow (see
+<a href="#poincare-far-pairs">Far pairs</a>).</p>
 <p>Neither of the two older idioms is used on that path any more. The <strong>additive</strong>
 <code>sqrt(sum(x**2) + MIN_NORM**2)</code> was a gradient guard: it gives <code>sqrt</code> a finite derivative at
 <span class="arithmatex">\(x = 0\)</span>, which <code>jnp.linalg.norm</code> does not (its VJP there is <span class="arithmatex">\(0/0 =\)</span> NaN). It paid for that with a
@@ -3917,35 +4095,46 @@ reproducibility studies or numerical debugging.</p>
 <div class="arithmatex">\[
 \lambda(x) = \frac{2}{1 - c||x||^2}
 \]</div>
-<p>This factor appears in:
-- Exponential map: scales tangent vectors
-- Logarithmic map: scales back to tangent space
-- Riemannian gradient: converts Euclidean to Riemannian gradients</p>
+<p>This factor appears in:</p>
+<ul>
+<li>Exponential map: scales tangent vectors</li>
+<li>Logarithmic map: scales back to tangent space</li>
+<li>Riemannian gradient: converts Euclidean to Riemannian gradients</li>
+</ul>
 <h3 id="exponential-growth">Exponential Growth<a class="headerlink" href="#exponential-growth" title="Permanent link">&para;</a></h3>
-<p>As points move toward the boundary (||x|| → 1/√c), λ(x) explodes:</p>
+<p>As points move toward the boundary (||x|| → 1/√c), λ(x) explodes. A point at scaled radius
+<span class="arithmatex">\(a = \sqrt{c}\,d_0\)</span> has <span class="arithmatex">\(\sqrt{c}\,\lVert x\rVert = \tanh(a/2)\)</span>, so
+<span class="arithmatex">\(\lambda(x) = 2\cosh^2(a/2) = 1 + \cosh a\)</span>, which grows like <span class="arithmatex">\(e^a/2\)</span>:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">1.0</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="n">distances</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">10</span><span class="p">]</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">distances</span><span class="p">:</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>    <span class="c1"># Point at distance d from origin</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">expmap_0</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">d</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">]),</span> <span class="n">c</span><span class="o">=</span><span class="n">c</span><span class="p">)</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="n">norm</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="n">lambda_x</span> <span class="o">=</span> <span class="mf">2.0</span> <span class="o">/</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">c</span> <span class="o">*</span> <span class="n">norm</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;d=</span><span class="si">{</span><span class="n">d</span><span class="si">:</span><span class="s2">2d</span><span class="si">}</span><span class="s2">: ||x||=</span><span class="si">{</span><span class="n">norm</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">, λ(x)=</span><span class="si">{</span><span class="n">lambda_x</span><span class="si">:</span><span class="s2">10.1f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">1.0</span>  <span class="c1"># at c = 1 the scaled radius a is the distance from the origin</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">20</span><span class="p">]:</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="c1"># expmap_0(v) lands at distance 2‖v‖ from the origin, so ask for ‖v‖ = a/2</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">expmap_0</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">a</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">]),</span> <span class="n">c</span><span class="o">=</span><span class="n">c</span><span class="p">)</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    <span class="n">norm</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="n">lambda_x</span> <span class="o">=</span> <span class="mf">2.0</span> <span class="o">/</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">c</span> <span class="o">*</span> <span class="n">norm</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;a=</span><span class="si">{</span><span class="n">a</span><span class="si">:</span><span class="s2">2d</span><span class="si">}</span><span class="s2">: ||x||=</span><span class="si">{</span><span class="n">norm</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">, λ(x)=</span><span class="si">{</span><span class="n">lambda_x</span><span class="si">:</span><span class="s2">9.1f</span><span class="si">}</span><span class="s2">, dist_0(x)=</span><span class="si">{</span><span class="n">poincare</span><span class="o">.</span><span class="n">dist_0</span><span class="p">(</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">c</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Output:
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>d= 0: ||x||=0.000000, λ(x)=       2.0
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>d= 1: ||x||=0.761594, λ(x)=       3.6
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>d= 2: ||x||=0.964028, λ(x)=      27.7
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>d= 3: ||x||=0.995055, λ(x)=     202.0
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>d= 5: ||x||=0.999909, λ(x)=   11013.2
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>d= 7: ||x||=0.999991, λ(x)= 1096633.2
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>d=10: ||x||=1.000000, λ(x)=       inf
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>a= 0: ||x||=0.000000, λ(x)=      2.0, dist_0(x)=0.0000
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>a= 2: ||x||=0.761594, λ(x)=      4.8, dist_0(x)=2.0000
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>a= 4: ||x||=0.964028, λ(x)=     28.3, dist_0(x)=4.0000
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>a= 6: ||x||=0.995055, λ(x)=    202.7, dist_0(x)=6.0000
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>a= 8: ||x||=0.999329, λ(x)=   1491.6, dist_0(x)=8.0000
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>a=10: ||x||=0.999909, λ(x)=  11008.7, dist_0(x)=9.9995
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>a=12: ||x||=0.999988, λ(x)=  81442.8, dist_0(x)=12.0008
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>a=14: ||x||=0.999994, λ(x)= 155344.6, dist_0(x)=12.6465
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>a=20: ||x||=0.999994, λ(x)= 155344.6, dist_0(x)=12.6465
 </span></code></pre></div></p>
+<p>From <span class="arithmatex">\(a = 6\)</span> to <span class="arithmatex">\(a = 12\)</span>, each step of 2 in <span class="arithmatex">\(a\)</span> multiplies λ by about <span class="arithmatex">\(e^2 \approx 7.4\)</span>. Float32
+misses the exact <span class="arithmatex">\(1 + \cosh a\)</span> by 5e-4 at <span class="arithmatex">\(a = 10\)</span> and 8e-4 at <span class="arithmatex">\(a = 12\)</span> (11014.2 and 81378.4):
+the stored point's own rounding, which <span class="arithmatex">\(1 - c\lVert x\rVert^2\)</span> amplifies (below). Past the float32
+<a href="#poincare-roundtrip-ceiling">chart ceiling</a>, <span class="arithmatex">\(a \approx 12.65\)</span> at <span class="arithmatex">\(c = 1\)</span>, <code>expmap_0</code> caps the
+point at the <code>proj</code> margin: <span class="arithmatex">\(a = 14\)</span> and <span class="arithmatex">\(a = 20\)</span> give the same point, with λ = 155344.6 and
+<code>dist_0</code> = 12.6465 (<code>logs/2026-09-29_cancellation-free/docs_b3/run_doc_snippets.out</code>).</p>
 <h3 id="numerical-issues">Numerical Issues<a class="headerlink" href="#numerical-issues" title="Permanent link">&para;</a></h3>
 <p><strong>Problem 1: Precision loss in logmap</strong></p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># logmap divides by λ(x), then later operations multiply by λ(x)</span>
@@ -3995,13 +4184,24 @@ reproducibility studies or numerical debugging.</p>
 </span></code></pre></div>
 <h3 id="poincare-roundtrip-ceiling">The Round-Trip Ceiling<a class="headerlink" href="#poincare-roundtrip-ceiling" title="Permanent link">&para;</a></h3>
 <p><code>proj</code> keeps points inside <span class="arithmatex">\(1/\sqrt{c}\)</span> by a margin of <code>eps**0.75</code>
-(<code>_gyrovector_core._get_max_norm_eps</code>), which caps the largest tangent vector <code>expmap_0</code> can
-represent at <span class="arithmatex">\(\|v\| = \mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}\)</span> — a geodesic radius of
-<span class="arithmatex">\(d_0 = 2\,\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}\)</span>, i.e. <span class="arithmatex">\(12.65/\sqrt{c}\)</span> in float32 and
-<span class="arithmatex">\(27.7/\sqrt{c}\)</span> in float64 (the factor 2 is the Poincaré metric's). Past that <code>expmap_0</code>
-saturates and <code>logmap_0(expmap_0(v))</code> hands back the ceiling instead of <code>v</code>. Measured ceilings
-(median returned <span class="arithmatex">\(\|v\|\)</span> on a round trip, in units of <span class="arithmatex">\(1/\sqrt{c}\)</span>; double them for the geodesic
-radius):</p>
+(<code>_gyrovector_core._max_norm</code>). The margin is absolute, not a fraction of <span class="arithmatex">\(1/\sqrt{c}\)</span>, so a
+stored point has <span class="arithmatex">\(\sqrt{c}\,\lVert x\rVert \le 1 - \sqrt{c}\,\varepsilon^{0.75}\)</span>, the largest
+tangent vector <code>expmap_0</code> can represent has
+<span class="arithmatex">\(\sqrt{c}\,\lVert v\rVert = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})\)</span>, and the ceiling in
+scaled radius is</p>
+<div class="arithmatex">\[
+a_{\max} = \sqrt{c}\,d_0 = 2\,\mathrm{atanh}\bigl(1 - \sqrt{c}\,\varepsilon^{0.75}\bigr)
+\]</div>
+<p>(the factor 2 is the Poincaré metric's): 12.65 in float32 and 27.73 in float64 at <span class="arithmatex">\(c = 1\)</span>, 13.80
+and 28.88 at <span class="arithmatex">\(c = 0.1\)</span>. Because it depends on <span class="arithmatex">\(c\)</span>,
+<span class="arithmatex">\(2\,\mathrm{atanh}(1 - \varepsilon^{0.75})/\sqrt{c}\)</span> is the geodesic radius of the ceiling only at
+<span class="arithmatex">\(c = 1\)</span>: at <span class="arithmatex">\(c = 0.1\)</span> it gives 40.0 in float32, where the ball reaches 43.6. Past the ceiling
+<code>expmap_0</code> saturates and <code>logmap_0(expmap_0(v))</code> hands back the ceiling instead of <code>v</code>. In
+float32 below <span class="arithmatex">\(c \approx 0.035\)</span>, where <span class="arithmatex">\(\sqrt{c}\,\varepsilon^{0.75} &lt; 10\varepsilon\)</span>, the
+<code>tanh</code>/<code>atanh</code> wrappers' clip at <span class="arithmatex">\(1 - 10\varepsilon\)</span> binds first: <code>expmap_0</code> and <code>logmap_0</code> stop
+at <span class="arithmatex">\(a \approx 14.33\)</span>, and the default <code>dist_0</code> reads every point that <code>proj</code> capped (out to
+<span class="arithmatex">\(a \approx 14.9\)</span> at <span class="arithmatex">\(c = 0.01\)</span>) as 14.33. Measured ceilings (median returned
+<span class="arithmatex">\(\sqrt{c}\,\lVert v\rVert\)</span> on a round trip, at <span class="arithmatex">\(c = 1\)</span> unless marked; double them for <span class="arithmatex">\(a\)</span>):</p>
 <table>
 <thead>
 <tr>
@@ -4019,6 +4219,12 @@ radius):</p>
 <td><code>eps**0.75</code></td>
 </tr>
 <tr>
+<td>hyperbolix, <span class="arithmatex">\(c = 0.1\)</span></td>
+<td>6.90</td>
+<td>14.44</td>
+<td><code>eps**0.75</code></td>
+</tr>
+<tr>
 <td>geoopt, hypLL</td>
 <td>3.11</td>
 <td>6.10</td>
@@ -4032,31 +4238,208 @@ radius):</p>
 </tr>
 </tbody>
 </table>
-<p>The margin is deliberate. It stops short of the unguarded limit so the conformal factor stays
-under ~3e5 (float32) / ~1e12 (float64), and it still leaves twice the radius the fixed margins
-used elsewhere allow. If your embeddings need larger radii, switch to the hyperboloid or to
-<code>ProperVelocity</code> rather than shrinking the margin.</p>
+<p>The margin is deliberate. It stops short of the unguarded limit, so the conformal factor tops out
+near <span class="arithmatex">\(1/(\sqrt{c}\,\varepsilon^{0.75})\)</span> — 1.6e5 (float32) and 5.5e11 (float64) at <span class="arithmatex">\(c = 1\)</span>, 4.9e5
+and 1.7e12 at <span class="arithmatex">\(c = 0.1\)</span> — and it still leaves twice the radius the fixed margins used elsewhere
+allow. If your embeddings need larger radii, switch to the hyperboloid or to <code>ProperVelocity</code>
+rather than shrinking the margin. The ceilings, the conformal factors and the hyperbolix rows of
+the table are from <code>logs/2026-09-29_cancellation-free/docs_b3/probe_ceiling.out</code>.</p>
 <h3 id="factored-mobius-denominator">The Factored Möbius Denominator<a class="headerlink" href="#factored-mobius-denominator" title="Permanent link">&para;</a></h3>
-<p>Every gyrovector op that needs <span class="arithmatex">\(x \oplus y\)</span> — <code>dist</code>, <code>logmap</code>, <code>addition</code>, <code>gyr</code> — divides by the
-Möbius denominator <span class="arithmatex">\(1 + \mathrm{sign}\cdot 2c\langle x,y\rangle + c^2\lVert x\rVert^2\lVert
-y\rVert^2\)</span>, and the literal spelling is a difference of two terms that both grow like the ball
-chart's own ceiling squared as <span class="arithmatex">\(x, y\)</span> approach the boundary. <code>_mobius_denominator</code> instead uses
-<span class="arithmatex">\(1 + t^2 = (1-t)^2 + 2t\)</span> with <span class="arithmatex">\(t = \lvert c\rvert\,r_x r_y\)</span>: the subtraction <span class="arithmatex">\(1 - t\)</span> happens
-<em>before</em> the square, so an <span class="arithmatex">\(O(1)\)</span> result stops being the difference of two large numbers. This is
-what a pairwise <code>dist</code>/<code>logmap</code> on the Poincaré ball uses at every radius; it is what the
+<p>Every gyrovector op that needs <span class="arithmatex">\(x \oplus y\)</span> — <code>logmap</code>, <code>addition</code>, <code>gyr</code>, and <code>dist</code> in slot 1 —
+divides by the Möbius denominator <span class="arithmatex">\(1 + \mathrm{sign}\cdot 2c\langle x,y\rangle + c^2\lVert
+x\rVert^2\lVert y\rVert^2\)</span>, and the literal spelling is a difference of two terms that both grow
+like the ball chart's own ceiling squared as <span class="arithmatex">\(x, y\)</span> approach the boundary. <code>_mobius_denominator</code>
+instead uses <span class="arithmatex">\(1 + t^2 = (1-t)^2 + 2t\)</span> with <span class="arithmatex">\(t = \lvert c\rvert\,r_x r_y\)</span>: the subtraction <span class="arithmatex">\(1 - t\)</span>
+happens <em>before</em> the square, so an <span class="arithmatex">\(O(1)\)</span> result stops being the difference of two large numbers.
+The pairwise <code>logmap</code> uses it at every radius, and so did the default <code>dist</code> (slot 0) until the
+<a href="#poincare-far-pairs">asinh form</a> below replaced it; it is what the
 <a href="#poincare-roundtrip-ceiling">chart ceiling</a> above ultimately bounds. Radii below are the geodesic
 distance from the origin (<span class="arithmatex">\(c = 1\)</span>, so <span class="arithmatex">\(a = d\)</span>).</p>
 <p>Measured on a radial pair with a geodesic gap of 0.1 (<code>probe_poincare_mobius_ebebd09.out</code>, table
-D.i, medians over 4 seeds): in float32, <code>dist</code> error goes from 2.816e-03 to 2.086e-06 at <span class="arithmatex">\(d = 8\)</span>,
-6.506e-02 to 1.958e-05 at <span class="arithmatex">\(d = 10\)</span>, and 1.423e+01 to 1.044e-04 at <span class="arithmatex">\(d = 12\)</span> (the as-is value at
+D.i, medians over 4 seeds; <code>dist</code> still in the factored form): in float32, <code>dist</code> error goes
+from 2.816e-03 to 2.086e-06 at <span class="arithmatex">\(d = 8\)</span>, 6.506e-02 to 1.958e-05 at <span class="arithmatex">\(d = 10\)</span>, and 1.423e+01 to 1.044e-04 at <span class="arithmatex">\(d = 12\)</span> (the as-is value at
 <span class="arithmatex">\(d = 12\)</span> is the whole geodesic gap, lost); <code>‖logmap‖</code> error goes from 5.523e-03 to 8.799e-07 at
 <span class="arithmatex">\(d = 8\)</span> and 2.866e-01 to 3.206e-04 at <span class="arithmatex">\(d = 12\)</span>. In float64, <code>dist</code> error goes from 1.101e-03 to
 1.584e-10 at <span class="arithmatex">\(d = 18\)</span>, 7.519e-02 to 5.367e-10 at <span class="arithmatex">\(d = 20\)</span>, and 9.664e-02 to 2.105e-09 at <span class="arithmatex">\(d = 22\)</span>
 (again, the as-is value at <span class="arithmatex">\(d = 20\)</span> is essentially the whole 0.1 gap); <code>‖logmap‖</code> error goes from
 2.187e-03 to 2.324e-10 at <span class="arithmatex">\(d = 18\)</span> and 9.384e-02 to 1.243e-09 at <span class="arithmatex">\(d = 20\)</span>. Both dtypes' fixed
 columns are still climbing as <span class="arithmatex">\(d\)</span> approaches the chart ceiling from below — the factoring removes
-the denominator's own cancellation, not the ball's inability to represent a point past
-<span class="arithmatex">\(12.65/\sqrt{c}\)</span> (float32) / <span class="arithmatex">\(27.7/\sqrt{c}\)</span> (float64) at all.</p>
+the denominator's own cancellation, but it cannot make the ball represent a point past its
+ceiling, <span class="arithmatex">\(a \approx 12.65\)</span> (float32) / <span class="arithmatex">\(27.73\)</span> (float64) at <span class="arithmatex">\(c = 1\)</span>.</p>
+<p><strong id="poincare-far-pairs">Far pairs: <code>dist</code> and <code>logmap</code> in the asinh form.</strong> The factoring fixes a
+close pair, not a far one. Slot 0 evaluated <span class="arithmatex">\(d = 2\,\mathrm{atanh}(u)/\sqrt{c}\)</span> with
+<span class="arithmatex">\(u = \sqrt{c}\,\lVert x - y\rVert/\sqrt{D_-}\)</span>, <span class="arithmatex">\(D_-\)</span> the Möbius denominator above with sign <span class="arithmatex">\(-1\)</span>,
+and for a far pair <span class="arithmatex">\(u \to 1\)</span>, where float32
+<code>atanh</code>'s domain clip at <span class="arithmatex">\(1 - 10\varepsilon\)</span> took over. With <span class="arithmatex">\(B_x = 1 - c\lVert x\rVert^2\)</span>, the
+identity <span class="arithmatex">\(D_- = B_x B_y + c\lVert x - y\rVert^2\)</span> gives <span class="arithmatex">\(1 - u^2 = B_x B_y/D_-\)</span>, so</p>
+<div class="arithmatex">\[
+d(x, y) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x - y\rVert}{\sqrt{B_x B_y}}\right),
+\]</div>
+<p>which has no domain to clip. Two points on opposite sides at scaled radius 7.2 each (true
+<span class="arithmatex">\(\sqrt{c}\,d = 14.4\)</span>, <span class="arithmatex">\(c = 1\)</span>) came back 14.333 in float32 with an exactly zero gradient; they now
+give 14.400112. At 9 each (true 18.0) the old value was still 14.333; it is now 17.999722
+(<code>logs/2026-09-29_cancellation-free/1a/probe_old.out</code>,
+<code>logs/2026-09-29_cancellation-free/2_evidence/probes/1a_merged.out</code>). This is the metric-tensor
+distance of <a href="#poincare-metric-tensor-dist-0">slot 2</a>, the same function, so slots 0 and 2 now run
+one body (see <a href="#which-version-to-use">Which Version to Use?</a>). <code>logmap</code> keeps the factored
+denominator for its direction and takes its length from the same <code>arcsinh</code> argument: the float32
+relative error of <span class="arithmatex">\(\lVert\log_x(y)\rVert\)</span> on those pairs goes from 4.7e-3 to 2.9e-5 at 7.2 and from
+0.20 to 2.6e-5 at 9.</p>
+<p><strong>Transport: the regrouped gyration.</strong> <code>ptransp(v, x, y)</code> is <span class="arithmatex">\(\mathrm{gyr}[y, -x]\,v\)</span> scaled by
+<span class="arithmatex">\(\lambda_x/\lambda_y\)</span>, and the gyration's numerator <span class="arithmatex">\(A\,x + B\,y\)</span> was two <span class="arithmatex">\(O(1)\)</span> terms cancelling
+down to <span class="arithmatex">\(O(1 - c\lVert x\rVert^2)\)</span> for two nearby points near the boundary, then divided by a
+denominator of size <span class="arithmatex">\(O((1 - c\lVert x\rVert^2)^2)\)</span>. <code>_gyration</code> now writes it as
+<span class="arithmatex">\((A - B)\,x + B\,s\)</span> with <span class="arithmatex">\(s = x + y\)</span> (<span class="arithmatex">\(= y - x\)</span> for the transport), where each coefficient is
+<span class="arithmatex">\(O(1 - c\lVert x\rVert^2)\)</span> on its own. On a 0.05-nat step (<span class="arithmatex">\(c = 1\)</span>, float32 against float64, max
+over 20 directions) the relative error goes from 1.9e-1 to 6.6e-5 at scaled radius 8 — the float32
+floor <span class="arithmatex">\(\varepsilon/(1 - c\lVert x\rVert^2) = \varepsilon\cosh^2(4)\)</span> is 8.9e-5 there — and from 6.6
+to 1.1e-3 at 10. At <span class="arithmatex">\(s = 0\)</span> the correction is exactly zero, so <code>ptransp(v, x, x)</code> returns <code>v</code>
+bit for bit; it was 8.4e-2 off in float32.</p>
+<p><strong>The Apollonian <span class="arithmatex">\(G\)</span>.</strong> <code>apollonian_dist</code> needs
+<span class="arithmatex">\(G = \sqrt{c^2\lVert x\rVert^2\lVert y\rVert^2 - 2c\langle x, y\rangle + 1}\)</span>. It now uses the same
+identity, <span class="arithmatex">\(G^2 = B_x B_y + c\lVert x - y\rVert^2\)</span>, a sum of two non-negative terms, where the
+Gram-determinant spelling it replaced cancelled for a close pair. On a 0.05-nat pair (float32
+against float64, max over 20 directions) the absolute error goes from 9.5e-4 to 5.3e-6 at scaled
+radius 5.7 and from 6.7e-2 to 5.3e-5 at 8.</p>
+<p><strong>Reductions.</strong> The asinh form reads three reductions over the dimension —
+<span class="arithmatex">\(\lVert x - y\rVert^2\)</span>, <span class="arithmatex">\(\lVert x\rVert^2\)</span>, <span class="arithmatex">\(\lVert y\rVert^2\)</span> — where slot 0's factored form took
+five and slot 2's old body four (the max-scaled norm's second pass, which a difference of two ball
+points does not need); the Apollonian <span class="arithmatex">\(G\)</span> takes three instead of four. Numbers in this and the two
+paragraphs above: <code>logs/2026-09-29_cancellation-free/1a/probe_old.out</code> (before) and
+<code>logs/2026-09-29_cancellation-free/2_evidence/probes/1a_merged.out</code> (after).</p>
+<h3 id="poincare-divisor-floors">Divisor Floors Below the Cap's Rounding Band<a class="headerlink" href="#poincare-divisor-floors" title="Permanent link">&para;</a></h3>
+<p><code>proj</code> caps a point at <span class="arithmatex">\(\lVert x\rVert = 1/\sqrt{c} - \varepsilon^{0.75}\)</span>, where
+<span class="arithmatex">\(B = 1 - c\lVert x\rVert^2\)</span> takes the analytic value <code>_boundary_floor</code>, and every divisor built
+from <span class="arithmatex">\(B\)</span> — the <span class="arithmatex">\(B_x\)</span>, <span class="arithmatex">\(B_y\)</span> above, <span class="arithmatex">\(\lambda_x = 2/B_x\)</span>, the Busemann divisor, and the Möbius
+denominator (at the square of that value) — used to be floored at exactly that value. Over float32
+and float64 and <span class="arithmatex">\(c \in \{0.1, 0.3, 1, 2.5\}\)</span>, the <em>computed</em> <span class="arithmatex">\(B\)</span> of a capped point lands from
+<span class="arithmatex">\(6.2\,\varepsilon\)</span> below that value to <span class="arithmatex">\(6\,\varepsilon\)</span> above it (Poincaré <code>expmap</code> at <span class="arithmatex">\(c \le 0.3\)</span>
+also returns points farther inside, up to <span class="arithmatex">\(17\,\varepsilon\)</span> above in float32), and below it for
+11–76 % of the capped points (mean 39 %; <code>logs/2026-09-29_cancellation-free/floorfix/probe_band.out</code>,
+<code>logs/2026-09-29_cancellation-free/floorfix/summarize_band.out</code>). A floor that binds returns a
+constant, so every derivative through it is zero: the float32 <code>dist</code> gradient at capped points came
+back with relative error up to 1.0 (measured at the intermediate commit 9b16f31, where <code>dist</code>
+already had the asinh form). The floors now sit at half the cap value
+(<code>_boundary_divisor_floor</code>; the Möbius denominator's squared floor at a quarter),
+<span class="arithmatex">\(\sqrt{c}\,\varepsilon^{0.75}\)</span> below the cap — <span class="arithmatex">\(54\sqrt{c}\,\varepsilon\)</span> in float32,
+<span class="arithmatex">\(8192\sqrt{c}\,\varepsilon\)</span> in float64 — which no projected point reaches. Against a float64
+unfloored reference, the float32 <code>dist</code> gradient error at capped points is now 1.6e-2 in <span class="arithmatex">\(x\)</span> and
+1.8e-2 in <span class="arithmatex">\(y\)</span>, and in float64 the gradient is bit-identical to the unfloored one
+(<code>logs/2026-09-29_cancellation-free/floorfix/probe_grad_9b16f31.summary</code>). The float32 margin
+covers the measured band only for <span class="arithmatex">\(c \gtrsim (6.16/54)^2 \approx 0.013\)</span>; below that a capped point
+can reach the floor again. Measured at smaller <span class="arithmatex">\(c\)</span> in float32, the half floor first binds at
+<span class="arithmatex">\(c = 0.005\)</span>, for 0.03 % of the capped points; at <span class="arithmatex">\(c = 0.02\)</span>–<span class="arithmatex">\(0.05\)</span> up to 97–99 % of them sit below
+the analytic value, where the old floor would have bound, while the half floor stays slack
+(<code>logs/2026-09-29_cancellation-free/wave4/audit_F/probe_small_c.out</code>). A point outside the ball,
+never projected, still meets the floor, which keeps its divisor positive. The Klein chart's gap
+<span class="arithmatex">\(g_x\)</span> and the gaps the isometry maps read off a Poincaré or Klein point take the same half floor;
+that is why a far Klein point now reads as <span class="arithmatex">\(a \approx 6.67\)</span> rather than at the <code>proj</code> ceiling 6.32
+(float32, <span class="arithmatex">\(c = 1\)</span>; see <a href="#klein-chart-ceiling">The Chart Ceiling and Floor</a>).</p>
+<p>Some float32 gradients at capped points stay wrong: Poincaré <code>expmap</code> with respect to its base
+point and Poincaré <code>addition</code> with respect to <span class="arithmatex">\(y\)</span> keep relative errors up to 1.0, Klein <code>expmap</code>
+with respect to its base point up to 1.0 (above 0.1 on 40–48 % of the pairs), and Klein
+<code>addition</code> up to 1.3 on pairs of one capped and one free point (on pairs of two capped points its
+gradient with respect to <span class="arithmatex">\(x\)</span> is fixed, 1.0 → 2.8e-3 at <span class="arithmatex">\(c = 1\)</span> and 7.8e-3 at <span class="arithmatex">\(c = 0.3\)</span>, while the
+one with respect to <span class="arithmatex">\(y\)</span> stays at 6.9e-2 and 1.5e-2, as before). The floor is not the cause: the gradients with the half floor and with no
+floor are identical (<code>logs/2026-09-29_cancellation-free/floorfix/probe_grad_commit2.out</code>,
+<code>logs/2026-09-29_cancellation-free/floorfix2/summary_grad2_fix.out</code>,
+<code>logs/2026-09-29_cancellation-free/docs_b4b/check_floor_not_cause.out</code>).</p>
+<h3 id="poincare-tangent-input">Tangent Inputs to the HNN++ and Busemann Layers<a class="headerlink" href="#poincare-tangent-input" title="Permanent link">&para;</a></h3>
+<p><code>HypRegressionPoincarePP</code> and <code>HypLinearPoincarePP</code> with <code>input_space="tangent"</code>, and
+<code>HypConv2DPoincare</code> (tangent in, tangent out), used to lift the tangent input with <code>expmap_0</code> and
+read the conformal factor back off the stored ball point; in float32 that lift stops at the
+ball's ceiling, <span class="arithmatex">\(t = \sqrt{c}\,\lVert v\rVert = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})\)</span>,
+≈ 6.33 at <span class="arithmatex">\(c = 1\)</span> and ≈ 6.63 at <span class="arithmatex">\(c = 0.3\)</span> (the conv's old output map measured 6.3233 and 6.6256;
+<code>logs/2026-09-29_cancellation-free/docs_a1/probe_conv_inf_score.out</code>), and
+past it the scores were those of the ceiling, with a zero radial gradient. They now score the
+tangent vector in closed form,
+<span class="arithmatex">\(\lambda_x\sqrt{c}\,\langle x, \hat{z}\rangle = \sinh(2t)\,\langle v, \hat{z}\rangle/\lVert v\rVert\)</span>
+and <span class="arithmatex">\(\lambda_x - 1 = \cosh(2t)\)</span>, and <code>HypConv2DPoincare</code> also maps its output back with <code>logmap_0</code>
+of the lift in closed form, so neither ball point is formed. <strong>This changes the output past
+that ceiling</strong>, and the conv output's norm is no longer capped. At <span class="arithmatex">\(t = 8\)</span>, float32 against
+float64 on the same inputs (max-abs error over max-abs value, worst of <span class="arithmatex">\(c = 0.3\)</span> and <span class="arithmatex">\(c = 1\)</span>;
+<code>logs/2026-09-29_cancellation-free/2_evidence/probes/1b_merged.out</code>): the regression head goes from
+2.0e-1 to 1.5e-6, <code>HypLinearPoincarePP</code> (kernel scaled by 0.1, so its output stays off the ball's
+edge) from 9.0e-2 to 9.7e-7, and the conv from 2.3e-1 (identity weights) and 6.9e-1 (random
+weights) to ≤ 1.6e-6; the conv output's largest <span class="arithmatex">\(\sqrt{c}\,\lVert\text{out}\rVert\)</span> at <span class="arithmatex">\(c = 1\)</span> is now 20.2,
+where the old route capped it at the ceiling (6.3279 in that probe). In
+float64 the new and old routes agree to ≤ 8.8e-11 for <span class="arithmatex">\(t \le 8\)</span>, except the conv with random
+weights from <span class="arithmatex">\(t = 5\)</span> on, whose output (<span class="arithmatex">\(\sqrt{c}\,\lVert\text{out}\rVert \ge 12.28\)</span>) is near or
+past the float64 ball's ceiling. The Poincaré Busemann layers
+(<code>HypRegressionPoincareBusemann</code>, <code>HypLinearPoincareBusemann</code>) score a tangent input the same way,
+through <code>Poincare._busemann_tangent</code>: at <span class="arithmatex">\(t = 8\)</span>, with random <span class="arithmatex">\(\omega\)</span>, the regression scores go from
+2.2e-1 to 2.0e-7 and the input gradients from 1.0 to ≤ 2.6e-7
+(<code>logs/2026-09-29_cancellation-free/bz/probe_layers_v3.out</code>). For <span class="arithmatex">\(\omega\)</span> within float32 rounding of
+<span class="arithmatex">\(\hat v\)</span>, the input and kernel gradients are off by 0.1 or more from <span class="arithmatex">\(t = 5\)</span> on both routes
+(<code>logs/2026-09-29_cancellation-free/poincare_small_t/probe_branch.out</code>, <code>probe_main.out</code>).</p>
+<p>The Hyperboloid Busemann layers (<code>HypRegressionHyperboloidBusemann</code>, <code>HypLinearHyperboloidBusemann</code>)
+with <code>input_space="tangent"</code> now score in closed form too, through <code>Hyperboloid._busemann_tangent</code>,
+which shares its closed form with <code>Poincare._busemann_tangent</code>. The hyperboloid's <code>expmap_0</code> places
+<span class="arithmatex">\(v = (0, v_s)\)</span> at scaled radius <span class="arithmatex">\(t = \sqrt{c}\,\lVert v_s\rVert\)</span>, half the radius the ball's
+<code>expmap_0</code> reaches for the same norm, so for a unit <span class="arithmatex">\(\omega\)</span> the score is
+<span class="arithmatex">\(\sqrt{c}\,B^\omega = \log(\cosh t - \sinh t\,\langle\omega, \hat v\rangle)\)</span>, the Poincaré tangent
+score with <span class="arithmatex">\(2t\)</span> replaced by <span class="arithmatex">\(t\)</span>. The time slot <span class="arithmatex">\(v_0\)</span> is not read; for a tangent vector at the origin
+it is 0. The layers used to lift <span class="arithmatex">\(v\)</span> with <code>expmap_0</code> and call <code>busemann</code> on the stored point. The
+float32 <code>expmap_0</code> is accurate up to the coordinate ceiling, so the scores were right, but the
+gradients were not. For random directions <span class="arithmatex">\(\omega\)</span> the float32 input and kernel gradients broke
+from <span class="arithmatex">\(t \approx 29.4\)</span> at <span class="arithmatex">\(c = 0.3\)</span> and <span class="arithmatex">\(t \approx 29.8\)</span> at <span class="arithmatex">\(c = 1\)</span>; at <span class="arithmatex">\(t = 30\)</span> and 40 they were off
+by 5.3e-2 to 1.07 relative to their largest entry, against ≤ 6.9e-7 up to <span class="arithmatex">\(t = 20\)</span>. Only scores
+with <span class="arithmatex">\(\langle x_s, \omega\rangle \ge 0\)</span> break: there <code>_busemann_arg</code> divides, and the backward pass
+of that division multiplies a cotangent of size about <span class="arithmatex">\(e^{-t}\)</span> by the squared inverse denominator,
+about <span class="arithmatex">\(e^{-2t}\)</span>. The product falls below float32's smallest normal number, and XLA:CPU flushes it
+to zero. Past the coordinate ceiling, <span class="arithmatex">\(t \approx 45\)</span>, the lifted point overflows and the scores are
+NaN. The closed form has neither limit: for random <span class="arithmatex">\(\omega\)</span> the layers' float32 outputs and
+gradients stay within 1.2e-6 of float64 from <span class="arithmatex">\(t = 1\)</span> to <span class="arithmatex">\(t = 50\)</span>, and in float64 they match the old
+route's to ≤ 2.2e-15 (<code>logs/2026-09-29_cancellation-free/hbz/probe_old.out</code>, <code>probe_new.out</code>,
+<code>compare_f64.out</code>, <code>scan_old_grad.out</code>;
+<code>logs/2026-09-29_cancellation-free/hbz_docs/scan_onset_jit.out</code>). All of this was measured on CPU;
+a GPU that keeps subnormal numbers may move the onset later.</p>
+<p>For <span class="arithmatex">\(\omega\)</span> within float32 rounding of <span class="arithmatex">\(\hat v\)</span>, both routes still err at large <span class="arithmatex">\(t\)</span>. Written as
+<span class="arithmatex">\(\sqrt{c}\,B^\omega = \log\bigl(e^{-t} + (1 - \langle\omega, \hat v\rangle)\sinh t\bigr)\)</span>, the score
+takes the misalignment of <span class="arithmatex">\(\omega\)</span> and <span class="arithmatex">\(\hat v\)</span> times <span class="arithmatex">\(\sinh t\)</span>, next to a term of size <span class="arithmatex">\(e^{-t}\)</span>,
+and both routes read that misalignment off float32 directions, so its rounding limits either one.
+The closed form removes the part of the error that came from the stored point. At <span class="arithmatex">\(t = 12\)</span> the
+float32 <span class="arithmatex">\(\sqrt{c}\,B\)</span> is 8.6e-5 to 1.2e-4 off float64 in closed form and 3.0e-4 to 5.2e-4 through
+the lift, 2.6 to 6 times more, and the layer outputs are 2.4 to 3.2 times more accurate. At
+<span class="arithmatex">\(t = 20\)</span> the gain is about 2: <span class="arithmatex">\(\sqrt{c}\,B\)</span> is 1.7 to 1.9 off against 3.6 to 3.7 (<span class="arithmatex">\(c = 0.3\)</span> and 1;
+<code>probe_new.out</code>, <code>probe_old.out</code>).</p>
+<p>At small <span class="arithmatex">\(t\)</span> the float32 kernel gradient of both Busemann tangent paths has a relative error that
+grows like <span class="arithmatex">\(1/t\)</span>. Through the Hyperboloid layers it is 1.0e-3 (regression head) and 8.1e-4 (linear
+layer) at <span class="arithmatex">\(t = 10^{-3}\)</span>, and 4.6e-6 and 5.4e-6 at <span class="arithmatex">\(t = 0.1\)</span>, against 1.5e-7 to 2.5e-7 through the old
+lift (<code>logs/2026-09-29_cancellation-free/hbz/probe_small_t.out</code>). The closed form's
+<span class="arithmatex">\(\omega\)</span>-gradient is <span class="arithmatex">\(2(\omega - w)/\lVert\omega - w\rVert^2\)</span>, where <span class="arithmatex">\(w\)</span> is <span class="arithmatex">\(\sqrt{c}\)</span> times the
+point's image in the ball, of norm <span class="arithmatex">\(\tanh(t/2)\)</span> here. At small <span class="arithmatex">\(t\)</span> it points almost along <span class="arithmatex">\(\omega\)</span>.
+The layers' kernel normalization projects that component out, which leaves a part of size about <span class="arithmatex">\(t\)</span>
+next to a rounding error of size about <span class="arithmatex">\(\varepsilon\)</span>. The Poincaré layers evaluate the same closed
+form and give 4.8e-4 and 5.9e-4 at <span class="arithmatex">\(t = \sqrt{c}\,\lVert v\rVert = 10^{-3}\)</span>; the ball route they
+replaced gave 4.8e-4 and 4.4e-4, since its <span class="arithmatex">\(\omega\)</span>-gradient has the same form, so there the error
+is not new (<code>logs/2026-09-29_cancellation-free/hbz_docs/probe_small_t_poincare.out</code>).</p>
+<p>The four Busemann layers check the manifold at construction, and a wrong one raises a <code>TypeError</code>.
+The first check is by the names of the methods they call. <code>Klein</code>, <code>HalfSpace</code>, <code>Stereographic</code>,
+<code>ProperVelocity</code> and <code>Euclidean</code> have neither <code>busemann</code> nor <code>_busemann_tangent</code>, so it rejects
+them. It cannot tell <code>Poincare</code> from <code>Hyperboloid</code>, which have both, so each layer also checks the
+class: the Poincaré Busemann layers (<code>HypRegressionPoincareBusemann</code>, <code>HypLinearPoincareBusemann</code>)
+accept only a <code>Poincare</code>, and the Hyperboloid ones (<code>HypRegressionHyperboloidBusemann</code>,
+<code>HypLinearHyperboloidBusemann</code>) only a <code>Hyperboloid</code>. Before that check, the other model passed
+construction and failed at the first call with a shape error, except at <code>in_dim = 2</code>: there a
+one-entry spatial part broadcasts against the kernel rows, and some of these calls ran without an
+error (<code>logs/2026-09-29_cancellation-free/hbz_docs/check_busemann_validation.out</code>; after the check:
+<code>logs/2026-09-29_cancellation-free/busemann_type/check_busemann_validation_new.out</code>).</p>
+<h3 id="poincare-batchnorm-mean"><code>PoincareBatchNorm2D</code>'s Batch Mean at Large Radius<a class="headerlink" href="#poincare-batchnorm-mean" title="Permanent link">&para;</a></h3>
+<p><code>PoincareBatchNorm2D</code> averages the batch in Klein coordinates, <span class="arithmatex">\(\sum\lambda x/\sum(\lambda - 1)\)</span>,
+and projects that average with <code>proj</code> before the Möbius half-scaling, so the batch mean cannot sit
+farther out than the Klein chart's ceiling, <span class="arithmatex">\(\operatorname{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})\)</span>:
+6.3250 at <span class="arithmatex">\(c = 1\)</span> and 6.9006 at <span class="arithmatex">\(c = 0.1\)</span> in float32 (13.86 and 14.44 in float64). Measured on
+clusters at scaled radius <span class="arithmatex">\(a \in \{5, 6, 7, 8\}\)</span> (spread 0.3, <span class="arithmatex">\(N = 256\)</span>, <span class="arithmatex">\(C = 16\)</span>, max over 4
+seeds; float32 against float64 and an independent longdouble Lorentz-centroid reference;
+<code>logs/2026-09-29_cancellation-free/docs/probe_batchnorm_midpoint.out</code>): at <span class="arithmatex">\(c = 1\)</span> the batch-mean
+error <span class="arithmatex">\(\sqrt{c}\,d(\mu_{32}, \mu_{64})\)</span> is 7.3e-4, 6.0e-3, 0.683 and 1.688 at <span class="arithmatex">\(a = 5, 6, 7, 8\)</span> —
+at <span class="arithmatex">\(a = 7\)</span> and 8 the float32 mean reads 6.31–6.33, the cap. The relative error of the Fréchet
+variance is 3.9e-6, 4.2e-4, 5.3 and 32, and that of the layer output 1.9e-3, 1.4e-2, 1.1 and 1.4;
+the output's batch mean sits 0.89 (<span class="arithmatex">\(a = 7\)</span>) and 0.99 (<span class="arithmatex">\(a = 8\)</span>) from the learned mean, against
+2.6e-3 in float64. At <span class="arithmatex">\(c = 0.1\)</span> the float32 mean reads 6.86–6.92 at <span class="arithmatex">\(a = 7, 8\)</span> and the mean errors
+are 8.2e-4, 8.2e-3, 0.142 and 1.10. The float64 path matches the independent reference to
+≤ 1.5e-9. In float32, keep this layer's inputs inside scaled radius ≈ 6, or run it in float64.</p>
 <h3 id="float32-accuracy-near-the-origin-depends-on-the-backend">Float32 Accuracy Near the Origin Depends on the Backend<a class="headerlink" href="#float32-accuracy-near-the-origin-depends-on-the-backend" title="Permanent link">&para;</a></h3>
 <p>XLA's float32 transcendental kernels are a few ulps off, and near the origin that is the whole
 error budget of a Poincaré round trip. Exact bit-pattern ulp error against a float64 reference
@@ -4110,6 +4493,42 @@ because torch's CPU <code>tanh</code>/<code>atanh</code> are correctly rounded; 
 CUDA <code>atanh</code> is bit-identical to XLA's). The closed forms are the same in both cases, so this is
 a kernel difference rather than a formula difference, but it does mean that a near-origin float32
 accuracy number is only meaningful with its backend quoted.</p>
+<p><strong><code>uniform_poincare.sample</code> at small and extreme radii.</strong> The sampler draws
+<span class="arithmatex">\(u = \cosh(\sqrt{c}\,r) - 1\)</span> and inverts it, and it now evaluates both directions in half-angle
+forms, <span class="arithmatex">\(2\sinh^2(\sqrt{c}\,r/2)\)</span> and <span class="arithmatex">\(2\operatorname{arcsinh}(\sqrt{u/2})/\sqrt{c}\)</span>: at
+<span class="arithmatex">\(\sqrt{c}\,R = 10^{-3}\)</span> every old float32 sample fell outside <span class="arithmatex">\(R\)</span> (max <span class="arithmatex">\(1.54R\)</span>) and none does now,
+and at <span class="arithmatex">\(10^{-4}\)</span>, where the old <span class="arithmatex">\(n = 3\)</span> rejection loop did not finish within 120 s, the new
+samples give a Kolmogorov–Smirnov statistic of 0.0062 against the null's ≈ 0.006 (<span class="arithmatex">\(N = 20000\)</span>;
+old: <code>logs/2026-09-29_cancellation-free/1d/probe_old.out</code>, new:
+<code>logs/2026-09-29_cancellation-free/2_evidence/probes/fixup_merged.out</code>). Where that loop cannot
+accept any draw — float32 <span class="arithmatex">\(\sqrt{c}\,R\)</span> below 2.168e-19 or from 45.0546 on, float64 below
+2.983e-154 or from 355.5845 on — the radius now comes from the closed-form flat limit or
+exponential tail of its density instead of the loop, which used to hang there
+(<code>logs/2026-09-29_cancellation-free/samplerhang/thresholds.out</code>).</p>
+<h3 id="poincare-pass-cost">Cost<a class="headerlink" href="#poincare-pass-cost" title="Permanent link">&para;</a></h3>
+<p>Old <code>3a43701</code> against new <code>9b16f31</code>, time ratios new/old
+(<code>logs/2026-09-29_cancellation-free/2_evidence/timing/final_table.out</code>). The new snapshot predates
+three changes described on this page: the Busemann tangent scores, the sampler's closed-form
+fallback and the half floors. Every row is an AOT-compiled float32 function at <span class="arithmatex">\(c = 1\)</span>, and each
+ratio is the median over 8 old/new process pairs. On the CPU each process is pinned to one core
+with single-threaded XLA. There are two runs, plus a third (re-time) of the rows that came out more
+than 6 % slower on the CPU or 10 % on the GPU.</p>
+<ul>
+<li><strong>Slower.</strong> <code>ptransp</code> forward is about 11 % slower on the CPU (1.112 and 1.117, re-time 1.114),
+  forward+backward 1.104 and 1.086 (re-time 1.046). On the A100 the <code>ptransp</code> forward is not
+  resolved: 1.120, 1.199 and 0.984 in three runs, while an A/A run with identical code on both
+  sides gave ratios from 0.814 to 1.113 on the same small Poincaré rows
+  (<code>logs/2026-09-29_cancellation-free/2_evidence/timing/analyze_all.out</code>). The <span class="arithmatex">\(n = 2\)</span> sampler is
+  about 8 % slower on the CPU (1.063, 1.081, re-time 1.091), and <code>logmap</code> forward+backward
+  measured 1.031 and 1.027.</li>
+<li><strong>Faster on the CPU.</strong> Slot 0 <code>dist</code> forward 0.671 / 0.651 and forward+backward 0.335 / 0.292;
+  slot 2 <code>dist</code> forward 0.676 / 0.635 and forward+backward 0.782 / 0.786; <code>apollonian_dist</code>
+  forward 0.777 / 0.770 and forward+backward 0.758 / 0.748. Forward+backward:
+  <code>HypRegressionPoincarePP</code> with tangent input 0.802 / 0.793, <code>HypLinearPoincarePP</code> with tangent
+  input 0.938 / 0.929, <code>HypConv2DPoincare</code> 0.837 / 0.840, the wrapped-normal <code>log_prob</code>
+  0.787 / 0.844, and <code>PoincareBatchNorm2D</code> in training mode 0.905 / 0.906. <code>HoroPCA.fit</code>
+  0.957 / 0.963.</li>
+</ul>
 <h2 id="init-scale-vs-depth">Init Scale vs. Depth<a class="headerlink" href="#init-scale-vs-depth" title="Permanent link">&para;</a></h2>
 <p>Weight-init failures on hyperbolic layers come in two flavors, and only one of
 them is loud. A <strong>too-large</strong> init pushes first-layer outputs toward the
@@ -4254,10 +4673,10 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 </span></code></pre></div>
 <h3 id="choosing-a-manifold-for-stability">Choosing a Manifold for Stability<a class="headerlink" href="#choosing-a-manifold-for-stability" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>Poincaré ball</strong>: compact, bounded — fine for small distances (<span class="arithmatex">\(&lt;5\)</span>) and visualization; clamp or use float64 past that.</li>
+<li><strong>Poincaré ball</strong>: compact, bounded — float32 is fine up to scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d \approx 7\)</span> and for visualization; use float64 for critical operations from <span class="arithmatex">\(a \approx 10\)</span>, and float64 is required past the float32 chart ceiling (<span class="arithmatex">\(a \approx 12.65\)</span> at <span class="arithmatex">\(c = 1\)</span>; see the <a href="#precision-requirements-by-distance">table</a>).</li>
 <li><strong>Hyperboloid</strong>: unbounded radius, and <code>dist</code>/<code>logmap</code>/<code>sqdist</code>/<code>tangent_norm</code>/<code>expmap</code>/<code>ptransp</code>/<code>tangent_proj</code>/<code>tangent_inner</code>/<code>egrad2rgrad</code>/gyro <code>addition</code>/<code>busemann</code> are all cancellation-free, designed to avoid the identified cancellation, with accuracy limited by the operation and stored inputs (see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>). The constraint <span class="arithmatex">\(\langle x, x\rangle_L = -1/c\)</span> must still be maintained and can drift under Euclidean updates — see <a href="#the-atol-convention">The <code>atol</code> Convention</a> — and a handful of places still lose accuracy for reasons the fix does not remove, listed under <a href="#hyperboloid-known-limitations">Known Limitations</a>.</li>
 <li><strong>Proper Velocity</strong>: unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span>, stable at large radii, exact Euclidean retraction (plain <code>optax.adam</code> / SGD trains PV layers without a Riemannian wrapper). Preferred when embeddings naturally grow large. Its tangent-space metric shares the hyperboloid's fix (see <a href="#pv-tangent-metric">below</a>), and <code>PV.dist</code>/<code>logmap</code> between two nearby points at large radius now go through the exact hyperboloid lift — see <a href="#pv-dist-lift">below</a>.</li>
-<li><strong>κ-Stereographic</strong>: identical numerics to the Poincaré ball for <span class="arithmatex">\(c &gt; 0\)</span> (they share the same gyrovector core); adds the flat and spherical regimes and a Taylor-series switchover near <span class="arithmatex">\(c = 0\)</span> — see the <a href="#stereographic-near-zero-curvature">dedicated section below</a>.</li>
+<li><strong>κ-Stereographic</strong>: the Poincaré ball's numerics for <span class="arithmatex">\(c &gt; 0\)</span>: it shares the gyrovector core (<code>addition</code>, <code>gyration</code>, <code>proj</code>, the conformal factor), and <code>dist</code>, <code>logmap</code> and <code>geodesic</code> use the far-pair asinh form of Poincaré's default <code>dist</code>. It adds the flat and spherical regimes and a Taylor-series switchover near <span class="arithmatex">\(c = 0\)</span> — see the <a href="#stereographic-near-zero-curvature">dedicated section below</a>.</li>
 <li><strong>Klein</strong>: the pairwise operations are cancellation-free, but the chart reaches its boundary at half the Poincaré radius (scaled radius 6.32 in float32, 13.86 in float64, at <span class="arithmatex">\(c = 1\)</span>) and its error floor grows as <span class="arithmatex">\(\varepsilon\cosh^2(a)\)</span> — see the <a href="#klein-numerics">dedicated section below</a>.</li>
 <li><strong>HalfSpace</strong>: no boundary at finite distance, and the pairwise operations are cancellation-free. The error floor is a stored point's rounding, which grows as <span class="arithmatex">\(\cosh(\sqrt{c}\,\delta)\)</span> with the distance <span class="arithmatex">\(\delta\)</span> to the vertical geodesic through the origin and stays at its minimum on that geodesic at every height. The pairwise operations return <code>inf</code>/NaN past a scaled distance of 88.7 in float32 (709.8 in float64) — see the <a href="#halfspace-numerics">dedicated section below</a>.</li>
 </ul>
@@ -4267,7 +4686,30 @@ remains finite and accurate in float32 for <span class="arithmatex">\(\|x\|\)</s
 </div>
 <h2 id="stereographic-near-zero-curvature">κ-Stereographic: Numerics Near Zero Curvature<a class="headerlink" href="#stereographic-near-zero-curvature" title="Permanent link">&para;</a></h2>
 <p>The <code>Stereographic</code> manifold's signed curvature introduces one numerical regime the other manifolds don't have: the neighborhood of <span class="arithmatex">\(c = 0\)</span>, where every closed-form expression becomes <span class="arithmatex">\(0/0\)</span> and the implementation switches to Taylor series. The switching logic is internal, but its consequences matter when you train a <em>signed</em> learnable curvature that may cross zero.</p>
-<p>For <span class="arithmatex">\(c &gt; 0\)</span> nothing here is new — <code>Stereographic</code> shares its gyrovector core with <code>Poincare</code>, so every boundary/conformal-factor consideration above applies verbatim. See the <a href="../../api-reference/manifolds/">κ-Stereographic API reference</a> for the sign convention and the factor-2 flat limit.</p>
+<p>For <span class="arithmatex">\(c &gt; 0\)</span> the Poincaré sections above apply. <code>addition</code>, <code>gyration</code>, <code>proj</code> and the conformal
+factor are the functions <code>Poincare</code> calls, and <code>ptransp</code> (with the
+<a href="#factored-mobius-denominator">regrouped gyration</a>), <code>ptransp_0</code>, <code>tangent_inner</code>, <code>tangent_norm</code>,
+<code>egrad2rgrad</code>, <code>retraction</code> and <code>dist_0</code> return <code>Poincare</code>'s bits (checked at <span class="arithmatex">\(c = 0.3\)</span>, 1 and 2.5
+in both dtypes). <code>dist</code>, <code>logmap</code> and <code>geodesic</code> take the half distance in the
+<a href="#poincare-far-pairs">asinh form</a> of Poincaré's default <code>dist</code>, not from the norm of
+<span class="arithmatex">\((-x) \oplus y\)</span>: that point lies at the full pair distance from the origin, so float32 caps it at
+the ball's ceiling while both inputs are still well inside. Two float32 points at scaled radius 7.2
+on opposite sides (<span class="arithmatex">\(c = 1\)</span>, true <span class="arithmatex">\(\sqrt{c}\,d = 14.4\)</span>) gave <code>dist</code> 12.656 with a gradient norm of
+0.037; they now give 14.39999 with 670.7, as <code>Poincare</code> does. <code>dist</code>, <code>logmap</code>, <code>expmap</code>,
+<code>expmap_0</code>, <code>logmap_0</code> and <code>scalar_mul</code> agree with <code>Poincare</code>'s to rounding, but not always bit for
+bit (float32: <code>logmap</code> within 1.1e-5 relative on pairs at scaled radius 6 to 11, the rest within
+3.7e-7). Two things differ.
+<code>geodesic(t, x, y)</code> still stores <span class="arithmatex">\(t \otimes ((-x) \oplus y)\)</span>, a point at radius <span class="arithmatex">\(t\,d\)</span> that float32
+caps once <span class="arithmatex">\(\sqrt{c}\,t\,d\)</span> passes the <a href="#poincare-roundtrip-ceiling">chart ceiling</a> (12.65 at <span class="arithmatex">\(c = 1\)</span>,
+13.80 at <span class="arithmatex">\(c = 0.1\)</span>); <span class="arithmatex">\(t = 1/2\)</span> stays inside for any two points the ball stores.
+And <code>dist</code> has no counterpart of Poincaré's saturating slot 1. For <span class="arithmatex">\(c \le 0\)</span> and in the Taylor band
+near <span class="arithmatex">\(c = 0\)</span> the formulas are unchanged: <code>logmap</code> and <code>geodesic</code> return the same bits as before, and
+<code>dist</code>, which now takes the norm of <span class="arithmatex">\((-x) \oplus y\)</span> from the Möbius denominator without forming the
+point, moves by at most 3.1e-7 relative in float32 (5.6e-16 in float64). Measured in
+<code>logs/2026-09-29_cancellation-free/stereo_fix/</code> (<code>probe_old.out</code>, <code>probe_new.out</code>,
+<code>diff_old_new.out</code>) and <code>logs/2026-09-29_cancellation-free/docs_b1/probe_stereo_vs_poincare.out</code>.
+See the <a href="../../api-reference/manifolds/">κ-Stereographic API reference</a> for the sign convention and
+the factor-2 flat limit.</p>
 <h3 id="the-taylor-cutover-is-dtype-dependent">The Taylor Cutover Is dtype-Dependent<a class="headerlink" href="#the-taylor-cutover-is-dtype-dependent" title="Permanent link">&para;</a></h3>
 <p>The curvature-generalized trig functions (<span class="arithmatex">\(\tan_\kappa\)</span>, <span class="arithmatex">\(\tan_\kappa^{-1}\)</span>) use their exact closed forms away from zero and a truncated Taylor series (degree 5 in <span class="arithmatex">\(\kappa\lVert x\rVert^2\)</span>) near zero. The cutover differs by precision:</p>
 <table>
@@ -4504,11 +4946,15 @@ out than the ceiling lands between the <code>proj</code> margin and the boundary
 float32 at <span class="arithmatex">\(c = 1\)</span> the margin is <span class="arithmatex">\(\lVert k\rVert = 1 - \varepsilon^{0.75} = 0.99999356\)</span>, and the
 three maps give <span class="arithmatex">\(\lVert k\rVert\)</span> = 0.9999983 at <span class="arithmatex">\(a = 7\)</span> and 0.99999976 at <span class="arithmatex">\(a = 8\)</span>. From <span class="arithmatex">\(a = 10\)</span>
 on, <span class="arithmatex">\(\lVert k\rVert\)</span> rounds to exactly <span class="arithmatex">\(1/\sqrt{c}\)</span> (at <span class="arithmatex">\(a = 10\)</span> for <code>poincare_to_klein</code> and
-<code>pv_to_klein</code>, at <span class="arithmatex">\(a = 12\)</span> for all three). Klein operations floor the gap <span class="arithmatex">\(g_k\)</span> at its value on
-the margin, so every such point reads as <span class="arithmatex">\(a \approx 6.32\)</span>: <code>Klein.dist</code> to the origin is 6.325
-for all three maps at <span class="arithmatex">\(a = 7, 8, 10, 12\)</span> (<code>logs/2026-09-28_klein_audit/audit_jax.out</code>). The
-radius beyond the ceiling is lost either way; call <code>Klein.proj</code> after mapping far points in, so
-that the stored point is the one the operations actually use.</p>
+<code>pv_to_klein</code>, at <span class="arithmatex">\(a = 12\)</span> for all three). Klein operations floor the gap <span class="arithmatex">\(g_k\)</span> at half its
+value on the margin: the computed gap of a point that <code>proj</code> capped lands within a few <span class="arithmatex">\(\varepsilon\)</span>
+of that value on either side, and a floor there would zero the gradient of every point it binds
+on. So a mapped-in point reads at its own radius up to <span class="arithmatex">\(a \approx 6.67\)</span> and as <span class="arithmatex">\(a \approx 6.67\)</span>
+beyond: <code>Klein.dist</code> to the origin is 6.51 at <span class="arithmatex">\(a = 6.5\)</span> and 6.67 for all three maps at
+<span class="arithmatex">\(a = 7, 8, 10, 12\)</span> (float64: 14.21 from <span class="arithmatex">\(a = 15\)</span> on;
+<code>logs/2026-09-29_cancellation-free/floorfix2/probe_far_reading.out</code>). The radius beyond that is
+lost either way; call <code>Klein.proj</code> after mapping far points in, so that the stored point is the
+one the operations actually use.</p>
 <p><strong>Floor.</strong> <span class="arithmatex">\(g_x = 1 - c\lVert x\rVert^2 = \operatorname{sech}^2(a)\)</span>. Computing it subtracts
 <span class="arithmatex">\(c\lVert x\rVert^2 \approx 1\)</span> from 1, so <span class="arithmatex">\(g_x\)</span> carries an absolute error of about <span class="arithmatex">\(\varepsilon\)</span>,
 a relative error of <span class="arithmatex">\(\varepsilon/g_x = \varepsilon\cosh^2(a)\)</span>. The pairwise formulas and the
@@ -4585,6 +5031,15 @@ along <span class="arithmatex">\(\pm v\)</span>, but by the wrong amount. In a f
 the far side of <span class="arithmatex">\(x\)</span> (<span class="arithmatex">\(t = -0.61\)</span> along <span class="arithmatex">\(v\)</span>, distance 1.368 instead of 1.749), and one landed at
 distance 0.317 instead of 0.504. All three <span class="arithmatex">\(c = 1\)</span> samples matched. <code>Klein.expmap</code> matches the hyperboloid
 exponential map to 1.748e-15 in the float64 oracle check above.</p>
+<p>On an inward step (<span class="arithmatex">\(u = c\langle x, v\rangle/g_x &lt; 0\)</span>) the two denominator terms have opposite
+signs, and <code>Klein.expmap</code> now evaluates the denominator as a sum of non-negative terms for either
+direction, <span class="arithmatex">\(\theta\coth\theta + u = 2\theta e^{-2\theta}/(1 - e^{-2\theta}) + (\theta + u)\)</span> with
+<span class="arithmatex">\(\theta + u = c\lVert v\rVert^2/(g_x(\theta - u))\)</span> on an inward step: a radial inward step
+<span class="arithmatex">\(\theta = 8\)</span> from <span class="arithmatex">\(a = 4\)</span> (<span class="arithmatex">\(c = 1\)</span>, float32 against the float64 hyperboloid <code>expmap</code>) landed 0.85
+scaled nats off before and lands 1.4e-4 off now, against the chart floor
+<span class="arithmatex">\(\varepsilon\cosh^2(4) = 8.9\text{e-}5\)</span>
+(<code>logs/2026-09-29_cancellation-free/1d/probe_old.out</code>,
+<code>logs/2026-09-29_cancellation-free/2_evidence/probes/fixup_merged.out</code>).</p>
 <h2 id="halfspace-numerics">Half-Space: Cancellation-Free Pairwise Operations<a class="headerlink" href="#halfspace-numerics" title="Permanent link">&para;</a></h2>
 <p><code>HalfSpace</code> (height <span class="arithmatex">\(x_n &gt; 0\)</span> in the last coordinate, metric <span class="arithmatex">\(\lVert dx\rVert^2/(c\,x_n^2)\)</span>,
 origin <span class="arithmatex">\(o = e_n/\sqrt{c}\)</span>) builds its two-point operations from <span class="arithmatex">\(w = y - x\)</span>, which is exact in
@@ -4681,10 +5136,12 @@ wrappers can go away and the call sites can return to <code>jnp.arcsinh</code>.<
 </span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="nb">print</span><span class="p">(</span><span class="n">clamped</span><span class="p">)</span>
 </span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="c1"># Near boundaries: smooth transition, not abrupt cutoff</span>
 </span></code></pre></div>
-<p>Benefits:
-- Differentiable everywhere (no gradient discontinuities)
-- Numerically stable (uses softplus internally)
-- Adjustable smoothing factor for trade-off between accuracy and gradient flow</p>
+<p>Benefits:</p>
+<ul>
+<li>Differentiable everywhere (no gradient discontinuities)</li>
+<li>Numerically stable (uses softplus internally)</li>
+<li>Adjustable smoothing factor for trade-off between accuracy and gradient flow</li>
+</ul>
 <h2 id="lorentz-residual-midpoint">Lorentz Residual and Midpoint at Large Radius<a class="headerlink" href="#lorentz-residual-midpoint" title="Permanent link">&para;</a></h2>
 <p><code>lorentz_residual</code> (the two-point combination behind <code>LorentzResidual</code> and
 <code>HypformerPositionalEncoding</code>) and <code>lorentz_midpoint</code> (the weighted aggregation behind
@@ -4811,6 +5268,12 @@ direction, <span class="arithmatex">\(K\)</span> ideal directions, <code>proj er
 at <span class="arithmatex">\(K = 2\)</span> the projection error goes from 1.413e-01 to 1.086e-04 at <span class="arithmatex">\(a = 8\)</span> and from 3.660e+00 to
 8.633e-03 at <span class="arithmatex">\(a = 12\)</span>; Busemann-coordinate preservation (<code>|dB|</code>, the true value of which is 0) goes
 from 8.170e-02 to 8.836e-05 at <span class="arithmatex">\(a = 8\)</span> and from 7.731e-02 to 1.575e-04 at <span class="arithmatex">\(a = 12\)</span>.</p>
+<p><code>HoroPCA</code> now centres its data with <code>Hyperboloid.gyro_difference</code> instead of a Lorentz-boost
+matrix product, which cancelled for points close to a far centre: at <span class="arithmatex">\(a = 8\)</span> (<span class="arithmatex">\(c = 1\)</span>, 64 points
+with spread <span class="arithmatex">\(0.3/\sqrt{c}\)</span>, float32 against float64 of the same inputs) the largest error of the
+centred points drops from 0.58 to 3.7e-4 scaled nats and that of <code>transform</code> from 0.38 to 1.7e-4
+(<code>logs/2026-09-29_cancellation-free/1d/probe_old.out</code>,
+<code>logs/2026-09-29_cancellation-free/2_evidence/probes/fixup_merged.out</code>).</p>
 <h3 id="gyro-difference">Gyro-Difference and GyroBatchNorm Centering at Large Radius<a class="headerlink" href="#gyro-difference" title="Permanent link">&para;</a></h3>
 <p>The current operation uses a Cartesian inverse boost when either endpoint's
 scaled spatial radius is at most 1e-1 and the stable polar frame otherwise. The
@@ -5780,7 +6243,7 @@ option.</p>
 </span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="n">y</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">])</span>
 </span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="n">c</span> <span class="o">=</span> <span class="mf">1.0</span>
 </span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="c1"># Version 0: Direct Möbius distance (FASTEST, default)</span>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="c1"># Version 0: Direct Möbius distance (default)</span>
 </span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="n">d0</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">poincare</span><span class="o">.</span><span class="n">VERSION_MOBIUS_DIRECT</span><span class="p">)</span>
 </span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>
 </span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="c1"># Version 1: Möbius via addition</span>
@@ -5811,8 +6274,10 @@ argument is <em>linear</em> in the radius near the origin:</p>
 <div class="arithmatex">\[
 d_0(x) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x\rVert}{\sqrt{1 - c\lVert x\rVert^2}}\right).
 \]</div>
-<p>Same function, so slot 2 still means "metric-tensor distance" — nothing was moved to a new slot,
-and the boundary clamp (via the conformal factor) is unchanged. Median relative error against a
+<p>Same function, so slot 2 still means "metric-tensor distance" — nothing was moved to a new slot.
+The boundary divisor <span class="arithmatex">\(1 - c\lVert x\rVert^2\)</span> was then still read through the conformal factor; it
+is now taken directly and floored below the cap's rounding band (see
+<a href="#poincare-divisor-floors">Divisor Floors</a>). Median relative error against a
 60-digit <code>decimal</code> reference, <span class="arithmatex">\(c = 1\)</span>, dim 8, before → after:</p>
 <table>
 <thead>
@@ -5949,23 +6414,42 @@ both radii. A loss separating two nearby points through slot 2 received no gradi
 <span class="arithmatex">\(y = x\)</span> the derivative does not exist and the convention is the finite, direction-free 0, which
 <code>safe_sqrt</code>'s double-<code>where</code> now supplies (it also keeps <code>dist(x, x)</code> exactly 0).</p>
 </div>
+<p>Slot 0 now runs this body too: the <a href="#poincare-far-pairs">far-pair fix</a> turned its <code>atanh</code> form
+into this <code>arcsinh</code> form, so <code>VERSION_MOBIUS_DIRECT</code> and <code>VERSION_METRIC_TENSOR</code> return identical
+values, from three reductions over the dimension.</p>
 <h3 id="which-version-to-use">Which Version to Use?<a class="headerlink" href="#which-version-to-use" title="Permanent link">&para;</a></h3>
-<p><strong>General recommendation</strong>: <code>VERSION_MOBIUS_DIRECT</code> (version 0)
-- Fastest
-- Fewest intermediate operations
-- Best for most applications</p>
-<p><strong>Special cases</strong>:
-- <strong>Near-boundary points</strong> (||x|| &gt; 0.9): Use <code>Poincare(dtype=jnp.float64)</code>, or convert to the
+<p><strong>General recommendation</strong>: <code>VERSION_MOBIUS_DIRECT</code> (version 0)</p>
+<ul>
+<li>Fewest intermediate operations</li>
+<li>Best for most applications</li>
+</ul>
+<p><strong>Special cases</strong>:</p>
+<ul>
+<li><strong>Near-boundary points</strong> (||x|| &gt; 0.9): Use <code>Poincare(dtype=jnp.float64)</code>, or convert to the
   hyperboloid via <code>isometry_mappings.poincare_to_hyperboloid</code> and use <code>Hyperboloid.dist</code> —
   <code>dist</code>/<code>logmap</code> are now covered by the measured two-point accuracy checks (see <a href="#the-hyperboloids-two-point-cancellation-failure-mode">above</a>). The contrast that motivates this
-  advice: the Poincaré ball itself cannot even <em>represent</em> a point past <span class="arithmatex">\(d_0 \approx 12.65/\sqrt{c}\)</span>
-  (float32) / <span class="arithmatex">\(27.7/\sqrt{c}\)</span> (float64) — <code>proj</code>'s boundary clamp saturates there — while the
-  hyperboloid chart's representable ceiling is <span class="arithmatex">\(\sqrt{c}\,d = \ln(2\,\texttt{finfo.max}) \approx 89\)</span>
+  advice: the Poincaré ball itself cannot even <em>represent</em> a point past the scaled radius
+  <span class="arithmatex">\(\sqrt{c}\,d_0 = 2\,\mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})\)</span>, where <code>proj</code>'s boundary
+  clamp saturates: 12.65 (float32) / 27.73 (float64) at <span class="arithmatex">\(c = 1\)</span>, 13.80 / 28.88 at <span class="arithmatex">\(c = 0.1\)</span> (see
+  <a href="#poincare-roundtrip-ceiling">The Round-Trip Ceiling</a>). The hyperboloid chart's representable
+  ceiling is <span class="arithmatex">\(\sqrt{c}\,d = \ln(2\,\texttt{finfo.max}) \approx 89\)</span>
   (float32), where <span class="arithmatex">\(\cosh\)</span> overflows — with <code>dist</code> itself giving up a fraction of a radius earlier,
   at <span class="arithmatex">\(\ln(\texttt{finfo.max}) \approx 88.7\)</span>, where the polar frame's <span class="arithmatex">\(x_0 + \lVert x_s\rVert = e^a\)</span>
-  does.
-- <strong>Very high dimensions</strong> (&gt; 1000): <code>VERSION_METRIC_TENSOR</code> (version 2) may be more stable
-- <strong>Debugging</strong>: Compare all versions — significant differences indicate numerical issues</p>
+  does.</li>
+<li><strong><code>VERSION_METRIC_TENSOR</code> (version 2)</strong> is no longer a separate option: it runs slot 0's body
+  and returns the same values (see <a href="#poincare-metric-tensor-dist-0">above</a>).</li>
+<li><strong><code>VERSION_MOBIUS</code> (version 1)</strong>, the norm of <span class="arithmatex">\((-x) \oplus y\)</span> through <code>_addition</code>, is unchanged
+  and still saturates on far float32 pairs: 12.637328 for a true 14.4 (two points at scaled
+  radius 7.2 on opposite sides, <span class="arithmatex">\(c = 1\)</span>), with a gradient relative error of 1.0
+  (<code>logs/2026-09-29_cancellation-free/2_evidence/probes/1a_merged.out</code>). Float64 moves the
+  saturation out to the float64 ceiling, <span class="arithmatex">\(\sqrt{c}\,d \approx 27.7\)</span> at <span class="arithmatex">\(c = 1\)</span>: an analogous
+  construction (<span class="arithmatex">\(x = r\,u\)</span>, <span class="arithmatex">\(y = -x\)</span>, dim 8, which gives 12.655848 in float32 at radius 7.2) gives
+  27.725826 for a true 29 and for a true 40, again with a gradient relative error of 1.0, while
+  slots 0 and 2 return 29 and 40 to within 7.6e-8
+  (<code>logs/2026-09-29_cancellation-free/docs_b1/probe_slot1_f64.out</code>).</li>
+<li><strong>Debugging</strong>: compare against <code>Poincare(dtype=jnp.float64)</code> rather than across versions — slots
+  0 and 2 always agree, and slot 1 departs from them on far pairs because it saturates.</li>
+</ul>
 <h3 id="hyperboloid-distance-versions">Hyperboloid Distance Versions<a class="headerlink" href="#hyperboloid-distance-versions" title="Permanent link">&para;</a></h3>
 <p>The Hyperboloid manifold has its own two-way <code>version_idx</code>, orthogonal to the Poincaré versions
 above. The same two slots select an arm of both the pairwise <code>dist</code> and the origin distance
@@ -6050,13 +6534,17 @@ lets XLA drop the branches you do not use.</p>
 <h3 id="why-project">Why Project?<a class="headerlink" href="#why-project" title="Permanent link">&para;</a></h3>
 <p>Operations like addition, linear transformations can push points off the manifold. Projection restores the manifold constraint.</p>
 <h3 id="when-to-project">When to Project<a class="headerlink" href="#when-to-project" title="Permanent link">&para;</a></h3>
-<p><strong>Always project</strong>:
-- After Möbius addition: <code>poincare.addition(x, y, c)</code>
-- After neural network layers
-- After parameter updates in optimization</p>
-<p><strong>Usually don't need projection</strong>:
-- After <code>expmap</code> (already on manifold)
-- After <code>proj</code> (redundant)</p>
+<p><strong>Always project</strong>:</p>
+<ul>
+<li>After Möbius addition: <code>poincare.addition(x, y, c)</code></li>
+<li>After neural network layers</li>
+<li>After parameter updates in optimization</li>
+</ul>
+<p><strong>Usually don't need projection</strong>:</p>
+<ul>
+<li>After <code>expmap</code> (already on manifold)</li>
+<li>After <code>proj</code> (redundant)</li>
+</ul>
 <h3 id="projection">Projection<a class="headerlink" href="#projection" title="Permanent link">&para;</a></h3>
 <p>Projection ensures points stay on the manifold by clipping norms:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
@@ -6220,7 +6708,10 @@ with an explicit <code>atol</code> rather than assuming the default is a bug.</p
 <div class="admonition success">
 <p class="admonition-title">Numerical Stability Checklist</p>
 <ul>
-<li>✅ <strong>On the Poincaré ball, use float32 for distances &lt; 7, float64 for larger; on the
+<li>✅ <strong>On the Poincaré ball, choose the dtype by the scaled radius</strong> <span class="arithmatex">\(a = \sqrt{c}\,d\)</span>: float32
+  up to <span class="arithmatex">\(a \approx 7\)</span>, float64 for critical operations from <span class="arithmatex">\(a \approx 10\)</span>, and float64 is
+  required past the float32 chart ceiling (<span class="arithmatex">\(a \approx 12.65\)</span> at <span class="arithmatex">\(c = 1\)</span>; see the
+  <a href="#precision-requirements-by-distance">table</a>). <strong>On the
   hyperboloid, <code>dist</code>/<code>logmap</code>/<code>sqdist</code>/<code>tangent_norm</code>/<code>expmap</code>/<code>ptransp</code>/<code>tangent_proj</code>/
   <code>tangent_inner</code>/<code>egrad2rgrad</code>/gyro <code>addition</code>/<code>busemann</code> are accurate to the
   point-representation floor at any radius in float32 — see
@@ -6231,7 +6722,9 @@ with an explicit <code>atol</code> rather than assuming the default is a bug.</p
 <li>✅ <strong>Use protected math functions</strong> (<code>hyperbolix.utils.math_utils</code>)</li>
 <li>✅ <strong>Monitor conformal factors</strong> during training</li>
 <li>✅ <strong>Validate manifold constraints</strong> in debugging</li>
-<li>✅ <strong>Use <code>VERSION_MOBIUS_DIRECT</code> for Poincaré distance</strong> unless issues arise</li>
+<li>✅ <strong>Use <code>VERSION_MOBIUS_DIRECT</code> for Poincaré distance</strong> (<code>VERSION_METRIC_TENSOR</code> runs the
+  same body; <code>VERSION_MOBIUS</code> saturates on far pairs, past <span class="arithmatex">\(\sqrt{c}\,d \approx 12.6\)</span> in float32
+  and 27.7 in float64 at <span class="arithmatex">\(c = 1\)</span>)</li>
 <li>✅ <strong>Clip curvature</strong> if learnable (0.1 &lt; c &lt; 10.0)</li>
 <li>✅ <strong>Initialize embeddings conservatively</strong> (small norms)</li>
 <li>✅ <strong>Prefer <code>ProperVelocity</code> for large-radius features</strong> — unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> avoids the boundary entirely and trains with plain <code>optax.adam</code></li>
@@ -6261,19 +6754,14 @@ with an explicit <code>atol</code> rather than assuming the default is a bug.</p
 </span></code></pre></div></p>
 </li>
 <li>
-<p><strong>Try different version</strong>:
-   <div class="language-python highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="c1"># Try VERSION_METRIC_TENSOR if VERSION_MOBIUS_DIRECT fails</span>
-</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="n">dist</span> <span class="o">=</span> <span class="n">poincare</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">version_idx</span><span class="o">=</span><span class="n">poincare</span><span class="o">.</span><span class="n">VERSION_METRIC_TENSOR</span><span class="p">)</span>
-</span></code></pre></div></p>
-</li>
-<li>
-<p><strong>Use float64 manifold</strong>:
-   <div class="language-python highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
-</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a><span class="n">poincare_f64</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a><span class="n">dist</span> <span class="o">=</span> <span class="n">poincare_f64</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+<p><strong>Use float64 manifold</strong> — switching the Poincaré <code>version_idx</code> does not help:
+   <code>VERSION_METRIC_TENSOR</code> runs the default's body, and <code>VERSION_MOBIUS</code> saturates on far pairs,
+   past <span class="arithmatex">\(\sqrt{c}\,d \approx 12.6\)</span> in float32 and 27.7 in float64 at <span class="arithmatex">\(c = 1\)</span> (see
+   <a href="#which-version-to-use">Which Version to Use?</a>):
+   <div class="language-python highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
+</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="n">poincare_f64</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="n">dist</span> <span class="o">=</span> <span class="n">poincare_f64</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
 </span></code></pre></div></p>
 </li>
 </ol>

@@ -1557,7 +1557,7 @@ loss from ~2.5 to &lt;0.05 in 200 steps. Copy, run, modify.</p>
 </tr>
 <tr>
 <td><strong>Curvature init</strong></td>
-<td>Hyperboloid: <code>c=1.0</code>. PV: <code>c=1.0</code>. Poincaré (deep nets): <code>c=0.1</code> with <code>LearnableCurvature(init_c=0.1)</code> per layer</td>
+<td>Hyperboloid: <code>c=1.0</code>. PV: <code>c=1.0</code>. Poincaré (deep nets): <code>c=0.1</code> with <code>LearnableCurvature(init_c=0.1)</code> per layer. The default clamp is a decade either side of <code>init_c</code> (<code>[0.01, 1]</code> here), and a <code>c</code> resting on a bound comes off it within a few steps of the loss pulling it back inside</td>
 </tr>
 <tr>
 <td><strong>Float precision</strong></td>

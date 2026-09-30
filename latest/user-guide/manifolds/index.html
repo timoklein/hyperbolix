@@ -1931,8 +1931,8 @@ you only have to get the channel argument right at construction.</p>
 <p>Curvature convention is uniform across all manifolds: <code>c &gt; 0</code> means sectional
 curvature <span class="arithmatex">\(-c\)</span> (so larger <code>c</code> → more curved). <code>Euclidean</code> ignores <code>c</code> entirely.
 The one exception is <code>Stereographic</code>, which takes a <strong>signed</strong> <code>c</code> that <em>extends</em>
-this same convention across zero: <code>c &gt; 0</code> hyperbolic (identical to <code>Poincare(c)</code>),
-<code>c = 0</code> Euclidean, <code>c &lt; 0</code> spherical. See the
+this same convention across zero: <code>c &gt; 0</code> hyperbolic (the <code>Poincare(c)</code> geometry,
+with some ops equal only to rounding), <code>c = 0</code> Euclidean, <code>c &lt; 0</code> spherical. See the
 <a href="../../api-reference/manifolds/">κ-Stereographic API reference</a> for the factor-2
 Euclidean-limit caveat and the sign-flip relative to the paper's <span class="arithmatex">\(\kappa\)</span>.</p>
 <h2 id="working-with-curvature">Working with Curvature<a class="headerlink" href="#working-with-curvature" title="Permanent link">&para;</a></h2>
@@ -1956,7 +1956,7 @@ in your model:</p>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">fc</span> <span class="o">=</span> <span class="n">FGGLinear</span><span class="p">(</span><span class="mi">33</span><span class="p">,</span> <span class="mi">65</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
 </span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="n">c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span><span class="p">()</span>                              <span class="c1"># softplus → positive, clamped</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="n">c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span><span class="p">()</span>                              <span class="c1"># exp → positive, clamped</span>
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="n">c</span><span class="p">)</span>
 </span></code></pre></div>
 <p>The underlying raw parameter is Euclidean and works with any standard
@@ -2003,11 +2003,19 @@ in your model:</p>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># Signed curvature for the Stereographic manifold (c&lt;0 spherical, 0 Euclidean, c&gt;0 hyperbolic):</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="bp">self</span><span class="o">.</span><span class="n">kappa</span> <span class="o">=</span> <span class="n">LearnableCurvature</span><span class="p">(</span><span class="n">init_c</span><span class="o">=-</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">parameterization</span><span class="o">=</span><span class="s2">&quot;identity&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-<p>The positive parameterizations apply the default clamp <code>[0.1, 10.0]</code> to the
-recovered <code>c</code> (not the raw parameter), giving a hard stability guard.
-<code>"identity"</code> instead uses a symmetric magnitude cap <code>[-10.0, 10.0]</code> that
-<em>includes</em> <code>0</code>, so it never forbids the Euclidean/spherical half. Pass
-<code>c_min=None, c_max=None</code> to disable, or set tighter bounds to fit your workload.</p>
+<p>The positive parameterizations clamp the recovered <code>c</code> (not the raw parameter)
+to a decade either side of <code>init_c</code>, <code>[init_c / 10, init_c * 10]</code> (<code>[0.1, 10]</code>
+at the default <code>init_c=1.0</code>), giving a hard stability guard. <code>"identity"</code>
+instead uses a symmetric magnitude cap <code>[-10.0, 10.0]</code> that <em>includes</em> <code>0</code>, so
+it never forbids the Euclidean/spherical half. Pass <code>c_min</code>/<code>c_max</code> to set other
+bounds, or <code>None</code> to disable one.</p>
+<p>The clamp does not freeze <code>c</code> on a bound. On a bound or outside
+<code>[c_min, c_max]</code> it blocks only a gradient that would push <code>c</code> out, so <code>c</code>
+rests on the bound while the loss pushes against it and comes off it once the
+loss pulls it back inside: projected gradient descent, with no extra call in
+the train step. The raw parameter stays within the step that crossed the bound
+(plus the optimizer's momentum), so leaving takes only the few steps that walk
+that back: 1 to 7 Adam steps at learning rate <code>1e-2</code> in a toy fit.</p>
 <h3 id="when-c10-works-and-when-it-doesnt">When <code>c=1.0</code> works and when it doesn't<a class="headerlink" href="#when-c10-works-and-when-it-doesnt" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -2127,9 +2135,11 @@ training kernels) have two stability concerns that motivate the
 <li>
 <p><strong>Clamp guard</strong>: Over millions of gradient steps, an unclamped curvature
    can drift to <code>c → 0</code> (effectively Euclidean) or <code>c → ∞</code> (numerical
-   blow-up). The default <code>[0.1, 10.0]</code> bounds — applied directly to <code>c</code>,
-   not to the raw parameter — cover the entire useful hyperbolic geometry
-   range without losing expressivity.</p>
+   blow-up). The default bounds, a decade either side of <code>init_c</code> and
+   applied directly to <code>c</code> rather than to the raw parameter, stop that drift;
+   pass wider bounds if <code>c</code> should range further. A <code>c</code> held on a bound still
+   gets the gradient that points back inside, so it comes off the bound when
+   the loss changes direction.</p>
 </li>
 </ol>
 <p>The recommended pattern for a compiled RL loop:</p>
@@ -2143,18 +2153,18 @@ training kernels) have two stability concerns that motivate the
 </span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
 </span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">manifold</span>
 </span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>        <span class="c1"># Log parameterization: scale-invariant gradient (dc/draw = c).</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        <span class="c1"># Default clamp [0.1, 10.0] is the stability guard.</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span> <span class="o">=</span> <span class="n">LearnableCurvature</span><span class="p">(</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>            <span class="n">init_c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">parameterization</span><span class="o">=</span><span class="s2">&quot;log&quot;</span><span class="p">,</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>        <span class="p">)</span>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">l1</span> <span class="o">=</span> <span class="n">HypLinearPoincarePP</span><span class="p">(</span><span class="n">manifold</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">l2</span> <span class="o">=</span> <span class="n">HypLinearPoincarePP</span><span class="p">(</span><span class="n">manifold</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>        <span class="n">c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span><span class="p">()</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">l1</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">l2</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        <span class="c1"># The default clamp [0.01, 1.0], a decade either side of init_c, is the stability guard.</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span> <span class="o">=</span> <span class="n">LearnableCurvature</span><span class="p">(</span><span class="n">init_c</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">parameterization</span><span class="o">=</span><span class="s2">&quot;log&quot;</span><span class="p">)</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>        <span class="c1"># l1 takes the Euclidean observation as a tangent vector; l2 takes l1&#39;s ball point.</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">l1</span> <span class="o">=</span> <span class="n">HypLinearPoincarePP</span><span class="p">(</span><span class="n">manifold</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span> <span class="n">input_space</span><span class="o">=</span><span class="s2">&quot;tangent&quot;</span><span class="p">)</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">l2</span> <span class="o">=</span> <span class="n">HypLinearPoincarePP</span><span class="p">(</span><span class="n">manifold</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>  <span class="c1"># x: (B, 4) Euclidean observations</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>        <span class="n">c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span><span class="p">()</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>        <span class="n">h</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">l1</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">l2</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="n">model</span> <span class="o">=</span> <span class="n">HypPolicy</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
 </span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="c1"># Standard Euclidean optimizer — self.curvature.raw is updated like any param.</span>
 </span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
 </span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>
@@ -2266,8 +2276,9 @@ and <code>pv_to_klein</code> send every point past <span class="arithmatex">\(a 
 at <span class="arithmatex">\(c = 1\)</span>, beyond the <code>Klein.proj</code> margin. These maps do not project: in float32 at
 <span class="arithmatex">\(c = 1\)</span> such points land between the margin (<span class="arithmatex">\(\lVert k\rVert = 0.99999356\)</span>) and the
 boundary, and from <span class="arithmatex">\(a \approx 10\)</span> on exactly on <span class="arithmatex">\(\lVert k\rVert = 1/\sqrt{c}\)</span>. Klein
-operations floor the gap <span class="arithmatex">\(1 - c\lVert k\rVert^2\)</span> at its value on the margin, so all of
-these points read as <span class="arithmatex">\(a \approx 6.32\)</span>. Map out of Klein freely; map into it only points
+operations floor the gap <span class="arithmatex">\(1 - c\lVert k\rVert^2\)</span> at half its value on the margin, so
+these points read at their own radius only up to <span class="arithmatex">\(a \approx 6.67\)</span>, and as <span class="arithmatex">\(a \approx 6.67\)</span>
+beyond. Map out of Klein freely; map into it only points
 you know lie inside that radius, and call <code>Klein.proj</code> after mapping far points in. See the
 <a href="../numerical-stability/#klein-chart-ceiling">numerical-stability guide</a>.</p>
 </div>
