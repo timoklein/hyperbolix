@@ -172,9 +172,9 @@ def test_fhnn_fhcnn_gradients_at_zero_spatial_norm(dtype):
 # --------------------------------------------------------------------------- #
 # Target spatial norm: sqrt(y0 - 1/sqrt(c)) * sqrt(y0 + 1/sqrt(c)), not the
 # algebraically equal sqrt(y0**2 - 1/c). `y0**2` overflows float32 to inf past
-# y0 = sqrt(FLT_MAX) ~ 1.844e19, which `capped_exp` explicitly allows y0 to
-# reach: it caps a runaway `scale` at exp(0.99*log(FLT_MAX)) ~ 6.1e37 to keep
-# the value finite, and the squaring then threw that finiteness away.
+# y0 = sqrt(FLT_MAX) ~ 1.844e19, which a finite `exp(scale)` reaches from
+# scale ~ 44 on (exp itself overflows only past ~88.7), and the squaring then
+# threw that finiteness away.
 # --------------------------------------------------------------------------- #
 def _fhnn_layer_with_scale(c, scale, out_dim=4, in_dim=4, spatial_bias=(1.0, -2.0, 3.0)):
     """FHNN layer wired so that z0 == 0 exactly and the spatial logits are a fixed constant.
@@ -196,8 +196,9 @@ def _fhnn_layer_with_scale(c, scale, out_dim=4, in_dim=4, spatial_bias=(1.0, -2.
 def test_fhnn_huge_time_coordinate_stays_finite(c):
     """y0 ~ 1e20 in float32: output finite, where `sqrt(y0**2 - 1/c)` gave inf.
 
-    Gate for the factored target-norm form. `capped_exp` guarantees y0 itself is finite here, so
-    an inf in the output can only come from the squaring.
+    Gate for the factored target-norm form. scale = log(2e20) ~ 46.7 is far below exp's float32
+    overflow (~88.7), so y0 itself is finite here and an inf in the output can only come from the
+    squaring.
     """
     dtype = jnp.float32
     # y0 = 0.5*exp(scale) + 1/sqrt(c) + eps ~ 1e20 -- past sqrt(FLT_MAX) = 1.844e19.
@@ -220,6 +221,26 @@ def test_fhnn_huge_time_coordinate_stays_finite(c):
     grad = nnx.grad(lambda m: jnp.sum(m(x, c=c)))(layer)
     assert np.all(np.isfinite(np.asarray(grad["kernel"][...])))
     assert np.all(np.isfinite(np.asarray(grad["bias"][...])))
+
+
+@pytest.mark.parametrize("layer_cls", [HypLinearHyperboloidFHNN, HypLinearHyperboloidFHCNN], ids=["fhnn", "fhcnn"])
+def test_runaway_scale_is_non_finite_f32(layer_cls):
+    """A scale past float32 ``exp`` overflow (~88.7) gives a non-finite output.
+
+    Regression: both forwards used ``capped_exp(scale)``, which saturates at ``exp(87.8)``, so a
+    runaway scale gave a finite output with an exactly-zero scale gradient. FHCNN reads the scale
+    only in its ``normalize=True`` branch.
+    """
+    dtype = jnp.float32
+    kwargs = {"normalize": True, "learnable_scale": True} if layer_cls is HypLinearHyperboloidFHCNN else {}
+    layer = layer_cls(get_hyperboloid(dtype), 5, 5, rngs=nnx.Rngs(0), param_dtype=dtype, **kwargs)
+    layer.kernel[...] = jax.random.normal(jax.random.PRNGKey(1), (5, 5), dtype=dtype) * 0.4
+    layer.scale[...] = jnp.asarray(100.0, dtype=dtype)
+    x = _hyperboloid_points(jax.random.PRNGKey(0), 4, 5, 1.0, dtype)
+
+    y = layer(x, c=1.0)
+
+    assert not bool(jnp.isfinite(y).any()), f"runaway scale saturated finite: {y}"
 
 
 @pytest.mark.parametrize("c", [0.5, 1.0, 2.0])

@@ -48,17 +48,9 @@ y = acosh(x)  # argument clamped into the open domain near 1.0
 `smooth_clamp` is a differentiable clamp for user code (e.g. bounding a parameter); the library
 itself does not use it.
 
-Use `capped_exp` instead of `jnp.exp` whenever you `exp()` an unconstrained trainable parameter
-(a log-scale reparameterization, for example) — a runaway parameter saturates to a large finite
-value instead of overflowing to `inf` and NaN-ing the rest of the model on the next optimizer step:
-
-```python
-from hyperbolix.utils.math_utils import capped_exp
-
-log_scale = jnp.array(1e6)  # a runaway trainable parameter
-jnp.exp(log_scale)  # inf -- would NaN downstream
-capped_exp(log_scale)  # finite, saturates at exp(0.99*log(finfo.max))
-```
+`capped_exp` caps its argument at `0.99·log(finfo.max)`, so past ≈87.8 (float32) it returns a
+finite value with zero gradient; the library's layers no longer use it, so a runaway scale
+parameter shows up as a NaN loss.
 
 ## Matmul Precision
 

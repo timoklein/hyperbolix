@@ -32,7 +32,7 @@ from hyperbolix.manifolds.poincare import Poincare
 
 # MIN_NORM is the library-wide floor for the init-time log-magnitude; the row normalization
 # itself uses ``safe_normalize``. Imported (not redefined) so there is one value library-wide.
-from hyperbolix.utils.math_utils import MIN_NORM, capped_exp, clamp_to, safe_norm, safe_normalize
+from hyperbolix.utils.math_utils import MIN_NORM, clamp_to, safe_norm, safe_normalize
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 
 from .poincare_linear import _poincare_sinh_lift
@@ -140,9 +140,10 @@ def _busemann_score(
     # for a dead output channel, with an exactly-zero VJP instead of a 1e-15-floored one, and it
     # cannot overflow the sum of squares.
     v_unit_KI = safe_normalize(kernel_KI)
-    # capped_exp: log_scale_K is unconstrained — a runaway param must saturate finite, not
-    # overflow to inf and NaN the logits.
-    alpha_K = capped_exp(log_scale_K.astype(work_dtype))
+    # Plain `jnp.exp`: log_scale_K is unconstrained, and a runaway param past ~88.7 (float32)
+    # overflows alpha to inf, so the logits and the loss go non-finite at that step -- the intended
+    # signal, rather than a finite saturation with zero gradient.
+    alpha_K = jnp.exp(log_scale_K.astype(work_dtype))
     bias_K = bias_K.astype(work_dtype)
 
     # B^{v_k}(x_b): single-point `busemann` vmapped over classes (inner) and batch (outer).
