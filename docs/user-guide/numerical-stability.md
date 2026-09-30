@@ -216,14 +216,13 @@ The cheaper first remedy is a `HyperboloidGyroRMSNorm` in front of the layer, or
 softmax; it does not help activations that are themselves stored in float32 past `a ≈ 8`.
 
 The value aggregation has its own form, `lorentz_midpoint(form=...)`, set by `centroid_form` on
-`HyperbolicFullAttention` and `LorentzMLA`. `"variance"` (the `lorentz_midpoint` default, and the
-default of `HyperbolicFullAttention`) is accurate for far-out values but costs `O(N·M·D)` work, and on
-an A100 it compiles slowly: `LorentzMLA` at S = 512 takes 104 s against 9.6 s, S = 2048 did not finish
-in 10 min, and `HyperbolicFullAttention` takes 15.9 s against 4.0 s at N = 512. `"gemm"` (the default of
-`LorentzMLA`, as in HELM) is one GEMM, but in float32 it loses the centroid once the *values* pass scaled
-radius `a ≈ 6`, even when the scores are accurate: values at `a ≈ 9` give 11.4 nats of error against
-6.4e-4 for `"variance"`. bfloat16 activations make both the scores and the `"gemm"` centroid worse,
-since bfloat16's `eps` is 2^16 times float32's.
+`HyperbolicFullAttention` and `LorentzMLA`. `"variance"` (the default of `lorentz_midpoint` and
+`HyperbolicFullAttention`) is accurate for far-out values but costs `O(N·M·D)` work and compiles
+slowly on an A100: `LorentzMLA` at S = 512 takes 104 s against 9.6 s and did not finish at S = 2048
+in 10 min; `HyperbolicFullAttention` at N = 512 takes 15.9 s against 4.0 s. `"gemm"` (the default of
+`LorentzMLA`, as in HELM) is one GEMM, but in float32 it loses the centroid once the *values* pass
+`a ≈ 6`, even when the scores are accurate: values at `a ≈ 9` give 11.4 nats of error against 6.4e-4
+for `"variance"`. bfloat16 activations (`eps` 2^16 times float32's) make both worse.
 
 #### The MLR Score at a Large Hyperplane Offset {#mlr-large-bias}
 
