@@ -147,18 +147,25 @@ def _masks(kind):
     return causal, segment_ids, attention_mask, (masked if kind != "none" else None)
 
 
+@pytest.mark.parametrize("centroid_form", ["gemm", "variance"])
 @pytest.mark.parametrize("mask_kind", ["none", "causal", "causal_segment_padding"])
 @pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
-def test_matches_helm_reference_float64(c, mask_kind):
-    """Same weights through the layer and a float64 transcription of HELM's forward agree."""
-    layer = _make_layer(jnp.float64)
+def test_matches_helm_reference_float64(c, mask_kind, centroid_form):
+    """Same weights through the layer and a float64 transcription of HELM's forward agree.
+
+    ``"gemm"`` (the default) is HELM's centroid formula; ``"variance"`` is the same value by a
+    cancellation-free route. At this radius both agree with the reference to rounding: measured
+    max relative difference 2.3e-13 (gemm) and 2.6e-13 (variance)
+    (``logs/2026-09-30_helm-centroid/reference_match_probe.out``).
+    """
+    layer = _make_layer(jnp.float64, centroid_form=centroid_form)
     _randomize_params(layer)
     x = _make_points(jax.random.PRNGKey(3), c, jnp.float64)
     causal, segment_ids, attention_mask, masked = _masks(mask_kind)
     out = layer(x, c, causal=causal, segment_ids=segment_ids, attention_mask=attention_mask)
     ref = _helm_reference_forward(layer, x, c, np.arange(SEQ), masked)
     assert out.dtype == jnp.float64
-    np.testing.assert_allclose(np.asarray(out), ref, atol=1e-10, rtol=1e-10)
+    np.testing.assert_allclose(np.asarray(out), ref, atol=1e-12, rtol=1e-12)
 
 
 def test_matches_helm_reference_float32():
@@ -219,6 +226,7 @@ def test_init_matches_helm_reference():
         {"v_head_dim": 1},
         {"kv_lora_rank": 0},
         {"dim": 1},
+        {"centroid_form": "clamp"},
     ],
 )
 def test_rejects_invalid_dims(kwargs):
@@ -244,6 +252,40 @@ def test_rejects_bad_call_shapes():
         layer(x, 1.0, positions=jnp.arange(SEQ + 1))
     with pytest.raises(ValueError):
         layer(x, 1.0, segment_ids=jnp.zeros((BATCH, SEQ + 1), dtype=jnp.int32))
+
+
+def test_gemm_centroid_has_no_sequence_squared_times_width_intermediate():
+    """The default ``"gemm"`` centroid holds no ``(B, H, S, T, v_head_dim - 1)`` array.
+
+    Compiled temp memory of one forward+backward at ``S = 256``, ``v_head_dim = 65``: the
+    variance form's intermediate alone is ``B*H*S*S*64*4`` bytes (32 MiB here). The default
+    layer's temp must stay below an eighth of it. On CPU, where XLA materializes that array in
+    the variance form's backward, the variance layer's temp must also reach it, so the check
+    can see the intermediate (XLA:GPU fuses it away; measured there: 2.3 vs 3.5 MiB at
+    ``v_head_dim = 33``). ``logs/2026-09-30_helm-centroid/memory_probe_*.out``.
+    """
+    batch, heads, seq, v_head = 1, 2, 256, 65
+    intermediate_bytes = batch * heads * seq * seq * (v_head - 1) * 4
+
+    def temp_bytes(**kwargs):
+        layer = LorentzMLA(DIM, heads, KV_RANK, QK_NOPE, QK_ROPE, v_head, rngs=nnx.Rngs(0), **kwargs)
+        graphdef, state = nnx.split(layer)
+        x = _make_points(jax.random.PRNGKey(0), 1.0, batch=batch, seq=seq)
+
+        def loss(state, x):
+            return jnp.sum(nnx.merge(graphdef, state)(x, 1.0)[..., 1:] ** 2)
+
+        analysis = jax.jit(jax.value_and_grad(loss, argnums=(0, 1))).lower(state, x).compile().memory_analysis()
+        if analysis is None:
+            pytest.skip("compiled memory_analysis() is unavailable on this backend")
+        return analysis.temp_size_in_bytes, layer.centroid_form
+
+    gemm_temp, default_form = temp_bytes()
+    assert default_form == "gemm"
+    assert gemm_temp < intermediate_bytes / 8, (gemm_temp, intermediate_bytes)
+    if jax.default_backend() == "cpu":
+        variance_temp, _ = temp_bytes(centroid_form="variance")
+        assert variance_temp >= intermediate_bytes, (variance_temp, intermediate_bytes)
 
 
 def _perturb(x, key, where_BS, c):
@@ -329,9 +371,17 @@ def test_batched_positions_match_per_row_calls():
         np.testing.assert_allclose(np.asarray(out[b]), np.asarray(out_row[0]), atol=1e-6)
 
 
-def test_jit_parity():
+@pytest.mark.parametrize(("centroid_form", "atol"), [("variance", 1e-6), ("gemm", 2e-5)])
+def test_jit_parity(centroid_form, atol):
+    """Compiled and eager float32 forwards agree to rounding.
+
+    The ``"gemm"`` centroid (the default) cancels, so it amplifies the rounding differences
+    between the fused and the op-by-op graph: measured jit-vs-eager max difference 4.8e-6 here,
+    7.6e-6 worst over 8 seeds, against 9.5e-7 for ``"variance"``
+    (``logs/2026-09-30_helm-centroid/jit_parity_probe.out``).
+    """
     c = 0.5
-    layer = _make_layer()
+    layer = _make_layer(centroid_form=centroid_form)
     x = _make_points(jax.random.PRNGKey(0), c)
     segment_ids = jnp.array([[0, 0, 0, 1, 1, 1], [0, 0, 1, 1, 1, 1]], dtype=jnp.int32)
 
@@ -340,7 +390,7 @@ def test_jit_parity():
         return model(x, c, segment_ids=segment_ids)
 
     np.testing.assert_allclose(
-        np.asarray(forward(layer, x, segment_ids)), np.asarray(layer(x, c, segment_ids=segment_ids)), atol=1e-6
+        np.asarray(forward(layer, x, segment_ids)), np.asarray(layer(x, c, segment_ids=segment_ids)), atol=atol
     )
 
 

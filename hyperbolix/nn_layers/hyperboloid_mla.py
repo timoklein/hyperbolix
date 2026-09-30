@@ -30,6 +30,7 @@ He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Expe
 """
 
 import math
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
@@ -73,11 +74,10 @@ class LorentzMLA(nnx.Module):
     5. Scores ``(2/c + 2 <q, k>_L) / tau`` -- the negative squared Lorentzian distance divided
        by one learnable temperature ``tau`` shared by all heads; masked, softmaxed in at least
        float32.
-    6. Each head takes the weighted Lorentzian centroid of its values (:func:`lorentz_midpoint`,
-       the cancellation-free form of HELM's ``lorentzian_centroid``), the per-head ambient points
-       (time included) are flattened to ``(H * W,)``, and ``wo`` maps them to the output point.
-       The centroid's direct variance holds a ``(B, H, S, T, W - 1)`` intermediate, so memory
-       grows as ``S^2 * v_head_dim`` per head (HELM's clamp form is a single GEMM).
+    6. Each head takes the weighted Lorentzian centroid of its values (:func:`lorentz_midpoint`
+       with ``form=centroid_form``; the default ``"gemm"`` is HELM's ``lorentzian_centroid``, one
+       GEMM plus ``O(S)`` work per head), the per-head ambient points (time included) are
+       flattened to ``(H * W,)``, and ``wo`` maps them to the output point.
 
     Only HELM's ``q_lora_rank = 0`` path (a direct query projection) is implemented; HELM's
     YaRN ``mscale`` adjustment of ``tau`` for extended contexts and its (commented-out) KV cache
@@ -94,9 +94,10 @@ class LorentzMLA(nnx.Module):
       (``scores / self.softmax_scale + self.bias``). A constant shared by all keys of a row
       cancels in the softmax, so that parameter changes nothing and its gradient is exactly zero;
       it is omitted.
-    - **Library forms** replace HELM's clamps: the centroid is :func:`lorentz_midpoint` (no
-      ``clamp_min(eps)`` on ``|<h, h>_L|``, and cancellation-free at large radius), the time
-      coordinates come from :func:`spatial_to_hyperboloid`.
+    - **Library forms** replace HELM's clamps: the centroid is :func:`lorentz_midpoint`, whose
+      ``eps`` floor sits on ``c |<h, h>_L|`` rather than HELM's ``1e-8`` on ``|<h, h>_L|`` and
+      whose time coordinate is rebuilt from the spatial part; the other time coordinates come
+      from :func:`spatial_to_hyperboloid`.
 
     Conventions
     -----------
@@ -121,6 +122,24 @@ class LorentzMLA(nnx.Module):
     ``e^(2a)``, that moves the same error down by ``ln(2^16) / 2 ~ 5.5`` nats of radius. The
     weights stay finite either way, just wrong. Keep the radius down, or run the layer in
     float32/float64.
+
+    Centroid form
+    -------------
+    ``centroid_form="gemm"`` (the default) normalizes ``h = sum_t w_t v_t`` by the literal
+    ``c (h_0^2 - ||h_s||^2)``: one GEMM and ``O(S T)`` memory per head, like the scores. It
+    cancels as the scores do, with relative error up to ``eps cosh^2(a)`` at value radius
+    ``a`` (float32: 9e-5 at ``a = 4``, 0.27 at ``a = 8``), so it breaks in the same regime as
+    the score floor above, where the weights it averages with are already wrong.
+    ``centroid_form="variance"`` is the cancellation-free direct variance of
+    :func:`lorentz_midpoint`, accurate to the storage floor, but it forms an elementwise
+    ``(B, H, S, T, v_head_dim - 1)`` intermediate: ``O(S T D)`` work outside the GEMMs, and as
+    much memory where XLA materializes it (XLA:CPU does in the backward, about 100 GB in
+    float32 at ``B = 8, H = 12, S = T = 2048, v_head_dim = 64``; XLA:GPU fuses it away, but
+    that fused kernel took 104 s to compile against 10 s for ``"gemm"`` at ``S = 512``, and
+    ptxas had not finished it after 10 min at ``S = 2048``;
+    ``logs/2026-09-30_helm-centroid/``). Pick it for short sequences when the
+    centroid itself must stay accurate past ``a ~ 8``, which in float32 the scores will not
+    be unless the queries and keys stay closer in than the values.
 
     Parameters
     ----------
@@ -156,6 +175,9 @@ class LorentzMLA(nnx.Module):
         Storage dtype of the parameters (default: jnp.float32). Compute follows the input dtype.
     eps : float, optional
         Numerical floor for the time rebuilds and the centroid (default: 1e-7).
+    centroid_form : {"gemm", "variance"}, optional
+        ``form`` of the per-head :func:`lorentz_midpoint` (default: ``"gemm"``, ``O(S T)``
+        memory); see "Centroid form".
 
     Attributes
     ----------
@@ -194,6 +216,7 @@ class LorentzMLA(nnx.Module):
         init_bound: float | None = None,
         param_dtype: DTypeLike = jnp.float32,
         eps: float = 1e-7,
+        centroid_form: Literal["gemm", "variance"] = "gemm",
     ):
         if dim < 2:
             raise ValueError(f"dim is the ambient model width and must be >= 2, got {dim}")
@@ -211,6 +234,8 @@ class LorentzMLA(nnx.Module):
             )
         if v_head_dim < 2:
             raise ValueError(f"v_head_dim is ambient and must be >= 2, got {v_head_dim}")
+        if centroid_form not in ("gemm", "variance"):
+            raise ValueError(f"centroid_form must be 'gemm' or 'variance', got {centroid_form!r}")
 
         self.dim = dim
         self.num_heads = num_heads
@@ -221,6 +246,7 @@ class LorentzMLA(nnx.Module):
         self.v_head_dim = v_head_dim
         self.rope_base = rope_base
         self.eps = eps
+        self.centroid_form: Literal["gemm", "variance"] = centroid_form
 
         def projection(in_features: int, out_features: int) -> HTCLinear:
             bound = init_bound if init_bound is not None else _helm_xavier_bound(in_features, out_features)
@@ -374,7 +400,7 @@ class LorentzMLA(nnx.Module):
 
         # 6. Per-head weighted Lorentzian centroid of the values.
         value_BHTW = jnp.transpose(value_BTHW, (0, 2, 1, 3))  # (B, H, T, W)
-        centroid_BHSW = lorentz_midpoint(value_BHTW, weights_BHST, c, eps)  # (B, H, S, W)
+        centroid_BHSW = lorentz_midpoint(value_BHTW, weights_BHST, c, eps, form=self.centroid_form)  # (B, H, S, W)
 
         # 7. Flatten the per-head ambient points (time included) and project to the output point.
         heads_BSF = jnp.transpose(centroid_BHSW, (0, 2, 1, 3)).reshape(B, S, H * self.v_head_dim)  # (B, S, H*W)
