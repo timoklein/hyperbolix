@@ -1145,6 +1145,62 @@
   
   
     <li class="md-nav__item">
+      <a href="embedding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embedding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="moe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mixture of Curvature Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="vector-quantization/" class="md-nav__link">
         
   
@@ -1472,7 +1528,7 @@
 
 
 <h1 id="neural-network-layers-api">Neural Network Layers API<a class="headerlink" href="#neural-network-layers-api" title="Permanent link">&para;</a></h1>
-<p>Hyperbolic neural network layers built with Flax NNX — 20+ layer classes and the
+<p>Hyperbolic neural network layers built with Flax NNX — 30+ layer classes and the
 activation/primitive functions that support them, across the Poincaré, Hyperboloid,
 and Proper Velocity models. All layers follow Flax NNX conventions and store a
 manifold-module reference.</p>
@@ -1505,7 +1561,7 @@ see the task-oriented <strong><a href="../../user-guide/nn-layers/">NN Layers gu
 </tr>
 <tr>
 <td><a href="attention/">Attention &amp; Transformer</a></td>
-<td>Linear O(N), softmax O(N²), and full Lorentzian O(N²) attention with causal masking</td>
+<td>Linear O(N), softmax O(N²), and full Lorentzian O(N²) attention with causal masking; HELM latent attention (<code>LorentzMLA</code>)</td>
 </tr>
 <tr>
 <td><a href="regression/">Regression &amp; MLR</a></td>
@@ -1517,7 +1573,15 @@ see the task-oriented <strong><a href="../../user-guide/nn-layers/">NN Layers gu
 </tr>
 <tr>
 <td><a href="positional-encoding/">Positional Encoding</a></td>
-<td>HOPE rotary PE, Hypformer learnable PE, Lorentzian residual</td>
+<td>HOPE rotary PE (<code>hope</code>, <code>hope_rotate_space</code>, <code>HyperbolicRoPE</code>), Hypformer learnable PE, Lorentzian residual</td>
+</tr>
+<tr>
+<td><a href="embedding/">Embedding</a></td>
+<td>HELM hyperboloid token embedding (<code>LorentzEmbedding</code>, <code>lorentz_embedding_init</code>)</td>
+</tr>
+<tr>
+<td><a href="moe/">Mixture of Curvature Experts</a></td>
+<td>HELM-MiCE feed-forward block: <code>LorentzMoE</code>, <code>LorentzMoEGate</code>, <code>LorentzSwiGLU</code>, sequence balance loss and routing statistics</td>
 </tr>
 <tr>
 <td><a href="vector-quantization/">Vector Quantization</a></td>
@@ -1536,9 +1600,9 @@ see the task-oriented <strong><a href="../../user-guide/nn-layers/">NN Layers gu
 <li><strong>Shimizu et al. (2020)</strong>: "Hyperbolic Neural Networks++" — enhanced Poincaré operations and the linearized-kernel conv formulation (<code>HypLinearPoincarePP</code>; basis of <code>HypLinearHyperboloidPLFC</code> and <code>HypConv2DHyperboloidILNN</code>)</li>
 <li><strong>Bdeir et al. (2023)</strong>: "Fully Hyperbolic Convolutional Neural Networks for Computer Vision" — HCat-based convolutions (<code>HypConv2DHyperboloid</code>)</li>
 <li><strong>Chen et al. (2022)</strong>: "Fully Hyperbolic Neural Networks" — FHCNN linear layers</li>
-<li><strong>LResNet (2023)</strong>: "Lorentzian ResNet" — HRC-based convolutions (<code>LorentzConv2D</code>)</li>
+<li><strong>He, Yang &amp; Ying (2025)</strong>: "Lorentzian Residual Neural Networks" (KDD 2025) — HRC-based convolutions (<code>LorentzConv2D</code>)</li>
 <li><strong>Hypformer (Yang et al. 2025)</strong>: "Hyperbolic Transformers" — HTC/HRC components with curvature-change support</li>
-<li><strong>Chen et al. (2024)</strong>: "Hyperbolic Embeddings for Learning on Manifolds (HELM)" — HOPE positional encoding and Lorentzian residual connections</li>
+<li><strong>He et al. (2025)</strong>: "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts" (arXiv:2505.24722) — <code>LorentzMLA</code>, <code>LorentzMoE</code> (with <code>LorentzMoEGate</code>, <code>LorentzSwiGLU</code>), <code>LorentzEmbedding</code>, HOPE positional encoding and Lorentzian residual connections</li>
 <li><strong>Klis et al. (2026)</strong>: "Fast and Geometrically Grounded Lorentz Neural Networks" — <code>FGGLinear</code>, <code>FGGConv2D</code>, <code>FGGLorentzMLR</code>, <code>FGGMeanOnlyBatchNorm</code>; sinh/arcsinh cancellation for linear hyperbolic distance growth</li>
 <li><strong>Chen et al. (2026)</strong>: "Proper Velocity Neural Networks" — <code>HypLinearPV</code>, <code>HypConv2DPV</code>, <code>HypRegressionPV</code>; unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> model with exact Euclidean retraction</li>
 <li><strong>Chen, Schölkopf &amp; Sebe (2026)</strong>: "Hyperbolic Busemann Neural Networks" (arXiv:2602.18858) — Busemann MLR heads and BFC layers; closed-form point-to-horosphere Busemann function (<code>Hyperboloid.busemann</code>, <code>Poincare.busemann</code>)</li>

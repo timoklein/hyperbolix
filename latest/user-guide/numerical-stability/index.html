@@ -2039,6 +2039,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../api-reference/nn-layers/embedding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embedding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api-reference/nn-layers/moe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mixture of Curvature Experts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../api-reference/nn-layers/vector-quantization/" class="md-nav__link">
         
   
@@ -3617,6 +3673,15 @@ perfectly finite. The remedy is <code>score_dtype=jnp.float64</code>, which runs
 the softmax; it fixes the arithmetic only, so activations that are themselves stored in float32
 past <code>a ≈ 8</code> still carry a floor of the same order, and a <code>HyperboloidGyroRMSNorm</code> in front of the
 layer (or a smaller <code>c</code>) is the cheaper first remedy.</p>
+<p>The value aggregation has its own form, <code>lorentz_midpoint(form=...)</code>, set by <code>centroid_form</code> on
+<code>HyperbolicFullAttention</code> and <code>LorentzMLA</code>. <code>"variance"</code> (the <code>lorentz_midpoint</code> default, and the
+default of <code>HyperbolicFullAttention</code>) is accurate for far-out values but costs <code>O(N·M·D)</code> work, and on
+an A100 it compiles slowly: <code>LorentzMLA</code> at S = 512 takes 104 s against 9.6 s, S = 2048 did not finish
+in 10 min, and <code>HyperbolicFullAttention</code> takes 15.9 s against 4.0 s at N = 512. <code>"gemm"</code> (the default of
+<code>LorentzMLA</code>, as in HELM) is one GEMM, but in float32 it loses the centroid once the <em>values</em> pass scaled
+radius <code>a ≈ 6</code>, even when the scores are accurate: values at <code>a ≈ 9</code> give 11.4 nats of error against
+6.4e-4 for <code>"variance"</code>. bfloat16 activations make both the scores and the <code>"gemm"</code> centroid worse,
+since bfloat16's <code>eps</code> is 2^16 times float32's.</p>
 <h4 id="mlr-large-bias">The MLR Score at a Large Hyperplane Offset<a class="headerlink" href="#mlr-large-bias" title="Permanent link">&para;</a></h4>
 <p>Every multinomial-logistic-regression head in the library evaluates the reference Lorentz MLR score
 of Bdeir et al. 2023,</p>
