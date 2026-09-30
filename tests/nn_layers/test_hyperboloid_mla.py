@@ -40,7 +40,7 @@ def _randomize_params(layer, seed=1):
         bias[...] = jnp.asarray(0.1 * rng.standard_normal(bias.shape), dtype=bias[...].dtype)
     scale = layer.kv_norm.rms.scale
     scale[...] = jnp.asarray(1.0 + 0.1 * rng.standard_normal(scale.shape), dtype=scale[...].dtype)
-    layer.softmax_scale[...] = jnp.asarray(3.0, dtype=layer.softmax_scale[...].dtype)
+    layer.log_tau[...] = jnp.asarray(math.log(3.0), dtype=layer.log_tau[...].dtype)
 
 
 def _lorentz_residual(y, c):
@@ -56,6 +56,8 @@ def _lorentz_residual(y, c):
 # LorentzLinear time rebuilds, and masked_fill(mask, -1e18). HELM's k is 1/c here.
 # HELM's learnable scalar score bias (`scores / self.softmax_scale + self.bias`) is kept in the
 # transcription at a nonzero value; the layer omits it, so the match also checks that it cancels.
+# HELM learns tau (`softmax_scale`) raw; the layer stores log_tau, so the transcription reads
+# tau = exp(log_tau).
 # ---------------------------------------------------------------------------
 
 HELM_SCORE_BIAS = 0.3
@@ -114,7 +116,8 @@ def _helm_reference_forward(layer, x, c, positions, masked_BST, rope_base=10000.
     qs_neg = qs.copy()
     qs_neg[..., 0] *= -1  # cinner
     scores = 2 * k + 2 * (qs_neg @ np.swapaxes(ks, -1, -2))  # (B, H, S, T)
-    scores = scores / p(layer.softmax_scale) + HELM_SCORE_BIAS
+    softmax_scale = np.exp(p(layer.log_tau))  # HELM's raw tau
+    scores = scores / softmax_scale + HELM_SCORE_BIAS
     if masked_BST is not None:
         scores = np.where(np.asarray(masked_BST)[:, None], -1e18, scores)  # shape_mask: [B,N,N] -> [B,1,N,N]
     scores = np.exp(scores - scores.max(axis=-1, keepdims=True))
@@ -212,10 +215,43 @@ def test_init_matches_helm_reference():
         assert np.max(np.abs(kernel)) <= bound
         assert np.max(np.abs(kernel)) > 0.5 * bound
         assert np.all(np.asarray(proj.bias[...]) == 0.0)
-    assert float(layer.softmax_scale[...]) == pytest.approx(math.sqrt(HEADS * (QK_NOPE + QK_ROPE)))
-    assert float(_make_layer(init_tau=2.5).softmax_scale[...]) == pytest.approx(2.5)
+    assert float(jnp.exp(layer.log_tau[...])) == pytest.approx(math.sqrt(HEADS * (QK_NOPE + QK_ROPE)))
+    assert float(jnp.exp(_make_layer(init_tau=2.5).log_tau[...])) == pytest.approx(2.5)
     fixed = _make_layer(init_bound=0.05)
     assert np.max(np.abs(np.asarray(fixed.wq.kernel[...]))) <= 0.05
+
+
+def test_temperature_stays_positive_where_raw_tau_would_turn_negative():
+    """One Adam step of size 1 from ``tau = 0.5`` takes a raw ``tau`` to about -0.5; ``log_tau`` keeps it positive.
+
+    Adam's first step moves each parameter by about ``lr * sign(grad)``. With the loss signed so
+    that it asks for a smaller ``tau``, the same step on HELM's raw ``tau`` (gradient
+    ``dL/dtau = dL/dlog_tau / tau``) lands below zero, where the softmax flips; on ``log_tau``
+    it lands at ``tau = 0.5 / e``.
+    """
+    c, init_tau, lr = 1.0, 0.5, 1.0
+    layer = _make_layer(init_tau=init_tau)
+    x = _make_points(jax.random.PRNGKey(0), c)
+
+    def loss_fn(model):
+        return jnp.sum(model(x, c)[..., 1:] ** 2)
+
+    grad_log_tau = float(nnx.grad(loss_fn)(layer).log_tau[...])
+    assert grad_log_tau != 0.0
+    sign = math.copysign(1.0, grad_log_tau)  # signed loss: descent lowers tau
+
+    # HELM's raw parameterization under the same optimizer step goes negative.
+    raw_tau = jnp.asarray(init_tau, dtype=jnp.float32)
+    raw_opt = optax.adam(lr)
+    raw_update, _ = raw_opt.update(jnp.asarray(abs(grad_log_tau) / init_tau), raw_opt.init(raw_tau))
+    assert float(optax.apply_updates(raw_tau, raw_update)) < 0.0
+
+    optimizer = nnx.Optimizer(layer, optax.adam(lr), wrt=nnx.Param)
+    optimizer.update(layer, nnx.grad(lambda model: sign * loss_fn(model))(layer))
+    tau = float(jnp.exp(layer.log_tau[...]))
+    assert 0.0 < tau < init_tau
+    assert tau == pytest.approx(init_tau / math.e, rel=1e-4)
+    assert bool(jnp.all(jnp.isfinite(layer(x, c))))
 
 
 @pytest.mark.parametrize(
@@ -227,6 +263,8 @@ def test_init_matches_helm_reference():
         {"kv_lora_rank": 0},
         {"dim": 1},
         {"centroid_form": "clamp"},
+        {"init_tau": 0.0},
+        {"init_tau": -1.0},
     ],
 )
 def test_rejects_invalid_dims(kwargs):

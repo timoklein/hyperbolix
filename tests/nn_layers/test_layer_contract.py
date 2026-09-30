@@ -430,7 +430,7 @@ SPECS: tuple[LayerSpec, ...] = (
         ),  # dim, heads, kv_rank, nope, rope (ambient), v_head (ambient)
         make_tangent=lambda dtype: _tangent((2, 5, 9), dtype, zero_time=True, scale=0.2),
         out_shape=(2, 5, 9),
-        grad_paths=("wq.kernel", "wkv_a.kernel", "wkv_b.kernel", "wo.kernel", "softmax_scale"),
+        grad_paths=("wq.kernel", "wkv_a.kernel", "wkv_b.kernel", "wo.kernel", "log_tau"),
         manifold_fn=_hyperboloid,
         output_is_manifold_point=True,
         has_input_space=False,
