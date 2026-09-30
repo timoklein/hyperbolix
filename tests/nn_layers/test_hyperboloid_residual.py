@@ -1,5 +1,7 @@
 """Tests for lorentz_scale (LResNet Eq. 10) and the LorentzResidual module."""
 
+import math
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -353,3 +355,208 @@ def test_lorentz_residual_matches_literal_definition_float64(c, w_y):
 
     err = _geodesic(got_A, ref_A, c)
     assert err < 1e-12, f"c={c}, w_y={w_y}: residual {err:.2e} geodesic from the literal definition"
+
+
+# --------------------------------------------------------------------------- #
+# Per-point weights, identity / exp parameterizations, call-time weight (HELM)
+#
+# Dimension key: B batch  L sequence  A ambient dim (= D + 1)  D spatial dim
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("trailing_axis", [False, True])
+def test_lorentz_residual_per_point_weight_matches_scalar_loop(dtype, trailing_axis):
+    """A weight array of shape (B, L) or (B, L, 1) equals one scalar-weight call per point."""
+    atol = 1e-6 if dtype == jnp.float32 else 1e-12
+    c = 0.7
+    x_BLA = _make_points(jax.random.PRNGKey(40), 12, 6, dtype, c).reshape(3, 4, 6)
+    y_BLA = _make_points(jax.random.PRNGKey(41), 12, 6, dtype, c).reshape(3, 4, 6)
+    w_BL = jax.random.uniform(jax.random.PRNGKey(42), (3, 4), minval=0.1, maxval=3.0, dtype=dtype)
+    w_arg = w_BL[..., None] if trailing_axis else w_BL
+
+    out_BLA = lorentz_residual(x_BLA, y_BLA, w_arg, c)
+
+    assert out_BLA.shape == x_BLA.shape
+    for b in range(3):
+        for i in range(4):
+            ref_A = lorentz_residual(x_BLA[b, i], y_BLA[b, i], w_BL[b, i], c)
+            assert jnp.allclose(out_BLA[b, i], ref_A, atol=atol), f"point ({b}, {i})"
+
+
+def test_lorentz_residual_weight_shape_validation():
+    """A weight array that is neither per-point nor scalar is rejected, not silently broadcast."""
+    c = 1.0
+    x_BLA = _make_points(jax.random.PRNGKey(43), 12, 6, jnp.float32, c).reshape(3, 4, 6)
+    with pytest.raises(ValueError):
+        lorentz_residual(x_BLA, x_BLA, jnp.ones((4,), dtype=jnp.float32), c)
+    # (S, 1) on (B, S, A) with B == S: a trailing-axis-only check would turn it into (S, 1, 1) and
+    # silently align it with the batch axis.
+    x_SSA = _make_points(jax.random.PRNGKey(56), 16, 6, jnp.float32, c).reshape(4, 4, 6)
+    with pytest.raises(ValueError):
+        lorentz_residual(x_SSA, x_SSA, jnp.ones((4, 1), dtype=jnp.float32), c)
+    # A single point takes a scalar weight (0-d array or Python float) unchanged.
+    x_A = x_BLA[0, 0]
+    assert jnp.allclose(lorentz_residual(x_A, x_A, jnp.asarray(0.5), c), lorentz_residual(x_A, x_A, 0.5, c))
+
+
+PARAMETERIZATIONS = [("identity", "softplus"), ("softplus", "exp"), ("identity", "exp")]
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("weight_param,scale_param", PARAMETERIZATIONS)
+def test_residual_parameterizations_match_softplus_at_init(dtype, weight_param, scale_param):
+    """At the same init values (w_y = 1, gamma = 2) the identity / exp parameterizations give the default output."""
+    atol = 1e-5 if dtype == jnp.float32 else 1e-10
+    c = 1.0
+    x = _make_points(jax.random.PRNGKey(44), 8, 6, dtype, c)
+    y = _make_points(jax.random.PRNGKey(45), 8, 6, dtype, c)
+    kwargs = dict(init_w_y=1.0, scale=True, init_gamma=2.0, learnable_scale=True, param_dtype=dtype)
+
+    default = LorentzResidual(**kwargs)(x, y, c=c)
+    other = LorentzResidual(**kwargs, weight_parameterization=weight_param, scale_parameterization=scale_param)(x, y, c=c)
+
+    assert jnp.allclose(other, default, atol=atol)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_residual_identity_exp_gradients(dtype):
+    """Gradients reach the raw identity w_y and exp gamma, and agree with the softplus ones by the chain rule.
+
+    Same loss at the same (w_y, gamma): dL/dw_y = grad_identity = grad_softplus / sigmoid(raw_w), and
+    dL/dgamma = grad_exp / gamma = grad_softplus / sigmoid(raw_gamma).
+    """
+    rtol = 1e-4 if dtype == jnp.float32 else 1e-9
+    c = 1.0
+    x = _make_points(jax.random.PRNGKey(46), 4, 6, dtype, c)
+    y = _make_points(jax.random.PRNGKey(47), 4, 6, dtype, c)
+    kwargs = dict(init_w_y=0.8, scale=True, init_gamma=1.5, learnable_scale=True, param_dtype=dtype)
+    softplus_mod = LorentzResidual(**kwargs)
+    helm_mod = LorentzResidual(**kwargs, weight_parameterization="identity", scale_parameterization="exp")
+
+    def loss_fn(mod):
+        return jnp.sum(mod(x, y, c=c)[..., 1:] ** 2)
+
+    g_sp = nnx.grad(loss_fn)(softplus_mod)
+    g_helm = nnx.grad(loss_fn)(helm_mod)
+
+    g_w_helm, g_gamma_helm = g_helm.w_y_raw[...], g_helm.gamma_raw[...]
+    assert jnp.isfinite(g_w_helm) and jnp.abs(g_w_helm) > 0
+    assert jnp.isfinite(g_gamma_helm) and jnp.abs(g_gamma_helm) > 0
+    dl_dw = g_sp.w_y_raw[...] / jax.nn.sigmoid(softplus_mod.w_y_raw[...])
+    dl_dgamma = g_sp.gamma_raw[...] / jax.nn.sigmoid(softplus_mod.gamma_raw[...])
+    assert jnp.allclose(g_w_helm, dl_dw, rtol=rtol)
+    assert jnp.allclose(g_gamma_helm / jnp.exp(helm_mod.gamma_raw[...]), dl_dgamma, rtol=rtol)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_residual_identity_allows_negative_weight(dtype):
+    """Under the identity parameterization a negative raw w_y is used as is (HELM), not squashed positive."""
+    atol = 4e-3 if dtype == jnp.float32 else 1e-7
+    c = 1.0
+    x = _make_points(jax.random.PRNGKey(48), 8, 6, dtype, c)
+    y = _make_points(jax.random.PRNGKey(49), 8, 6, dtype, c)
+
+    module = LorentzResidual(weight_parameterization="identity", param_dtype=dtype)
+    module.w_y_raw = nnx.Param(jnp.asarray(-0.5, dtype=dtype))
+    out = module(x, y, c=c)
+
+    assert jnp.isfinite(out).all()
+    assert _check_on_hyperboloid(out, c=c, atol=atol)
+    assert jnp.allclose(out, lorentz_residual(x, y, -0.5, c), atol=1e-12 if dtype == jnp.float64 else 1e-6)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_residual_call_time_weight_override(dtype):
+    """`weight=` replaces the module's own w_y, as a scalar or one weight per point."""
+    atol = 1e-6 if dtype == jnp.float32 else 1e-12
+    c = 0.5
+    x = _make_points(jax.random.PRNGKey(50), 8, 6, dtype, c)
+    y = _make_points(jax.random.PRNGKey(51), 8, 6, dtype, c)
+    module = LorentzResidual(init_w_y=1.0, scale=True, init_gamma=2.0)
+
+    fixed = LorentzResidual(learnable_weight=False, init_w_y=0.3, scale=True, init_gamma=2.0)
+    assert jnp.allclose(module(x, y, c=c, weight=0.3), fixed(x, y, c=c), atol=atol)
+
+    w_B = jax.random.uniform(jax.random.PRNGKey(52), (8,), minval=0.1, maxval=2.0, dtype=dtype)
+    # Independent float64 NumPy oracle from the documented formula: ave = x + w y,
+    # out = ave / (sqrt(c) sqrt(|<ave, ave>_L|)), space *= gamma, time = sqrt(|space|^2 + 1/c).
+    x_BA, y_BA = np.asarray(x, np.float64), np.asarray(y, np.float64)
+    ave_BA = x_BA + np.asarray(w_B, np.float64)[:, None] * y_BA
+    mink_B1 = -(ave_BA[:, :1] ** 2) + np.sum(ave_BA[:, 1:] ** 2, axis=-1, keepdims=True)
+    unit_BA = ave_BA / (np.sqrt(c) * np.sqrt(np.abs(mink_B1)))
+    space_BD = 2.0 * unit_BA[:, 1:]
+    time_B1 = np.sqrt(np.sum(space_BD**2, axis=-1, keepdims=True) + 1.0 / c)
+    expected_BA = np.concatenate([time_B1, space_BD], axis=-1)
+    assert_atol = 1e-5 if dtype == jnp.float32 else 1e-12
+    np.testing.assert_allclose(np.asarray(module(x, y, c=c, weight=w_B), np.float64), expected_BA, atol=assert_atol)
+    np.testing.assert_allclose(np.asarray(module(x, y, c=c, weight=w_B[:, None]), np.float64), expected_BA, atol=assert_atol)
+
+
+def test_residual_parameterization_validation():
+    """Unknown parameterization strings are rejected; identity accepts a zero learnable init."""
+    with pytest.raises(ValueError):
+        LorentzResidual(weight_parameterization="exp")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        LorentzResidual(scale_parameterization="identity")  # type: ignore[arg-type]
+    LorentzResidual(weight_parameterization="identity", init_w_y=0.0)
+
+
+def _helm_lresnet_numpy(x_NA, y_NA, w_y, k, scale, learned_scale):
+    """Transcription of HELM's ``LResNet.forward`` (hypercore/nn/conv/conv_util_layers.py) in float64 NumPy.
+
+    HELM's manifold constant ``k`` is ``1/c``: points satisfy ``<x, x>_L = -k``. ``scale`` is the fixed
+    factor, or the raw log-scale when ``learned_scale`` (``x_space = exp(scale) * x_space``).
+    """
+    x_NA, y_NA = np.asarray(x_NA, np.float64), np.asarray(y_NA, np.float64)
+    ave_NA = x_NA + y_NA * w_y
+    l_inner_N1 = -(ave_NA[..., :1] ** 2) + np.sum(ave_NA[..., 1:] ** 2, axis=-1, keepdims=True)
+    denom_N1 = np.sqrt(np.maximum(np.abs(-l_inner_N1), 1e-4))
+    out_NA = np.sqrt(k) * ave_NA / denom_N1
+    s = np.exp(scale) if learned_scale else scale
+    space_ND = s * out_NA[..., 1:]
+    time_N1 = np.sqrt(np.maximum(np.sum(space_ND**2, axis=-1, keepdims=True) + k, 1e-4))
+    return np.concatenate([time_N1, space_ND], axis=-1)
+
+
+# The three HELM uses: block residual (learnable raw w_y, fixed scale sqrt(D)); MoE weighted sum
+# (per-token weight, fixed scale 2); shared + routed combine (learnable raw w_y, learnable exp scale).
+HELM_CONFIGS = ["block_residual", "moe_weighted_sum", "add_experts"]
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize("c", [0.5, 1.0, 2.0])
+@pytest.mark.parametrize("config", HELM_CONFIGS)
+def test_residual_matches_helm_lresnet(dtype, c, config):
+    """The layer reproduces HELM's LResNet (literal |<ave, ave>_L| clamp form) at normal radii."""
+    rtol, atol = (1e-4, 1e-5) if dtype == jnp.float32 else (1e-10, 1e-12)
+    d = 8
+    x_NA = _make_points(jax.random.PRNGKey(53), 16, d + 1, dtype, c)
+    y_NA = _make_points(jax.random.PRNGKey(54), 16, d + 1, dtype, c)
+    k = 1.0 / c
+
+    if config == "block_residual":
+        module = LorentzResidual(weight_parameterization="identity", scale=True, init_gamma=math.sqrt(d), param_dtype=dtype)
+        module.w_y_raw = nnx.Param(jnp.asarray(0.7, dtype=dtype))  # a trained, non-init value
+        got = module(x_NA, y_NA, c=c)
+        ref = _helm_lresnet_numpy(x_NA, y_NA, 0.7, k, math.sqrt(d), learned_scale=False)
+    elif config == "moe_weighted_sum":
+        w_N1 = jax.random.uniform(jax.random.PRNGKey(55), (16, 1), minval=0.05, maxval=1.0, dtype=dtype)
+        module = LorentzResidual(learnable_weight=False, scale=True, init_gamma=2.0)
+        got = module(x_NA, y_NA, c=c, weight=w_N1)
+        ref = _helm_lresnet_numpy(x_NA, y_NA, np.asarray(w_N1, np.float64), k, 2.0, learned_scale=False)
+    else:
+        module = LorentzResidual(
+            weight_parameterization="identity",
+            scale=True,
+            init_gamma=2.0,
+            learnable_scale=True,
+            scale_parameterization="exp",
+            param_dtype=dtype,
+        )
+        module.w_y_raw = nnx.Param(jnp.asarray(1.3, dtype=dtype))
+        module.gamma_raw = nnx.Param(jnp.asarray(0.4, dtype=dtype))  # exp(0.4) ~ 1.49, off init
+        got = module(x_NA, y_NA, c=c)
+        ref = _helm_lresnet_numpy(x_NA, y_NA, 1.3, k, 0.4, learned_scale=True)
+
+    np.testing.assert_allclose(np.asarray(got, np.float64), ref, rtol=rtol, atol=atol)

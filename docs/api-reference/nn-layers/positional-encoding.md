@@ -17,6 +17,10 @@ NNX module wrapper is here.
     options:
       heading_level: 3
 
+::: hyperbolix.nn_layers.hope_rotate_space
+    options:
+      heading_level: 3
+
 ::: hyperbolix.nn_layers.HyperbolicRoPE
     options:
       heading_level: 3

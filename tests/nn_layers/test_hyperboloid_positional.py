@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pytest
 from flax import nnx
@@ -12,6 +13,7 @@ from hyperbolix.nn_layers.hyperboloid_positional import (
     HyperbolicRoPE,
     HypformerPositionalEncoding,
     hope,
+    hope_rotate_space,
 )
 
 hyperboloid = Hyperboloid()
@@ -275,6 +277,77 @@ def test_hyperbolic_rope_module():
     for b in range(batch):
         for s in range(seq_len):
             assert hyperboloid.is_in_manifold(out[b, s], c, atol=1e-4)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hope_batched_positions_match_per_row(dtype):
+    """(B, S) positions give each batch row the result of hope with that row's (S,) positions."""
+    batch, seq_len, d, c = 3, 7, 8, 0.5
+    z = _make_hyperboloid_seq(jax.random.PRNGKey(21), batch, seq_len, d, c=c).astype(dtype)
+    positions_BS = jnp.arange(seq_len)[None, :] + jnp.array([0, 5, 113])[:, None]  # distinct offsets per row
+
+    out = hope(z, positions_BS, c=c)
+    out_module = HyperbolicRoPE(dim=d)(z, positions_BS, c=c)
+
+    assert out.shape == z.shape
+    assert jnp.array_equal(out_module, out)
+    for b in range(batch):
+        assert jnp.array_equal(out[b], hope(z[b], positions_BS[b], c=c))
+
+
+def _helm_apply_rotary_emb_np(x, positions, base):
+    """Numpy transcription of HELM's precompute_freqs_cis (no YaRN) + apply_rotary_emb on (S, d) or (..., S, d)."""
+    d = x.shape[-1]
+    freqs = 1.0 / (base ** (np.arange(0, d, 2, dtype=np.float64) / d))
+    freqs_cis = np.exp(1j * np.outer(positions, freqs))  # torch.polar(ones, angles): (S, F)
+    x_c = x.reshape(*x.shape[:-1], -1, 2)  # view_as_complex over adjacent pairs
+    x_c = x_c[..., 0] + 1j * x_c[..., 1]  # (..., S, F)
+    y_c = x_c * freqs_cis
+    return np.stack([y_c.real, y_c.imag], axis=-1).reshape(x.shape)  # view_as_real(...).flatten
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hope_rotate_space_matches_helm_complex_rotation(dtype):
+    """hope_rotate_space equals HELM's complex rotation, keeps norms and dtype, and is hope's spatial part."""
+    batch, seq_len, d, base = 2, 9, 12, 10000.0
+    x = jax.random.normal(jax.random.PRNGKey(5), (batch, seq_len, d), dtype=dtype)
+    positions = jnp.arange(seq_len) * 31
+
+    out = hope_rotate_space(x, positions, base=base)
+    expected = _helm_apply_rotary_emb_np(np.asarray(x, dtype=np.float64), np.asarray(positions), base)
+
+    assert out.shape == x.shape
+    assert out.dtype == dtype
+    atol = 1e-4 if dtype == jnp.float32 else 1e-12
+    np.testing.assert_allclose(np.asarray(out), expected, atol=atol)
+
+    # Norm-preserving per rotated pair (hence per vector).
+    pair_norms_in = jnp.linalg.norm(x.reshape(batch, seq_len, -1, 2), axis=-1)
+    pair_norms_out = jnp.linalg.norm(out.reshape(batch, seq_len, -1, 2), axis=-1)
+    rtol = 1e-6 if dtype == jnp.float32 else 1e-14
+    assert jnp.allclose(pair_norms_in, pair_norms_out, rtol=rtol, atol=0.0)
+
+    # HELM's (B, S, H, d) layout: positions (S, 1) line the sequence axis up past the head axis.
+    x_BSHD = jnp.stack([x, 2.0 * x], axis=2)  # (B, S, 2, d)
+    out_BSHD = hope_rotate_space(x_BSHD, positions[:, None], base=base)
+    np.testing.assert_allclose(np.asarray(out_BSHD[:, :, 0]), expected, atol=atol)
+
+    # hope rotates the spatial part with this function, then rebuilds time.
+    z = _make_hyperboloid_seq(jax.random.PRNGKey(6), batch, seq_len, d).astype(dtype)
+    assert jnp.array_equal(hope(z, positions)[..., 1:], hope_rotate_space(z[..., 1:], positions))
+
+
+@pytest.mark.parametrize("low_dtype", [jnp.bfloat16, jnp.float16])
+def test_hope_rotate_space_low_precision_computes_in_float32(low_dtype):
+    """bf16/f16 input is rotated in float32 and cast back once, as HELM's x.float() ... .to(dtype)."""
+    x = jax.random.normal(jax.random.PRNGKey(8), (2, 16, 8), dtype=jnp.float32).astype(low_dtype)
+    positions = jnp.arange(16) * 97  # large angles, where a low-precision angle would be visibly off
+
+    out = hope_rotate_space(x, positions)
+    expected = hope_rotate_space(x.astype(jnp.float32), positions).astype(low_dtype)
+
+    assert out.dtype == low_dtype
+    assert jnp.array_equal(out, expected)
 
 
 # ============================================================================

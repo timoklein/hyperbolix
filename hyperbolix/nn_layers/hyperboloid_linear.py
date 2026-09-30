@@ -961,7 +961,8 @@ class HTCLinear(nnx.Module):
         x: Float[Array, "batch in_features"],
         c_in: float = 1.0,
         c_out: float = 1.0,
-    ) -> Float[Array, "batch out_features_plus_1"]:
+        return_space: bool = False,
+    ) -> Float[Array, "batch out_features_plus_1"] | Float[Array, "batch out_features"]:
         """Apply HTC linear transformation.
 
         Parameters
@@ -972,11 +973,17 @@ class HTCLinear(nnx.Module):
             Input curvature (default: 1.0).
         c_out : float, optional
             Output curvature (default: 1.0).
+        return_space : bool, optional
+            If True, return only the spatial components ``(batch, out_features)``
+            of the output point, already scaled by ``sqrt(c_in / c_out)``, i.e.
+            exactly ``y[..., 1:]`` of the full output (HELM ``LorentzLinear``'s
+            ``return_space``). Under ``jit`` the unused time coordinate is
+            dead code and is not computed (default: False).
 
         Returns
         -------
-        y : Array of shape (batch, out_features+1)
-            Output points on hyperboloid with curvature c_out.
+        y : Array of shape (batch, out_features+1), or (batch, out_features) if return_space
+            Output points on hyperboloid with curvature c_out, or their spatial part.
         """
 
         def linear_fn(z):
@@ -989,7 +996,12 @@ class HTCLinear(nnx.Module):
                 out = out + self.bias[...].astype(z.dtype)
             return out
 
-        return htc(x, linear_fn, c_in, c_out, self.eps)
+        y = htc(x, linear_fn, c_in, c_out, self.eps)  # (..., out_features+1)
+        if return_space:
+            # Slice rather than re-derive the sqrt(c_in/c_out) scaling, so the spatial part is
+            # htc's by construction; XLA drops the dead time reduction under jit.
+            return y[..., 1:]  # (..., out_features)
+        return y
 
 
 class FGGLinear(nnx.Module):

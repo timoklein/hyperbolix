@@ -941,3 +941,74 @@ def test_full_attention_head_averages_far_values_on_different_rays_accurately(se
     dist_fn = jax.vmap(hyperboloid_f64.dist, in_axes=(0, 0, None))
     err = float(jnp.max(dist_fn(got_BNA.astype(jnp.float64).reshape(-1, D + 1), ref_BNA.reshape(-1, D + 1), c)))
     assert err < 5e-6, f"float32 head average {err:.2e} geodesic from the float64 run"
+
+
+# ===================================================================
+# HyperbolicFullAttention centroid_form
+# ===================================================================
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["float32", "float64"])
+@pytest.mark.parametrize("causal", [False, True])
+def test_full_attention_default_centroid_form_is_variance_bit_for_bit(dtype, causal):
+    """The default aggregation is the variance form, so outputs of earlier releases are unchanged."""
+    c_in, c_attn, c_out = 1.0, 0.5, 2.0
+    x_BNA = _make_hyp_points(jax.random.PRNGKey(5), 2, 6, 7, c=c_in).astype(dtype)
+    default = HyperbolicFullAttention(7, 6, num_heads=2, rngs=nnx.Rngs(0))
+    explicit = HyperbolicFullAttention(7, 6, num_heads=2, rngs=nnx.Rngs(0), centroid_form="variance")
+
+    assert default.centroid_form == "variance"
+    out_default = default(x_BNA, c_in, c_attn, c_out, causal=causal)
+    out_explicit = explicit(x_BNA, c_in, c_attn, c_out, causal=causal)
+    assert out_default.dtype == dtype
+    assert bool(jnp.array_equal(out_default, out_explicit))
+
+
+@pytest.mark.parametrize(("dtype", "bound"), [(jnp.float64, 1e-11), (jnp.float32, 2e-4)], ids=["float64", "float32"])
+@pytest.mark.parametrize("causal", [False, True])
+def test_full_attention_gemm_centroid_matches_variance_at_moderate_radius(dtype, bound, causal):
+    """``centroid_form="gemm"`` and ``"variance"`` agree when the values sit at scaled radius ~3.
+
+    At ``a = sqrt(c) d = 3`` the GEMM normalizer's relative error ``eps cosh^2(a)`` is about 1e-5 in
+    float32 and 2e-14 in float64, so the two forms must agree to rounding: tightly in float64,
+    loosely in float32. Queries and keys sit near the origin and the values on a radial cloud with
+    an angular spread, as in the far-value tests above; ``_attend`` is called directly so the
+    projections do not move the values. Measured max gap over four seeds: 4.0e-14 (float64) and
+    1.0e-5 (float32) (``logs/2026-09-30_helm-decisions/gemm_vs_variance_moderate_probe.out``).
+    """
+    B, N, H, D, c = 2, 16, 2, 8, 0.5
+    k_q, k_k, k_base, k_dirs, k_rad = jax.random.split(jax.random.PRNGKey(7), 5)
+
+    def _near_origin(key):
+        k_u, k_a = jax.random.split(key)
+        u_BNHD = jax.random.normal(k_u, (B, N, H, D), dtype=jnp.float64)
+        u_BNHD = u_BNHD / jnp.linalg.norm(u_BNHD, axis=-1, keepdims=True)
+        a_BNH = 1.0 + 0.3 * jax.random.normal(k_a, (B, N, H), dtype=jnp.float64)
+        return _polar_points(a_BNH, u_BNHD, c)
+
+    base_D = jax.random.normal(k_base, (D,), dtype=jnp.float64)
+    base_D = base_D / jnp.linalg.norm(base_D)
+    dirs_BNHD = _spread_directions(k_dirs, base_D, (B, N, H), 0.3)
+    a_v_BNH = 3.0 + 0.3 * jax.random.normal(k_rad, (B, N, H), dtype=jnp.float64)
+    qkv = tuple(x.astype(dtype) for x in (_near_origin(k_q), _near_origin(k_k), _polar_points(a_v_BNH, dirs_BNHD, c)))
+
+    variance = HyperbolicFullAttention(D + 1, D, num_heads=H, rngs=nnx.Rngs(0), centroid_form="variance")
+    gemm = HyperbolicFullAttention(D + 1, D, num_heads=H, rngs=nnx.Rngs(0), centroid_form="gemm")
+    out_variance_BNA = variance._attend(*qkv, c_attn=c, c_out=c, causal=causal)
+    out_gemm_BNA = gemm._attend(*qkv, c_attn=c, c_out=c, causal=causal)
+    assert out_gemm_BNA.dtype == dtype
+
+    dist_fn = jax.vmap(hyperboloid_f64.dist, in_axes=(0, 0, None))
+    err = float(
+        jnp.max(
+            dist_fn(
+                out_gemm_BNA.astype(jnp.float64).reshape(-1, D + 1), out_variance_BNA.astype(jnp.float64).reshape(-1, D + 1), c
+            )
+        )
+    )
+    assert err < bound, f"gemm and variance centroids {err:.2e} geodesic apart"
+
+
+def test_full_attention_rejects_invalid_centroid_form():
+    with pytest.raises(ValueError, match="centroid_form"):
+        HyperbolicFullAttention(7, 6, num_heads=2, rngs=nnx.Rngs(0), centroid_form="literal")  # type: ignore[arg-type]

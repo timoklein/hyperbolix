@@ -30,6 +30,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.test_util import check_grads
 
 # tests/conftest.py enables x64 at import time, but ``seed_jax`` is not autouse, so set it
 # here too: every float64 reference in this file depends on it.
@@ -42,7 +43,9 @@ from hyperbolix.nn_layers.hyperboloid_core import (  # noqa: E402
     MATMUL_PRECISION,
     lorentz_midpoint,
     lorentz_residual,
+    spatial_to_hyperboloid,
 )
+from hyperbolix.utils.math_utils import floor_at  # noqa: E402
 
 # ---------------------------------------------------------------------------------------
 # Anti-reversion oracles: verbatim transcriptions of the pre-fix (naive) bodies.
@@ -735,3 +738,112 @@ def test_frechet_mean_with_boundary_lifted_point_is_finite():
     assert float(mean_A[0]) > 0.0, "frechet_mean not on the upper sheet"
     resid, tol = abs(_lorentz_sq(mean_A) + 1.0 / c), _sheet_tol(mean_A)
     assert resid < tol, f"frechet_mean off the sheet by {resid:.3e} (tol {tol:.1e})"
+
+
+# ---------------------------------------------------------------------------------------
+# 11. form="gemm": the O(N*M)-memory literal normalizer, and the unchanged default
+# ---------------------------------------------------------------------------------------
+
+
+def _variance_midpoint_before_gemm(points, weights, c, eps=1e-7):
+    """Verbatim body of ``lorentz_midpoint`` before the ``form`` option existed (the default path)."""
+    h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
+    time_M = points[..., 0]
+    velocity_MD = points[..., 1:] / time_M[..., None]
+    time_N = h_NA[..., 0]
+    safe_time_N = jnp.where(time_N != 0, time_N, 1.0)
+    mean_ND = h_NA[..., 1:] / safe_time_N[..., None]
+    dev_sq_NM = jnp.sum((velocity_MD[..., None, :, :] - mean_ND[..., :, None, :]) ** 2, axis=-1)
+    terms_NM = 1.0 / time_M[..., None, :] + c * time_M[..., None, :] * dev_sq_NM
+    weighted_N = jnp.einsum("...nm,...nm->...n", weights, terms_NM, precision=MATMUL_PRECISION)
+    neg_c_mink_N1 = (time_N * weighted_N)[..., None]
+    denom_N1 = jnp.sqrt(floor_at(jnp.abs(neg_c_mink_N1), eps))
+    z_NA = h_NA / denom_N1
+    return spatial_to_hyperboloid(z_NA[..., 1:], c_in=c, c_out=c, eps=eps)
+
+
+def _mixed_cloud_and_weights(seed, a, c, m=16, n=4, d=32, temperature=1.0):
+    """Mixed cloud (spread 0.3 in radius and direction) and softmax rows of ``temperature * N(0,1)``."""
+    pts_MA = _angular_cloud(seed, m, a, c, d, sigma_rad=0.3, sigma_a=0.3)
+    scores_NM = temperature * jax.random.normal(jax.random.PRNGKey(900 + seed), (n, m), dtype=jnp.float64)
+    return pts_MA, jax.nn.softmax(scores_NM, axis=-1)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_lorentz_midpoint_default_form_is_bitwise_unchanged(dtype):
+    """The default and ``form="variance"`` reproduce the pre-``form`` body bit for bit."""
+    pts_MA, w_NM = _mixed_cloud_and_weights(3, 5.0, 0.5)
+    pts_MA, w_NM = pts_MA.astype(dtype), w_NM.astype(dtype)
+    before_NA = _variance_midpoint_before_gemm(pts_MA, w_NM, 0.5)
+    np.testing.assert_array_equal(np.asarray(lorentz_midpoint(pts_MA, w_NM, 0.5)), np.asarray(before_NA))
+    np.testing.assert_array_equal(np.asarray(lorentz_midpoint(pts_MA, w_NM, 0.5, form="variance")), np.asarray(before_NA))
+
+
+def test_lorentz_midpoint_rejects_unknown_form():
+    pts_MA, w_NM = _mixed_cloud_and_weights(0, 1.0, 1.0)
+    with pytest.raises(ValueError, match="form"):
+        lorentz_midpoint(pts_MA, w_NM, 1.0, form="clamp")
+
+
+@pytest.mark.parametrize("temperature", [1.0, 30.0], ids=["soft", "peaked"])
+@pytest.mark.parametrize("a", [1.0, 2.0, 4.0])
+@pytest.mark.parametrize("c", [0.5, 1.0])
+def test_lorentz_midpoint_gemm_matches_variance(c, a, temperature):
+    """``form="gemm"`` agrees with the variance form at ``a <= 4`` and lands on the sheet.
+
+    Reference: the float64 variance form. Peaked rows (one key takes ~all the weight) are the
+    gemm form's worst case, ``-c<h,h>_L ~ 1``, where it loses ``eps*cosh^2(a)`` relative
+    accuracy: 8.9e-5 in float32 at ``a = 4``. Measured worst geodesic error over the cells
+    (``logs/2026-09-30_helm-centroid/accuracy_probe.out``, c = 1): float64 1.8e-13, float32
+    1.2e-4. Bounds: 1e-11 (float64) and 5e-4 (float32).
+    """
+    for seed in _SEEDS:
+        pts64_MA, w64_NM = _mixed_cloud_and_weights(seed, a, c, temperature=temperature)
+        truth_NA = lorentz_midpoint(pts64_MA, w64_NM, c)
+
+        gemm64_NA = lorentz_midpoint(pts64_MA, w64_NM, c, form="gemm")
+        err64 = _geodesic_err(gemm64_NA, truth_NA, c)
+        assert err64 < 1e-11, f"seed {seed}: float64 gemm midpoint {err64:.2e} geodesic from the variance one"
+
+        gemm32_NA = lorentz_midpoint(pts64_MA.astype(jnp.float32), w64_NM.astype(jnp.float32), c, form="gemm")
+        assert gemm32_NA.dtype == jnp.float32
+        err32 = _geodesic_err(gemm32_NA, truth_NA, c)
+        assert err32 < 5e-4, f"seed {seed}: float32 gemm midpoint {err32:.2e} geodesic from the float64 variance one"
+
+        for z_A in gemm64_NA:
+            resid, tol = abs(_lorentz_sq(z_A) + 1.0 / c), _sheet_tol(z_A)
+            assert resid < tol, f"seed {seed}: gemm midpoint off the sheet by {resid:.3e} (tol {tol:.1e})"
+
+
+def test_lorentz_midpoint_gemm_gradient_matches_finite_differences():
+    """Float64 ``jax.test_util.check_grads`` (forward and reverse, order 2) at a generic point.
+
+    Points and weights both vary; the finite differences step off the sheet, where the gemm
+    normalizer is still smooth (``h`` stays timelike).
+    """
+    c = 0.7
+    pts_MA, w_NM = _mixed_cloud_and_weights(5, 1.5, c, m=5, n=3, d=4)
+
+    def fn(pts_MA, w_NM):
+        return lorentz_midpoint(pts_MA, w_NM, c, form="gemm")
+
+    check_grads(fn, (pts_MA, w_NM), order=2, modes=("fwd", "rev"), atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.parametrize("form", ["gemm", "variance"])
+def test_lorentz_midpoint_degenerate_clouds_return_the_point(form):
+    """A single point, and M coincident points under uniform or softmax weights, return that point."""
+    c = 0.5
+    u_D = _spread_directions(jax.random.PRNGKey(7), jnp.eye(6, dtype=jnp.float64)[0], (), 0.4)
+    x_A = _polar_points(jnp.asarray(2.5, dtype=jnp.float64), u_D, c)
+
+    single_NA = lorentz_midpoint(x_A[None], jnp.ones((1, 1), dtype=jnp.float64), c, form=form)
+    assert _geodesic_err(single_NA, x_A[None], c) < 1e-12
+
+    m = 8
+    same_MA = jnp.broadcast_to(x_A, (m, x_A.shape[0]))
+    uniform_NM = jnp.full((1, m), 1.0 / m, dtype=jnp.float64)
+    softmax_NM = _softmax_weights(11, 3, m)
+    for w_NM in (uniform_NM, softmax_NM):
+        out_NA = lorentz_midpoint(same_MA, w_NM, c, form=form)
+        assert _geodesic_err(out_NA, jnp.broadcast_to(x_A, out_NA.shape), c) < 1e-12

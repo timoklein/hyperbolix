@@ -23,7 +23,7 @@ Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026)
 """
 
 from collections.abc import Callable
-from typing import cast
+from typing import Literal, cast
 
 import jax
 import jax.numpy as jnp
@@ -430,6 +430,7 @@ def lorentz_midpoint(
     weights: Float[Array, "... N M"],
     c: ScalarCurvature,
     eps: float = 1e-7,
+    form: Literal["variance", "gemm"] = "variance",
 ) -> Float[Array, "... N A"]:
     """Weighted Lorentzian midpoint over M points.
 
@@ -437,7 +438,7 @@ def lorentz_midpoint(
     arbitrary weighted combination used by full attention aggregation and
     multi-head averaging.
 
-    Formula (HELM, Chen et al. 2024):
+    Formula (HELM, He et al. 2025):
         ``h = weights @ points``  (weighted sum)
         ``mu = h / (sqrt(c) * ||h||_L)``
 
@@ -465,6 +466,29 @@ def lorentz_midpoint(
     broadcast and reduction. For batch means and head averages, ``N = 1`` and
     this is linear in the number of points. All contractions use HIGHEST
     precision. Output time is reconstructed from the normalized spatial part.
+
+    ``form="gemm"`` instead evaluates ``-c<h,h>_L = c*(h_0² - ||h_s||²)`` on ``h`` itself,
+    the literal HELM centroid ``h / sqrt(c*|<h,h>_L|)`` (floored at ``eps``), with the same
+    time rebuild. Its cost is one GEMM plus ``O(N*A)`` work, against the variance form's
+    elementwise ``(..., N, M, D)`` intermediate, which in attention (``N = S`` queries,
+    ``M = T`` keys) is ``S*T*D`` per head: ``O(S*T*D)`` work outside the GEMM, and as much
+    memory where XLA materializes it (measured: XLA:CPU does in the backward, XLA:GPU fused
+    it away; ``logs/2026-09-30_helm-centroid/``). The price is cancellation: the two
+    squares are ``O(cosh²(a))`` at scaled radius ``a = sqrt(c)*d``, so when ``-c<h,h>_L ≈ 1`` (a tight
+    cloud, or a peaked softmax row) it loses relative accuracy of about ``eps*cosh²(a)``
+    (float32: 9e-5 at ``a = 4``, 0.27 at ``a = 8``), and the midpoint's geodesic error is of
+    the same order (measured, float32, M = 16: 1.2e-4 at ``a = 4``, 0.35 at ``a = 8``;
+    ``logs/2026-09-30_helm-centroid/accuracy_probe.out``). Spread clouds lose less, as
+    ``-c<h,h>_L`` grows with the spread. The default, ``"variance"``, is unchanged bit for
+    bit. The error depends on the radius of the ``points`` alone, not on how the weights
+    were formed: in attention, float32 ``"gemm"`` loses the centroid of values at ``a = 9``
+    (5.7 to 11 nats from the float64 run, against 5e-7 to 4.5e-4 for ``"variance"``) even
+    when queries and keys sit near the origin and the scores are accurate
+    (``logs/2026-09-30_helm-decisions/far_values_gemm_probe.out``). So ``"gemm"`` does not
+    break only where GEMM-formed attention scores already have
+    (``docs/user-guide/numerical-stability.md#attention-score-floor``). Pick it where the
+    cost matters (long sequences) and the points stay well inside ``a ≈ 6`` in float32, or
+    run in float64; otherwise use ``"variance"``.
 
     Historical measurements of the preceding radius/direction variance form
     (probe C.i in ``logs/2026-09-08_hyperboloid_tangent_primitives``, M = 16,
@@ -494,11 +518,20 @@ def lorentz_midpoint(
         Curvature parameter (positive).
     eps : float, optional
         Numerical stability floor (default: 1e-7).
+    form : {"variance", "gemm"}, optional
+        How ``-c<h,h>_L`` is evaluated; a static Python choice (default: ``"variance"``, the
+        cancellation-free direct variance; ``"gemm"`` is the single-GEMM literal form, see
+        above).
 
     Returns
     -------
     Array, shape (..., N, A)
         Midpoints on the hyperboloid with curvature ``c``.
+
+    Raises
+    ------
+    ValueError
+        If ``form`` is not ``"variance"`` or ``"gemm"``.
 
     Notes
     -----
@@ -516,21 +549,28 @@ def lorentz_midpoint(
     flows through the spatial components (as in every HRC/HTC layer) rather than through the input
     time coordinates directly.
     """
+    if form not in ("variance", "gemm"):
+        raise ValueError(f"form must be 'variance' or 'gemm', got {form!r}")
     # h = sum_m w_{n,m} * points_m  →  (..., N, A)
     # Pinned HIGHEST: the cancellation-free identity below only holds to O(eps) if its inputs
     # are float32-accurate; at the TF32 default the f32-vs-f64 relative error of this function
     # is 4.6e-5 … 2.6e-4 instead of 2.6e-8 … 1.6e-7 (see hyperbolix.utils.precision).
     h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
-    time_M = points[..., 0]  # (..., M), positive on the upper sheet
-    velocity_MD = points[..., 1:] / time_M[..., None]  # (..., M, D)
-    time_N = h_NA[..., 0]  # (..., N)
-    safe_time_N = jnp.where(time_N != 0, time_N, 1.0)
-    mean_ND = h_NA[..., 1:] / safe_time_N[..., None]  # (..., N, D)
-    # Direct variance: expanding these squares reintroduces large-radius cancellation.
-    dev_sq_NM = jnp.sum((velocity_MD[..., None, :, :] - mean_ND[..., :, None, :]) ** 2, axis=-1)
-    terms_NM = 1.0 / time_M[..., None, :] + c * time_M[..., None, :] * dev_sq_NM
-    weighted_N = jnp.einsum("...nm,...nm->...n", weights, terms_NM, precision=MATMUL_PRECISION)
-    neg_c_mink_N1 = (time_N * weighted_N)[..., None]  # (..., N, 1), = -c*<h,h>_L
+    if form == "gemm":
+        # Literal -c<h,h>_L from h alone: O(N*A) elementwise work, no (..., N, M, D) intermediate.
+        # Cancels as eps*cosh²(a) at large radius (docstring); elementwise, so no TF32 either.
+        neg_c_mink_N1 = c * (h_NA[..., :1] ** 2 - jnp.sum(h_NA[..., 1:] ** 2, axis=-1, keepdims=True))  # (..., N, 1)
+    else:
+        time_M = points[..., 0]  # (..., M), positive on the upper sheet
+        velocity_MD = points[..., 1:] / time_M[..., None]  # (..., M, D)
+        time_N = h_NA[..., 0]  # (..., N)
+        safe_time_N = jnp.where(time_N != 0, time_N, 1.0)
+        mean_ND = h_NA[..., 1:] / safe_time_N[..., None]  # (..., N, D)
+        # Direct variance: expanding these squares reintroduces large-radius cancellation.
+        dev_sq_NM = jnp.sum((velocity_MD[..., None, :, :] - mean_ND[..., :, None, :]) ** 2, axis=-1)
+        terms_NM = 1.0 / time_M[..., None, :] + c * time_M[..., None, :] * dev_sq_NM
+        weighted_N = jnp.einsum("...nm,...nm->...n", weights, terms_NM, precision=MATMUL_PRECISION)
+        neg_c_mink_N1 = (time_N * weighted_N)[..., None]  # (..., N, 1), = -c*<h,h>_L
     denom_N1 = jnp.sqrt(floor_at(jnp.abs(neg_c_mink_N1), eps))  # (..., N, 1)
     z_NA = h_NA / denom_N1  # (..., N, A)
     # The identity above assumes *exactly* on-sheet points, which float storage cannot guarantee at
@@ -545,7 +585,7 @@ def lorentz_midpoint(
 def lorentz_residual(
     x: Float[Array, "... dim_plus_1"],
     y: Float[Array, "... dim_plus_1"],
-    w_y: float | Float[Array, ""],
+    w_y: float | Float[Array, "..."],
     c: float,
     eps: float = 1e-7,
 ) -> Float[Array, "... dim_plus_1"]:
@@ -576,7 +616,8 @@ def lorentz_residual(
         (``ave_0 < 0``) — the ``abs()`` in the normalizer then converts the
         geometry violation into a "valid-looking" but wrong output instead of
         raising. This is why callers must not expose ``w_y`` as an
-        unconstrained learnable parameter.
+        unconstrained learnable parameter unless they accept that behaviour
+        (see Notes, "Negative weights").
 
     Parameters
     ----------
@@ -584,8 +625,12 @@ def lorentz_residual(
         Points on hyperboloid with curvature c.
     y : Array, shape (..., d+1)
         Points on hyperboloid with curvature c (to be added with weight w_y).
-    w_y : float or scalar Array
-        Weight for the y contribution. Must be >= 0 (see warning above).
+    w_y : float or Array, shape () or (...) or (..., 1)
+        Weight for the y contribution. Must be >= 0 (see warning above). A scalar applies one
+        weight to every point; an array of shape ``x.shape[:-1]`` or ``x.shape[:-1] + (1,)``
+        gives one weight per point (e.g. per-token gate weights in a mixture of experts). A
+        weight array of shape ``x.shape[:-1]`` gets a trailing axis added internally; any
+        other non-scalar shape raises ``ValueError``.
     c : float
         Curvature parameter (positive, c > 0).
     eps : float, optional
@@ -615,7 +660,21 @@ def lorentz_residual(
     For ``w_y >= 0`` the ``abs()`` and the ``eps`` floor are provably inactive: the difference of
     two on-sheet points is spacelike (``<x - y, x - y>_L >= 0``), so
     ``c * |<ave, ave>_L| = (1 + w_y)^2 + c * w_y * <x - y, x - y>_L >= (1 + w_y)^2 >= 1``. Both
-    are kept only as insurance for out-of-contract inputs.
+    are kept only as insurance for out-of-contract inputs. The bound holds per point, so it
+    covers per-point weight arrays as well.
+
+    Negative weights. The weight is not checked: an unconstrained learnable ``w_y`` (HELM's raw
+    ``nn.Parameter``, or ``LorentzResidual(weight_parameterization="identity")``) can go
+    negative, and ``w_y < 0`` is evaluated, not rejected. The ``abs()`` then plays the role of
+    the ``.abs()`` in the HELM / LResNet reference: where ``ave`` turns spacelike, the result is
+    ``ave`` divided by ``sqrt(c <ave, ave>_L)`` and put back on the sheet by the time-coordinate
+    rebuild below — a valid hyperboloid point, but not a midpoint of ``x`` and ``y`` in any
+    sense. The reference has the same behaviour whenever its output scaling rebuilds the time
+    coordinate (without the scaling it returns the spacelike vector itself, off the sheet).
+    Likewise a past-directed ``ave`` (``ave_0 < 0``) comes back on the upper sheet with the
+    spatial part ``ave_s / sqrt(c |<ave, ave>_L|)``. At ``w_y = -1``,
+    ``c |<ave, ave>_L| = c <x - y, x - y>_L``, which falls below ``eps`` as ``x`` approaches ``y``,
+    and the floor becomes active; in the reference the ``1e-4`` clamp plays that role.
 
     The identity assumes ``x``, ``y`` are *exactly* on-sheet — an assumption float storage cannot
     honour at large radius, since ``x_0`` is only accurate to ``eps * x_0`` and the sheet constraint
@@ -634,8 +693,19 @@ def lorentz_residual(
     ----------
     He, Neil, Menglin Yang, and Rex Ying. "Lorentzian residual neural networks."
     Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 1. 2025.
-    (Also adopted as the residual connection in HELM, Chen et al. 2024, Eq. 2.)
+    (Also adopted as the residual connection in HELM, He et al. 2025.)
     """
+    # Per-point weights: (...,) -> (..., 1) so they broadcast over the ambient axis. Scalars (Python
+    # or 0-d) pass through untouched, which keeps the scalar path bit-for-bit unchanged.
+    if jnp.ndim(w_y) > 0:
+        w_shape = tuple(jnp.shape(w_y))
+        if w_shape == tuple(x.shape[:-1]):
+            w_y = jnp.expand_dims(jnp.asarray(w_y), -1)  # (..., 1)
+        elif w_shape != (*x.shape[:-1], 1):
+            raise ValueError(
+                f"lorentz_residual: w_y must be a scalar or have shape x.shape[:-1] or x.shape[:-1] + (1,); "
+                f"got w_y.shape={w_shape} for x.shape={tuple(x.shape)}"
+            )
     ave_A = x + w_y * y  # (..., A) where A = d+1
     # Exact for on-sheet x, y:  <x + w y, x + w y>_L = -(1+w)^2/c - w <x-y, x-y>_L.
     # The naive -ave_0^2 + ||ave_s||^2 subtracts two O(||s||^2) squares to reach an O(1/c) result

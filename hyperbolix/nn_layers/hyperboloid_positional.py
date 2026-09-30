@@ -6,11 +6,13 @@ This module provides positional encoding layers for hyperbolic Transformers:
   Hypformer, combining HTCLinear with a Lorentzian residual connection.
 - **hope** / **HyperbolicRoPE**: Hyperbolic Rotary Positional Encoding (HOPE)
   from HELM, a deterministic rotation-based encoding that preserves manifold
-  structure and relative position information.
+  structure and relative position information. **hope_rotate_space** applies
+  the same rotation to a spatial tensor without rebuilding the time coordinate
+  (the decoupled RoPE slice of multi-head latent attention).
 
 References
 ----------
-Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
 Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
 Hyperbolic Space", 2025.
 """
@@ -74,7 +76,7 @@ class HypformerPositionalEncoding(nnx.Module):
 
     References
     ----------
-    Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+    He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
     Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
     Hyperbolic Space", 2025.
     """
@@ -154,9 +156,75 @@ def _apply_rotary_interleaved(
     return jnp.stack([y1_F, y2_F], axis=-1).reshape(x.shape)  # (..., d)
 
 
+def hope_rotate_space(
+    x_space: Float[Array, "... seq d"],
+    positions: Float[Array, "..."],
+    base: float = 10000.0,
+) -> Float[Array, "... seq d"]:
+    """Rotate a spatial tensor with the HOPE / RoPE interleaved-pair rotation.
+
+    The spatial-only half of :func:`hope`: it rotates adjacent pairs
+    ``(x_0, x_1), (x_2, x_3), ...`` of the last axis by the angles
+    ``positions * theta_i`` with ``theta_i = 1 / base^(2i/d)``, and does not
+    rebuild a time coordinate. This is HELM's ``apply_rotary_emb`` (a complex
+    multiply over adjacent pairs), used by multi-head latent attention's
+    decoupled RoPE, which rotates only a slice of the space part of the
+    queries and keys and assembles the full point afterwards.
+
+    Parameters
+    ----------
+    x_space : Array, shape (..., seq_len, d)
+        Spatial components (``d`` must be even). Any leading axes.
+    positions : Array
+        Integer position indices, broadcastable against ``x_space.shape[:-1]``
+        after the angle axis is appended (``positions[..., None] * theta``):
+        ``(seq_len,)`` applies one position sequence to every leading axis,
+        ``(batch, seq_len)`` gives each batch row its own positions for an
+        ``x_space`` of shape ``(batch, seq_len, d)``. Axes are aligned from the
+        right, so other layouts need singleton axes: heads before the sequence,
+        ``(batch, heads, seq_len, d)``, take ``(batch, 1, seq_len)``; heads after
+        it, ``(batch, seq_len, heads, d)`` as in HELM, take ``positions[:, None]``
+        of shape ``(seq_len, 1)``.
+    base : float, optional
+        Frequency base for rotation angles (default: 10000.0).
+
+    Returns
+    -------
+    Array, same shape and dtype as ``x_space``
+        Rotated spatial components; every pair keeps its Euclidean norm.
+
+    Notes
+    -----
+    The rotation is computed in ``promote_types(x_space.dtype, float32)`` and cast
+    back to the input dtype: bfloat16/float16 inputs are rotated in float32, as
+    HELM does (``x.float()`` ... ``.to(dtype)``), float32 stays float32 and float64
+    stays float64.
+
+    References
+    ----------
+    He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
+    """
+    d = x_space.shape[-1]
+    in_dtype = x_space.dtype
+    dtype = jnp.promote_types(in_dtype, jnp.float32)  # f32 for bf16/f16, unchanged for f32/f64
+    x_SD = x_space.astype(dtype)  # (..., S, D); no-op for f32/f64
+
+    # Frequency schedule: theta_i = 1 / base^(2i/d). Build the index grid in the
+    # compute dtype: bare jnp.arange is int64 under global jax_enable_x64, and the
+    # subsequent division would promote the whole encoding to float64.
+    freqs_F = 1.0 / (base ** (jnp.arange(0, d, 2, dtype=dtype) / d))  # (F,) where F = d//2
+    angles_SF = positions[..., None].astype(dtype) * freqs_F  # (..., S, F), positions' shape + (F,)
+    cos_SF = jnp.cos(angles_SF)
+    sin_SF = jnp.sin(angles_SF)
+
+    # Rotate interleaved pairs; cos/sin broadcast against the (..., S, F) pair grid.
+    rotated_SD = _apply_rotary_interleaved(x_SD, cos_SF, sin_SF)  # (..., S, D)
+    return rotated_SD.astype(in_dtype)
+
+
 def hope(
     z: Float[Array, "... seq d_plus_1"],
-    positions: Float[Array, "seq"],
+    positions: Float[Array, "..."],
     c: float = 1.0,
     base: float = 10000.0,
     eps: float = 1e-7,
@@ -176,8 +244,13 @@ def hope(
     ----------
     z : Array, shape (..., seq_len, d+1)
         Points on hyperboloid (d must be even).
-    positions : Array, shape (seq_len,)
-        Integer position indices.
+    positions : Array
+        Integer position indices, broadcastable against ``z.shape[:-1]``:
+        ``(seq_len,)`` for one position sequence shared by all leading axes,
+        or e.g. ``(batch, seq_len)`` for per-row positions with ``z`` of shape
+        ``(batch, seq_len, d+1)``. Axes are aligned from the right, so axes between
+        batch and sequence need singleton axes (``(batch, 1, seq_len)`` for
+        ``(batch, heads, seq_len, d+1)``). See :func:`hope_rotate_space`.
     c : float, optional
         Curvature parameter (default: 1.0).
     base : float, optional
@@ -192,22 +265,12 @@ def hope(
 
     References
     ----------
-    Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+    He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
     """
     spatial_SD = z[..., 1:]  # (..., S, D) where S=seq, D=spatial dim
-    d = spatial_SD.shape[-1]
-    dtype = spatial_SD.dtype
-
-    # Frequency schedule: theta_i = 1 / base^(2i/d). Build the index grid in the
-    # input dtype: bare jnp.arange is int64 under global jax_enable_x64, and the
-    # subsequent division would promote the whole encoding to float64.
-    freqs_F = 1.0 / (base ** (jnp.arange(0, d, 2, dtype=dtype) / d))  # (F,) where F = d//2
-    angles_SF = positions[:, None].astype(dtype) * freqs_F[None, :]  # (S, F)
-    cos_SF = jnp.cos(angles_SF)
-    sin_SF = jnp.sin(angles_SF)
 
     # Rotate spatial components (interleaved pairs)
-    rotated_SD = _apply_rotary_interleaved(spatial_SD, cos_SF, sin_SF)  # (..., S, D)
+    rotated_SD = hope_rotate_space(spatial_SD, positions, base)  # (..., S, D)
 
     # Reconstruct time via the hyperboloid constraint (scale = 1 since c_in == c_out),
     # which is exactly the hrc(z, R, c, c) tail this function is documented to equal.
@@ -233,7 +296,7 @@ class HyperbolicRoPE(nnx.Module):
 
     References
     ----------
-    Chen et al., "Hyperbolic Embeddings for Learning on Manifolds" (HELM), 2024.
+    He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
     """
 
     def __init__(
@@ -251,7 +314,7 @@ class HyperbolicRoPE(nnx.Module):
     def __call__(
         self,
         z: Float[Array, "... seq d_plus_1"],
-        positions: Float[Array, "seq"],
+        positions: Float[Array, "..."],
         c: float = 1.0,
     ) -> Float[Array, "... seq d_plus_1"]:
         """Apply HOPE positional encoding.
@@ -260,8 +323,9 @@ class HyperbolicRoPE(nnx.Module):
         ----------
         z : Array, shape (..., seq_len, d+1)
             Points on hyperboloid (spatial dim must equal self.dim, must be even).
-        positions : Array, shape (seq_len,)
-            Integer position indices.
+        positions : Array
+            Integer position indices, broadcastable against ``z.shape[:-1]``
+            (``(seq_len,)`` or e.g. ``(batch, seq_len)``; see :func:`hope`).
         c : float, optional
             Curvature parameter (default: 1.0).
 

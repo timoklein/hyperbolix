@@ -121,6 +121,8 @@ nav:
           - Regression & MLR: api-reference/nn-layers/regression.md
           - Activations: api-reference/nn-layers/activations.md
           - Positional Encoding: api-reference/nn-layers/positional-encoding.md
+          - Embedding: api-reference/nn-layers/embedding.md
+          - Mixture of Curvature Experts: api-reference/nn-layers/moe.md
           - Vector Quantization: api-reference/nn-layers/vector-quantization.md
           - Primitives & Helpers: api-reference/nn-layers/primitives.md
       - Optimizers: api-reference/optimizers.md

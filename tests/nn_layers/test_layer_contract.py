@@ -37,10 +37,18 @@ in ``grad_paths`` and asserted finite by ``test_gradient_contract``; whether a
 layer returns a manifold point or Euclidean logits is ``output_is_manifold_point``;
 whether it has an ``input_space`` option is ``has_input_space``.
 
+Layers whose call signature is not ``layer(x, c=c) -> array`` (the HELM MoE returns
+``(out, stats)``, the embedding takes integer ids and names its curvature ``c_out``, the
+SwiGLU expert needs an expert curvature) are wrapped in the small adapter modules below;
+an adapter only fixes the call shape, and every parameter is still reached through
+``grad_paths``.  ``LayerSpec.make_input`` replaces the lifted-tangent input for the
+embedding, whose input is token ids.
+
 Dimension key:
   B: batch size        H, W: feature-map height/width
   I: input dim         O: output dim
   C: channels          N: flattened points (B*H*W)
+  S: sequence length   A: ambient dim (spatial + 1)   K: experts selected per token
 """
 
 from collections.abc import Callable
@@ -72,6 +80,11 @@ from hyperbolix.nn_layers import (
     HypRegressionPoincareBusemann,
     HypRegressionPoincarePP,
     HypRegressionPV,
+    LorentzEmbedding,
+    LorentzMLA,
+    LorentzMoE,
+    LorentzMoEGate,
+    LorentzSwiGLU,
 )
 
 # Busemann layers were tested at c=0.7 upstream; keep that curvature so the
@@ -145,6 +158,50 @@ class LayerSpec:
     make_conv: Callable | None = None
     conv_in_channels: int = 3
     conv_out_channels: int = 3
+    # (dtype, c) -> layer input; None => a lifted tangent draw (see ``_make_input``).
+    make_input: Callable | None = None
+
+
+class _MoEOutput(nnx.Module):
+    """``LorentzMoE`` returns ``(out, stats)``; the contract checks the ``out`` point."""
+
+    def __init__(self, moe: LorentzMoE):
+        self.moe = moe
+
+    def __call__(self, x, c=1.0):
+        out, _stats = self.moe(x, c)
+        return out
+
+
+class _GateWeights(nnx.Module):
+    """``LorentzMoEGate`` takes no curvature and returns ``(weights, indices, stats)``; check the weights."""
+
+    def __init__(self, gate: LorentzMoEGate):
+        self.gate = gate
+
+    def __call__(self, x, c=1.0):
+        weights, _indices, _stats = self.gate(x)
+        return weights
+
+
+class _SwiGLUAtDoubleCurvature(nnx.Module):
+    """``LorentzSwiGLU`` needs an expert curvature; run it on a sheet of twice the model curvature."""
+
+    def __init__(self, expert: LorentzSwiGLU):
+        self.expert = expert
+
+    def __call__(self, x, c=1.0):
+        return self.expert(x, 2.0 * c, c)
+
+
+class _EmbeddingAtCurvature(nnx.Module):
+    """``LorentzEmbedding`` names its output curvature ``c_out``; the table sits at c = 1."""
+
+    def __init__(self, embedding: LorentzEmbedding):
+        self.embedding = embedding
+
+    def __call__(self, ids, c=1.0):
+        return self.embedding(ids, c_out=c)
 
 
 def _linear_spec(
@@ -364,6 +421,67 @@ SPECS: tuple[LayerSpec, ...] = (
         output_is_manifold_point=False,
         has_input_space=False,
     ),
+    # --- HELM layers on the hyperboloid: no input_space option, fixed-shape wrappers where the
+    #     signature is not ``layer(x, c=c)`` (see the module docstring) ---
+    LayerSpec(
+        id="helm_mla",
+        make_layer=lambda dtype, input_space: LorentzMLA(
+            9, 2, 4, 3, 5, 4, rngs=nnx.Rngs(0), param_dtype=dtype
+        ),  # dim, heads, kv_rank, nope, rope (ambient), v_head (ambient)
+        make_tangent=lambda dtype: _tangent((2, 5, 9), dtype, zero_time=True, scale=0.2),
+        out_shape=(2, 5, 9),
+        grad_paths=("wq.kernel", "wkv_a.kernel", "wkv_b.kernel", "wo.kernel", "log_tau"),
+        manifold_fn=_hyperboloid,
+        output_is_manifold_point=True,
+        has_input_space=False,
+    ),
+    LayerSpec(
+        id="helm_moe",
+        make_layer=lambda dtype, input_space: _MoEOutput(LorentzMoE(9, 6, 4, 1, 2, rngs=nnx.Rngs(0), param_dtype=dtype)),
+        make_tangent=lambda dtype: _tangent((2, 5, 9), dtype, zero_time=True, scale=0.2),
+        out_shape=(2, 5, 9),
+        grad_paths=("moe.experts.w1.kernel", "moe.experts.w2.kernel", "moe.shared_experts.w3.kernel", "moe.gate.kernel"),
+        manifold_fn=_hyperboloid,
+        output_is_manifold_point=True,
+        has_input_space=False,
+    ),
+    LayerSpec(
+        id="helm_swiglu",
+        make_layer=lambda dtype, input_space: _SwiGLUAtDoubleCurvature(
+            LorentzSwiGLU(9, 6, rngs=nnx.Rngs(0), param_dtype=dtype)
+        ),
+        make_tangent=lambda dtype: _tangent((8, 9), dtype, zero_time=True, scale=0.2),
+        out_shape=(8, 9),
+        grad_paths=("expert.w1.kernel", "expert.w2.kernel", "expert.w3.kernel"),
+        manifold_fn=_hyperboloid,
+        output_is_manifold_point=True,
+        has_input_space=False,
+    ),
+    # The gate returns Euclidean routing weights, not a point.
+    LayerSpec(
+        id="helm_moe_gate",
+        make_layer=lambda dtype, input_space: _GateWeights(LorentzMoEGate(9, 6, 2, rngs=nnx.Rngs(0), param_dtype=dtype)),
+        make_tangent=lambda dtype: _tangent((8, 9), dtype, zero_time=True, scale=0.2),
+        out_shape=(8, 2),
+        grad_paths=("gate.kernel",),
+        manifold_fn=_hyperboloid,
+        output_is_manifold_point=False,
+        has_input_space=False,
+    ),
+    # Token ids in, points out: the input is not a lifted tangent draw.
+    LayerSpec(
+        id="helm_embedding",
+        make_layer=lambda dtype, input_space: _EmbeddingAtCurvature(
+            LorentzEmbedding(16, 9, rngs=nnx.Rngs(0), param_dtype=dtype)
+        ),
+        make_tangent=lambda dtype: jnp.zeros((2, 5), dtype=jnp.int32),  # unused: make_input replaces it
+        out_shape=(2, 5, 9),
+        grad_paths=("embedding.embedding",),
+        manifold_fn=_hyperboloid,
+        output_is_manifold_point=True,
+        has_input_space=False,
+        make_input=lambda dtype, c: jax.random.randint(jax.random.PRNGKey(0), (2, 5), 0, 16),
+    ),
 )
 
 CONV_SPECS = tuple(s for s in SPECS if s.make_conv is not None)
@@ -380,6 +498,8 @@ def _ids(specs):
 
 def _make_input(spec, dtype, c):
     """The layer's ``input_space="manifold"`` input: a lifted tangent draw."""
+    if spec.make_input is not None:
+        return spec.make_input(dtype, c)
     v = spec.make_tangent(dtype)
     if spec.manifold_fn is None:
         return v

@@ -50,6 +50,7 @@ from .hyperboloid_core import (
     sinh_lift_to_hyperboloid,
     spatial_to_hyperboloid,
 )
+from .hyperboloid_embedding import LorentzEmbedding, lorentz_embedding_init
 from .hyperboloid_linear import (
     FGGLinear,
     HTCLinear,
@@ -57,7 +58,16 @@ from .hyperboloid_linear import (
     HypLinearHyperboloidFHNN,
     HypLinearHyperboloidPLFC,
 )
-from .hyperboloid_positional import HyperbolicRoPE, HypformerPositionalEncoding, hope
+from .hyperboloid_mla import LorentzMLA
+from .hyperboloid_moe import (
+    LorentzMoE,
+    LorentzMoEGate,
+    LorentzSwiGLU,
+    MoERoutingStats,
+    RoutingBias,
+    moe_sequence_balance_loss,
+)
+from .hyperboloid_positional import HyperbolicRoPE, HypformerPositionalEncoding, hope, hope_rotate_space
 from .hyperboloid_regression import FGGLorentzMLR, HypRegressionHyperboloid
 from .hyperboloid_regularization import FGGMeanOnlyBatchNorm, HRCBatchNorm, HRCDropout, HRCLayerNorm, HRCRMSNorm
 from .hyperboloid_residual import LorentzResidual
@@ -111,12 +121,19 @@ __all__ = [
     "HyperboloidGyroRMSNorm",
     "HypformerPositionalEncoding",
     "LorentzConv2D",
+    "LorentzEmbedding",
+    "LorentzMLA",
+    "LorentzMoE",
+    "LorentzMoEGate",
     "LorentzResidual",
+    "LorentzSwiGLU",
+    "MoERoutingStats",
     "PoincareBatchNorm2D",
     "PoincareGyroRMSNorm",
     "PoincareVQOutput",
     "ProperVelocityGyroBatchNorm",
     "ProperVelocityGyroRMSNorm",
+    "RoutingBias",
     "build_spacelike_V",
     "busemann_fc_poincare_output",
     "extract_patches",
@@ -124,6 +141,7 @@ __all__ = [
     "frechet_variance",
     "hcat_ambient_dim",
     "hope",
+    "hope_rotate_space",
     "hrc",
     "hrc_gelu",
     "hrc_leaky_relu",
@@ -138,9 +156,11 @@ __all__ = [
     "hyp_relu",
     "hyp_swish",
     "hyp_tanh",
+    "lorentz_embedding_init",
     "lorentz_midpoint",
     "lorentz_residual",
     "lorentz_scale",
+    "moe_sequence_balance_loss",
     "poincare_leaky_relu",
     "poincare_midpoint",
     "poincare_relu",
