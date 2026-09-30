@@ -27,7 +27,7 @@ from flax import nnx
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
-from .hyperboloid_core import hrc
+from .hyperboloid_core import hrc, spatial_to_hyperboloid
 
 # Flax NNX Modules
 
@@ -230,26 +230,37 @@ class HRCRMSNorm(nnx.Module):
 
     def __call__(
         self,
-        x: Float[Array, "batch dim_plus_1"],
+        x: Float[Array, "batch dim_plus_1"] | Float[Array, "batch dim"],
         c_in: float = 1.0,
         c_out: float = 1.0,
+        space_only: bool = False,
     ) -> Float[Array, "batch dim_plus_1"]:
         """Apply HRC RMS normalization.
 
         Parameters
         ----------
-        x : Array of shape (batch, dim+1)
-            Input points on hyperboloid with curvature c_in.
+        x : Array of shape (batch, dim+1), or (batch, dim) if space_only
+            Input points on hyperboloid with curvature c_in, or only their
+            spatial components when ``space_only=True``.
         c_in : float, optional
             Input curvature (default: 1.0).
         c_out : float, optional
             Output curvature (default: 1.0).
+        space_only : bool, optional
+            If True, ``x`` is the spatial part ``(..., num_features)`` of a point
+            (no time coordinate); it is normalized, scaled by ``sqrt(c_in / c_out)``
+            and given a time coordinate for ``c_out``, the same result as the
+            full-input path on ``concat([x_0, x])`` for any ``x_0`` (HELM
+            ``LorentzRMSNorm(space_only=True)``) (default: False).
 
         Returns
         -------
         y : Array of shape (batch, dim+1)
             Output points on hyperboloid with curvature c_out.
         """
+        if space_only:
+            # hrc's tail on an input that is already spatial: the time coordinate is never read.
+            return spatial_to_hyperboloid(self.rms(x), c_in, c_out, self.eps)  # (..., D+1)
         return hrc(x, self.rms, c_in, c_out, self.eps)
 
 

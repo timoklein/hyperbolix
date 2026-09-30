@@ -337,6 +337,30 @@ def test_htc_linear_gradient():
     assert jnp.all(jnp.isfinite(grads.kernel[...]))
 
 
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_htc_linear_return_space_matches_full_output(dtype):
+    """return_space=True gives exactly the spatial part y[..., 1:] of the full output (c_in != c_out)."""
+    layer = HTCLinear(in_features=5, out_features=8, rngs=nnx.Rngs(0))
+    c_in, c_out = 0.7, 2.0
+
+    manifold = Hyperboloid(dtype=dtype)
+    x = jax.random.normal(jax.random.PRNGKey(3), (2, 16, 5), dtype=dtype)
+    x = jax.vmap(manifold.proj, in_axes=(0, None))(x.reshape(-1, 5), c_in).reshape(2, 16, 5)
+
+    y = layer(x, c_in=c_in, c_out=c_out)
+    y_space = layer(x, c_in=c_in, c_out=c_out, return_space=True)
+
+    assert y_space.shape == (2, 16, 8)
+    assert y_space.dtype == dtype
+    assert jnp.array_equal(y_space, y[..., 1:])
+
+    @nnx.jit(static_argnums=(4,))
+    def forward(model, inputs, a, b, return_space):
+        return model(inputs, a, b, return_space=return_space)
+
+    assert jnp.array_equal(forward(layer, x, c_in, c_out, True), forward(layer, x, c_in, c_out, False)[..., 1:])
+
+
 def test_hrc_dropout_training_vs_eval():
     """Test HRCDropout behaves differently in training vs eval mode."""
     dropout = HRCDropout(rate=0.5, rngs=nnx.Rngs(dropout=42))
@@ -629,6 +653,30 @@ def test_hrc_rmsnorm_vs_layernorm():
 
     # But they should produce different outputs (RMS vs Layer normalization)
     assert not jnp.allclose(y_rms, y_ln, atol=1e-6)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_hrc_rmsnorm_space_only_matches_full_input(dtype):
+    """space_only=True on x[..., 1:] equals the full-input path on x bit for bit, and lands on c_out."""
+    manifold = Hyperboloid(dtype=dtype)
+    rms = HRCRMSNorm(num_features=4, rngs=nnx.Rngs(0), epsilon=1e-8, param_dtype=dtype)
+    # Non-trivial scale so the learned weight enters the comparison.
+    assert rms.rms.scale is not None
+    rms.rms.scale[...] = jax.random.uniform(jax.random.PRNGKey(1), (4,), dtype=dtype, minval=0.5, maxval=1.5)
+    c_in, c_out = 0.5, 2.0
+
+    x = jax.random.normal(jax.random.PRNGKey(42), (32, 5), dtype=dtype)
+    x = jax.vmap(manifold.proj, in_axes=(0, None))(x, c_in)
+
+    y_full = rms(x, c_in=c_in, c_out=c_out)
+    y_space = rms(x[..., 1:], c_in=c_in, c_out=c_out, space_only=True)
+
+    assert y_space.shape == x.shape
+    assert y_space.dtype == dtype
+    assert jnp.array_equal(y_space, y_full)
+    atol = 1e-5 if dtype == jnp.float32 else 1e-10
+    for i in range(32):
+        assert manifold.is_in_manifold(y_space[i], c_out, atol=atol)
 
 
 # HTCLinear weight-init regression tests (fan-in-aware default; frozen-stack guard)
