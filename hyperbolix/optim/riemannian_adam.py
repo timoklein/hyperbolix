@@ -123,6 +123,14 @@ def riemannian_adam(
     - Second moments follow Geoopt/PyTorch: accumulated as tangent inner products without transport
     - Works seamlessly with nnx.Optimizer wrapper
     - Parameters stay on manifold after updates (via expmap/retraction + projection)
+    - There is no geoopt-style ``stabilize`` option because every step already ends on the manifold:
+      ``expmap``/``retraction`` end with ``proj`` (the ball clip on Poincaré), and the first moment is
+      moved with ``ptransp``, which returns a tangent vector by construction (on the Hyperboloid it
+      rebuilds the time slot from tangency; on Poincaré every vector is tangent). geoopt's ``stabilize=1``,
+      as HELM uses it, is therefore what this optimizer does at every step. Passing the already-tangent
+      moment back through ``tangent_proj`` would only lose float32 accuracy far from the origin: 30 steps
+      on the Hyperboloid at c = 0.5 from scaled radius 8 end 1.6e-4 from the float64 run without it and
+      7.1e-2 with it, and NaN from radius 10 (``logs/2026-09-30_optim-stabilize/probe_large_radius.py``).
     """
 
     def manifold_leaf_fn(rgrad, moments, param_value, manifold_module, c, lr, count):
