@@ -122,15 +122,10 @@ to a decade either side of `init_c`, `[init_c / 10, init_c * 10]` (`[0.1, 10]`
 at the default `init_c=1.0`), giving a hard stability guard. `"identity"`
 instead uses a symmetric magnitude cap `[-10.0, 10.0]` that *includes* `0`, so
 it never forbids the Euclidean/spherical half. Pass `c_min`/`c_max` to set other
-bounds, or `None` to disable one.
-
-The clamp does not freeze `c` on a bound. On a bound or outside
-`[c_min, c_max]` it blocks only a gradient that would push `c` out, so `c`
-rests on the bound while the loss pushes against it and comes off it once the
-loss pulls it back inside: projected gradient descent, with no extra call in
-the train step. The raw parameter stays within the step that crossed the bound
-(plus the optimizer's momentum), so leaving takes only the few steps that walk
-that back: 1 to 7 Adam steps at learning rate `1e-2` in a toy fit.
+bounds, or `None` to disable one. The clamp does not freeze `c` on a bound:
+it blocks only a gradient that would push `c` out, so `c` comes off the bound
+once the loss pulls it back inside (projected gradient descent, with no extra
+call in the train step).
 
 ### When `c=1.0` works and when it doesn't
 
@@ -241,25 +236,14 @@ points but constant curvatures.
 
 ### Learnable curvature in compiled training loops (`nnx.scan` / `nnx.fori_loop`)
 
-Long compiled training loops (RL agents, episode rollouts, multi-step
-training kernels) have two stability concerns that motivate the
-`LearnableCurvature` defaults:
-
-1. **Sharing rule**: Assigning the **same** `LearnableCurvature` instance
-   to multiple fields creates a shared reference in the NNX pytree, which
-   breaks `nnx.scan` / `nnx.fori_loop` with `ValueError: Dict key mismatch`.
-   Always instantiate a fresh `LearnableCurvature` per location where you
-   want a distinct learnable `c`. (The manifold itself is a plain Python
-   class with no NNX state, so sharing the manifold across layers is
-   always safe.)
-
-2. **Clamp guard**: Over millions of gradient steps, an unclamped curvature
-   can drift to `c → 0` (effectively Euclidean) or `c → ∞` (numerical
-   blow-up). The default bounds, a decade either side of `init_c` and
-   applied directly to `c` rather than to the raw parameter, stop that drift;
-   pass wider bounds if `c` should range further. A `c` held on a bound still
-   gets the gradient that points back inside, so it comes off the bound when
-   the loss changes direction.
+Assigning the **same** `LearnableCurvature` instance to multiple fields
+creates a shared reference in the NNX pytree, which breaks `nnx.scan` /
+`nnx.fori_loop` with `ValueError: Dict key mismatch`. Instantiate a fresh
+`LearnableCurvature` per location where you want a distinct learnable `c`.
+The manifold is a plain Python class with no NNX state, so sharing it across
+layers is always safe. The default clamp (see
+[Choosing a parameterization](#choosing-a-parameterization)) keeps `c` from
+drifting over long runs.
 
 The recommended pattern for a compiled RL loop:
 
@@ -389,11 +373,9 @@ the spatial part of `halfspace_to_hyperboloid`.
     A `HalfSpace` point keeps its height $x_n > 0$ in the last coordinate, and its origin is
     $e_n/\sqrt{c}$, not 0. Code written for the zero origin of `Poincare`, `Klein` or
     `ProperVelocity` should use `expmap_0`/`logmap_0`, which start from $e_n/\sqrt{c}$. None of the maps
-    into the half-space projects; `hyperboloid_to_halfspace` and `pv_to_halfspace` return
-    the height without a floor, and `HalfSpace.proj` floors it at the dtype's smallest normal
-    number. `klein_to_halfspace` inherits the Klein chart's error floor
-    $\varepsilon\cosh^2(a)$ ([Klein's chart floor](numerical-stability.md#klein-chart-ceiling)).
-    A worked example is in the [API reference](../api-reference/manifolds.md#halfspace-operations).
+    into the half-space projects; `HalfSpace.proj` floors the height at the dtype's smallest
+    normal number. A worked example is in the
+    [API reference](../api-reference/manifolds.md#halfspace-operations).
 
 ## Common Pitfalls
 

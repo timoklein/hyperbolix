@@ -62,20 +62,20 @@ capped_exp(log_scale)  # finite, saturates at exp(0.99*log(finfo.max))
 
 ## Matmul Precision
 
-`MATMUL_PRECISION` pins the **geometry** to `jax.lax.Precision.HIGHEST`, avoiding XLA:GPU's default TF32 rounding on the cancellations hyperbolic geometry relies on. It is not user-configurable. Pinned: the vector-vector reductions inside `manifolds/` and the `decomposition/` (HoroPCA) contractions; `lorentz_midpoint` and `poincare_weighted_midpoint`; the conv patch extraction (a 0/1-filter convolution, so a pure data copy); the attention score and aggregation einsums and the spatial residual projection added to that aggregate; and the MLR heads (`HypRegressionHyperboloid` and the `_compute_mlr*` einsums in `manifolds/`), which are decision quantities, and the PLFC, Poincaré++ and proper-velocity linear and convolution layers, whose weight GEMM is that einsum.
-
-The **layer weight GEMMs** pass no `precision` keyword at all — `HTCLinear` (including the attention Q/K/V projections), `FGGLinear`/`FGGConv2D`, the FHCNN/FHNN linears, `HypLinearPoincare`, `HypVQMLRPoincare`'s codebook matmul, `hybrid_regularization`'s `nnx.Linear`. These follow JAX's own `jax_default_matmul_precision`, which on Ampere/Hopper means TF32. That is where `HIGHEST` actually costs throughput (one TF32 pass becomes a three-pass float32 emulation; measured +5.5 % on a jitted hyperbolic attention forward), so the trade is yours to make:
+`MATMUL_PRECISION` pins the geometry dots (manifold reductions, midpoints, attention scores, MLR heads) to `jax.lax.Precision.HIGHEST`, so XLA:GPU's default TF32 rounding does not hit the cancellations they rely on; it is not user-configurable. The layer weight GEMMs pass no `precision` and follow JAX's `jax_default_matmul_precision`, which means TF32 on Ampere/Hopper GPUs. To run those in full float32 too, at some cost in throughput, set:
 
 ```python
+import jax
+
 # JAX-wide (jit-cache aware — changing it re-traces)
 jax.config.update("jax_default_matmul_precision", "highest")
 
 # or scoped to a block
 with jax.default_matmul_precision("highest"):
-    logits = model(x)
+    ...
 ```
 
-A deep, fully hyperbolic stack is a good reason to set it: a TF32 error introduced in an early layer's weight GEMM is carried by every layer after it. Measured on an A100 (jax 0.9.1, float32 against a float64 reference), `FGGLinear`'s relative error is 2.6e-4 at the TF32 default against 6.8e-8 under `HIGHEST` — roughly ~1e-4 against ~1e-7 on the layers. `HIGHEST` is a no-op on CPU and for float64 anywhere.
+The full list of pinned sites and the measured costs are in [TF32 on Ampere and Hopper GPUs](../user-guide/numerical-stability.md#tf32-on-ampere-and-hopper-gpus).
 
 ::: hyperbolix.utils.precision
     options:

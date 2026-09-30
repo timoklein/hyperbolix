@@ -5,18 +5,12 @@ Velocity models. For **which** conv to pick see the
 [NN Layers guide](../../user-guide/nn-layers.md#convolutional).
 
 !!! warning "Dimensional growth is internal, not in the output shape"
-    `HypConv2DHyperboloid` / `HypConv2DHyperboloidFHNN` / `FGGConv2D` expand
-    dimensionality via the HCat operation, but only as an *intermediate*
-    step: a `d+1`-ambient input is HCat-concatenated over the receptive field
-    into a `(d×N)+1`-ambient point (`N = kernel_height × kernel_width` — a
-    3×3 kernel over a 4-wide ambient input (d = 3) builds a 28-wide intermediate), which the layer's
-    kernel then projects down to `out_channels`. The **output** ambient width
-    is always `out_channels`, a free hyperparameter independent of kernel
-    size — large kernels cost more parameters and compute in that
-    intermediate step, not output width. `LorentzConv2D` never does HCat
-    (Euclidean conv on the space-like part only), so its output is
-    `out_channels` too; like Poincaré and PV convolutions, it "preserves
-    dimension" only if you set `out_channels == in_channels`.
+    `HypConv2DHyperboloid` / `HypConv2DHyperboloidFHNN` / `FGGConv2D`
+    HCat-concatenate a `d+1`-ambient input over the `N`-pixel receptive field
+    into a `(d×N)+1`-ambient intermediate, which the kernel projects down to
+    `out_channels`. The output ambient width is always `out_channels`; a
+    larger kernel costs parameters and compute, not output width.
+    `LorentzConv2D` does no HCat, and its output is also `out_channels`.
 
 ## Hyperboloid
 

@@ -21,11 +21,9 @@ from hyperbolix.nn_layers import (
     HRCLayerNorm,
     HTCLinear,
     HyperbolicSoftmaxAttention,
-    HypConv2DPoincare,
     HyperPPFeatureScaling,
     HypRegressionHyperboloid,
     HypRegressionPoincarePP,
-    PoincareBatchNorm2D,
     lorentz_residual,
 )
 
@@ -124,11 +122,9 @@ optimizer choice:
 | **FGG** (Klis et al. 2026) | Euclidean | `optax.adam` | `FGGLinear`, `FGGConv2D`, `FGGLorentzMLR` | Advanced — fast, but init-sensitive |
 | **Ganea (legacy)** | Bias on Poincaré, kernel Euclidean | `riemannian_adam` | `HypLinearPoincare`, `HypRegressionPoincare` | Legacy — prefer `PP` |
 
-**Bottom line:** every modern layer parameterizes weights in Euclidean space,
-and even the legacy Ganea layers keep their *kernel* Euclidean — only the
-*bias* is manifold-valued. Standard `optax.adam` works for everything except
-that one bias. See the [Riemannian Optimizers guide](optimizers.md)
-for the rare cases where a manifold-valued parameter appears.
+**Bottom line:** every layer keeps its kernel Euclidean, so plain `optax.adam`
+works for all of them except the legacy Ganea layers' manifold-valued bias;
+prefer their `PP` equivalents, or see the [Riemannian Optimizers guide](optimizers.md).
 
 ## Channel Conventions
 
@@ -216,20 +212,13 @@ x_manifold = jax.vmap(lambda v: hyperboloid.expmap_0(
 
 ### Proper Velocity: when to use `expmap_0` (and when not to)
 
-PV has its own rule because PV points live in unconstrained $\mathbb{R}^n$ —
-there's no "outside the manifold" to project from. Whether you apply
-`expmap_0` at the boundary depends on the rest of the architecture:
+PV points live in unconstrained $\mathbb{R}^n$, so `expmap_0` is a
+once-per-network entry, not a per-layer adapter:
 
 | Architecture | Apply `expmap_0` at input? | Why |
 |---|---|---|
 | **Fully hyperbolic PV** (PV layers all the way through) | ✅ **Yes**, once at the beginning | Establishes the proper-velocity coordinate frame; downstream PV layers assume their inputs were lifted from Euclidean tangent vectors |
 | **Hybrid PV** (Euclidean backbone → PV head, or Euclidean ↔ PV alternating) | ❌ **No** — pass Euclidean features directly to PV layers | PV layers accept any point of $\mathbb{R}^n$, so Euclidean features are valid inputs; an `expmap_0` is not needed |
-
-In other words: `expmap_0` is the **once-per-network** entry into the PV
-coordinate frame, not a per-layer adapter. If your network has a Euclidean
-stem feeding a PV classifier, hand the raw Euclidean activations to the PV
-layer; if your entire network is PV, lift once at the input and stay in PV
-coordinates from there on.
 
 ## Composition Patterns
 
@@ -369,27 +358,6 @@ gradient). The token table is a `LorentzEmbedding(vocab, hidden, rngs=rngs, c=c)
 `riemannian_adam` inside the same `nnx.Optimizer` as the Euclidean weights. The expert curvatures start
 at `linspace(0.1, 2.0, E)`; `expert_curvatures=[1.0] * E` reproduces the released HELM checkpoint.
 
-### Pattern 4: Per-layer learnable curvature (deep Poincaré nets)
-
-When stacking many Poincaré layers, give each block its own learnable curvature
-to avoid the conformal-factor collapse near the boundary:
-
-```python
-from hyperbolix import LearnableCurvature
-
-class HypResBlock(nnx.Module):
-    def __init__(self, channels: int, *, rngs: nnx.Rngs):
-        self.manifold = Poincare(c=0.1)
-        self.curv1 = LearnableCurvature(init_c=0.1)
-        self.curv2 = LearnableCurvature(init_c=0.1)
-        self.conv1 = HypConv2DPoincare(self.manifold, channels, channels,
-                                       kernel_size=(3, 3), rngs=rngs)
-        self.bn1 = PoincareBatchNorm2D(self.manifold, channels)
-        self.conv2 = HypConv2DPoincare(self.manifold, channels, channels,
-                                       kernel_size=(3, 3), rngs=rngs)
-        self.bn2 = PoincareBatchNorm2D(self.manifold, channels)
-```
-
 ## Common Pitfalls
 
 ### 1. Wrong channel count (ambient vs. spatial)
@@ -398,30 +366,13 @@ By far the most common construction bug. If a hyperboloid layer raises an
 incomprehensible shape error during the first call, check whether you passed
 spatial dim (`d`) where it wanted ambient (`d+1`), or vice versa.
 
-### 2. Reaching for a Riemannian optimizer
-
-Modern layers don't need one. The Euclidean defaults — `optax.adam`,
-`optax.adamw` — work for FGG, HNN++, HRC/HTC, and PV layers. Use
-`riemannian_adam` only when parameters live directly on a manifold (typically a
-hyperbolic embedding table); see the [Optimizers guide](optimizers.md).
-
-### 3. Leaving `version_idx` dynamic under JIT
+### 2. Leaving `version_idx` dynamic under JIT
 
 `Poincare.dist` and `dist_0` take a `version_idx` selecting between formulations.
 Keep it static under JIT, so only the selected variant compiles; see
 [Static vs Dynamic Arguments](batching-jit.md#static-vs-dynamic-arguments).
 
-### 4. Mixing layer families incoherently
-
-Stacking `HypLinearPoincare` (manifold-valued bias, expects
-`riemannian_adam`) on top of `HypLinearPoincarePP` (fully Euclidean weights,
-expects `optax.adam`) gives you a model where one optimizer is wrong for part
-of the parameters. Pick one family per network and stay in it;
-`riemannian_adam` auto-dispatches correctly across a mix of `ManifoldParam`
-and plain `nnx.Param` if you genuinely need one, but the simpler fix is to
-migrate the legacy layers to their `PP` equivalents.
-
-### 5. Using a Euclidean `Dropout` / `LayerNorm` on hyperboloid points
+### 3. Using a Euclidean `Dropout` / `LayerNorm` on hyperboloid points
 
 A point on the hyperboloid satisfies $\langle x, x \rangle_L = -1/c$ —
 elementwise zeroing or affine normalization breaks the constraint and produces
@@ -429,7 +380,7 @@ silent NaNs downstream. Use the manifold-aware variants: `HRCDropout`,
 `HRCLayerNorm`, `HRCRMSNorm`, `HRCBatchNorm`. (Poincaré has its own
 `PoincareBatchNorm2D` for conv stacks.)
 
-### 6. Forgetting to project the input
+### 4. Forgetting to project the input
 
 If you build a hyperboloid point by hand (e.g. constraint projection from a
 Euclidean backbone) and feed it to a hyperbolic layer, float32 drift can violate
