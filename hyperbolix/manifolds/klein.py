@@ -75,9 +75,9 @@ def _gap(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     bit-identical to the unfloored ones in both dtypes. On pairs of two capped points the float32 ``⊕``
     error drops from 1.0 to 2.8e-3 (c = 1) and 7.8e-3 (c = 0.3). Two float32 errors remain, and they do
     not come from the floor, since they are the same with no floor: ``⊕`` on pairs of one capped and one
-    free point (0.47-1.3) and ``expmap`` w.r.t. a capped base point (1.0). A point past the margin that was never projected (the maps into Klein do not project)
-    still meets the floor, which keeps the gap positive and reads it at scaled radius ≈ 6.67
-    (float32) / 14.21 (float64) at c = 1.
+    free point (0.47-1.3) and ``expmap`` w.r.t. a capped base point (1.0). A point past the margin that
+    was never projected (the maps into Klein do not project) still meets the floor, which keeps the gap
+    positive and reads it at scaled radius ≈ 6.67 (float32) / 14.21 (float64) at c = 1.
     """
     x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
     return floor_at(1.0 - c * x2, _boundary_divisor_floor(x, c))
