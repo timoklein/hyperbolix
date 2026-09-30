@@ -1205,6 +1205,22 @@ def test_softmax_attention_bfloat16_softmax_runs_in_float32(causal):
     assert bool(jnp.array_equal(weights_BNHM, jax.nn.softmax(scores_BNHM, axis=-1).astype(jnp.bfloat16)))
     assert not bool(jnp.array_equal(weights_BNHM, jax.nn.softmax(scores_BNHM.astype(jnp.bfloat16), axis=-1)))
 
-    # The output dtype is not asserted: the float32 residual_proj (an nnx.Linear) promotes it.
     out_BNA = layer(x_BNA, causal=causal)
+    assert out_BNA.dtype == jnp.bfloat16
+    assert bool(jnp.all(jnp.isfinite(out_BNA.astype(jnp.float32))))
+
+
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("low_dtype", [jnp.bfloat16, jnp.float16], ids=["bfloat16", "float16"])
+@pytest.mark.parametrize("layer_cls", ATTN_CLASSES)
+def test_attention_low_precision_output_keeps_input_dtype(layer_cls, low_dtype, causal):
+    """The output keeps a bfloat16/float16 input's dtype under the default float32 parameters.
+
+    Compute follows the input dtype (the class docstrings), so no parameter may promote it,
+    including the ``residual_proj`` of the linear and softmax variants.
+    """
+    layer = layer_cls(7, 6, num_heads=2, rngs=nnx.Rngs(0))
+    x_BNA = _make_hyp_points(jax.random.PRNGKey(6), 2, 16, 7, c=1.0).astype(low_dtype)
+    out_BNA = layer(x_BNA, causal=causal)
+    assert out_BNA.dtype == low_dtype
     assert bool(jnp.all(jnp.isfinite(out_BNA.astype(jnp.float32))))

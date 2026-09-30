@@ -23,11 +23,12 @@ Hyperbolic Space", 2025.
 """
 
 import math
-from typing import Literal
+from typing import Any, Literal, cast
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
+from flax.typing import TupleArg
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
@@ -40,6 +41,22 @@ from .hyperboloid_linear import HTCLinear
 # uses. Finite, so a fully masked row softmaxes to a finite uniform row instead of NaN; it is
 # written in the (at least float32) score dtype, where it is representable.
 _MASK_FILL = -1e18
+
+
+def _cast_params_to_input_dtype(args: TupleArg, /, *, dtype: Any = None, inexact: bool = True) -> TupleArg:
+    """``promote_dtype`` hook for a wrapped ``nnx.Linear``: cast its parameters to the input's dtype.
+
+    Flax's default promotes the input and the parameters to a common dtype, so float32
+    parameters would lift a bfloat16/float16 input to float32. Casting the parameters to the
+    input's dtype at use, as :class:`HTCLinear` does, keeps compute in the input dtype. For
+    float32 and float64 inputs with float32 parameters it is the cast Flax does.
+    """
+    del inexact
+    inputs, *params = args
+    target_dtype = inputs.dtype if dtype is None else dtype
+    cast_args = (jnp.asarray(inputs, target_dtype), *(p if p is None else jnp.asarray(p, target_dtype) for p in params))
+    return cast(TupleArg, cast_args)
+
 
 # ---------------------------------------------------------------------------
 # Focus transform (Eq 19)
@@ -293,9 +310,15 @@ class HyperbolicLinearAttention(_HyperbolicAttentionBase):
         # Spatial residual projection ψ: D → D (shared across heads). Its output is added to the
         # attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at
         # the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even
-        # when every attention einsum is already pinned (see hyperbolix.utils.precision).
+        # when every attention einsum is already pinned (see hyperbolix.utils.precision). Its
+        # parameters are cast to the input dtype at use, so they don't promote a bfloat16 input.
         self.residual_proj = nnx.Linear(
-            out_features, out_features, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs
+            out_features,
+            out_features,
+            param_dtype=param_dtype,
+            precision=MATMUL_PRECISION,
+            promote_dtype=_cast_params_to_input_dtype,
+            rngs=rngs,
         )
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
@@ -434,9 +457,15 @@ class HyperbolicSoftmaxAttention(_HyperbolicAttentionBase):
         # Spatial residual projection ψ: D → D (shared across heads). Its output is added to the
         # attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at
         # the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even
-        # when every attention einsum is already pinned (see hyperbolix.utils.precision).
+        # when every attention einsum is already pinned (see hyperbolix.utils.precision). Its
+        # parameters are cast to the input dtype at use, so they don't promote a bfloat16 input.
         self.residual_proj = nnx.Linear(
-            out_features, out_features, param_dtype=param_dtype, precision=MATMUL_PRECISION, rngs=rngs
+            out_features,
+            out_features,
+            param_dtype=param_dtype,
+            precision=MATMUL_PRECISION,
+            promote_dtype=_cast_params_to_input_dtype,
+            rngs=rngs,
         )
 
     def _attention_scores(
