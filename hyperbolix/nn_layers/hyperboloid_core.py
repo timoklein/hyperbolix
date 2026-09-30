@@ -595,7 +595,7 @@ def lorentz_residual(
     to the hyperboloid:
 
         ave = x + w_y * y
-        result = ave / sqrt(c * |<ave, ave>_L|)   (time coordinate then reconstructed, see Notes)
+        result = ave / sqrt(-c * <ave, ave>_L)   (time coordinate then reconstructed, see Notes)
 
     where <a, a>_L = -a_0^2 + ||a_s||^2 is the Minkowski inner product. ``<ave, ave>_L`` is
     **not** evaluated by that literal formula: for on-sheet ``x``, ``y``
@@ -612,12 +612,11 @@ def lorentz_residual(
         ``w_y < 0`` the combination can turn spacelike (``<ave, ave>_L > 0``,
         which by the identity above happens exactly when
         ``w_y * <x - y, x - y>_L < -(1 + w_y)^2 / c``; roughly ``w_y < -1`` for
-        nearby points) or land on the lower sheet
-        (``ave_0 < 0``) — the ``abs()`` in the normalizer then converts the
-        geometry violation into a "valid-looking" but wrong output instead of
-        raising. This is why callers must not expose ``w_y`` as an
-        unconstrained learnable parameter unless they accept that behaviour
-        (see Notes, "Negative weights").
+        nearby points), and then the output is NaN. For ``w_y < -1`` it can
+        also stay timelike but point to the past (``ave_0 < 0``), and then the
+        output is a finite upper-sheet point with no error. This is why callers
+        must not expose ``w_y`` as an unconstrained learnable parameter unless
+        they accept that behaviour (see Notes, "Negative weights").
 
     Parameters
     ----------
@@ -634,7 +633,8 @@ def lorentz_residual(
     c : float
         Curvature parameter (positive, c > 0).
     eps : float, optional
-        Numerical stability floor (default: 1e-7).
+        Floor under the squared time coordinate when it is rebuilt from the spatial part
+        (:func:`spatial_to_hyperboloid`; default: 1e-7). The normalizer itself has no floor.
 
     Returns
     -------
@@ -645,8 +645,7 @@ def lorentz_residual(
     -----
     The naive ``-ave_0^2 + ||ave_s||^2`` subtracts two ``O(||s||^2)`` squares to reach an
     ``O(1/c)`` result, so its float32 relative error grows like ``eps * c * ||s||^2`` and the
-    computed value flips sign above ``||s|| ~ 1e4`` — where the ``abs()`` hides the flip and the
-    ``eps`` floor silently inflates the output. Both terms of the identity in the formula block are
+    computed value flips sign above ``||s|| ~ 1e4``. Both terms of the identity in the formula block are
     non-positive for ``w_y >= 0``, so combining them adds magnitudes rather than cancelling, and the
     accuracy of the normalizer is the accuracy of the single term ``<x - y, x - y>_L``. That term is
     evaluated by :func:`_lorentz_sqdist_polar` as ``4(P^2 + q^2)/c`` — the hyperbolic haversine form,
@@ -657,24 +656,30 @@ def lorentz_residual(
     the chord ``||x_hat - y_hat||`` is dominated by rounding before either form sees it, and float64
     is required (the naive form is no better there).
 
-    For ``w_y >= 0`` the ``abs()`` and the ``eps`` floor are provably inactive: the difference of
-    two on-sheet points is spacelike (``<x - y, x - y>_L >= 0``), so
-    ``c * |<ave, ave>_L| = (1 + w_y)^2 + c * w_y * <x - y, x - y>_L >= (1 + w_y)^2 >= 1``. Both
-    are kept only as insurance for out-of-contract inputs. The bound holds per point, so it
-    covers per-point weight arrays as well.
+    For ``w_y >= 0`` the normalizer needs no ``abs()`` and no floor: the difference of two
+    on-sheet points is spacelike (``<x - y, x - y>_L >= 0``, and the polar form is a sum of
+    non-negatives, so it is ``>= 0`` in floating point too), so
+    ``-c * <ave, ave>_L = (1 + w_y)^2 + c * w_y * <x - y, x - y>_L >= (1 + w_y)^2 >= 1``. The
+    output is bit-identical to the earlier ``sqrt(max(c |<ave, ave>_L|, eps))`` (so are eager
+    gradients; under ``jit`` XLA may compile the backward differently, a rounding-level change).
+    The bound holds
+    per point, so it covers per-point weight arrays as well.
 
     Negative weights. The weight is not checked: an unconstrained learnable ``w_y`` (HELM's raw
     ``nn.Parameter``, or ``LorentzResidual(weight_parameterization="identity")``) can go
-    negative, and ``w_y < 0`` is evaluated, not rejected. The ``abs()`` then plays the role of
-    the ``.abs()`` in the HELM / LResNet reference: where ``ave`` turns spacelike, the result is
-    ``ave`` divided by ``sqrt(c <ave, ave>_L)`` and put back on the sheet by the time-coordinate
-    rebuild below — a valid hyperboloid point, but not a midpoint of ``x`` and ``y`` in any
-    sense. The reference has the same behaviour whenever its output scaling rebuilds the time
-    coordinate (without the scaling it returns the spacelike vector itself, off the sheet).
-    Likewise a past-directed ``ave`` (``ave_0 < 0``) comes back on the upper sheet with the
-    spatial part ``ave_s / sqrt(c |<ave, ave>_L|)``. At ``w_y = -1``,
-    ``c |<ave, ave>_L| = c <x - y, x - y>_L``, which falls below ``eps`` as ``x`` approaches ``y``,
-    and the floor becomes active; in the reference the ``1e-4`` clamp plays that role.
+    negative, and ``w_y < 0`` is evaluated, not rejected. Such a weight leaves the domain of the
+    paper's guarantee: LResNet's Lemma 4.1 bounds the normalizer only for
+    ``(w_x, w_y) in R+ x R+ \\ {(0, 0)}``, where ``ave`` is future timelike, so the absolute value
+    in its Lorentzian norm is notation there, not a mechanism. Where ``ave`` turns spacelike (always
+    at ``w_y = -1``, where ``-c <ave, ave>_L = -c <x - y, x - y>_L <= 0``; for
+    ``-1 < w_y < 0`` once ``x`` and ``y`` are far enough apart), ``-c <ave, ave>_L < 0`` and the
+    output is NaN: the intended signal that the combination has left the hyperboloid. This
+    deliberately differs from the HELM / LResNet reference, whose ``.abs()`` (with a ``1e-4``
+    clamp) turns a spacelike ``ave`` into a valid-looking hyperboloid point that is not a
+    midpoint of ``x`` and ``y`` in any sense. One case stays silent: for ``w_y < -1``, ``ave``
+    can be timelike but past-directed (``ave_0 < 0``); the normalizer is then finite and the
+    time-coordinate rebuild below returns the upper-sheet point with spatial part
+    ``ave_s / sqrt(-c <ave, ave>_L)``, with no error.
 
     The identity assumes ``x``, ``y`` are *exactly* on-sheet — an assumption float storage cannot
     honour at large radius, since ``x_0`` is only accurate to ``eps * x_0`` and the sheet constraint
@@ -716,7 +721,10 @@ def lorentz_residual(
     # past a ~ 8 — the accuracy of the whole normalizer is the accuracy of this one term.
     dd_1 = _lorentz_sqdist_polar(x, y, c)[..., None]  # (..., 1), >= 0 on-sheet
     mink_1 = -((1.0 + w_y) ** 2) / c - w_y * dd_1  # (..., 1)
-    denom_1 = jnp.sqrt(floor_at(c * jnp.abs(mink_1), eps))  # (..., 1)
+    # No abs() and no floor: for w >= 0, -c*mink >= (1 + w)^2 >= 1 (see Notes), so both were
+    # inactive and this is the same value bit for bit. Where a w < 0 makes ave spacelike,
+    # -c*mink < 0 and the sqrt returns NaN, the intended signal.
+    denom_1 = jnp.sqrt(-c * mink_1)  # (..., 1)
     z_A = ave_A / denom_1  # (..., A)
     # The identity above assumes *exactly* on-sheet inputs, which float storage cannot guarantee at
     # large radius (eps*x_0^2 > 1/c beyond ||s|| ~ 3e3 in float32 / ~1e8 in float64): for such inputs

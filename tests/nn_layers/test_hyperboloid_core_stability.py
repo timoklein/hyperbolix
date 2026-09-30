@@ -1,11 +1,12 @@
 """Numerical-stability tests for the Minkowski norm inside the Lorentz aggregators.
 
 ``lorentz_residual`` and ``lorentz_midpoint`` normalize a weighted sum ``h`` of on-sheet points
-by ``sqrt(c * |<h,h>_L|)``. Evaluating ``<h,h>_L`` as the literal ``-h_0^2 + ||h_s||^2``
-subtracts two ``O(||s||^2)`` squares to reach an ``O(1/c)`` result: in float32 the relative
-error grows like ``eps * c * ||s||^2``, the computed value flips sign above ``||s|| ~ 1e4``,
-``abs()`` hides the flip, and the ``eps = 1e-7`` floor then inflates the output by
-``2/sqrt(1e-7) ~ 6325x`` with no warning.
+by ``sqrt(c * |<h,h>_L|)`` (the residual now by ``sqrt(-c <h,h>_L)``, without ``abs()`` or
+floor). Evaluating ``<h,h>_L`` as the literal ``-h_0^2 + ||h_s||^2`` subtracts two
+``O(||s||^2)`` squares to reach an ``O(1/c)`` result: in float32 the relative error grows like
+``eps * c * ||s||^2``, the computed value flips sign above ``||s|| ~ 1e4``, ``abs()`` hid the
+flip, and the ``eps = 1e-7`` floor then inflated the output by ``2/sqrt(1e-7) ~ 6325x`` with no
+warning.
 
 Both functions instead evaluate ``<h,h>_L`` through an exact algebraic identity whose every
 term is ``O(||x_i - x_j||^2)``. These tests

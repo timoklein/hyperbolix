@@ -8,9 +8,10 @@ output scaling of
 :func:`~hyperbolix.nn_layers.hyperboloid_core.lorentz_scale` (LResNet Eq. 10).
 
 The constraint is the point of the module: ``lorentz_residual`` warns that
-``w_y`` must stay non-negative -- its ``abs()`` normalizer silently turns a
-``w_y < 0`` geometry violation into a valid-looking but wrong output instead of
-raising. Exposing ``w_y`` as a raw ``nnx.Param`` is therefore unsafe; here it is
+``w_y`` must stay non-negative -- a ``w_y < 0`` that makes the combination
+spacelike gives NaN, and a ``w_y < -1`` that makes it past-directed gives a
+valid-looking but wrong point with no error. Exposing ``w_y`` as a raw
+``nnx.Param`` is therefore unsafe; here it is
 reparameterized through ``softplus`` so a *trainable* weight can never leave the
 upper hyperboloid sheet. ``gamma`` is likewise softplus-constrained to keep the
 "slide toward / away from the origin" semantics (``gamma > 0``).
@@ -85,8 +86,14 @@ class LorentzResidual(nnx.Module):
         out = add_experts(shared_out, y, c=c)
 
     With ``weight_parameterization="identity"`` a trainable ``w_y`` can go
-    negative; :func:`~hyperbolix.nn_layers.hyperboloid_core.lorentz_residual`
-    then returns a valid but wrong point, as the reference does (see its Notes).
+    negative. Where that makes the combination spacelike,
+    :func:`~hyperbolix.nn_layers.hyperboloid_core.lorentz_residual` returns NaN,
+    where the HELM reference's ``.abs()`` returns a valid but wrong point; a
+    past-directed combination (``w_y < -1``) still gives a valid but wrong point
+    with no error (see its Notes). A negative ``w_y`` is outside the domain of
+    LResNet's Lemma 4.1, which bounds the normalizer only for
+    ``(w_x, w_y) in R+ x R+ \\ {(0, 0)}``. Keep the default softplus
+    parameterization unless you are reproducing HELM.
 
     Parameters
     ----------

@@ -39,8 +39,9 @@ class HypformerPositionalEncoding(nnx.Module):
     Hypformer reference keeps it a plain (non-learnable) tensor fixed at 1.0;
     making it a trainable parameter is unsafe because gradient descent can
     drive it below -1, where ``x + epsilon * p`` leaves the upper hyperboloid
-    sheet and the ``abs()`` in the residual normalizer silently masks the
-    violation (see :func:`~hyperbolix.nn_layers.hyperboloid_core.lorentz_residual`).
+    sheet: a spacelike combination gives NaN, and a past-directed one a
+    valid-looking but wrong point with no error (see
+    :func:`~hyperbolix.nn_layers.hyperboloid_core.lorentz_residual`).
 
     Parameters
     ----------
