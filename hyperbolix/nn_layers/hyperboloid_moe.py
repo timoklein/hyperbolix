@@ -59,6 +59,7 @@ from .hyperboloid_core import lorentz_midpoint, spatial_to_hyperboloid
 from .hyperboloid_linear import HTCLinear
 
 ScoreFunc = Literal["softmax", "sigmoid"]
+BiasUpdateRule = Literal["sign", "proportional"]
 
 
 def _helm_xavier_bound(in_features: int, out_features: int) -> float:
@@ -207,14 +208,24 @@ class LorentzMoEGate(nnx.Module):
         affinity_NE = scores_NE / floor_at(jnp.sum(scores_NE, axis=-1, keepdims=True), tiny)
         return weights_NK, indices_NK, MoERoutingStats(affinity=affinity_NE, mask=mask_NE)
 
-    def update_bias(self, mask: Float[Array, "... E"], speed: float) -> None:
-        """DeepSeek-V3's auxiliary-loss-free bias update, ``b_i += speed * sign(mean_load - load_i)``.
+    def update_bias(self, mask: Float[Array, "... E"], speed: float, rule: BiasUpdateRule = "sign") -> None:
+        """Auxiliary-loss-free bias update from the step's routing mask.
 
-        ``load_i`` is the number of tokens routed to expert ``i`` in ``mask`` and ``mean_load`` its
-        mean over the experts: an overloaded expert's bias drops by ``speed``, an underloaded one's
-        rises by ``speed``, and an exactly average one's is unchanged. DeepSeek-V3 applies it at
-        the end of each training step, over all tokens of the step (gather ``mask`` across data
-        shards first); its ``speed`` (``gamma``) was 0.001, HELM's config sets 0.005.
+        ``load_i`` is the number of tokens routed to expert ``i`` in ``mask``. Two rules:
+
+        - ``"sign"`` (the default): DeepSeek-V3's rule, the one the HELM paper cites,
+          ``b_i += speed * sign(mean(load) - load_i)``. An overloaded expert's bias drops by
+          ``speed``, an underloaded one's rises by ``speed``, and an exactly average one's is
+          unchanged. DeepSeek-V3 applies it at the end of each training step, over all tokens of
+          the step (gather ``mask`` across data shards first); its ``speed`` (``gamma``) was
+          0.001, HELM's config sets 0.005.
+        - ``"proportional"``: the rule of the ``update_bias`` method in HELM's released code
+          (``helm/modules/mice.py``, never called by its training loop),
+          ``b_i += speed * (mean(util) - util_i)`` with ``util_i = load_i / sum_j load_j`` the
+          fraction of the step's selections that went to expert ``i`` (so ``mean(util) = 1/E``).
+          The step is proportional to the imbalance, and the update sums to 0 over the experts,
+          so ``sum(b)`` does not change. A mask with no selections leaves the bias unchanged, as
+          HELM's early return does.
 
         Parameters
         ----------
@@ -222,12 +233,22 @@ class LorentzMoEGate(nnx.Module):
             The routing mask of the step (:attr:`MoERoutingStats.mask`), any leading shape.
         speed : float
             Bias update speed ``gamma``.
+        rule : {"sign", "proportional"}, optional
+            Update rule (default: "sign").
         """
         if mask.shape[-1] != self.num_experts:
             raise ValueError(f"mask must have {self.num_experts} experts on its last axis, got shape {mask.shape}")
+        if rule not in ("sign", "proportional"):
+            raise ValueError(f"rule must be 'sign' or 'proportional', got {rule!r}")
         bias_E = self.bias[...]  # (E,)
         load_E = jnp.sum(mask.reshape(-1, self.num_experts).astype(bias_E.dtype), axis=0)  # (E,)
-        self.bias[...] = bias_E + speed * jnp.sign(jnp.mean(load_E) - load_E)
+        if rule == "sign":
+            self.bias[...] = bias_E + speed * jnp.sign(jnp.mean(load_E) - load_E)
+        else:
+            # HELM: util = bincount(indices) / its sum. An empty step gives util = 0, hence no update.
+            tiny = jnp.asarray(jnp.finfo(load_E.dtype).tiny, dtype=load_E.dtype)
+            util_E = load_E / floor_at(jnp.sum(load_E), tiny)  # (E,)
+            self.bias[...] = bias_E + speed * (jnp.mean(util_E) - util_E)
 
 
 class LorentzSwiGLU(nnx.Module):
@@ -390,7 +411,8 @@ class LorentzMoE(nnx.Module):
 
     Load balancing, as the paper takes it from DeepSeek-V3, uses the returned ``stats``: add
     ``moe_sequence_balance_loss(stats, alpha)`` to the loss (HELM's ``alpha = 1e-4``), and after
-    the optimizer step call ``moe.update_bias(stats.mask, speed)``.
+    the optimizer step call ``moe.update_bias(stats.mask, speed)`` (``rule="proportional"`` for
+    the rule in HELM's released code; see :meth:`LorentzMoEGate.update_bias`).
 
     Curvatures
     ----------
@@ -430,13 +452,17 @@ class LorentzMoE(nnx.Module):
       ``n_shared_experts == 1``). Here the output is the paper's single centroid, with no scale.
     - **Curvature init.** The code builds every expert at ``Lorentz(c=1.0, learnable=args.train_curv)``;
       its ``np.linspace(0.1, 2.0, ...)`` list is unused. Here ``c_i = linspace(0.1, 2.0, E)``.
+      The released HELM 120M checkpoint (Zenodo record 18729608) follows the code: with its one
+      optimizer step after training undone, every expert curvature is ``k = 1`` (``c = 1``), so
+      to match that checkpoint pass ``expert_curvatures=[1.0] * num_routed``.
     - **Shared experts** are ``R`` separate SwiGLU experts, each with weight 1 in the centroid
       (the paper's ``sum_j z_j``); the code has one ``LorentzFeedForward`` of width
       ``n_shared_experts * moe_inter_dim``. They agree for ``R = 1``.
     - **Routing bias.** The code's bias is an ``nn.Parameter`` that no gradient reaches and whose
-      update is commented out of the training loop. Here it is a :class:`RoutingBias` with the
-      DeepSeek-V3 sign update (:meth:`update_bias`); the code's unused ``update_bias`` was
-      proportional (``self.bias += self.bias_update_spd * (mean - util)``).
+      update is commented out of the training loop. Here it is a :class:`RoutingBias` updated by
+      :meth:`update_bias`, by default with the DeepSeek-V3 sign rule the paper cites;
+      ``rule="proportional"`` is the code's unused ``update_bias``
+      (``self.bias += self.bias_update_spd * (mean - util)``).
     - **Balance loss.** The code's ``sequence_balance_loss`` fixes ``k=2``, overwrites the
       expert counts with the index tensor (``freq = indices * (E / (k * N))``, a shape error) and
       averages over all tokens of the batch; :func:`moe_sequence_balance_loss` is DeepSeek-V3's
@@ -570,9 +596,9 @@ class LorentzMoE(nnx.Module):
             return jnp.asarray(self.init_curvatures, dtype=jnp.float32)
         return jnp.stack([curvature() for curvature in self.curvatures])
 
-    def update_bias(self, mask: Float[Array, "... E"], speed: float) -> None:
+    def update_bias(self, mask: Float[Array, "... E"], speed: float, rule: BiasUpdateRule = "sign") -> None:
         """Auxiliary-loss-free bias update of the gate; see :meth:`LorentzMoEGate.update_bias`."""
-        self.gate.update_bias(mask, speed)
+        self.gate.update_bias(mask, speed, rule)
 
     def __call__(
         self,

@@ -230,6 +230,53 @@ def test_gate_update_bias_moves_toward_balance():
     np.testing.assert_array_equal(np.asarray(gate.bias[...]), before)
 
 
+def _hand_mask():
+    """(2, 2, 4) routing mask, top_k = 2: loads 3, 1, 0, 4 over 8 selections."""
+    rows = [[1, 0, 0, 1], [1, 0, 0, 1], [0, 1, 0, 1], [1, 0, 0, 1]]
+    return jnp.asarray(rows, dtype=jnp.float32).reshape(2, 2, 4)
+
+
+def test_gate_update_bias_proportional_matches_hand_computation_and_keeps_sum():
+    """HELM code's rule: ``b += speed * (mean(util) - util)``, ``util = load / sum(load)``."""
+    gate = LorentzMoEGate(DIM, 4, 2, rngs=nnx.Rngs(0))
+    bias0 = np.array([0.1, -0.2, 0.3, 0.05], dtype=np.float32)
+    gate.bias[...] = jnp.asarray(bias0)
+    speed = 0.005
+    gate.update_bias(_hand_mask(), speed, rule="proportional")
+    # util = (3, 1, 0, 4) / 8, mean(util) = 1/4.
+    expected = bias0 + speed * np.array([0.25 - 3 / 8, 0.25 - 1 / 8, 0.25 - 0.0, 0.25 - 4 / 8])
+    np.testing.assert_allclose(np.asarray(gate.bias[...]), expected, rtol=0, atol=1e-8)
+    np.testing.assert_allclose(float(jnp.sum(gate.bias[...])), float(bias0.sum()), rtol=0, atol=1e-7)
+
+    # A step with no selections leaves the bias unchanged (HELM returns early).
+    before = np.asarray(gate.bias[...])
+    gate.update_bias(jnp.zeros((3, 4), dtype=jnp.float32), speed, rule="proportional")
+    np.testing.assert_array_equal(np.asarray(gate.bias[...]), before)
+
+
+def test_gate_update_bias_sign_rule_unchanged_and_rule_validated():
+    """``rule="sign"`` is the default and the DeepSeek-V3 rule; an unknown rule raises."""
+    bias0 = jnp.asarray([0.1, -0.2, 0.3, 0.05], dtype=jnp.float32)
+    gates = [LorentzMoEGate(DIM, 4, 2, rngs=nnx.Rngs(0)) for _ in range(2)]
+    for gate in gates:
+        gate.bias[...] = bias0
+    gates[0].update_bias(_hand_mask(), 0.01)
+    gates[1].update_bias(_hand_mask(), 0.01, rule="sign")
+    expected = np.asarray(bias0) + 0.01 * np.sign(2.0 - np.array([3.0, 1.0, 0.0, 4.0]))
+    np.testing.assert_array_equal(np.asarray(gates[0].bias[...]), np.asarray(gates[1].bias[...]))
+    np.testing.assert_allclose(np.asarray(gates[0].bias[...]), expected, rtol=0, atol=1e-8)
+    with pytest.raises(ValueError):
+        gates[0].update_bias(_hand_mask(), 0.01, rule="linear")  # type: ignore[arg-type]
+
+
+def test_moe_update_bias_forwards_rule():
+    moe = LorentzMoE(DIM, INTER, 4, NUM_SHARED, 2, rngs=nnx.Rngs(0))
+    gate = LorentzMoEGate(DIM, 4, 2, rngs=nnx.Rngs(0))
+    moe.update_bias(_hand_mask(), 0.005, rule="proportional")
+    gate.update_bias(_hand_mask(), 0.005, rule="proportional")
+    np.testing.assert_array_equal(np.asarray(moe.gate.bias[...]), np.asarray(gate.bias[...]))
+
+
 # ---------------------------------------------------------------------------
 # Expert
 # ---------------------------------------------------------------------------

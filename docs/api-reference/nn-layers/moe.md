@@ -9,8 +9,9 @@ caller (see [`LorentzResidual`](positional-encoding.md#lorentzian-residual-conne
 Attention for the same architecture is [`LorentzMLA`](attention.md#latent-attention-helm).
 
 Load balancing follows DeepSeek-V3: add `moe_sequence_balance_loss(stats, alpha)` to the
-training loss and call `update_bias(stats.mask, speed)` after each optimizer step. The
-routing bias is a `RoutingBias` variable, not an `nnx.Param`, so gradient transforms and
+training loss and call `update_bias(stats.mask, speed)` after each optimizer step. Its
+default `rule="sign"` is the DeepSeek-V3 rule the HELM paper cites; `rule="proportional"` is
+the rule of the unused `update_bias` in HELM's released code. The routing bias is a `RoutingBias` variable, not an `nnx.Param`, so gradient transforms and
 `nnx.Optimizer(..., wrt=nnx.Param)` skip it.
 
 ## Mixture layer
