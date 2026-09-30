@@ -90,7 +90,7 @@ class LearnableCurvature(nnx.Module):
 
     Usage::
 
-        self.curvature = LearnableCurvature(init_c=0.1)
+        self.curvature = LearnableCurvature(init_c=0.1, straight_through_clamp=True)
         ...
         c = self.curvature()  # positive jax.Array
 

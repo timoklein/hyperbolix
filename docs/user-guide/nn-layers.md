@@ -245,7 +245,7 @@ class HybridCNN(nnx.Module):
         self.stem = nnx.Conv(3, 64, kernel_size=(3, 3), rngs=rngs)  # Euclidean
         self.pool = lambda x: jnp.mean(x, axis=(1, 2))               # GAP
         self.poincare = Poincare(c=0.1)
-        self.curvature = LearnableCurvature(init_c=0.1)              # per van Spengler
+        self.curvature = LearnableCurvature(init_c=0.1, straight_through_clamp=True)  # per van Spengler
         self.head = HypRegressionPoincarePP(
             manifold_module=self.poincare,
             in_dim=64, out_dim=num_classes, rngs=rngs,
@@ -292,8 +292,8 @@ from hyperbolix import LearnableCurvature
 class HypResBlock(nnx.Module):
     def __init__(self, channels: int, *, rngs: nnx.Rngs):
         self.manifold = Poincare(c=0.1)
-        self.curv1 = LearnableCurvature(init_c=0.1)
-        self.curv2 = LearnableCurvature(init_c=0.1)
+        self.curv1 = LearnableCurvature(init_c=0.1, straight_through_clamp=True)
+        self.curv2 = LearnableCurvature(init_c=0.1, straight_through_clamp=True)
         self.conv1 = HypConv2DPoincare(self.manifold, channels, channels,
                                        kernel_size=(3, 3), rngs=rngs)
         self.bn1 = PoincareBatchNorm2D(self.manifold, channels)

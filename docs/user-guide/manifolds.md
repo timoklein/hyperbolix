@@ -142,8 +142,8 @@ from hyperbolix import LearnableCurvature
 class HypResNetBlock(nnx.Module):
     def __init__(self, rngs: nnx.Rngs):
         self.manifold = Poincare(c=0.1)
-        self.curv_a = LearnableCurvature(init_c=0.1)
-        self.curv_b = LearnableCurvature(init_c=0.1)
+        self.curv_a = LearnableCurvature(init_c=0.1, straight_through_clamp=True)
+        self.curv_b = LearnableCurvature(init_c=0.1, straight_through_clamp=True)
         self.conv_a = HypConv2DPoincare(self.manifold, ..., rngs=rngs)
         self.conv_b = HypConv2DPoincare(self.manifold, ..., rngs=rngs)
 
@@ -250,9 +250,10 @@ class HypPolicy(nnx.Module):
     def __init__(self, rngs: nnx.Rngs):
         self.manifold = manifold
         # Log parameterization: scale-invariant gradient (dc/draw = c).
-        # Default clamp [0.1, 10.0] is the stability guard.
+        # Default clamp [0.1, 10.0] is the stability guard; init_c=0.1 sits on its
+        # floor, and straight-through lets c come back after a step below it.
         self.curvature = LearnableCurvature(
-            init_c=0.1, parameterization="log",
+            init_c=0.1, parameterization="log", straight_through_clamp=True,
         )
         # l1 takes the Euclidean observation as a tangent vector; l2 takes l1's ball point.
         self.l1 = HypLinearPoincarePP(manifold, 4, 4, rngs=rngs, input_space="tangent")
