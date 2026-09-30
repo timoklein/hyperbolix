@@ -12,6 +12,7 @@ Dimension key
 B : batch size
 N : sequence length
 H : number of attention heads
+M : key sequence length (``N``; a separate letter for the key axis of pairwise arrays)
 D : spatial dimension per head (``out_features``)
 A : ambient dimension (``D + 1``)
 
@@ -20,6 +21,8 @@ References
 Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
 Hyperbolic Space", 2025.
 """
+
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
@@ -482,6 +485,36 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
     pairwise polar-frame evaluation, which would remove the cancellation outright, is
     O(N·M·D) in memory and is not implemented here.
 
+    Centroid form
+    -------------
+    Each head aggregates its values with :func:`lorentz_midpoint` in
+    ``form=centroid_form``. ``"variance"`` (the default) is the cancellation-free direct
+    variance, accurate to the storage floor. It is the default because this layer is the
+    library's geometrically faithful O(N²) attention, and its accuracy on far-out values
+    is pinned by tests (``test_full_attention_aggregates_far_values_accurately`` and its
+    per-head-ray sibling). Its cost is an elementwise ``(B, H, N, M, D)`` intermediate:
+    ``O(N M D)`` work outside the GEMMs, materialized in memory where XLA does not fuse
+    it away.
+
+    ``"gemm"`` is for long sequences. It normalizes ``h = sum_m w_m v_m`` by the literal
+    ``c (h_0^2 - ||h_s||^2)``: one GEMM plus ``O(N)`` work per head. Measured on an A100,
+    float32 forward+backward, ``B = 2``, ``H = 4``, ``D = 32``, causal, variance against
+    gemm: compile 15.9 s against 4.0 s and step 2.44 ms against 1.93 ms at ``N = 512``;
+    compile 17.2 s against 4.8 s and step 16.5 ms against 9.5 ms at ``N = 2048``
+    (``logs/2026-09-30_helm-decisions/full_attention_centroid_probe_gpu*.out``). The
+    normalizer cancels, with relative error up to ``eps cosh^2(a)`` at value radius
+    ``a`` (float32: 9e-5 at ``a = 4``, 0.27 at ``a = 8``). This depends on the values
+    alone: with queries and keys near the origin, where the scores are float32-accurate,
+    and values at ``a = 9``, the float32 output of ``"gemm"`` lies 5.7 to 11 nats from
+    the float64 run, against 5e-7 to 4.5e-4 for ``"variance"``
+    (``logs/2026-09-30_helm-decisions/far_values_gemm_probe.out``). Use ``"gemm"`` only
+    when the values stay well inside ``a ≈ 6`` or run in float64.
+
+    The average over heads (a midpoint of the ``H`` head aggregates of each token) always
+    uses the variance form: its intermediate is ``(B, N, H, D)``, the size of the layer's
+    input, so the GEMM form would save next to nothing (measured: 0.7 s of compile, under
+    2 % of the step) and would cancel when the head aggregates lie close together.
+
     Parameters
     ----------
     in_features : int
@@ -506,6 +539,10 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         opt-in float64 island against the floor above (``jnp.float64`` needs
         ``jax.config.update("jax_enable_x64", True)``); ``None`` (the default) leaves
         the score path in the working dtype, unchanged op for op.
+    centroid_form : {"variance", "gemm"}
+        ``form`` of the per-head :func:`lorentz_midpoint` that aggregates the values
+        (default: ``"variance"``, the aggregation of earlier releases, bit for bit);
+        see "Centroid form". ``"gemm"`` is the opt-in faster form for long sequences.
     rngs : nnx.Rngs
         Random number generators.
     """
@@ -520,8 +557,11 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
         score_dtype: DTypeLike | None = None,
+        centroid_form: Literal["variance", "gemm"] = "variance",
         rngs: nnx.Rngs,
     ):
+        if centroid_form not in ("variance", "gemm"):
+            raise ValueError(f"centroid_form must be 'variance' or 'gemm', got {centroid_form!r}")
         super().__init__(
             in_features,
             out_features,
@@ -532,6 +572,7 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
             rngs=rngs,
         )
         self.score_dtype = score_dtype
+        self.centroid_form: Literal["variance", "gemm"] = centroid_form
         self.scale = nnx.Param(jnp.array(1.0, dtype=param_dtype))
         self.attn_bias = nnx.Param(jnp.array(0.0, dtype=param_dtype))
 
@@ -593,10 +634,12 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         #    Transpose to (B, H, ...) layout for lorentz_midpoint which expects (..., M, A) and (..., N, M)
         value_BHMA = jnp.transpose(value_BNHA, (0, 2, 1, 3))  # (B, H, M, A)
         attn_weights_BHNM = jnp.transpose(attn_weights_BNHM, (0, 2, 1, 3))  # (B, H, N, M)
-        midpoint_BHNA = lorentz_midpoint(value_BHMA, attn_weights_BHNM, c_attn, eps)  # (B, H, N, A)
+        midpoint_BHNA = lorentz_midpoint(value_BHMA, attn_weights_BHNM, c_attn, eps, form=self.centroid_form)  # (B, H, N, A)
         midpoint_BNHA = jnp.transpose(midpoint_BHNA, (0, 2, 1, 3))  # (B, N, H, A)
 
-        # 3. Average heads via Lorentzian midpoint (uniform weights)
+        # 3. Average heads via Lorentzian midpoint (uniform weights). Always the variance form: its
+        #    (B, N, 1, H, D) intermediate is the size of the input, and the GEMM form would cancel
+        #    when the H head aggregates of a token lie close together (class docstring).
         uniform_BN1H = jnp.ones((B, N, 1, H), dtype=midpoint_BNHA.dtype) / H
         averaged_BN1A = lorentz_midpoint(midpoint_BNHA, uniform_BN1H, c_attn, eps)  # (B, N, 1, A)
         output_BNA = averaged_BN1A.squeeze(axis=2)  # (B, N, A)
