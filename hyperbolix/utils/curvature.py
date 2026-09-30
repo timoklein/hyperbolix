@@ -157,8 +157,8 @@ class LearnableCurvature(nnx.Module):
 
     Init on a bound: rounding the inverse of ``init_c`` to the storage dtype can
     put the recovered ``c`` outside the clamp interval — in float32
-    ``exp(float32(log 0.1)) = 0.099999994 < 0.1`` — which left the default
-    ``LearnableCurvature(init_c=0.1)`` with a raw gradient of exactly 0 from
+    ``exp(float32(log 0.1)) = 0.099999994 < 0.1`` — which left
+    ``LearnableCurvature(init_c=0.1)`` under the default ``log`` with a raw gradient of exactly 0 from
     step 0 and ``c`` frozen for the whole run (float64 ``init_c=10.0`` rounded
     above ``c_max`` the same way). ``raw`` is therefore nudged at
     construction, by as few ulps as needed, until the recovered ``c`` lies
@@ -252,11 +252,12 @@ class LearnableCurvature(nnx.Module):
         """The stored ``raw``: the inverse of ``init_c``, nudged by ulps so the clamp is live at init.
 
         Rounding the inverse to the storage dtype can put the recovered ``c`` on or outside a bound that
-        ``init_c`` sits on: in float32, ``exp(float32(log 0.1)) = 0.099999994 < 0.1``, so the default
-        ``LearnableCurvature(init_c=0.1)`` started strictly below ``c_min``, where the clamp's gradient is
-        exactly 0, and never moved; float64 ``exp(float64(log 10))`` rounds above ``c_max = 10`` the same
-        way. So when the recovered ``c`` is not strictly inside ``(c_min, c_max)``, ``raw`` is stepped toward
-        the interior by the fewest ulps that bring ``c`` strictly inside (``c`` is increasing in ``raw`` for
+        ``init_c`` sits on: in float32, ``exp(float32(log 0.1)) = 0.099999994 < 0.1``, so
+        ``LearnableCurvature(init_c=0.1)`` under the default ``log`` started strictly below ``c_min``, where
+        the clamp's gradient is exactly 0, and never moved; float64 ``exp(float64(log 10))`` rounds above
+        ``c_max = 10`` the same way. So when the recovered ``c`` is not strictly inside ``(c_min, c_max)``,
+        ``raw`` is stepped toward the interior by the fewest ulps that bring ``c`` strictly inside (``c`` is
+        increasing in ``raw`` for
         every parameterization): a galloping search over 1, 2, 4, ... ulps, then a bisection back to the first
         step that crosses. It searches ``raw`` itself rather than inverting
         nearby curvatures, so it does not rely on the inverse being accurate to the last ulp.
