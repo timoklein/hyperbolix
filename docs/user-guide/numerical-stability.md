@@ -1259,194 +1259,91 @@ HTorch's `ptransp` applies the ambient-hyperboloid transport formula to chart co
 is not an isometry: it transports $(1, 0)$ from $(0, 1)$ to $(0, 2)$ as $(1, 0)$, whose norm at
 the endpoint is 0.5, where the parallel transport is $(2, 0)$ (`timing_pass/probe_final.out`).
 
-## Hyperbolic Function Overflow
+## The `math_utils` Wrappers {#hyperbolic-function-overflow}
 
-### The Problem
+The manifolds call the transcendentals in `hyperbolix.utils.math_utils`, not the `jnp` builtins.
+Each has a guard that changes neither value nor gradient inside its valid range:
 
-Standard implementations of cosh, sinh can overflow:
+- `cosh` and `sinh` clip their argument at $\pm 0.99\ln(\texttt{finfo.max})$ (≈ ±87.8 in float32,
+  ±702.7 in float64), so the value cannot overflow. Past the clip the value is constant and the
+  gradient is exactly 0.
+- `acosh` floors its argument at $1 + 10\,\varepsilon$, and `atanh` clamps it to
+  $\pm(1 - 10\,\varepsilon)$, where the builtin derivatives are infinite.
 
-```python
-# Standard numpy/jax
-import jax.numpy as jnp
+An argument in the clipped range means the model has already diverged. The clip only keeps that
+one value finite; it is not a regime to train in.
 
-x = jnp.array(100.0, dtype=jnp.float32)
-print(jnp.cosh(x))  # inf (overflow!)
-print(jnp.sinh(x))  # inf (overflow!)
-```
+### `asinh` and `acosh`: The Derivative Overflows Before the Value Does {#asinh-acosh-wrappers}
 
-### Solution: Protected Math Utils
+JAX's derivative rules for `asinh` and `acosh` are `g·rsqrt(x² + 1)` and `g·rsqrt(x² − 1)`. In
+float32, `x²` overflows once $|x| > 1.84\times10^{19}$, and `rsqrt(inf)` is 0, so the derivative
+comes back exactly 0.0 while the forward value is correct and no warning is raised: at
+`x = 1e22`, `jax.grad(jnp.arcsinh)` returns `0.0` instead of `1e-22`. A parameter downstream of an
+`asinh` whose argument grows exponentially stops moving.
 
-Hyperbolix provides overflow-protected hyperbolic functions:
+The wrappers keep `jnp.arcsinh`'s forward value bit for bit and spell the derivatives as
+`1/hypot(1, x)` and `1/(√(x−1)·√(x+1))`, which never form `x²`. Every
+library `asinh` call site — the manifolds' `dist`/`dist_0`/`logmap` forms, `asinhc`, the
+proper-velocity operations, the samplers and every MLR head — goes through the wrapper. The
+hyperboloid MLR reaches this regime at a large hyperplane offset (see
+[The MLR Score at a Large Hyperplane Offset](#mlr-large-bias)). In your own code, use
+`math_utils.asinh` wherever the argument can grow exponentially.
 
-```python
-from hyperbolix.utils.math_utils import cosh, sinh, asinh, acosh, atanh
-
-# Protected versions
-x = jnp.array(100.0, dtype=jnp.float32)
-print(cosh(x))  # Finite value (clamped to safe range)
-print(sinh(x))  # Finite value (clamped to safe range)
-
-# Domain-protected inverse functions
-y = jnp.array(0.5, dtype=jnp.float32)
-print(acosh(y))  # Clamped to valid domain [1, inf)
-
-z = jnp.array(0.999999, dtype=jnp.float32)
-print(atanh(z))  # Clamped away from ±1 singularities
-```
-
-#### `asinh` and `acosh`: The Derivative Overflows Before the Value Does {#asinh-acosh-wrappers}
-
-`asinh` is wrapped for a different reason from the others: its forward value needs no protection at
-all — `asinh` has no domain boundary and the wrapper's forward is bit-identical to `jnp.arcsinh`.
-What it repairs is the **derivative**. JAX's JVP rules for `asinh_p` and `acosh_p` are
-`g·rsqrt(x² + 1)` and `g·rsqrt(x² − 1)` (`jax/_src/lax/lax.py:4746` and `:4753` in jax 0.11.1,
-unchanged in the 0.9.1 this repo pins, where they are at `:4350` and `:4354`), and `x²` overflows float32 once `|x| > 1.84e19`. `rsqrt(inf)`
-is `0`, so the returned derivative is **exactly 0.0** while the true `1/hypot(1, x) ≈ 1/|x|` is an
-ordinary normal float: at `x = 1e22`, `jax.grad(jnp.arcsinh)` gives `0.0` where the answer is
-`1e-22`, with a perfectly correct forward value of `51.35` and no warning. A parameter downstream of
-an `asinh` whose argument grows exponentially simply stops moving.
-
-The wrappers spell the same derivatives as `1/hypot(1, x)` and `1/(√(x−1)·√(x+1))`, which never
-materialise `x²`. All 16 library `asinh` call sites — the hyperboloid and Poincaré `dist`/`dist_0`
-slots, `logmap_0`'s `asinhc`, the proper-velocity operations, and every MLR head — go through the
-wrapper. Its float32 derivative is correct up to `|x| ≈ 8.5e37`, past which the true tangent is
-subnormal and XLA flushes it to zero, and moves the gradient by at most 1 float32 ulp / 2 float64 ulps against a float64 reference on a log-spaced grid spanning `1e-30` to `1e37`
-(float32) and `1e-300` to `1e300` (float64); the `acosh` tangent was spot-checked at six points per dtype, where it agrees with the builtin rule to a float32 ulp (both are ~2 % off a float64 reference near `x = 1`, from the rounding of `x` itself)
-(`logs/2026-09-11_asinh_acosh_custom_jvp/probe_grid_ulp.py`,
-`probe_subnormal_tail.py`, `probe_hypot_grad.py`).
-
-The library reaches the bad regime in the hyperboloid MLR: at bias `r = 60`, the `asinh` argument is
-5.97e22 at input scaled radius 11 and 2.64e28 at radius 24, past the cutoff in every row, and the
-bias and input gradients come back exactly zero while the kernel gradient survives (21.8) — at
-`r = 20`, radius 24, the argument is still only 1.37e16 and every gradient is finite
-(`logs/2026-09-11_plfc_residual_nan/fuzz_asinh_f32.out`, cell `C5-r60`, and
-`fuzz_composite_5c2aa99_f32.out` for the neighbouring `r`). This is an upstream bug,
-reported upstream as [jax-ml/jax#40634](https://github.com/jax-ml/jax/issues/40634), with the report kept at
-`logs/2026-09-11_plfc_residual_nan/jax_issue_asinh_jvp.md`; when JAX stops squaring the argument the
-wrappers can go away and the call sites can return to `jnp.arcsinh`.
-
-### Smooth Clamping
-
-The library uses **smooth clamping** via softplus instead of hard clipping:
-
-```python
-from hyperbolix.utils.math_utils import smooth_clamp
-
-# Smooth clamp (differentiable, no gradient issues)
-x = jnp.array([-10.0, -1.0, 0.0, 1.0, 10.0])
-clamped = smooth_clamp(x, min_value=-5.0, max_value=5.0, smoothing_factor=50.0)
-print(clamped)
-# Near boundaries: smooth transition, not abrupt cutoff
-```
-
-Benefits:
-
-- Differentiable everywhere (no gradient discontinuities)
-- Numerically stable (uses softplus internally)
-- Adjustable smoothing factor for trade-off between accuracy and gradient flow
+This is an upstream bug, reported as
+[jax-ml/jax#40634](https://github.com/jax-ml/jax/issues/40634). Once JAX stops squaring the
+argument, the wrappers can go and the call sites can return to `jnp.arcsinh`.
 
 ## Lorentz Residual and Midpoint at Large Radius {#lorentz-residual-midpoint}
 
 `lorentz_residual` (the two-point combination behind `LorentzResidual` and
 `HypformerPositionalEncoding`) and `lorentz_midpoint` (the weighted aggregation behind
-`HyperbolicFullAttention`, `HyperboloidGyroRMSNorm`, and the hyperboloid Fréchet
-mean) both form a raw ambient vector $h = (h_0, h_s)$ — time coordinate $h_0$, spatial
-part $h_s$ — and pull it back onto the sheet by dividing by
+`HyperbolicFullAttention`, `HyperboloidGyroBatchNorm`/`ProperVelocityGyroBatchNorm`'s batch mean,
+and the hyperboloid Fréchet mean) both form a raw ambient vector $h = (h_0, h_s)$ — time
+coordinate $h_0$, spatial part $h_s$ — and pull it back onto the sheet by dividing by
 $\sqrt{\lvert\langle h,h\rangle_L\rvert}$. Computing that Minkowski square directly,
 
 $$
 \langle h, h\rangle_L = -h_0^2 + \lVert h_s\rVert^2,
 $$
 
-cancels catastrophically. On the sheet $h_0 \approx \lVert h_s \rVert$, so both terms
-are of size $\lVert s\rVert^2$ — writing $\lVert s\rVert$ for the spatial radius of the
-inputs — while their difference is only $O(1/c)$. The float32 relative error of the
-result therefore grows with the radius as
-$\varepsilon_{32}\, c\, \lVert s\rVert^2$ with $\varepsilon_{32} \approx 1.19\times10^{-7}$,
-which crosses a target error `err` at
+cancels. On the sheet both terms are of size $\lVert s\rVert^2$, the squared spatial radius of the
+inputs, while their difference is only $O(1/c)$, so the float32 relative error grows as
+$\varepsilon_{32}\, c\, \lVert s\rVert^2$ ($\varepsilon_{32} \approx 1.19\times10^{-7}$). At
+$c = 0.1$ it reaches $10^{-3}$ at a spatial radius of about 290, gradients about three times
+sooner, and past $\lVert s\rVert \sim 10^4$ the computed square flips sign.
 
-$$
-\lVert s\rVert \approx \sqrt{\mathtt{err} \,/\, (\varepsilon_{32}\, c)}.
-$$
-
-In plain terms: at $c = 0.1$, a relative error of $10^{-3}$ arrives once the spatial
-radius reaches about 290, and gradients hit that level roughly three times sooner in
-$\lVert s\rVert$ than the forward value does, because the normalizer's Jacobian cancels
-a second time. Past $\lVert s\rVert \sim 10^4$ the computed square flips sign outright.
-
-Hyperbolix instead evaluates $\langle h,h\rangle_L$ from exact identities, valid for any
-weights as long as the inputs are on the sheet ($\langle x,x\rangle_L = -1/c$). For the
-residual $h = x + w\,y$ with scalar weight $w$:
+Hyperbolix instead evaluates $\langle h,h\rangle_L$ from exact identities, valid for any weights
+as long as the inputs are on the sheet. For the residual $h = x + w\,y$ with scalar weight $w$:
 
 $$
 \langle h,h\rangle_L = -\frac{(1+w)^2}{c} - w\,\langle x-y,\; x-y\rangle_L .
 $$
 
-For the midpoint of $M$ points, write $h=\sum_m w_m x_m$, $t_m=x_{m,0}$,
-$z_m=x_{m,s}/t_m$, $T=h_0$, and $\bar z=h_s/T$. The current normalizer uses
+For the midpoint of $M$ points, write $h=\sum_m w_m x_m$, $t_m=x_{m,0}$, $z_m=x_{m,s}/t_m$,
+$T=h_0$ and $\bar z=h_s/T$. The normalizer is
 
 $$
 D^2 = T\sum_m w_m\left(\frac{1}{t_m}+c\,t_m\lVert z_m-\bar z\rVert^2\right)
-     = c\left(T^2-\lVert h_s\rVert^2\right).
+     = c\left(T^2-\lVert h_s\rVert^2\right),
 $$
 
-The equality follows from the sheet identity $1-\lVert z_m\rVert^2=1/(c t_m^2)$.
-The implementation evaluates the variance directly, using coordinate differences;
-expanding the squares would reintroduce cancellation. All terms are non-negative
-for non-negative weights, and the cost remains $O(NMD)$ for $N$ weight rows.
-Contractions retain HIGHEST precision. Spatial coordinates are normalized with the
-existing `sqrt(max(abs(D²), eps))`, and output time is reconstructed from them.
+where the equality follows from the sheet identity $1-\lVert z_m\rVert^2=1/(c t_m^2)$. The
+variance is evaluated from coordinate differences, so every term is non-negative for non-negative
+weights. Negative weights are unsupported; an all-zero weight row returns the origin.
 
-This replaces the preceding radius/unit-direction variance form. That form kept
-large-radius values accurate but lost the derivative of an origin point with a
-nonzero weight in a mixed cloud. Dividing by positive $t_m$, instead of a spatial
-radius that can vanish, preserves that derivative. Negative weights remain
-unsupported. An all-zero weight row returns the origin; division by $T=0$ is guarded.
-This is a value convention, not a promise of a weight derivative: normalized means
-approached along different positive weight rays have different limits.
-
-The historical radial/angular/mixed measurements in
-`probe_midpoint_horopca_busemann_pv_fd0c1d7.out` describe the preceding variance
-implementation, not this derivative repair. Current regression coverage compares
-the value with a high-precision literal Lorentz mean and checks the origin-point
-Jacobian independently.
-
-Rounding a stored direction by $\delta$ can cause geodesic error of order
-$\sinh(a)\delta$. Comparing with unrounded generated inputs includes both this
-storage error and arithmetic error. The new evidence records both comparisons;
-matching the magnitude of a storage estimate alone does not establish the cause
-of an observed error.
-
-The residual's own identity is unaffected by the angular-cloud regression the pivot form hit — with
-only two points there is no third point to reintroduce that cancellation — so its measured float32
-error against float64 at $\lVert s\rVert = 10^4$ stays $\approx 2\times10^{-5}$ on the value and
-$\approx 6\times10^{-4}$ on the gradient (`c = 0.1`, $x \approx y$;
-`logs/2026-08-24_lorentz_minkowski_cancellation/PR_BODY.md`), and the limit that remains for it is
-the difference $x - y$ itself: when two points share a direction at $\lVert s\rVert \gtrsim 10^4$,
-float32 rounding swallows the subtraction before the formula sees it, and that regime needs
-float64.
-
-!!! note "Scope of the preceding large-radius sweep"
-    The preceding sweep covered `Hyperboloid.dist`'s two slots and the remaining
-    tangent-space and two-point primitives
-    (`expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, `egrad2rgrad`, gyro `addition`,
-    `gyro_difference`, `busemann`) with cancellation-free large-radius value
-    formulas. It did not establish every origin derivative. The current midpoint,
-    Busemann, and Cartesian origin-derivative repairs are documented in their
-    sections here. Remaining accuracy is limited by the operation and stored inputs — see
-    [Known Limitations](#hyperboloid-known-limitations) for the handful of places that still lose
-    accuracy for other reasons, and [The `atol` Convention](#the-atol-convention) for why merely
-    *storing* a point past distance ~11 in float64 can already need an explicit `atol` on
-    `is_in_manifold`.
+The residual's float32 error against float64 at $\lVert s\rVert = 10^4$ is about
+$2\times10^{-5}$ on the value and $6\times10^{-4}$ on the gradient ($c = 0.1$, $x \approx y$). The
+limit that remains is the difference $x - y$ itself: when two points share a direction at
+$\lVert s\rVert \gtrsim 10^4$, float32 rounding swallows the subtraction before the formula sees
+it, and that regime needs float64.
 
 ### Busemann Coordinates at Large Radius {#busemann-large-radius}
 
 `Hyperboloid.busemann(x, v, c)` (the horosphere coordinate behind
 `HypLinearHyperboloidBusemann`/`HypRegressionHyperboloidBusemann` and HoroPCA) is
-`log(√c·arg)/√c` with `arg = x_0 - ⟨x_s, v⟩`. Along the branch aligned with the ideal
-direction $v$, `x_0` and `⟨x_s,v⟩` are both $O(\cosh a)$ and nearly equal, so the literal
-subtraction can cancel. For a unit direction, set $q=\langle x_s,v\rangle$ and
-$p=x_s-qv$. The current evaluation is
+`log(√c·arg)/√c` with `arg = x_0 - ⟨x_s, v⟩`. Along the branch aligned with the ideal direction
+$v$, `x_0` and `⟨x_s,v⟩` are both $O(\cosh a)$ and nearly equal, so the literal subtraction
+cancels. With $q=\langle x_s,v\rangle$ and $p=x_s-qv$, the library evaluates
 
 $$
 \mathrm{arg}=\begin{cases}
@@ -1455,427 +1352,106 @@ x_0-q,&q<0.
 \end{cases}
 $$
 
-The unused positive-branch denominator is evaluated as
-`x_0 + where(q >= 0, q, 0)`, so a batched reverse pass cannot divide by a rounded
-zero at an anti-aligned point. Both branches agree in value and constrained
-first derivative at $q=0$. At the origin the spatial Busemann gradient is exactly
-$-v$ in exact arithmetic. Learned directions must be normalized before the call;
-the public function continues to require a unit direction.
+The direction $v$ must be a unit vector: normalize learned directions before the call. At the
+origin the spatial gradient is exactly $-v$ in exact arithmetic. The batched score
+`nn_layers.busemann_core._busemann_score`, used by the Busemann MLR/FC layers, applies the same
+formula.
 
-The earlier spatial-radius/direction formula had correct large-radius values
-but erased this origin gradient. Measurements in
-`probe_midpoint_horopca_busemann_pv_9093ea7.out` describe that earlier value repair,
-not the current derivative rule. The current derivative checks use valid spatial
-lifts and normalized directions and test both sides of the $q=0$ branch.
-
-The batched attention-style head, `nn_layers.busemann_core._busemann_score` (and the vmapped
-`busemann` it shares with the Busemann MLR/FC layers), uses the same projected-coordinate formula.
-Historical measurements of the preceding formula, on a batch where every point sits within 1e-3 rad of one of $K = 4$ directions,
-$a = 10$ (table C.iii(b)): the median relative error is unchanged at 3.509e-08 (only the
-near-aligned pairs cancel at all), but the max drops from 4.006e-02 to 5.366e-06 — 7,470× — since
-it is exactly those near-aligned pairs that the old form lost. For a use case that needs float64
-throughout without paying for it everywhere, the recipe is a float64 island around just the score:
-cast $\hat x$ and the class directions to float64, run the one similarity GEMM there,
-compute $\mathrm{arg} = 1/(c(x_0+r)) + r(1-g)$ and its `log` in float64, then cast back — this is a
-documented pattern, not a library option; `HyperbolicFullAttention`'s `score_dtype` (see
-[above](#attention-score-floor)) is the shipped version of the same idea for the Lorentzian
-similarity score.
+For a model that needs float64 only in the score, use a float64 island: cast $\hat x$ and the class
+directions to float64, run the one similarity GEMM there, compute
+$\mathrm{arg} = 1/(c(x_0+r)) + r(1-g)$, with $r = \lVert x_s\rVert$ and
+$g = \langle \hat x_s, v\rangle$, and its `log` in float64, then cast back. This is a pattern, not
+a library option; `HyperbolicFullAttention`'s `score_dtype` (see
+[above](#attention-score-floor)) is the library's version of the same idea for the Lorentzian
+score.
 
 ### HoroPCA Projection at Large Radius
 
-`horo_projection`, the ideal-point projection behind `hyperbolix.decomposition.horopca`, inherits
-the same Busemann cancellation: it is defined to preserve every Busemann coordinate of its input
-exactly, so any drift in `busemann` itself shows up as drift in the projected point. The following
-historical measurement describes the preceding Busemann value repair. Measured
-(`probe_midpoint_horopca_busemann_pv_9093ea7.out`, table C.ii; a point 1e-3 rad off the first ideal
-direction, $K$ ideal directions, `proj err` against the library's own float64 `horo_projection`):
-at $K = 2$ the projection error goes from 1.413e-01 to 1.086e-04 at $a = 8$ and from 3.660e+00 to
-8.633e-03 at $a = 12$; Busemann-coordinate preservation (`|dB|`, the true value of which is 0) goes
-from 8.170e-02 to 8.836e-05 at $a = 8$ and from 7.731e-02 to 1.575e-04 at $a = 12$.
-
-`HoroPCA` now centres its data with `Hyperboloid.gyro_difference` instead of a Lorentz-boost
-matrix product, which cancelled for points close to a far centre: at $a = 8$ ($c = 1$, 64 points
-with spread $0.3/\sqrt{c}$, float32 against float64 of the same inputs) the largest error of the
-centred points drops from 0.58 to 3.7e-4 scaled nats and that of `transform` from 0.38 to 1.7e-4
-(`logs/2026-09-29_cancellation-free/1d/probe_old.out`,
-`logs/2026-09-29_cancellation-free/2_evidence/probes/fixup_merged.out`).
+`horo_projection`, the ideal-point projection behind `hyperbolix.decomposition.horopca`, preserves
+every Busemann coordinate of its input, so it has the accuracy of `busemann` above. `HoroPCA`
+centres its data with `Hyperboloid.gyro_difference` rather than a Lorentz-boost matrix product,
+which cancels for points close to a far centre: at $a = 8$ in float32, the largest error of the
+centred points is 3.7e-4 scaled nats, against 0.58 with the boost.
 
 ### Gyro-Difference and GyroBatchNorm Centering at Large Radius {#gyro-difference}
 
-The current operation uses a Cartesian inverse boost when either endpoint's
-scaled spatial radius is at most 1e-1 and the stable polar frame otherwise. The
-measurements in this section describe the preceding high-radius value and
-collinear-gradient repairs, before the Cartesian origin branch; they are not
-measurements of the current origin derivative rule.
-
 `Hyperboloid.gyro_difference(x, y, c)` computes $(\ominus x)\oplus y$, the operation
-`HyperboloidGyroBatchNorm` needs to center a batch on its mean and any layer needs for a difference
-of two far points. The general gyro-addition `addition(neg(x), y)` (the Lorentz boost
+`HyperboloidGyroBatchNorm` needs to center a batch on its mean and any layer needs for the
+difference of two far points. The general `addition(neg(x), y)` (the Lorentz boost
 $\Lambda_{\ominus x}\,y$ — see [above](#the-hyperboloids-two-point-cancellation-failure-mode)) is
-accurate almost everywhere *except* here: at $y \approx x$ the boost's spatial part is a sum of
-three terms, each $O(e^{2a})$, that cancel identically at $y = x$, so its absolute error is
-`eps·cosh²(a)/√c` no matter how close $y$ is to $x$ — the near-identity gyro-addition has no
-ambient-spelling fix.
+accurate almost everywhere except here: at $y \approx x$ the boost's spatial part is a sum of three
+terms, each $O(e^{2a})$, that cancel at $y = x$, so its absolute error is `eps·cosh²(a)/√c` however
+close $y$ is to $x$.
 
-`gyro_difference` instead uses the isometry $\Lambda_x^{-1}$, the transvection carrying $x$ back to
-the origin, whose differential along the geodesic $x \to 0$ *is* parallel transport:
+`gyro_difference` instead uses the transvection carrying $x$ back to the origin,
 
 $$
-(\ominus x) \oplus y = \Lambda_x^{-1} y = \mathrm{Exp}_0\big(\mathrm{PT}_{x\to 0}(\mathrm{Log}_x y)\big) .
+(\ominus x) \oplus y = \Lambda_x^{-1} y = \mathrm{Exp}_0\big(\mathrm{PT}_{x\to 0}(\mathrm{Log}_x y)\big) ,
 $$
 
-Away from an exact-origin endpoint, transport in the polar frame is free: the inward radial leg of $\mathrm{Log}_x y$ transports to
-the outward direction $-\hat x$ continuing the same geodesic past the origin, and the in-plane
-angular leg is untouched, so the result is read straight off the frame with no cancellation and no
-transcendental beyond the frame's own.
+which the polar frame evaluates with no cancellation. What limits it at $y \approx x$ is the
+inputs: two float32 points whose directions are $\psi$ radians apart fix the direction of their
+difference only to `eps32·√D/ψ` relative, and a result far from the origin to one ulp of its own
+radius, `eps32·sinh(√c·d₀)/√c`. Measured at $a \in \{9, 12\}$, `gyro_difference` stays within
+these floors, while the boost's error at $a = 9$ is 0.9 to 2.6 nats whatever the true answer.
 
-**The floor.** What limits `gyro_difference` at $y \approx x$ is not the arithmetic but the
-operands: two float32 points whose directions are $\psi$ radians apart pin the *direction* of their
-difference only to `eps32·√D/ψ` relative — that is the accuracy of the result regardless of
-formula. When the result is instead far from the origin, the binding floor is one float32 ulp of
-its own spatial radius, `eps32·sinh(√c·d₀)/√c`.
-
-Measured (`step2c_gyro_difference_accuracy.out`; $c = 0.5$, $D = 64$, $a \in \{9, 12\}$, $y$ a
-$\psi$-radian rotation of $x$, medians/maxima over 4 seeds; `true d0` is the true radius of the
-result):
-
-| $a$ | $\psi$ | true $d_0$ | boost abs err (med) | `gyro_difference` abs err (max) | direction floor | radius floor |
-|---|---|---|---|---|---|---|
-| 9 | 1e-2 | 1.047e+01 | 8.904e-01 | 3.203e-04 | 9.987e-04 | 1.385e-04 |
-| 9 | 1e-4 | 5.691e-01 | 2.560e+00 | 7.147e-04 | 5.428e-03 | 6.969e-08 |
-| 9 | 1e-6 | 5.748e-03 | 2.053e+00 | 1.047e-03 | 5.482e-03 | 6.852e-10 |
-| 12 | 1e-2 | 1.896e+01 | 1.593e+01 | 2.986e-02 | 1.808e-03 | 5.582e-02 |
-| 12 | 1e-4 | 5.972e+00 | 1.704e+01 | 7.407e-03 | 5.695e-02 | 5.748e-06 |
-| 12 | 1e-6 | 1.150e-01 | 1.072e+01 | 1.916e-02 | 1.097e-01 | 1.372e-08 |
-
-`gyro_difference`'s worst error over these six cells is 0.535× the larger of the two floors —
-input-limited everywhere — against the boost's absolute error, which tracks $a$ and not $\psi$ at
-all: 0.89 to 2.05 nats whether the true answer is 10.5 nats from the origin or 5.7e-3.
-
-`HyperboloidGyroBatchNorm` now centers with `gyro_difference`. Measured on 32 points at $a = 9$,
-$c = 0.5$, $D = 16$, $\gamma = 1.3$ (`step2c_gyro_bn_centering.out`, float32 vs float64 on
-bit-identical inputs; `err` = max geodesic distance between the two legs' layer output; `grad rel` =
-max relative error of $\partial\text{loss}/\partial\text{bias}$):
-
-| target sep | mean sep | before err | after err | ratio | before grad | after grad |
-|---|---|---|---|---|---|---|
-| 0.3 | 0.556 | 5.220e+00 | 3.996e-03 | 1306.3× | 2.835e+01 | 4.133e-03 |
-| 0.6 | 1.101 | 3.960e+00 | 1.869e-03 | 2118.5× | 1.329e+01 | 2.073e-03 |
-| 1.0 | 1.797 | 2.142e+00 | 8.996e-04 | 2381.4× | 2.099e+00 | 1.278e-03 |
-| 2.0 | 3.388 | 4.218e-01 | 4.766e-04 | 884.9× | 7.551e-02 | 2.193e-04 |
-| 4.0 | 6.250 | 6.311e-02 | 1.052e-04 | 600.0× | 4.921e-02 | 8.333e-05 |
-| 8.0 | 11.749 | 1.525e-03 | 1.791e-05 | 85.2× | 2.384e-04 | 2.172e-05 |
-
-The `before` column is finite and plausible at every row — that is the failure mode, not a NaN.
-
-`gyro_difference` is verified against `addition(neg(x), y)` in float64 over dims 2/5/64,
-$c \in \{0.1, 0.5, 1, 3\}$ and random/parallel/anti-parallel/perpendicular/degenerate operand
-pairs: worst relative disagreement 2.34e-15; against a `np.longdouble` reference the result stays
-inside the float64 representation floor of its own radius (worst 0.62×)
-(`step2c_gyro_difference_equivalence.out`).
+`HyperboloidGyroBatchNorm` and `ProperVelocityGyroBatchNorm` center with `gyro_difference`. The
+boost's error there is finite and plausible, not a NaN: centering 32 points at $a = 9$ with it
+gives output errors up to 5.2 nats, against 4e-3 with `gyro_difference`.
 
 ### Origin derivatives and the Cartesian chart {#origin-derivatives}
 
-`gyro_difference` and `ptransp` use Cartesian formulas when either endpoint's
-scaled spatial radius is at most 1e-1. The difference is the inverse Lorentz boost
-with reconstructed time. Transport uses the closed-form geodesic transport and derives the input
-tangent time as $v_0=\langle x_s,v_s\rangle/x_0$, without a cleanup projection.
-Otherwise both retain the stable geodesic frame.
+<a id="geodesic-frame"></a>
 
-`logmap` uses the regular Cartesian expression when either endpoint is exactly the
-origin and the stable polar frame otherwise. For close pairs, the frame's separation
-$S=\sinh(\sqrt c\,d(x,y)/2)$ enters the equivalent spatial displacement
-$\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}$ when $S\le0.5$.
-Ordinary autodiff follows the selected expression. Through spatial lifts, coincidence
-Jacobians are $+I$ for the target and $-I$ for the base. The log-map origin defect
-predates the preceding polar-frame sweep and the PV bridges; neither introduced
-it. The sweep's collinear-gradient repair did not cover every origin endpoint,
-even where a zero forward value and finite gradients passed.
+`gyro_difference` and `ptransp` use Cartesian formulas when either endpoint's scaled spatial
+radius is at most 1e-1: the difference is the inverse Lorentz boost with reconstructed time, and
+transport is the closed-form geodesic transport, with the input tangent's time coordinate taken as
+$v_0=\langle x_s,v_s\rangle/x_0$. Otherwise both use the stable geodesic frame.
 
-PV `logmap`, `gyro_difference`, and `ptransp` inherit these repairs through their
-existing exact lifts. `lorentz_residual` is unchanged: its first origin derivative
-passes an independent analytic check. Consumers include zero embeddings, residual
-branches, masked points, normalization, attention, Busemann layers, and HoroPCA;
-their acceptance checks compare against analytic or finite-difference references,
-rather than checking finiteness alone.
+`logmap` uses the Cartesian expression when either endpoint is exactly the origin and the polar
+frame otherwise. For close pairs, with the frame's separation $S=\sinh(\sqrt c\,d(x,y)/2)$, it
+uses the equivalent spatial displacement
+$\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}$ when $S\le0.5$. At coincidence the
+Jacobians through spatial lifts are $+I$ for the target and $-I$ for the base.
 
-### The Geodesic Frame Has No Normalize {#geodesic-frame}
+The polar frame never normalizes a direction that vanishes on a collinear pair (two points on one
+ray, $y = x$ included). Its angular leg is a non-negative combination of $\hat y_s - \hat x_s$ and
+$\hat x_s + \hat y_s$, which is exactly zero on both degenerate rays, so `logmap`, `ptransp` and
+`gyro_difference` have correct gradients there as well as correct values.
 
-This section records the preceding collinear-gradient repair and its historical
-measurements. It did not cover the value-only origin fallbacks; the current
-Cartesian derivative repair is described immediately above.
+PV `logmap`, `gyro_difference` and `ptransp` inherit this through their exact lifts (below). The
+tests check these derivatives against analytic or finite-difference references.
 
-`_polar_frame`'s angular leg used to come from a helper, `_logmap_direction`, that normalized a
-vector which is exactly zero on the whole collinear set — a pair $(x, y)$ sharing a ray, $\psi = 0$
-or $\pi$, $y = x$ included. It returned $(\cos\varphi, \sin\varphi, \hat n)$ with
-$\hat n = \mathrm{normalize}(\hat y_s - \langle \hat x_s, \hat y_s\rangle\, \hat x_s)$; on a
-collinear pair that argument is zero up to rounding, so the normalization's derivative is
-arbitrary, and multiplied by a $\sin\varphi$ that is itself only $O(\text{rounding})$ rather than
-exactly 0, it left an $O(1)$ error in the *gradient* of every consumer while the forward value
-stayed correct. Four public functions share the helper and inherited the defect:
-`Hyperboloid.logmap`, `.ptransp`, `.gyro_difference`, and, through the exact lift onto the
-hyperboloid, `ProperVelocity.logmap`. Pre-existing since the polar-frame `logmap` of 1.1.2
-(2026-08-25).
+### ProperVelocity Through the Hyperboloid Lift {#pv-operation-lifts}
 
-**The fix.** `_logmap_direction` now returns $(S\cos\varphi, \mathrm{perp}_y)$ with no $1/S$ and no
-$1/\lVert\mathrm{perp}_y\rVert$ anywhere:
+<a id="pv-dist-lift"></a>
+<a id="pv-tangent-metric"></a>
+
+Proper-velocity coordinates are the hyperboloid's spatial part, so the lift
 
 $$
-\mathrm{perp}_y = r_y\Big[\tfrac{\mathrm{csum}^2}{4}(\hat y_s - \hat x_s) +
-\tfrac{\mathrm{chord}^2}{4}(\hat x_s + \hat y_s)\Big],
+X = \Big(\sqrt{1/c + \lVert x\rVert^2},\; x\Big)
 $$
 
-with $\mathrm{chord}$ and $\mathrm{csum}$ the frame's own norms of $\hat y_s - \hat x_s$ and
-$\hat x_s + \hat y_s$. Each consumer's own prefactor cancels the remaining $S$:
+is exact, and a PV tangent $v$ lifts to $(\langle x,v\rangle/X_0,\,v)$. PV `dist`, `logmap`,
+`expmap`, gyro `addition`, `gyro_difference` and `ptransp` lift their inputs, run the hyperboloid
+operation, and return its spatial part; no Poincaré chart conversion is involved.
+`tangent_inner`/`tangent_norm` share the hyperboloid's `radial_perp_decomposition`. So PV has the
+hyperboloid's accuracy and its remaining limits, including transport of directions below float32
+angular resolution.
 
-$$
-\log_x(y) = \mathrm{asinhc}(S)\cdot\tfrac{2}{\sqrt c}\cdot(S\cos\varphi)\cdot e_{\mathrm{rad}} +
-\tfrac{\mathrm{asinhc}(S)}{C}\cdot(0, \mathrm{perp}_y), \qquad
-\mathrm{asinhc}(S) = \frac{\mathrm{arcsinh}(S)}{S},
-$$
-
-$$
-\mathrm{ptransp\ scale} = -\frac{S\cos\varphi}{C}\cdot\frac{\mathrm{radial}(v)}{x_0} +
-\frac{c}{2}\cdot\frac{\langle \mathrm{perp}_y, \mathrm{perp}(v)\rangle}{C^2}, \qquad
-(\ominus x)\oplus y = -\frac{2}{\sqrt c}\cdot C\cdot(S\cos\varphi)\cdot\hat x + \mathrm{perp}_y .
-$$
-
-**Two design points.**
-
-- $S\cos\varphi$ is formed as a sum of individually bounded ratios —
-  $P\cdot\mathrm{hypot}(1,P)/C + q\cdot(q/C)\cdot(x_0/r_x)$ — never as the unbounded product $q^2$
-  first, since at large radius $q$ alone is $\sim 10^{18}$ in float32. This keeps the float32 worst
-  case at $a \in \{9, 12\}$ to 1.7e-7 against 2.3e-7 for the previous spelling
-  (`step2e_equivalence.out`).
-- $\mathrm{perp}_y$ is spelled as the non-negative combination of the two orthogonal vectors
-  $\hat y_s - \hat x_s$ and $\hat x_s + \hat y_s$ above, not as
-  $r_y(\hat y_s - \langle\hat x_s,\hat y_s\rangle\hat x_s)$: the dot-product form loses
-  $\mathrm{eps}/\sin\psi$, while the orthogonal-vector form is exactly zero on both degenerate rays
-  ($\psi = 0$ zeroes $\hat y_s - \hat x_s$ and $\mathrm{chord}$ together, $\psi = \pi$ zeroes
-  $\hat x_s + \hat y_s$ and $\mathrm{csum}$ together) and cannot cancel at any other $\psi$.
-
-**Measured** (`step2e_gradients.out`, $a \le 3$, old $\to$ new):
-
-| quantity | dtype | old | new |
-|---|---|---|---|
-| $\nabla\lVert\log_x(y)\rVert^2$ / $\nabla\langle w,\log\rangle$, collinear + $y=x$ | float64 | 2.81 | 1.8e-10 |
-| Jacobian of $\log_x(\cdot)$ at $y=x$ vs. the identity | float64 | 1.00 | 5.0e-16 |
-| `ptransp` $\nabla\langle w, \mathrm{PT}\,v\rangle$, f32-vs-f64 relative error | float32/64 | 3.29 | 4.0e-6 |
-| `gyro_difference` gradient, f32-vs-f64 relative error | float32/64 | 5.94 | 9.6e-7 |
-| PV $\nabla\lVert\log\rVert^2$, collinear | float32 | 4.1e-5 | 2.2e-5 |
-| PV $\nabla\lVert\log\rVert^2$, collinear | float64 | 3.3e-10 | 3.3e-10 |
-
-The PV float32 row is 1.9× better than even the pre-lift ambient PV spelling on the same reference,
-and the float64 row is unchanged either way. Every gradient in this table is finite in both
-dtypes at every radius tested, before and after the fix.
-
-Forward values are unaffected: float64 new-vs-old equivalence at $a \le 6$ over dims 2/5/64,
-$c \in \{0.1, 0.5, 1, 3\}$, 5 geometries, 5 seeds — `logmap` 4.7e-16, `ptransp` 5.8e-14,
-`gyro_difference` 3.2e-15, PV `logmap` 1.5e-15, all against a 1e-12 budget
-(`step2e_equivalence.out`); `dist`, `sqdist` and `_polar_frame` are bitwise unchanged.
-
-### ProperVelocity's Tangent-Space Metric at Large Radius {#pv-tangent-metric}
-
-The proper-velocity `tangent_inner`/`tangent_norm` share the hyperboloid's
-`radial_perp_decomposition` helper and its fix. Measured on the exactly-unit radial tangent, $c =
-0.5$ (`probe_midpoint_horopca_busemann_pv_9093ea7.out`, table C.iv): $\lvert\langle v,v\rangle -
-1\rvert$ goes from 6.250e-01 to 2.384e-07 at $a = 8$ and from 1.536e+03 to 5.192e-05 at $a = 12$;
-the library's own float64 path on the same input goes from 9.313e-10 to 2.220e-16 at $a = 8$.
-
-### ProperVelocity `dist`/`logmap` Through the Exact Lift {#pv-dist-lift}
-
-`ProperVelocity._dist` and `_logmap` go through the exact lift onto the hyperboloid,
-
-$$
-X = \Big(\sqrt{1/c + \lVert x\rVert^2},\; x\Big) ,
-$$
-
-and then the hyperboloid's own cancellation-free polar-frame `dist`/`logmap` — PV coordinates *are*
-the hyperboloid's spatial part, so the lift is exact, not an approximation. This closes the gap the
-tangent-space metric fix above did not reach: `PV.dist`/`logmap` between two nearby points at large
-radius used to cancel the same way the ambient hyperboloid primitives did before their own fix.
-
-Measured (`step2c_pv_accuracy.out`, $c = 0.5$, dim 16, a radial step of true Riemannian length 0.1,
-landing point computed in float64, coordinate-axis direction): old `dist` 5.988811e-02 /
-4.382994e+00 / 1.056287e+01 at $a = 8/10/12$ (true value 0.1 in every case), new relative error
-9.54e-07 / 8.05e-07 / 4.62e-07 — inside the float32 storage floor of the same input pairs,
-9.24e-07 / 7.22e-07 / 4.92e-07. This coordinate-axis direction is the favourable case: on the same
-probe's PRNGKey(3) direction, the worst new relative error over $a \in \{8, 10\}$ is 1.13e-04 at
-$a = 10$, against that pair's own storage floor of 1.41e-05. The full float32 chain (`expmap` in
-float32 too, so its own error is included) used to return 3.167524e-01 at $a = 8$ and 4.369660e+00
-at $a = 10$ for a true step of 0.1; it now returns 1.000014e-01 and 9.999371e-02.
-
-Equivalence (`step2c_pv_equivalence.out`): float64 new vs old at $a \le 3$ (random, parallel,
-antiparallel, perpendicular, coincident pairs) agree to 8.09e-14 max; against an 80-bit reference at
-$a \le 6$, `dist` is 7.11e-15 max against old's 3.64e-11, and `logmap` is 4.39e-14 max relative
-error and 1.26e-12 max $\lVert\mathrm{err}\rVert_x$; `dist(x, x)` and `logmap(x, x)` are exactly 0
-in both dtypes, with a finite gradient there.
-
-Callers that inherit the fix with no change of their own: `utils.helpers.compute_pairwise_distances`,
-`decomposition/frechet.py`, `nn_layers/poincare_batchnorm.py` (when built with a PV manifold), and
-`manifolds/product.py`.
-
-### ProperVelocity exponential, addition, difference, and transport bridges {#pv-operation-lifts}
-
-PV `expmap` and gyro `addition` use the exact hyperboloid lift (baseline bridge
-commit `8e77147`). `gyro_difference` and `ptransp` use it as of `757a910`, and
-`ProperVelocityGyroBatchNorm` centers with `gyro_difference`. A PV tangent lifts
-as $(\langle x,v\rangle/X_0,v)$ at $X=(\sqrt{1/c+\lVert x\rVert^2},x)$;
-the spatial part of the hyperboloid result is the PV result. No Poincare chart
-conversion is needed. The lift carries the hyperboloid primitive's accuracy and
-its remaining limitations, including transport of directions below float32
-angular resolution; it does not remove those limitations.
-
-## Historical Cost of the Cancellation-Free Spellings {#numerics-cost}
-
-These tables compare `b586169` with `5b756df`, before the post-PV baseline
-`757a910` and the origin derivative repairs. They measure forward or
-forward/backward functions, not complete optimizer updates, and use the archived
-settings stated below. They are historical observations, not current speed or
-convergence guarantees. No long-training or time-to-quality conclusion is made
-from them.
-
-Step 5c performance probe (`logs/2026-09-08_hyperboloid_tangent_primitives/`): two revisions of the
-library — **as-is** `b586169` ("update learnable curvature") and **new** `5b756df` ("Un-normalized
-geodesic frame: fix the collinear log-map gradient") — measured with the same forward/backward script at
-each revision. AOT-compiled executables (`compiled = jax.jit(f).lower(*args).compile()`, timing
-`compiled(*args)` directly rather than the `jax.jit` wrapper, so no per-call cache lookup is in the
-number), float32, batch 4096, $c = 0.5$ for every hyperboloid workload ($c = 1.0$ for the Poincaré
-and proper-velocity primitives and the HoroPCA/Fréchet items), points at geodesic radius $\approx 3$,
-forward and `nnx.value_and_grad` forward+backward. CPU is XLA:CPU on the development box; GPU is an
-A100-PCIE-40GB (device 0) with `XLA_FLAGS=--xla_gpu_autotune_level=0` and
-`XLA_PYTHON_CLIENT_PREALLOCATE=false`. A third, never-released intermediate, **key-Gram** (`900f054`,
-library files identical to `4f8057a`; the `O(M²)` pairwise-Gram `lorentz_midpoint` normalizer), is in
-the full source summary but dropped from the tables below — see the note after them.
-
-`os.getloadavg()` at the start and end of each run, `(1 min, 5 min, 15 min)`:
-
-| run | `.out` | start | end |
-|---|---|---|---|
-| CPU new | `probe_cost_5b756df.out` | (3.5, 5.3369140625, 4.45849609375) | (3.52783203125, 5.111328125, 4.42431640625) |
-| CPU as-is | `probe_cost_b586169.out` | (4.048828125, 4.35009765625, 7.4306640625) | (4.77294921875, 4.44970703125, 7.34765625) |
-| GPU new | `probe_cost_gpu_5b756df.out` | (2.46044921875, 4.73193359375, 4.31640625) | (2.041015625, 4.4482421875, 4.232421875) |
-| GPU as-is | `probe_cost_gpu_b586169.out` | (3.013671875, 4.037109375, 7.025390625) | (2.45654296875, 3.82373046875, 6.875) |
-| GPU new (repeat) | `probe_cost_gpu_5b756df_rep2.out` | (1.87744140625, 4.3740234375, 4.20947265625) | (1.64501953125, 4.11865234375, 4.12841796875) |
-
-Two forward passes that compile to byte-identical optimized HLO at `b586169` and the never-released
-`900f054` — `HypLinearPoincarePP` and `HypRegressionPoincarePP` — calibrate the noise floor of the
-CPU table: about ±6% on a workload known to be unchanged.
-
-### CPU
-
-`probe_cost_b586169.out` (as-is) vs `probe_cost_5b756df.out` (new).
-
-| workload | as-is fusions | as-is Mflop | as-is ms | new fusions | new Mflop | new ms | ratio |
-|---|---|---|---|---|---|---|---|
-| PLFC gyro-bias fwd | 48 | 56.010 | 6.2048 | 24 | 44.359 | 2.2965 | 0.370 |
-| PLFC gyro-bias fwd+bwd | 156 | 148.578 | 13.8245 | 89 | 120.035 | 6.3049 | 0.456 |
-| GyroBatchNorm(train) fwd | 117 | 24.514 | 9.0924 | 86 | 21.088 | 5.5412 | 0.609 |
-| GyroBatchNorm(train) fwd+bwd | 231 | 53.586 | 13.4201 | 141 | 33.451 | 7.6611 | 0.571 |
-| HyperboloidGyroRMSNorm fwd | 16 | 5.087 | 2.2426 | 16 | 5.087 | 2.2973 | 1.02 |
-| HyperboloidGyroRMSNorm fwd+bwd | 40 | 13.550 | 3.5352 | 40 | 13.550 | 3.5132 | 0.994 |
-| HyperbolicFullAttention fwd | 72 | 322.554 | 12.0482 | 86 | 426.546 | 89.9417 | 7.47 |
-| HyperbolicFullAttention fwd+bwd | 208 | 863.546 | 31.1128 | 259 | 1118.311 | 139.1628 | 4.47 |
-| LorentzResidual fwd | 8 | 2.421 | 0.8921 | 21 | 6.599 | 2.0828 | 2.33 |
-| LorentzResidual fwd+bwd | 29 | 5.165 | 1.7535 | 49 | 10.084 | 3.0969 | 1.77 |
-| Busemann head fwd | 10 | 140.630 | 2.1609 | 22 | 208.480 | 98.2874 | 45.5 |
-| Busemann head fwd+bwd | 26 | 286.534 | 4.4315 | 41 | 419.794 | 131.7908 | 29.7 |
-| riemannian_adam one step | 88 | 54.010 | 21.2513 | 117 | 76.014 | 21.7737 | 1.02 |
-| Poincare.dist (vmap) | 4 | 4.997 | 5.2551 | 8 | 7.258 | 2.1213 | 0.404 |
-| Poincare.addition (vmap) | 5 | 8.872 | 4.5814 | 10 | 10.756 | 5.3327 | 1.16 |
-| Poincare.logmap (vmap) | 10 | 14.983 | 8.5312 | 19 | 19.079 | 7.9924 | 0.937 |
-| HypLinearPoincarePP fwd | 28 | 49.678 | 3.4088 | 28 | 49.678 | 3.3689 | 0.988 |
-| HypRegressionPoincarePP fwd | 15 | 38.326 | 1.3978 | 15 | 38.326 | 1.3604 | 0.973 |
-| PoincareGyroRMSNorm fwd | 16 | 3.592 | 1.0773 | 16 | 3.592 | 1.0963 | 1.02 |
-| PoincareGyroRMSNorm fwd+bwd | 41 | 9.597 | 2.1686 | 41 | 9.597 | 2.2260 | 1.03 |
-| HypLinearPV fwd | 17 | 41.578 | 1.3097 | 17 | 41.578 | 1.2538 | 0.957 |
-| ProperVelocity.expmap (vmap) | 17 | 21.340 | 5.8779 | 29 | 28.467 | 6.7439 | 1.15 |
-| horo_projection (vmap, K=3) | 52 | 18.630 | 5.8367 | 66 | 22.894 | 7.2006 | 1.23 |
-| frechet_mean (max_iters=100) | 82 | 3.650 | 73.4981 | 75 | 3.007 | 52.3895 | 0.713 |
-| prim Hyperboloid.addition fwd | 24 | 17.539 | 9.4171 | 7 | 4.235 | 2.7026 | 0.287 |
-| prim Hyperboloid.addition value_and_grad(both) | 81 | 64.700 | 17.3033 | 15 | 13.836 | 3.4826 | 0.201 |
-| prim Hyperboloid.tangent_proj | 7 | 4.850 | 5.8666 | 3 | 2.146 | 2.0845 | 0.355 |
-| prim Hyperboloid.egrad2rgrad | 9 | 4.882 | 5.9710 | 5 | 2.179 | 2.5501 | 0.427 |
-| prim Hyperboloid.ptransp_0 | 10 | 7.561 | 7.9804 | 4 | 2.138 | 1.7538 | 0.220 |
-| prim Hyperboloid.expmap | 8 | 5.767 | 2.8512 | 21 | 13.509 | 4.9346 | 1.73 |
-| prim Hyperboloid.tangent_inner | 3 | 1.073 | 1.9195 | 11 | 8.618 | 6.7360 | 3.51 |
-| prim Hyperboloid.ptransp | 11 | 8.626 | 9.7918 | 37 | 26.763 | 8.8648 | 0.905 |
-| prim lorentz_midpoint | 14 | 281.261 | 3.9228 | 21 | 487.023 | 111.3655 | 28.4 |
-
-Total wall time: as-is 35.2 s, new 45.4 s.
-
-The `frechet_mean` row was measured before the 2026-09-29 step change (step
-`step_size / mean_i(a_i·coth a_i)`), which adds one batched `tangent_norm` per iteration and
-can change the iteration count; it is not the current per-call cost.
-
-### GPU (A100-PCIE-40GB, device 0)
-
-`probe_cost_gpu_b586169.out` (as-is) vs `probe_cost_gpu_5b756df.out` (new). The `@REV` marker in the
-Busemann rows names the revision that produced each column: `@b586169` in the as-is columns,
-`@5b756df` in the new.
-
-| workload | as-is fusions | as-is Mflop | as-is ms | new fusions | new Mflop | new ms | ratio |
-|---|---|---|---|---|---|---|---|
-| (a) library `_busemann_score` @REV K=256 fwd | 5 | 5.885 | 0.1976 | 9 | 207.867 | 0.4121 | 2.09 |
-| (a) library `_busemann_score` @REV K=256 fwd+bwd | 11 | 20.501 | 0.3418 | 19 | 626.689 | 0.8373 | 2.45 |
-| (b) float64-island GEMM K=256 fwd | 5 | 7.434 | 0.1816 | 5 | 7.434 | 0.2526 | 1.39 |
-| (b) float64-island GEMM K=256 fwd+bwd | 13 | 19.203 | 0.3693 | 13 | 19.203 | 0.3451 | 0.934 |
-| (a) library `_busemann_score` @REV K=1000 fwd | 6 | 21.465 | 0.2595 | 9 | 802.458 | 1.0685 | 4.12 |
-| (a) library `_busemann_score` @REV K=1000 fwd+bwd | 11 | 76.238 | 0.5406 | 19 | 2416.393 | 2.3974 | 4.43 |
-| (b) float64-island GEMM K=1000 fwd | 5 | 25.908 | 0.3267 | 5 | 25.908 | 0.2895 | 0.886 |
-| (b) float64-island GEMM K=1000 fwd+bwd | 13 | 65.477 | 0.7621 | 13 | 65.477 | 0.6421 | 0.843 |
-| PLFC gyro-bias fwd | 17 | 16.587 | 0.2561 | 8 | 7.653 | 0.2510 | 0.980 |
-| PLFC gyro-bias fwd+bwd | 41 | 70.943 | 0.6084 | 29 | 30.104 | 0.6258 | 1.03 |
-| HyperbolicFullAttention fwd | 44 | 119.604 | 0.6080 | 46 | 225.923 | 0.9836 | 1.62 |
-| HyperbolicFullAttention fwd+bwd | 100 | 252.674 | 1.4532 | 111 | 576.520 | 2.1561 | 1.48 |
-| GyroBatchNorm(train) fwd | 47 | 34.770 | 0.5463 | 35 | 23.865 | 0.4806 | 0.880 |
-| GyroBatchNorm(train) fwd+bwd | 76 | 59.214 | 0.7203 | 53 | 38.095 | 0.5613 | 0.779 |
-
-Total wall time: as-is 25.0 s, new 24.9 s.
-
-The key-Gram intermediate (`900f054`) is dropped from both tables above to keep them readable; its
-cost shows in more than one row — CPU `GyroBatchNorm(train)
-fwd` 1343.1408 ms against 9.0924 ms as-is, CPU `GyroBatchNorm(train) fwd+bwd` 1317.4855 ms against
-13.4201 ms as-is, CPU `frechet_mean` 193.4177 ms against 73.4981 ms as-is, GPU `GyroBatchNorm(train)
-fwd` 7.9182 ms against 0.5463 ms as-is, GPU `GyroBatchNorm(train) fwd+bwd` 7.0382 ms against 0.7203
-ms as-is, and GPU `PLFC gyro-bias fwd+bwd` 2.4144 ms against 0.6084 ms as-is.
-
-Reading the tables:
-
-(a) Every consumer of the gyro-addition is about 2x faster on CPU and unchanged on GPU.
-`GyroBatchNorm` is 0.57–0.61x as-is on CPU; on the A100 it measured 0.78–0.88x in one run and
-0.96–0.97x on the repeat, i.e. unchanged within GPU noise — so the key-Gram intermediate's 148x
-(CPU) / 14.5x (GPU) never reached a release (the numbers in the key-Gram column of the full source
-summary). The consumers are `PLFC gyro-bias` (CPU ratio 0.370 forward / 0.456 forward+backward, GPU
-0.980 / 1.03) and `GyroBatchNorm(train)` (CPU 0.609 / 0.571, GPU 0.880 / 0.779 primary run, 0.959 /
-0.967 repeat), both of which used the then-current stable gyro-addition /
-`gyro_difference` implementation instead of the ambient boost. These rows predate
-the Cartesian origin branch.
-
-(b) The rows above 1.5x and why: attention and the `lorentz_midpoint` primitive on CPU because
-XLA:CPU materialises the variance form's `(…, N, M, D)` difference (Mflop only 1.3x for attention)
-while XLA:GPU fuses it (attention 1.62x / 1.48x on the A100), `LorentzResidual` on CPU for its
-pairwise polar frame, the Busemann head (CPU streaming of the exact broadcast-reduce; 2.1–4.4x on
-the A100 at 0.41–2.40 ms absolute, the decided trade), `prim Hyperboloid.expmap` and `tangent_inner`
-(three reductions instead of one; only the Riemannian optimizer's second moment and `frechet_mean`
-call them, and the optimizer step is 1.02x). Those two primitives are individually 1.73x and 3.51x
-slower on CPU in isolation, but `frechet_mean` — their other call site — comes out at 0.713x, faster
-overall, since the primitive call is a small fraction of its 100 iterations.
-
-(c) GPU repeatability from the repeat run `probe_cost_gpu_5b756df_rep2.out`: worst 39.4% on the
-float64-island GEMM K=1000 fwd row, 24.1% on `GyroBatchNorm` fwd+bwd, so GPU ratios inside ±1.3x are
-noise. That noise band is wider than the CPU table's ±6% identity-row floor, so a GPU ratio needs a
-bigger gap from 1x before it means anything.
-
-The Busemann float64-island GEMM rows — (b) in the GPU table above — are the documented float64-island
-recipe from [Busemann Coordinates at Large Radius](#busemann-large-radius), not a shipped library
-option.
+Measured at $c = 0.5$: the float32 `dist` of a radial step of length 0.1 at $a = 10$ has relative
+error 8e-7 along a coordinate axis, about the storage floor of the input pair (1.1e-4 for one
+random direction, whose floor is 1.4e-5), and the unit radial tangent's
+$\lvert\langle v,v\rangle - 1\rvert$ is 5.2e-5 at $a = 12$. `dist(x, x)` and `logmap(x, x)` are
+exactly 0, with a finite gradient. Code built on PV `dist` inherits this, e.g.
+`utils.helpers.compute_pairwise_distances` and `nn_layers.poincare_batchnorm.frechet_variance`
+(called by `ProperVelocityGyroBatchNorm`).
 
 ## Version Parameters
 
-### Purpose
-
-Many manifold operations have multiple mathematically equivalent formulations that differ in numerical properties. The `version_idx` parameter selects which to use.
+Several manifold operations have more than one formula for the same quantity. The `version_idx`
+argument selects which one runs.
 
 ### Poincaré Ball Distance Versions
 
@@ -1894,138 +1470,63 @@ d0 = poincare.dist(x, y, c, version_idx=poincare.VERSION_MOBIUS_DIRECT)
 # Version 1: Möbius via addition
 d1 = poincare.dist(x, y, c, version_idx=poincare.VERSION_MOBIUS)
 
-# Version 2: Metric tensor induced
+# Version 2: metric-tensor form; `dist` runs version 0's body (identical values)
 d2 = poincare.dist(x, y, c, version_idx=poincare.VERSION_METRIC_TENSOR)
 
 print(f"Version 0: {d0:.6f}")
 print(f"Version 1: {d1:.6f}")
 print(f"Version 2: {d2:.6f}")
-# All should be approximately equal
+# 0 and 2 are identical; 1 agrees here but saturates on far pairs
 ```
+
+| slot | `dist` | `dist_0` |
+| --- | --- | --- |
+| `VERSION_MOBIUS_DIRECT` (0), default | $\frac{2}{\sqrt c}\operatorname{arcsinh}\big(\sqrt c\lVert x-y\rVert/\sqrt{B_x B_y}\big)$, $B_x = 1 - c\lVert x\rVert^2$ | $\frac{2}{\sqrt c}\operatorname{atanh}(\sqrt c\lVert x\rVert)$ |
+| `VERSION_MOBIUS` (1) | the norm of $(-x)\oplus y$; saturates on far pairs | same as slot 0 |
+| `VERSION_METRIC_TENSOR` (2) | runs slot 0's body | the `arcsinh` form below |
 
 #### Slot 2 Reads the Radius Through `arcsinh` {#poincare-metric-tensor-dist-0}
 
-Both metric-tensor arms — the origin distance `dist_0` and the pairwise `dist` — used to have the
-[hyperboloid origin chart's defect](#hyperboloid-origin-chart) in Poincaré coordinates. Taking
-`dist_0` first, the metric-tensor integral is
+The metric-tensor distance is
+$d_0(x) = \frac{1}{\sqrt{c}}\operatorname{acosh}\big(1 + \frac{2c\lVert x\rVert^2}{1 - c\lVert x\rVert^2}\big)$,
+whose whole radial signal is a small perturbation of a leading 1: through `acosh`'s domain floor,
+every float32 radius below $\approx 1.1\times10^{-3}/\sqrt{c}$ would round to a distance of 0, with
+zero gradient. Slot 2 therefore evaluates it with the half-angle identity
+$\operatorname{acosh}(1 + 2t) = 2\operatorname{arcsinh}(\sqrt{t})$,
 
 $$
-d_0(x) = \frac{1}{\sqrt{c}}\operatorname{acosh}\!\left(1 + \frac{2c\lVert x\rVert^2}{1 - c\lVert x\rVert^2}\right),
+d_0(x) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x\rVert}{\sqrt{1 - c\lVert x\rVert^2}}\right),
 $$
 
-and the whole radial signal sits in that $2t$ perturbation of a leading 1. `acosh`'s
-$1 + 10\varepsilon$ domain clamp therefore flattened every float32 radius below
-$\sqrt{10\varepsilon/c} \approx 1.1\text{e-}3/\sqrt{c}$ onto exactly zero, and a second
-`arg < 1 + MIN_NORM` short-circuit zeroed the band below
-$\sqrt{\texttt{MIN\_NORM}/2c} \approx 2.2\text{e-}8/\sqrt{c}$ in **both** dtypes. The arm now uses
-the half-angle identity $\operatorname{acosh}(1 + 2t) = 2\operatorname{arcsinh}(\sqrt{t})$, whose
-argument is *linear* in the radius near the origin:
+whose argument is linear in the radius near the origin. Its median float32 relative error against
+a 60-digit reference is below 1e-7 from radius 1e-8 to $0.9/\sqrt c$ ($c = 1$), and it equals
+slot 0 to rounding. The pairwise `dist` uses the same identity with
+$t = c\lVert x - y\rVert^2/\big((1 - c\lVert x\rVert^2)(1 - c\lVert y\rVert^2)\big)$; that is
+slot 0's body. `dist(x, x)` is exactly 0, with gradient 0.
 
-$$
-d_0(x) = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\frac{\sqrt{c}\,\lVert x\rVert}{\sqrt{1 - c\lVert x\rVert^2}}\right).
-$$
+### Which Version to Use? {#which-version-to-use}
 
-Same function, so slot 2 still means "metric-tensor distance" — nothing was moved to a new slot.
-The boundary divisor $1 - c\lVert x\rVert^2$ was then still read through the conformal factor; it
-is now taken directly and floored below the cap's rounding band (see
-[Divisor Floors](#poincare-divisor-floors)). Median relative error against a
-60-digit `decimal` reference, $c = 1$, dim 8, before → after:
+Use `VERSION_MOBIUS_DIRECT` (version 0), the default.
 
-| radius | float32 | float64 |
-| --- | --- | --- |
-| 1e-8 | 7.7e4 → 1.4e-8 | 1.0 → 1.7e-16 |
-| 1e-6 | 7.7e2 → 1.4e-8 | 1.1e-5 → 0 |
-| 1e-4 | 6.7 → 2.9e-8 | 2.5e-9 → 1.4e-16 |
-| 1e-3 | 6.6e-3 → 5.3e-8 | 2.8e-12 → 0 |
-| 1e-2 | 3.3e-5 → 8.6e-8 | 1.4e-13 → 0 |
-| 0.1 | 4.9e-7 → 3.4e-8 | 2.2e-15 → 0 |
-| 0.9/√c | 6.5e-8 → 3.5e-8 | 1.5e-16 → 1.5e-16 |
-
-!!! warning "The floored band had a zero gradient, not just a wrong value"
-    `jax.grad` of slot 2 returned exactly `0` for float32 radii ≤ 1e-6 at every curvature (≤ 1e-3
-    at $c = 0.3$) and float64 radii ≤ 1e-8, instead of the analytic $2/(1 - c r^2) \to 2$. Anything
-    optimised through slot 2 near the origin received no gradient at all. Slots 0 and 1
-    (`VERSION_MOBIUS_DIRECT` / `VERSION_MOBIUS`, both $2\operatorname{atanh}(\sqrt{c}\lVert x\rVert)/\sqrt{c}$)
-    were never affected, and remain the default.
-
-The pairwise `dist` slot 2 is the same story with a separation in place of a radius:
-
-$$
-d(x,y) = \frac{1}{\sqrt{c}}\operatorname{acosh}\!\left(1 + 2t\right)
-       = \frac{2}{\sqrt{c}}\operatorname{arcsinh}\!\left(\sqrt{t}\right),
-\qquad
-t = \frac{c\lVert x - y\rVert^2}{(1 - c\lVert x\rVert^2)(1 - c\lVert y\rVert^2)} .
-$$
-
-The `acosh` clamp zeroed every pair with $t < 5\varepsilon$ and the `MIN_NORM` short-circuit a
-second band below $t = \texttt{MIN\_NORM}/2$. The two $(1 - c r^2)$ factors scale the threshold
-with the pair's radius, so at $c = 1$ the float32 separation floor is 1.2e-3 at the origin and
-9.2e-4 at radius 0.5. Median relative error against a 60-digit `decimal` reference routed through
-Möbius addition (independent of the formula under test), $c = 1$, dim 8, before → after:
-
-| radius | separation | float32 | float64 |
-| --- | --- | --- | --- |
-| 1e-2 | 1e-8 | 7.7e4 → 3.0e-8 | 1.0 → 1.7e-16 |
-| 1e-2 | 1e-6 | 7.7e2 → 2.6e-8 | 5.4e-8 → 2.1e-16 |
-| 1e-2 | 1e-4 | 6.7 → 2.3e-8 | 2.5e-9 → 6.8e-17 |
-| 1e-2 | 1e-2 | 6.7e-5 → 1.0e-7 | 1.9e-13 → 0 |
-| 0.5 | 1e-8 | 3.5e4 → 3.6e-8 | 1.0 → 1.2e-16 |
-| 0.5 | 1e-6 | 5.8e2 → 3.3e-8 | 6.3e-6 → 0 |
-| 0.5 | 1e-4 | 4.8 → 4.5e-8 | 3.6e-10 → 0 |
-| 0.5 | 1e-2 | 2.6e-6 → 6.1e-8 | 5.1e-14 → 1.3e-16 |
-
-!!! warning "Two points inside the floor had no gradient pulling them apart"
-    `‖∂d(x,y)/∂y‖` must equal the conformal factor $\lambda(y) = 2/(1 - c\lVert y\rVert^2)$ — the
-    unit-speed statement in Euclidean coordinates. Inside the floored band the old arm returned
-    exactly `0` instead: 23 of 60 probed gradient cells, across both dtypes, three curvatures and
-    both radii. A loss separating two nearby points through slot 2 received no gradient at all. At
-    $y = x$ the derivative does not exist and the convention is the finite, direction-free 0, which
-    `safe_sqrt`'s double-`where` now supplies (it also keeps `dist(x, x)` exactly 0).
-
-Slot 0 now runs this body too: the [far-pair fix](#poincare-far-pairs) turned its `atanh` form
-into this `arcsinh` form, so `VERSION_MOBIUS_DIRECT` and `VERSION_METRIC_TENSOR` return identical
-values, from three reductions over the dimension.
-
-### Which Version to Use?
-
-**General recommendation**: `VERSION_MOBIUS_DIRECT` (version 0)
-
-- Fewest intermediate operations
-- Best for most applications
-
-**Special cases**:
-
-- **Near-boundary points** (||x|| > 0.9): Use `Poincare(dtype=jnp.float64)`, or convert to the
-  hyperboloid via `isometry_mappings.poincare_to_hyperboloid` and use `Hyperboloid.dist` —
-  `dist`/`logmap` are now covered by the measured two-point accuracy checks (see [above](
-  #the-hyperboloids-two-point-cancellation-failure-mode)). The contrast that motivates this
-  advice: the Poincaré ball itself cannot even *represent* a point past the scaled radius
-  $\sqrt{c}\,d_0 = 2\,\mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$, where `proj`'s boundary
-  clamp saturates: 12.65 (float32) / 27.73 (float64) at $c = 1$, 13.80 / 28.88 at $c = 0.1$ (see
-  [The Round-Trip Ceiling](#poincare-roundtrip-ceiling)). The hyperboloid chart's representable
-  ceiling is $\sqrt{c}\,d = \ln(2\,\texttt{finfo.max}) \approx 89$
-  (float32), where $\cosh$ overflows — with `dist` itself giving up a fraction of a radius earlier,
-  at $\ln(\texttt{finfo.max}) \approx 88.7$, where the polar frame's $x_0 + \lVert x_s\rVert = e^a$
-  does.
-- **`VERSION_METRIC_TENSOR` (version 2)** is no longer a separate option: it runs slot 0's body
-  and returns the same values (see [above](#poincare-metric-tensor-dist-0)).
-- **`VERSION_MOBIUS` (version 1)**, the norm of $(-x) \oplus y$ through `_addition`, is unchanged
-  and still saturates on far float32 pairs: 12.637328 for a true 14.4 (two points at scaled
-  radius 7.2 on opposite sides, $c = 1$), with a gradient relative error of 1.0
-  (`logs/2026-09-29_cancellation-free/2_evidence/probes/1a_merged.out`). Float64 moves the
-  saturation out to the float64 ceiling, $\sqrt{c}\,d \approx 27.7$ at $c = 1$: an analogous
-  construction ($x = r\,u$, $y = -x$, dim 8, which gives 12.655848 in float32 at radius 7.2) gives
-  27.725826 for a true 29 and for a true 40, again with a gradient relative error of 1.0, while
-  slots 0 and 2 return 29 and 40 to within 7.6e-8
-  (`logs/2026-09-29_cancellation-free/docs_b1/probe_slot1_f64.out`).
-- **Debugging**: compare against `Poincare(dtype=jnp.float64)` rather than across versions — slots
-  0 and 2 always agree, and slot 1 departs from them on far pairs because it saturates.
+- `VERSION_METRIC_TENSOR` (version 2): for `dist` it runs slot 0's body and returns the same
+  values; `dist_0`'s slot 2 is the `arcsinh` form, equal to slot 0 to rounding (see
+  [above](#poincare-metric-tensor-dist-0)).
+- `VERSION_MOBIUS` (version 1) saturates on far pairs: in float32 it returns 12.637 for a true
+  distance of 14.4 (two points at scaled radius 7.2 on opposite sides, $c = 1$), with a gradient
+  relative error of 1.0. In float64 it saturates at $\sqrt{c}\,d \approx 27.7$.
+- Far points: no version helps. From $a = \sqrt{c}\,d \approx 10$, use float64 or the hyperboloid
+  (see the [table](#precision-requirements-by-distance)); the ball cannot store a point past
+  $a = 12.65$ (float32) / 27.73 (float64) at $c = 1$ (see
+  [The Round-Trip Ceiling](#poincare-roundtrip-ceiling)). The hyperboloid holds float32 accuracy to
+  $a \approx 16.6$ (the storage floor) and stores points up to $a \approx 45$ at $c = 1$, where the
+  time coordinate overflows (see [Input Overflow](#input-overflow-fingerprint)). Convert with
+  `isometry_mappings.poincare_to_hyperboloid`.
 
 ### Hyperboloid Distance Versions {#hyperboloid-distance-versions}
 
-The Hyperboloid manifold has its own two-way `version_idx`, orthogonal to the Poincaré versions
-above. The same two slots select an arm of both the pairwise `dist` and the origin distance
-`dist_0`, which are different implementations. A `version_idx` outside {0, 1} raises `ValueError`:
+The Hyperboloid has its own two-way `version_idx`. The same two slots select an arm of both the
+pairwise `dist` and the origin distance `dist_0`, which are different implementations. A
+`version_idx` outside {0, 1} raises `ValueError`:
 
 | slot | `dist` arm | `dist_0` arm | floor |
 | --- | --- | --- | --- |
@@ -2048,197 +1549,23 @@ d0 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_DEFAULT)
 d1 = hyperboloid.dist(x, y, c, version_idx=hyperboloid.VERSION_SMOOTHENED)
 ```
 
-**When to use which**:
-
-- `VERSION_DEFAULT` — the default, and the right choice for new code. It avoids the
-  identified cancellation over the measured range; stored-input and chart ceilings
-  still apply (see [above](#the-hyperboloids-two-point-cancellation-failure-mode)).
-- `VERSION_SMOOTHENED` — same numerics, but coincident points return a small positive distance
-  with a well-defined gradient instead of exactly 0. Useful when a downstream `1/dist` or `log
-  dist` would otherwise divide by zero. The floor is tiny: $2\,\mathrm{arcsinh}(10\epsilon)/\sqrt{c}
-  \approx 2.4\text{e-}6/\sqrt{c}$ in float32 (vs. float64's $\approx 4.4\text{e-}15/\sqrt{c}$) — a
-  large drop from the old softplus floor of $\mathrm{acosh}(1 + \ln 2/\beta)/\sqrt{c}
-  \approx 0.166/\sqrt{c}$, which shifted *every* distance in the working range, not just
-  coincident ones.
+Use `VERSION_DEFAULT` for new code. Use `VERSION_SMOOTHENED` when a downstream `1/dist` or
+`log dist` would otherwise divide by zero: coincident points then return the floor above, with a
+well-defined gradient.
 
 ### Using Versions with JIT
 
-Manifold operations are single-point functions: batch them with `jax.vmap` and compile the result
-with `jax.jit` yourself. An uncompiled `vmap` re-traces dozens of primitives on every call and
-runs 10-100x slower than the compiled path; that is the expected cost of the calling convention,
-not a bug.
+Keep `version_idx` static (bake it into the function, or `static_argnames`): a traced index still
+compiles, but every variant ends up in one `lax.switch`. Batch the single-point operations with
+`jax.vmap` and compile with `jax.jit`; see [Batching & JIT](batching-jit.md#combining-vmap-and-jit)
+for the patterns.
 
-`version_idx` does **not** have to be a static argument. The version switch is a `lax.switch`,
-which accepts a traced index, so a dynamic `version_idx` compiles and runs. Making it static
-(baking it into the function body, or `static_argnames`) is a compile-size optimization: it
-lets XLA drop the branches you do not use.
+## Projection {#projection-strategies}
 
-```python
-import jax
-from hyperbolix.manifolds import Poincare
-
-poincare = Poincare()
-
-# Recommended: bake the version into the function body, then jit the batched call.
-@jax.jit
-def compute_distances(x_batch, y_batch, c):
-    return jax.vmap(
-        lambda x, y: poincare.dist(x, y, c, version_idx=0)
-    )(x_batch, y_batch)
-
-# Or mark it static explicitly
-dist_jit = jax.jit(poincare.dist, static_argnames=['version_idx'])
-d = dist_jit(x, y, c=1.0, version_idx=0)
-```
-
-## Projection Strategies
-
-### Why Project?
-
-Operations like addition, linear transformations can push points off the manifold. Projection restores the manifold constraint.
-
-### When to Project
-
-**Always project**:
-
-- After Möbius addition: `poincare.addition(x, y, c)`
-- After neural network layers
-- After parameter updates in optimization
-
-**Usually don't need projection**:
-
-- After `expmap` (already on manifold)
-- After `proj` (redundant)
-
-### Projection
-
-Projection ensures points stay on the manifold by clipping norms:
-
-```python
-from hyperbolix.manifolds import Poincare
-
-poincare = Poincare()
-
-# Project to Poincaré ball
-x_proj = poincare.proj(x, c=1.0)
-
-# Projection is numerically stable and automatically handles edge cases
-```
-
-### Projection in Training
-
-```python
-from hyperbolix.manifolds import Poincare
-from hyperbolix.nn_layers import HypLinearPoincare
-from flax import nnx
-
-poincare = Poincare()
-
-class HyperbolicModel(nnx.Module):
-    def __init__(self, rngs):
-        self.layer1 = HypLinearPoincare(poincare, 128, 64, rngs=rngs)
-        self.layer2 = HypLinearPoincare(poincare, 64, 32, rngs=rngs)
-
-    def __call__(self, x, c=1.0):
-        x = self.layer1(x, c)
-        # Project after layer (layer already includes projection internally)
-
-        x = self.layer2(x, c)
-        # Final projection
-        x = jax.vmap(lambda xi: poincare.proj(xi, c))(x)
-        return x
-```
-
-!!! note "Layer Projection"
-    Hyperbolix layers already project internally after operations, so explicit projection between layers is optional but recommended for extra safety.
-
-## Common Edge Cases
-
-### Edge Case 1: Points Near the Boundary
-
-**Symptoms**: NaN or Inf in gradients, exploding losses
-
-**Solution**:
-```python
-# Check if points are too close to boundary
-def check_boundary_proximity(x_batch, c=1.0):
-    norms = jnp.linalg.norm(x_batch, axis=-1)
-    max_norm = 1.0 / jnp.sqrt(c)
-    proximity = norms / max_norm
-
-    if jnp.any(proximity > 0.95):
-        print(f"WARNING: Points near boundary (max proximity: {jnp.max(proximity):.4f})")
-        return True
-    return False
-
-# Clip if needed
-def safe_clip_to_interior(x_batch, c=1.0, safety_factor=0.9):
-    max_allowed = safety_factor / jnp.sqrt(c)
-    norms = jnp.linalg.norm(x_batch, axis=-1, keepdims=True)
-    scale = jnp.minimum(1.0, max_allowed / (norms + 1e-8))
-    return x_batch * scale
-```
-
-### Edge Case 2: Zero or Near-Zero Vectors
-
-**Symptoms**: Division by zero warnings, NaN in tangent operations
-
-**Solution**:
-```python
-# Manifold functions handle this internally: every norm on a differentiated path is
-# safe_sqrt(sum(v**2)), which returns an exact 0 with an exactly-zero gradient at v = 0
-# (see "Norms: One Reduction, Gradient-Safe at Zero" above). If you need the same in your
-# own code, use the library's primitives rather than rolling a floor:
-from hyperbolix.utils import safe_normalize, safe_sqrt
-import jax.numpy as jnp
-
-norm = safe_sqrt(jnp.sum(v**2, axis=-1))  # 0 at v = 0, gradient 0, one reduction
-unit = safe_normalize(v)                  # exact zero vector at v = 0, unit vector otherwise
-```
-
-### Edge Case 3: Large Learning Rates
-
-**Symptoms**: Points shoot to boundary, training collapse
-
-**Solution**:
-```python
-# Use conservative learning rates
-from hyperbolix.optim import riemannian_adam
-
-# For Poincaré ball
-optimizer = riemannian_adam(learning_rate=1e-3)  # Not 1e-2 or higher!
-
-# For Hyperboloid
-optimizer = riemannian_adam(learning_rate=5e-4)  # Even more conservative
-
-# Use learning rate scheduling
-from optax import exponential_decay
-
-schedule = exponential_decay(
-    init_value=1e-3,
-    transition_steps=1000,
-    decay_rate=0.96,
-    staircase=True
-)
-optimizer = riemannian_adam(learning_rate=schedule)
-```
-
-### Edge Case 4: High Curvature Values
-
-**Symptoms**: Numerical instability, rapid convergence to boundary
-
-**Solution**:
-```python
-# Keep curvature moderate
-c = 1.0  # Good default
-
-# High curvature (c > 1) increases numerical challenges
-c = 0.1  # Lower curvature = larger hyperbolic space = more stable
-
-# If learning curvature, clip it
-def clip_curvature(c, min_c=0.1, max_c=10.0):
-    return jnp.clip(c, min_c, max_c)
-```
+The library applies `proj` where its operations need it: Poincaré `addition` clamps its output,
+layers such as `HypLinearPoincare` end in that `addition`, and the Riemannian optimizers move
+parameters by `expmap` or retraction. Call `proj` yourself only on points you build: raw
+parameters, data loaded from disk, and hand-made ambient vectors.
 
 ## Checking Manifold Constraints
 
@@ -2265,26 +1592,22 @@ x_ambient = spatial_to_hyperboloid(jnp.array([0.2, 0.3, 0.1]), 1.0, 1.0)  # (dim
 assert hyperboloid.is_in_manifold(x_ambient, c=1.0)
 ```
 
-### The `atol` Convention
+### The `atol` Convention {#the-atol-convention}
 
-`is_in_manifold` and `is_in_tangent_space` take `atol: float | None = None`.
-Left as `None`, every manifold resolves it through
-`hyperbolix.manifolds._base.default_atol(dtype) = sqrt(finfo(dtype).eps)` —
-`3.45e-4` in float32, `1.49e-8` in float64. An explicit value is used as given:
-it is never floored, clamped, or ignored (through v1.0.0 the hyperboloid floored
-it at `1e-4`, so no caller could tighten it, and the Poincaré ball dropped it
-entirely). Ball membership tests
-the dimensionless residual `c||x||² - 1`, so one tolerance means the same thing
-at every curvature.
-
-The float64 default is strict enough to matter at large radii: a genuinely
-on-sheet hyperboloid point past hyperbolic distance ~11 accumulates more than
-`1.49e-8` of Lorentz residual just from storing `x₀`, so validate far-out points
-with an explicit `atol` rather than assuming the default is a bug.
+`is_in_manifold` and `is_in_tangent_space` take `atol: float | None = None`. Left as `None`, every
+manifold resolves it through
+`hyperbolix.manifolds._base.default_atol(dtype) = sqrt(finfo(dtype).eps)` — `3.45e-4` in float32,
+`1.49e-8` in float64. An explicit value is used as given: it is never floored, clamped or ignored.
+Ball membership tests the dimensionless residual `c||x||² - 1`, so one tolerance means the same
+thing at every curvature. On the hyperboloid the check compares the stored `x₀` with
+`√(1/c + ‖x_s‖²)` and uses the tolerance as both `rtol` and `atol`, so on-sheet points pass the
+default at any radius (see [above](#hyperboloid-known-limitations)).
 
 ### Batch Validation
 
 ```python
+import jax
+import jax.numpy as jnp
 from hyperbolix.manifolds import Poincare
 
 poincare = Poincare()
@@ -2306,60 +1629,53 @@ def validate_batch(x_batch, c=1.0, atol=1e-5):
 ## Best Practices Summary
 
 !!! success "Numerical Stability Checklist"
-    - ✅ **On the Poincaré ball, choose the dtype by the scaled radius** $a = \sqrt{c}\,d$: float32
-      up to $a \approx 7$, float64 for critical operations from $a \approx 10$, and float64 is
+    - **Choose the dtype by the scaled radius** $a = \sqrt{c}\,d$. On the Poincaré ball, float32
+      is fine to $a \approx 10$; use float64 for critical operations from there, and float64 is
       required past the float32 chart ceiling ($a \approx 12.65$ at $c = 1$; see the
-      [table](#precision-requirements-by-distance)). **On the
-      hyperboloid, `dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/
-      `tangent_inner`/`egrad2rgrad`/gyro `addition`/`busemann` are accurate to the
-      point-representation floor at any radius in float32 — see
-      [Known Limitations](#hyperboloid-known-limitations) for the exceptions**
-    - ✅ **Project after operations that might violate constraints**
-    - ✅ **Keep points away from boundary** (max norm < 0.9/√c)
-    - ✅ **Use conservative learning rates** (< 1e-3 for Poincaré, < 5e-4 for Hyperboloid)
-    - ✅ **Use protected math functions** (`hyperbolix.utils.math_utils`)
-    - ✅ **Monitor conformal factors** during training
-    - ✅ **Validate manifold constraints** in debugging
-    - ✅ **Use `VERSION_MOBIUS_DIRECT` for Poincaré distance** (`VERSION_METRIC_TENSOR` runs the
-      same body; `VERSION_MOBIUS` saturates on far pairs, past $\sqrt{c}\,d \approx 12.6$ in float32
-      and 27.7 in float64 at $c = 1$)
-    - ✅ **Clip curvature** if learnable (0.1 < c < 10.0)
-    - ✅ **Initialize embeddings conservatively** (small norms)
-    - ✅ **Prefer `ProperVelocity` for large-radius features** — unconstrained $\mathbb{R}^n$ avoids the boundary entirely and trains with plain `optax.adam`
+      [table](#precision-requirements-by-distance)).
+    - **For large radii, use the hyperboloid or `ProperVelocity`.** The hyperboloid holds float32
+      accuracy to $a \approx 16.6$ (see [Known Limitations](#hyperboloid-known-limitations));
+      `ProperVelocity` lives in unconstrained $\mathbb{R}^n$ and trains with plain `optax.adam`.
+    - **Use `VERSION_MOBIUS_DIRECT` for Poincaré distance** (the default). `VERSION_MOBIUS`
+      saturates on far pairs, past $\sqrt{c}\,d \approx 12.6$ in float32 and 27.7 in float64 at
+      $c = 1$.
+    - **Learn curvature with `LearnableCurvature`** (default log parameterization, bounds
+      $[\texttt{init\_c}/10,\ \texttt{init\_c}\cdot10]$; its clamp passes only gradients that
+      point back inside). Don't `jnp.clip` the curvature yourself: past the bound the gradient of
+      `jnp.clip` is 0, and the curvature stops moving.
+    - **Keep the default initializations.** A too-small init freezes a deep stack without any NaN;
+      see [Initialization Scales](nn-layers.md#initialization-scales).
+    - **A NaN loss is the intended signal of divergence.** Don't clip or clamp points, inputs or
+      curvature to keep values finite; find where the value diverged instead (below).
 
 ## Debugging Numerical Issues
-
-### Step-by-Step Diagnostic
 
 1. **Check for NaN/Inf**:
    ```python
    assert jnp.all(jnp.isfinite(x_batch)), "NaN or Inf detected in data"
    ```
 
-2. **Verify manifold constraints**:
+2. **Verify manifold constraints** with `validate_batch` from above:
    ```python
    validate_batch(x_batch, c=1.0, atol=1e-5)
    ```
 
-3. **Check boundary proximity**:
-   ```python
-   check_boundary_proximity(x_batch, c=1.0)
-   ```
+3. **Check the scaled radius** of your points against the model's limit (the
+   [Quick Check](#precision-requirements-by-distance) computes it for the Poincaré ball).
 
-4. **Switch to float64**:
-   ```python
-   x_batch = x_batch.astype(jnp.float64)
-   ```
-
-5. **Use float64 manifold** — switching the Poincaré `version_idx` does not help:
-   `VERSION_METRIC_TENSOR` runs the default's body, and `VERSION_MOBIUS` saturates on far pairs,
-   past $\sqrt{c}\,d \approx 12.6$ in float32 and 27.7 in float64 at $c = 1$ (see
+4. **Switch to float64**: enable `jax.config.update("jax_enable_x64", True)` and build the
+   manifold with `dtype=jnp.float64` — casting only the data does nothing, since a float32
+   manifold casts its inputs back. Switching the Poincaré `version_idx` does not help (see
    [Which Version to Use?](#which-version-to-use)):
    ```python
-   from hyperbolix.manifolds import Poincare
+   import jax
    import jax.numpy as jnp
+   from hyperbolix.manifolds import Poincare
+
+   jax.config.update("jax_enable_x64", True)
    poincare_f64 = Poincare(dtype=jnp.float64)
-   dist = poincare_f64.dist(x, y, c)
+   x, y = jnp.array([0.1, 0.2]), jnp.array([0.3, 0.4])
+   dist = poincare_f64.dist(x, y, 1.0)
    ```
 
 ## See Also
