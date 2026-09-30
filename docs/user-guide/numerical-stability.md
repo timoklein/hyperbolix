@@ -181,7 +181,7 @@ Five places still lose accuracy at large radius:
    the point-representation floor `eps·sinh(a)/√c` is lost in the endpoints' storage rounding, and
    no formula recovers it.
 2. **Attention scores through a GEMM.** The Lorentzian similarity score behind
-   `HyperbolicFullAttention` forms `2 + 2⟨Q,K⟩_L` from a matrix product, and a GEMM cannot be
+   `HyperbolicFullAttention` forms `2/c + 2⟨Q,K⟩_L` from a matrix product, and a GEMM cannot be
    made cancellation-free the way a single pairwise `dist` can — see
    [Full Attention's Float32 Score Floor](#attention-score-floor) below.
 3. **Transport to the origin from a far point.** The wrapped-normal `log_prob` uses its own
@@ -204,12 +204,13 @@ See also [Gyro-Difference and GyroBatchNorm Centering at Large Radius](#gyro-dif
 
 #### Full Attention's Float32 Score Floor {#attention-score-floor}
 
-`HyperbolicFullAttention`'s scores are `2 + 2⟨Q,K⟩_L`, a difference of two Minkowski terms each of
-size `cosh(a_q)·cosh(a_k)/c`. A matrix product returns the Gram matrix only to absolute `eps`, so
-no GEMM spelling avoids the cancellation. The absolute error on one score is about
-`eps·cosh(a_q)·cosh(a_k)/(c·scale)`: in float32 (`c = 1`, `scale = 1`) 4.8e-3 at `a = 6`, 0.26 at
-`a = 8`, and 2.0 at `a = 9`. From `a ≈ 8` it exceeds the score spread softmax is meant to resolve,
-and the weights come out wrong while staying finite.
+`HyperbolicFullAttention`'s scores are `(2/c + 2⟨Q,K⟩_L)/τ`, and `⟨Q,K⟩_L` is a difference of two
+Minkowski terms each of size `cosh(a_q)·cosh(a_k)/c`. A matrix product returns the Gram matrix only
+to absolute `eps`, so no GEMM spelling avoids the cancellation. The absolute error on one score is
+about `eps·cosh(a_q)·cosh(a_k)/(c·τ)`: in float32 (`c = 1`, `τ = 1`) 4.8e-3 at `a = 6`, 0.26 at
+`a = 8`, and 2.0 at `a = 9`. The default `τ = √out_features` divides the error and the score spread
+alike, so from `a ≈ 8` the error still exceeds the spread softmax is meant to resolve, and the
+weights come out wrong while staying finite.
 
 The cheaper first remedy is a `HyperboloidGyroRMSNorm` in front of the layer, or a smaller `c`.
 `score_dtype=jnp.float64` runs the score arithmetic as a float64 island and casts back before the
