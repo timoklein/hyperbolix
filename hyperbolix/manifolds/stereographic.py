@@ -13,7 +13,7 @@ across zero):
 ======  =========================  ===================================================
  ``c``   sectional curvature        geometry
 ======  =========================  ===================================================
-``> 0``  ``< 0``                    hyperbolic — **identical to** ``Poincare(c)``; open ball ‖x‖ < 1/√c
+``> 0``  ``< 0``                    hyperbolic — ``Poincare(c)``'s geometry (see below); open ball ‖x‖ < 1/√c
 ``= 0``  ``0``                      Euclidean (see the factor-2 note below)
 ``< 0``  ``> 0``                    spherical (projected sphere); no boundary, all of R^d
 ======  =========================  ===================================================
@@ -21,7 +21,11 @@ across zero):
 Internally the paper's curvature ``κ = -c``. Every private function sets ``k = -c`` once and then
 follows the geoopt/Bachmann formulas verbatim. **This is sign-flipped from the paper/geoopt ``κ``**
 (their ``κ > 0`` = spherical ↔ our ``c < 0`` = spherical): the sign is chosen so ``c`` matches every
-other hyperbolix manifold and so ``Stereographic(c)`` reproduces ``Poincare(c)`` exactly for ``c > 0``.
+other hyperbolix manifold and so ``Stereographic(c)`` matches ``Poincare(c)`` for ``c > 0``. ``addition``, ``gyration``,
+``proj``, the conformal factor, ``ptransp``, ``ptransp_0``, ``tangent_inner``, ``tangent_norm``, ``egrad2rgrad``,
+``retraction`` and ``dist_0`` return ``Poincare``'s bits; ``dist``, ``logmap``, ``expmap``, ``expmap_0``, ``logmap_0``
+and ``scalar_mul`` agree only to rounding (float32: ``logmap`` within 1.1e-5 relative at scaled radius 6-11, the others
+within 3.7e-7).
 
 Euclidean-limit factor of 2 (a classic gyrovector-space gotcha)
 ---------------------------------------------------------------
@@ -42,7 +46,7 @@ Numerical precision
 Bachmann et al. strongly recommend double precision. Prefer ``Stereographic(dtype=jnp.float64)`` for
 distances ≳ 7 (hyperbolic boundary) or spherical points near the ``tan`` pole; float32 is fine for
 moderate points. See :mod:`hyperbolix.manifolds.poincare` for the near-boundary conformal-factor caveats,
-which apply identically to the ``c > 0`` regime here.
+which apply to the ``c > 0`` regime here as well (the conformal factor is the same function).
 
 JIT / batching example::
 
@@ -50,7 +54,7 @@ JIT / batching example::
     >>> from hyperbolix.manifolds import Stereographic
     >>> m = Stereographic(dtype=jnp.float64)
     >>> x, y = jnp.array([0.1, 0.2]), jnp.array([0.3, 0.4])
-    >>> d_hyp = m.dist(x, y, c=1.0)     # hyperbolic  (== Poincare(c=1).dist)
+    >>> d_hyp = m.dist(x, y, c=1.0)     # hyperbolic  (Poincare's dist, to rounding)
     >>> d_sph = m.dist(x, y, c=-1.0)    # spherical
     >>> dist_batched = jax.vmap(m.dist, in_axes=(0, 0, None))   # batch over points
 
@@ -526,10 +530,11 @@ class Stereographic(ManifoldBase):
     """κ-Stereographic manifold (Bachmann et al. 2020) with automatic dtype casting.
 
     A single constant-curvature manifold spanning hyperbolic, Euclidean, and spherical geometry via a
-    **signed** curvature ``c`` (sectional curvature ``= -c``): ``c > 0`` hyperbolic (identical to
-    :class:`~hyperbolix.manifolds.Poincare`), ``c = 0`` Euclidean (with the gyrovector factor-2 metric —
-    see the module docstring), ``c < 0`` spherical. See the module docstring for the full convention
-    table, the Euclidean-limit factor-2 gotcha, and precision notes.
+    **signed** curvature ``c`` (sectional curvature ``= -c``): ``c > 0`` hyperbolic (the geometry of
+    :class:`~hyperbolix.manifolds.Poincare`; some ops agree with it only to rounding), ``c = 0`` Euclidean
+    (with the gyrovector factor-2 metric — see the module docstring), ``c < 0`` spherical. See the module
+    docstring for the full convention table, which ops match ``Poincare`` bit for bit, the Euclidean-limit
+    factor-2 gotcha, and precision notes.
 
     Args:
         dtype: Target JAX dtype for computations (default: ``jnp.float32``; float64 recommended).

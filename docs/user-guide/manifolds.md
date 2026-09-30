@@ -59,8 +59,8 @@ different conventions:
 Curvature convention is uniform across all manifolds: `c > 0` means sectional
 curvature $-c$ (so larger `c` → more curved). `Euclidean` ignores `c` entirely.
 The one exception is `Stereographic`, which takes a **signed** `c` that *extends*
-this same convention across zero: `c > 0` hyperbolic (identical to `Poincare(c)`),
-`c = 0` Euclidean, `c < 0` spherical. See the
+this same convention across zero: `c > 0` hyperbolic (the `Poincare(c)` geometry,
+with some ops equal only to rounding), `c = 0` Euclidean, `c < 0` spherical. See the
 [κ-Stereographic API reference](../api-reference/manifolds.md) for the factor-2
 Euclidean-limit caveat and the sign-flip relative to the paper's $\kappa$.
 

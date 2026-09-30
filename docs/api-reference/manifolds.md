@@ -121,11 +121,11 @@ A single constant-curvature manifold spanning **hyperbolic, Euclidean, and spher
 
     | `c` | sectional curvature | geometry |
     |---|---|---|
-    | $> 0$ | $< 0$ | hyperbolic — **identical to `Poincare(c)`** |
+    | $> 0$ | $< 0$ | hyperbolic — the `Poincare(c)` geometry (see below) |
     | $= 0$ | $0$ | Euclidean (factor-2 limit; see below) |
     | $< 0$ | $> 0$ | spherical (stereographic projection of the sphere) |
 
-    Internally the paper's $\kappa = -c$. This is **sign-flipped from the paper/geoopt $\kappa$** (their $\kappa > 0$ = spherical), chosen so `c` matches every other hyperbolix manifold and so `Stereographic(c)` reproduces `Poincare(c)` exactly for $c > 0$.
+    Internally the paper's $\kappa = -c$. This is **sign-flipped from the paper/geoopt $\kappa$** (their $\kappa > 0$ = spherical), chosen so `c` matches every other hyperbolix manifold and so `Stereographic(c)` matches `Poincare(c)` for $c > 0$: `addition`, `gyration`, `proj`, the conformal factor, `ptransp`, `ptransp_0`, `tangent_inner`, `tangent_norm`, `egrad2rgrad`, `retraction` and `dist_0` return `Poincare`'s bits, while `dist`, `logmap`, `expmap`, `expmap_0`, `logmap_0` and `scalar_mul` agree only to rounding (float32: `logmap` within 1.1e-5 relative at scaled radius 6–11, the others within 3.7e-7; see [κ-Stereographic numerics](../user-guide/numerical-stability.md#stereographic-near-zero-curvature)).
 
 !!! warning "The Euclidean limit carries a factor of 2"
     The conformal factor is $\lambda^\kappa_x = 2/(1 - c\lVert x\rVert^2)$, so $\lambda^\kappa_0 = 2$ and the metric at $c = 0$ is $4\cdot I$, **not** $I$. As $c \to 0$: `addition`/`expmap`/`logmap` reduce to the *bare* Euclidean $x{+}y$ / $x{+}v$ / $y{-}x$, but `dist` $\to 2\lVert x-y\rVert$ and `tangent_norm` $\to 2\lVert v\rVert$ (paper Thm. 3). This matches Poincaré's own `dist_0` $\to 2\lVert x\rVert$, and therefore does **not** equal the separate `Euclidean` manifold's `dist` (bare metric $I$). Use `Euclidean` for un-scaled flat geometry; use `Stereographic` at $c=0$ only as the *continuous limit* of the curved family.
