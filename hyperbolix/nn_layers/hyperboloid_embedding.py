@@ -177,18 +177,19 @@ class LorentzEmbedding(nnx.Module):
         """
         if not jnp.issubdtype(jnp.asarray(ids).dtype, jnp.integer):
             raise ValueError(f"LorentzEmbedding: ids must be integers, got dtype {jnp.asarray(ids).dtype}")
-        table = self.embedding[...]
-        dtype = table.dtype
+        dtype = self.embedding[...].dtype
         if self.parameterization == "spatial":
-            spatial_S = jnp.take(table, ids, axis=0)  # (..., S)
+            table_VS = self.embedding[...]  # (V, S)
+            spatial_S = jnp.take(table_VS, ids, axis=0)  # (..., S)
             target_c = self.c if c_out is None else c_out
             return spatial_to_hyperboloid(
                 spatial_S, jnp.asarray(self.c, dtype=dtype), jnp.asarray(target_c, dtype=dtype)
             )  # (..., A)
 
-        rows_A = jnp.take(table, ids, axis=0)  # (..., A)
+        table_VA = self.embedding[...]  # (V, A)
+        rows_A = jnp.take(table_VA, ids, axis=0)  # (..., A)
         if c_out is None:
             return rows_A
         # <s·x, s·x>_L = -s²/c = -1/c_out for s = sqrt(c/c_out): the whole ambient vector scales.
-        scale = jnp.sqrt(jnp.asarray(self.c, dtype=dtype) / jnp.asarray(c_out, dtype=dtype))
-        return scale * rows_A
+        sheet_scale = jnp.sqrt(jnp.asarray(self.c, dtype=dtype) / jnp.asarray(c_out, dtype=dtype))  # scalar
+        return sheet_scale * rows_A

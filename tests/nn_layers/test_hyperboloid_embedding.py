@@ -12,7 +12,6 @@ import pytest
 from flax import nnx
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.nn_layers.hyperboloid_core import spatial_to_hyperboloid
 from hyperbolix.nn_layers.hyperboloid_embedding import LorentzEmbedding, lorentz_embedding_init
 from hyperbolix.optim import ManifoldParam, riemannian_adam
 
@@ -197,8 +196,13 @@ def test_spatial_parameterization(dtype, c, c_out):
 
     assert out_BLA.dtype == dtype
     assert _on_manifold(out_BLA.reshape(-1, A), target_c, dtype)
-    expected_BLA = spatial_to_hyperboloid(table_VS[ids_BL], c, target_c)
-    np.testing.assert_allclose(np.asarray(out_BLA), np.asarray(expected_BLA), rtol=1e-6 if dtype == jnp.float32 else 1e-14)
+    # Independent float64 NumPy oracle: lift the row onto the sheet of curvature c, then scale the whole
+    # ambient vector by sqrt(c / c_out), which lands on the sheet of curvature target_c.
+    rows_BLS = np.asarray(table_VS, np.float64)[np.asarray(ids_BL)]
+    time_BL1 = np.sqrt(np.sum(rows_BLS**2, axis=-1, keepdims=True) + 1.0 / c)
+    lifted_BLA = np.concatenate([time_BL1, rows_BLS], axis=-1)
+    expected_BLA = np.sqrt(c / target_c) * lifted_BLA
+    np.testing.assert_allclose(np.asarray(out_BLA), expected_BLA, rtol=1e-6 if dtype == jnp.float32 else 1e-12)
 
 
 def test_spatial_init_is_standard_normal():

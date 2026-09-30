@@ -625,7 +625,7 @@ def lorentz_residual(
         weight to every point; an array of shape ``x.shape[:-1]`` or ``x.shape[:-1] + (1,)``
         gives one weight per point (e.g. per-token gate weights in a mixture of experts). A
         weight array of shape ``x.shape[:-1]`` gets a trailing axis added internally; any
-        other non-scalar shape whose last axis is not 1 raises ``ValueError``.
+        other non-scalar shape raises ``ValueError``.
     c : float
         Curvature parameter (positive, c > 0).
     eps : float, optional
@@ -692,14 +692,14 @@ def lorentz_residual(
     """
     # Per-point weights: (...,) -> (..., 1) so they broadcast over the ambient axis. Scalars (Python
     # or 0-d) pass through untouched, which keeps the scalar path bit-for-bit unchanged.
-    w_ndim = jnp.ndim(w_y)
-    if w_ndim > 0:
-        if w_ndim == x.ndim - 1:
+    if jnp.ndim(w_y) > 0:
+        w_shape = tuple(jnp.shape(w_y))
+        if w_shape == tuple(x.shape[:-1]):
             w_y = jnp.expand_dims(jnp.asarray(w_y), -1)  # (..., 1)
-        if jnp.shape(w_y)[-1] != 1:
+        elif w_shape != (*x.shape[:-1], 1):
             raise ValueError(
                 f"lorentz_residual: w_y must be a scalar or have shape x.shape[:-1] or x.shape[:-1] + (1,); "
-                f"got w_y.shape={jnp.shape(w_y)} for x.shape={x.shape}"
+                f"got w_y.shape={w_shape} for x.shape={tuple(x.shape)}"
             )
     ave_A = x + w_y * y  # (..., A) where A = d+1
     # Exact for on-sheet x, y:  <x + w y, x + w y>_L = -(1+w)^2/c - w <x-y, x-y>_L.

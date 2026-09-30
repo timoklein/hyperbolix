@@ -22,6 +22,11 @@ L : query/key ambient dimension per head (``K + 1 = qk_nope_head_dim + qk_rope_h
 V : value spatial dimension per head (``v_head_dim - 1``)
 W : value ambient dimension per head (``V + 1 = v_head_dim``)
 F : flattened head outputs (``H * W``)
+X : flattened query spatial coordinates (``H * K``)
+Y : latent plus shared rotated key, spatial (``R + P``)
+Z : latent point, ambient (``R + 1``)
+U : key/value decompression width per head, spatial (``N + V``)
+G : flattened key/value decompression (``H * U``)
 
 References
 ----------
@@ -351,25 +356,25 @@ class LorentzMLA(nnx.Module):
             raise ValueError(f"positions must have shape (S,) = {(S,)} or (B, S) = {(B, S)}, got {positions.shape}")
 
         # 1. Queries: one GEMM over all heads, then [nope | rope] per head.
-        query_space_BSX = self.wq(x_BSA, c, c, return_space=True)  # (B, S, H*K)
+        query_space_BSX = self.wq(x_BSA, c, c, return_space=True)  # (B, S, X) = (B, S, H*K)
         query_space_BSHK = query_space_BSX.reshape(B, S, H, N + P)  # (B, S, H, K)
         query_nope_BSHN = query_space_BSHK[..., :N]  # (B, S, H, N)
         # Heads sit after the sequence axis: positions (S,) -> (S, 1), (B, S) -> (B, S, 1).
         query_rope_BSHP = hope_rotate_space(query_space_BSHK[..., N:], positions[..., None], self.rope_base)  # (B, S, H, P)
 
         # 2. Latent and the shared rotated key: one GEMM, split [latent | rope].
-        latent_rope_BSY = self.wkv_a(x_BSA, c, c, return_space=True)  # (B, S, R+P)
+        latent_rope_BSY = self.wkv_a(x_BSA, c, c, return_space=True)  # (B, S, Y) = (B, S, R+P)
         latent_BSR = latent_rope_BSY[..., :R]  # (B, S, R)
         key_rope_BSP = hope_rotate_space(latent_rope_BSY[..., R:], positions, self.rope_base)  # (B, S, P), one per token
 
         # 3. Normalize the latent into a point, then decompress keys and values for all heads.
         # nnx.RMSNorm promotes a low-precision input to its float32 scale; cast back so a
         # bfloat16 forward stays bfloat16 (HELM's F.rms_norm keeps the input dtype).
-        latent_point_BSZ = self.kv_norm(latent_BSR, c, c, space_only=True).astype(work_dtype)  # (B, S, R+1)
-        key_value_BSX = self.wkv_b(latent_point_BSZ, c, c, return_space=True)  # (B, S, H*(N+V))
-        key_value_BSHX = key_value_BSX.reshape(B, S, H, N + V)  # (B, S, H, N+V)
-        key_nope_BSHN = key_value_BSHX[..., :N]  # (B, S, H, N)
-        value_space_BSHV = key_value_BSHX[..., N:]  # (B, S, H, V)
+        latent_point_BSZ = self.kv_norm(latent_BSR, c, c, space_only=True).astype(work_dtype)  # (B, S, Z) = (B, S, R+1)
+        key_value_BSG = self.wkv_b(latent_point_BSZ, c, c, return_space=True)  # (B, S, G) = (B, S, H*U)
+        key_value_BSHU = key_value_BSG.reshape(B, S, H, N + V)  # (B, S, H, U)
+        key_nope_BSHN = key_value_BSHU[..., :N]  # (B, S, H, N)
+        value_space_BSHV = key_value_BSHU[..., N:]  # (B, S, H, V)
 
         # 4. Lorentz concatenation: concatenate the spatial parts, rebuild the time coordinate.
         query_BSHL = spatial_to_hyperboloid(
@@ -385,7 +390,7 @@ class LorentzMLA(nnx.Module):
         lorentz_inner_BHST = -jnp.einsum(
             "bshl,bthl->bhst", query_BSHL[..., :1], key_BTHL[..., :1], precision=MATMUL_PRECISION
         ) + jnp.einsum("bshk,bthk->bhst", query_BSHL[..., 1:], key_BTHL[..., 1:], precision=MATMUL_PRECISION)  # (B, H, S, T)
-        # Scale, bias, mask and softmax run in at least float32 (HELM: softmax(dtype=float32)); a
+        # Scale, mask and softmax run in at least float32 (HELM: softmax(dtype=float32)); a
         # float64 forward keeps float64.
         softmax_dtype = jnp.promote_types(work_dtype, jnp.float32)
         lorentz_inner_BHST = lorentz_inner_BHST.astype(softmax_dtype)

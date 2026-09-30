@@ -29,6 +29,7 @@ E : routed experts
 R : shared experts
 M : merged expert outputs per token (``E + R``)
 K : experts selected per token (``top_k``)
+L : leading axes of the input, ``x.shape[:-1]`` (any number, flattened into ``N``)
 
 References
 ----------
@@ -224,9 +225,9 @@ class LorentzMoEGate(nnx.Module):
         """
         if mask.shape[-1] != self.num_experts:
             raise ValueError(f"mask must have {self.num_experts} experts on its last axis, got shape {mask.shape}")
-        bias = self.bias[...]
-        load_E = jnp.sum(mask.reshape(-1, self.num_experts).astype(bias.dtype), axis=0)  # (E,)
-        self.bias[...] = bias + speed * jnp.sign(jnp.mean(load_E) - load_E)
+        bias_E = self.bias[...]  # (E,)
+        load_E = jnp.sum(mask.reshape(-1, self.num_experts).astype(bias_E.dtype), axis=0)  # (E,)
+        self.bias[...] = bias_E + speed * jnp.sign(jnp.mean(load_E) - load_E)
 
 
 class LorentzSwiGLU(nnx.Module):
@@ -605,7 +606,7 @@ class LorentzMoE(nnx.Module):
         c_work = jnp.asarray(c, dtype=work_dtype)
         c_expert_E = self.routed_curvatures().astype(work_dtype)  # (E,)
 
-        weights_NK, indices_NK, stats = self.gate(x_NA)
+        weights_NK, indices_NK, gate_stats = self.gate(x_NA)
         # Dense (N, E) gate weights: g_i for the selected experts, 0 for the rest.
         gate_NE = jnp.sum(jax.nn.one_hot(indices_NK, self.num_routed, dtype=weights_NK.dtype) * weights_NK[..., None], axis=-2)
 
@@ -619,12 +620,12 @@ class LorentzMoE(nnx.Module):
 
         points_NMA = jnp.transpose(outputs_ENA, (1, 0, 2))  # (N, M, A)
         centroid_N1A = lorentz_midpoint(points_NMA, weights_NM[:, None, :], c_work, eps=self.eps)  # (N, 1, A)
-        out = centroid_N1A[:, 0, :].reshape(*lead_shape, self.dim)
-        stats = MoERoutingStats(
-            affinity=stats.affinity.reshape(*lead_shape, self.num_routed),
-            mask=stats.mask.reshape(*lead_shape, self.num_routed),
+        out_LA = centroid_N1A[:, 0, :].reshape(*lead_shape, self.dim)  # (L..., A)
+        routing_stats = MoERoutingStats(
+            affinity=gate_stats.affinity.reshape(*lead_shape, self.num_routed),  # (L..., E)
+            mask=gate_stats.mask.reshape(*lead_shape, self.num_routed),  # (L..., E)
         )
-        return out, stats
+        return out_LA, routing_stats
 
 
 def moe_sequence_balance_loss(stats: MoERoutingStats, alpha: float) -> Float[Array, ""]:

@@ -390,6 +390,11 @@ def test_lorentz_residual_weight_shape_validation():
     x_BLA = _make_points(jax.random.PRNGKey(43), 12, 6, jnp.float32, c).reshape(3, 4, 6)
     with pytest.raises(ValueError):
         lorentz_residual(x_BLA, x_BLA, jnp.ones((4,), dtype=jnp.float32), c)
+    # (S, 1) on (B, S, A) with B == S: a trailing-axis-only check would turn it into (S, 1, 1) and
+    # silently align it with the batch axis.
+    x_SSA = _make_points(jax.random.PRNGKey(56), 16, 6, jnp.float32, c).reshape(4, 4, 6)
+    with pytest.raises(ValueError):
+        lorentz_residual(x_SSA, x_SSA, jnp.ones((4, 1), dtype=jnp.float32), c)
     # A single point takes a scalar weight (0-d array or Python float) unchanged.
     x_A = x_BLA[0, 0]
     assert jnp.allclose(lorentz_residual(x_A, x_A, jnp.asarray(0.5), c), lorentz_residual(x_A, x_A, 0.5, c))
@@ -474,9 +479,18 @@ def test_residual_call_time_weight_override(dtype):
     assert jnp.allclose(module(x, y, c=c, weight=0.3), fixed(x, y, c=c), atol=atol)
 
     w_B = jax.random.uniform(jax.random.PRNGKey(52), (8,), minval=0.1, maxval=2.0, dtype=dtype)
-    expected = lorentz_scale(lorentz_residual(x, y, w_B, c), 2.0, c)
-    assert jnp.allclose(module(x, y, c=c, weight=w_B), expected, atol=atol)
-    assert jnp.allclose(module(x, y, c=c, weight=w_B[:, None]), expected, atol=atol)
+    # Independent float64 NumPy oracle from the documented formula: ave = x + w y,
+    # out = ave / (sqrt(c) sqrt(|<ave, ave>_L|)), space *= gamma, time = sqrt(|space|^2 + 1/c).
+    x_BA, y_BA = np.asarray(x, np.float64), np.asarray(y, np.float64)
+    ave_BA = x_BA + np.asarray(w_B, np.float64)[:, None] * y_BA
+    mink_B1 = -(ave_BA[:, :1] ** 2) + np.sum(ave_BA[:, 1:] ** 2, axis=-1, keepdims=True)
+    unit_BA = ave_BA / (np.sqrt(c) * np.sqrt(np.abs(mink_B1)))
+    space_BD = 2.0 * unit_BA[:, 1:]
+    time_B1 = np.sqrt(np.sum(space_BD**2, axis=-1, keepdims=True) + 1.0 / c)
+    expected_BA = np.concatenate([time_B1, space_BD], axis=-1)
+    assert_atol = 1e-5 if dtype == jnp.float32 else 1e-12
+    np.testing.assert_allclose(np.asarray(module(x, y, c=c, weight=w_B), np.float64), expected_BA, atol=assert_atol)
+    np.testing.assert_allclose(np.asarray(module(x, y, c=c, weight=w_B[:, None]), np.float64), expected_BA, atol=assert_atol)
 
 
 def test_residual_parameterization_validation():
