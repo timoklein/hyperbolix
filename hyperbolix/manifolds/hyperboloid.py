@@ -1755,8 +1755,7 @@ def _is_in_manifold(x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: flo
     ``⟨x, x⟩_L`` against ``-1/c``, i.e. a residual of ``x₀² - x₀(x_s)² ≈ 2·x₀·(x₀ - x₀(x_s))``: it
     scaled the honest time-slot discrepancy by ``2·x₀ = 2·cosh(a)/√c`` *and* obtained it as the
     difference of two ``O(cosh² a)`` numbers, so a perfectly on-sheet point stopped passing an
-    absolute tolerance from geodesic radius ~7 (float32) / ~11 (float64) — the caveat
-    :func:`~hyperbolix.manifolds._base.default_atol` documents. Comparing the time slot against the
+    absolute tolerance from geodesic radius ~7 (float32) / ~11 (float64). Comparing the time slot against the
     spatial part directly removes both factors, and makes the check exact on anything :func:`_proj`
     produced (``_proj`` computes precisely this reference through :func:`_time_slot`).
 
