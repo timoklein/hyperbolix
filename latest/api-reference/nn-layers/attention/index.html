@@ -1674,6 +1674,27 @@ transformation component <code>HTCLinear</code> (used for MLP sublayers) is on t
 spatial domain of the hyperboloid.  Focus function φ sharpens query and key.</p>
 
 
+<details class="differences-from-hypformer" open>
+  <summary>Differences from Hypformer</summary>
+  <ul>
+<li><strong>No focus temperature.</strong> Hypformer learns a temperature <code>t</code> inside the focus
+  function. :func:<code>focus_transform</code> is homogeneous of degree 1 in <code>1/(|t| + eps)</code>,
+  so <code>φ(Q)</code> and <code>φ(K)</code> both scale by it, and the output
+  <code>φ(Q)(φ(K)^T V) / φ(Q)(φ(K)^T 1)</code> sees <code>t</code> only through the <code>eps</code> floors
+  inside :func:<code>focus_transform</code>, in the bidirectional and the causal form alike. Its
+  gradient measured 5 to 7 orders of magnitude below the other parameters', so it stays
+  near its init; the parameter is omitted and the layer uses <code>t = 1</code>, the old init,
+  which leaves the output at init unchanged.</li>
+<li><strong>No additive <code>eps</code> on the kernel-ratio denominator.</strong> Hypformer divides by
+  <code>den + 1e-6</code>. <code>φ</code> is strictly positive, so <code>den &gt; 0</code>, but a query whose spatial
+  part is <code>≤ 0</code> on a head has <code>φ(Q) ≈ eps^power</code> and <code>den ~ 1e-13</code> at the default
+  <code>power = 2</code>, where <code>+ eps</code> returns <code>≈ 0</code> for that head instead of its attention
+  average. The layer divides by <code>den</code> floored at the smallest normal number of the
+  working dtype promoted to at least float32, a floor that acts only on an underflowed
+  <code>den</code>.</li>
+</ul>
+</details>
+
 <p><span class="doc-section-title">Parameters:</span></p>
     <table>
       <thead>
@@ -1829,65 +1850,77 @@ input array's dtype (the parameters are cast to it).</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_attention.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-248">248</a></span>
-<span class="normal"><a href="#__codelineno-0-249">249</a></span>
-<span class="normal"><a href="#__codelineno-0-250">250</a></span>
-<span class="normal"><a href="#__codelineno-0-251">251</a></span>
-<span class="normal"><a href="#__codelineno-0-252">252</a></span>
-<span class="normal"><a href="#__codelineno-0-253">253</a></span>
-<span class="normal"><a href="#__codelineno-0-254">254</a></span>
-<span class="normal"><a href="#__codelineno-0-255">255</a></span>
-<span class="normal"><a href="#__codelineno-0-256">256</a></span>
-<span class="normal"><a href="#__codelineno-0-257">257</a></span>
-<span class="normal"><a href="#__codelineno-0-258">258</a></span>
-<span class="normal"><a href="#__codelineno-0-259">259</a></span>
-<span class="normal"><a href="#__codelineno-0-260">260</a></span>
-<span class="normal"><a href="#__codelineno-0-261">261</a></span>
-<span class="normal"><a href="#__codelineno-0-262">262</a></span>
-<span class="normal"><a href="#__codelineno-0-263">263</a></span>
-<span class="normal"><a href="#__codelineno-0-264">264</a></span>
-<span class="normal"><a href="#__codelineno-0-265">265</a></span>
-<span class="normal"><a href="#__codelineno-0-266">266</a></span>
-<span class="normal"><a href="#__codelineno-0-267">267</a></span>
-<span class="normal"><a href="#__codelineno-0-268">268</a></span>
-<span class="normal"><a href="#__codelineno-0-269">269</a></span>
-<span class="normal"><a href="#__codelineno-0-270">270</a></span>
-<span class="normal"><a href="#__codelineno-0-271">271</a></span>
-<span class="normal"><a href="#__codelineno-0-272">272</a></span>
-<span class="normal"><a href="#__codelineno-0-273">273</a></span>
-<span class="normal"><a href="#__codelineno-0-274">274</a></span>
-<span class="normal"><a href="#__codelineno-0-275">275</a></span>
-<span class="normal"><a href="#__codelineno-0-276">276</a></span>
-<span class="normal"><a href="#__codelineno-0-277">277</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-248"><a id="__codelineno-0-248" name="__codelineno-0-248"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-249"><a id="__codelineno-0-249" name="__codelineno-0-249"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-250"><a id="__codelineno-0-250" name="__codelineno-0-250"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-251"><a id="__codelineno-0-251" name="__codelineno-0-251"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-252"><a id="__codelineno-0-252" name="__codelineno-0-252"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-253"><a id="__codelineno-0-253" name="__codelineno-0-253"></a>    <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-0-254"><a id="__codelineno-0-254" name="__codelineno-0-254"></a>    <span class="n">power</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.0</span><span class="p">,</span>
-</span><span id="__span-0-255"><a id="__codelineno-0-255" name="__codelineno-0-255"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-256"><a id="__codelineno-0-256" name="__codelineno-0-256"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
-</span><span id="__span-0-257"><a id="__codelineno-0-257" name="__codelineno-0-257"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-258"><a id="__codelineno-0-258" name="__codelineno-0-258"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-259"><a id="__codelineno-0-259" name="__codelineno-0-259"></a><span class="p">):</span>
-</span><span id="__span-0-260"><a id="__codelineno-0-260" name="__codelineno-0-260"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-261"><a id="__codelineno-0-261" name="__codelineno-0-261"></a>        <span class="n">in_features</span><span class="p">,</span>
-</span><span id="__span-0-262"><a id="__codelineno-0-262" name="__codelineno-0-262"></a>        <span class="n">out_features</span><span class="p">,</span>
-</span><span id="__span-0-263"><a id="__codelineno-0-263" name="__codelineno-0-263"></a>        <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span>
-</span><span id="__span-0-264"><a id="__codelineno-0-264" name="__codelineno-0-264"></a>        <span class="n">init_bound</span><span class="o">=</span><span class="n">init_bound</span><span class="p">,</span>
-</span><span id="__span-0-265"><a id="__codelineno-0-265" name="__codelineno-0-265"></a>        <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">,</span>
-</span><span id="__span-0-266"><a id="__codelineno-0-266" name="__codelineno-0-266"></a>        <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span>
-</span><span id="__span-0-267"><a id="__codelineno-0-267" name="__codelineno-0-267"></a>        <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
-</span><span id="__span-0-268"><a id="__codelineno-0-268" name="__codelineno-0-268"></a>    <span class="p">)</span>
-</span><span id="__span-0-269"><a id="__codelineno-0-269" name="__codelineno-0-269"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">power</span> <span class="o">=</span> <span class="n">power</span>
-</span><span id="__span-0-270"><a id="__codelineno-0-270" name="__codelineno-0-270"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">temperature</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
-</span><span id="__span-0-271"><a id="__codelineno-0-271" name="__codelineno-0-271"></a>    <span class="c1"># Spatial residual projection ψ: D → D (shared across heads). Its output is added to the</span>
-</span><span id="__span-0-272"><a id="__codelineno-0-272" name="__codelineno-0-272"></a>    <span class="c1"># attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at</span>
-</span><span id="__span-0-273"><a id="__codelineno-0-273" name="__codelineno-0-273"></a>    <span class="c1"># the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even</span>
-</span><span id="__span-0-274"><a id="__codelineno-0-274" name="__codelineno-0-274"></a>    <span class="c1"># when every attention einsum is already pinned (see hyperbolix.utils.precision).</span>
-</span><span id="__span-0-275"><a id="__codelineno-0-275" name="__codelineno-0-275"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">residual_proj</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span>
-</span><span id="__span-0-276"><a id="__codelineno-0-276" name="__codelineno-0-276"></a>        <span class="n">out_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">,</span> <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span> <span class="n">precision</span><span class="o">=</span><span class="n">MATMUL_PRECISION</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span>
-</span><span id="__span-0-277"><a id="__codelineno-0-277" name="__codelineno-0-277"></a>    <span class="p">)</span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-310">310</a></span>
+<span class="normal"><a href="#__codelineno-0-311">311</a></span>
+<span class="normal"><a href="#__codelineno-0-312">312</a></span>
+<span class="normal"><a href="#__codelineno-0-313">313</a></span>
+<span class="normal"><a href="#__codelineno-0-314">314</a></span>
+<span class="normal"><a href="#__codelineno-0-315">315</a></span>
+<span class="normal"><a href="#__codelineno-0-316">316</a></span>
+<span class="normal"><a href="#__codelineno-0-317">317</a></span>
+<span class="normal"><a href="#__codelineno-0-318">318</a></span>
+<span class="normal"><a href="#__codelineno-0-319">319</a></span>
+<span class="normal"><a href="#__codelineno-0-320">320</a></span>
+<span class="normal"><a href="#__codelineno-0-321">321</a></span>
+<span class="normal"><a href="#__codelineno-0-322">322</a></span>
+<span class="normal"><a href="#__codelineno-0-323">323</a></span>
+<span class="normal"><a href="#__codelineno-0-324">324</a></span>
+<span class="normal"><a href="#__codelineno-0-325">325</a></span>
+<span class="normal"><a href="#__codelineno-0-326">326</a></span>
+<span class="normal"><a href="#__codelineno-0-327">327</a></span>
+<span class="normal"><a href="#__codelineno-0-328">328</a></span>
+<span class="normal"><a href="#__codelineno-0-329">329</a></span>
+<span class="normal"><a href="#__codelineno-0-330">330</a></span>
+<span class="normal"><a href="#__codelineno-0-331">331</a></span>
+<span class="normal"><a href="#__codelineno-0-332">332</a></span>
+<span class="normal"><a href="#__codelineno-0-333">333</a></span>
+<span class="normal"><a href="#__codelineno-0-334">334</a></span>
+<span class="normal"><a href="#__codelineno-0-335">335</a></span>
+<span class="normal"><a href="#__codelineno-0-336">336</a></span>
+<span class="normal"><a href="#__codelineno-0-337">337</a></span>
+<span class="normal"><a href="#__codelineno-0-338">338</a></span>
+<span class="normal"><a href="#__codelineno-0-339">339</a></span>
+<span class="normal"><a href="#__codelineno-0-340">340</a></span>
+<span class="normal"><a href="#__codelineno-0-341">341</a></span>
+<span class="normal"><a href="#__codelineno-0-342">342</a></span>
+<span class="normal"><a href="#__codelineno-0-343">343</a></span>
+<span class="normal"><a href="#__codelineno-0-344">344</a></span>
+<span class="normal"><a href="#__codelineno-0-345">345</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-310"><a id="__codelineno-0-310" name="__codelineno-0-310"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-311"><a id="__codelineno-0-311" name="__codelineno-0-311"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-312"><a id="__codelineno-0-312" name="__codelineno-0-312"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-313"><a id="__codelineno-0-313" name="__codelineno-0-313"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-314"><a id="__codelineno-0-314" name="__codelineno-0-314"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-315"><a id="__codelineno-0-315" name="__codelineno-0-315"></a>    <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-0-316"><a id="__codelineno-0-316" name="__codelineno-0-316"></a>    <span class="n">power</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.0</span><span class="p">,</span>
+</span><span id="__span-0-317"><a id="__codelineno-0-317" name="__codelineno-0-317"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-318"><a id="__codelineno-0-318" name="__codelineno-0-318"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
+</span><span id="__span-0-319"><a id="__codelineno-0-319" name="__codelineno-0-319"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-320"><a id="__codelineno-0-320" name="__codelineno-0-320"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-321"><a id="__codelineno-0-321" name="__codelineno-0-321"></a><span class="p">):</span>
+</span><span id="__span-0-322"><a id="__codelineno-0-322" name="__codelineno-0-322"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-323"><a id="__codelineno-0-323" name="__codelineno-0-323"></a>        <span class="n">in_features</span><span class="p">,</span>
+</span><span id="__span-0-324"><a id="__codelineno-0-324" name="__codelineno-0-324"></a>        <span class="n">out_features</span><span class="p">,</span>
+</span><span id="__span-0-325"><a id="__codelineno-0-325" name="__codelineno-0-325"></a>        <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span>
+</span><span id="__span-0-326"><a id="__codelineno-0-326" name="__codelineno-0-326"></a>        <span class="n">init_bound</span><span class="o">=</span><span class="n">init_bound</span><span class="p">,</span>
+</span><span id="__span-0-327"><a id="__codelineno-0-327" name="__codelineno-0-327"></a>        <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">,</span>
+</span><span id="__span-0-328"><a id="__codelineno-0-328" name="__codelineno-0-328"></a>        <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span>
+</span><span id="__span-0-329"><a id="__codelineno-0-329" name="__codelineno-0-329"></a>        <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-0-330"><a id="__codelineno-0-330" name="__codelineno-0-330"></a>    <span class="p">)</span>
+</span><span id="__span-0-331"><a id="__codelineno-0-331" name="__codelineno-0-331"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">power</span> <span class="o">=</span> <span class="n">power</span>
+</span><span id="__span-0-332"><a id="__codelineno-0-332" name="__codelineno-0-332"></a>    <span class="c1"># No temperature parameter: it cancels in the kernel ratio (class docstring).</span>
+</span><span id="__span-0-333"><a id="__codelineno-0-333" name="__codelineno-0-333"></a>    <span class="c1"># Spatial residual projection ψ: D → D (shared across heads). Its output is added to the</span>
+</span><span id="__span-0-334"><a id="__codelineno-0-334" name="__codelineno-0-334"></a>    <span class="c1"># attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at</span>
+</span><span id="__span-0-335"><a id="__codelineno-0-335" name="__codelineno-0-335"></a>    <span class="c1"># the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even</span>
+</span><span id="__span-0-336"><a id="__codelineno-0-336" name="__codelineno-0-336"></a>    <span class="c1"># when every attention einsum is already pinned (see hyperbolix.utils.precision). Its</span>
+</span><span id="__span-0-337"><a id="__codelineno-0-337" name="__codelineno-0-337"></a>    <span class="c1"># parameters are cast to the input dtype at use, so they don&#39;t promote a bfloat16 input.</span>
+</span><span id="__span-0-338"><a id="__codelineno-0-338" name="__codelineno-0-338"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">residual_proj</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span>
+</span><span id="__span-0-339"><a id="__codelineno-0-339" name="__codelineno-0-339"></a>        <span class="n">out_features</span><span class="p">,</span>
+</span><span id="__span-0-340"><a id="__codelineno-0-340" name="__codelineno-0-340"></a>        <span class="n">out_features</span><span class="p">,</span>
+</span><span id="__span-0-341"><a id="__codelineno-0-341" name="__codelineno-0-341"></a>        <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span>
+</span><span id="__span-0-342"><a id="__codelineno-0-342" name="__codelineno-0-342"></a>        <span class="n">precision</span><span class="o">=</span><span class="n">MATMUL_PRECISION</span><span class="p">,</span>
+</span><span id="__span-0-343"><a id="__codelineno-0-343" name="__codelineno-0-343"></a>        <span class="n">promote_dtype</span><span class="o">=</span><span class="n">_cast_params_to_input_dtype</span><span class="p">,</span>
+</span><span id="__span-0-344"><a id="__codelineno-0-344" name="__codelineno-0-344"></a>        <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-0-345"><a id="__codelineno-0-345" name="__codelineno-0-345"></a>    <span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -1943,6 +1976,9 @@ input array's dtype (the parameters are cast to it).</p>
 <p>Standard scaled dot-product attention applied to spatial components of
 query, key, value, followed by the same HRC pipeline (residual + time
 calibration) as the linear variant.</p>
+<p>The scores are scaled, masked and softmaxed in at least float32, and the weights
+are cast back to the working dtype, so bfloat16/float16 inputs get a float32
+softmax; float32 and float64 inputs are unaffected.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2084,59 +2120,71 @@ input array's dtype (the parameters are cast to it).</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_attention.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-389">389</a></span>
-<span class="normal"><a href="#__codelineno-0-390">390</a></span>
-<span class="normal"><a href="#__codelineno-0-391">391</a></span>
-<span class="normal"><a href="#__codelineno-0-392">392</a></span>
-<span class="normal"><a href="#__codelineno-0-393">393</a></span>
-<span class="normal"><a href="#__codelineno-0-394">394</a></span>
-<span class="normal"><a href="#__codelineno-0-395">395</a></span>
-<span class="normal"><a href="#__codelineno-0-396">396</a></span>
-<span class="normal"><a href="#__codelineno-0-397">397</a></span>
-<span class="normal"><a href="#__codelineno-0-398">398</a></span>
-<span class="normal"><a href="#__codelineno-0-399">399</a></span>
-<span class="normal"><a href="#__codelineno-0-400">400</a></span>
-<span class="normal"><a href="#__codelineno-0-401">401</a></span>
-<span class="normal"><a href="#__codelineno-0-402">402</a></span>
-<span class="normal"><a href="#__codelineno-0-403">403</a></span>
-<span class="normal"><a href="#__codelineno-0-404">404</a></span>
-<span class="normal"><a href="#__codelineno-0-405">405</a></span>
-<span class="normal"><a href="#__codelineno-0-406">406</a></span>
-<span class="normal"><a href="#__codelineno-0-407">407</a></span>
-<span class="normal"><a href="#__codelineno-0-408">408</a></span>
-<span class="normal"><a href="#__codelineno-0-409">409</a></span>
-<span class="normal"><a href="#__codelineno-0-410">410</a></span>
-<span class="normal"><a href="#__codelineno-0-411">411</a></span>
-<span class="normal"><a href="#__codelineno-0-412">412</a></span>
-<span class="normal"><a href="#__codelineno-0-413">413</a></span>
-<span class="normal"><a href="#__codelineno-0-414">414</a></span>
-<span class="normal"><a href="#__codelineno-0-415">415</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-389"><a id="__codelineno-0-389" name="__codelineno-0-389"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-390"><a id="__codelineno-0-390" name="__codelineno-0-390"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-391"><a id="__codelineno-0-391" name="__codelineno-0-391"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-392"><a id="__codelineno-0-392" name="__codelineno-0-392"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-393"><a id="__codelineno-0-393" name="__codelineno-0-393"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-394"><a id="__codelineno-0-394" name="__codelineno-0-394"></a>    <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-0-395"><a id="__codelineno-0-395" name="__codelineno-0-395"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-396"><a id="__codelineno-0-396" name="__codelineno-0-396"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
-</span><span id="__span-0-397"><a id="__codelineno-0-397" name="__codelineno-0-397"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-398"><a id="__codelineno-0-398" name="__codelineno-0-398"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-399"><a id="__codelineno-0-399" name="__codelineno-0-399"></a><span class="p">):</span>
-</span><span id="__span-0-400"><a id="__codelineno-0-400" name="__codelineno-0-400"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-401"><a id="__codelineno-0-401" name="__codelineno-0-401"></a>        <span class="n">in_features</span><span class="p">,</span>
-</span><span id="__span-0-402"><a id="__codelineno-0-402" name="__codelineno-0-402"></a>        <span class="n">out_features</span><span class="p">,</span>
-</span><span id="__span-0-403"><a id="__codelineno-0-403" name="__codelineno-0-403"></a>        <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span>
-</span><span id="__span-0-404"><a id="__codelineno-0-404" name="__codelineno-0-404"></a>        <span class="n">init_bound</span><span class="o">=</span><span class="n">init_bound</span><span class="p">,</span>
-</span><span id="__span-0-405"><a id="__codelineno-0-405" name="__codelineno-0-405"></a>        <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">,</span>
-</span><span id="__span-0-406"><a id="__codelineno-0-406" name="__codelineno-0-406"></a>        <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span>
-</span><span id="__span-0-407"><a id="__codelineno-0-407" name="__codelineno-0-407"></a>        <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
-</span><span id="__span-0-408"><a id="__codelineno-0-408" name="__codelineno-0-408"></a>    <span class="p">)</span>
-</span><span id="__span-0-409"><a id="__codelineno-0-409" name="__codelineno-0-409"></a>    <span class="c1"># Spatial residual projection ψ: D → D (shared across heads). Its output is added to the</span>
-</span><span id="__span-0-410"><a id="__codelineno-0-410" name="__codelineno-0-410"></a>    <span class="c1"># attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at</span>
-</span><span id="__span-0-411"><a id="__codelineno-0-411" name="__codelineno-0-411"></a>    <span class="c1"># the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even</span>
-</span><span id="__span-0-412"><a id="__codelineno-0-412" name="__codelineno-0-412"></a>    <span class="c1"># when every attention einsum is already pinned (see hyperbolix.utils.precision).</span>
-</span><span id="__span-0-413"><a id="__codelineno-0-413" name="__codelineno-0-413"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">residual_proj</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span>
-</span><span id="__span-0-414"><a id="__codelineno-0-414" name="__codelineno-0-414"></a>        <span class="n">out_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">,</span> <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span> <span class="n">precision</span><span class="o">=</span><span class="n">MATMUL_PRECISION</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span>
-</span><span id="__span-0-415"><a id="__codelineno-0-415" name="__codelineno-0-415"></a>    <span class="p">)</span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-460">460</a></span>
+<span class="normal"><a href="#__codelineno-0-461">461</a></span>
+<span class="normal"><a href="#__codelineno-0-462">462</a></span>
+<span class="normal"><a href="#__codelineno-0-463">463</a></span>
+<span class="normal"><a href="#__codelineno-0-464">464</a></span>
+<span class="normal"><a href="#__codelineno-0-465">465</a></span>
+<span class="normal"><a href="#__codelineno-0-466">466</a></span>
+<span class="normal"><a href="#__codelineno-0-467">467</a></span>
+<span class="normal"><a href="#__codelineno-0-468">468</a></span>
+<span class="normal"><a href="#__codelineno-0-469">469</a></span>
+<span class="normal"><a href="#__codelineno-0-470">470</a></span>
+<span class="normal"><a href="#__codelineno-0-471">471</a></span>
+<span class="normal"><a href="#__codelineno-0-472">472</a></span>
+<span class="normal"><a href="#__codelineno-0-473">473</a></span>
+<span class="normal"><a href="#__codelineno-0-474">474</a></span>
+<span class="normal"><a href="#__codelineno-0-475">475</a></span>
+<span class="normal"><a href="#__codelineno-0-476">476</a></span>
+<span class="normal"><a href="#__codelineno-0-477">477</a></span>
+<span class="normal"><a href="#__codelineno-0-478">478</a></span>
+<span class="normal"><a href="#__codelineno-0-479">479</a></span>
+<span class="normal"><a href="#__codelineno-0-480">480</a></span>
+<span class="normal"><a href="#__codelineno-0-481">481</a></span>
+<span class="normal"><a href="#__codelineno-0-482">482</a></span>
+<span class="normal"><a href="#__codelineno-0-483">483</a></span>
+<span class="normal"><a href="#__codelineno-0-484">484</a></span>
+<span class="normal"><a href="#__codelineno-0-485">485</a></span>
+<span class="normal"><a href="#__codelineno-0-486">486</a></span>
+<span class="normal"><a href="#__codelineno-0-487">487</a></span>
+<span class="normal"><a href="#__codelineno-0-488">488</a></span>
+<span class="normal"><a href="#__codelineno-0-489">489</a></span>
+<span class="normal"><a href="#__codelineno-0-490">490</a></span>
+<span class="normal"><a href="#__codelineno-0-491">491</a></span>
+<span class="normal"><a href="#__codelineno-0-492">492</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-460"><a id="__codelineno-0-460" name="__codelineno-0-460"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-461"><a id="__codelineno-0-461" name="__codelineno-0-461"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-462"><a id="__codelineno-0-462" name="__codelineno-0-462"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-463"><a id="__codelineno-0-463" name="__codelineno-0-463"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-464"><a id="__codelineno-0-464" name="__codelineno-0-464"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-465"><a id="__codelineno-0-465" name="__codelineno-0-465"></a>    <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-0-466"><a id="__codelineno-0-466" name="__codelineno-0-466"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-467"><a id="__codelineno-0-467" name="__codelineno-0-467"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
+</span><span id="__span-0-468"><a id="__codelineno-0-468" name="__codelineno-0-468"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-469"><a id="__codelineno-0-469" name="__codelineno-0-469"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-470"><a id="__codelineno-0-470" name="__codelineno-0-470"></a><span class="p">):</span>
+</span><span id="__span-0-471"><a id="__codelineno-0-471" name="__codelineno-0-471"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-472"><a id="__codelineno-0-472" name="__codelineno-0-472"></a>        <span class="n">in_features</span><span class="p">,</span>
+</span><span id="__span-0-473"><a id="__codelineno-0-473" name="__codelineno-0-473"></a>        <span class="n">out_features</span><span class="p">,</span>
+</span><span id="__span-0-474"><a id="__codelineno-0-474" name="__codelineno-0-474"></a>        <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span>
+</span><span id="__span-0-475"><a id="__codelineno-0-475" name="__codelineno-0-475"></a>        <span class="n">init_bound</span><span class="o">=</span><span class="n">init_bound</span><span class="p">,</span>
+</span><span id="__span-0-476"><a id="__codelineno-0-476" name="__codelineno-0-476"></a>        <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">,</span>
+</span><span id="__span-0-477"><a id="__codelineno-0-477" name="__codelineno-0-477"></a>        <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span>
+</span><span id="__span-0-478"><a id="__codelineno-0-478" name="__codelineno-0-478"></a>        <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-0-479"><a id="__codelineno-0-479" name="__codelineno-0-479"></a>    <span class="p">)</span>
+</span><span id="__span-0-480"><a id="__codelineno-0-480" name="__codelineno-0-480"></a>    <span class="c1"># Spatial residual projection ψ: D → D (shared across heads). Its output is added to the</span>
+</span><span id="__span-0-481"><a id="__codelineno-0-481" name="__codelineno-0-481"></a>    <span class="c1"># attention aggregate, so it is pinned HIGHEST like the aggregate: measured, leaving it at</span>
+</span><span id="__span-0-482"><a id="__codelineno-0-482" name="__codelineno-0-482"></a>    <span class="c1"># the TF32 default reddens the eager-vs-jit and causal shape-invariance GPU tests even</span>
+</span><span id="__span-0-483"><a id="__codelineno-0-483" name="__codelineno-0-483"></a>    <span class="c1"># when every attention einsum is already pinned (see hyperbolix.utils.precision). Its</span>
+</span><span id="__span-0-484"><a id="__codelineno-0-484" name="__codelineno-0-484"></a>    <span class="c1"># parameters are cast to the input dtype at use, so they don&#39;t promote a bfloat16 input.</span>
+</span><span id="__span-0-485"><a id="__codelineno-0-485" name="__codelineno-0-485"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">residual_proj</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span>
+</span><span id="__span-0-486"><a id="__codelineno-0-486" name="__codelineno-0-486"></a>        <span class="n">out_features</span><span class="p">,</span>
+</span><span id="__span-0-487"><a id="__codelineno-0-487" name="__codelineno-0-487"></a>        <span class="n">out_features</span><span class="p">,</span>
+</span><span id="__span-0-488"><a id="__codelineno-0-488" name="__codelineno-0-488"></a>        <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span>
+</span><span id="__span-0-489"><a id="__codelineno-0-489" name="__codelineno-0-489"></a>        <span class="n">precision</span><span class="o">=</span><span class="n">MATMUL_PRECISION</span><span class="p">,</span>
+</span><span id="__span-0-490"><a id="__codelineno-0-490" name="__codelineno-0-490"></a>        <span class="n">promote_dtype</span><span class="o">=</span><span class="n">_cast_params_to_input_dtype</span><span class="p">,</span>
+</span><span id="__span-0-491"><a id="__codelineno-0-491" name="__codelineno-0-491"></a>        <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-0-492"><a id="__codelineno-0-492" name="__codelineno-0-492"></a>    <span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -2180,8 +2228,9 @@ input array's dtype (the parameters are cast to it).</p>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">score_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">centroid_form</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;variance&quot;</span><span class="p">,</span> <span class="s2">&quot;gemm&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;variance&quot;</span><span class="p">,</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">init_tau</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="p">)</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents first">
@@ -2193,25 +2242,51 @@ input array's dtype (the parameters are cast to it).</p>
         <p>Full Lorentzian attention with midpoint aggregation.</p>
 <p>Uses the Lorentzian inner product for similarity and weighted Lorentzian
 midpoint for aggregation — operating on full hyperboloid points throughout.</p>
+<p>The score of query <code>Q</code> and key <code>K</code> is <code>(2/c + 2&lt;Q,K&gt;_L) / tau</code>, which is
+<code>-d_L^2(Q, K) / tau</code> with <code>d_L^2 = -2/c - 2&lt;Q,K&gt;_L</code> the squared Lorentzian
+distance. <code>tau = exp(log_tau)</code> is one learnable temperature shared by all heads.
+The scores are masked and softmaxed in at least float32, and the weights are cast
+back to the working dtype.</p>
 
+
+<details class="differences-from-hypformer" open>
+  <summary>Differences from Hypformer</summary>
+  <ul>
+<li><strong>Temperature parameterization.</strong> Hypformer divides by a raw learnable <code>scale</code>.
+  Nothing keeps it positive: an optimizer step can drive it to 0 or below, and a
+  negative value flips the softmax so each query attends to its farthest keys. Here
+  the parameter is <code>log_tau</code> and <code>tau = exp(log_tau)</code> is positive for any
+  parameter value. The init is Hypformer's, <code>tau = sqrt(out_features)</code> (the
+  per-head spatial width), unless <code>init_tau</code> is given.</li>
+<li><strong>No score bias.</strong> Hypformer adds one learnable scalar to every score. A constant
+  shared by all keys of a row cancels in the softmax, so that parameter changes
+  nothing and its gradient is exactly zero; it is omitted.</li>
+<li><strong>Curvature constant.</strong> Hypformer writes <code>2 + 2&lt;Q,K&gt;_L</code>, the <code>c = 1</code> form;
+  here it is <code>2/c</code>. The constant cancels in the softmax as well, so the weights
+  are the same, but the score is the scaled negative squared distance for any <code>c</code>.</li>
+</ul>
+</details>
 
 <details class="float32-score-floor" open>
   <summary>Float32 score floor</summary>
-  <p>The scores are <code>2 + 2&lt;Q,K&gt;_L</code> with <code>&lt;Q,K&gt;_L = -Q_0 K_0 + &lt;Q_s, K_s&gt;</code>, a
-difference of two Minkowski terms each of size <code>cosh(a_q) cosh(a_k) / c</code> —
-writing <code>a = sqrt(c) d</code> for the geodesic radius of a point in nats — whose O(1)
+  <p>The score contains <code>&lt;Q,K&gt;_L = -Q_0 K_0 + &lt;Q_s, K_s&gt;</code>, a difference of two
+Minkowski terms each of size <code>cosh(a_q) cosh(a_k) / c</code> — writing
+<code>a = sqrt(c) d</code> for the geodesic radius of a point in nats — whose O(1)
 difference is the only part the softmax sees. Unlike the other cancellations in
 the library this one has <strong>no GEMM-compatible cancellation-free spelling</strong>: any
 matrix product of the ambient coordinates returns the Gram matrix to absolute
 <code>eps</code>, so the angular term alone already carries an error of
 <code>eps sinh(a_q) sinh(a_k) / c</code>, the same order as the literal form. The absolute
 error on one score is therefore</p>
-<div class="language-text highlight"><pre><span></span><code>eps * cosh(a_q) * cosh(a_k) / (c * scale)
+<div class="language-text highlight"><pre><span></span><code>eps * cosh(a_q) * cosh(a_k) / (c * tau)
 </code></pre></div>
-<p>which with float32's <code>eps ≈ 1.19e-7</code> (<code>c = 1</code>, <code>scale = 1</code>) is about 4.8e-3
-at <code>a = 6</code>, 0.26 at <code>a = 8</code> and 2.0 at <code>a = 9</code>: from <code>a ≈ 8</code> the error
-exceeds the score spread the softmax is meant to resolve, and the weights are
-wrong while staying perfectly finite. Three remedies, cheapest first: keep the
+<p>which with float32's <code>eps ≈ 1.19e-7</code> (<code>c = 1</code>, <code>tau = 1</code>) is about 4.8e-3
+at <code>a = 6</code>, 0.26 at <code>a = 8</code> and 2.0 at <code>a = 9</code>. The default
+<code>tau = sqrt(out_features)</code> divides these numbers by <code>tau</code>, but it divides the
+score spread by the same factor, so the radius where the error overtakes the
+spread does not move: from <code>a ≈ 8</code> the error exceeds the score spread the
+softmax is meant to resolve, and the weights are wrong while staying perfectly
+finite. Three remedies, cheapest first: keep the
 radius down (a :class:<code>HyperboloidGyroRMSNorm</code> in front of the layer), use a
 smaller <code>c</code>, or pass <code>score_dtype=jnp.float64</code> to run the score computation as
 a float64 island. The island fixes the <em>arithmetic</em> only — float32 <em>storage</em> of
@@ -2370,11 +2445,13 @@ input array's dtype (the parameters are cast to it).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>When set, the Lorentzian similarity and the <code>2 + 2&lt;Q,K&gt;_L</code> score are
-computed in this dtype and the scores are cast back before the softmax — an
-opt-in float64 island against the floor above (<code>jnp.float64</code> needs
-<code>jax.config.update("jax_enable_x64", True)</code>); <code>None</code> (the default) leaves
-the score path in the working dtype, unchanged op for op.</p>
+                <p>When set, the Lorentzian similarity and the <code>(2/c + 2&lt;Q,K&gt;_L) / tau</code> score
+are computed in this dtype and the scores are cast to the softmax dtype (the
+working dtype, promoted to at least float32) before the softmax — an opt-in
+float64 island against the floor above (<code>jnp.float64</code> needs
+<code>jax.config.update("jax_enable_x64", True)</code>). <code>None</code> (the default) computes
+the similarity in the working dtype and the rest of the score in at least
+float32.</p>
               </div>
             </td>
             <td>
@@ -2401,6 +2478,27 @@ see "Centroid form". <code>"gemm"</code> is the opt-in faster form for long sequ
           </tr>
           <tr class="doc-section-item">
             <td>
+                <code>init_tau</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span> or None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Initial score temperature <code>tau</code> (must be positive; stored as
+<code>log(init_tau)</code>). <code>None</code> (the default) is Hypformer's
+<code>sqrt(out_features)</code>. <code>init_tau=1.0</code> gives the attention of earlier releases
+at init (their <code>scale = 1</code>, <code>attn_bias = 0</code>) up to the <code>+ eps</code> their
+divisor carried; <code>init_tau=1.0 + eps</code> matches it to rounding (bit for bit at
+<code>c = 1</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
                 <code>rngs</code>
             </td>
             <td>
@@ -2419,6 +2517,32 @@ see "Centroid form". <code>"gemm"</code> is the opt-in faster form for long sequ
     </table>
 
 
+<p><span class="doc-section-title">Attributes:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td><code><span title="hyperbolix.nn_layers.HyperbolicFullAttention.log_tau">log_tau</span></code></td>
+            <td>
+                  <code><span title="flax.nnx.Param">Param</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Scalar log temperature, init <code>log(init_tau)</code>; the score temperature is
+<code>tau = exp(log_tau)</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
 
 
 
@@ -2427,61 +2551,69 @@ see "Centroid form". <code>"gemm"</code> is the opt-in faster form for long sequ
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_attention.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-550">550</a></span>
-<span class="normal"><a href="#__codelineno-0-551">551</a></span>
-<span class="normal"><a href="#__codelineno-0-552">552</a></span>
-<span class="normal"><a href="#__codelineno-0-553">553</a></span>
-<span class="normal"><a href="#__codelineno-0-554">554</a></span>
-<span class="normal"><a href="#__codelineno-0-555">555</a></span>
-<span class="normal"><a href="#__codelineno-0-556">556</a></span>
-<span class="normal"><a href="#__codelineno-0-557">557</a></span>
-<span class="normal"><a href="#__codelineno-0-558">558</a></span>
-<span class="normal"><a href="#__codelineno-0-559">559</a></span>
-<span class="normal"><a href="#__codelineno-0-560">560</a></span>
-<span class="normal"><a href="#__codelineno-0-561">561</a></span>
-<span class="normal"><a href="#__codelineno-0-562">562</a></span>
-<span class="normal"><a href="#__codelineno-0-563">563</a></span>
-<span class="normal"><a href="#__codelineno-0-564">564</a></span>
-<span class="normal"><a href="#__codelineno-0-565">565</a></span>
-<span class="normal"><a href="#__codelineno-0-566">566</a></span>
-<span class="normal"><a href="#__codelineno-0-567">567</a></span>
-<span class="normal"><a href="#__codelineno-0-568">568</a></span>
-<span class="normal"><a href="#__codelineno-0-569">569</a></span>
-<span class="normal"><a href="#__codelineno-0-570">570</a></span>
-<span class="normal"><a href="#__codelineno-0-571">571</a></span>
-<span class="normal"><a href="#__codelineno-0-572">572</a></span>
-<span class="normal"><a href="#__codelineno-0-573">573</a></span>
-<span class="normal"><a href="#__codelineno-0-574">574</a></span>
-<span class="normal"><a href="#__codelineno-0-575">575</a></span>
-<span class="normal"><a href="#__codelineno-0-576">576</a></span>
-<span class="normal"><a href="#__codelineno-0-577">577</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-550"><a id="__codelineno-0-550" name="__codelineno-0-550"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-551"><a id="__codelineno-0-551" name="__codelineno-0-551"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-552"><a id="__codelineno-0-552" name="__codelineno-0-552"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-553"><a id="__codelineno-0-553" name="__codelineno-0-553"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-554"><a id="__codelineno-0-554" name="__codelineno-0-554"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-555"><a id="__codelineno-0-555" name="__codelineno-0-555"></a>    <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-0-556"><a id="__codelineno-0-556" name="__codelineno-0-556"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-557"><a id="__codelineno-0-557" name="__codelineno-0-557"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
-</span><span id="__span-0-558"><a id="__codelineno-0-558" name="__codelineno-0-558"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-559"><a id="__codelineno-0-559" name="__codelineno-0-559"></a>    <span class="n">score_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-560"><a id="__codelineno-0-560" name="__codelineno-0-560"></a>    <span class="n">centroid_form</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;variance&quot;</span><span class="p">,</span> <span class="s2">&quot;gemm&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;variance&quot;</span><span class="p">,</span>
-</span><span id="__span-0-561"><a id="__codelineno-0-561" name="__codelineno-0-561"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-562"><a id="__codelineno-0-562" name="__codelineno-0-562"></a><span class="p">):</span>
-</span><span id="__span-0-563"><a id="__codelineno-0-563" name="__codelineno-0-563"></a>    <span class="k">if</span> <span class="n">centroid_form</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;variance&quot;</span><span class="p">,</span> <span class="s2">&quot;gemm&quot;</span><span class="p">):</span>
-</span><span id="__span-0-564"><a id="__codelineno-0-564" name="__codelineno-0-564"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;centroid_form must be &#39;variance&#39; or &#39;gemm&#39;, got </span><span class="si">{</span><span class="n">centroid_form</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-565"><a id="__codelineno-0-565" name="__codelineno-0-565"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-566"><a id="__codelineno-0-566" name="__codelineno-0-566"></a>        <span class="n">in_features</span><span class="p">,</span>
-</span><span id="__span-0-567"><a id="__codelineno-0-567" name="__codelineno-0-567"></a>        <span class="n">out_features</span><span class="p">,</span>
-</span><span id="__span-0-568"><a id="__codelineno-0-568" name="__codelineno-0-568"></a>        <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span>
-</span><span id="__span-0-569"><a id="__codelineno-0-569" name="__codelineno-0-569"></a>        <span class="n">init_bound</span><span class="o">=</span><span class="n">init_bound</span><span class="p">,</span>
-</span><span id="__span-0-570"><a id="__codelineno-0-570" name="__codelineno-0-570"></a>        <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">,</span>
-</span><span id="__span-0-571"><a id="__codelineno-0-571" name="__codelineno-0-571"></a>        <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span>
-</span><span id="__span-0-572"><a id="__codelineno-0-572" name="__codelineno-0-572"></a>        <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
-</span><span id="__span-0-573"><a id="__codelineno-0-573" name="__codelineno-0-573"></a>    <span class="p">)</span>
-</span><span id="__span-0-574"><a id="__codelineno-0-574" name="__codelineno-0-574"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">score_dtype</span> <span class="o">=</span> <span class="n">score_dtype</span>
-</span><span id="__span-0-575"><a id="__codelineno-0-575" name="__codelineno-0-575"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">centroid_form</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;variance&quot;</span><span class="p">,</span> <span class="s2">&quot;gemm&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">centroid_form</span>
-</span><span id="__span-0-576"><a id="__codelineno-0-576" name="__codelineno-0-576"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
-</span><span id="__span-0-577"><a id="__codelineno-0-577" name="__codelineno-0-577"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">attn_bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-693">693</a></span>
+<span class="normal"><a href="#__codelineno-0-694">694</a></span>
+<span class="normal"><a href="#__codelineno-0-695">695</a></span>
+<span class="normal"><a href="#__codelineno-0-696">696</a></span>
+<span class="normal"><a href="#__codelineno-0-697">697</a></span>
+<span class="normal"><a href="#__codelineno-0-698">698</a></span>
+<span class="normal"><a href="#__codelineno-0-699">699</a></span>
+<span class="normal"><a href="#__codelineno-0-700">700</a></span>
+<span class="normal"><a href="#__codelineno-0-701">701</a></span>
+<span class="normal"><a href="#__codelineno-0-702">702</a></span>
+<span class="normal"><a href="#__codelineno-0-703">703</a></span>
+<span class="normal"><a href="#__codelineno-0-704">704</a></span>
+<span class="normal"><a href="#__codelineno-0-705">705</a></span>
+<span class="normal"><a href="#__codelineno-0-706">706</a></span>
+<span class="normal"><a href="#__codelineno-0-707">707</a></span>
+<span class="normal"><a href="#__codelineno-0-708">708</a></span>
+<span class="normal"><a href="#__codelineno-0-709">709</a></span>
+<span class="normal"><a href="#__codelineno-0-710">710</a></span>
+<span class="normal"><a href="#__codelineno-0-711">711</a></span>
+<span class="normal"><a href="#__codelineno-0-712">712</a></span>
+<span class="normal"><a href="#__codelineno-0-713">713</a></span>
+<span class="normal"><a href="#__codelineno-0-714">714</a></span>
+<span class="normal"><a href="#__codelineno-0-715">715</a></span>
+<span class="normal"><a href="#__codelineno-0-716">716</a></span>
+<span class="normal"><a href="#__codelineno-0-717">717</a></span>
+<span class="normal"><a href="#__codelineno-0-718">718</a></span>
+<span class="normal"><a href="#__codelineno-0-719">719</a></span>
+<span class="normal"><a href="#__codelineno-0-720">720</a></span>
+<span class="normal"><a href="#__codelineno-0-721">721</a></span>
+<span class="normal"><a href="#__codelineno-0-722">722</a></span>
+<span class="normal"><a href="#__codelineno-0-723">723</a></span>
+<span class="normal"><a href="#__codelineno-0-724">724</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-693"><a id="__codelineno-0-693" name="__codelineno-0-693"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-694"><a id="__codelineno-0-694" name="__codelineno-0-694"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-695"><a id="__codelineno-0-695" name="__codelineno-0-695"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-696"><a id="__codelineno-0-696" name="__codelineno-0-696"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-697"><a id="__codelineno-0-697" name="__codelineno-0-697"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-698"><a id="__codelineno-0-698" name="__codelineno-0-698"></a>    <span class="n">num_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-0-699"><a id="__codelineno-0-699" name="__codelineno-0-699"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-700"><a id="__codelineno-0-700" name="__codelineno-0-700"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
+</span><span id="__span-0-701"><a id="__codelineno-0-701" name="__codelineno-0-701"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-702"><a id="__codelineno-0-702" name="__codelineno-0-702"></a>    <span class="n">score_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-703"><a id="__codelineno-0-703" name="__codelineno-0-703"></a>    <span class="n">centroid_form</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;variance&quot;</span><span class="p">,</span> <span class="s2">&quot;gemm&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;variance&quot;</span><span class="p">,</span>
+</span><span id="__span-0-704"><a id="__codelineno-0-704" name="__codelineno-0-704"></a>    <span class="n">init_tau</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-705"><a id="__codelineno-0-705" name="__codelineno-0-705"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-706"><a id="__codelineno-0-706" name="__codelineno-0-706"></a><span class="p">):</span>
+</span><span id="__span-0-707"><a id="__codelineno-0-707" name="__codelineno-0-707"></a>    <span class="k">if</span> <span class="n">centroid_form</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;variance&quot;</span><span class="p">,</span> <span class="s2">&quot;gemm&quot;</span><span class="p">):</span>
+</span><span id="__span-0-708"><a id="__codelineno-0-708" name="__codelineno-0-708"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;centroid_form must be &#39;variance&#39; or &#39;gemm&#39;, got </span><span class="si">{</span><span class="n">centroid_form</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-709"><a id="__codelineno-0-709" name="__codelineno-0-709"></a>    <span class="n">tau</span> <span class="o">=</span> <span class="n">init_tau</span> <span class="k">if</span> <span class="n">init_tau</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">out_features</span><span class="p">)</span>
+</span><span id="__span-0-710"><a id="__codelineno-0-710" name="__codelineno-0-710"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">tau</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
+</span><span id="__span-0-711"><a id="__codelineno-0-711" name="__codelineno-0-711"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;init_tau must be positive, got </span><span class="si">{</span><span class="n">init_tau</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-712"><a id="__codelineno-0-712" name="__codelineno-0-712"></a>    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-713"><a id="__codelineno-0-713" name="__codelineno-0-713"></a>        <span class="n">in_features</span><span class="p">,</span>
+</span><span id="__span-0-714"><a id="__codelineno-0-714" name="__codelineno-0-714"></a>        <span class="n">out_features</span><span class="p">,</span>
+</span><span id="__span-0-715"><a id="__codelineno-0-715" name="__codelineno-0-715"></a>        <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span>
+</span><span id="__span-0-716"><a id="__codelineno-0-716" name="__codelineno-0-716"></a>        <span class="n">init_bound</span><span class="o">=</span><span class="n">init_bound</span><span class="p">,</span>
+</span><span id="__span-0-717"><a id="__codelineno-0-717" name="__codelineno-0-717"></a>        <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">,</span>
+</span><span id="__span-0-718"><a id="__codelineno-0-718" name="__codelineno-0-718"></a>        <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span>
+</span><span id="__span-0-719"><a id="__codelineno-0-719" name="__codelineno-0-719"></a>        <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span>
+</span><span id="__span-0-720"><a id="__codelineno-0-720" name="__codelineno-0-720"></a>    <span class="p">)</span>
+</span><span id="__span-0-721"><a id="__codelineno-0-721" name="__codelineno-0-721"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">score_dtype</span> <span class="o">=</span> <span class="n">score_dtype</span>
+</span><span id="__span-0-722"><a id="__codelineno-0-722" name="__codelineno-0-722"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">centroid_form</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;variance&quot;</span><span class="p">,</span> <span class="s2">&quot;gemm&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">centroid_form</span>
+</span><span id="__span-0-723"><a id="__codelineno-0-723" name="__codelineno-0-723"></a>    <span class="c1"># tau = exp(log_tau) &gt; 0 for any parameter value (Hypformer learns a raw scale; class docstring).</span>
+</span><span id="__span-0-724"><a id="__codelineno-0-724" name="__codelineno-0-724"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">log_tau</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">tau</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 

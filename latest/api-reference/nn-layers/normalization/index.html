@@ -1850,8 +1850,7 @@
 
 
 <h1 id="normalization">Normalization<a class="headerlink" href="#normalization" title="Permanent link">&para;</a></h1>
-<p>All hyperbolic normalization layers in one place — previously these were scattered
-across the convolution and Hypformer sections. For <strong>which</strong> normalizer to use
+<p>All hyperbolic normalization layers. For <strong>which</strong> normalizer to use
 between which layers, see the
 <a href="../../../user-guide/nn-layers/#attention-normalization-positional-encoding">NN Layers guide</a>.</p>
 <div class="admonition note">
@@ -2416,15 +2415,9 @@ above); the per-sample radial RMSNorm covers all three.</p>
   <em>Centers</em> by gyro-translating with the inverse batch mean, <em>scales</em> by the inverse
   Fréchet standard deviation, <em>biases</em> with a learned manifold point, and keeps
   running statistics for evaluation (<code>use_running_average</code>). Both use the closed-form
-  Lorentz centroid as the batch mean; the PV layer takes it on the exact hyperboloid
-  lift of its points (PV coordinates are the hyperboloid's spatial part). The centroid
-  commutes with the gyro-translation used for centering, so the output's Fréchet mean
-  lies close to the bias point; the log-Euclidean mean the PV layer used before did
-  not. Both center with <code>gyro_difference</code>: the Hyperboloid operation
-  uses a Cartesian inverse boost when either endpoint has scaled spatial radius at
-  most 1e-1 and the stable polar frame otherwise, while the PV operation inherits both
-  branches through its exact Hyperboloid lift. This also preserves derivatives with
-  respect to an origin mean. Use for faithful hyperbolic ResNets.</li>
+  Lorentz centroid as the batch mean (the PV layer on the exact hyperboloid lift of
+  its points) and center with <code>gyro_difference</code>, so the output's Fréchet mean lies
+  close to the bias point. Use for faithful hyperbolic ResNets.</li>
 <li><strong>Gyro radial RMSNorm</strong> (<code>HyperboloidGyroRMSNorm</code>, <code>ProperVelocityGyroRMSNorm</code>,
   <code>PoincareGyroRMSNorm</code>) — a <em>per-sample</em>, batch-independent normalizer (no running
   statistics, identical in train and eval, valid at batch size 1 — the properties RL

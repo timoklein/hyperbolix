@@ -1528,10 +1528,11 @@
 
 
 <h1 id="neural-network-layers-api">Neural Network Layers API<a class="headerlink" href="#neural-network-layers-api" title="Permanent link">&para;</a></h1>
-<p>Hyperbolic neural network layers built with Flax NNX — 30+ layer classes and the
+<p>Hyperbolic neural network layers built with Flax NNX — 40+ layer classes and the
 activation/primitive functions that support them, across the Poincaré, Hyperboloid,
-and Proper Velocity models. All layers follow Flax NNX conventions and store a
-manifold-module reference.</p>
+and Proper Velocity models. All layers are Flax NNX modules. Layers tied to a manifold
+class take a <code>manifold_module</code>; the HTC/HRC, FGG, attention, positional, MoE, MLA and
+embedding layers compute on the hyperboloid directly and take none.</p>
 <div class="admonition tip">
 <p class="admonition-title">Looking for <em>which</em> layer to use?</p>
 <p>This API reference documents signatures and call semantics. For <strong>layer
@@ -1598,8 +1599,8 @@ see the task-oriented <strong><a href="../../user-guide/nn-layers/">NN Layers gu
 <ul>
 <li><strong>Ganea et al. (2018)</strong>: "Hyperbolic Neural Networks" — Poincaré linear layers and activations</li>
 <li><strong>Shimizu et al. (2020)</strong>: "Hyperbolic Neural Networks++" — enhanced Poincaré operations and the linearized-kernel conv formulation (<code>HypLinearPoincarePP</code>; basis of <code>HypLinearHyperboloidPLFC</code> and <code>HypConv2DHyperboloidILNN</code>)</li>
-<li><strong>Bdeir et al. (2023)</strong>: "Fully Hyperbolic Convolutional Neural Networks for Computer Vision" — HCat-based convolutions (<code>HypConv2DHyperboloid</code>)</li>
-<li><strong>Chen et al. (2022)</strong>: "Fully Hyperbolic Neural Networks" — FHCNN linear layers</li>
+<li><strong>Bdeir et al. (2023)</strong>: "Fully Hyperbolic Convolutional Neural Networks for Computer Vision" — HCat-based convolutions (<code>HypConv2DHyperboloid</code>) and <code>HypLinearHyperboloidFHCNN</code></li>
+<li><strong>Chen et al. (2022)</strong>: "Fully Hyperbolic Neural Networks" — <code>HypLinearHyperboloidFHNN</code>, <code>HypConv2DHyperboloidFHNN</code></li>
 <li><strong>He, Yang &amp; Ying (2025)</strong>: "Lorentzian Residual Neural Networks" (KDD 2025) — HRC-based convolutions (<code>LorentzConv2D</code>)</li>
 <li><strong>Hypformer (Yang et al. 2025)</strong>: "Hyperbolic Transformers" — HTC/HRC components with curvature-change support</li>
 <li><strong>He et al. (2025)</strong>: "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts" (arXiv:2505.24722) — <code>LorentzMLA</code>, <code>LorentzMoE</code> (with <code>LorentzMoEGate</code>, <code>LorentzSwiGLU</code>), <code>LorentzEmbedding</code>, HOPE positional encoding and Lorentzian residual connections</li>

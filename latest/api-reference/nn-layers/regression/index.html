@@ -2549,7 +2549,7 @@ Compute precision of manifold operations is set by <code>manifold.dtype</code>.<
 </span><span id="__span-0-311"><a id="__codelineno-0-311" name="__codelineno-0-311"></a><span class="sd">        Multinomial linear regression scores</span>
 </span><span id="__span-0-312"><a id="__codelineno-0-312" name="__codelineno-0-312"></a><span class="sd">    &quot;&quot;&quot;</span>
 </span><span id="__span-0-313"><a id="__codelineno-0-313" name="__codelineno-0-313"></a>    <span class="c1"># Static branch - JIT friendly. A tangent input is scored as expmap_0 would place it, without</span>
-</span><span id="__span-0-314"><a id="__codelineno-0-314" name="__codelineno-0-314"></a>    <span class="c1"># forming the ball point: in float32 that lift stopped at the ball&#39;s ceiling, √c‖v‖ ≈ 6.33</span>
+</span><span id="__span-0-314"><a id="__codelineno-0-314" name="__codelineno-0-314"></a>    <span class="c1"># forming the ball point: in float32 that lift stopped at the ball&#39;s ceiling, √c‖v‖ ≈ 6.32</span>
 </span><span id="__span-0-315"><a id="__codelineno-0-315" name="__codelineno-0-315"></a>    <span class="c1"># at c = 1.</span>
 </span><span id="__span-0-316"><a id="__codelineno-0-316" name="__codelineno-0-316"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span> <span class="o">==</span> <span class="s2">&quot;tangent&quot;</span><span class="p">:</span>
 </span><span id="__span-0-317"><a id="__codelineno-0-317" name="__codelineno-0-317"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="o">.</span><span class="n">_compute_mlr_pp_tangent</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span><span class="p">[</span><span class="o">...</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">],</span> <span class="n">c</span><span class="p">)</span>
@@ -2685,7 +2685,7 @@ function (point-to-horosphere distance), returning Euclidean logits — not mani
               <div class="doc-md-description">
                 <p><code>"manifold"</code> (default) or <code>"tangent"</code>: a tangent vector at the origin, scored where
 <code>expmap_0</code> would place it without forming the ball point, whose float32 lift stops at the
-ceiling <code>√c‖v‖ ≈ 6.33</code> at c = 1 (<code>Poincare._busemann_tangent</code>). Static for JIT.</p>
+ceiling <code>√c‖v‖ ≈ 6.32</code> at c = 1 (<code>Poincare._busemann_tangent</code>). Static for JIT.</p>
               </div>
             </td>
             <td>

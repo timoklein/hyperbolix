@@ -2798,7 +2798,7 @@ recovered via <code>ω = sinh(√c·φ(u))/√c</code>, <code>y = ω / (1 + √(
               <div class="doc-md-description">
                 <p><code>"manifold"</code> (default) or <code>"tangent"</code>: a tangent vector at the origin, scored where
 <code>expmap_0</code> would place it without forming the ball point, whose float32 lift stops at the
-ceiling <code>√c‖v‖ ≈ 6.33</code> at c = 1 (<code>Poincare._busemann_tangent</code>). Static for JIT.</p>
+ceiling <code>√c‖v‖ ≈ 6.32</code> at c = 1 (<code>Poincare._busemann_tangent</code>). Static for JIT.</p>
               </div>
             </td>
             <td>
@@ -3360,10 +3360,7 @@ Hyperbolic Space", 2025.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-926">926</a></span>
-<span class="normal"><a href="#__codelineno-0-927">927</a></span>
-<span class="normal"><a href="#__codelineno-0-928">928</a></span>
-<span class="normal"><a href="#__codelineno-0-929">929</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-929">929</a></span>
 <span class="normal"><a href="#__codelineno-0-930">930</a></span>
 <span class="normal"><a href="#__codelineno-0-931">931</a></span>
 <span class="normal"><a href="#__codelineno-0-932">932</a></span>
@@ -3391,38 +3388,41 @@ Hyperbolic Space", 2025.</p>
 <span class="normal"><a href="#__codelineno-0-954">954</a></span>
 <span class="normal"><a href="#__codelineno-0-955">955</a></span>
 <span class="normal"><a href="#__codelineno-0-956">956</a></span>
-<span class="normal"><a href="#__codelineno-0-957">957</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-926"><a id="__codelineno-0-926" name="__codelineno-0-926"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-927"><a id="__codelineno-0-927" name="__codelineno-0-927"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-928"><a id="__codelineno-0-928" name="__codelineno-0-928"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-929"><a id="__codelineno-0-929" name="__codelineno-0-929"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-930"><a id="__codelineno-0-930" name="__codelineno-0-930"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-931"><a id="__codelineno-0-931" name="__codelineno-0-931"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-932"><a id="__codelineno-0-932" name="__codelineno-0-932"></a>    <span class="n">use_bias</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="__span-0-933"><a id="__codelineno-0-933" name="__codelineno-0-933"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-934"><a id="__codelineno-0-934" name="__codelineno-0-934"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
-</span><span id="__span-0-935"><a id="__codelineno-0-935" name="__codelineno-0-935"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-936"><a id="__codelineno-0-936" name="__codelineno-0-936"></a><span class="p">):</span>
-</span><span id="__span-0-937"><a id="__codelineno-0-937" name="__codelineno-0-937"></a>    <span class="c1"># Norm-preserving fan-in bound: U(-a, a) has entry std a/sqrt(3), and htc applies</span>
-</span><span id="__span-0-938"><a id="__codelineno-0-938" name="__codelineno-0-938"></a>    <span class="c1"># no nonlinearity to the matmul output, so the per-layer input-Jacobian RMS gain</span>
-</span><span id="__span-0-939"><a id="__codelineno-0-939" name="__codelineno-0-939"></a>    <span class="c1"># is (a/sqrt(3)) * sqrt(in_features) ~= 1 for a = sqrt(3/in_features). Any fixed</span>
-</span><span id="__span-0-940"><a id="__codelineno-0-940" name="__codelineno-0-940"></a>    <span class="c1"># width-independent bound cannot hold gain ~= 1: the old 0.02 default gave gain</span>
-</span><span id="__span-0-941"><a id="__codelineno-0-941" name="__codelineno-0-941"></a>    <span class="c1"># ~0.09 at in_features=65, so depth&gt;=2 stacks contracted input variation below</span>
-</span><span id="__span-0-942"><a id="__codelineno-0-942" name="__codelineno-0-942"></a>    <span class="c1"># the float32 noise floor (constant map, zero gradients, frozen training).</span>
-</span><span id="__span-0-943"><a id="__codelineno-0-943" name="__codelineno-0-943"></a>    <span class="c1"># in_features counts the near-constant time column -- slightly conservative.</span>
-</span><span id="__span-0-944"><a id="__codelineno-0-944" name="__codelineno-0-944"></a>    <span class="k">if</span> <span class="n">init_bound</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-945"><a id="__codelineno-0-945" name="__codelineno-0-945"></a>        <span class="c1"># float(): see the note in HypConv2DHyperboloidILNN -- `float.__pow__` returns Any,</span>
-</span><span id="__span-0-946"><a id="__codelineno-0-946" name="__codelineno-0-946"></a>        <span class="c1"># so without it the narrowing from `float | None` to `float` does not happen.</span>
-</span><span id="__span-0-947"><a id="__codelineno-0-947" name="__codelineno-0-947"></a>        <span class="n">init_bound</span> <span class="o">=</span> <span class="nb">float</span><span class="p">((</span><span class="mf">3.0</span> <span class="o">/</span> <span class="n">in_features</span><span class="p">)</span> <span class="o">**</span> <span class="mf">0.5</span><span class="p">)</span>
-</span><span id="__span-0-948"><a id="__codelineno-0-948" name="__codelineno-0-948"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span>
-</span><span id="__span-0-949"><a id="__codelineno-0-949" name="__codelineno-0-949"></a>        <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span>
-</span><span id="__span-0-950"><a id="__codelineno-0-950" name="__codelineno-0-950"></a>            <span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="p">(</span><span class="n">in_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span> <span class="n">minval</span><span class="o">=-</span><span class="n">init_bound</span><span class="p">,</span> <span class="n">maxval</span><span class="o">=</span><span class="n">init_bound</span>
-</span><span id="__span-0-951"><a id="__codelineno-0-951" name="__codelineno-0-951"></a>        <span class="p">)</span>
-</span><span id="__span-0-952"><a id="__codelineno-0-952" name="__codelineno-0-952"></a>    <span class="p">)</span>
-</span><span id="__span-0-953"><a id="__codelineno-0-953" name="__codelineno-0-953"></a>    <span class="k">if</span> <span class="n">use_bias</span><span class="p">:</span>
-</span><span id="__span-0-954"><a id="__codelineno-0-954" name="__codelineno-0-954"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">out_features</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
-</span><span id="__span-0-955"><a id="__codelineno-0-955" name="__codelineno-0-955"></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-956"><a id="__codelineno-0-956" name="__codelineno-0-956"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="__span-0-957"><a id="__codelineno-0-957" name="__codelineno-0-957"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+<span class="normal"><a href="#__codelineno-0-957">957</a></span>
+<span class="normal"><a href="#__codelineno-0-958">958</a></span>
+<span class="normal"><a href="#__codelineno-0-959">959</a></span>
+<span class="normal"><a href="#__codelineno-0-960">960</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-929"><a id="__codelineno-0-929" name="__codelineno-0-929"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-930"><a id="__codelineno-0-930" name="__codelineno-0-930"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-931"><a id="__codelineno-0-931" name="__codelineno-0-931"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-932"><a id="__codelineno-0-932" name="__codelineno-0-932"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-933"><a id="__codelineno-0-933" name="__codelineno-0-933"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-934"><a id="__codelineno-0-934" name="__codelineno-0-934"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-935"><a id="__codelineno-0-935" name="__codelineno-0-935"></a>    <span class="n">use_bias</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-936"><a id="__codelineno-0-936" name="__codelineno-0-936"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-937"><a id="__codelineno-0-937" name="__codelineno-0-937"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
+</span><span id="__span-0-938"><a id="__codelineno-0-938" name="__codelineno-0-938"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-939"><a id="__codelineno-0-939" name="__codelineno-0-939"></a><span class="p">):</span>
+</span><span id="__span-0-940"><a id="__codelineno-0-940" name="__codelineno-0-940"></a>    <span class="c1"># Norm-preserving fan-in bound: U(-a, a) has entry std a/sqrt(3), and htc applies</span>
+</span><span id="__span-0-941"><a id="__codelineno-0-941" name="__codelineno-0-941"></a>    <span class="c1"># no nonlinearity to the matmul output, so the per-layer input-Jacobian RMS gain</span>
+</span><span id="__span-0-942"><a id="__codelineno-0-942" name="__codelineno-0-942"></a>    <span class="c1"># is (a/sqrt(3)) * sqrt(in_features) ~= 1 for a = sqrt(3/in_features). Any fixed</span>
+</span><span id="__span-0-943"><a id="__codelineno-0-943" name="__codelineno-0-943"></a>    <span class="c1"># width-independent bound cannot hold gain ~= 1: the old 0.02 default gave gain</span>
+</span><span id="__span-0-944"><a id="__codelineno-0-944" name="__codelineno-0-944"></a>    <span class="c1"># ~0.09 at in_features=65, so depth&gt;=2 stacks contracted input variation below</span>
+</span><span id="__span-0-945"><a id="__codelineno-0-945" name="__codelineno-0-945"></a>    <span class="c1"># the float32 noise floor (constant map, zero gradients, frozen training).</span>
+</span><span id="__span-0-946"><a id="__codelineno-0-946" name="__codelineno-0-946"></a>    <span class="c1"># in_features counts the near-constant time column -- slightly conservative.</span>
+</span><span id="__span-0-947"><a id="__codelineno-0-947" name="__codelineno-0-947"></a>    <span class="k">if</span> <span class="n">init_bound</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-948"><a id="__codelineno-0-948" name="__codelineno-0-948"></a>        <span class="c1"># float(): see the note in HypConv2DHyperboloidILNN -- `float.__pow__` returns Any,</span>
+</span><span id="__span-0-949"><a id="__codelineno-0-949" name="__codelineno-0-949"></a>        <span class="c1"># so without it the narrowing from `float | None` to `float` does not happen.</span>
+</span><span id="__span-0-950"><a id="__codelineno-0-950" name="__codelineno-0-950"></a>        <span class="n">init_bound</span> <span class="o">=</span> <span class="nb">float</span><span class="p">((</span><span class="mf">3.0</span> <span class="o">/</span> <span class="n">in_features</span><span class="p">)</span> <span class="o">**</span> <span class="mf">0.5</span><span class="p">)</span>
+</span><span id="__span-0-951"><a id="__codelineno-0-951" name="__codelineno-0-951"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span>
+</span><span id="__span-0-952"><a id="__codelineno-0-952" name="__codelineno-0-952"></a>        <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span>
+</span><span id="__span-0-953"><a id="__codelineno-0-953" name="__codelineno-0-953"></a>            <span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="p">(</span><span class="n">in_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span> <span class="n">minval</span><span class="o">=-</span><span class="n">init_bound</span><span class="p">,</span> <span class="n">maxval</span><span class="o">=</span><span class="n">init_bound</span>
+</span><span id="__span-0-954"><a id="__codelineno-0-954" name="__codelineno-0-954"></a>        <span class="p">)</span>
+</span><span id="__span-0-955"><a id="__codelineno-0-955" name="__codelineno-0-955"></a>    <span class="p">)</span>
+</span><span id="__span-0-956"><a id="__codelineno-0-956" name="__codelineno-0-956"></a>    <span class="k">if</span> <span class="n">use_bias</span><span class="p">:</span>
+</span><span id="__span-0-957"><a id="__codelineno-0-957" name="__codelineno-0-957"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">out_features</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
+</span><span id="__span-0-958"><a id="__codelineno-0-958" name="__codelineno-0-958"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-0-959"><a id="__codelineno-0-959" name="__codelineno-0-959"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-960"><a id="__codelineno-0-960" name="__codelineno-0-960"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -3571,10 +3571,7 @@ dead code and is not computed (default: False).</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-959"> 959</a></span>
-<span class="normal"><a href="#__codelineno-0-960"> 960</a></span>
-<span class="normal"><a href="#__codelineno-0-961"> 961</a></span>
-<span class="normal"><a href="#__codelineno-0-962"> 962</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-962"> 962</a></span>
 <span class="normal"><a href="#__codelineno-0-963"> 963</a></span>
 <span class="normal"><a href="#__codelineno-0-964"> 964</a></span>
 <span class="normal"><a href="#__codelineno-0-965"> 965</a></span>
@@ -3616,52 +3613,55 @@ dead code and is not computed (default: False).</p>
 <span class="normal"><a href="#__codelineno-0-1001">1001</a></span>
 <span class="normal"><a href="#__codelineno-0-1002">1002</a></span>
 <span class="normal"><a href="#__codelineno-0-1003">1003</a></span>
-<span class="normal"><a href="#__codelineno-0-1004">1004</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-959"><a id="__codelineno-0-959" name="__codelineno-0-959"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
-</span><span id="__span-0-960"><a id="__codelineno-0-960" name="__codelineno-0-960"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-961"><a id="__codelineno-0-961" name="__codelineno-0-961"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_features&quot;</span><span class="p">],</span>
-</span><span id="__span-0-962"><a id="__codelineno-0-962" name="__codelineno-0-962"></a>    <span class="n">c_in</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-963"><a id="__codelineno-0-963" name="__codelineno-0-963"></a>    <span class="n">c_out</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-964"><a id="__codelineno-0-964" name="__codelineno-0-964"></a>    <span class="n">return_space</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-0-965"><a id="__codelineno-0-965" name="__codelineno-0-965"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_features_plus_1&quot;</span><span class="p">]</span> <span class="o">|</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_features&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-966"><a id="__codelineno-0-966" name="__codelineno-0-966"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply HTC linear transformation.</span>
-</span><span id="__span-0-967"><a id="__codelineno-0-967" name="__codelineno-0-967"></a>
-</span><span id="__span-0-968"><a id="__codelineno-0-968" name="__codelineno-0-968"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-969"><a id="__codelineno-0-969" name="__codelineno-0-969"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-970"><a id="__codelineno-0-970" name="__codelineno-0-970"></a><span class="sd">    x : Array of shape (batch, in_features)</span>
-</span><span id="__span-0-971"><a id="__codelineno-0-971" name="__codelineno-0-971"></a><span class="sd">        Input points on hyperboloid with curvature c_in.</span>
-</span><span id="__span-0-972"><a id="__codelineno-0-972" name="__codelineno-0-972"></a><span class="sd">    c_in : float, optional</span>
-</span><span id="__span-0-973"><a id="__codelineno-0-973" name="__codelineno-0-973"></a><span class="sd">        Input curvature (default: 1.0).</span>
-</span><span id="__span-0-974"><a id="__codelineno-0-974" name="__codelineno-0-974"></a><span class="sd">    c_out : float, optional</span>
-</span><span id="__span-0-975"><a id="__codelineno-0-975" name="__codelineno-0-975"></a><span class="sd">        Output curvature (default: 1.0).</span>
-</span><span id="__span-0-976"><a id="__codelineno-0-976" name="__codelineno-0-976"></a><span class="sd">    return_space : bool, optional</span>
-</span><span id="__span-0-977"><a id="__codelineno-0-977" name="__codelineno-0-977"></a><span class="sd">        If True, return only the spatial components ``(batch, out_features)``</span>
-</span><span id="__span-0-978"><a id="__codelineno-0-978" name="__codelineno-0-978"></a><span class="sd">        of the output point, already scaled by ``sqrt(c_in / c_out)``, i.e.</span>
-</span><span id="__span-0-979"><a id="__codelineno-0-979" name="__codelineno-0-979"></a><span class="sd">        exactly ``y[..., 1:]`` of the full output (HELM ``LorentzLinear``&#39;s</span>
-</span><span id="__span-0-980"><a id="__codelineno-0-980" name="__codelineno-0-980"></a><span class="sd">        ``return_space``). Under ``jit`` the unused time coordinate is</span>
-</span><span id="__span-0-981"><a id="__codelineno-0-981" name="__codelineno-0-981"></a><span class="sd">        dead code and is not computed (default: False).</span>
-</span><span id="__span-0-982"><a id="__codelineno-0-982" name="__codelineno-0-982"></a>
-</span><span id="__span-0-983"><a id="__codelineno-0-983" name="__codelineno-0-983"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-984"><a id="__codelineno-0-984" name="__codelineno-0-984"></a><span class="sd">    -------</span>
-</span><span id="__span-0-985"><a id="__codelineno-0-985" name="__codelineno-0-985"></a><span class="sd">    y : Array of shape (batch, out_features+1), or (batch, out_features) if return_space</span>
-</span><span id="__span-0-986"><a id="__codelineno-0-986" name="__codelineno-0-986"></a><span class="sd">        Output points on hyperboloid with curvature c_out, or their spatial part.</span>
-</span><span id="__span-0-987"><a id="__codelineno-0-987" name="__codelineno-0-987"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-988"><a id="__codelineno-0-988" name="__codelineno-0-988"></a>
-</span><span id="__span-0-989"><a id="__codelineno-0-989" name="__codelineno-0-989"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">linear_fn</span><span class="p">(</span><span class="n">z</span><span class="p">):</span>
-</span><span id="__span-0-990"><a id="__codelineno-0-990" name="__codelineno-0-990"></a>        <span class="c1"># Cast params to the working dtype so float64 weights (from global</span>
-</span><span id="__span-0-991"><a id="__codelineno-0-991" name="__codelineno-0-991"></a>        <span class="c1"># jax_enable_x64) don&#39;t promote a float32 computation to float64.</span>
-</span><span id="__span-0-992"><a id="__codelineno-0-992" name="__codelineno-0-992"></a>        <span class="c1"># Layer weight GEMM: no `precision` kwarg, so it follows JAX&#39;s own</span>
-</span><span id="__span-0-993"><a id="__codelineno-0-993" name="__codelineno-0-993"></a>        <span class="c1"># `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.</span>
-</span><span id="__span-0-994"><a id="__codelineno-0-994" name="__codelineno-0-994"></a>        <span class="n">out</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span><span class="p">[</span><span class="o">...</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">z</span><span class="o">.</span><span class="n">dtype</span><span class="p">))</span>
-</span><span id="__span-0-995"><a id="__codelineno-0-995" name="__codelineno-0-995"></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-996"><a id="__codelineno-0-996" name="__codelineno-0-996"></a>            <span class="n">out</span> <span class="o">=</span> <span class="n">out</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">z</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
-</span><span id="__span-0-997"><a id="__codelineno-0-997" name="__codelineno-0-997"></a>        <span class="k">return</span> <span class="n">out</span>
-</span><span id="__span-0-998"><a id="__codelineno-0-998" name="__codelineno-0-998"></a>
-</span><span id="__span-0-999"><a id="__codelineno-0-999" name="__codelineno-0-999"></a>    <span class="n">y</span> <span class="o">=</span> <span class="n">htc</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">linear_fn</span><span class="p">,</span> <span class="n">c_in</span><span class="p">,</span> <span class="n">c_out</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (..., out_features+1)</span>
-</span><span id="__span-0-1000"><a id="__codelineno-0-1000" name="__codelineno-0-1000"></a>    <span class="k">if</span> <span class="n">return_space</span><span class="p">:</span>
-</span><span id="__span-0-1001"><a id="__codelineno-0-1001" name="__codelineno-0-1001"></a>        <span class="c1"># Slice rather than re-derive the sqrt(c_in/c_out) scaling, so the spatial part is</span>
-</span><span id="__span-0-1002"><a id="__codelineno-0-1002" name="__codelineno-0-1002"></a>        <span class="c1"># htc&#39;s by construction; XLA drops the dead time reduction under jit.</span>
-</span><span id="__span-0-1003"><a id="__codelineno-0-1003" name="__codelineno-0-1003"></a>        <span class="k">return</span> <span class="n">y</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">:]</span>  <span class="c1"># (..., out_features)</span>
-</span><span id="__span-0-1004"><a id="__codelineno-0-1004" name="__codelineno-0-1004"></a>    <span class="k">return</span> <span class="n">y</span>
+<span class="normal"><a href="#__codelineno-0-1004">1004</a></span>
+<span class="normal"><a href="#__codelineno-0-1005">1005</a></span>
+<span class="normal"><a href="#__codelineno-0-1006">1006</a></span>
+<span class="normal"><a href="#__codelineno-0-1007">1007</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-962"><a id="__codelineno-0-962" name="__codelineno-0-962"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
+</span><span id="__span-0-963"><a id="__codelineno-0-963" name="__codelineno-0-963"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-964"><a id="__codelineno-0-964" name="__codelineno-0-964"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_features&quot;</span><span class="p">],</span>
+</span><span id="__span-0-965"><a id="__codelineno-0-965" name="__codelineno-0-965"></a>    <span class="n">c_in</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-966"><a id="__codelineno-0-966" name="__codelineno-0-966"></a>    <span class="n">c_out</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-967"><a id="__codelineno-0-967" name="__codelineno-0-967"></a>    <span class="n">return_space</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-968"><a id="__codelineno-0-968" name="__codelineno-0-968"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_features_plus_1&quot;</span><span class="p">]</span> <span class="o">|</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_features&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-969"><a id="__codelineno-0-969" name="__codelineno-0-969"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply HTC linear transformation.</span>
+</span><span id="__span-0-970"><a id="__codelineno-0-970" name="__codelineno-0-970"></a>
+</span><span id="__span-0-971"><a id="__codelineno-0-971" name="__codelineno-0-971"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-972"><a id="__codelineno-0-972" name="__codelineno-0-972"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-973"><a id="__codelineno-0-973" name="__codelineno-0-973"></a><span class="sd">    x : Array of shape (batch, in_features)</span>
+</span><span id="__span-0-974"><a id="__codelineno-0-974" name="__codelineno-0-974"></a><span class="sd">        Input points on hyperboloid with curvature c_in.</span>
+</span><span id="__span-0-975"><a id="__codelineno-0-975" name="__codelineno-0-975"></a><span class="sd">    c_in : float, optional</span>
+</span><span id="__span-0-976"><a id="__codelineno-0-976" name="__codelineno-0-976"></a><span class="sd">        Input curvature (default: 1.0).</span>
+</span><span id="__span-0-977"><a id="__codelineno-0-977" name="__codelineno-0-977"></a><span class="sd">    c_out : float, optional</span>
+</span><span id="__span-0-978"><a id="__codelineno-0-978" name="__codelineno-0-978"></a><span class="sd">        Output curvature (default: 1.0).</span>
+</span><span id="__span-0-979"><a id="__codelineno-0-979" name="__codelineno-0-979"></a><span class="sd">    return_space : bool, optional</span>
+</span><span id="__span-0-980"><a id="__codelineno-0-980" name="__codelineno-0-980"></a><span class="sd">        If True, return only the spatial components ``(batch, out_features)``</span>
+</span><span id="__span-0-981"><a id="__codelineno-0-981" name="__codelineno-0-981"></a><span class="sd">        of the output point, already scaled by ``sqrt(c_in / c_out)``, i.e.</span>
+</span><span id="__span-0-982"><a id="__codelineno-0-982" name="__codelineno-0-982"></a><span class="sd">        exactly ``y[..., 1:]`` of the full output (HELM ``LorentzLinear``&#39;s</span>
+</span><span id="__span-0-983"><a id="__codelineno-0-983" name="__codelineno-0-983"></a><span class="sd">        ``return_space``). Under ``jit`` the unused time coordinate is</span>
+</span><span id="__span-0-984"><a id="__codelineno-0-984" name="__codelineno-0-984"></a><span class="sd">        dead code and is not computed (default: False).</span>
+</span><span id="__span-0-985"><a id="__codelineno-0-985" name="__codelineno-0-985"></a>
+</span><span id="__span-0-986"><a id="__codelineno-0-986" name="__codelineno-0-986"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-987"><a id="__codelineno-0-987" name="__codelineno-0-987"></a><span class="sd">    -------</span>
+</span><span id="__span-0-988"><a id="__codelineno-0-988" name="__codelineno-0-988"></a><span class="sd">    y : Array of shape (batch, out_features+1), or (batch, out_features) if return_space</span>
+</span><span id="__span-0-989"><a id="__codelineno-0-989" name="__codelineno-0-989"></a><span class="sd">        Output points on hyperboloid with curvature c_out, or their spatial part.</span>
+</span><span id="__span-0-990"><a id="__codelineno-0-990" name="__codelineno-0-990"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-991"><a id="__codelineno-0-991" name="__codelineno-0-991"></a>
+</span><span id="__span-0-992"><a id="__codelineno-0-992" name="__codelineno-0-992"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">linear_fn</span><span class="p">(</span><span class="n">z</span><span class="p">):</span>
+</span><span id="__span-0-993"><a id="__codelineno-0-993" name="__codelineno-0-993"></a>        <span class="c1"># Cast params to the working dtype so float64 weights (from global</span>
+</span><span id="__span-0-994"><a id="__codelineno-0-994" name="__codelineno-0-994"></a>        <span class="c1"># jax_enable_x64) don&#39;t promote a float32 computation to float64.</span>
+</span><span id="__span-0-995"><a id="__codelineno-0-995" name="__codelineno-0-995"></a>        <span class="c1"># Layer weight GEMM: no `precision` kwarg, so it follows JAX&#39;s own</span>
+</span><span id="__span-0-996"><a id="__codelineno-0-996" name="__codelineno-0-996"></a>        <span class="c1"># `jax_default_matmul_precision` (TF32 on Ampere/Hopper). See hyperbolix.utils.precision.</span>
+</span><span id="__span-0-997"><a id="__codelineno-0-997" name="__codelineno-0-997"></a>        <span class="n">out</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span><span class="p">[</span><span class="o">...</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">z</span><span class="o">.</span><span class="n">dtype</span><span class="p">))</span>
+</span><span id="__span-0-998"><a id="__codelineno-0-998" name="__codelineno-0-998"></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-999"><a id="__codelineno-0-999" name="__codelineno-0-999"></a>            <span class="n">out</span> <span class="o">=</span> <span class="n">out</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">z</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+</span><span id="__span-0-1000"><a id="__codelineno-0-1000" name="__codelineno-0-1000"></a>        <span class="k">return</span> <span class="n">out</span>
+</span><span id="__span-0-1001"><a id="__codelineno-0-1001" name="__codelineno-0-1001"></a>
+</span><span id="__span-0-1002"><a id="__codelineno-0-1002" name="__codelineno-0-1002"></a>    <span class="n">y</span> <span class="o">=</span> <span class="n">htc</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">linear_fn</span><span class="p">,</span> <span class="n">c_in</span><span class="p">,</span> <span class="n">c_out</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (..., out_features+1)</span>
+</span><span id="__span-0-1003"><a id="__codelineno-0-1003" name="__codelineno-0-1003"></a>    <span class="k">if</span> <span class="n">return_space</span><span class="p">:</span>
+</span><span id="__span-0-1004"><a id="__codelineno-0-1004" name="__codelineno-0-1004"></a>        <span class="c1"># Slice rather than re-derive the sqrt(c_in/c_out) scaling, so the spatial part is</span>
+</span><span id="__span-0-1005"><a id="__codelineno-0-1005" name="__codelineno-0-1005"></a>        <span class="c1"># htc&#39;s by construction; XLA drops the dead time reduction under jit.</span>
+</span><span id="__span-0-1006"><a id="__codelineno-0-1006" name="__codelineno-0-1006"></a>        <span class="k">return</span> <span class="n">y</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">:]</span>  <span class="c1"># (..., out_features)</span>
+</span><span id="__span-0-1007"><a id="__codelineno-0-1007" name="__codelineno-0-1007"></a>    <span class="k">return</span> <span class="n">y</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -3946,10 +3946,7 @@ HTCLinear : Module wrapper for htc with learnable linear transformation.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-464">464</a></span>
-<span class="normal"><a href="#__codelineno-0-465">465</a></span>
-<span class="normal"><a href="#__codelineno-0-466">466</a></span>
-<span class="normal"><a href="#__codelineno-0-467">467</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-467">467</a></span>
 <span class="normal"><a href="#__codelineno-0-468">468</a></span>
 <span class="normal"><a href="#__codelineno-0-469">469</a></span>
 <span class="normal"><a href="#__codelineno-0-470">470</a></span>
@@ -3985,46 +3982,49 @@ HTCLinear : Module wrapper for htc with learnable linear transformation.</p>
 <span class="normal"><a href="#__codelineno-0-500">500</a></span>
 <span class="normal"><a href="#__codelineno-0-501">501</a></span>
 <span class="normal"><a href="#__codelineno-0-502">502</a></span>
-<span class="normal"><a href="#__codelineno-0-503">503</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-464"><a id="__codelineno-0-464" name="__codelineno-0-464"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-465"><a id="__codelineno-0-465" name="__codelineno-0-465"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-466"><a id="__codelineno-0-466" name="__codelineno-0-466"></a>    <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Manifold</span><span class="p">,</span>
-</span><span id="__span-0-467"><a id="__codelineno-0-467" name="__codelineno-0-467"></a>    <span class="n">in_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-468"><a id="__codelineno-0-468" name="__codelineno-0-468"></a>    <span class="n">out_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-469"><a id="__codelineno-0-469" name="__codelineno-0-469"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-470"><a id="__codelineno-0-470" name="__codelineno-0-470"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-471"><a id="__codelineno-0-471" name="__codelineno-0-471"></a>    <span class="n">input_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;manifold&quot;</span><span class="p">,</span>
-</span><span id="__span-0-472"><a id="__codelineno-0-472" name="__codelineno-0-472"></a>    <span class="n">init_scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.3</span><span class="p">,</span>
-</span><span id="__span-0-473"><a id="__codelineno-0-473" name="__codelineno-0-473"></a>    <span class="n">learnable_scale</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-0-474"><a id="__codelineno-0-474" name="__codelineno-0-474"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-5</span><span class="p">,</span>
-</span><span id="__span-0-475"><a id="__codelineno-0-475" name="__codelineno-0-475"></a>    <span class="n">activation</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Array</span><span class="p">],</span> <span class="n">Array</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-476"><a id="__codelineno-0-476" name="__codelineno-0-476"></a>    <span class="n">normalize</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-0-477"><a id="__codelineno-0-477" name="__codelineno-0-477"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-478"><a id="__codelineno-0-478" name="__codelineno-0-478"></a><span class="p">):</span>
-</span><span id="__span-0-479"><a id="__codelineno-0-479" name="__codelineno-0-479"></a>    <span class="k">if</span> <span class="n">input_space</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;tangent&quot;</span><span class="p">,</span> <span class="s2">&quot;manifold&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-480"><a id="__codelineno-0-480" name="__codelineno-0-480"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;input_space must be either &#39;tangent&#39; or &#39;manifold&#39;, got &#39;</span><span class="si">{</span><span class="n">input_space</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
-</span><span id="__span-0-481"><a id="__codelineno-0-481" name="__codelineno-0-481"></a>
-</span><span id="__span-0-482"><a id="__codelineno-0-482" name="__codelineno-0-482"></a>    <span class="c1"># Static configuration (treated as compile-time constants for JIT)</span>
-</span><span id="__span-0-483"><a id="__codelineno-0-483" name="__codelineno-0-483"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;expmap_0&quot;</span><span class="p">,))</span>
-</span><span id="__span-0-484"><a id="__codelineno-0-484" name="__codelineno-0-484"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">manifold_module</span>
-</span><span id="__span-0-485"><a id="__codelineno-0-485" name="__codelineno-0-485"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">in_dim</span> <span class="o">=</span> <span class="n">in_dim</span>
-</span><span id="__span-0-486"><a id="__codelineno-0-486" name="__codelineno-0-486"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">out_dim</span> <span class="o">=</span> <span class="n">out_dim</span>
-</span><span id="__span-0-487"><a id="__codelineno-0-487" name="__codelineno-0-487"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span> <span class="o">=</span> <span class="n">input_space</span>
-</span><span id="__span-0-488"><a id="__codelineno-0-488" name="__codelineno-0-488"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
-</span><span id="__span-0-489"><a id="__codelineno-0-489" name="__codelineno-0-489"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
-</span><span id="__span-0-490"><a id="__codelineno-0-490" name="__codelineno-0-490"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">normalize</span> <span class="o">=</span> <span class="n">normalize</span>
-</span><span id="__span-0-491"><a id="__codelineno-0-491" name="__codelineno-0-491"></a>
-</span><span id="__span-0-492"><a id="__codelineno-0-492" name="__codelineno-0-492"></a>    <span class="c1"># Trainable parameters</span>
-</span><span id="__span-0-493"><a id="__codelineno-0-493" name="__codelineno-0-493"></a>    <span class="n">bound</span> <span class="o">=</span> <span class="mf">0.02</span>
-</span><span id="__span-0-494"><a id="__codelineno-0-494" name="__codelineno-0-494"></a>    <span class="n">weight_init</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="p">(</span><span class="n">out_dim</span><span class="p">,</span> <span class="n">in_dim</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span> <span class="n">minval</span><span class="o">=-</span><span class="n">bound</span><span class="p">,</span> <span class="n">maxval</span><span class="o">=</span><span class="n">bound</span><span class="p">)</span>
-</span><span id="__span-0-495"><a id="__codelineno-0-495" name="__codelineno-0-495"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">weight_init</span><span class="p">)</span>
-</span><span id="__span-0-496"><a id="__codelineno-0-496" name="__codelineno-0-496"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="n">out_dim</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
-</span><span id="__span-0-497"><a id="__codelineno-0-497" name="__codelineno-0-497"></a>
-</span><span id="__span-0-498"><a id="__codelineno-0-498" name="__codelineno-0-498"></a>    <span class="c1"># Scale parameter for sigmoid</span>
-</span><span id="__span-0-499"><a id="__codelineno-0-499" name="__codelineno-0-499"></a>    <span class="k">if</span> <span class="n">learnable_scale</span><span class="p">:</span>
-</span><span id="__span-0-500"><a id="__codelineno-0-500" name="__codelineno-0-500"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">init_scale</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
-</span><span id="__span-0-501"><a id="__codelineno-0-501" name="__codelineno-0-501"></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-502"><a id="__codelineno-0-502" name="__codelineno-0-502"></a>        <span class="c1"># For non-learnable scale, store as regular Python float (static)</span>
-</span><span id="__span-0-503"><a id="__codelineno-0-503" name="__codelineno-0-503"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">=</span> <span class="n">init_scale</span>
+<span class="normal"><a href="#__codelineno-0-503">503</a></span>
+<span class="normal"><a href="#__codelineno-0-504">504</a></span>
+<span class="normal"><a href="#__codelineno-0-505">505</a></span>
+<span class="normal"><a href="#__codelineno-0-506">506</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-467"><a id="__codelineno-0-467" name="__codelineno-0-467"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-468"><a id="__codelineno-0-468" name="__codelineno-0-468"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-469"><a id="__codelineno-0-469" name="__codelineno-0-469"></a>    <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Manifold</span><span class="p">,</span>
+</span><span id="__span-0-470"><a id="__codelineno-0-470" name="__codelineno-0-470"></a>    <span class="n">in_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-471"><a id="__codelineno-0-471" name="__codelineno-0-471"></a>    <span class="n">out_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-472"><a id="__codelineno-0-472" name="__codelineno-0-472"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-473"><a id="__codelineno-0-473" name="__codelineno-0-473"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-474"><a id="__codelineno-0-474" name="__codelineno-0-474"></a>    <span class="n">input_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;manifold&quot;</span><span class="p">,</span>
+</span><span id="__span-0-475"><a id="__codelineno-0-475" name="__codelineno-0-475"></a>    <span class="n">init_scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.3</span><span class="p">,</span>
+</span><span id="__span-0-476"><a id="__codelineno-0-476" name="__codelineno-0-476"></a>    <span class="n">learnable_scale</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-477"><a id="__codelineno-0-477" name="__codelineno-0-477"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-5</span><span class="p">,</span>
+</span><span id="__span-0-478"><a id="__codelineno-0-478" name="__codelineno-0-478"></a>    <span class="n">activation</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Array</span><span class="p">],</span> <span class="n">Array</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-479"><a id="__codelineno-0-479" name="__codelineno-0-479"></a>    <span class="n">normalize</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-480"><a id="__codelineno-0-480" name="__codelineno-0-480"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-481"><a id="__codelineno-0-481" name="__codelineno-0-481"></a><span class="p">):</span>
+</span><span id="__span-0-482"><a id="__codelineno-0-482" name="__codelineno-0-482"></a>    <span class="k">if</span> <span class="n">input_space</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;tangent&quot;</span><span class="p">,</span> <span class="s2">&quot;manifold&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-483"><a id="__codelineno-0-483" name="__codelineno-0-483"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;input_space must be either &#39;tangent&#39; or &#39;manifold&#39;, got &#39;</span><span class="si">{</span><span class="n">input_space</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+</span><span id="__span-0-484"><a id="__codelineno-0-484" name="__codelineno-0-484"></a>
+</span><span id="__span-0-485"><a id="__codelineno-0-485" name="__codelineno-0-485"></a>    <span class="c1"># Static configuration (treated as compile-time constants for JIT)</span>
+</span><span id="__span-0-486"><a id="__codelineno-0-486" name="__codelineno-0-486"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;expmap_0&quot;</span><span class="p">,))</span>
+</span><span id="__span-0-487"><a id="__codelineno-0-487" name="__codelineno-0-487"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">manifold_module</span>
+</span><span id="__span-0-488"><a id="__codelineno-0-488" name="__codelineno-0-488"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">in_dim</span> <span class="o">=</span> <span class="n">in_dim</span>
+</span><span id="__span-0-489"><a id="__codelineno-0-489" name="__codelineno-0-489"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">out_dim</span> <span class="o">=</span> <span class="n">out_dim</span>
+</span><span id="__span-0-490"><a id="__codelineno-0-490" name="__codelineno-0-490"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span> <span class="o">=</span> <span class="n">input_space</span>
+</span><span id="__span-0-491"><a id="__codelineno-0-491" name="__codelineno-0-491"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+</span><span id="__span-0-492"><a id="__codelineno-0-492" name="__codelineno-0-492"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
+</span><span id="__span-0-493"><a id="__codelineno-0-493" name="__codelineno-0-493"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">normalize</span> <span class="o">=</span> <span class="n">normalize</span>
+</span><span id="__span-0-494"><a id="__codelineno-0-494" name="__codelineno-0-494"></a>
+</span><span id="__span-0-495"><a id="__codelineno-0-495" name="__codelineno-0-495"></a>    <span class="c1"># Trainable parameters</span>
+</span><span id="__span-0-496"><a id="__codelineno-0-496" name="__codelineno-0-496"></a>    <span class="n">bound</span> <span class="o">=</span> <span class="mf">0.02</span>
+</span><span id="__span-0-497"><a id="__codelineno-0-497" name="__codelineno-0-497"></a>    <span class="n">weight_init</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="p">(</span><span class="n">out_dim</span><span class="p">,</span> <span class="n">in_dim</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span> <span class="n">minval</span><span class="o">=-</span><span class="n">bound</span><span class="p">,</span> <span class="n">maxval</span><span class="o">=</span><span class="n">bound</span><span class="p">)</span>
+</span><span id="__span-0-498"><a id="__codelineno-0-498" name="__codelineno-0-498"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">weight_init</span><span class="p">)</span>
+</span><span id="__span-0-499"><a id="__codelineno-0-499" name="__codelineno-0-499"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="n">out_dim</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
+</span><span id="__span-0-500"><a id="__codelineno-0-500" name="__codelineno-0-500"></a>
+</span><span id="__span-0-501"><a id="__codelineno-0-501" name="__codelineno-0-501"></a>    <span class="c1"># Scale parameter for sigmoid</span>
+</span><span id="__span-0-502"><a id="__codelineno-0-502" name="__codelineno-0-502"></a>    <span class="k">if</span> <span class="n">learnable_scale</span><span class="p">:</span>
+</span><span id="__span-0-503"><a id="__codelineno-0-503" name="__codelineno-0-503"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">init_scale</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
+</span><span id="__span-0-504"><a id="__codelineno-0-504" name="__codelineno-0-504"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-0-505"><a id="__codelineno-0-505" name="__codelineno-0-505"></a>        <span class="c1"># For non-learnable scale, store as regular Python float (static)</span>
+</span><span id="__span-0-506"><a id="__codelineno-0-506" name="__codelineno-0-506"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">=</span> <span class="n">init_scale</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -4131,10 +4131,7 @@ HTCLinear : Module wrapper for htc with learnable linear transformation.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-505">505</a></span>
-<span class="normal"><a href="#__codelineno-0-506">506</a></span>
-<span class="normal"><a href="#__codelineno-0-507">507</a></span>
-<span class="normal"><a href="#__codelineno-0-508">508</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-508">508</a></span>
 <span class="normal"><a href="#__codelineno-0-509">509</a></span>
 <span class="normal"><a href="#__codelineno-0-510">510</a></span>
 <span class="normal"><a href="#__codelineno-0-511">511</a></span>
@@ -4163,39 +4160,42 @@ HTCLinear : Module wrapper for htc with learnable linear transformation.</p>
 <span class="normal"><a href="#__codelineno-0-534">534</a></span>
 <span class="normal"><a href="#__codelineno-0-535">535</a></span>
 <span class="normal"><a href="#__codelineno-0-536">536</a></span>
-<span class="normal"><a href="#__codelineno-0-537">537</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-505"><a id="__codelineno-0-505" name="__codelineno-0-505"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
-</span><span id="__span-0-506"><a id="__codelineno-0-506" name="__codelineno-0-506"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-507"><a id="__codelineno-0-507" name="__codelineno-0-507"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_dim&quot;</span><span class="p">],</span>
-</span><span id="__span-0-508"><a id="__codelineno-0-508" name="__codelineno-0-508"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-509"><a id="__codelineno-0-509" name="__codelineno-0-509"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_dim&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-510"><a id="__codelineno-0-510" name="__codelineno-0-510"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="__span-0-511"><a id="__codelineno-0-511" name="__codelineno-0-511"></a><span class="sd">    Forward pass through the FHCNN hyperbolic linear layer.</span>
-</span><span id="__span-0-512"><a id="__codelineno-0-512" name="__codelineno-0-512"></a>
-</span><span id="__span-0-513"><a id="__codelineno-0-513" name="__codelineno-0-513"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-514"><a id="__codelineno-0-514" name="__codelineno-0-514"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-515"><a id="__codelineno-0-515" name="__codelineno-0-515"></a><span class="sd">    x : Array of shape (batch, in_dim)</span>
-</span><span id="__span-0-516"><a id="__codelineno-0-516" name="__codelineno-0-516"></a><span class="sd">        Input tensor where the hyperbolic_axis is last. x.shape[-1] must equal self.in_dim.</span>
-</span><span id="__span-0-517"><a id="__codelineno-0-517" name="__codelineno-0-517"></a><span class="sd">    c : float</span>
-</span><span id="__span-0-518"><a id="__codelineno-0-518" name="__codelineno-0-518"></a><span class="sd">        Manifold curvature (default: 1.0)</span>
-</span><span id="__span-0-519"><a id="__codelineno-0-519" name="__codelineno-0-519"></a>
-</span><span id="__span-0-520"><a id="__codelineno-0-520" name="__codelineno-0-520"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-521"><a id="__codelineno-0-521" name="__codelineno-0-521"></a><span class="sd">    -------</span>
-</span><span id="__span-0-522"><a id="__codelineno-0-522" name="__codelineno-0-522"></a><span class="sd">    res : Array of shape (batch, out_dim)</span>
-</span><span id="__span-0-523"><a id="__codelineno-0-523" name="__codelineno-0-523"></a><span class="sd">        Output on the Hyperboloid manifold</span>
-</span><span id="__span-0-524"><a id="__codelineno-0-524" name="__codelineno-0-524"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-525"><a id="__codelineno-0-525" name="__codelineno-0-525"></a>    <span class="n">scale_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">scale</span><span class="p">[</span><span class="o">...</span><span class="p">]</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scale</span><span class="p">,</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">scale</span>
-</span><span id="__span-0-526"><a id="__codelineno-0-526" name="__codelineno-0-526"></a>    <span class="k">return</span> <span class="n">_fhcnn_forward</span><span class="p">(</span>
-</span><span id="__span-0-527"><a id="__codelineno-0-527" name="__codelineno-0-527"></a>        <span class="n">x</span><span class="p">,</span>
-</span><span id="__span-0-528"><a id="__codelineno-0-528" name="__codelineno-0-528"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
-</span><span id="__span-0-529"><a id="__codelineno-0-529" name="__codelineno-0-529"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
-</span><span id="__span-0-530"><a id="__codelineno-0-530" name="__codelineno-0-530"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span>
-</span><span id="__span-0-531"><a id="__codelineno-0-531" name="__codelineno-0-531"></a>        <span class="n">c</span><span class="p">,</span>
-</span><span id="__span-0-532"><a id="__codelineno-0-532" name="__codelineno-0-532"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span><span class="p">,</span>
-</span><span id="__span-0-533"><a id="__codelineno-0-533" name="__codelineno-0-533"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
-</span><span id="__span-0-534"><a id="__codelineno-0-534" name="__codelineno-0-534"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">normalize</span><span class="p">,</span>
-</span><span id="__span-0-535"><a id="__codelineno-0-535" name="__codelineno-0-535"></a>        <span class="n">scale_val</span><span class="p">,</span>
-</span><span id="__span-0-536"><a id="__codelineno-0-536" name="__codelineno-0-536"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">,</span>
-</span><span id="__span-0-537"><a id="__codelineno-0-537" name="__codelineno-0-537"></a>    <span class="p">)</span>
+<span class="normal"><a href="#__codelineno-0-537">537</a></span>
+<span class="normal"><a href="#__codelineno-0-538">538</a></span>
+<span class="normal"><a href="#__codelineno-0-539">539</a></span>
+<span class="normal"><a href="#__codelineno-0-540">540</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-508"><a id="__codelineno-0-508" name="__codelineno-0-508"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
+</span><span id="__span-0-509"><a id="__codelineno-0-509" name="__codelineno-0-509"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-510"><a id="__codelineno-0-510" name="__codelineno-0-510"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_dim&quot;</span><span class="p">],</span>
+</span><span id="__span-0-511"><a id="__codelineno-0-511" name="__codelineno-0-511"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-512"><a id="__codelineno-0-512" name="__codelineno-0-512"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_dim&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-513"><a id="__codelineno-0-513" name="__codelineno-0-513"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="__span-0-514"><a id="__codelineno-0-514" name="__codelineno-0-514"></a><span class="sd">    Forward pass through the FHCNN hyperbolic linear layer.</span>
+</span><span id="__span-0-515"><a id="__codelineno-0-515" name="__codelineno-0-515"></a>
+</span><span id="__span-0-516"><a id="__codelineno-0-516" name="__codelineno-0-516"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-517"><a id="__codelineno-0-517" name="__codelineno-0-517"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-518"><a id="__codelineno-0-518" name="__codelineno-0-518"></a><span class="sd">    x : Array of shape (batch, in_dim)</span>
+</span><span id="__span-0-519"><a id="__codelineno-0-519" name="__codelineno-0-519"></a><span class="sd">        Input tensor where the hyperbolic_axis is last. x.shape[-1] must equal self.in_dim.</span>
+</span><span id="__span-0-520"><a id="__codelineno-0-520" name="__codelineno-0-520"></a><span class="sd">    c : float</span>
+</span><span id="__span-0-521"><a id="__codelineno-0-521" name="__codelineno-0-521"></a><span class="sd">        Manifold curvature (default: 1.0)</span>
+</span><span id="__span-0-522"><a id="__codelineno-0-522" name="__codelineno-0-522"></a>
+</span><span id="__span-0-523"><a id="__codelineno-0-523" name="__codelineno-0-523"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-524"><a id="__codelineno-0-524" name="__codelineno-0-524"></a><span class="sd">    -------</span>
+</span><span id="__span-0-525"><a id="__codelineno-0-525" name="__codelineno-0-525"></a><span class="sd">    res : Array of shape (batch, out_dim)</span>
+</span><span id="__span-0-526"><a id="__codelineno-0-526" name="__codelineno-0-526"></a><span class="sd">        Output on the Hyperboloid manifold</span>
+</span><span id="__span-0-527"><a id="__codelineno-0-527" name="__codelineno-0-527"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-528"><a id="__codelineno-0-528" name="__codelineno-0-528"></a>    <span class="n">scale_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">scale</span><span class="p">[</span><span class="o">...</span><span class="p">]</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scale</span><span class="p">,</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">scale</span>
+</span><span id="__span-0-529"><a id="__codelineno-0-529" name="__codelineno-0-529"></a>    <span class="k">return</span> <span class="n">_fhcnn_forward</span><span class="p">(</span>
+</span><span id="__span-0-530"><a id="__codelineno-0-530" name="__codelineno-0-530"></a>        <span class="n">x</span><span class="p">,</span>
+</span><span id="__span-0-531"><a id="__codelineno-0-531" name="__codelineno-0-531"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
+</span><span id="__span-0-532"><a id="__codelineno-0-532" name="__codelineno-0-532"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
+</span><span id="__span-0-533"><a id="__codelineno-0-533" name="__codelineno-0-533"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span>
+</span><span id="__span-0-534"><a id="__codelineno-0-534" name="__codelineno-0-534"></a>        <span class="n">c</span><span class="p">,</span>
+</span><span id="__span-0-535"><a id="__codelineno-0-535" name="__codelineno-0-535"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span><span class="p">,</span>
+</span><span id="__span-0-536"><a id="__codelineno-0-536" name="__codelineno-0-536"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+</span><span id="__span-0-537"><a id="__codelineno-0-537" name="__codelineno-0-537"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">normalize</span><span class="p">,</span>
+</span><span id="__span-0-538"><a id="__codelineno-0-538" name="__codelineno-0-538"></a>        <span class="n">scale_val</span><span class="p">,</span>
+</span><span id="__span-0-539"><a id="__codelineno-0-539" name="__codelineno-0-539"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">,</span>
+</span><span id="__span-0-540"><a id="__codelineno-0-540" name="__codelineno-0-540"></a>    <span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -4467,10 +4467,7 @@ HypLinearHyperboloidPLFC : PLFC layer using MLR + sinh diffeomorphism.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-609">609</a></span>
-<span class="normal"><a href="#__codelineno-0-610">610</a></span>
-<span class="normal"><a href="#__codelineno-0-611">611</a></span>
-<span class="normal"><a href="#__codelineno-0-612">612</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-612">612</a></span>
 <span class="normal"><a href="#__codelineno-0-613">613</a></span>
 <span class="normal"><a href="#__codelineno-0-614">614</a></span>
 <span class="normal"><a href="#__codelineno-0-615">615</a></span>
@@ -4507,47 +4504,50 @@ HypLinearHyperboloidPLFC : PLFC layer using MLR + sinh diffeomorphism.</p>
 <span class="normal"><a href="#__codelineno-0-646">646</a></span>
 <span class="normal"><a href="#__codelineno-0-647">647</a></span>
 <span class="normal"><a href="#__codelineno-0-648">648</a></span>
-<span class="normal"><a href="#__codelineno-0-649">649</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-609"><a id="__codelineno-0-609" name="__codelineno-0-609"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-610"><a id="__codelineno-0-610" name="__codelineno-0-610"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-611"><a id="__codelineno-0-611" name="__codelineno-0-611"></a>    <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Manifold</span><span class="p">,</span>
-</span><span id="__span-0-612"><a id="__codelineno-0-612" name="__codelineno-0-612"></a>    <span class="n">in_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-613"><a id="__codelineno-0-613" name="__codelineno-0-613"></a>    <span class="n">out_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-614"><a id="__codelineno-0-614" name="__codelineno-0-614"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-615"><a id="__codelineno-0-615" name="__codelineno-0-615"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-616"><a id="__codelineno-0-616" name="__codelineno-0-616"></a>    <span class="n">input_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;manifold&quot;</span><span class="p">,</span>
-</span><span id="__span-0-617"><a id="__codelineno-0-617" name="__codelineno-0-617"></a>    <span class="n">init_scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.3</span><span class="p">,</span>
-</span><span id="__span-0-618"><a id="__codelineno-0-618" name="__codelineno-0-618"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-5</span><span class="p">,</span>
-</span><span id="__span-0-619"><a id="__codelineno-0-619" name="__codelineno-0-619"></a>    <span class="n">activation</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Array</span><span class="p">],</span> <span class="n">Array</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-620"><a id="__codelineno-0-620" name="__codelineno-0-620"></a>    <span class="n">dropout_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-621"><a id="__codelineno-0-621" name="__codelineno-0-621"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-622"><a id="__codelineno-0-622" name="__codelineno-0-622"></a><span class="p">):</span>
-</span><span id="__span-0-623"><a id="__codelineno-0-623" name="__codelineno-0-623"></a>    <span class="k">if</span> <span class="n">input_space</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;tangent&quot;</span><span class="p">,</span> <span class="s2">&quot;manifold&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-624"><a id="__codelineno-0-624" name="__codelineno-0-624"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;input_space must be either &#39;tangent&#39; or &#39;manifold&#39;, got &#39;</span><span class="si">{</span><span class="n">input_space</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
-</span><span id="__span-0-625"><a id="__codelineno-0-625" name="__codelineno-0-625"></a>
-</span><span id="__span-0-626"><a id="__codelineno-0-626" name="__codelineno-0-626"></a>    <span class="c1"># Static configuration (treated as compile-time constants for JIT)</span>
-</span><span id="__span-0-627"><a id="__codelineno-0-627" name="__codelineno-0-627"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;expmap_0&quot;</span><span class="p">,))</span>
-</span><span id="__span-0-628"><a id="__codelineno-0-628" name="__codelineno-0-628"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">manifold_module</span>
-</span><span id="__span-0-629"><a id="__codelineno-0-629" name="__codelineno-0-629"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">in_dim</span> <span class="o">=</span> <span class="n">in_dim</span>
-</span><span id="__span-0-630"><a id="__codelineno-0-630" name="__codelineno-0-630"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">out_dim</span> <span class="o">=</span> <span class="n">out_dim</span>
-</span><span id="__span-0-631"><a id="__codelineno-0-631" name="__codelineno-0-631"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span> <span class="o">=</span> <span class="n">input_space</span>
-</span><span id="__span-0-632"><a id="__codelineno-0-632" name="__codelineno-0-632"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
-</span><span id="__span-0-633"><a id="__codelineno-0-633" name="__codelineno-0-633"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
-</span><span id="__span-0-634"><a id="__codelineno-0-634" name="__codelineno-0-634"></a>
-</span><span id="__span-0-635"><a id="__codelineno-0-635" name="__codelineno-0-635"></a>    <span class="c1"># FHNN weight init: U(-0.02, 0.02) with time column zeroed (tangent vectors at origin)</span>
-</span><span id="__span-0-636"><a id="__codelineno-0-636" name="__codelineno-0-636"></a>    <span class="n">bound</span> <span class="o">=</span> <span class="mf">0.02</span>
-</span><span id="__span-0-637"><a id="__codelineno-0-637" name="__codelineno-0-637"></a>    <span class="n">weight_init</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="p">(</span><span class="n">out_dim</span><span class="p">,</span> <span class="n">in_dim</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span> <span class="n">minval</span><span class="o">=-</span><span class="n">bound</span><span class="p">,</span> <span class="n">maxval</span><span class="o">=</span><span class="n">bound</span><span class="p">)</span>
-</span><span id="__span-0-638"><a id="__codelineno-0-638" name="__codelineno-0-638"></a>    <span class="n">weight_init</span> <span class="o">=</span> <span class="n">weight_init</span><span class="o">.</span><span class="n">at</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="mf">0.0</span><span class="p">)</span>
-</span><span id="__span-0-639"><a id="__codelineno-0-639" name="__codelineno-0-639"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">weight_init</span><span class="p">)</span>
-</span><span id="__span-0-640"><a id="__codelineno-0-640" name="__codelineno-0-640"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="n">out_dim</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
-</span><span id="__span-0-641"><a id="__codelineno-0-641" name="__codelineno-0-641"></a>
-</span><span id="__span-0-642"><a id="__codelineno-0-642" name="__codelineno-0-642"></a>    <span class="c1"># Learnable scale for the sigmoid (always learnable in FHNN)</span>
-</span><span id="__span-0-643"><a id="__codelineno-0-643" name="__codelineno-0-643"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">init_scale</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
+<span class="normal"><a href="#__codelineno-0-649">649</a></span>
+<span class="normal"><a href="#__codelineno-0-650">650</a></span>
+<span class="normal"><a href="#__codelineno-0-651">651</a></span>
+<span class="normal"><a href="#__codelineno-0-652">652</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-612"><a id="__codelineno-0-612" name="__codelineno-0-612"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-613"><a id="__codelineno-0-613" name="__codelineno-0-613"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-614"><a id="__codelineno-0-614" name="__codelineno-0-614"></a>    <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Manifold</span><span class="p">,</span>
+</span><span id="__span-0-615"><a id="__codelineno-0-615" name="__codelineno-0-615"></a>    <span class="n">in_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-616"><a id="__codelineno-0-616" name="__codelineno-0-616"></a>    <span class="n">out_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-617"><a id="__codelineno-0-617" name="__codelineno-0-617"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-618"><a id="__codelineno-0-618" name="__codelineno-0-618"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-619"><a id="__codelineno-0-619" name="__codelineno-0-619"></a>    <span class="n">input_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;manifold&quot;</span><span class="p">,</span>
+</span><span id="__span-0-620"><a id="__codelineno-0-620" name="__codelineno-0-620"></a>    <span class="n">init_scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.3</span><span class="p">,</span>
+</span><span id="__span-0-621"><a id="__codelineno-0-621" name="__codelineno-0-621"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-5</span><span class="p">,</span>
+</span><span id="__span-0-622"><a id="__codelineno-0-622" name="__codelineno-0-622"></a>    <span class="n">activation</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Array</span><span class="p">],</span> <span class="n">Array</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-623"><a id="__codelineno-0-623" name="__codelineno-0-623"></a>    <span class="n">dropout_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-624"><a id="__codelineno-0-624" name="__codelineno-0-624"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-625"><a id="__codelineno-0-625" name="__codelineno-0-625"></a><span class="p">):</span>
+</span><span id="__span-0-626"><a id="__codelineno-0-626" name="__codelineno-0-626"></a>    <span class="k">if</span> <span class="n">input_space</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;tangent&quot;</span><span class="p">,</span> <span class="s2">&quot;manifold&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-627"><a id="__codelineno-0-627" name="__codelineno-0-627"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;input_space must be either &#39;tangent&#39; or &#39;manifold&#39;, got &#39;</span><span class="si">{</span><span class="n">input_space</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+</span><span id="__span-0-628"><a id="__codelineno-0-628" name="__codelineno-0-628"></a>
+</span><span id="__span-0-629"><a id="__codelineno-0-629" name="__codelineno-0-629"></a>    <span class="c1"># Static configuration (treated as compile-time constants for JIT)</span>
+</span><span id="__span-0-630"><a id="__codelineno-0-630" name="__codelineno-0-630"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;expmap_0&quot;</span><span class="p">,))</span>
+</span><span id="__span-0-631"><a id="__codelineno-0-631" name="__codelineno-0-631"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">manifold_module</span>
+</span><span id="__span-0-632"><a id="__codelineno-0-632" name="__codelineno-0-632"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">in_dim</span> <span class="o">=</span> <span class="n">in_dim</span>
+</span><span id="__span-0-633"><a id="__codelineno-0-633" name="__codelineno-0-633"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">out_dim</span> <span class="o">=</span> <span class="n">out_dim</span>
+</span><span id="__span-0-634"><a id="__codelineno-0-634" name="__codelineno-0-634"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span> <span class="o">=</span> <span class="n">input_space</span>
+</span><span id="__span-0-635"><a id="__codelineno-0-635" name="__codelineno-0-635"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+</span><span id="__span-0-636"><a id="__codelineno-0-636" name="__codelineno-0-636"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
+</span><span id="__span-0-637"><a id="__codelineno-0-637" name="__codelineno-0-637"></a>
+</span><span id="__span-0-638"><a id="__codelineno-0-638" name="__codelineno-0-638"></a>    <span class="c1"># FHNN weight init: U(-0.02, 0.02) with time column zeroed (tangent vectors at origin)</span>
+</span><span id="__span-0-639"><a id="__codelineno-0-639" name="__codelineno-0-639"></a>    <span class="n">bound</span> <span class="o">=</span> <span class="mf">0.02</span>
+</span><span id="__span-0-640"><a id="__codelineno-0-640" name="__codelineno-0-640"></a>    <span class="n">weight_init</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="p">(</span><span class="n">out_dim</span><span class="p">,</span> <span class="n">in_dim</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">,</span> <span class="n">minval</span><span class="o">=-</span><span class="n">bound</span><span class="p">,</span> <span class="n">maxval</span><span class="o">=</span><span class="n">bound</span><span class="p">)</span>
+</span><span id="__span-0-641"><a id="__codelineno-0-641" name="__codelineno-0-641"></a>    <span class="n">weight_init</span> <span class="o">=</span> <span class="n">weight_init</span><span class="o">.</span><span class="n">at</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="mf">0.0</span><span class="p">)</span>
+</span><span id="__span-0-642"><a id="__codelineno-0-642" name="__codelineno-0-642"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">weight_init</span><span class="p">)</span>
+</span><span id="__span-0-643"><a id="__codelineno-0-643" name="__codelineno-0-643"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="n">out_dim</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
 </span><span id="__span-0-644"><a id="__codelineno-0-644" name="__codelineno-0-644"></a>
-</span><span id="__span-0-645"><a id="__codelineno-0-645" name="__codelineno-0-645"></a>    <span class="c1"># Optional dropout</span>
-</span><span id="__span-0-646"><a id="__codelineno-0-646" name="__codelineno-0-646"></a>    <span class="k">if</span> <span class="n">dropout_rate</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">dropout_rate</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="__span-0-647"><a id="__codelineno-0-647" name="__codelineno-0-647"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout_rate</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
-</span><span id="__span-0-648"><a id="__codelineno-0-648" name="__codelineno-0-648"></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-649"><a id="__codelineno-0-649" name="__codelineno-0-649"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-645"><a id="__codelineno-0-645" name="__codelineno-0-645"></a>    <span class="c1"># Learnable scale for the sigmoid (always learnable in FHNN)</span>
+</span><span id="__span-0-646"><a id="__codelineno-0-646" name="__codelineno-0-646"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">init_scale</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
+</span><span id="__span-0-647"><a id="__codelineno-0-647" name="__codelineno-0-647"></a>
+</span><span id="__span-0-648"><a id="__codelineno-0-648" name="__codelineno-0-648"></a>    <span class="c1"># Optional dropout</span>
+</span><span id="__span-0-649"><a id="__codelineno-0-649" name="__codelineno-0-649"></a>    <span class="k">if</span> <span class="n">dropout_rate</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">dropout_rate</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="__span-0-650"><a id="__codelineno-0-650" name="__codelineno-0-650"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">dropout_rate</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
+</span><span id="__span-0-651"><a id="__codelineno-0-651" name="__codelineno-0-651"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-0-652"><a id="__codelineno-0-652" name="__codelineno-0-652"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span> <span class="o">=</span> <span class="kc">None</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -4672,10 +4672,7 @@ HypLinearHyperboloidPLFC : PLFC layer using MLR + sinh diffeomorphism.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-651">651</a></span>
-<span class="normal"><a href="#__codelineno-0-652">652</a></span>
-<span class="normal"><a href="#__codelineno-0-653">653</a></span>
-<span class="normal"><a href="#__codelineno-0-654">654</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-654">654</a></span>
 <span class="normal"><a href="#__codelineno-0-655">655</a></span>
 <span class="normal"><a href="#__codelineno-0-656">656</a></span>
 <span class="normal"><a href="#__codelineno-0-657">657</a></span>
@@ -4712,47 +4709,50 @@ HypLinearHyperboloidPLFC : PLFC layer using MLR + sinh diffeomorphism.</p>
 <span class="normal"><a href="#__codelineno-0-688">688</a></span>
 <span class="normal"><a href="#__codelineno-0-689">689</a></span>
 <span class="normal"><a href="#__codelineno-0-690">690</a></span>
-<span class="normal"><a href="#__codelineno-0-691">691</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-651"><a id="__codelineno-0-651" name="__codelineno-0-651"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
-</span><span id="__span-0-652"><a id="__codelineno-0-652" name="__codelineno-0-652"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-653"><a id="__codelineno-0-653" name="__codelineno-0-653"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_dim&quot;</span><span class="p">],</span>
-</span><span id="__span-0-654"><a id="__codelineno-0-654" name="__codelineno-0-654"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-655"><a id="__codelineno-0-655" name="__codelineno-0-655"></a>    <span class="n">deterministic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="__span-0-656"><a id="__codelineno-0-656" name="__codelineno-0-656"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_dim&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-657"><a id="__codelineno-0-657" name="__codelineno-0-657"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Forward pass through the FHNN hyperbolic linear layer.</span>
-</span><span id="__span-0-658"><a id="__codelineno-0-658" name="__codelineno-0-658"></a>
-</span><span id="__span-0-659"><a id="__codelineno-0-659" name="__codelineno-0-659"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-660"><a id="__codelineno-0-660" name="__codelineno-0-660"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-661"><a id="__codelineno-0-661" name="__codelineno-0-661"></a><span class="sd">    x : Array of shape (batch, in_dim)</span>
-</span><span id="__span-0-662"><a id="__codelineno-0-662" name="__codelineno-0-662"></a><span class="sd">        Input tensor. x.shape[-1] must equal self.in_dim.</span>
-</span><span id="__span-0-663"><a id="__codelineno-0-663" name="__codelineno-0-663"></a><span class="sd">    c : float</span>
-</span><span id="__span-0-664"><a id="__codelineno-0-664" name="__codelineno-0-664"></a><span class="sd">        Manifold curvature (default: 1.0)</span>
-</span><span id="__span-0-665"><a id="__codelineno-0-665" name="__codelineno-0-665"></a><span class="sd">    deterministic : bool</span>
-</span><span id="__span-0-666"><a id="__codelineno-0-666" name="__codelineno-0-666"></a><span class="sd">        If True, dropout is disabled (default: True).</span>
-</span><span id="__span-0-667"><a id="__codelineno-0-667" name="__codelineno-0-667"></a>
-</span><span id="__span-0-668"><a id="__codelineno-0-668" name="__codelineno-0-668"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-669"><a id="__codelineno-0-669" name="__codelineno-0-669"></a><span class="sd">    -------</span>
-</span><span id="__span-0-670"><a id="__codelineno-0-670" name="__codelineno-0-670"></a><span class="sd">    res : Array of shape (batch, out_dim)</span>
-</span><span id="__span-0-671"><a id="__codelineno-0-671" name="__codelineno-0-671"></a><span class="sd">        Output on the Hyperboloid manifold</span>
-</span><span id="__span-0-672"><a id="__codelineno-0-672" name="__codelineno-0-672"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-673"><a id="__codelineno-0-673" name="__codelineno-0-673"></a>    <span class="c1"># Build dropout closure for the pure function</span>
-</span><span id="__span-0-674"><a id="__codelineno-0-674" name="__codelineno-0-674"></a>    <span class="n">dropout_module</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span>
-</span><span id="__span-0-675"><a id="__codelineno-0-675" name="__codelineno-0-675"></a>    <span class="k">if</span> <span class="n">dropout_module</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-676"><a id="__codelineno-0-676" name="__codelineno-0-676"></a>        <span class="n">dropout_fn</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">z</span><span class="p">:</span> <span class="n">dropout_module</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">deterministic</span><span class="o">=</span><span class="n">deterministic</span><span class="p">)</span>  <span class="c1"># noqa: E731</span>
-</span><span id="__span-0-677"><a id="__codelineno-0-677" name="__codelineno-0-677"></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-678"><a id="__codelineno-0-678" name="__codelineno-0-678"></a>        <span class="n">dropout_fn</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="__span-0-679"><a id="__codelineno-0-679" name="__codelineno-0-679"></a>
-</span><span id="__span-0-680"><a id="__codelineno-0-680" name="__codelineno-0-680"></a>    <span class="k">return</span> <span class="n">_fhnn_forward</span><span class="p">(</span>
-</span><span id="__span-0-681"><a id="__codelineno-0-681" name="__codelineno-0-681"></a>        <span class="n">x</span><span class="p">,</span>
-</span><span id="__span-0-682"><a id="__codelineno-0-682" name="__codelineno-0-682"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
-</span><span id="__span-0-683"><a id="__codelineno-0-683" name="__codelineno-0-683"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
-</span><span id="__span-0-684"><a id="__codelineno-0-684" name="__codelineno-0-684"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span>
-</span><span id="__span-0-685"><a id="__codelineno-0-685" name="__codelineno-0-685"></a>        <span class="n">c</span><span class="p">,</span>
-</span><span id="__span-0-686"><a id="__codelineno-0-686" name="__codelineno-0-686"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span><span class="p">,</span>
-</span><span id="__span-0-687"><a id="__codelineno-0-687" name="__codelineno-0-687"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
-</span><span id="__span-0-688"><a id="__codelineno-0-688" name="__codelineno-0-688"></a>        <span class="n">dropout_fn</span><span class="p">,</span>
-</span><span id="__span-0-689"><a id="__codelineno-0-689" name="__codelineno-0-689"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">scale</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
-</span><span id="__span-0-690"><a id="__codelineno-0-690" name="__codelineno-0-690"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">,</span>
-</span><span id="__span-0-691"><a id="__codelineno-0-691" name="__codelineno-0-691"></a>    <span class="p">)</span>
+<span class="normal"><a href="#__codelineno-0-691">691</a></span>
+<span class="normal"><a href="#__codelineno-0-692">692</a></span>
+<span class="normal"><a href="#__codelineno-0-693">693</a></span>
+<span class="normal"><a href="#__codelineno-0-694">694</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-654"><a id="__codelineno-0-654" name="__codelineno-0-654"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
+</span><span id="__span-0-655"><a id="__codelineno-0-655" name="__codelineno-0-655"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-656"><a id="__codelineno-0-656" name="__codelineno-0-656"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_dim&quot;</span><span class="p">],</span>
+</span><span id="__span-0-657"><a id="__codelineno-0-657" name="__codelineno-0-657"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-658"><a id="__codelineno-0-658" name="__codelineno-0-658"></a>    <span class="n">deterministic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-659"><a id="__codelineno-0-659" name="__codelineno-0-659"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_dim&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-660"><a id="__codelineno-0-660" name="__codelineno-0-660"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Forward pass through the FHNN hyperbolic linear layer.</span>
+</span><span id="__span-0-661"><a id="__codelineno-0-661" name="__codelineno-0-661"></a>
+</span><span id="__span-0-662"><a id="__codelineno-0-662" name="__codelineno-0-662"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-663"><a id="__codelineno-0-663" name="__codelineno-0-663"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-664"><a id="__codelineno-0-664" name="__codelineno-0-664"></a><span class="sd">    x : Array of shape (batch, in_dim)</span>
+</span><span id="__span-0-665"><a id="__codelineno-0-665" name="__codelineno-0-665"></a><span class="sd">        Input tensor. x.shape[-1] must equal self.in_dim.</span>
+</span><span id="__span-0-666"><a id="__codelineno-0-666" name="__codelineno-0-666"></a><span class="sd">    c : float</span>
+</span><span id="__span-0-667"><a id="__codelineno-0-667" name="__codelineno-0-667"></a><span class="sd">        Manifold curvature (default: 1.0)</span>
+</span><span id="__span-0-668"><a id="__codelineno-0-668" name="__codelineno-0-668"></a><span class="sd">    deterministic : bool</span>
+</span><span id="__span-0-669"><a id="__codelineno-0-669" name="__codelineno-0-669"></a><span class="sd">        If True, dropout is disabled (default: True).</span>
+</span><span id="__span-0-670"><a id="__codelineno-0-670" name="__codelineno-0-670"></a>
+</span><span id="__span-0-671"><a id="__codelineno-0-671" name="__codelineno-0-671"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-672"><a id="__codelineno-0-672" name="__codelineno-0-672"></a><span class="sd">    -------</span>
+</span><span id="__span-0-673"><a id="__codelineno-0-673" name="__codelineno-0-673"></a><span class="sd">    res : Array of shape (batch, out_dim)</span>
+</span><span id="__span-0-674"><a id="__codelineno-0-674" name="__codelineno-0-674"></a><span class="sd">        Output on the Hyperboloid manifold</span>
+</span><span id="__span-0-675"><a id="__codelineno-0-675" name="__codelineno-0-675"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-676"><a id="__codelineno-0-676" name="__codelineno-0-676"></a>    <span class="c1"># Build dropout closure for the pure function</span>
+</span><span id="__span-0-677"><a id="__codelineno-0-677" name="__codelineno-0-677"></a>    <span class="n">dropout_module</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span>
+</span><span id="__span-0-678"><a id="__codelineno-0-678" name="__codelineno-0-678"></a>    <span class="k">if</span> <span class="n">dropout_module</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-679"><a id="__codelineno-0-679" name="__codelineno-0-679"></a>        <span class="n">dropout_fn</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">z</span><span class="p">:</span> <span class="n">dropout_module</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">deterministic</span><span class="o">=</span><span class="n">deterministic</span><span class="p">)</span>  <span class="c1"># noqa: E731</span>
+</span><span id="__span-0-680"><a id="__codelineno-0-680" name="__codelineno-0-680"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-0-681"><a id="__codelineno-0-681" name="__codelineno-0-681"></a>        <span class="n">dropout_fn</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-682"><a id="__codelineno-0-682" name="__codelineno-0-682"></a>
+</span><span id="__span-0-683"><a id="__codelineno-0-683" name="__codelineno-0-683"></a>    <span class="k">return</span> <span class="n">_fhnn_forward</span><span class="p">(</span>
+</span><span id="__span-0-684"><a id="__codelineno-0-684" name="__codelineno-0-684"></a>        <span class="n">x</span><span class="p">,</span>
+</span><span id="__span-0-685"><a id="__codelineno-0-685" name="__codelineno-0-685"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
+</span><span id="__span-0-686"><a id="__codelineno-0-686" name="__codelineno-0-686"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
+</span><span id="__span-0-687"><a id="__codelineno-0-687" name="__codelineno-0-687"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span>
+</span><span id="__span-0-688"><a id="__codelineno-0-688" name="__codelineno-0-688"></a>        <span class="n">c</span><span class="p">,</span>
+</span><span id="__span-0-689"><a id="__codelineno-0-689" name="__codelineno-0-689"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span><span class="p">,</span>
+</span><span id="__span-0-690"><a id="__codelineno-0-690" name="__codelineno-0-690"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span>
+</span><span id="__span-0-691"><a id="__codelineno-0-691" name="__codelineno-0-691"></a>        <span class="n">dropout_fn</span><span class="p">,</span>
+</span><span id="__span-0-692"><a id="__codelineno-0-692" name="__codelineno-0-692"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">scale</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
+</span><span id="__span-0-693"><a id="__codelineno-0-693" name="__codelineno-0-693"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">,</span>
+</span><span id="__span-0-694"><a id="__codelineno-0-694" name="__codelineno-0-694"></a>    <span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5004,10 +5004,7 @@ Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-758">758</a></span>
-<span class="normal"><a href="#__codelineno-0-759">759</a></span>
-<span class="normal"><a href="#__codelineno-0-760">760</a></span>
-<span class="normal"><a href="#__codelineno-0-761">761</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-761">761</a></span>
 <span class="normal"><a href="#__codelineno-0-762">762</a></span>
 <span class="normal"><a href="#__codelineno-0-763">763</a></span>
 <span class="normal"><a href="#__codelineno-0-764">764</a></span>
@@ -5043,46 +5040,49 @@ Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++
 <span class="normal"><a href="#__codelineno-0-794">794</a></span>
 <span class="normal"><a href="#__codelineno-0-795">795</a></span>
 <span class="normal"><a href="#__codelineno-0-796">796</a></span>
-<span class="normal"><a href="#__codelineno-0-797">797</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-758"><a id="__codelineno-0-758" name="__codelineno-0-758"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-759"><a id="__codelineno-0-759" name="__codelineno-0-759"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-760"><a id="__codelineno-0-760" name="__codelineno-0-760"></a>    <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Hyperboloid</span><span class="p">,</span>
-</span><span id="__span-0-761"><a id="__codelineno-0-761" name="__codelineno-0-761"></a>    <span class="n">in_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-762"><a id="__codelineno-0-762" name="__codelineno-0-762"></a>    <span class="n">out_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-763"><a id="__codelineno-0-763" name="__codelineno-0-763"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-764"><a id="__codelineno-0-764" name="__codelineno-0-764"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-765"><a id="__codelineno-0-765" name="__codelineno-0-765"></a>    <span class="n">input_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;manifold&quot;</span><span class="p">,</span>
-</span><span id="__span-0-766"><a id="__codelineno-0-766" name="__codelineno-0-766"></a>    <span class="n">v_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">10.0</span><span class="p">,</span>
-</span><span id="__span-0-767"><a id="__codelineno-0-767" name="__codelineno-0-767"></a>    <span class="n">use_gyro_bias</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-0-768"><a id="__codelineno-0-768" name="__codelineno-0-768"></a>    <span class="n">kernel_init_std</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.02</span><span class="p">,</span>
-</span><span id="__span-0-769"><a id="__codelineno-0-769" name="__codelineno-0-769"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-770"><a id="__codelineno-0-770" name="__codelineno-0-770"></a><span class="p">):</span>
-</span><span id="__span-0-771"><a id="__codelineno-0-771" name="__codelineno-0-771"></a>    <span class="k">if</span> <span class="n">input_space</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;tangent&quot;</span><span class="p">,</span> <span class="s2">&quot;manifold&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-772"><a id="__codelineno-0-772" name="__codelineno-0-772"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;input_space must be either &#39;tangent&#39; or &#39;manifold&#39;, got &#39;</span><span class="si">{</span><span class="n">input_space</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
-</span><span id="__span-0-773"><a id="__codelineno-0-773" name="__codelineno-0-773"></a>
-</span><span id="__span-0-774"><a id="__codelineno-0-774" name="__codelineno-0-774"></a>    <span class="c1"># Static configuration (treated as compile-time constants for JIT)</span>
-</span><span id="__span-0-775"><a id="__codelineno-0-775" name="__codelineno-0-775"></a>    <span class="n">required_methods</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;expmap_0&quot;</span><span class="p">,</span> <span class="s2">&quot;compute_mlr&quot;</span><span class="p">)</span>
-</span><span id="__span-0-776"><a id="__codelineno-0-776" name="__codelineno-0-776"></a>    <span class="k">if</span> <span class="n">use_gyro_bias</span><span class="p">:</span>
-</span><span id="__span-0-777"><a id="__codelineno-0-777" name="__codelineno-0-777"></a>        <span class="n">required_methods</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;expmap_0&quot;</span><span class="p">,</span> <span class="s2">&quot;compute_mlr&quot;</span><span class="p">,</span> <span class="s2">&quot;embed_spatial_0&quot;</span><span class="p">,</span> <span class="s2">&quot;addition&quot;</span><span class="p">)</span>
-</span><span id="__span-0-778"><a id="__codelineno-0-778" name="__codelineno-0-778"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">required_methods</span><span class="p">)</span>
-</span><span id="__span-0-779"><a id="__codelineno-0-779" name="__codelineno-0-779"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">manifold_module</span>
-</span><span id="__span-0-780"><a id="__codelineno-0-780" name="__codelineno-0-780"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">in_dim</span> <span class="o">=</span> <span class="n">in_dim</span>
-</span><span id="__span-0-781"><a id="__codelineno-0-781" name="__codelineno-0-781"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">out_dim</span> <span class="o">=</span> <span class="n">out_dim</span>
-</span><span id="__span-0-782"><a id="__codelineno-0-782" name="__codelineno-0-782"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span> <span class="o">=</span> <span class="n">input_space</span>
-</span><span id="__span-0-783"><a id="__codelineno-0-783" name="__codelineno-0-783"></a>    <span class="n">_assert_v_max_safe</span><span class="p">(</span><span class="n">v_max</span><span class="p">)</span>
-</span><span id="__span-0-784"><a id="__codelineno-0-784" name="__codelineno-0-784"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">v_max</span> <span class="o">=</span> <span class="n">v_max</span>
-</span><span id="__span-0-785"><a id="__codelineno-0-785" name="__codelineno-0-785"></a>
-</span><span id="__span-0-786"><a id="__codelineno-0-786" name="__codelineno-0-786"></a>    <span class="c1"># Trainable parameters — small normal init (Shi et al. 2026 PLFC reference)</span>
-</span><span id="__span-0-787"><a id="__codelineno-0-787" name="__codelineno-0-787"></a>    <span class="n">in_spatial</span> <span class="o">=</span> <span class="n">in_dim</span> <span class="o">-</span> <span class="mi">1</span>
-</span><span id="__span-0-788"><a id="__codelineno-0-788" name="__codelineno-0-788"></a>    <span class="n">out_spatial</span> <span class="o">=</span> <span class="n">out_dim</span> <span class="o">-</span> <span class="mi">1</span>
-</span><span id="__span-0-789"><a id="__codelineno-0-789" name="__codelineno-0-789"></a>    <span class="n">kernel_init</span> <span class="o">=</span> <span class="n">kernel_init_std</span> <span class="o">*</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="p">(</span><span class="n">out_spatial</span><span class="p">,</span> <span class="n">in_spatial</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">)</span>
-</span><span id="__span-0-790"><a id="__codelineno-0-790" name="__codelineno-0-790"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">kernel_init</span><span class="p">)</span>
-</span><span id="__span-0-791"><a id="__codelineno-0-791" name="__codelineno-0-791"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">out_spatial</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
-</span><span id="__span-0-792"><a id="__codelineno-0-792" name="__codelineno-0-792"></a>
-</span><span id="__span-0-793"><a id="__codelineno-0-793" name="__codelineno-0-793"></a>    <span class="c1"># Gyro-bias: spatial tangent vector at the origin, zero-initialized</span>
-</span><span id="__span-0-794"><a id="__codelineno-0-794" name="__codelineno-0-794"></a>    <span class="k">if</span> <span class="n">use_gyro_bias</span><span class="p">:</span>
-</span><span id="__span-0-795"><a id="__codelineno-0-795" name="__codelineno-0-795"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">gyro_bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">out_spatial</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
-</span><span id="__span-0-796"><a id="__codelineno-0-796" name="__codelineno-0-796"></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-797"><a id="__codelineno-0-797" name="__codelineno-0-797"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">gyro_bias</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="normal"><a href="#__codelineno-0-797">797</a></span>
+<span class="normal"><a href="#__codelineno-0-798">798</a></span>
+<span class="normal"><a href="#__codelineno-0-799">799</a></span>
+<span class="normal"><a href="#__codelineno-0-800">800</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-761"><a id="__codelineno-0-761" name="__codelineno-0-761"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-762"><a id="__codelineno-0-762" name="__codelineno-0-762"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-763"><a id="__codelineno-0-763" name="__codelineno-0-763"></a>    <span class="n">manifold_module</span><span class="p">:</span> <span class="n">Hyperboloid</span><span class="p">,</span>
+</span><span id="__span-0-764"><a id="__codelineno-0-764" name="__codelineno-0-764"></a>    <span class="n">in_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-765"><a id="__codelineno-0-765" name="__codelineno-0-765"></a>    <span class="n">out_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-766"><a id="__codelineno-0-766" name="__codelineno-0-766"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-767"><a id="__codelineno-0-767" name="__codelineno-0-767"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-768"><a id="__codelineno-0-768" name="__codelineno-0-768"></a>    <span class="n">input_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;manifold&quot;</span><span class="p">,</span>
+</span><span id="__span-0-769"><a id="__codelineno-0-769" name="__codelineno-0-769"></a>    <span class="n">v_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">10.0</span><span class="p">,</span>
+</span><span id="__span-0-770"><a id="__codelineno-0-770" name="__codelineno-0-770"></a>    <span class="n">use_gyro_bias</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-771"><a id="__codelineno-0-771" name="__codelineno-0-771"></a>    <span class="n">kernel_init_std</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.02</span><span class="p">,</span>
+</span><span id="__span-0-772"><a id="__codelineno-0-772" name="__codelineno-0-772"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-773"><a id="__codelineno-0-773" name="__codelineno-0-773"></a><span class="p">):</span>
+</span><span id="__span-0-774"><a id="__codelineno-0-774" name="__codelineno-0-774"></a>    <span class="k">if</span> <span class="n">input_space</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;tangent&quot;</span><span class="p">,</span> <span class="s2">&quot;manifold&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-775"><a id="__codelineno-0-775" name="__codelineno-0-775"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;input_space must be either &#39;tangent&#39; or &#39;manifold&#39;, got &#39;</span><span class="si">{</span><span class="n">input_space</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+</span><span id="__span-0-776"><a id="__codelineno-0-776" name="__codelineno-0-776"></a>
+</span><span id="__span-0-777"><a id="__codelineno-0-777" name="__codelineno-0-777"></a>    <span class="c1"># Static configuration (treated as compile-time constants for JIT)</span>
+</span><span id="__span-0-778"><a id="__codelineno-0-778" name="__codelineno-0-778"></a>    <span class="n">required_methods</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;expmap_0&quot;</span><span class="p">,</span> <span class="s2">&quot;compute_mlr&quot;</span><span class="p">)</span>
+</span><span id="__span-0-779"><a id="__codelineno-0-779" name="__codelineno-0-779"></a>    <span class="k">if</span> <span class="n">use_gyro_bias</span><span class="p">:</span>
+</span><span id="__span-0-780"><a id="__codelineno-0-780" name="__codelineno-0-780"></a>        <span class="n">required_methods</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;expmap_0&quot;</span><span class="p">,</span> <span class="s2">&quot;compute_mlr&quot;</span><span class="p">,</span> <span class="s2">&quot;embed_spatial_0&quot;</span><span class="p">,</span> <span class="s2">&quot;addition&quot;</span><span class="p">)</span>
+</span><span id="__span-0-781"><a id="__codelineno-0-781" name="__codelineno-0-781"></a>    <span class="n">validate_hyperboloid_manifold</span><span class="p">(</span><span class="n">manifold_module</span><span class="p">,</span> <span class="n">required_methods</span><span class="o">=</span><span class="n">required_methods</span><span class="p">)</span>
+</span><span id="__span-0-782"><a id="__codelineno-0-782" name="__codelineno-0-782"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">manifold_module</span>
+</span><span id="__span-0-783"><a id="__codelineno-0-783" name="__codelineno-0-783"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">in_dim</span> <span class="o">=</span> <span class="n">in_dim</span>
+</span><span id="__span-0-784"><a id="__codelineno-0-784" name="__codelineno-0-784"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">out_dim</span> <span class="o">=</span> <span class="n">out_dim</span>
+</span><span id="__span-0-785"><a id="__codelineno-0-785" name="__codelineno-0-785"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span> <span class="o">=</span> <span class="n">input_space</span>
+</span><span id="__span-0-786"><a id="__codelineno-0-786" name="__codelineno-0-786"></a>    <span class="n">_assert_v_max_safe</span><span class="p">(</span><span class="n">v_max</span><span class="p">)</span>
+</span><span id="__span-0-787"><a id="__codelineno-0-787" name="__codelineno-0-787"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">v_max</span> <span class="o">=</span> <span class="n">v_max</span>
+</span><span id="__span-0-788"><a id="__codelineno-0-788" name="__codelineno-0-788"></a>
+</span><span id="__span-0-789"><a id="__codelineno-0-789" name="__codelineno-0-789"></a>    <span class="c1"># Trainable parameters — small normal init (Shi et al. 2026 PLFC reference)</span>
+</span><span id="__span-0-790"><a id="__codelineno-0-790" name="__codelineno-0-790"></a>    <span class="n">in_spatial</span> <span class="o">=</span> <span class="n">in_dim</span> <span class="o">-</span> <span class="mi">1</span>
+</span><span id="__span-0-791"><a id="__codelineno-0-791" name="__codelineno-0-791"></a>    <span class="n">out_spatial</span> <span class="o">=</span> <span class="n">out_dim</span> <span class="o">-</span> <span class="mi">1</span>
+</span><span id="__span-0-792"><a id="__codelineno-0-792" name="__codelineno-0-792"></a>    <span class="n">kernel_init</span> <span class="o">=</span> <span class="n">kernel_init_std</span> <span class="o">*</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="p">(</span><span class="n">out_spatial</span><span class="p">,</span> <span class="n">in_spatial</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">)</span>
+</span><span id="__span-0-793"><a id="__codelineno-0-793" name="__codelineno-0-793"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">kernel_init</span><span class="p">)</span>
+</span><span id="__span-0-794"><a id="__codelineno-0-794" name="__codelineno-0-794"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">out_spatial</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
+</span><span id="__span-0-795"><a id="__codelineno-0-795" name="__codelineno-0-795"></a>
+</span><span id="__span-0-796"><a id="__codelineno-0-796" name="__codelineno-0-796"></a>    <span class="c1"># Gyro-bias: spatial tangent vector at the origin, zero-initialized</span>
+</span><span id="__span-0-797"><a id="__codelineno-0-797" name="__codelineno-0-797"></a>    <span class="k">if</span> <span class="n">use_gyro_bias</span><span class="p">:</span>
+</span><span id="__span-0-798"><a id="__codelineno-0-798" name="__codelineno-0-798"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">gyro_bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">out_spatial</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
+</span><span id="__span-0-799"><a id="__codelineno-0-799" name="__codelineno-0-799"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-0-800"><a id="__codelineno-0-800" name="__codelineno-0-800"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">gyro_bias</span> <span class="o">=</span> <span class="kc">None</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -5189,10 +5189,7 @@ Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-799">799</a></span>
-<span class="normal"><a href="#__codelineno-0-800">800</a></span>
-<span class="normal"><a href="#__codelineno-0-801">801</a></span>
-<span class="normal"><a href="#__codelineno-0-802">802</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-802">802</a></span>
 <span class="normal"><a href="#__codelineno-0-803">803</a></span>
 <span class="normal"><a href="#__codelineno-0-804">804</a></span>
 <span class="normal"><a href="#__codelineno-0-805">805</a></span>
@@ -5218,36 +5215,39 @@ Shimizu Ryohei, Yusuke Mukuta, and Tatsuya Harada. "Hyperbolic neural networks++
 <span class="normal"><a href="#__codelineno-0-825">825</a></span>
 <span class="normal"><a href="#__codelineno-0-826">826</a></span>
 <span class="normal"><a href="#__codelineno-0-827">827</a></span>
-<span class="normal"><a href="#__codelineno-0-828">828</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-799"><a id="__codelineno-0-799" name="__codelineno-0-799"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
-</span><span id="__span-0-800"><a id="__codelineno-0-800" name="__codelineno-0-800"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-801"><a id="__codelineno-0-801" name="__codelineno-0-801"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_dim&quot;</span><span class="p">],</span>
-</span><span id="__span-0-802"><a id="__codelineno-0-802" name="__codelineno-0-802"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-803"><a id="__codelineno-0-803" name="__codelineno-0-803"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_dim&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-804"><a id="__codelineno-0-804" name="__codelineno-0-804"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="__span-0-805"><a id="__codelineno-0-805" name="__codelineno-0-805"></a><span class="sd">    Forward pass through the PLFC hyperboloid linear layer.</span>
-</span><span id="__span-0-806"><a id="__codelineno-0-806" name="__codelineno-0-806"></a>
-</span><span id="__span-0-807"><a id="__codelineno-0-807" name="__codelineno-0-807"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-808"><a id="__codelineno-0-808" name="__codelineno-0-808"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-809"><a id="__codelineno-0-809" name="__codelineno-0-809"></a><span class="sd">    x : Array of shape (batch, in_dim)</span>
-</span><span id="__span-0-810"><a id="__codelineno-0-810" name="__codelineno-0-810"></a><span class="sd">        Input tensor. x.shape[-1] must equal self.in_dim.</span>
-</span><span id="__span-0-811"><a id="__codelineno-0-811" name="__codelineno-0-811"></a><span class="sd">    c : float</span>
-</span><span id="__span-0-812"><a id="__codelineno-0-812" name="__codelineno-0-812"></a><span class="sd">        Manifold curvature (default: 1.0)</span>
-</span><span id="__span-0-813"><a id="__codelineno-0-813" name="__codelineno-0-813"></a>
-</span><span id="__span-0-814"><a id="__codelineno-0-814" name="__codelineno-0-814"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-815"><a id="__codelineno-0-815" name="__codelineno-0-815"></a><span class="sd">    -------</span>
-</span><span id="__span-0-816"><a id="__codelineno-0-816" name="__codelineno-0-816"></a><span class="sd">    res : Array of shape (batch, out_dim)</span>
-</span><span id="__span-0-817"><a id="__codelineno-0-817" name="__codelineno-0-817"></a><span class="sd">        Output on the Hyperboloid manifold</span>
-</span><span id="__span-0-818"><a id="__codelineno-0-818" name="__codelineno-0-818"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-819"><a id="__codelineno-0-819" name="__codelineno-0-819"></a>    <span class="k">return</span> <span class="n">_hyperboloid_plfc_forward</span><span class="p">(</span>
-</span><span id="__span-0-820"><a id="__codelineno-0-820" name="__codelineno-0-820"></a>        <span class="n">x</span><span class="p">,</span>
-</span><span id="__span-0-821"><a id="__codelineno-0-821" name="__codelineno-0-821"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
-</span><span id="__span-0-822"><a id="__codelineno-0-822" name="__codelineno-0-822"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
-</span><span id="__span-0-823"><a id="__codelineno-0-823" name="__codelineno-0-823"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">gyro_bias</span><span class="p">[</span><span class="o">...</span><span class="p">]</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">gyro_bias</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-824"><a id="__codelineno-0-824" name="__codelineno-0-824"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span>
-</span><span id="__span-0-825"><a id="__codelineno-0-825" name="__codelineno-0-825"></a>        <span class="n">c</span><span class="p">,</span>
-</span><span id="__span-0-826"><a id="__codelineno-0-826" name="__codelineno-0-826"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span><span class="p">,</span>
-</span><span id="__span-0-827"><a id="__codelineno-0-827" name="__codelineno-0-827"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">v_max</span><span class="p">,</span>
-</span><span id="__span-0-828"><a id="__codelineno-0-828" name="__codelineno-0-828"></a>    <span class="p">)</span>
+<span class="normal"><a href="#__codelineno-0-828">828</a></span>
+<span class="normal"><a href="#__codelineno-0-829">829</a></span>
+<span class="normal"><a href="#__codelineno-0-830">830</a></span>
+<span class="normal"><a href="#__codelineno-0-831">831</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-802"><a id="__codelineno-0-802" name="__codelineno-0-802"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
+</span><span id="__span-0-803"><a id="__codelineno-0-803" name="__codelineno-0-803"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-804"><a id="__codelineno-0-804" name="__codelineno-0-804"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_dim&quot;</span><span class="p">],</span>
+</span><span id="__span-0-805"><a id="__codelineno-0-805" name="__codelineno-0-805"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-806"><a id="__codelineno-0-806" name="__codelineno-0-806"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_dim&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-807"><a id="__codelineno-0-807" name="__codelineno-0-807"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="__span-0-808"><a id="__codelineno-0-808" name="__codelineno-0-808"></a><span class="sd">    Forward pass through the PLFC hyperboloid linear layer.</span>
+</span><span id="__span-0-809"><a id="__codelineno-0-809" name="__codelineno-0-809"></a>
+</span><span id="__span-0-810"><a id="__codelineno-0-810" name="__codelineno-0-810"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-811"><a id="__codelineno-0-811" name="__codelineno-0-811"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-812"><a id="__codelineno-0-812" name="__codelineno-0-812"></a><span class="sd">    x : Array of shape (batch, in_dim)</span>
+</span><span id="__span-0-813"><a id="__codelineno-0-813" name="__codelineno-0-813"></a><span class="sd">        Input tensor. x.shape[-1] must equal self.in_dim.</span>
+</span><span id="__span-0-814"><a id="__codelineno-0-814" name="__codelineno-0-814"></a><span class="sd">    c : float</span>
+</span><span id="__span-0-815"><a id="__codelineno-0-815" name="__codelineno-0-815"></a><span class="sd">        Manifold curvature (default: 1.0)</span>
+</span><span id="__span-0-816"><a id="__codelineno-0-816" name="__codelineno-0-816"></a>
+</span><span id="__span-0-817"><a id="__codelineno-0-817" name="__codelineno-0-817"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-818"><a id="__codelineno-0-818" name="__codelineno-0-818"></a><span class="sd">    -------</span>
+</span><span id="__span-0-819"><a id="__codelineno-0-819" name="__codelineno-0-819"></a><span class="sd">    res : Array of shape (batch, out_dim)</span>
+</span><span id="__span-0-820"><a id="__codelineno-0-820" name="__codelineno-0-820"></a><span class="sd">        Output on the Hyperboloid manifold</span>
+</span><span id="__span-0-821"><a id="__codelineno-0-821" name="__codelineno-0-821"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-822"><a id="__codelineno-0-822" name="__codelineno-0-822"></a>    <span class="k">return</span> <span class="n">_hyperboloid_plfc_forward</span><span class="p">(</span>
+</span><span id="__span-0-823"><a id="__codelineno-0-823" name="__codelineno-0-823"></a>        <span class="n">x</span><span class="p">,</span>
+</span><span id="__span-0-824"><a id="__codelineno-0-824" name="__codelineno-0-824"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
+</span><span id="__span-0-825"><a id="__codelineno-0-825" name="__codelineno-0-825"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
+</span><span id="__span-0-826"><a id="__codelineno-0-826" name="__codelineno-0-826"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">gyro_bias</span><span class="p">[</span><span class="o">...</span><span class="p">]</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">gyro_bias</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-827"><a id="__codelineno-0-827" name="__codelineno-0-827"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span><span class="p">,</span>
+</span><span id="__span-0-828"><a id="__codelineno-0-828" name="__codelineno-0-828"></a>        <span class="n">c</span><span class="p">,</span>
+</span><span id="__span-0-829"><a id="__codelineno-0-829" name="__codelineno-0-829"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">input_space</span><span class="p">,</span>
+</span><span id="__span-0-830"><a id="__codelineno-0-830" name="__codelineno-0-830"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">v_max</span><span class="p">,</span>
+</span><span id="__span-0-831"><a id="__codelineno-0-831" name="__codelineno-0-831"></a>    <span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -5932,10 +5932,7 @@ input array's dtype (the parameters are cast to it).</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1081">1081</a></span>
-<span class="normal"><a href="#__codelineno-0-1082">1082</a></span>
-<span class="normal"><a href="#__codelineno-0-1083">1083</a></span>
-<span class="normal"><a href="#__codelineno-0-1084">1084</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1084">1084</a></span>
 <span class="normal"><a href="#__codelineno-0-1085">1085</a></span>
 <span class="normal"><a href="#__codelineno-0-1086">1086</a></span>
 <span class="normal"><a href="#__codelineno-0-1087">1087</a></span>
@@ -5971,46 +5968,49 @@ input array's dtype (the parameters are cast to it).</p>
 <span class="normal"><a href="#__codelineno-0-1117">1117</a></span>
 <span class="normal"><a href="#__codelineno-0-1118">1118</a></span>
 <span class="normal"><a href="#__codelineno-0-1119">1119</a></span>
-<span class="normal"><a href="#__codelineno-0-1120">1120</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1081"><a id="__codelineno-0-1081" name="__codelineno-0-1081"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-1082"><a id="__codelineno-0-1082" name="__codelineno-0-1082"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-1083"><a id="__codelineno-0-1083" name="__codelineno-0-1083"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-1084"><a id="__codelineno-0-1084" name="__codelineno-0-1084"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-1085"><a id="__codelineno-0-1085" name="__codelineno-0-1085"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-1086"><a id="__codelineno-0-1086" name="__codelineno-0-1086"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-1087"><a id="__codelineno-0-1087" name="__codelineno-0-1087"></a>    <span class="n">activation</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">],</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-1088"><a id="__codelineno-0-1088" name="__codelineno-0-1088"></a>    <span class="n">reset_params</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;fan_out&quot;</span><span class="p">,</span>
-</span><span id="__span-0-1089"><a id="__codelineno-0-1089" name="__codelineno-0-1089"></a>    <span class="n">use_weight_norm</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-0-1090"><a id="__codelineno-0-1090" name="__codelineno-0-1090"></a>    <span class="n">init_bias</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
-</span><span id="__span-0-1091"><a id="__codelineno-0-1091" name="__codelineno-0-1091"></a>    <span class="n">gain</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-1092"><a id="__codelineno-0-1092" name="__codelineno-0-1092"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
-</span><span id="__span-0-1093"><a id="__codelineno-0-1093" name="__codelineno-0-1093"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-1094"><a id="__codelineno-0-1094" name="__codelineno-0-1094"></a><span class="p">):</span>
-</span><span id="__span-0-1095"><a id="__codelineno-0-1095" name="__codelineno-0-1095"></a>    <span class="n">in_spatial</span> <span class="o">=</span> <span class="n">in_features</span> <span class="o">-</span> <span class="mi">1</span>  <span class="c1"># I</span>
-</span><span id="__span-0-1096"><a id="__codelineno-0-1096" name="__codelineno-0-1096"></a>    <span class="n">out_spatial</span> <span class="o">=</span> <span class="n">out_features</span> <span class="o">-</span> <span class="mi">1</span>  <span class="c1"># O</span>
-</span><span id="__span-0-1097"><a id="__codelineno-0-1097" name="__codelineno-0-1097"></a>
-</span><span id="__span-0-1098"><a id="__codelineno-0-1098" name="__codelineno-0-1098"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">in_features</span> <span class="o">=</span> <span class="n">in_features</span>
-</span><span id="__span-0-1099"><a id="__codelineno-0-1099" name="__codelineno-0-1099"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">out_features</span> <span class="o">=</span> <span class="n">out_features</span>
-</span><span id="__span-0-1100"><a id="__codelineno-0-1100" name="__codelineno-0-1100"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
-</span><span id="__span-0-1101"><a id="__codelineno-0-1101" name="__codelineno-0-1101"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">use_weight_norm</span> <span class="o">=</span> <span class="n">use_weight_norm</span>
-</span><span id="__span-0-1102"><a id="__codelineno-0-1102" name="__codelineno-0-1102"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
-</span><span id="__span-0-1103"><a id="__codelineno-0-1103" name="__codelineno-0-1103"></a>
-</span><span id="__span-0-1104"><a id="__codelineno-0-1104" name="__codelineno-0-1104"></a>    <span class="c1"># Euclidean weight U (I, O). Default &quot;fan_out&quot; std sqrt(1/out_spatial) is</span>
-</span><span id="__span-0-1105"><a id="__codelineno-0-1105" name="__codelineno-0-1105"></a>    <span class="c1"># norm-preserving; gain scales the random init (no-op for &quot;eye&quot;).</span>
-</span><span id="__span-0-1106"><a id="__codelineno-0-1106" name="__codelineno-0-1106"></a>    <span class="n">U_init</span> <span class="o">=</span> <span class="n">_fgg_weight_init</span><span class="p">(</span>
-</span><span id="__span-0-1107"><a id="__codelineno-0-1107" name="__codelineno-0-1107"></a>        <span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="n">in_spatial</span><span class="p">,</span> <span class="n">out_spatial</span><span class="p">,</span> <span class="n">in_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">,</span> <span class="n">reset_params</span><span class="p">,</span> <span class="n">param_dtype</span><span class="p">,</span> <span class="n">gain</span><span class="o">=</span><span class="n">gain</span>
-</span><span id="__span-0-1108"><a id="__codelineno-0-1108" name="__codelineno-0-1108"></a>    <span class="p">)</span>
-</span><span id="__span-0-1109"><a id="__codelineno-0-1109" name="__codelineno-0-1109"></a>
-</span><span id="__span-0-1110"><a id="__codelineno-0-1110" name="__codelineno-0-1110"></a>    <span class="c1"># Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||</span>
-</span><span id="__span-0-1111"><a id="__codelineno-0-1111" name="__codelineno-0-1111"></a>    <span class="k">if</span> <span class="n">use_weight_norm</span><span class="p">:</span>
-</span><span id="__span-0-1112"><a id="__codelineno-0-1112" name="__codelineno-0-1112"></a>        <span class="c1"># Reference: kernel_dir from reset_params (normalized in forward), kernel_scale fixed magnitude</span>
-</span><span id="__span-0-1113"><a id="__codelineno-0-1113" name="__codelineno-0-1113"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel_dir</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">U_init</span><span class="p">)</span>  <span class="c1"># (I, O) direction</span>
-</span><span id="__span-0-1114"><a id="__codelineno-0-1114" name="__codelineno-0-1114"></a>        <span class="n">g_init_val</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="p">(</span><span class="n">in_features</span> <span class="o">+</span> <span class="n">out_features</span><span class="p">))</span>
-</span><span id="__span-0-1115"><a id="__codelineno-0-1115" name="__codelineno-0-1115"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel_scale</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">out_spatial</span><span class="p">,),</span> <span class="n">g_init_val</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>  <span class="c1"># (O,)</span>
-</span><span id="__span-0-1116"><a id="__codelineno-0-1116" name="__codelineno-0-1116"></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-1117"><a id="__codelineno-0-1117" name="__codelineno-0-1117"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">U_init</span><span class="p">)</span>  <span class="c1"># (I, O)</span>
-</span><span id="__span-0-1118"><a id="__codelineno-0-1118" name="__codelineno-0-1118"></a>
-</span><span id="__span-0-1119"><a id="__codelineno-0-1119" name="__codelineno-0-1119"></a>    <span class="c1"># Bias: init to init_bias</span>
-</span><span id="__span-0-1120"><a id="__codelineno-0-1120" name="__codelineno-0-1120"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">out_spatial</span><span class="p">,),</span> <span class="n">init_bias</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>  <span class="c1"># (O,)</span>
+<span class="normal"><a href="#__codelineno-0-1120">1120</a></span>
+<span class="normal"><a href="#__codelineno-0-1121">1121</a></span>
+<span class="normal"><a href="#__codelineno-0-1122">1122</a></span>
+<span class="normal"><a href="#__codelineno-0-1123">1123</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1084"><a id="__codelineno-0-1084" name="__codelineno-0-1084"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-1085"><a id="__codelineno-0-1085" name="__codelineno-0-1085"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-1086"><a id="__codelineno-0-1086" name="__codelineno-0-1086"></a>    <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-1087"><a id="__codelineno-0-1087" name="__codelineno-0-1087"></a>    <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-1088"><a id="__codelineno-0-1088" name="__codelineno-0-1088"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-1089"><a id="__codelineno-0-1089" name="__codelineno-0-1089"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-1090"><a id="__codelineno-0-1090" name="__codelineno-0-1090"></a>    <span class="n">activation</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">],</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-1091"><a id="__codelineno-0-1091" name="__codelineno-0-1091"></a>    <span class="n">reset_params</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;fan_out&quot;</span><span class="p">,</span>
+</span><span id="__span-0-1092"><a id="__codelineno-0-1092" name="__codelineno-0-1092"></a>    <span class="n">use_weight_norm</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-1093"><a id="__codelineno-0-1093" name="__codelineno-0-1093"></a>    <span class="n">init_bias</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+</span><span id="__span-0-1094"><a id="__codelineno-0-1094" name="__codelineno-0-1094"></a>    <span class="n">gain</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-1095"><a id="__codelineno-0-1095" name="__codelineno-0-1095"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
+</span><span id="__span-0-1096"><a id="__codelineno-0-1096" name="__codelineno-0-1096"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-1097"><a id="__codelineno-0-1097" name="__codelineno-0-1097"></a><span class="p">):</span>
+</span><span id="__span-0-1098"><a id="__codelineno-0-1098" name="__codelineno-0-1098"></a>    <span class="n">in_spatial</span> <span class="o">=</span> <span class="n">in_features</span> <span class="o">-</span> <span class="mi">1</span>  <span class="c1"># I</span>
+</span><span id="__span-0-1099"><a id="__codelineno-0-1099" name="__codelineno-0-1099"></a>    <span class="n">out_spatial</span> <span class="o">=</span> <span class="n">out_features</span> <span class="o">-</span> <span class="mi">1</span>  <span class="c1"># O</span>
+</span><span id="__span-0-1100"><a id="__codelineno-0-1100" name="__codelineno-0-1100"></a>
+</span><span id="__span-0-1101"><a id="__codelineno-0-1101" name="__codelineno-0-1101"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">in_features</span> <span class="o">=</span> <span class="n">in_features</span>
+</span><span id="__span-0-1102"><a id="__codelineno-0-1102" name="__codelineno-0-1102"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">out_features</span> <span class="o">=</span> <span class="n">out_features</span>
+</span><span id="__span-0-1103"><a id="__codelineno-0-1103" name="__codelineno-0-1103"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">activation</span> <span class="o">=</span> <span class="n">activation</span>
+</span><span id="__span-0-1104"><a id="__codelineno-0-1104" name="__codelineno-0-1104"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">use_weight_norm</span> <span class="o">=</span> <span class="n">use_weight_norm</span>
+</span><span id="__span-0-1105"><a id="__codelineno-0-1105" name="__codelineno-0-1105"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+</span><span id="__span-0-1106"><a id="__codelineno-0-1106" name="__codelineno-0-1106"></a>
+</span><span id="__span-0-1107"><a id="__codelineno-0-1107" name="__codelineno-0-1107"></a>    <span class="c1"># Euclidean weight U (I, O). Default &quot;fan_out&quot; std sqrt(1/out_spatial) is</span>
+</span><span id="__span-0-1108"><a id="__codelineno-0-1108" name="__codelineno-0-1108"></a>    <span class="c1"># norm-preserving; gain scales the random init (no-op for &quot;eye&quot;).</span>
+</span><span id="__span-0-1109"><a id="__codelineno-0-1109" name="__codelineno-0-1109"></a>    <span class="n">U_init</span> <span class="o">=</span> <span class="n">_fgg_weight_init</span><span class="p">(</span>
+</span><span id="__span-0-1110"><a id="__codelineno-0-1110" name="__codelineno-0-1110"></a>        <span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="n">in_spatial</span><span class="p">,</span> <span class="n">out_spatial</span><span class="p">,</span> <span class="n">in_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">,</span> <span class="n">reset_params</span><span class="p">,</span> <span class="n">param_dtype</span><span class="p">,</span> <span class="n">gain</span><span class="o">=</span><span class="n">gain</span>
+</span><span id="__span-0-1111"><a id="__codelineno-0-1111" name="__codelineno-0-1111"></a>    <span class="p">)</span>
+</span><span id="__span-0-1112"><a id="__codelineno-0-1112" name="__codelineno-0-1112"></a>
+</span><span id="__span-0-1113"><a id="__codelineno-0-1113" name="__codelineno-0-1113"></a>    <span class="c1"># Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||</span>
+</span><span id="__span-0-1114"><a id="__codelineno-0-1114" name="__codelineno-0-1114"></a>    <span class="k">if</span> <span class="n">use_weight_norm</span><span class="p">:</span>
+</span><span id="__span-0-1115"><a id="__codelineno-0-1115" name="__codelineno-0-1115"></a>        <span class="c1"># Reference: kernel_dir from reset_params (normalized in forward), kernel_scale fixed magnitude</span>
+</span><span id="__span-0-1116"><a id="__codelineno-0-1116" name="__codelineno-0-1116"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel_dir</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">U_init</span><span class="p">)</span>  <span class="c1"># (I, O) direction</span>
+</span><span id="__span-0-1117"><a id="__codelineno-0-1117" name="__codelineno-0-1117"></a>        <span class="n">g_init_val</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="p">(</span><span class="n">in_features</span> <span class="o">+</span> <span class="n">out_features</span><span class="p">))</span>
+</span><span id="__span-0-1118"><a id="__codelineno-0-1118" name="__codelineno-0-1118"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel_scale</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">out_spatial</span><span class="p">,),</span> <span class="n">g_init_val</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>  <span class="c1"># (O,)</span>
+</span><span id="__span-0-1119"><a id="__codelineno-0-1119" name="__codelineno-0-1119"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-0-1120"><a id="__codelineno-0-1120" name="__codelineno-0-1120"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">U_init</span><span class="p">)</span>  <span class="c1"># (I, O)</span>
+</span><span id="__span-0-1121"><a id="__codelineno-0-1121" name="__codelineno-0-1121"></a>
+</span><span id="__span-0-1122"><a id="__codelineno-0-1122" name="__codelineno-0-1122"></a>    <span class="c1"># Bias: init to init_bias</span>
+</span><span id="__span-0-1123"><a id="__codelineno-0-1123" name="__codelineno-0-1123"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">out_spatial</span><span class="p">,),</span> <span class="n">init_bias</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>  <span class="c1"># (O,)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -6119,10 +6119,7 @@ Ao = out_features (ambient dimension).</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_linear.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1132">1132</a></span>
-<span class="normal"><a href="#__codelineno-0-1133">1133</a></span>
-<span class="normal"><a href="#__codelineno-0-1134">1134</a></span>
-<span class="normal"><a href="#__codelineno-0-1135">1135</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1135">1135</a></span>
 <span class="normal"><a href="#__codelineno-0-1136">1136</a></span>
 <span class="normal"><a href="#__codelineno-0-1137">1137</a></span>
 <span class="normal"><a href="#__codelineno-0-1138">1138</a></span>
@@ -6141,29 +6138,32 @@ Ao = out_features (ambient dimension).</p>
 <span class="normal"><a href="#__codelineno-0-1151">1151</a></span>
 <span class="normal"><a href="#__codelineno-0-1152">1152</a></span>
 <span class="normal"><a href="#__codelineno-0-1153">1153</a></span>
-<span class="normal"><a href="#__codelineno-0-1154">1154</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1132"><a id="__codelineno-0-1132" name="__codelineno-0-1132"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
-</span><span id="__span-0-1133"><a id="__codelineno-0-1133" name="__codelineno-0-1133"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-1134"><a id="__codelineno-0-1134" name="__codelineno-0-1134"></a>    <span class="n">x_BAi</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_features&quot;</span><span class="p">],</span>
-</span><span id="__span-0-1135"><a id="__codelineno-0-1135" name="__codelineno-0-1135"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-1136"><a id="__codelineno-0-1136" name="__codelineno-0-1136"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_features&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-1137"><a id="__codelineno-0-1137" name="__codelineno-0-1137"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Forward pass through the FGG linear layer.</span>
-</span><span id="__span-0-1138"><a id="__codelineno-0-1138" name="__codelineno-0-1138"></a>
-</span><span id="__span-0-1139"><a id="__codelineno-0-1139" name="__codelineno-0-1139"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-1140"><a id="__codelineno-0-1140" name="__codelineno-0-1140"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-1141"><a id="__codelineno-0-1141" name="__codelineno-0-1141"></a><span class="sd">    x_BAi : Array, shape (B, Ai)</span>
-</span><span id="__span-0-1142"><a id="__codelineno-0-1142" name="__codelineno-0-1142"></a><span class="sd">        Input points on the hyperboloid with curvature ``c``.</span>
-</span><span id="__span-0-1143"><a id="__codelineno-0-1143" name="__codelineno-0-1143"></a><span class="sd">        Ai = in_features (ambient dimension).</span>
-</span><span id="__span-0-1144"><a id="__codelineno-0-1144" name="__codelineno-0-1144"></a><span class="sd">    c : float, optional</span>
-</span><span id="__span-0-1145"><a id="__codelineno-0-1145" name="__codelineno-0-1145"></a><span class="sd">        Curvature parameter (default: 1.0).</span>
-</span><span id="__span-0-1146"><a id="__codelineno-0-1146" name="__codelineno-0-1146"></a>
-</span><span id="__span-0-1147"><a id="__codelineno-0-1147" name="__codelineno-0-1147"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-1148"><a id="__codelineno-0-1148" name="__codelineno-0-1148"></a><span class="sd">    -------</span>
-</span><span id="__span-0-1149"><a id="__codelineno-0-1149" name="__codelineno-0-1149"></a><span class="sd">    y_BAo : Array, shape (B, Ao)</span>
-</span><span id="__span-0-1150"><a id="__codelineno-0-1150" name="__codelineno-0-1150"></a><span class="sd">        Output points on the hyperboloid with curvature ``c``.</span>
-</span><span id="__span-0-1151"><a id="__codelineno-0-1151" name="__codelineno-0-1151"></a><span class="sd">        Ao = out_features (ambient dimension).</span>
-</span><span id="__span-0-1152"><a id="__codelineno-0-1152" name="__codelineno-0-1152"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-1153"><a id="__codelineno-0-1153" name="__codelineno-0-1153"></a>    <span class="n">U_IO</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_kernel</span><span class="p">()</span>  <span class="c1"># (I, O)</span>
-</span><span id="__span-0-1154"><a id="__codelineno-0-1154" name="__codelineno-0-1154"></a>    <span class="k">return</span> <span class="n">_fgg_linear_forward</span><span class="p">(</span><span class="n">x_BAi</span><span class="p">,</span> <span class="n">U_IO</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">],</span> <span class="n">c</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-0-1154">1154</a></span>
+<span class="normal"><a href="#__codelineno-0-1155">1155</a></span>
+<span class="normal"><a href="#__codelineno-0-1156">1156</a></span>
+<span class="normal"><a href="#__codelineno-0-1157">1157</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1135"><a id="__codelineno-0-1135" name="__codelineno-0-1135"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
+</span><span id="__span-0-1136"><a id="__codelineno-0-1136" name="__codelineno-0-1136"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-1137"><a id="__codelineno-0-1137" name="__codelineno-0-1137"></a>    <span class="n">x_BAi</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_features&quot;</span><span class="p">],</span>
+</span><span id="__span-0-1138"><a id="__codelineno-0-1138" name="__codelineno-0-1138"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-1139"><a id="__codelineno-0-1139" name="__codelineno-0-1139"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch out_features&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-1140"><a id="__codelineno-0-1140" name="__codelineno-0-1140"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Forward pass through the FGG linear layer.</span>
+</span><span id="__span-0-1141"><a id="__codelineno-0-1141" name="__codelineno-0-1141"></a>
+</span><span id="__span-0-1142"><a id="__codelineno-0-1142" name="__codelineno-0-1142"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-1143"><a id="__codelineno-0-1143" name="__codelineno-0-1143"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-1144"><a id="__codelineno-0-1144" name="__codelineno-0-1144"></a><span class="sd">    x_BAi : Array, shape (B, Ai)</span>
+</span><span id="__span-0-1145"><a id="__codelineno-0-1145" name="__codelineno-0-1145"></a><span class="sd">        Input points on the hyperboloid with curvature ``c``.</span>
+</span><span id="__span-0-1146"><a id="__codelineno-0-1146" name="__codelineno-0-1146"></a><span class="sd">        Ai = in_features (ambient dimension).</span>
+</span><span id="__span-0-1147"><a id="__codelineno-0-1147" name="__codelineno-0-1147"></a><span class="sd">    c : float, optional</span>
+</span><span id="__span-0-1148"><a id="__codelineno-0-1148" name="__codelineno-0-1148"></a><span class="sd">        Curvature parameter (default: 1.0).</span>
+</span><span id="__span-0-1149"><a id="__codelineno-0-1149" name="__codelineno-0-1149"></a>
+</span><span id="__span-0-1150"><a id="__codelineno-0-1150" name="__codelineno-0-1150"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-1151"><a id="__codelineno-0-1151" name="__codelineno-0-1151"></a><span class="sd">    -------</span>
+</span><span id="__span-0-1152"><a id="__codelineno-0-1152" name="__codelineno-0-1152"></a><span class="sd">    y_BAo : Array, shape (B, Ao)</span>
+</span><span id="__span-0-1153"><a id="__codelineno-0-1153" name="__codelineno-0-1153"></a><span class="sd">        Output points on the hyperboloid with curvature ``c``.</span>
+</span><span id="__span-0-1154"><a id="__codelineno-0-1154" name="__codelineno-0-1154"></a><span class="sd">        Ao = out_features (ambient dimension).</span>
+</span><span id="__span-0-1155"><a id="__codelineno-0-1155" name="__codelineno-0-1155"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-1156"><a id="__codelineno-0-1156" name="__codelineno-0-1156"></a>    <span class="n">U_IO</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_kernel</span><span class="p">()</span>  <span class="c1"># (I, O)</span>
+</span><span id="__span-0-1157"><a id="__codelineno-0-1157" name="__codelineno-0-1157"></a>    <span class="k">return</span> <span class="n">_fgg_linear_forward</span><span class="p">(</span><span class="n">x_BAi</span><span class="p">,</span> <span class="n">U_IO</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">],</span> <span class="n">c</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>

@@ -1671,7 +1671,7 @@ nothing on a manifold.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix</span><span class="w"> </span><span class="kn">import</span> <span class="n">LearnableCurvature</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">Model</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">...</span><span class="p">):</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">):</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvature</span> <span class="o">=</span> <span class="n">LearnableCurvature</span><span class="p">(</span><span class="n">init_c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># raw is a plain nnx.Param</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>        <span class="o">...</span>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
@@ -1691,6 +1691,10 @@ them is just:</p>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">model</span> <span class="o">=</span> <span class="n">HypLinearPoincare</span><span class="p">(</span><span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span> <span class="n">in_dim</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">out_dim</span><span class="o">=</span><span class="mi">16</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="mf">1e-3</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
 </span></code></pre></div>
+<p>Pass the curvature you call the layer with to the constructor too
+(<code>curvature=0.1</code>, or a callable such as <code>lambda: self.curvature()</code> for
+learnable curvature). The optimizer's bias update uses it, not the call-time
+<code>c</code>.</p>
 <p>No manual tagging step is required for these built-in layers. If you're
 writing your <strong>own</strong> manifold-valued parameter instead — e.g. a hyperbolic
 embedding table — that's when you reach for <code>ManifoldParam</code> (or the
@@ -1759,8 +1763,8 @@ shift by one step.</p>
    nothing to do for them. The tag matters only when <em>you</em> add your own
    manifold-valued parameter (e.g. a hyperbolic embedding table stored as a
    plain <code>nnx.Param</code>): without <code>ManifoldParam</code> / <code>mark_manifold_param</code>,
-   <code>riemannian_adam</code> falls back to Euclidean Adam on it and the values drift
-   off the ball within a few steps.</li>
+   <code>riemannian_adam</code> falls back to Euclidean Adam on it: the update ignores
+   the ball's metric and can step the values off the ball.</li>
 <li><strong>Expecting <code>riemannian_adam</code> to need a separate optimizer for the
    Euclidean parts.</strong> It doesn't. One optimizer with <code>wrt=nnx.Param</code> handles
    everything; dispatch is via the <code>ManifoldParam</code> tag.</li>

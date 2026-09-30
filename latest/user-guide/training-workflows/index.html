@@ -1519,8 +1519,8 @@ call time, optionally project, and pick reasonable hyperparameters per
 manifold. This page shows a minimal working loop and lists the failures you'll
 actually hit.</p>
 <h2 id="minimal-training-loop">Minimal Training Loop<a class="headerlink" href="#minimal-training-loop" title="Permanent link">&para;</a></h2>
-<p>The following classifier trains on synthetic data and is verified to drop the
-loss from ~2.5 to &lt;0.05 in 200 steps. Copy, run, modify.</p>
+<p>The following classifier trains on synthetic data and drops the loss from
+~2.4 to ~0.25 in 200 steps (CPU run). Copy, run, modify.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">optax</span>
@@ -1637,18 +1637,18 @@ loss from ~2.5 to &lt;0.05 in 200 steps. Copy, run, modify.</p>
 <tbody>
 <tr>
 <td>NaN loss in the first step</td>
-<td>Init too large, or <code>version_idx</code> left dynamic under JIT</td>
-<td>Verify per-family init defaults; bind <code>version_idx</code> with <code>functools.partial</code> before JIT</td>
+<td>Init too large (e.g. a He/Xavier override)</td>
+<td>Keep each family's default init</td>
 </tr>
 <tr>
 <td>Stuck at random-chance accuracy (Poincaré)</td>
 <td>Curvature too high — features hit the boundary where the conformal factor collapses</td>
-<td>Use <code>Poincare(c=0.1)</code> with <code>LearnableCurvature(init_c=0.1)</code> per layer</td>
+<td>Pass <code>c=0.1</code> at every layer call (or <code>self.curvature()</code> from a per-layer <code>LearnableCurvature(init_c=0.1)</code>); the manifold constructor's <code>c</code> is not read by layers</td>
 </tr>
 <tr>
 <td>Loss explodes after some warmup (Hyperboloid float32)</td>
 <td>Lorentz-constraint drift accumulated past the layer's tolerance</td>
-<td>Periodically call <code>manifold.proj(x, c)</code> between blocks, or switch to float64</td>
+<td>Call <code>jax.vmap(manifold.proj, in_axes=(0, None))(x, c)</code> between blocks, or switch to float64</td>
 </tr>
 <tr>
 <td>Loss is decreasing on training data but eval is wild</td>

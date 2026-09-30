@@ -1329,21 +1329,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+  <a href="#hyperbolix.optim.manifold_metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How It Works
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API Reference
+        manifold_metadata
       
     </span>
   </a>
@@ -1364,23 +1353,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Expmap vs Retraction">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#choosing-update-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Choosing Update Mode
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -1388,17 +1360,6 @@
     <span class="md-ellipsis">
       
         Mixed Optimization
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Performance Considerations
       
     </span>
   </a>
@@ -1698,21 +1659,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+  <a href="#hyperbolix.optim.manifold_metadata" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How It Works
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API Reference
+        manifold_metadata
       
     </span>
   </a>
@@ -1733,23 +1683,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Expmap vs Retraction">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#choosing-update-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Choosing Update Mode
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -1757,17 +1690,6 @@
     <span class="md-ellipsis">
       
         Mixed Optimization
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Performance Considerations
       
     </span>
   </a>
@@ -1808,18 +1730,16 @@
 <h1 id="optimizers-api">Optimizers API<a class="headerlink" href="#optimizers-api" title="Permanent link">&para;</a></h1>
 <p>Riemannian optimization algorithms for training neural networks with hyperbolic parameters.</p>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>Hyperbolix provides two Riemannian optimizers that extend standard Euclidean optimizers to manifold-valued parameters:</p>
+<p>Hyperbolix provides two Riemannian optimizers for manifold-valued parameters:</p>
 <ul>
 <li><strong>Riemannian SGD (RSGD)</strong>: Stochastic gradient descent with momentum</li>
-<li><strong>Riemannian Adam (RAdam)</strong>: Adaptive learning rates with moment transport</li>
+<li><strong>Riemannian Adam</strong>: Adaptive learning rates with moment transport</li>
 </ul>
-<p>Both optimizers:</p>
-<ul>
-<li>Follow the standard Optax <code>GradientTransformation</code> interface</li>
-<li>Automatically detect manifold parameters via metadata</li>
-<li>Support mixed Euclidean/Riemannian parameter optimization</li>
-<li>Are compatible with <code>nnx.Optimizer</code> wrapper</li>
-</ul>
+<p>Both are Optax <code>GradientTransformation</code>s that work with <code>nnx.Optimizer</code>. They
+detect manifold-valued parameters (tagged with <code>ManifoldParam</code>) and give every
+other parameter a Euclidean update, so one optimizer covers a mixed model. Most
+layers keep all their weights Euclidean and need neither; see the
+<a href="../../user-guide/optimizers/">Riemannian Optimizers guide</a> for when you do.</p>
 <h2 id="riemannian-sgd">Riemannian SGD<a class="headerlink" href="#riemannian-sgd" title="Permanent link">&para;</a></h2>
 
 
@@ -2311,16 +2231,17 @@ optimizer.update(layer, grads)  # Automatically handles manifold parameters</p>
 </span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span>
 </span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="p">)</span>
 </span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="c1"># Training step</span>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="k">def</span><span class="w"> </span><span class="nf">train_step</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">loss_fn</span><span class="p">(</span><span class="n">model</span><span class="p">):</span>
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>        <span class="n">pred</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">((</span><span class="n">pred</span> <span class="o">-</span> <span class="n">y</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    <span class="n">loss</span><span class="p">,</span> <span class="n">grads</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">value_and_grad</span><span class="p">(</span><span class="n">loss_fn</span><span class="p">)(</span><span class="n">model</span><span class="p">)</span>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>    <span class="n">optimizer</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">grads</span><span class="p">)</span>
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>
-</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>    <span class="k">return</span> <span class="n">loss</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="c1"># Training step (use nnx.jit, not jax.jit, if you compile it:</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="c1"># a jax.jit step drops the in-place parameter and optimizer updates)</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="k">def</span><span class="w"> </span><span class="nf">train_step</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">loss_fn</span><span class="p">(</span><span class="n">model</span><span class="p">):</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>        <span class="n">pred</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">((</span><span class="n">pred</span> <span class="o">-</span> <span class="n">y</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>    <span class="n">loss</span><span class="p">,</span> <span class="n">grads</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">value_and_grad</span><span class="p">(</span><span class="n">loss_fn</span><span class="p">)(</span><span class="n">model</span><span class="p">)</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>    <span class="n">optimizer</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">grads</span><span class="p">)</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>    <span class="k">return</span> <span class="n">loss</span>
 </span></code></pre></div>
 <h2 id="riemannian-adam">Riemannian Adam<a class="headerlink" href="#riemannian-adam" title="Permanent link">&para;</a></h2>
 
@@ -2948,52 +2869,24 @@ optimizer.update(layer, grads)  # Automatically handles manifold parameters</p>
 </span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="c1"># Use in training loop (same as RSGD example, call optimizer.update(model, grads))</span>
 </span></code></pre></div>
 <h2 id="manifold-metadata-system">Manifold Metadata System<a class="headerlink" href="#manifold-metadata-system" title="Permanent link">&para;</a></h2>
-<p>Hyperbolix uses <code>ManifoldParam</code>, an <code>nnx.Param</code> subclass, to tag parameters that live on a Riemannian manifold. The optimizers detect these via <code>isinstance</code> checks.</p>
-<h3 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">ManifoldParam</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Layer tags hyperbolic parameters using ManifoldParam</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">class</span><span class="w"> </span><span class="nc">HypLinearPoincare</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">manifold_module</span><span class="p">,</span> <span class="n">in_dim</span><span class="p">,</span> <span class="n">out_dim</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">rngs</span><span class="p">):</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">manifold</span> <span class="o">=</span> <span class="n">manifold_module</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>        <span class="c1"># Kernel is Euclidean (plain nnx.Param)</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>            <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">rngs</span><span class="o">.</span><span class="n">params</span><span class="p">(),</span> <span class="p">(</span><span class="n">out_dim</span><span class="p">,</span> <span class="n">in_dim</span><span class="p">))</span> <span class="o">*</span> <span class="mf">0.01</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>        <span class="p">)</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>        <span class="c1"># Bias lives on Poincaré ball (ManifoldParam)</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">ManifoldParam</span><span class="p">(</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>            <span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">out_dim</span><span class="p">),</span>
-</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>            <span class="n">manifold</span><span class="o">=</span><span class="n">manifold_module</span><span class="p">,</span>
-</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>            <span class="n">curvature</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>        <span class="p">)</span>
-</span></code></pre></div>
-<p>The optimizer automatically:</p>
-<ol>
-<li>Detects <code>ManifoldParam</code> instances</li>
-<li>Applies Riemannian gradient updates (expmap/retraction)</li>
-<li>Performs parallel transport for momentum/adaptive moments</li>
-<li>Falls back to Euclidean updates for plain <code>nnx.Param</code> parameters</li>
-</ol>
-<p><strong>Dtype contract:</strong> the Riemannian math (steps 2-3) runs in the manifold's
-<code>dtype</code>, but the returned updates and the moment buffers are cast back to each
-parameter's storage dtype before they leave the transformation. A float32
-parameter tagged with a float64 manifold keeps float32 weights and float32
-optimizer state across steps, while the geometry itself is computed in
-float64.</p>
-<h3 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h3>
+<p><code>ManifoldParam</code>, an <code>nnx.Param</code> subclass, tags a parameter that lives on a
+manifold; the optimizers detect it with <code>isinstance</code>. For a tagged parameter
+they convert the gradient to a Riemannian one, move along the manifold and
+transport the momentum or moments; every plain <code>nnx.Param</code> gets the Euclidean
+update. Riemannian math runs in the manifold's dtype; updates and moments keep
+each parameter's storage dtype (see
+<a href="../../user-guide/numerical-stability/#storage-vs-compute-dtype">Storage vs. Compute Dtype</a>).</p>
 
 
 <div class="doc doc-object doc-module">
 
 
 
-<h4 id="hyperbolix.optim.manifold_metadata" class="doc doc-heading">
+<h3 id="hyperbolix.optim.manifold_metadata" class="doc doc-heading">
             <span class="doc doc-object-name doc-module-name">hyperbolix.optim.manifold_metadata</span>
 
 
-<a href="#hyperbolix.optim.manifold_metadata" class="headerlink" title="Permanent link">&para;</a></h4>
+<a href="#hyperbolix.optim.manifold_metadata" class="headerlink" title="Permanent link">&para;</a></h3>
 
     <div class="doc doc-contents first">
 
@@ -3053,11 +2946,11 @@ appropriate exponential-map / retraction updates automatically.</p>
 
 
 
-<h5 id="hyperbolix.optim.manifold_metadata.ManifoldParam" class="doc doc-heading">
+<h4 id="hyperbolix.optim.manifold_metadata.ManifoldParam" class="doc doc-heading">
             <span class="doc doc-object-name doc-class-name">ManifoldParam</span>
 
 
-<a href="#hyperbolix.optim.manifold_metadata.ManifoldParam" class="headerlink" title="Permanent link">&para;</a></h5>
+<a href="#hyperbolix.optim.manifold_metadata.ManifoldParam" class="headerlink" title="Permanent link">&para;</a></h4>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">ManifoldParam</span><span class="p">(</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">value</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="o">*</span><span class="p">,</span>
@@ -3154,13 +3047,13 @@ from flax import nnx
 from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.optim import ManifoldParam</p>
 <p>manifold = Poincare(dtype=jnp.float64)</p>
-<h6 id="hyperbolix.optim.manifold_metadata.ManifoldParam--static-curvature">Static curvature<a class="headerlink" href="#hyperbolix.optim.manifold_metadata.ManifoldParam--static-curvature" title="Permanent link">&para;</a></h6>
+<h5 id="hyperbolix.optim.manifold_metadata.ManifoldParam--static-curvature">Static curvature<a class="headerlink" href="#hyperbolix.optim.manifold_metadata.ManifoldParam--static-curvature" title="Permanent link">&para;</a></h5>
 <p>bias = ManifoldParam(
 ...     jax.random.normal(jax.random.key(0), (10,)) * 0.01,
 ...     manifold=manifold,
 ...     curvature=1.0,
 ... )</p>
-<h6 id="hyperbolix.optim.manifold_metadata.ManifoldParam--learnable-curvature-callable">Learnable curvature (callable)<a class="headerlink" href="#hyperbolix.optim.manifold_metadata.ManifoldParam--learnable-curvature-callable" title="Permanent link">&para;</a></h6>
+<h5 id="hyperbolix.optim.manifold_metadata.ManifoldParam--learnable-curvature-callable">Learnable curvature (callable)<a class="headerlink" href="#hyperbolix.optim.manifold_metadata.ManifoldParam--learnable-curvature-callable" title="Permanent link">&para;</a></h5>
 <p>class MyLayer(nnx.Module):
 ...     def <strong>init</strong>(self, rngs):
 ...         self.c = nnx.Param(jnp.array(1.0))
@@ -3227,11 +3120,11 @@ from hyperbolix.optim import ManifoldParam</p>
 <div class="doc doc-object doc-function">
 
 
-<h5 id="hyperbolix.optim.manifold_metadata.mark_manifold_param" class="doc doc-heading">
+<h4 id="hyperbolix.optim.manifold_metadata.mark_manifold_param" class="doc doc-heading">
             <span class="doc doc-object-name doc-function-name">mark_manifold_param</span>
 
 
-<a href="#hyperbolix.optim.manifold_metadata.mark_manifold_param" class="headerlink" title="Permanent link">&para;</a></h5>
+<a href="#hyperbolix.optim.manifold_metadata.mark_manifold_param" class="headerlink" title="Permanent link">&para;</a></h4>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">mark_manifold_param</span><span class="p">(</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">param</span><span class="p">:</span> <span class="n">Param</span><span class="p">,</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">manifold</span><span class="p">:</span> <span class="n">Manifold</span><span class="p">,</span>
@@ -3392,11 +3285,11 @@ from hyperbolix.optim import ManifoldParam</p>
 <div class="doc doc-object doc-function">
 
 
-<h5 id="hyperbolix.optim.manifold_metadata.get_manifold_info" class="doc doc-heading">
+<h4 id="hyperbolix.optim.manifold_metadata.get_manifold_info" class="doc doc-heading">
             <span class="doc doc-object-name doc-function-name">get_manifold_info</span>
 
 
-<a href="#hyperbolix.optim.manifold_metadata.get_manifold_info" class="headerlink" title="Permanent link">&para;</a></h5>
+<a href="#hyperbolix.optim.manifold_metadata.get_manifold_info" class="headerlink" title="Permanent link">&para;</a></h4>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">get_manifold_info</span><span class="p">(</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">param</span><span class="p">:</span> <span class="n">Variable</span><span class="p">,</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Manifold</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span>
@@ -3552,11 +3445,11 @@ if manifold_info is not None:
 <div class="doc doc-object doc-function">
 
 
-<h5 id="hyperbolix.optim.manifold_metadata.has_manifold_params" class="doc doc-heading">
+<h4 id="hyperbolix.optim.manifold_metadata.has_manifold_params" class="doc doc-heading">
             <span class="doc doc-object-name doc-function-name">has_manifold_params</span>
 
 
-<a href="#hyperbolix.optim.manifold_metadata.has_manifold_params" class="headerlink" title="Permanent link">&para;</a></h5>
+<a href="#hyperbolix.optim.manifold_metadata.has_manifold_params" class="headerlink" title="Permanent link">&para;</a></h4>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">has_manifold_params</span><span class="p">(</span><span class="n">params_pytree</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
 </span></code></pre></div>
 
@@ -3712,100 +3605,28 @@ if has_manifold_params(params):
     </div>
 
 </div><h2 id="expmap-vs-retraction">Expmap vs Retraction<a class="headerlink" href="#expmap-vs-retraction" title="Permanent link">&para;</a></h2>
-<p>Both optimizers support two update modes:</p>
-<ul>
-<li><strong>Exponential map</strong> (default): <code>expmap(x, -lr * grad)</code></li>
-<li>Exact geodesic following</li>
-<li>Numerically stable for large steps</li>
-<li>
-<p>Slightly slower</p>
-</li>
-<li>
-<p><strong>Retraction</strong>: <code>proj(x - lr * grad)</code></p>
-</li>
-<li>First-order approximation</li>
-<li>Faster computation</li>
-<li>Can be less stable for large learning rates</li>
-</ul>
-<h3 id="choosing-update-mode">Choosing Update Mode<a class="headerlink" href="#choosing-update-mode" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Use exponential map (default, recommended)</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">opt</span> <span class="o">=</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="mf">0.001</span><span class="p">)</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># For extremely performance-critical applications,</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># you can experiment with retraction-based updates</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1"># by modifying the optimizer implementation</span>
+<p>Both optimizers take a <code>use_expmap</code> flag. The default, <code>True</code>, moves a manifold
+parameter with the manifold's <code>expmap</code>; <code>False</code> uses its <code>retraction</code>, a
+first-order approximation.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">opt</span> <span class="o">=</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="mf">0.001</span><span class="p">)</span>                    <span class="c1"># expmap (default)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">opt</span> <span class="o">=</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="mf">0.001</span><span class="p">,</span> <span class="n">use_expmap</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>  <span class="c1"># retraction</span>
 </span></code></pre></div>
-<p>In practice, exponential maps provide better stability and convergence, especially for hyperbolic neural networks.</p>
 <h2 id="mixed-optimization">Mixed Optimization<a class="headerlink" href="#mixed-optimization" title="Permanent link">&para;</a></h2>
-<p>The optimizers seamlessly handle models with both Euclidean and hyperbolic parameters:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.manifolds</span><span class="w"> </span><span class="kn">import</span> <span class="n">Poincare</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hyperbolix.nn_layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">HypLinearPoincare</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">poincare</span> <span class="o">=</span> <span class="n">Poincare</span><span class="p">()</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="k">class</span><span class="w"> </span><span class="nc">MixedModel</span><span class="p">(</span><span class="n">nnx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rngs</span><span class="p">):</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>        <span class="c1"># Euclidean linear layer</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">fc1</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>        <span class="c1"># Hyperbolic layer (bias has manifold metadata)</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">hyp</span> <span class="o">=</span> <span class="n">HypLinearPoincare</span><span class="p">(</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>            <span class="n">manifold_module</span><span class="o">=</span><span class="n">poincare</span><span class="p">,</span>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>            <span class="n">in_dim</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>            <span class="n">out_dim</span><span class="o">=</span><span class="mi">16</span><span class="p">,</span>
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>            <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span>
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>        <span class="p">)</span>
-</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>
-</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>        <span class="c1"># Another Euclidean layer</span>
-</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">fc2</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">)</span>
-</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>
-</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="c1"># Optimizer handles all parameter types automatically</span>
-</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="n">optimizer</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">riemannian_adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="mf">0.001</span><span class="p">),</span> <span class="n">wrt</span><span class="o">=</span><span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">)</span>
-</span></code></pre></div>
-<p>The optimizer will:</p>
+<p>On a model that mixes <code>nnx.Linear</code> layers with <code>HypLinearPoincare</code>,
+<code>riemannian_adam</code> will:</p>
 <ul>
-<li>Apply standard Adam updates to <code>fc1</code> and <code>fc2</code> parameters</li>
-<li>Apply Riemannian Adam updates to <code>hyp.bias</code> (tagged with metadata)</li>
-<li>Apply Euclidean Adam updates to <code>hyp.kernel</code> (no metadata)</li>
+<li>Apply standard Adam updates to the <code>nnx.Linear</code> parameters</li>
+<li>Apply Riemannian Adam updates to <code>HypLinearPoincare.bias</code> (a <code>ManifoldParam</code>)</li>
+<li>Apply Euclidean Adam updates to <code>HypLinearPoincare.kernel</code> (a plain <code>nnx.Param</code>)</li>
 </ul>
-<h2 id="performance-considerations">Performance Considerations<a class="headerlink" href="#performance-considerations" title="Permanent link">&para;</a></h2>
-<div class="admonition tip">
-<p class="admonition-title">JIT Compilation</p>
-<p>Both optimizers are JIT-compatible. For best performance:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">train_step</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">loss_fn</span><span class="p">(</span><span class="n">model</span><span class="p">):</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>        <span class="k">return</span> <span class="n">compute_loss</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">loss</span><span class="p">,</span> <span class="n">grads</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">value_and_grad</span><span class="p">(</span><span class="n">loss_fn</span><span class="p">)(</span><span class="n">model</span><span class="p">)</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">optimizer</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">grads</span><span class="p">)</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="k">return</span> <span class="n">loss</span>
-</span></code></pre></div>
-</div>
-<div class="admonition note">
-<p class="admonition-title">Curvature as Static Argument</p>
-<p>If curvature <code>c</code> is constant during training, pass it as a static argument to enable better JIT optimization:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="k">return</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># c is traced, not ideal</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Better: use partial application</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">functools</span><span class="w"> </span><span class="kn">import</span> <span class="n">partial</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="nd">@partial</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">,</span> <span class="n">static_argnums</span><span class="o">=</span><span class="p">(</span><span class="mi">2</span><span class="p">,))</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="p">):</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    <span class="k">return</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="n">c</span><span class="p">)</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="n">output</span> <span class="o">=</span> <span class="n">forward</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>  <span class="c1"># c=1.0 is static</span>
-</span></code></pre></div>
-</div>
+<p>The <a href="../../user-guide/optimizers/#the-legacy-ganea-exception">user guide</a> covers these
+layers and tagging your own manifold-valued parameters.</p>
 <h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
 <p>The Riemannian optimizers are based on:</p>
 <ul>
 <li>Bécigneul, G., &amp; Ganea, O. (2019). "Riemannian Adaptive Optimization Methods." ICLR 2019.</li>
 <li>Bonnabel, S. (2013). "Stochastic gradient descent on Riemannian manifolds." IEEE TAC.</li>
 </ul>
-<p>See the <a href="../../user-guide/optimizers/">User Guide</a> for detailed explanations and best practices.</p>
 
 
 
