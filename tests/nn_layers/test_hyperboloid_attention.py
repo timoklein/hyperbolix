@@ -387,7 +387,8 @@ def _ref_full_attention(model, x_BNA, c_in, c_attn, c_out):
     q, k, v = _ref_project_qkv(model, x_BNA, c_in, c_attn)
     eps = model.eps
     inner = -np.einsum("bnh,bmh->bnhm", q[..., 0], k[..., 0]) + np.einsum("bnhd,bmhd->bnhm", q[..., 1:], k[..., 1:])
-    scores = (2.0 + 2.0 * inner) / (float(model.scale[...]) + eps) + float(model.attn_bias[...])
+    tau = float(np.exp(np.asarray(model.log_tau[...], np.float64)))
+    scores = (2.0 / c_attn + 2.0 * inner) / tau
     weights = _ref_softmax(scores)
 
     mid = np.transpose(
@@ -701,10 +702,11 @@ def test_causal_overfit(cls):
 def test_full_attention_attend_preserves_float32(causal):
     """HyperbolicFullAttention._attend keeps float32 inputs in float32.
 
-    Regression: the scalar scale/attn_bias params (JAX default dtype — float64
-    under x64) and the uniform head-averaging weights (jnp.ones without dtype)
-    silently promoted float32 activations to float64. The params are now cast
-    to the compute dtype at use; the buffer derives its dtype from the input.
+    Regression: the scalar score params (then ``scale``/``attn_bias``, now
+    ``log_tau``; JAX default dtype — float64 under x64) and the uniform
+    head-averaging weights (jnp.ones without dtype) silently promoted float32
+    activations to float64. The param is now cast to the compute dtype at use;
+    the buffer derives its dtype from the input.
     """
     layer = HyperbolicFullAttention(in_features=7, out_features=6, num_heads=2, rngs=nnx.Rngs(0))
     pts_BNA = _make_hyp_points(jax.random.PRNGKey(1), 2, 5, 7, c=1.0)
@@ -770,8 +772,8 @@ def test_full_attention_score_dtype_float64_island():
 
     At ``sqrt(c) d = 9`` the two Minkowski terms behind ``<Q,K>_L`` are each about
     ``cosh(9)^2 / c ≈ 3.3e7`` while their O(1) difference is all the softmax sees, so a
-    float32 score carries an absolute error of ``eps cosh(a_q) cosh(a_k) / (c scale)``
-    ≈ 4 — far more than the spread the softmax resolves. Nothing overflows and the
+    float32 score carries an absolute error of ``eps cosh(a_q) cosh(a_k) / (c tau)``
+    ≈ 4 at ``tau = 1`` — far more than the spread the softmax resolves. Nothing overflows and the
     weights stay normalized; they are simply wrong. This is therefore an accuracy check
     against an all-float64 run of the same layer on the same values, not a finiteness
     check, and it also asserts that the float32 default path *fails* that accuracy bar,
@@ -784,12 +786,13 @@ def test_full_attention_score_dtype_float64_island():
     q32_BNHA, k32_BNHA = _far_cluster_qk(0, B, N, H, D_out, radius, c)
     q64_BNHA, k64_BNHA = q32_BNHA.astype(jnp.float64), k32_BNHA.astype(jnp.float64)
 
-    plain = HyperbolicFullAttention(D_out + 1, D_out, num_heads=H, rngs=nnx.Rngs(0))
-    island = HyperbolicFullAttention(D_out + 1, D_out, num_heads=H, rngs=nnx.Rngs(0), score_dtype=jnp.float64)
+    # tau = 1, the temperature the error above is quoted for.
+    plain = HyperbolicFullAttention(D_out + 1, D_out, num_heads=H, init_tau=1.0, rngs=nnx.Rngs(0))
+    island = HyperbolicFullAttention(D_out + 1, D_out, num_heads=H, init_tau=1.0, rngs=nnx.Rngs(0), score_dtype=jnp.float64)
 
-    w_ref_BNHM = plain._attention_weights(q64_BNHA, k64_BNHA)  # same values, float64 throughout
-    w_f32_BNHM = plain._attention_weights(q32_BNHA, k32_BNHA)
-    w_island_BNHM = island._attention_weights(q32_BNHA, k32_BNHA)
+    w_ref_BNHM = plain._attention_weights(q64_BNHA, k64_BNHA, c)  # same values, float64 throughout
+    w_f32_BNHM = plain._attention_weights(q32_BNHA, k32_BNHA, c)
+    w_island_BNHM = island._attention_weights(q32_BNHA, k32_BNHA, c)
 
     assert w_island_BNHM.dtype == jnp.float32, "the island must cast the scores back before the softmax"
     assert float(w_ref_BNHM.max()) < 0.9, "reference softmax collapsed to one-hot; the comparison would be vacuous"
@@ -846,7 +849,8 @@ def test_full_attention_aggregates_far_values_accurately(seed):
     a_v_BNH = 9.0 + 0.3 * jax.random.normal(k_a, (B, N, H), dtype=jnp.float64)
     value_BNHA = _polar_points(a_v_BNH, jnp.broadcast_to(ray_D, (B, N, H, D)), c)
 
-    layer = HyperbolicFullAttention(D + 1, D, num_heads=H, rngs=nnx.Rngs(0))
+    # tau = 1, the temperature the measurements in the docstring were taken at.
+    layer = HyperbolicFullAttention(D + 1, D, num_heads=H, init_tau=1.0, rngs=nnx.Rngs(0))
     ref_BNA = layer._attend(query_BNHA, key_BNHA, value_BNHA, c_attn=c, c_out=c)
     got_BNA = layer._attend(*(x.astype(jnp.float32) for x in (query_BNHA, key_BNHA, value_BNHA)), c_attn=c, c_out=c)
 
@@ -854,8 +858,8 @@ def test_full_attention_aggregates_far_values_accurately(seed):
     w_err = float(
         jnp.max(
             jnp.abs(
-                layer._attention_weights(query_BNHA.astype(jnp.float32), key_BNHA.astype(jnp.float32)).astype(jnp.float64)
-                - layer._attention_weights(query_BNHA, key_BNHA)
+                layer._attention_weights(query_BNHA.astype(jnp.float32), key_BNHA.astype(jnp.float32), c).astype(jnp.float64)
+                - layer._attention_weights(query_BNHA, key_BNHA, c)
             )
         )
     )
@@ -923,7 +927,8 @@ def test_full_attention_head_averages_far_values_on_different_rays_accurately(se
     a_v_BNH = 9.0 + 0.3 * jax.random.normal(k_rad, (B, N, H), dtype=jnp.float64)
     value_BNHA = _polar_points(a_v_BNH, jnp.broadcast_to(rays_HD, (B, N, H, D)), c)
 
-    layer = HyperbolicFullAttention(D + 1, D, num_heads=H, rngs=nnx.Rngs(0))
+    # tau = 1, the temperature the measurements in the docstring were taken at.
+    layer = HyperbolicFullAttention(D + 1, D, num_heads=H, init_tau=1.0, rngs=nnx.Rngs(0))
     ref_BNA = layer._attend(query_BNHA, key_BNHA, value_BNHA, c_attn=c, c_out=c)
     got_BNA = layer._attend(*(x.astype(jnp.float32) for x in (query_BNHA, key_BNHA, value_BNHA)), c_attn=c, c_out=c)
 
@@ -931,8 +936,8 @@ def test_full_attention_head_averages_far_values_on_different_rays_accurately(se
     w_err = float(
         jnp.max(
             jnp.abs(
-                layer._attention_weights(query_BNHA.astype(jnp.float32), key_BNHA.astype(jnp.float32)).astype(jnp.float64)
-                - layer._attention_weights(query_BNHA, key_BNHA)
+                layer._attention_weights(query_BNHA.astype(jnp.float32), key_BNHA.astype(jnp.float32), c).astype(jnp.float64)
+                - layer._attention_weights(query_BNHA, key_BNHA, c)
             )
         )
     )
@@ -992,8 +997,9 @@ def test_full_attention_gemm_centroid_matches_variance_at_moderate_radius(dtype,
     a_v_BNH = 3.0 + 0.3 * jax.random.normal(k_rad, (B, N, H), dtype=jnp.float64)
     qkv = tuple(x.astype(dtype) for x in (_near_origin(k_q), _near_origin(k_k), _polar_points(a_v_BNH, dirs_BNHD, c)))
 
-    variance = HyperbolicFullAttention(D + 1, D, num_heads=H, rngs=nnx.Rngs(0), centroid_form="variance")
-    gemm = HyperbolicFullAttention(D + 1, D, num_heads=H, rngs=nnx.Rngs(0), centroid_form="gemm")
+    # tau = 1, the temperature the measurements in the docstring were taken at.
+    variance = HyperbolicFullAttention(D + 1, D, num_heads=H, init_tau=1.0, rngs=nnx.Rngs(0), centroid_form="variance")
+    gemm = HyperbolicFullAttention(D + 1, D, num_heads=H, init_tau=1.0, rngs=nnx.Rngs(0), centroid_form="gemm")
     out_variance_BNA = variance._attend(*qkv, c_attn=c, c_out=c, causal=causal)
     out_gemm_BNA = gemm._attend(*qkv, c_attn=c, c_out=c, causal=causal)
     assert out_gemm_BNA.dtype == dtype
@@ -1012,3 +1018,129 @@ def test_full_attention_gemm_centroid_matches_variance_at_moderate_radius(dtype,
 def test_full_attention_rejects_invalid_centroid_form():
     with pytest.raises(ValueError, match="centroid_form"):
         HyperbolicFullAttention(7, 6, num_heads=2, rngs=nnx.Rngs(0), centroid_form="literal")  # type: ignore[arg-type]
+
+
+# ===================================================================
+# HyperbolicFullAttention temperature
+# ===================================================================
+
+
+def _full_attention_points(key, c, dtype=jnp.float64, shape=(2, 6, 2, 5)):
+    """On-sheet ``(B, N, H, D+1)`` points at curvature ``c``, spatial spread 0.5."""
+    spatial = jax.random.normal(key, shape, dtype=dtype) * 0.5
+    time = jnp.sqrt(jnp.sum(spatial**2, axis=-1, keepdims=True) + 1.0 / c)
+    return jnp.concatenate([time, spatial], axis=-1)
+
+
+def test_full_attention_init_tau():
+    """Default ``tau = sqrt(out_features)`` (Hypformer), ``init_tau`` overrides it; no score bias."""
+    layer = HyperbolicFullAttention(7, 6, num_heads=2, rngs=nnx.Rngs(0))
+    assert float(jnp.exp(layer.log_tau[...])) == pytest.approx(np.sqrt(6.0))
+    custom = HyperbolicFullAttention(7, 6, num_heads=2, init_tau=2.5, rngs=nnx.Rngs(0))
+    assert float(jnp.exp(custom.log_tau[...])) == pytest.approx(2.5)
+    # Hypformer's score bias cancels in the softmax (zero gradient), and its raw scale is replaced.
+    assert not hasattr(layer, "attn_bias")
+    assert not hasattr(layer, "scale")
+    for bad in (0.0, -1.0):
+        with pytest.raises(ValueError, match="init_tau"):
+            HyperbolicFullAttention(7, 6, num_heads=2, init_tau=bad, rngs=nnx.Rngs(0))
+
+
+@pytest.mark.parametrize("c", [0.5, 2.0])
+@pytest.mark.parametrize("causal", [False, True])
+def test_full_attention_scores_match_float64_transcription(c, causal):
+    """Scores are ``(2/c + 2<q,k>_L) / tau``, i.e. ``-d_L^2 / tau``, at ``c != 1``.
+
+    The constant ``2/c`` cancels in the softmax, so the end-to-end reference cannot see it; the
+    scores are compared directly. ``d_L^2 = -2/c - 2<q,k>_L`` is the squared Lorentzian distance,
+    ``(2/c)(cosh(sqrt(c) d) - 1)`` in terms of the geodesic distance ``d``, which is checked
+    against the manifold's own ``dist``.
+    """
+    tau = 1.7
+    layer = HyperbolicFullAttention(6, 5, num_heads=2, init_tau=tau, param_dtype=jnp.float64, rngs=nnx.Rngs(0))
+    k_q, k_k = jax.random.split(jax.random.PRNGKey(3))
+    query_BNHA, key_BNHA = _full_attention_points(k_q, c), _full_attention_points(k_k, c)
+
+    got_BNHM = layer._attention_scores(query_BNHA, key_BNHA, c, causal)
+
+    q, k = np.asarray(query_BNHA), np.asarray(key_BNHA)
+    inner = -np.einsum("bnh,bmh->bnhm", q[..., 0], k[..., 0]) + np.einsum("bnhd,bmhd->bnhm", q[..., 1:], k[..., 1:])
+    expected_BNHM = (2.0 / c + 2.0 * inner) / tau
+    dist_fn = jax.vmap(jax.vmap(hyperboloid_f64.dist, in_axes=(None, 0, None)), in_axes=(0, None, None))
+    d_NM = dist_fn(query_BNHA[0, :, 0], key_BNHA[0, :, 0], c)  # (N, M)
+    squared_lorentz_dist_NM = (2.0 / c) * (np.cosh(np.sqrt(c) * np.asarray(d_NM)) - 1.0)
+    assert np.allclose(expected_BNHM[0, :, 0] * tau, -squared_lorentz_dist_NM, atol=1e-10)
+
+    assert got_BNHM.dtype == jnp.float64
+    if causal:
+        N = q.shape[1]
+        visible_NM = np.tril(np.ones((N, N), dtype=bool))[None, :, None, :]
+        assert np.all(np.asarray(got_BNHM)[~np.broadcast_to(visible_NM, got_BNHM.shape)] == -1e18)
+        expected_BNHM = np.where(visible_NM, expected_BNHM, -1e18)
+    assert np.allclose(np.asarray(got_BNHM), expected_BNHM, rtol=0, atol=1e-12)
+
+
+def test_full_attention_log_tau_receives_gradient():
+    """``log_tau`` gets a finite, nonzero gradient through the forward pass."""
+    layer = HyperbolicFullAttention(7, 6, num_heads=2, rngs=nnx.Rngs(0))
+    x_BNA = _make_hyp_points(jax.random.PRNGKey(4), 2, 5, 7, c=1.0)
+
+    grads = nnx.grad(lambda m: jnp.sum(m(x_BNA)[..., 1:] ** 2))(layer)
+    grad_log_tau = float(grads.log_tau[...])
+    assert np.isfinite(grad_log_tau)
+    assert grad_log_tau != 0.0
+
+
+def test_full_attention_tau_stays_positive_where_raw_scale_would_turn_negative():
+    """One Adam step of size 1 from ``tau = 0.5`` takes a raw scale to about -0.5; ``log_tau`` keeps it positive.
+
+    Adam's first step moves each parameter by about ``lr * sign(grad)``. With the loss signed so
+    that descent asks for a smaller ``tau``, the same step on Hypformer's raw scale (gradient
+    ``dL/dtau = dL/dlog_tau / tau``) lands below zero, where the softmax flips to the farthest
+    keys; on ``log_tau`` it lands at ``tau = 0.5 / e``.
+    """
+    init_tau, lr = 0.5, 1.0
+    layer = HyperbolicFullAttention(7, 6, num_heads=2, init_tau=init_tau, rngs=nnx.Rngs(0))
+    x_BNA = _make_hyp_points(jax.random.PRNGKey(5), 2, 5, 7, c=1.0)
+
+    def loss_fn(model):
+        return jnp.sum(model(x_BNA)[..., 1:] ** 2)
+
+    grad_log_tau = float(nnx.grad(loss_fn)(layer).log_tau[...])
+    assert grad_log_tau != 0.0
+    sign = float(np.sign(grad_log_tau))  # signed loss: descent lowers tau
+
+    # Hypformer's raw parameterization under the same optimizer step goes negative.
+    raw_tau = jnp.asarray(init_tau, dtype=jnp.float32)
+    raw_opt = optax.adam(lr)
+    raw_update, _ = raw_opt.update(jnp.asarray(abs(grad_log_tau) / init_tau), raw_opt.init(raw_tau))
+    assert float(optax.apply_updates(raw_tau, raw_update)) < 0.0
+
+    optimizer = nnx.Optimizer(layer, optax.adam(lr), wrt=nnx.Param)
+    optimizer.update(layer, nnx.grad(lambda model: sign * loss_fn(model))(layer))
+    tau = float(jnp.exp(layer.log_tau[...]))
+    assert 0.0 < tau < init_tau
+    assert tau == pytest.approx(init_tau / np.e, rel=1e-4)
+    assert bool(jnp.all(jnp.isfinite(layer(x_BNA))))
+
+
+def test_full_attention_bfloat16_softmax_runs_in_float32():
+    """A bfloat16 input gets float32 scores and a float32 softmax; the weights come back in bfloat16.
+
+    Non-vacuity: a softmax of the same scores rounded to bfloat16 gives different weights.
+    """
+    layer = HyperbolicFullAttention(7, 6, num_heads=2, rngs=nnx.Rngs(0))
+    x_BNA = _make_hyp_points(jax.random.PRNGKey(6), 2, 16, 7, c=1.0).astype(jnp.bfloat16)
+    query_BNHA, key_BNHA, _ = layer._project_qkv(x_BNA, 1.0, 1.0)
+    assert query_BNHA.dtype == jnp.bfloat16
+
+    scores_BNHM = layer._attention_scores(query_BNHA, key_BNHA, 1.0)
+    weights_BNHM = layer._attention_weights(query_BNHA, key_BNHA, 1.0)
+    assert scores_BNHM.dtype == jnp.float32
+    assert weights_BNHM.dtype == jnp.bfloat16
+    assert bool(jnp.array_equal(weights_BNHM, jax.nn.softmax(scores_BNHM, axis=-1).astype(jnp.bfloat16)))
+    assert not bool(jnp.array_equal(weights_BNHM, jax.nn.softmax(scores_BNHM.astype(jnp.bfloat16), axis=-1)))
+
+    out_BNA = layer(x_BNA)
+    assert out_BNA.dtype == jnp.bfloat16
+    assert bool(jnp.all(jnp.isfinite(out_BNA.astype(jnp.float32))))

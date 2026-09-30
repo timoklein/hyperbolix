@@ -22,6 +22,7 @@ Yang et al., "Hypformer: Exploring Efficient Transformer Fully in
 Hyperbolic Space", 2025.
 """
 
+import math
 from typing import Literal
 
 import jax
@@ -34,6 +35,11 @@ from hyperbolix.utils.math_utils import safe_hypot_norm
 
 from .hyperboloid_core import MATMUL_PRECISION, lorentz_midpoint, spatial_to_hyperboloid
 from .hyperboloid_linear import HTCLinear
+
+# Masked-score fill of HyperbolicFullAttention, the value LorentzMLA uses. Finite, so a fully
+# masked row softmaxes to a finite uniform row instead of NaN; it is written in the (at least
+# float32) score dtype, where it is representable.
+_MASK_FILL = -1e18
 
 # ---------------------------------------------------------------------------
 # Focus transform (Eq 19)
@@ -459,11 +465,32 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
     Uses the Lorentzian inner product for similarity and weighted Lorentzian
     midpoint for aggregation — operating on full hyperboloid points throughout.
 
+    The score of query ``Q`` and key ``K`` is ``(2/c + 2<Q,K>_L) / tau``, which is
+    ``-d_L^2(Q, K) / tau`` with ``d_L^2 = -2/c - 2<Q,K>_L`` the squared Lorentzian
+    distance. ``tau = exp(log_tau)`` is one learnable temperature shared by all heads.
+    The scores are masked and softmaxed in at least float32, and the weights are cast
+    back to the working dtype.
+
+    Differences from Hypformer
+    --------------------------
+    - **Temperature parameterization.** Hypformer divides by a raw learnable ``scale``.
+      Nothing keeps it positive: an optimizer step can drive it to 0 or below, and a
+      negative value flips the softmax so each query attends to its farthest keys. Here
+      the parameter is ``log_tau`` and ``tau = exp(log_tau)`` is positive for any
+      parameter value. The init is Hypformer's, ``tau = sqrt(out_features)`` (the
+      per-head spatial width), unless ``init_tau`` is given.
+    - **No score bias.** Hypformer adds one learnable scalar to every score. A constant
+      shared by all keys of a row cancels in the softmax, so that parameter changes
+      nothing and its gradient is exactly zero; it is omitted.
+    - **Curvature constant.** Hypformer writes ``2 + 2<Q,K>_L``, the ``c = 1`` form;
+      here it is ``2/c``. The constant cancels in the softmax as well, so the weights
+      are the same, but the score is the scaled negative squared distance for any ``c``.
+
     Float32 score floor
     -------------------
-    The scores are ``2 + 2<Q,K>_L`` with ``<Q,K>_L = -Q_0 K_0 + <Q_s, K_s>``, a
-    difference of two Minkowski terms each of size ``cosh(a_q) cosh(a_k) / c`` —
-    writing ``a = sqrt(c) d`` for the geodesic radius of a point in nats — whose O(1)
+    The score contains ``<Q,K>_L = -Q_0 K_0 + <Q_s, K_s>``, a difference of two
+    Minkowski terms each of size ``cosh(a_q) cosh(a_k) / c`` — writing
+    ``a = sqrt(c) d`` for the geodesic radius of a point in nats — whose O(1)
     difference is the only part the softmax sees. Unlike the other cancellations in
     the library this one has **no GEMM-compatible cancellation-free spelling**: any
     matrix product of the ambient coordinates returns the Gram matrix to absolute
@@ -471,12 +498,15 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
     ``eps sinh(a_q) sinh(a_k) / c``, the same order as the literal form. The absolute
     error on one score is therefore
 
-        eps * cosh(a_q) * cosh(a_k) / (c * scale)
+        eps * cosh(a_q) * cosh(a_k) / (c * tau)
 
-    which with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``scale = 1``) is about 4.8e-3
-    at ``a = 6``, 0.26 at ``a = 8`` and 2.0 at ``a = 9``: from ``a ≈ 8`` the error
-    exceeds the score spread the softmax is meant to resolve, and the weights are
-    wrong while staying perfectly finite. Three remedies, cheapest first: keep the
+    which with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``tau = 1``) is about 4.8e-3
+    at ``a = 6``, 0.26 at ``a = 8`` and 2.0 at ``a = 9``. The default
+    ``tau = sqrt(out_features)`` divides these numbers by ``tau``, but it divides the
+    score spread by the same factor, so the radius where the error overtakes the
+    spread does not move: from ``a ≈ 8`` the error exceeds the score spread the
+    softmax is meant to resolve, and the weights are wrong while staying perfectly
+    finite. Three remedies, cheapest first: keep the
     radius down (a :class:`HyperboloidGyroRMSNorm` in front of the layer), use a
     smaller ``c``, or pass ``score_dtype=jnp.float64`` to run the score computation as
     a float64 island. The island fixes the *arithmetic* only — float32 *storage* of
@@ -534,17 +564,32 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         This layer takes no ``manifold_module``, so compute precision follows the
         input array's dtype (the parameters are cast to it).
     score_dtype : DTypeLike or None
-        When set, the Lorentzian similarity and the ``2 + 2<Q,K>_L`` score are
-        computed in this dtype and the scores are cast back before the softmax — an
-        opt-in float64 island against the floor above (``jnp.float64`` needs
-        ``jax.config.update("jax_enable_x64", True)``); ``None`` (the default) leaves
-        the score path in the working dtype, unchanged op for op.
+        When set, the Lorentzian similarity and the ``(2/c + 2<Q,K>_L) / tau`` score
+        are computed in this dtype and the scores are cast to the softmax dtype (the
+        working dtype, promoted to at least float32) before the softmax — an opt-in
+        float64 island against the floor above (``jnp.float64`` needs
+        ``jax.config.update("jax_enable_x64", True)``). ``None`` (the default) computes
+        the similarity in the working dtype and the rest of the score in at least
+        float32.
     centroid_form : {"variance", "gemm"}
         ``form`` of the per-head :func:`lorentz_midpoint` that aggregates the values
         (default: ``"variance"``, the aggregation of earlier releases, bit for bit);
         see "Centroid form". ``"gemm"`` is the opt-in faster form for long sequences.
+    init_tau : float or None
+        Initial score temperature ``tau`` (must be positive; stored as
+        ``log(init_tau)``). ``None`` (the default) is Hypformer's
+        ``sqrt(out_features)``. ``init_tau=1.0`` gives the attention of earlier releases
+        at init (their ``scale = 1``, ``attn_bias = 0``) up to the ``+ eps`` their
+        divisor carried; ``init_tau=1.0 + eps`` matches it to rounding (bit for bit at
+        ``c = 1``).
     rngs : nnx.Rngs
         Random number generators.
+
+    Attributes
+    ----------
+    log_tau : nnx.Param
+        Scalar log temperature, init ``log(init_tau)``; the score temperature is
+        ``tau = exp(log_tau)``.
     """
 
     def __init__(
@@ -558,10 +603,14 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         param_dtype: DTypeLike = jnp.float32,
         score_dtype: DTypeLike | None = None,
         centroid_form: Literal["variance", "gemm"] = "variance",
+        init_tau: float | None = None,
         rngs: nnx.Rngs,
     ):
         if centroid_form not in ("variance", "gemm"):
             raise ValueError(f"centroid_form must be 'variance' or 'gemm', got {centroid_form!r}")
+        tau = init_tau if init_tau is not None else math.sqrt(out_features)
+        if not tau > 0.0:
+            raise ValueError(f"init_tau must be positive, got {init_tau}")
         super().__init__(
             in_features,
             out_features,
@@ -573,30 +622,28 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         )
         self.score_dtype = score_dtype
         self.centroid_form: Literal["variance", "gemm"] = centroid_form
-        self.scale = nnx.Param(jnp.array(1.0, dtype=param_dtype))
-        self.attn_bias = nnx.Param(jnp.array(0.0, dtype=param_dtype))
+        # tau = exp(log_tau) > 0 for any parameter value (Hypformer learns a raw scale; class docstring).
+        self.log_tau = nnx.Param(jnp.asarray(math.log(tau), dtype=param_dtype))
 
-    def _attention_weights(
+    def _attention_scores(
         self,
         query_BNHA: Float[Array, "B N H A"],
         key_BNHA: Float[Array, "B N H A"],
+        c: float,
         causal: bool = False,
     ) -> Float[Array, "B N H M"]:
-        """Softmax weights of the Lorentzian similarity score ``2 + 2<Q,K>_L``.
+        """Masked scores ``(2/c + 2<Q,K>_L) / tau``, the negative squared distance over ``tau``.
 
         Carries the float32 score floor documented on the class: the absolute error on
-        a score is ``eps * cosh(a_q) * cosh(a_k) / (c * scale)``, which crosses the
+        a score is ``eps * cosh(a_q) * cosh(a_k) / (c * tau)``, which crosses the
         softmax's resolution around a geodesic radius of ``sqrt(c) d ≈ 8``. With
-        ``self.score_dtype`` set, the two einsums and the ``2 + 2<Q,K>_L`` /
-        scale / bias / causal-mask arithmetic run in that dtype and the scores are cast
-        back to the working dtype before the softmax, so only this step changes
-        precision; with ``score_dtype=None`` the path is the working dtype throughout,
-        op for op.
+        ``self.score_dtype`` set, the two einsums and the constant / ``tau`` /
+        causal-mask arithmetic run in that dtype; with ``score_dtype=None`` the einsums
+        run in the working dtype and the arithmetic after them in at least float32. The
+        scores are returned in that arithmetic dtype.
         """
-        eps = self.eps
         score_dtype = self.score_dtype
         if score_dtype is not None:
-            work_dtype = query_BNHA.dtype
             query_BNHA = query_BNHA.astype(score_dtype)
             key_BNHA = key_BNHA.astype(score_dtype)
 
@@ -608,27 +655,45 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         lorentz_inner_BNHM = -jnp.einsum(
             "bnha,bmha->bnhm", query_BNHA[..., 0:1], key_BNHA[..., 0:1], precision=MATMUL_PRECISION
         ) + jnp.einsum("bnhd,bmhd->bnhm", query_BNHA[..., 1:], key_BNHA[..., 1:], precision=MATMUL_PRECISION)  # (B, N, H, M)
-        # Cast scalar params to compute dtype: storage (param_dtype) and compute
-        # (input/manifold dtype) are decoupled, so the params must not drag the
-        # scores to their storage dtype.
-        scale = self.scale[...].astype(lorentz_inner_BNHM.dtype)
-        attn_bias = self.attn_bias[...].astype(lorentz_inner_BNHM.dtype)
-        scores_BNHM = (2.0 + 2.0 * lorentz_inner_BNHM) / (scale + eps) + attn_bias
+        # Constant, temperature and mask run in at least float32, as in LorentzMLA; this changes
+        # only bfloat16/float16 inputs, and the float64 island stays float64. The scalar parameter
+        # is cast to this dtype so its storage dtype (param_dtype) does not drag the scores along.
+        arith_dtype = jnp.promote_types(lorentz_inner_BNHM.dtype, jnp.float32)
+        lorentz_inner_BNHM = lorentz_inner_BNHM.astype(arith_dtype)
+        inv_c = jnp.asarray(1.0, dtype=arith_dtype) / jnp.asarray(c, dtype=arith_dtype)
+        tau = jnp.exp(self.log_tau[...].astype(arith_dtype))
+        # No score bias: Hypformer's `+ self.bias` is one scalar for every key and cancels in the softmax.
+        scores_BNHM = (2.0 * inv_c + 2.0 * lorentz_inner_BNHM) / tau  # (B, N, H, M)
         if causal:
             N = scores_BNHM.shape[1]
             mask_NM = jnp.tril(jnp.ones((N, N), dtype=jnp.bool_))  # (N, N)
-            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, -1e9)
+            scores_BNHM = jnp.where(mask_NM[None, :, None, :], scores_BNHM, jnp.asarray(_MASK_FILL, dtype=arith_dtype))
+        return scores_BNHM
 
-        if score_dtype is not None:
-            scores_BNHM = scores_BNHM.astype(work_dtype)
-        return jax.nn.softmax(scores_BNHM, axis=-1)  # (B, N, H, M)
+    def _attention_weights(
+        self,
+        query_BNHA: Float[Array, "B N H A"],
+        key_BNHA: Float[Array, "B N H A"],
+        c: float,
+        causal: bool = False,
+    ) -> Float[Array, "B N H M"]:
+        """Softmax weights of :meth:`_attention_scores`, in the working dtype.
+
+        The softmax runs in the working dtype promoted to at least float32 (the float64
+        island's scores are cast down to it first), and the weights are cast back to the
+        working dtype. For float32 and float64 inputs that is the working dtype throughout.
+        """
+        work_dtype = query_BNHA.dtype
+        softmax_dtype = jnp.promote_types(work_dtype, jnp.float32)
+        scores_BNHM = self._attention_scores(query_BNHA, key_BNHA, c, causal).astype(softmax_dtype)
+        return jax.nn.softmax(scores_BNHM, axis=-1).astype(work_dtype)  # (B, N, H, M)
 
     def _attend(self, query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal=False):
         eps = self.eps
         B, N, H, _A = value_BNHA.shape
 
         # 1. Pairwise Lorentzian similarity → softmax weights
-        attn_weights_BNHM = self._attention_weights(query_BNHA, key_BNHA, causal)  # (B, N, H, M)
+        attn_weights_BNHM = self._attention_weights(query_BNHA, key_BNHA, c_attn, causal)  # (B, N, H, M)
 
         # 2. Weighted Lorentzian midpoint per head
         #    Transpose to (B, H, ...) layout for lorentz_midpoint which expects (..., M, A) and (..., N, M)
