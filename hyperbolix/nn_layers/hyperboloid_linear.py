@@ -177,7 +177,7 @@ def _fhnn_forward(
     # = (y0 - 1/sqrt(c))(y0 + 1/sqrt(c)) = m*(m + 2/sqrt(c)), read off the height m directly rather than
     # off y0. Adding 1/sqrt(c) to m and taking it away again rounded m to the ulp of 1/sqrt(c): at the
     # eps floor (sigmoid(z0) -> 0, m ~ 1e-5) that left 6.8e-4 relative error on ||y_s|| in float32, and
-    # 2.4e-3 at m = 1.3e-5 (z0 = -15) for c <= 1 (8.8e-5 at c = 2), where this form is at float32
+    # 2.4e-3 at m = 1.3e-5 (z0 = -15) at c = 0.5 and 1 (8.8e-5 at c = 2), where this form is at float32
     # rounding (<= 1.5e-7). Nothing is squared either, so y0 past sqrt(FLT_MAX) ~ 1.8e19 (which
     # capped_exp allows) stays finite, and both factors are positive because m >= eps > 0.
     # `Hyperboloid.proj` reconstructs the same constraint from the spatial side instead, where a single

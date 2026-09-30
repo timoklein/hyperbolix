@@ -982,8 +982,9 @@ that is why a far Klein point now reads as $a \approx 6.67$ rather than at the `
 Some float32 gradients at capped points stay wrong: Poincaré `expmap` with respect to its base
 point and Poincaré `addition` with respect to $y$ keep relative errors up to 1.0, Klein `expmap`
 with respect to its base point up to 1.0 (above 0.1 on 40–48 % of the pairs), and Klein
-`addition` up to 1.3 on pairs of one capped and one free point (on pairs of two capped points it
-is fixed, 1.0 → 2.8e-3 at $c = 1$ and 7.8e-3 at $c = 0.3$). The floor is not the cause: the gradients with the half floor and with no
+`addition` up to 1.3 on pairs of one capped and one free point (on pairs of two capped points its
+gradient with respect to $x$ is fixed, 1.0 → 2.8e-3 at $c = 1$ and 7.8e-3 at $c = 0.3$, while the
+one with respect to $y$ stays at 6.9e-2 and 1.5e-2, as before). The floor is not the cause: the gradients with the half floor and with no
 floor are identical (`logs/2026-09-29_cancellation-free/floorfix/probe_grad_commit2.out`,
 `logs/2026-09-29_cancellation-free/floorfix2/summary_grad2_fix.out`,
 `logs/2026-09-29_cancellation-free/docs_b4b/check_floor_not_cause.out`).
@@ -1009,7 +1010,7 @@ edge) from 9.0e-2 to 9.7e-7, and the conv from 2.3e-1 (identity weights) and 6.9
 weights) to ≤ 1.6e-6; the conv output's largest $\sqrt{c}\,\lVert\text{out}\rVert$ at $c = 1$ is now 20.2,
 where the old route capped it at the ceiling (6.3279 in that probe). In
 float64 the new and old routes agree to ≤ 8.8e-11 for $t \le 8$, except the conv with random
-weights from $t = 5$ on, whose output ($\sqrt{c}\,\lVert\text{out}\rVert \ge 12.3$) is near or
+weights from $t = 5$ on, whose output ($\sqrt{c}\,\lVert\text{out}\rVert \ge 12.28$) is near or
 past the float64 ball's ceiling. The Poincaré Busemann layers
 (`HypRegressionPoincareBusemann`, `HypLinearPoincareBusemann`) score a tangent input the same way,
 through `Poincare._busemann_tangent`: at $t = 8$ the regression scores go from 2.2e-1 to 2.0e-7 and
