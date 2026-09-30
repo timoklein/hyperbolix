@@ -138,20 +138,27 @@ class LorentzMLA(nnx.Module):
     Centroid form
     -------------
     ``centroid_form="gemm"`` (the default) normalizes ``h = sum_t w_t v_t`` by the literal
-    ``c (h_0^2 - ||h_s||^2)``: one GEMM and ``O(S T)`` memory per head, like the scores. It
-    cancels as the scores do, with relative error up to ``eps cosh^2(a)`` at value radius
-    ``a`` (float32: 9e-5 at ``a = 4``, 0.27 at ``a = 8``), so it breaks in the same regime as
-    the score floor above, where the weights it averages with are already wrong.
-    ``centroid_form="variance"`` is the cancellation-free direct variance of
-    :func:`lorentz_midpoint`, accurate to the storage floor, but it forms an elementwise
-    ``(B, H, S, T, v_head_dim - 1)`` intermediate: ``O(S T D)`` work outside the GEMMs, and as
-    much memory where XLA materializes it (XLA:CPU does in the backward, about 100 GB in
-    float32 at ``B = 8, H = 12, S = T = 2048, v_head_dim = 64``; XLA:GPU fuses it away, but
-    that fused kernel took 104 s to compile against 10 s for ``"gemm"`` at ``S = 512``, and
-    ptxas had not finished it after 10 min at ``S = 2048``;
-    ``logs/2026-09-30_helm-centroid/``). Pick it for short sequences when the
-    centroid itself must stay accurate past ``a ~ 8``, which in float32 the scores will not
-    be unless the queries and keys stay closer in than the values.
+    ``c (h_0^2 - ||h_s||^2)``: one GEMM and ``O(S T)`` memory per head, like the scores. This
+    is the centroid of HELM's own reference code (its ``lorentzian_centroid``), which trains
+    in bfloat16. It is the default because at LLM context lengths the alternative is
+    impractical on GPU: ``centroid_form="variance"``, the cancellation-free direct variance
+    of :func:`lorentz_midpoint`, forms an elementwise ``(B, H, S, T, v_head_dim - 1)``
+    intermediate, ``O(S T D)`` work outside the GEMMs and as much memory where XLA
+    materializes it (XLA:CPU does in the backward, about 100 GB in float32 at ``B = 8,
+    H = 12, S = T = 2048, v_head_dim = 64``). XLA:GPU fuses it away, but that fused kernel
+    took 104 s to compile against 9.6 s for ``"gemm"`` at ``S = 512``, and ptxas had not
+    finished it after 10 min at ``S = 2048`` (``logs/2026-09-30_helm-centroid/``).
+
+    The price of ``"gemm"`` is cancellation in the normalizer, with relative error up to
+    ``eps cosh^2(a)`` at value radius ``a`` (float32: 9e-5 at ``a = 4``, 0.27 at ``a = 8``).
+    This depends on the values alone, not on the score floor above: in float32 ``"gemm"``
+    loses the centroid once the values lie beyond scaled radius ``a ≈ 6``, even when the
+    queries and keys sit near the origin and the scores are accurate (measured on this layer,
+    values at ``a ≈ 9``: 11.4 nats from the float64 centroid, against at most 6.4e-4 for
+    ``"variance"``; ``logs/2026-09-30_helm-decisions/mla_far_values_probe.out``, pinned by
+    ``test_variance_centroid_aggregates_far_values_accurately``). For short sequences, or
+    whenever the values can lie far out, use ``centroid_form="variance"``, which is accurate
+    to the storage floor.
 
     Parameters
     ----------
@@ -189,7 +196,8 @@ class LorentzMLA(nnx.Module):
         Numerical floor for the time rebuilds and the centroid (default: 1e-7).
     centroid_form : {"gemm", "variance"}, optional
         ``form`` of the per-head :func:`lorentz_midpoint` (default: ``"gemm"``, ``O(S T)``
-        memory); see "Centroid form".
+        memory, HELM's centroid); ``"variance"`` for short sequences or far-out values. See
+        "Centroid form".
 
     Attributes
     ----------

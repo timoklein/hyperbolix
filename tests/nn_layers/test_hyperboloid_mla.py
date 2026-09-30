@@ -14,6 +14,7 @@ import pytest
 from flax import nnx
 
 from hyperbolix.manifolds import Hyperboloid
+from hyperbolix.nn_layers import hyperboloid_mla as mla_module
 from hyperbolix.nn_layers.hyperboloid_core import spatial_to_hyperboloid
 from hyperbolix.nn_layers.hyperboloid_mla import LorentzMLA
 
@@ -324,6 +325,87 @@ def test_gemm_centroid_has_no_sequence_squared_times_width_intermediate():
     if jax.default_backend() == "cpu":
         variance_temp, _ = temp_bytes(centroid_form="variance")
         assert variance_temp >= intermediate_bytes, (variance_temp, intermediate_bytes)
+
+
+def _far_value_centroid_errors(seed, centroid_form, c=0.5, seq=16, radius=9.0):
+    """Float32 per-head centroids of far values against a float64 variance-form run of the same layer.
+
+    Only the value rows of ``wkv_b`` are changed: head ``h`` gets the bias ``beta * ray_h`` with
+    ``beta = sinh(radius) / sqrt(c)`` and the rank-one kernel ``0.3 beta * outer(w, ray_h)``, so every
+    value of a head lies on one geodesic ray at scaled radius ``radius`` with a radial spread set by
+    ``w . z`` (``w`` reads only the latent's spatial coordinates). Queries and keys keep their
+    moderate-radius init, so the scores stay float32-accurate and any centroid error is the
+    aggregation's. The centroids are read off the layer's own :func:`lorentz_midpoint` call by
+    wrapping it for the duration of the two eager forwards.
+
+    Returns the max geodesic centroid error, the max softmax-weight error and the value radius range.
+    """
+    V = V_HEAD - 1
+    rng = np.random.default_rng(seed)
+    layer = _make_layer(jnp.float32, seed=seed, centroid_form=centroid_form)
+    reference = _make_layer(jnp.float32, seed=seed, centroid_form="variance")
+    beta = math.sinh(radius) / math.sqrt(c)
+    w_Z = np.concatenate([[0.0], rng.standard_normal(KV_RANK)])
+    w_Z /= np.linalg.norm(w_Z)
+    kernel_ZG = np.array(layer.wkv_b.kernel[...], dtype=np.float64)  # (Z, G) = (R+1, H*(N+V))
+    bias_G = np.array(layer.wkv_b.bias[...], dtype=np.float64)
+    for h in range(HEADS):
+        ray_V = rng.standard_normal(V)
+        ray_V /= np.linalg.norm(ray_V)
+        cols = slice(h * (QK_NOPE + V) + QK_NOPE, (h + 1) * (QK_NOPE + V))
+        kernel_ZG[:, cols] = 0.3 * beta * np.outer(w_Z, ray_V)
+        bias_G[cols] = beta * ray_V
+    for model in (layer, reference):
+        model.wkv_b.kernel[...] = jnp.asarray(kernel_ZG, dtype=jnp.float32)
+        model.wkv_b.bias[...] = jnp.asarray(bias_G, dtype=jnp.float32)
+
+    real_midpoint = mla_module.lorentz_midpoint
+    recorded = []
+
+    def recording_midpoint(points, weights, *args, **kwargs):
+        centroid = real_midpoint(points, weights, *args, **kwargs)
+        recorded.append((points, weights, centroid))
+        return centroid
+
+    x_BSA = _make_points(jax.random.PRNGKey(seed), c, jnp.float64, seq=seq)
+    mla_module.lorentz_midpoint = recording_midpoint
+    try:
+        reference(x_BSA, c)  # float64 forward: float32 weights, cast to the input dtype
+        layer(x_BSA.astype(jnp.float32), c)
+    finally:
+        mla_module.lorentz_midpoint = real_midpoint
+    (value_ref_BHTW, weights_ref_BHST, centroid_ref_BHSW), (_, weights_BHST, centroid_BHSW) = recorded
+    assert centroid_ref_BHSW.dtype == jnp.float64 and centroid_BHSW.dtype == jnp.float32
+
+    a_BHT = jnp.arcsinh(math.sqrt(c) * jnp.linalg.norm(value_ref_BHTW[..., 1:], axis=-1))
+    w_err = float(jnp.max(jnp.abs(weights_BHST.astype(jnp.float64) - weights_ref_BHST)))
+    dist_fn = jax.vmap(Hyperboloid(dtype=jnp.float64).dist, in_axes=(0, 0, None))
+    err = float(
+        jnp.max(dist_fn(centroid_BHSW.astype(jnp.float64).reshape(-1, V_HEAD), centroid_ref_BHSW.reshape(-1, V_HEAD), c))
+    )
+    return {"err": err, "w_err": w_err, "a_min": float(a_BHT.min()), "a_max": float(a_BHT.max())}
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_variance_centroid_aggregates_far_values_accurately(seed):
+    """``centroid_form="variance"`` keeps float32 centroids of values at scaled radius ~9 accurate.
+
+    Values on one ray per head at ``sqrt(c) d ≈ 9``, queries and keys near the origin (asserted
+    through the softmax weights), float32 forward against a float64 forward of the same weights. The
+    variance form stays within 3e-3 geodesic of the float64 centroid, the bound of
+    ``test_full_attention_aggregates_far_values_accurately``. The default ``"gemm"`` form loses the
+    centroid here although the scores are accurate: its normalizer cancels with relative error
+    ``eps cosh^2(a)``, of order 1 at ``a = 9``. Measured, seeds 0-3: variance 1.1e-4 to 6.4e-4,
+    gemm 11.4 to 11.5 nats, weight error at most 3.6e-7
+    (``logs/2026-09-30_helm-decisions/mla_far_values_probe.out``).
+    """
+    variance = _far_value_centroid_errors(seed, "variance")
+    assert 8.0 < variance["a_min"] and variance["a_max"] < 10.0, variance
+    assert variance["w_err"] < 1e-5, f"softmax weights already differ by {variance['w_err']:.2e}; the scores dominate"
+    assert variance["err"] < 3e-3, f"float32 variance centroid {variance['err']:.2e} geodesic from the float64 run"
+
+    gemm = _far_value_centroid_errors(seed, "gemm")
+    assert gemm["err"] > 100 * variance["err"], f"gemm {gemm['err']:.2e} vs variance {variance['err']:.2e}"
 
 
 def _perturb(x, key, where_BS, c):

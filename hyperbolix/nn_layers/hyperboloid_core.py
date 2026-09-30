@@ -480,10 +480,15 @@ def lorentz_midpoint(
     the same order (measured, float32, M = 16: 1.2e-4 at ``a = 4``, 0.35 at ``a = 8``;
     ``logs/2026-09-30_helm-centroid/accuracy_probe.out``). Spread clouds lose less, as
     ``-c<h,h>_L`` grows with the spread. The default, ``"variance"``, is unchanged bit for
-    bit. Pick ``"gemm"`` where the cost matters and the inputs stay below the radius at
-    which the caller already loses accuracy elsewhere, e.g. attention, whose GEMM-formed
-    scores break at the same ``a ≈ 8`` in float32
-    (``docs/user-guide/numerical-stability.md#attention-score-floor``).
+    bit. The error depends on the radius of the ``points`` alone, not on how the weights
+    were formed: in attention, float32 ``"gemm"`` loses the centroid of values at ``a = 9``
+    (5.7 to 11 nats from the float64 run, against 5e-7 to 4.5e-4 for ``"variance"``) even
+    when queries and keys sit near the origin and the scores are accurate
+    (``logs/2026-09-30_helm-decisions/far_values_gemm_probe.out``). So ``"gemm"`` does not
+    break only where GEMM-formed attention scores already have
+    (``docs/user-guide/numerical-stability.md#attention-score-floor``). Pick it where the
+    cost matters (long sequences) and the points stay well inside ``a ≈ 6`` in float32, or
+    run in float64; otherwise use ``"variance"``.
 
     Historical measurements of the preceding radius/direction variance form
     (probe C.i in ``logs/2026-09-08_hyperboloid_tangent_primitives``, M = 16,
