@@ -8,12 +8,12 @@ hyperbolic/Euclidean/spherical, for the ``Stereographic`` manifold) for ``identi
 
 Example::
 
+    from flax import nnx
     from hyperbolix import LearnableCurvature
-    from hyperbolix.manifolds import Hyperboloid
+    from hyperbolix.nn_layers import FGGLinear
 
     class Model(nnx.Module):
         def __init__(self, rngs):
-            self.manifold = Hyperboloid(c=1.0)
             self.curvature = LearnableCurvature(init_c=1.0)
             self.fc = FGGLinear(33, 65, rngs=rngs)
 
