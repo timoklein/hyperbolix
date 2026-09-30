@@ -908,6 +908,52 @@ def _busemann(x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature
     return jnp.log(num / denom) / sqrt_c
 
 
+def _busemann_tangent_core(
+    h: Float[Array, ""], v_norm: Float[Array, ""], v: Float[Array, "dim"], omega: Float[Array, "dim"]
+) -> Float[Array, ""]:
+    """``√c·B^ω`` of the point at scaled radius ``2h`` in direction ``v/v_norm``, without forming it.
+
+    The shared core of the two tangent-input Busemann paths: :func:`_busemann_tangent` here, with
+    ``h = √c‖v‖`` (the ball's origin metric is ``4·I``, so ``expmap_0`` reaches scaled radius
+    ``2√c‖v‖``), and ``hyperboloid._busemann_tangent``, with ``h = √c‖v_s‖/2``. In the ball the point
+    is ``√c·x = tanh(h)·v̂``, the two models' Busemann functions agree under the isometry, and for a
+    unit ``ω``::
+
+        √c·B^ω = log(cosh 2h - sinh 2h·⟨ω, v̂⟩)
+               = log(cosh²(h)·‖ω - tanh(h)·v̂‖²)                   h ≤ 1
+               = 2h + log(e^{-4h} + (1 - e^{-4h})·‖ω - v̂‖²/4)      h > 1
+
+    ``v_norm`` is ``‖v‖`` floored at ``MIN_NORM`` by the caller, and ``h`` a fixed multiple of that
+    same floored value, so ``tanh(h)/v_norm`` is finite and equals its limit at ``v = 0``. Why each
+    form is used on its side of ``h = 1``: :func:`_busemann_tangent`.
+
+    Args:
+        h: Half the point's scaled radius, built from ``v_norm``
+        v_norm: ``‖v‖`` floored at ``MIN_NORM``
+        v: Direction vector (only ``v/v_norm`` enters), shape (dim,)
+        omega: Unit ideal direction, shape (dim,)
+
+    Returns:
+        ``√c·B^ω`` of that point, scalar
+    """
+    far = h > 1.0
+    tanh_h = tanh(h)
+    # Scaled per point, so the pair below pays one difference norm, as `_busemann` does.
+    w = (jnp.where(far, 1.0, tanh_h) / v_norm) * v  # h > 1: v̂;  h ≤ 1: tanh(h)·v̂
+    n = jnp.sum((omega - w) ** 2)
+    # Both forms as `offset + log(n + shift)` with per-point `offset` and `shift`, so the pair's
+    # cotangent is 1/(n + shift). Spelled `log(a + b·n)`, the per-point `b` in that cotangent was
+    # fused into the backward pass over the (pair, dim) difference and recomputed for every element.
+    # The h > 1 form reads `h` floored at the seam: it divides by 1 - e^{-4h} = 0 at v = 0, and the
+    # unselected branch of a `where` must stay finite, or its zero cotangent times an infinite
+    # derivative is a NaN gradient. The h ≤ 1 offset 2·log(cosh h) = -log(1 - tanh²h) reuses the
+    # tanh of `w`, finite on every row because `tanh` caps its output at 1 - 10·eps.
+    exp_m4h = jnp.exp(-4.0 * floor_at(h, 1.0))
+    offset = jnp.where(far, 2.0 * h + jnp.log(0.25 * (1.0 - exp_m4h)), -jnp.log1p(-(tanh_h**2)))
+    shift = jnp.where(far, 4.0 * exp_m4h / (1.0 - exp_m4h), 0.0)
+    return offset + jnp.log(n + shift)
+
+
 def _busemann_tangent(v: Float[Array, "dim"], omega: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     """:func:`_busemann` of ``x = expmap_0(v)``, evaluated on the tangent vector ``v`` itself.
 
@@ -951,23 +997,8 @@ def _busemann_tangent(v: Float[Array, "dim"], omega: Float[Array, "dim"], c: Sca
     # The only reduction over the point: the ball route paid `_expmap_0`'s `safe_norm` plus the
     # `sum(x**2)` of `_busemann`. The floor makes `tanh(t)/‖v‖ = √c` at v = 0.
     v_norm = floor_at(safe_norm(v), MIN_NORM)
-    t = sqrt_c * v_norm
-    far = t > 1.0
-    tanh_t = tanh(t)
-    # Scaled per point, so the pair below pays one difference norm, as `_busemann` does.
-    w = (jnp.where(far, 1.0, tanh_t) / v_norm) * v  # t > 1: v̂;  t ≤ 1: √c·expmap_0(v)
-    n = jnp.sum((omega - w) ** 2)
-    # Both forms as `offset + log(n + shift)` with per-point `offset` and `shift`, so the pair's
-    # cotangent is 1/(n + shift). Spelled `log(a + b·n)`, the per-point `b` in that cotangent was
-    # fused into the backward pass over the (pair, dim) difference and recomputed for every element.
-    # The t > 1 form reads `t` floored at the seam: it divides by 1 - e^{-4t} = 0 at v = 0, and the
-    # unselected branch of a `where` must stay finite, or its zero cotangent times an infinite
-    # derivative is a NaN gradient. The t ≤ 1 offset 2·log(cosh t) = -log(1 - tanh²t) reuses the
-    # tanh of `w`, finite on every row because `tanh` caps its output at 1 - 10·eps.
-    exp_m4t = jnp.exp(-4.0 * floor_at(t, 1.0))
-    offset = jnp.where(far, 2.0 * t + jnp.log(0.25 * (1.0 - exp_m4t)), -jnp.log1p(-(tanh_t**2)))
-    shift = jnp.where(far, 4.0 * exp_m4t / (1.0 - exp_m4t), 0.0)
-    return (offset + jnp.log(n + shift)) / sqrt_c
+    # h = t: this `expmap_0` reaches scaled radius 2t, and `w` is then √c·expmap_0(v) for t ≤ 1.
+    return _busemann_tangent_core(sqrt_c * v_norm, v_norm, v, omega) / sqrt_c
 
 
 # ---------------------------------------------------------------------------

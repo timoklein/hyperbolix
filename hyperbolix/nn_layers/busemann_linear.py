@@ -93,9 +93,11 @@ class HypLinearHyperboloidBusemann(nnx.Module):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
-        required_methods = ("expmap_0", "busemann")
+        # The methods `__call__` calls: `expmap_0` only for the gyro-bias point, since tangent input
+        # is scored by `_busemann_tangent` without the lift.
+        required_methods = ("busemann", "_busemann_tangent")
         if use_gyro_bias:
-            required_methods = ("expmap_0", "busemann", "embed_spatial_0", "addition")
+            required_methods = ("busemann", "_busemann_tangent", "embed_spatial_0", "expmap_0", "addition")
         validate_hyperboloid_manifold(manifold_module, required_methods=required_methods)
         _assert_v_max_safe(v_max)
 

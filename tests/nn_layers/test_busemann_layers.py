@@ -476,3 +476,129 @@ def test_poincare_busemann_tangent_input_far_point_f32(layer_cls, c):
     assert jnp.isfinite(y32_BO).all() and jnp.isfinite(g32_BI).all()
     assert _max_rel(y32_BO, y64_BO) < 5e-6, _max_rel(y32_BO, y64_BO)
     assert _max_rel(g32_BI, g64_BI) < 2e-5, _max_rel(g32_BI, g64_BI)
+
+
+# --------------------------------------------------------------------------- #
+# Hyperboloid tangent input: scored from v, without the lifted point expmap_0(v)
+# --------------------------------------------------------------------------- #
+HYPERBOLOID_LAYERS = [HypRegressionHyperboloidBusemann, HypLinearHyperboloidBusemann]
+HYPERBOLOID_IDS = ["bmlr", "bfc"]
+
+
+def _ambient_tangent_rows(key, batch, in_dim, t_B1, c):
+    """Float64 tangent vectors ``(0, v_s)`` at the origin, ``t = √c‖v_s‖``, random directions."""
+    return jnp.pad(_tangent_rows(key, batch, in_dim - 1, t_B1, c), ((0, 0), (1, 0)))
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+@pytest.mark.parametrize("layer_cls", HYPERBOLOID_LAYERS, ids=HYPERBOLOID_IDS)
+def test_hyperboloid_busemann_tangent_input_matches_the_lift_route(layer_cls, c):
+    """float64, t = √c‖v_s‖ ≤ 12: the tangent-input layer equals the route through the lifted point it replaced.
+
+    That route lifted v first: expmap_0, then the manifold-input layer. The rows straddle the t = 2
+    seam between the two closed forms of ``Hyperboloid._busemann_tangent``, three of them within 1e-7
+    of it. Outputs, input gradients and parameter gradients agree to 1e-12 relative to their largest
+    entry (measured ≤ 1.4e-15).
+    """
+    dtype, batch, in_dim, out_dim = jnp.float64, 32, 13, 9
+    manifold = get_hyperboloid(dtype)
+    tangent = layer_cls(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dtype)
+    lifted = layer_cls(manifold, in_dim, out_dim, rngs=nnx.Rngs(0), param_dtype=dtype)
+    n_rows = tangent.bias[...].shape[0]
+    key_s, key_b, key_t, key_u, key_w = jax.random.split(jax.random.PRNGKey(1), 5)
+    # Move alpha and the bias off their init so every parameter gradient is exercised.
+    tangent.log_scale[...] = tangent.log_scale[...] + 0.3 * jax.random.normal(key_s, (n_rows,), dtype=dtype)
+    tangent.bias[...] = 0.3 * jax.random.normal(key_b, (n_rows,), dtype=dtype)
+    _copy_params(lifted, tangent, dtype)
+    seam_B1 = jnp.array([[2.0 - 1e-7], [2.0], [2.0 + 1e-7]], dtype=dtype)
+    t_B1 = jnp.concatenate([jax.random.uniform(key_t, (batch - 3, 1), dtype=dtype, minval=0.05, maxval=12.0), seam_B1])
+    v_BA = _ambient_tangent_rows(key_u, batch, in_dim, t_B1, c)
+    w_BO = jax.random.normal(key_w, (batch, out_dim), dtype=dtype)
+
+    def lift_route(model, v_BA):
+        return model(jax.vmap(manifold.expmap_0, in_axes=(0, None))(v_BA, c), c)
+
+    y_new, g_new, params_new = _out_and_grads(lambda m, v: m(v, c), tangent, v_BA, w_BO)
+    y_old, g_old, params_old = _out_and_grads(lift_route, lifted, v_BA, w_BO)
+    assert _max_rel(y_new, y_old) < 1e-12, _max_rel(y_new, y_old)
+    assert _max_rel(g_new, g_old) < 1e-12, _max_rel(g_new, g_old)
+    for p_new, p_old in zip(params_new, params_old, strict=True):
+        assert _max_rel(p_new, p_old) < 1e-12, _max_rel(p_new, p_old)
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+@pytest.mark.parametrize("layer_cls", HYPERBOLOID_LAYERS, ids=HYPERBOLOID_IDS)
+def test_hyperboloid_busemann_tangent_input_derivatives_at_origin_and_seam(layer_cls, c):
+    """float64: the input Jacobian at v = 0 and at the t = 2 seam matches central finite differences.
+
+    The points lie on one ray ``s·u``; kernel row 0 is ``u`` (aligned) and row 1 is ``-u``
+    (anti-aligned). At t = 2 the stencil straddles the seam between the two closed forms of
+    ``Hyperboloid._busemann_tangent``; t = 2 ± 1e-3 test each side. The cancellation-free form is built
+    from t = √c‖v_s‖ and v̂, whose cone singularities at the origin cancel only in the sum:
+    differentiated as written it would return a zero Jacobian at v = 0. The BMLR Jacobian is also
+    closed-form there, and on the two ray-aligned rows at every point: B^{±u}(expmap_0(s·u)) = ∓s, so
+    ∂u_k/∂v_s = alpha_k·ω_k for those rows, and for every row at v = 0. The time slot is not read.
+    """
+    dtype, in_dim, out_dim, h = jnp.float64, 13, 9, 1e-6
+    layer = layer_cls(get_hyperboloid(dtype), in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dtype)
+    n_rows = layer.bias[...].shape[0]
+    key_u, key_b = jax.random.split(jax.random.PRNGKey(2))
+    u_I = jax.random.normal(key_u, (in_dim - 1,), dtype=dtype)
+    u_I = u_I / jnp.linalg.norm(u_I)
+    layer.kernel[...] = layer.kernel[...].at[0].set(0.7 * u_I).at[1].set(-1.3 * u_I)
+    layer.bias[...] = 0.3 * jax.random.normal(key_b, (n_rows,), dtype=dtype)
+    omega_KI = layer.kernel[...] / jnp.linalg.norm(layer.kernel[...], axis=-1, keepdims=True)
+    alpha_K = jnp.exp(layer.log_scale[...])
+
+    def layer_O(v_A):
+        return layer(v_A[None, :], c)[0]
+
+    for t in (0.0, 2.0 - 1e-3, 2.0, 2.0 + 1e-3):
+        v_A = jnp.concatenate([jnp.zeros((1,), dtype=dtype), (t / jnp.sqrt(c)) * u_I])
+        jac_OA = jax.jacobian(layer_O)(v_A)
+        fd_OA = jnp.stack(
+            [(layer_O(v_A + h * e_A) - layer_O(v_A - h * e_A)) / (2 * h) for e_A in jnp.eye(in_dim, dtype=dtype)], -1
+        )
+        assert _max_rel(jac_OA, fd_OA) < 1e-7, (t, _max_rel(jac_OA, fd_OA))  # measured ≤ 2.2e-9 (FD rounding)
+        assert bool(jnp.all(jac_OA[:, 0] == 0.0)), (t, jac_OA[:, 0])
+        if layer_cls is HypRegressionHyperboloidBusemann:
+            rows = slice(None) if t == 0.0 else slice(0, 2)
+            expected_OI = alpha_K[:, None] * omega_KI
+            assert _max_rel(jac_OA[rows, 1:], expected_OI[rows]) < 1e-12, (t, _max_rel(jac_OA[rows, 1:], expected_OI[rows]))
+
+
+@pytest.mark.parametrize("c", [0.3, 1.0])
+@pytest.mark.parametrize("layer_cls", HYPERBOLOID_LAYERS, ids=HYPERBOLOID_IDS)
+def test_hyperboloid_busemann_tangent_input_far_point_f32(layer_cls, c):
+    """float32 at t = √c‖v_s‖ ∈ {12, 20, 40, 50}: outputs and all gradients match float64 on the same inputs and parameters.
+
+    Through the lifted point the float32 gradients broke from t = 30: the backward pass of the
+    rationalized division in ``hyperboloid._busemann_arg`` flushed a ~e^{-3t} intermediate to zero,
+    so the input and kernel gradients were 5e-2 … 1.07 off relative to their largest entry while the
+    scores stayed right, and at t = 50 the lifted point overflowed and the outputs were NaN. Here every
+    quantity is within 1.4e-6 (measured). The directions are random: an ω within float32 rounding of
+    v̂ is ill-conditioned by either route (see ``Hyperboloid._busemann_tangent``). alpha = 0.15 keeps
+    the BFC's √c·u below its v_max clip at t = 50.
+    """
+    batch, in_dim, out_dim = 32, 17, 12
+    layer32, layer64 = (
+        layer_cls(get_hyperboloid(dt), in_dim, out_dim, rngs=nnx.Rngs(0), input_space="tangent", param_dtype=dt)
+        for dt in (jnp.float32, jnp.float64)
+    )
+    n_rows = layer32.bias[...].shape[0]
+    layer32.log_scale[...] = jnp.full((n_rows,), jnp.log(0.15), dtype=jnp.float32)
+    layer32.bias[...] = 0.3 * jax.random.normal(jax.random.PRNGKey(2), (n_rows,), dtype=jnp.float32)
+    _copy_params(layer64, layer32, jnp.float64)
+    w32_BO = jax.random.normal(jax.random.PRNGKey(1), (batch, out_dim), dtype=jnp.float32)
+
+    for t in (12.0, 20.0, 40.0, 50.0):
+        v32_BA = _ambient_tangent_rows(jax.random.PRNGKey(0), batch, in_dim, jnp.full((batch, 1), t), c).astype(jnp.float32)
+        y32, g32, params32 = _out_and_grads(lambda m, v: m(v, c), layer32, v32_BA, w32_BO)
+        y64, g64, params64 = _out_and_grads(
+            lambda m, v: m(v, c), layer64, v32_BA.astype(jnp.float64), w32_BO.astype(jnp.float64)
+        )
+        assert jnp.isfinite(y32).all() and jnp.isfinite(g32).all(), t
+        assert _max_rel(y32, y64) < 1e-5, (t, _max_rel(y32, y64))
+        assert _max_rel(g32, g64) < 1e-5, (t, _max_rel(g32, g64))
+        for p32, p64 in zip(params32, params64, strict=True):
+            assert _max_rel(p32, p64) < 1e-5, (t, _max_rel(p32, p64))

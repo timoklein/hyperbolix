@@ -113,28 +113,25 @@ def _busemann_score(
         Curvature (positive).
     input_space : str
         ``"manifold"`` (default usage) or ``"tangent"`` — when ``"tangent"``, the input is
-        scored where ``expmap_0`` places it: the Hyperboloid lifts it first, the Poincaré ball
-        scores the tangent vector directly (:meth:`Poincare._busemann_tangent`).
+        scored where ``expmap_0`` places it, from the tangent vector itself
+        (:meth:`Poincare._busemann_tangent`, :meth:`Hyperboloid._busemann_tangent`).
 
     Returns
     -------
     Array, shape (B, K)
         The Busemann logits.
     """
-    # `busemann` is defined on Hyperboloid and Poincare but is not part of the `Manifold`
-    # protocol (Euclidean, ProperVelocity and Stereographic have no horosphere).
-    busemann = cast("Hyperboloid | Poincare", manifold).busemann
-    if input_space == "tangent" and isinstance(manifold, Poincare):
-        # Scored without forming the ball point, whose float32 lift stops at the ceiling
-        # t = √c‖x‖ ≈ 6.33 at c = 1 (see `poincare._busemann_tangent`). The hyperboloid keeps its
-        # `expmap_0` lift below, which is exact up to its coordinate ceiling. The score read off the
-        # stored float32 point still loses accuracy at large t: √c·B is off by ≤ 6.4e-7 up to t = 8,
-        # 7.9e-5 (c = 1) to 2.1e-4 (c = 0.3) at t = 12 and 3.4-3.6 at t = 20, the last two for ω
-        # aligned with the input (logs/2026-09-29_cancellation-free/wave4/audit_U/probe_u2.out).
-        x_BI = x_BI.astype(manifold.dtype)  # the work dtype `expmap_0` gave the lifted input
-        busemann = manifold._busemann_tangent
-    elif input_space == "tangent":
-        x_BI = jax.vmap(manifold.expmap_0, in_axes=(0, None), out_axes=0)(x_BI, c)
+    # `busemann` and `_busemann_tangent` are defined on Hyperboloid and Poincare but are not part
+    # of the `Manifold` protocol (Euclidean, ProperVelocity and Stereographic have no horosphere).
+    horo_manifold = cast("Hyperboloid | Poincare", manifold)
+    busemann = horo_manifold.busemann
+    if input_space == "tangent":
+        # Scored without forming the point `expmap_0` would give: the float32 ball lift stops at
+        # the ceiling t = √c‖x‖ ≈ 6.33 at c = 1 (see `poincare._busemann_tangent`); through the
+        # float32 hyperboloid lift the score's gradient underflows from t ≈ 29.6 and the point
+        # overflows at t ≈ 45 (see `hyperboloid._busemann_tangent`).
+        x_BI = x_BI.astype(horo_manifold.dtype)  # the work dtype `expmap_0` gave the lifted input
+        busemann = horo_manifold._busemann_tangent
 
     work_dtype = x_BI.dtype
     kernel_KI = kernel_KI.astype(work_dtype)

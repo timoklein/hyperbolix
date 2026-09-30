@@ -73,6 +73,7 @@ from ..utils.math_utils import (
 )
 from ..utils.precision import MATMUL_PRECISION
 from ._base import ManifoldBase, default_atol
+from .poincare import _busemann_tangent_core
 from .protocol import ScalarCurvature
 
 # Version selection constants for _dist() and _dist_0()
@@ -2086,6 +2087,66 @@ def _busemann(x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCu
     return jnp.log(sqrt_c * _busemann_arg(x, v, c)) / sqrt_c
 
 
+def _busemann_tangent(v: Float[Array, "dim_plus_1"], omega: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
+    """:func:`_busemann` of ``x = expmap_0(v)``, evaluated on the tangent vector ``v = (0, v_s)`` itself.
+
+    With ``t = √c‖v_s‖`` the point sits at scaled radius ``t``: ``√c·x₀ = cosh t`` and
+    ``√c·x_s = sinh(t)·v̂``, so for a unit ``ω`` the Busemann coordinate is
+    ``√c·B^ω(x) = log(cosh t - sinh t·⟨ω, v̂⟩)``. That is the Poincaré tangent form
+    (:func:`poincare._busemann_tangent`) with ``2t`` replaced by ``t``: the ball's origin metric is
+    ``4·I``, so its ``expmap_0`` reaches twice the scaled radius. It is evaluated by the same core,
+    :func:`poincare._busemann_tangent_core`, at ``h = t/2`` (the point's image in the ball is
+    ``tanh(t/2)·v̂/√c``)::
+
+        t ≤ 2:  log(cosh²(t/2) · ‖ω - tanh(t/2)·v̂‖²)
+        t > 2:  t + log(e^{-2t} + (1 - e^{-2t}) · ‖ω - v̂‖²/4)
+
+    and the lifted point is never formed. The value and the derivative at ``v = 0`` and across the
+    seam are handled by the core, and in float64 ``√c·B`` agrees with ``busemann(expmap_0(v))`` to
+    ≤ 1e-14.
+
+    In float32 that route's gradient broke first. The backward pass of the rationalized division in
+    :func:`_busemann_arg` multiplies the cotangent ``1/arg`` (~``e^{-t}`` for a generic ``ω``) by
+    ``(x₀ + q)^{-2}`` (~``e^{-2t}``), and that product drops below float32's smallest normal number
+    past ``t ≈ 29.6``. XLA:CPU flushes it to zero, so from ``t = 30`` the input and direction
+    gradients of the Busemann layers were off by 5e-2 to 1.07 relative to their largest entry, with
+    the scores still right. Past ``t ≈ 45`` (``c = 1``) the lifted point itself overflows and the
+    scores are NaN. The closed form has neither limit. Its only non-finite case is a row exactly on
+    ``ω`` (``‖ω - v̂‖ = 0``), which returns ``-inf`` once ``e^{-2t}`` leaves the float32 range: from
+    ``t ≈ 43.7`` where subnormals are flushed, 51.7 where they are kept.
+
+    Neither route removes the conditioning of an ``ω`` close to ``v̂``. Its misalignment is read off
+    float32 directions, and a direction error ``δ`` moves ``√c·B`` by up to ~``δ·sinh t``. For ``ω``
+    and ``v̂`` that agree up to float32 rounding, the float32 ``√c·B`` sits 9e-5 to 1.2e-4 from
+    float64 at ``t = 12`` (the lift route 3e-4 to 5e-4) and 1.7 to 1.9 away at ``t = 20`` (3.6 to 3.7).
+
+    ``ω`` must be unit, as for :func:`_busemann`. Both forms use ``‖ω‖ = 1``, so the ``ω``-gradient
+    differs from the lift route's by a multiple of ``ω``, which the row normalization of the Busemann
+    layers projects out. At small ``t`` that multiple is ~``2ω`` against a tangential part of size
+    ~``t``, so after the projection the direction gradient carries a relative float32 error of
+    ~``eps/t``, as in the Poincaré form: through the regression head 1.0e-3 at ``t = 1e-3`` and
+    4.6e-6 at ``t = 0.1``, where the lift route had 2e-7.
+
+    The time slot ``v[0]`` of a tangent vector at the origin is zero and is not read; ``expmap_0``
+    folds a non-zero ``v[0]`` into a Minkowski norm instead.
+
+    Args:
+        v: Tangent vector at the origin in ambient representation, shape (dim+1,)
+        omega: Unit ideal direction (spatial), shape (dim,)
+        c: Curvature (positive)
+
+    Returns:
+        Busemann coordinate B^omega(expmap_0(v)), scalar
+    """
+    sqrt_c = jnp.sqrt(c)
+    v_s = v[1:]
+    # One norm per point and one difference norm per pair; the lift route paid `_expmap_0`'s
+    # Minkowski norm and `_proj`'s time slot per point, and `_busemann_arg`'s dot and perpendicular
+    # norm per pair. The floor makes `tanh(t/2)/‖v_s‖ = √c/2` at v = 0.
+    v_norm = floor_at(safe_norm(v_s), MIN_NORM)
+    return _busemann_tangent_core(0.5 * (sqrt_c * v_norm), v_norm, v_s, omega) / sqrt_c
+
+
 def _lorentz_boost(mu: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
     """Lorentz boost matrix ``B`` that sends ``mu`` to the origin (``B @ mu = origin``).
 
@@ -2386,6 +2447,16 @@ class Hyperboloid(ManifoldBase):
         (symmetrizes to ``√c·dist``) and cannot deliver circulation.
         """
         return _busemann(self._cast(x), self._cast(v), c)
+
+    def _busemann_tangent(
+        self, v: Float[Array, "dim_plus_1"], omega: Float[Array, "dim"], c: ScalarCurvature
+    ) -> Float[Array, ""]:
+        """``busemann(expmap_0(v), omega, c)`` from the tangent vector ``v = (0, v_s)``, without the lifted point.
+
+        Private: the tangent-input path of the Busemann layers (see :func:`_busemann_tangent`).
+        ``omega`` must be a unit spatial direction; the time slot ``v[0]`` is not read.
+        """
+        return _busemann_tangent(self._cast(v), self._cast(omega), c)
 
     def lorentz_boost(self, mu: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
         """Lorentz boost matrix ``B`` with ``B @ mu = origin`` (sends ``mu`` to the origin).

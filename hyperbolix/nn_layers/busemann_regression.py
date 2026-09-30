@@ -69,7 +69,7 @@ class HypRegressionHyperboloidBusemann(nnx.Module):
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
 
-        validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "busemann"))
+        validate_hyperboloid_manifold(manifold_module, required_methods=("busemann", "_busemann_tangent"))
         self.manifold = manifold_module
         self.in_dim = in_dim
         self.out_dim = out_dim
