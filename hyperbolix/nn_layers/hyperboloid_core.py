@@ -545,7 +545,7 @@ def lorentz_midpoint(
 def lorentz_residual(
     x: Float[Array, "... dim_plus_1"],
     y: Float[Array, "... dim_plus_1"],
-    w_y: float | Float[Array, ""],
+    w_y: float | Float[Array, "..."],
     c: float,
     eps: float = 1e-7,
 ) -> Float[Array, "... dim_plus_1"]:
@@ -576,7 +576,8 @@ def lorentz_residual(
         (``ave_0 < 0``) — the ``abs()`` in the normalizer then converts the
         geometry violation into a "valid-looking" but wrong output instead of
         raising. This is why callers must not expose ``w_y`` as an
-        unconstrained learnable parameter.
+        unconstrained learnable parameter unless they accept that behaviour
+        (see Notes, "Negative weights").
 
     Parameters
     ----------
@@ -584,8 +585,12 @@ def lorentz_residual(
         Points on hyperboloid with curvature c.
     y : Array, shape (..., d+1)
         Points on hyperboloid with curvature c (to be added with weight w_y).
-    w_y : float or scalar Array
-        Weight for the y contribution. Must be >= 0 (see warning above).
+    w_y : float or Array, shape () or (...) or (..., 1)
+        Weight for the y contribution. Must be >= 0 (see warning above). A scalar applies one
+        weight to every point; an array of shape ``x.shape[:-1]`` or ``x.shape[:-1] + (1,)``
+        gives one weight per point (e.g. per-token gate weights in a mixture of experts). A
+        weight array of shape ``x.shape[:-1]`` gets a trailing axis added internally; any
+        other non-scalar shape whose last axis is not 1 raises ``ValueError``.
     c : float
         Curvature parameter (positive, c > 0).
     eps : float, optional
@@ -615,7 +620,21 @@ def lorentz_residual(
     For ``w_y >= 0`` the ``abs()`` and the ``eps`` floor are provably inactive: the difference of
     two on-sheet points is spacelike (``<x - y, x - y>_L >= 0``), so
     ``c * |<ave, ave>_L| = (1 + w_y)^2 + c * w_y * <x - y, x - y>_L >= (1 + w_y)^2 >= 1``. Both
-    are kept only as insurance for out-of-contract inputs.
+    are kept only as insurance for out-of-contract inputs. The bound holds per point, so it
+    covers per-point weight arrays as well.
+
+    Negative weights. The weight is not checked: an unconstrained learnable ``w_y`` (HELM's raw
+    ``nn.Parameter``, or ``LorentzResidual(weight_parameterization="identity")``) can go
+    negative, and ``w_y < 0`` is evaluated, not rejected. The ``abs()`` then plays the role of
+    the ``.abs()`` in the HELM / LResNet reference: where ``ave`` turns spacelike, the result is
+    ``ave`` divided by ``sqrt(c <ave, ave>_L)`` and put back on the sheet by the time-coordinate
+    rebuild below — a valid hyperboloid point, but not a midpoint of ``x`` and ``y`` in any
+    sense. The reference has the same behaviour whenever its output scaling rebuilds the time
+    coordinate (without the scaling it returns the spacelike vector itself, off the sheet).
+    Likewise a past-directed ``ave`` (``ave_0 < 0``) comes back on the upper sheet with the
+    spatial part ``ave_s / sqrt(c |<ave, ave>_L|)``. At ``w_y = -1``,
+    ``c |<ave, ave>_L| = c <x - y, x - y>_L``, which falls below ``eps`` as ``x`` approaches ``y``,
+    and the floor becomes active; in the reference the ``1e-4`` clamp plays that role.
 
     The identity assumes ``x``, ``y`` are *exactly* on-sheet — an assumption float storage cannot
     honour at large radius, since ``x_0`` is only accurate to ``eps * x_0`` and the sheet constraint
@@ -636,6 +655,17 @@ def lorentz_residual(
     Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 1. 2025.
     (Also adopted as the residual connection in HELM, He et al. 2025.)
     """
+    # Per-point weights: (...,) -> (..., 1) so they broadcast over the ambient axis. Scalars (Python
+    # or 0-d) pass through untouched, which keeps the scalar path bit-for-bit unchanged.
+    w_ndim = jnp.ndim(w_y)
+    if w_ndim > 0:
+        if w_ndim == x.ndim - 1:
+            w_y = jnp.expand_dims(jnp.asarray(w_y), -1)  # (..., 1)
+        if jnp.shape(w_y)[-1] != 1:
+            raise ValueError(
+                f"lorentz_residual: w_y must be a scalar or have shape x.shape[:-1] or x.shape[:-1] + (1,); "
+                f"got w_y.shape={jnp.shape(w_y)} for x.shape={x.shape}"
+            )
     ave_A = x + w_y * y  # (..., A) where A = d+1
     # Exact for on-sheet x, y:  <x + w y, x + w y>_L = -(1+w)^2/c - w <x-y, x-y>_L.
     # The naive -ave_0^2 + ||ave_s||^2 subtracts two O(||s||^2) squares to reach an O(1/c) result
