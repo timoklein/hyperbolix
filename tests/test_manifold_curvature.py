@@ -79,7 +79,8 @@ class TestEuclidean:
 # init_c on a clamp bound: (parameterization, c_min, c_max, init_c), with explicit bounds so the cases do not depend
 # on the default bounds. Rounding the inverse of init_c to the storage dtype puts the recovered c one float outside
 # the bound for five of these 22 dtype cases on XLA:CPU (float32 log at 0.1 and 0.2, float32 softplus at 0.2 and
-# float64 softplus at 0.3 below c_min; float64 log at 10 above c_max), and on the bound or inside it for the rest.
+# float64 softplus at 0.3 below c_min; float64 log at 10 above c_max), one float inside it for two (float64 log and
+# softplus at 0.1, above c_min), and exactly on it for the other 15, every identity case among them.
 INIT_ON_BOUND_CASES = [
     ("log", 0.1, 10.0, 0.1),
     ("log", 0.1, 10.0, 10.0),
@@ -184,9 +185,9 @@ class TestLearnableCurvatureInit:
         ``raw`` is the plain inverse of ``init_c`` rounded to the storage dtype, so the recovered ``c`` can land one
         float outside the bound: on XLA:CPU float32 ``exp(float32(log 0.1)) = 0.099999994 < 0.1``, which froze
         ``LearnableCurvature(init_c=0.1)`` under the old hard clamp. The clamp maps it onto the bound, passes the
-        inward gradient and blocks the outward one. A ``c`` that rounds onto the bound or inside it counts as
-        inside, where the outward gradient passes too. The oracle is ``±dc/draw`` in Python float64 at the stored
-        ``raw``.
+        inward gradient and blocks the outward one. A ``c`` that rounds exactly onto the bound gets the same
+        projected-gradient treatment, so the outward gradient passes only where ``c`` rounds inside the interval.
+        The oracle is ``±dc/draw`` in Python float64 at the stored ``raw``.
         """
         curvature = LearnableCurvature(init_c, parameterization=parameterization, c_min=c_min, c_max=c_max, param_dtype=dtype)
         plain_inverse = jnp.array(INVERSE[parameterization](init_c), dtype=dtype)
@@ -195,6 +196,7 @@ class TestLearnableCurvatureInit:
         bound = jnp.asarray(c_min if on_floor else c_max, dtype=dtype)
         unclamped = UNCLAMPED[parameterization](curvature.raw[...])
         outside = bool(unclamped < bound) if on_floor else bool(unclamped > bound)
+        on_or_outside = bool(unclamped <= bound) if on_floor else bool(unclamped >= bound)
         assert curvature() == (bound if outside else unclamped)
 
         inward = -1.0 if on_floor else 1.0  # dL/dc under which a descent step moves c into the interval
@@ -204,7 +206,7 @@ class TestLearnableCurvatureInit:
         rel = 1e-6 if dtype == jnp.float32 else 1e-12
         assert grad_in.dtype == dtype
         assert float(grad_in) == pytest.approx(inward * dc_draw, rel=rel)
-        if outside:
+        if on_or_outside:
             assert float(grad_out) == 0.0
         else:
             assert float(grad_out) == pytest.approx(-inward * dc_draw, rel=rel)
@@ -450,10 +452,11 @@ class TestLearnableCurvatureGradients:
         """Toy fit: Adam(1e-2) on ``(c - target)**2``, float32, ``c`` started on ``c_min = 0.1``.
 
         20 steps with the target at 0.05, below the floor, then 30 with it at 0.3. ``c`` rests on the floor while
-        the loss pushes it out and leaves it within a few steps of the target moving inside: 1 for ``log``, whose
-        init lands one float below the floor on XLA:CPU so no outward step ever moved ``raw``; 7 for ``softplus``,
-        whose init is a tie, so the first outward step passed and Adam's momentum carried ``raw`` 0.05 on. Under the
-        old hard clamp ``c`` stayed at exactly 0.1 for good; under the removed ``straight_through_clamp`` it left
+        the loss pushes it out and leaves it on the first step after the target moves inside, for both: on XLA:CPU
+        ``log``'s init lands one float below the floor and ``softplus``'s exactly on it, the clamp blocks every
+        outward step in both cases, and ``raw`` never moves. While a tie still passed the outward gradient,
+        ``softplus`` took 7 steps: the first outward step passed and Adam's momentum carried ``raw`` 0.05 on. Under
+        the old hard clamp ``c`` stayed at exactly 0.1 for good; under the removed ``straight_through_clamp`` it left
         only after ``raw`` had walked back from 0.85 nats below (55 steps, after 100 steps below the floor).
         """
         curvature = LearnableCurvature(0.1, parameterization=parameterization, c_min=0.1, c_max=10.0)

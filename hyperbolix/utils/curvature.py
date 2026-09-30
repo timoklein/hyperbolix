@@ -65,9 +65,10 @@ _C_ABS_MAX = 10.0
 def _clamp_keep_inward(c: jax.Array, c_min: float, c_max: float) -> jax.Array:
     """``c`` clipped to ``[c_min, c_max]``, with a backward that zeroes only a cotangent pointing out of the interval.
 
-    The cotangent ``g`` passes unchanged where ``c`` is inside the interval, a tie included. Outside it, ``g``
-    passes only if a descent step moves ``c`` back toward the interval: below ``c_min`` a negative ``g``, above
-    ``c_max`` a positive one. The other sign becomes exactly 0. A NaN ``c`` or ``g`` passes through.
+    The cotangent ``g`` passes unchanged where ``c`` is strictly inside the interval. On a bound or past it, ``g``
+    passes only if a descent step moves ``c`` into the interval: at or below ``c_min`` a negative ``g``, at or
+    above ``c_max`` a positive one. The other sign becomes exactly 0, which for a ``c`` exactly on a bound is
+    the projected-gradient step. A NaN ``c`` or ``g`` passes through.
     """
     return clamp_to(c, c_min, c_max)
 
@@ -77,7 +78,7 @@ def _clamp_keep_inward_fwd(c: jax.Array, c_min: float, c_max: float) -> tuple[ja
 
 
 def _clamp_keep_inward_bwd(c_min: float, c_max: float, c: jax.Array, g: jax.Array) -> tuple[jax.Array]:
-    outward = ((c < c_min) & (g > 0)) | ((c > c_max) & (g < 0))
+    outward = ((c <= c_min) & (g > 0)) | ((c >= c_max) & (g < 0))
     return (jnp.where(outward, 0.0, g),)
 
 
@@ -143,25 +144,38 @@ class LearnableCurvature(nnx.Module):
     (same root cause as the pre-refactor manifold bug).
 
     Clamp: the forward value is the recovered ``c`` clipped to
-    ``[c_min, c_max]``. Inside the interval, a tie included, the gradient is the
-    full chain rule, ``dc/draw`` times the incoming gradient. Outside it, the
-    gradient passes only if it points back inside (below ``c_min``, one under
-    which gradient descent raises ``c``; above ``c_max``, one under which it
-    lowers ``c``); an outward gradient is set to exactly 0. This is projected
-    gradient descent with the projection folded into the forward pass, so the
-    train step needs no extra call: ``c`` rests on a bound while the loss pushes
-    it outward and comes off it once the loss pulls it back, and a blocked
+    ``[c_min, c_max]``. Strictly inside the interval the gradient is the full
+    chain rule, ``dc/draw`` times the incoming gradient. On a bound or outside
+    it, the gradient passes only if it points inside (at or below ``c_min``, one
+    under which gradient descent raises ``c``; at or above ``c_max``, one under
+    which it lowers ``c``); an outward gradient is set to exactly 0. This is
+    projected gradient descent with the projection folded into the forward pass,
+    so the train step needs no extra call: ``c`` rests on a bound while the loss
+    pushes it outward and comes off it once the loss pulls it back, and a blocked
     gradient does not feed Adam's moments. ``raw`` itself is not clamped, but it
     does not drift: it leaves the interval only by the step that crossed the bound
     (plus the optimizer's decaying momentum). Coming back takes only the few steps
     that walk that overshoot back, each sized like an interior step at the bound,
     so no damping is needed. A ``c`` that sits on a bound for many steps is held
-    there by the loss; widen the bound if that is unwanted.
+    there by the loss; widen the bound if that is unwanted. The clamp sees each
+    call's gradient separately, so call the instance once per forward and reuse
+    ``c``: in a toy fit where two calls of one instance pulled opposite ways at
+    the floor, ``c`` hovered up to 0.21 % above it under Adam at ``1e-2`` (a
+    level reached after about 10,000 steps and then held; 0.15 % under SGD),
+    while one reused call held it on the floor.
+
+    Forward mode: the clamp's backward is a custom VJP, so ``jax.jvp`` and
+    ``jax.jacfwd`` through a clamped instance raise a ``TypeError``
+    (``jax.hessian``, which is forward-over-reverse, works); with
+    ``c_min=None, c_max=None`` it is plain autodiff.
 
     Init: ``raw`` is the inverse of ``init_c`` rounded to ``param_dtype``. For an
-    ``init_c`` on a bound, that rounding can recover a ``c`` one float outside it
-    (float32 ``exp(float32(log 0.1)) = 0.099999994``); the clamp maps it onto the
-    bound, and a loss that pulls ``c`` inside moves it from the first step.
+    ``init_c`` on a bound, that rounding can recover a ``c`` exactly on it, one
+    float outside it (float32 ``exp(float32(log 0.1)) = 0.099999994``) or one
+    float inside it (float64 ``exp(log 0.1) = 0.10000000000000002``). On or
+    outside the bound, ``c`` starts on the bound, where from the first step the
+    outward gradient is blocked and the inward one passes. One float inside,
+    ``c`` starts as an interior point.
     """
 
     def __init__(

@@ -122,13 +122,13 @@ instead uses a symmetric magnitude cap `[-10.0, 10.0]` that *includes* `0`, so
 it never forbids the Euclidean/spherical half. Pass `c_min`/`c_max` to set other
 bounds, or `None` to disable one.
 
-The clamp does not freeze `c` on a bound. Outside `[c_min, c_max]` it blocks
-only a gradient that would push `c` further out, so `c` rests on the bound
-while the loss pushes against it and comes off it once the loss pulls it back
-inside: projected gradient descent, with no extra call in the train step. The
-raw parameter stays within the step that crossed the bound (plus the
-optimizer's momentum), so leaving takes only the few steps that walk that
-back: 1 to 7 Adam steps at learning rate `1e-2` in a toy fit.
+The clamp does not freeze `c` on a bound. On a bound or outside
+`[c_min, c_max]` it blocks only a gradient that would push `c` out, so `c`
+rests on the bound while the loss pushes against it and comes off it once the
+loss pulls it back inside: projected gradient descent, with no extra call in
+the train step. The raw parameter stays within the step that crossed the bound
+(plus the optimizer's momentum), so leaving takes only the few steps that walk
+that back: 1 to 7 Adam steps at learning rate `1e-2` in a toy fit.
 
 ### When `c=1.0` works and when it doesn't
 
