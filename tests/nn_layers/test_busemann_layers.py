@@ -47,6 +47,32 @@ def _make_ball_points(key, n, in_dim, dtype, c=C):
 
 
 # --------------------------------------------------------------------------- #
+# Construction: each family takes its own model only
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("in_dim", [5, 2])
+@pytest.mark.parametrize(
+    "layer_cls, wrong_manifold_fn, family",
+    [
+        (HypRegressionPoincareBusemann, get_hyperboloid, "Poincare"),
+        (HypLinearPoincareBusemann, get_hyperboloid, "Poincare"),
+        (HypRegressionHyperboloidBusemann, get_poincare, "Hyperboloid"),
+        (HypLinearHyperboloidBusemann, get_poincare, "Hyperboloid"),
+    ],
+    ids=["bmlr-poincare", "bfc-poincare", "bmlr-hyperboloid", "bfc-hyperboloid"],
+)
+def test_busemann_layers_reject_the_other_model_at_construction(layer_cls, wrong_manifold_fn, family, in_dim):
+    """The Poincaré layers refuse a ``Hyperboloid``, the Hyperboloid layers a ``Poincare``.
+
+    Both manifolds have ``busemann`` and ``_busemann_tangent``, so the method-name validation cannot
+    tell them apart. The mismatched layer then failed at its first call on a shape error, except at
+    ``in_dim = 2``: there one operand has a single spatial entry, which broadcasts against the
+    other's two, and the layer ran without an error.
+    """
+    with pytest.raises(TypeError, match=f"{family} Busemann layers need a class-based {family} manifold instance"):
+        layer_cls(wrong_manifold_fn(jnp.float32), in_dim, 3, rngs=nnx.Rngs(0))
+
+
+# --------------------------------------------------------------------------- #
 # BMLR logit sign / value oracle (audit A9-06 + M3-G16)
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(

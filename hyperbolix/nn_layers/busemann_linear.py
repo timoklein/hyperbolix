@@ -103,6 +103,12 @@ class HypLinearHyperboloidBusemann(nnx.Module):
         if use_gyro_bias:
             required_methods = ("busemann", "_busemann_tangent", "embed_spatial_0", "expmap_0", "addition")
         validate_hyperboloid_manifold(manifold_module, required_methods=required_methods)
+        # `Poincare` has `busemann` and `_busemann_tangent` too: the method names above cannot tell the models apart.
+        if not isinstance(manifold_module, Hyperboloid):
+            raise TypeError(
+                "The Hyperboloid Busemann layers need a class-based Hyperboloid manifold instance "
+                f"(e.g., hyperbolix.manifolds.Hyperboloid()), got {type(manifold_module).__name__}."
+            )
         _assert_v_max_safe(v_max)
 
         self.manifold = manifold_module
@@ -207,6 +213,12 @@ class HypLinearPoincareBusemann(nnx.Module):
         if use_gyro_bias:
             required_methods = ("busemann", "_busemann_tangent", "proj", "expmap_0", "addition")
         validate_poincare_manifold(manifold_module, required_methods=required_methods)
+        # `Hyperboloid` has `busemann` and `_busemann_tangent` too: the method names above cannot tell the models apart.
+        if not isinstance(manifold_module, Poincare):
+            raise TypeError(
+                "The Poincare Busemann layers need a class-based Poincare manifold instance "
+                f"(e.g., hyperbolix.manifolds.Poincare()), got {type(manifold_module).__name__}."
+            )
         _assert_v_max_safe(v_max)
 
         self.manifold = manifold_module

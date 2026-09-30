@@ -977,9 +977,10 @@ def _busemann_tangent(v: Float[Array, "dim"], omega: Float[Array, "dim"], c: Sca
     the origin, and ``‖ω - tanh(t)·v̂‖ ≥ 1 - tanh(1) = 0.24`` bounds its rounding amplification.
     Both forms are exact identities, so the value and its derivative are continuous across the
     seam. Measured through ``HypRegressionPoincareBusemann`` (float32 vs float64 on the same inputs
-    and parameters, relative to the largest entry, c ∈ {0.3, 1}): at t = 5 scores 2.3e-4 → 2.4e-7
-    and input gradients 1.4e-3 → 2.1e-7; at t = 8 2.2e-1 → 2.0e-7 and 1.0 (no radial derivative)
-    → 2.6e-7.
+    and parameters, relative to the largest entry, c ∈ {0.3, 1}, random ``ω``): at t = 5 scores
+    2.3e-4 → 2.4e-7 and input gradients 1.4e-3 → 2.1e-7; at t = 8 2.2e-1 → 2.0e-7 and 1.0 (no radial
+    derivative) → 2.6e-7. For ``ω`` aligned with ``v̂`` the input and kernel gradients are off by 0.1
+    or more from t = 5, on the ball route too.
 
     ``ω`` must be unit, as for :func:`_busemann`. The ``t > 1`` form uses ``‖ω‖ = 1``, so its
     ``ω``-gradient differs from the ball route's by a multiple of ``ω``, which the row normalization

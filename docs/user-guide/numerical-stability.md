@@ -1069,14 +1069,17 @@ form and give 4.8e-4 and 5.9e-4 at $t = \sqrt{c}\,\lVert v\rVert = 10^{-3}$; the
 replaced gave 4.8e-4 and 4.4e-4, since its $\omega$-gradient has the same form, so there the error
 is not new (`logs/2026-09-29_cancellation-free/hbz_docs/probe_small_t_poincare.out`).
 
-The four Busemann layers check the manifold by the names of the methods they call. `Klein` has
-neither `busemann` nor `_busemann_tangent`, so they reject it at construction with a `TypeError`,
-as they reject `HalfSpace`, `Stereographic`, `ProperVelocity` and `Euclidean`. `Hyperboloid` now
-has `_busemann_tangent` as well, so it passes the check of the Poincaré Busemann layers, as
-`Poincare` passes that of the Hyperboloid ones. Such a pair fails at the first call with a shape
-error, except at `in_dim = 2`: there a one-entry spatial part broadcasts against the kernel rows,
-and some of these calls run without an error
-(`logs/2026-09-29_cancellation-free/hbz_docs/check_busemann_validation.out`).
+The four Busemann layers check the manifold at construction, and a wrong one raises a `TypeError`.
+The first check is by the names of the methods they call. `Klein`, `HalfSpace`, `Stereographic`,
+`ProperVelocity` and `Euclidean` have neither `busemann` nor `_busemann_tangent`, so it rejects
+them. It cannot tell `Poincare` from `Hyperboloid`, which have both, so each layer also checks the
+class: the Poincaré Busemann layers (`HypRegressionPoincareBusemann`, `HypLinearPoincareBusemann`)
+accept only a `Poincare`, and the Hyperboloid ones (`HypRegressionHyperboloidBusemann`,
+`HypLinearHyperboloidBusemann`) only a `Hyperboloid`. Before that check, the other model passed
+construction and failed at the first call with a shape error, except at `in_dim = 2`: there a
+one-entry spatial part broadcasts against the kernel rows, and some of these calls ran without an
+error (`logs/2026-09-29_cancellation-free/hbz_docs/check_busemann_validation.out`; after the check:
+`logs/2026-09-29_cancellation-free/busemann_type/check_busemann_validation_new.out`).
 
 ### `PoincareBatchNorm2D`'s Batch Mean at Large Radius {#poincare-batchnorm-mean}
 
