@@ -12,14 +12,17 @@ Hyperbolic geometry presents unique numerical challenges due to the exponential 
     - **Hyperbolic function overflow**: cosh/sinh overflow for large arguments
     - **Division by near-zero**: Operations involving 1 - c||x||² near the boundary
 
-    These challenges are specific to the Poincaré ball; see [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode) below for operations that are stable over the measured radius ranges in float32.
+    These challenges are specific to the Poincaré ball. The hyperboloid is covered [below](#the-hyperboloids-two-point-cancellation-failure-mode); Klein and the half-space model have their own limits, see [Klein](#klein-numerics) and [Half-Space](#halfspace-numerics).
 
-!!! note "Archived numerical evidence"
-    Historical `logs/...` paths and bare probe filenames cited on this page are
-    members of the immutable `numerics_logs/numerics_logs.zip` archive. The complete
-    member list is recorded in
-    `logs/2026-09-08_origin_derivative_fixes/supplied_archive_inventory.txt`; those
-    older directories are not duplicated in the working tree.
+Each model's pairwise operations hold up to a scaled radius $a = \sqrt{c}\,d$ (at $c = 1$). Past it
+the chart cannot represent the point; that is a property of the chart, not a bug.
+
+| Model | Good to $a$ (float32 / float64) | What sets the limit |
+|---|---|---|
+| Hyperboloid | 16.6 / much further | the storage floor $\varepsilon\sinh(a)/\sqrt{c}$ of a stored point |
+| Poincaré | 12.65 / 27.7 (13.80 / 28.88 at $c = 0.1$) | the ball chart's ceiling, see [The Round-Trip Ceiling](#poincare-roundtrip-ceiling) |
+| Klein | 6.32 / 13.86 | half the Poincaré radius, and the floor $\varepsilon\cosh^2(a)$, see [Klein](#klein-chart-ceiling) |
+| HalfSpace | `inf`/NaN past 88.7 / 709.8 | a stored point's rounding, which grows with the distance to the vertical axis, see [Half-Space](#halfspace-numerics) |
 
 ## Float Precision: Float32 vs Float64
 
@@ -28,7 +31,7 @@ Hyperbolic geometry presents unique numerical challenges due to the exponential 
 **Float32 (default)**:
 
 - Sufficient up to scaled radius $a = \sqrt{c}\,d \approx 7$, and up to $a \approx 10$ outside critical operations
-- 2-4x faster on GPU
+- Much faster on GPU: float64 runs at half rate on A100/H100 and 1/32–1/64 rate on consumer cards
 - Lower memory footprint (important for large models)
 - ~7 significant decimal digits
 
@@ -40,6 +43,7 @@ Hyperbolic geometry presents unique numerical challenges due to the exponential 
 - Use for research, validation, or stability-critical applications
 
 ```python
+import jax
 import jax.numpy as jnp
 from hyperbolix.manifolds import Poincare
 
@@ -50,6 +54,7 @@ y = jnp.array([0.8, 0.5])
 dist = poincare_f32.dist(x, y, c=1.0)
 
 # Float64 (high precision) — inputs are automatically cast
+jax.config.update("jax_enable_x64", True)  # required for float64
 poincare_f64 = Poincare(dtype=jnp.float64)
 dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
 ```
@@ -67,19 +72,11 @@ dist = poincare_f64.dist(x, y, c=1.0)  # returns float64
 | 12.5 | 8.2e-4 / 2.5e-3 | float64 for critical ops |
 | ≥ 12.65 | past the float32 chart ceiling: the ball cannot store the point | **float64 required** |
 
-*Float32 relative error against float64 on the same float32 input, for the single-point
-operations `dist_0`, `logmap_0` (vector error), `expmap_0` (error of the output's scaled radius)
-and the round trip `logmap_0(expmap_0(v))` against `v`: median and max over 256 random directions
-in 16 dimensions, the worst of the four operations and of $c \in \{0.1, 1\}$
-(`logs/2026-09-29_cancellation-free/docs_b2/probe_precision_table.out`). At $c = 1$, $a$ is the
-distance $d$ itself. The last row is the ceiling at $c = 1$ (see
-[The Round-Trip Ceiling](#poincare-roundtrip-ceiling)); at $c = 0.1$ the float32 ceiling is
-$a \approx 13.8$. Table scoped to the Poincaré ball: for the hyperboloid's `dist_0` and `logmap_0` see
-[The Hyperboloid Origin Chart](#hyperboloid-origin-chart), and
-`Hyperboloid.dist`/`logmap`/`sqdist`/`tangent_norm`/`expmap`/`ptransp`/`tangent_proj`/`tangent_inner`/`egrad2rgrad`/gyro
-`addition`/`gyro_difference`/`busemann` under `VERSION_DEFAULT` are evaluated with stable formulas
-whose tested accuracy is described in [Hyperboloid](#the-hyperboloids-two-point-cancellation-failure-mode)
-below.*
+*Poincaré ball only: float32 against float64 for `dist_0`, `logmap_0`, `expmap_0` and their
+round trip, the worst of the four and of $c \in \{0.1, 1\}$. The last row is the ceiling at
+$c = 1$ (13.8 at $c = 0.1$; see [The Round-Trip Ceiling](#poincare-roundtrip-ceiling)). For the
+hyperboloid, see [The Hyperboloid Origin Chart](#hyperboloid-origin-chart) and the
+[two-point section](#the-hyperboloids-two-point-cancellation-failure-mode) below.*
 
 !!! tip "Quick Check"
     Compute the largest scaled radius $a = \sqrt{c}\,d_0$ of your embeddings with your own $c$.
@@ -113,26 +110,19 @@ below.*
 
 ### TF32 on Ampere and Hopper GPUs
 
-The dtype is not the only thing setting your float32 accuracy on a modern NVIDIA card.
-XLA:GPU runs float32 matmuls in **TF32** by default, whose 10-bit mantissa carries ~1e-3
-relative error against float32's ~1e-7 — three of your seven significant digits, silently.
+XLA:GPU runs float32 matmuls in **TF32** by default. Its 10-bit mantissa carries ~1e-3 relative
+error against float32's ~1e-7, so it silently costs three of your seven significant digits.
 
 hyperbolix splits its float32 dot products in two:
 
 - **Geometry is pinned** to `jax.lax.Precision.HIGHEST` and is not configurable: the manifold
-  vector dots, `lorentz_midpoint` and `poincare_weighted_midpoint`, the conv patch extraction,
-  the attention score and aggregation einsums and the spatial residual projection added to
-  that aggregate, and the point-to-hyperplane kernel einsums — the MLR heads, and with them the
-  PLFC, Poincaré++ and proper-velocity linear and conv layers, whose weight GEMM *is* that
-  einsum applied to their kernel. These are the cancellations the geometry is built on, and they are not
-  where the throughput is.
-- **The other layer weight GEMMs follow JAX** — `HTCLinear` (the attention Q/K/V projections
+  vector dots, the Lorentz and Poincaré midpoints, the conv patch extraction, the attention
+  score and aggregation einsums, and the point-to-hyperplane einsums of the MLR heads and of the
+  PLFC, Poincaré++ and proper-velocity linear and conv layers. These dots cancel, and they are
+  not where the throughput is.
+- **The other layer weight GEMMs follow JAX**: `HTCLinear` (the attention Q/K/V projections
   included), `FGGLinear`/`FGGConv2D`, the FHCNN/FHNN linears, `HypLinearPoincare`, the VQ
-  codebook matmul.
-  On an Ampere or Hopper card these run in TF32 unless you say otherwise. The FGG hidden dot
-  `x @ V` is a deliberate exception: it absorbs the Minkowski metric into `V`, so its
-  cancellation happens inside one accumulation, and it is left on the default anyway (see the
-  depth numbers below).
+  codebook matmul. On an Ampere or Hopper card these run in TF32 unless you say otherwise.
 
 To run everything in full float32, set JAX's own knob:
 
@@ -144,207 +134,86 @@ with jax.default_matmul_precision("highest"):
     logits = model(x)
 ```
 
-A deep, fully hyperbolic stack is a good reason to do so: a TF32 error introduced in an early
-layer's weight GEMM is carried by every layer after it. Measured on an A100 (jax 0.9.1,
-ambient dim 33, batch 64, float32 against a float64 reference), the relative error of
-`FGGLinear` is **2.6e-4** at the TF32 default against **6.8e-8** under `HIGHEST`, and
-`FGGLorentzMLR` **1.3e-4 … 3.6e-4** against **3.6e-8 … 9.6e-8**. The cost is real but modest:
-`HIGHEST` replaces one TF32 pass with a three-pass float32 emulation, measured **+5.5 %** on a
-jitted hyperbolic attention forward.
+On an A100 (float32 against a float64 reference), the relative error of `FGGLinear` is
+**2.6e-4** at the TF32 default against **6.8e-8** under `HIGHEST`. `HIGHEST` replaces one TF32
+pass with a three-pass float32 emulation, measured **+5.5 %** on a jitted hyperbolic attention
+forward.
 
-**Depth is what decides whether you need it.** At depth 2 you do not: an independent
-teacher-student comparison (5 seeds per arm, $D = 128$, $B = 256$, $c = 1$, 2 000 Adam updates,
-independent A100 measurement, jax 0.9.1) found no mean heldout-loss difference between the
-default and global `HIGHEST` — 0.27736 against 0.27738 for an `HTCLinear` stack, 0.28610
-against 0.28614 for an `FGGLinear` one, against a seed spread of ~0.015–0.017. The
-float32-vs-float64 gradient error does grow with depth. At depth 16, $c = 1$, input geodesic
-radius 5 (same measurement), the `HTCLinear` stack's parameter gradient is **1.539 %**
-relative L2 off a float64 reference under the default against **2.5e-6** under global
-`HIGHEST`, and its input gradient **2.013 %** against **1.2e-5**; the `FGGLinear` stack at that
-same cell is **0.199 %** against **8.0e-7** and **0.274 %** against **1.0e-6** — which is why
-the FGG hidden dot is left on the default despite its cancellation. That cell is the *worst* of
-a 24-cell grid (depths 2/8/16, $c \in \{0.1, 1\}$, input radius $\{0.5, 5\}$), one
-initialisation and one input draw per cell and no seeds: these are grid maxima at $n = 1$, not
-means.
-
-The two stacks differ in the radius they reach. `HTCLinear` feeds the whole ambient point — time
-coordinate included — through its Euclidean kernel, so at the default init the curvature-scaled
-geodesic radius $\sqrt{c}\,r$ climbs by ≈0.35 nats per layer (measured mean +0.36 … +0.38 at depths
-8 and 16, the input→layer-1 step excluded), while an `FGGLinear` stack stays at its input radius
-(−0.011 … +0.002). Across the four depth-16 cells the `HTCLinear` stack's TF32 parameter-gradient
-error is **2.3–7.8×** the `FGGLinear` stack's, on that one initialisation and one input draw per
-cell. Whether the radius climb is *what* costs the precision is a **hypothesis**: rescaling the HTC
-kernel by $1/\sqrt{2}$ to flatten the climb cuts the depth-16 error 3.9× in a CPU rounding
-emulation, but doubling the climb did not raise it and the emulation does not reproduce the GPU
-gap. At depth 2 the HTC/FGG ratios are 0.87–0.97, which is not an ordering. For a deep or
-gradient-sensitive stack, set the global knob.
+**Depth decides whether you need it.** At depth 2 the default and `HIGHEST` train identically; the
+float32 gradient error grows with depth (1.5 % at depth 16 for an `HTCLinear` stack against 2.5e-6
+under `HIGHEST`). For a deep or gradient-sensitive stack, set the global knob. Details:
+[`hyperbolix.utils.precision`](../api-reference/utils.md#matmul-precision).
 
 `HIGHEST` is a no-op on CPU (there is no TF32 path) and for float64 anywhere.
 
 ### The Hyperboloid's Two-Point Cancellation Failure Mode
 
-The distance-from-origin table above is for the Poincaré ball. The hyperboloid's single-point
-operations (`dist_0`, `logmap_0`, `expmap_0`) are covered in
-[The Hyperboloid Origin Chart](#hyperboloid-origin-chart) below. Point-to-point operations
-(`dist`, `logmap`, `sqdist`, `tangent_norm`) are governed by a different, two-point quantity —
-being far from the origin is not itself the problem; two points far from the origin **and close
-together** is.
+The table above is for the Poincaré ball. For the hyperboloid, being far from the origin is not
+the problem by itself; two points far from the origin **and close together** is. The literal
+Minkowski inner product $\langle x, y\rangle_L = -x_0y_0 + \langle x_s, y_s\rangle$ subtracts two
+terms of size about $e^{\sqrt{c}\,(d_0(x) + d_0(y))}$ to leave a result of size
+$e^{\sqrt{c}\,d(x,y)}$. The digits lost are set by the **Gromov-product-like quantity**
 
-Every one of these operations used to go through the Minkowski inner product
-$\langle x, y\rangle_L = -x_0y_0 + \langle x_s, y_s\rangle$, which for two hyperboloid points is a
-subtraction of two positive terms each roughly $e^{\sqrt{c}\,(d_0(x) + d_0(y))}$ in size, leaving a
-result proportional to $e^{\sqrt{c}\,d(x,y)}$. The number of significant digits lost is set by the
-**Gromov-product-like quantity**
 $$
 \sqrt{c}\,\bigl(d_0(x) + d_0(y) - d(x, y)\bigr),
 $$
-and once it exceeds $\ln(1/\epsilon)$ — 15.9 for float32, 36.0 for float64 — every digit of the
-result is cancellation noise. Two nearby points that are each individually far from the origin hit
-this constantly (e.g. points sampled along a shared geodesic ray, or clustered leaf embeddings in a
-deep hierarchy), while a single point far from the origin, or two points that are merely far from
-each other, does not.
 
-Concretely, before this fix: float32 `dist` returned `0.0015` for a true distance of `1.0` for two
-points at radius 10 from the origin — not a large relative error but a *complete loss of
-information*, since the correct value could have been anything below the float32 noise floor.
-`logmap` returned `NaN` from radius ~10 (float32) / ~20 (float64); `tangent_norm` returned ~0 on
-tangent vectors of exactly unit length past radius 8 (float32) / 20 (float64) — a 100% error with
-no warning. Deep metric-learning embeddings routinely sit at radius 30–60, so this was not an edge
-case in practice.
+and once it exceeds $\ln(1/\epsilon)$ (15.9 for float32, 36.0 for float64) every digit of the
+result is cancellation noise. Nearby points on a shared geodesic ray, or clustered leaf embeddings
+in a deep hierarchy, reach it easily.
 
-As of this fix, `dist`, `logmap`, `sqdist`, and `tangent_norm` under the default `version_idx`
-(`VERSION_DEFAULT` / `VERSION_SMOOTHENED`) are evaluated through a cancellation-free "hyperbolic
-haversine" decomposition and are stable over the measured radius ranges — see
-[Hyperboloid Distance Versions](#hyperboloid-distance-versions) below for the version constants,
-and [Known Limitations](#hyperboloid-known-limitations) for the remaining two-point primitives —
-which are now also cancellation-free — and the handful of places that still lose accuracy at
-large radius for other reasons.
+hyperbolix never forms that product in its two-point primitives. `dist`, `logmap`, `sqdist` and
+`tangent_norm` are cancellation-free under both version slots (`VERSION_DEFAULT` /
+`VERSION_SMOOTHENED`, see [Hyperboloid Distance Versions](#hyperboloid-distance-versions)). The
+single-point operations are covered in [The Hyperboloid Origin Chart](#hyperboloid-origin-chart),
+and the places that still lose accuracy are listed below.
 
 #### Known Limitations {#hyperboloid-known-limitations}
 
-The two-point cancellation fix originally covered `dist`, `logmap`, `sqdist`, and `tangent_norm`.
-A second pass extended the same pattern — read the radius off the spatial part, subtract before
-squaring, write the result as a sum of non-negative terms — to the remaining two-point and
-tangent-space primitives: `expmap` (the two-point form), `ptransp`/`ptransp_0`, `tangent_proj`,
-`tangent_inner`, `egrad2rgrad`, the gyro `addition` (the Lorentz boost — this is what
-`Hyperboloid.scalar_mul` and a `use_gyro_bias=True` gyro-bias on `HypLinearHyperboloidPLFC`,
-`HypConv2DHyperboloidILNN`, and `HypLinearHyperboloidBusemann` call), and `busemann`. None of
-these route through the literal `⟨x,y⟩_L = -x_0 y_0 + ⟨x_s,y_s⟩` any more, and none of them are
-limited to radius ~7-9 in float32. Radii below are the **scaled geodesic radius**
-`a = √c·d`. Measurements are 4-seed medians, float32 unless noted, from
-`logs/2026-09-08_hyperboloid_tangent_primitives/`.
+`expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, `egrad2rgrad`, gyro `addition` and
+`busemann` are also cancellation-free. `is_in_manifold` and `is_in_tangent_space` compare the
+stored time slot with the value the spatial part implies, so an on-sheet point passes a fixed
+`atol` far out (see [The `atol` Convention](#the-atol-convention)).
 
-`tangent_norm`/`tangent_inner` are measured cancellation-free through `a = 12`, the largest radius
-either probe reaches (measured B.iv: `|⟨v,v⟩-1|` on an exactly-unit radial tangent goes from
-1.100e+01 as-is to 1.132e-06 fixed at `a = 10`, and the ProperVelocity twin from 8.000e+00 to
-1.132e-06; measured C.iv at `a = 12`, ProperVelocity twin: `|⟨v,v⟩-1|` median 5.192e-05,
-`|‖v‖-1|` median 2.593e-05). One power of `cosh` above the ambient chart's own
-point-representation floor, `eps·sinh(a)/√c` — `a ≈ 16.6` in float32, much further in float64 —
-**predicts, but does not measure,** exactness through `a ≈ 15` (float32) / `a ≈ 25` (float64).
-Origin-chart operations (`dist_0`, `logmap_0`, `expmap_0`) never routed through the
-Minkowski inner product, so none of this applies to them; they had a different problem at the
-*small*-radius end, fixed separately and described next.
+Five places still lose accuracy at large radius:
 
-**Gyro-addition and the PLFC gyro-bias.** `x ⊕ exp_0(b)` at `c = 0.5`, `‖b‖ = 0.5`
-(`probe_addition_{46abd2b,ebebd09}.out`, table A.1a): forward geodesic error 4.181e-04 → 1.366e-05
-at `a = 6`, 1.527e-02 → 9.767e-05 at `a = 8`, 6.557e-02 → 6.802e-04 at `a = 10`, 5.670e-01 →
-4.565e-03 at `a = 12`; 5 of 32 float32 seeds were non-finite as-is across the table, none are
-fixed. Gradients improve further: `d/db` relative error 7.496e-02 → 1.315e-06 at `a = 8`,
-8.467e-01 → 4.616e-07 at `a = 10`; `d/dx` 2.164e-02 → 9.752e-08 at `a = 8`, 4.752e+00 → 8.233e-08
-at `a = 12`.
-
-**Transport, tangent projection, gradient conversion, and expmap.** End-to-end
-`riemannian_adam` on a `ManifoldParam`, 30 steps (`probe_optimizer_*.out`, table B.i): as-is loses
-both seeds to NaN by `a = 9` (first non-finite step between 1 and 9 of 30); fixed stays finite
-through `a = 16`, descending the expected loss ~0.29 through `a = 14` (2-seed medians: 0.290 at
-`a=9`, 0.289 at `a=12`, 0.305 at `a=14`). The parallel-transport isometry `‖PT v‖_y/‖v‖_x` (table B.ii) goes from
-non-finite on 1-2 of 4 seeds from `a = 9` on (max residual 6.6e+14 at `a=10`) to finite everywhere,
-`|ratio-1|` at 1.192e-07 (`a=6`), 1.132e-06 (`a=8`), 7.557e-05 (`a=12`), 1.333e-04 (`a=14`).
-`egrad2rgrad` (table B.iii) goes from a relative error that reaches 1.0 (the whole gradient lost,
-non-finite on half the seeds) at `a = 14` to a flat ~5e-8 with no radius dependence through
-`a = 14` — it needs no division by a measured quantity at all, since `⟨x,x⟩_L = -1/c` holds
-exactly on the sheet, so it is not floor-limited the way the others are.
-
-`expmap`'s landing accuracy (`dist(x, expmap(v,x))/‖v‖_x`, table B.v) is the one cell in this pass
-that is not a clean win: the `a = 12` outlier is gone (max geodesic landing error 1.651e-01 →
-5.312e-03), but at `a = 14` the fixed landing error is *worse* than as-is — 3.500e-02 vs 2.410e-02
-median (1.45×), 4.571e-02 vs 2.917e-02 max (1.57×). Both revisions are within the `tangent_norm`
-floor's own uncertainty at that radius, so this reads as the `tangent_norm` floor showing through
-the exponential map rather than a new cancellation.
-
-**`is_in_manifold` / `is_in_tangent_space`.** Both now compare the stored `x₀` (or `v₀`) directly
-against the value the spatial part implies, instead of testing the Lorentz form against `-1/c` (or
-`0`). The old residual was the honest time-slot discrepancy scaled by `2·x₀ = 2·cosh(a)/√c` *and*
-obtained as a difference of two `O(cosh²a)` numbers; reading the time slot directly removes both
-factors, so a genuinely on-sheet point now passes a fixed `atol` far past the `a ≈ 7` (float32) /
-`a ≈ 11` (float64) ceiling the old check imposed — see [The `atol` Convention](#the-atol-convention).
-
-#### Known limits
-
-Five places still lose accuracy at large radius, for reasons the fix above does not remove:
-
-1. **`ptransp`'s direction below the float32 angular resolution.** A transported direction that
-   differs from the identity by less than the point-representation floor `eps·sinh(a)/√c` is
-   input-limited: the two endpoints do not disagree by more than storage rounding, so no formula
-   recovers a direction that was never represented in the first place. This is a different limit
-   from the transport *isometry* fixed above (table B.ii), which holds the vector's length, not
-   the smallest resolvable direction.
+1. **`ptransp`'s direction below the float32 angular resolution.** A transport step shorter than
+   the point-representation floor `eps·sinh(a)/√c` is lost in the endpoints' storage rounding, and
+   no formula recovers it.
 2. **Attention scores through a GEMM.** The Lorentzian similarity score behind
-   `HyperbolicFullAttention` still forms `2 + 2⟨Q,K⟩_L` from a matrix product, and a GEMM cannot be
+   `HyperbolicFullAttention` forms `2 + 2⟨Q,K⟩_L` from a matrix product, and a GEMM cannot be
    made cancellation-free the way a single pairwise `dist` can — see
    [Full Attention's Float32 Score Floor](#attention-score-floor) below.
-3. **The wrapped-normal `log_prob` on the hyperboloid, through its tangent vector.** `log_prob`
-   transports the sample's tangent vector $u = \log_\mu(z)$ from $\mu$ to the origin. The generic
-   `Hyperboloid.ptransp(u, μ, origin)` always takes its Cartesian chart when one endpoint is the
-   origin, and that chart's radial component is $u_r - u_r(1 - 1/\cosh a)$: two $O(u_r)$ terms
-   cancelling down to $u_r/\cosh a$, a float32 radial error of 1.95e-3 at scaled radius 10
-   ($1.5\,\varepsilon\cosh a$, with $\varepsilon\cosh a = 1.3\text{e-}3$). `log_prob` now uses its
-   own transport to the origin: it splits $u$ into radial and perpendicular parts along
-   $\hat\mu = \mu_s/\lVert\mu_s\rVert$, divides the radial part by $\cosh a = \sqrt{c}\,\mu_0$, and
-   subtracts the rounding residue the perpendicular part carries along $\hat\mu$. Its radial error
-   is 2.3e-7 to 2.6e-7 at $a = 10$, and $\lvert\log p_{32} - \log p_{64}\rvert$ at $a = 10$ (max over 512
-   draws, $D = 3$; $\sigma = 0.1, 0.3, 1$ and a diagonal $\sigma$ at $c = 1$, $\sigma = 0.3$ at
-   $c = 0.5$) goes from 1.3e-2–2.0e-2 to 2.2e-3–4.5e-3
-   (`logs/2026-09-29_cancellation-free/1c/probe_old.out`,
-   `logs/2026-09-29_cancellation-free/2_evidence/probes/1c_merged.out`). What remains is the
-   float32 representation of $u$ itself: the `logmap` output that feeds the transport is
-   7.6e-4–1.3e-3 relative off at $a = 10$, and the transport's perpendicular error, 5.3e-4–5.5e-4,
-   is of the same order — the ambient chart stores a tangent vector's components at $\cosh a$ times
-   its length. User code that calls the generic `Hyperboloid.ptransp(v, far_point, origin)` still
-   takes the Cartesian chart and still cancels.
+3. **Transport to the origin from a far point.** The wrapped-normal `log_prob` uses its own
+   transport to the origin and is accurate up to the float32 storage of its tangent vector $u$
+   (the ambient chart stores a tangent vector's components at $\cosh a$ times its length). The
+   generic `Hyperboloid.ptransp(v, far_point, origin)` still cancels: its radial component has a
+   float32 error of 1.95e-3 at scaled radius 10.
 4. **The MLR score, when the hyperplane itself sits far from the origin.** The reference Lorentz
-   MLR the library keeps subtracts two terms of size `e^(a+ρ)`, with `ρ` the scaled hyperplane
-   offset, so a large bias costs as many digits as a large input radius — see
+   MLR subtracts two terms of size `e^(a+ρ)`, with `ρ` the scaled hyperplane offset, so a large
+   bias costs as many digits as a large input radius — see
    [The MLR Score at a Large Hyperplane Offset](#mlr-large-bias) below.
-5. **Busemann gradients at a far stored point.** `Hyperboloid.busemann` on a stored float32 point,
-   which is how the Busemann layers score manifold input, has the gradient underflow described
-   under [Tangent Inputs to the HNN++ and Busemann Layers](#poincare-tangent-input): from scaled
-   radius $a \approx 29.4$ at $c = 0.3$ and $a \approx 29.8$ at $c = 1$, the gradients of the
-   scores with $\langle x_s, \omega\rangle \ge 0$ with respect to the point and to $\omega$ are up to
-   0.90 and 0.92 off relative to their largest entry, while the scores stay right. Measured on CPU
-   (`logs/2026-09-29_cancellation-free/hbz/scan_old_grad.out`,
-   `logs/2026-09-29_cancellation-free/hbz_docs/scan_onset_jit.out`).
+5. **Busemann gradients at a far stored point.** When the Busemann layers score a stored float32
+   point, from scaled radius $a \approx 29.8$ at $c = 1$ ($29.4$ at $c = 0.3$) the gradients of the
+   scores with $\langle x_s, \omega\rangle \ge 0$ can be up to 0.9 off relative to their largest
+   entry while the scores stay right (measured on CPU; see
+   [Tangent Inputs to the HNN++ and Busemann Layers](#poincare-tangent-input)).
 
-Two more items that used to be on this list — gyro-centering with a near-identity partner, and
-`ProperVelocity.dist`/`logmap` between nearby points — were fixed in a later pass; see
-[Gyro-Difference and GyroBatchNorm Centering at Large Radius](#gyro-difference) and
+See also [Gyro-Difference and GyroBatchNorm Centering at Large Radius](#gyro-difference) and
 [ProperVelocity `dist`/`logmap` Through the Exact Lift](#pv-dist-lift) below.
 
 #### Full Attention's Float32 Score Floor {#attention-score-floor}
 
 `HyperbolicFullAttention`'s scores are `2 + 2⟨Q,K⟩_L`, a difference of two Minkowski terms each of
-size `cosh(a_q)·cosh(a_k)/c`. Unlike the primitives above, there is no GEMM-compatible
-cancellation-free spelling for it: any matrix product of the ambient coordinates returns the Gram
-matrix to absolute `eps`, so the angular term alone already carries an error of
-`eps·sinh(a_q)·sinh(a_k)/c`, the same order as the literal form. The absolute error on one score is
-therefore `eps·cosh(a_q)·cosh(a_k)/(c·scale)`, which with float32's `eps ≈ 1.19e-7` (`c = 1`,
-`scale = 1`) is about 4.8e-3 at `a = 6`, 0.26 at `a = 8`, and 2.0 at `a = 9`: from `a ≈ 8` the error
-exceeds the score spread softmax is meant to resolve, and the weights come out wrong while staying
-perfectly finite. The remedy is `score_dtype=jnp.float64`, which runs the similarity and the
-`2 + 2⟨Q,K⟩_L` / scale / bias / causal-mask arithmetic as a float64 island and casts back before
-the softmax; it fixes the arithmetic only, so activations that are themselves stored in float32
-past `a ≈ 8` still carry a floor of the same order, and a `HyperboloidGyroRMSNorm` in front of the
-layer (or a smaller `c`) is the cheaper first remedy.
+size `cosh(a_q)·cosh(a_k)/c`. A matrix product returns the Gram matrix only to absolute `eps`, so
+no GEMM spelling avoids the cancellation. The absolute error on one score is about
+`eps·cosh(a_q)·cosh(a_k)/(c·scale)`: in float32 (`c = 1`, `scale = 1`) 4.8e-3 at `a = 6`, 0.26 at
+`a = 8`, and 2.0 at `a = 9`. From `a ≈ 8` it exceeds the score spread softmax is meant to resolve,
+and the weights come out wrong while staying finite.
+
+The cheaper first remedy is a `HyperboloidGyroRMSNorm` in front of the layer, or a smaller `c`.
+`score_dtype=jnp.float64` runs the score arithmetic as a float64 island and casts back before the
+softmax; it does not help activations that are themselves stored in float32 past `a ≈ 8`.
 
 The value aggregation has its own form, `lorentz_midpoint(form=...)`, set by `centroid_form` on
 `HyperbolicFullAttention` and `LorentzMLA`. `"variance"` (the `lorentz_midpoint` default, and the
@@ -358,8 +227,8 @@ since bfloat16's `eps` is 2^16 times float32's.
 
 #### The MLR Score at a Large Hyperplane Offset {#mlr-large-bias}
 
-Every multinomial-logistic-regression head in the library evaluates the reference Lorentz MLR score
-of Bdeir et al. 2023,
+The hyperplane MLR heads (`HypRegressionHyperboloid`, `HypRegressionPV`, `HypRegressionPoincarePP`)
+evaluate the reference Lorentz MLR score of Bdeir et al. 2023,
 
 $$
 \alpha = -x_0\sinh(\sqrt{c}\,r)\,\lVert z\rVert + \cosh(\sqrt{c}\,r)\,\langle z, x_s\rangle,
@@ -373,17 +242,13 @@ $$
 \sinh(a)\cosh(\rho)\cos\theta \;-\; \cosh(a)\sinh(\rho),
 $$
 
-two terms of size `e^(a+ρ)` whose difference is `O(1)` for a point near the hyperplane. The rounding
-error is therefore `eps·e^(a+ρ)`, against the point's own representation floor of `eps·e^a`: **a
-hyperplane far from the origin costs exactly as many digits as an input far from the origin.** The
-same expression sits in `HypRegressionHyperboloid` and the PLFC / ILNN / Busemann layers that end in
-it, in the proper-velocity MLR, in the Poincaré++ MLR (where `ρ = 2√c·r`), and in `FGGLinear`'s
-spacelike-`V` GEMM.
+two terms of size `e^(a+ρ)` whose difference is `O(1)` for a point near the hyperplane, so the
+rounding error is `eps·e^(a+ρ)`: **a hyperplane far from the origin costs as many digits as an
+input far from the origin.** The same expression sits in the PLFC / ILNN layers, the Poincaré++
+MLR (where `ρ = 2√c·r`), and `FGGLinear`'s spacelike-`V` GEMM.
 
-Measured, float32 hyperboloid, points placed exactly on the hyperplane, median relative error of the
-gradient with respect to the point, 36 cells per entry (dims 16/64/512 × `c ∈ {0.1, 0.5, 1}` ×
-4 seeds; `logs/2026-09-11_mlr_half_angle/probe_mlr_cancellation.out` and the per-cell
-`probe_mlr_cancellation_cells.csv`):
+Median relative error of the float32 gradient with respect to the point, hyperboloid, points
+exactly on the hyperplane:
 
 | `a` \ `ρ` | 0.5 | 1 | 2 | 4 | 8 |
 | --- | --- | --- | --- | --- | --- |
@@ -393,117 +258,55 @@ gradient with respect to the point, 36 cells per entry (dims 16/64/512 × `c ∈
 | 14 | 9e-4 | 1.3e-3 | 0.013 | 0.32 | 0.98 |
 | 16 | 0.042 | 0.040 | 0.39 | 0.86 | 1.0 |
 
-Cells at ~1e-7 are float32 rounding — no measurable loss. `n/a` marks `ρ ≥ a`, where the hyperplane
-cannot cross the point at all. The rule of thumb the table supports: **the float32 gradient is about 0.1 % wrong at `a + ρ ≈ 15`, about 1 % at `a + ρ ≈ 16`, roughly 40 % by 18, and entirely wrong by 22** — the same `ln(1/eps)` budget as the two-point
-cancellation above, now spent on `a + ρ` rather than on `a` alone. At `ρ = 8` the *score* can come
-out with the wrong sign: on the branch aligned with the hyperplane normal, `a = 14`, `c = 1`,
-dim 512, the true score in `asinh` units is `+6.00` and float32 returns `-3.04`
-(`logs/2026-09-11_mlr_half_angle/audit/sign.py`). Float64 has the usual ~20 extra nats of budget —
-the same cells' median float64 gradient error at `ρ = 8` is 2.5e-13 — so `a + ρ ≈ 36` is its
-equivalent limit — extrapolated, not measured: the grid stops at `a + ρ = 24`, where the float64 median is 6.6e-13.
+`n/a` marks `ρ ≥ a`, where the hyperplane cannot cross the point. The rule of thumb: **the float32
+gradient is about 0.1 % wrong at `a + ρ ≈ 15`, about 1 % at 16, roughly 40 % by 18, and entirely
+wrong by 22**. At `ρ = 8` the *score* itself can take the wrong sign. Float64's limit is about
+`a + ρ ≈ 36` (extrapolated).
 
-All three conditions have to hold at once: an input far from the origin, **and** a hyperplane far
-from the origin, **and** points close to that hyperplane, which is where the `O(1)` difference is
-smallest. With normalized features (`a ≲ 8`) and an `O(1)` bias none of this arises — every cell at
-`a + ρ ≤ 10` in the table is at float32 rounding; the two `a + ρ = 12` cells are already ~5e-6, some 50× eps. The remedies are the ordinary ones: run the head in
-float64, or keep `a + ρ` under ≈ 15 by bounding the trunk's radius in the model and weight-decaying
-the head's bias.
+It takes an input far from the origin, **and** a hyperplane far from the origin, **and** points
+close to that hyperplane. With normalized features (`a ≲ 8`) and an `O(1)` bias none of this
+arises. Remedies: run the head in float64, or keep `a + ρ` under ≈ 15 by bounding the trunk's
+radius and weight-decaying the head's bias. A cancellation-free half-angle form was measured at
+1.8–2.5× the cost and not adopted. `FGGLinear`'s spacelike `V` has a related `eps` floor on its
+column norm, which matters only for a small weight column with a large bias.
 
-!!! note "A cancellation-free rewrite was measured and not adopted"
-    A half-angle rewrite of the same score removes the `e^ρ` factor: median on-hyperplane score gain, pooled over the four charts and both dtypes,
-    2.1 / 17 / 354 / 2.0e4 at `ρ = 1 / 2 / 4 / 8` (float32 hyperboloid alone: 2.6 / 17 / 311 / 3.7e3), and over the float32 on-hyperplane cells with
-    `ρ ≥ 2` a median relative gradient error of 2.3e-5 against 0.0091 for the shipped form
-    (`logs/2026-09-11_mlr_half_angle/probe_mlr_cancellation.out`). It is **not** in the library: the
-    fused `(B, P, D)` unit-vector difference it needs cannot use the tensor-core GEMM, and it
-    measured 1.9–2.5× forward+backward on `HypRegressionHyperboloid` (`B = 256`, `D = 512`,
-    `P = 1000`) and 1.8–2.2× on `HypConv2DHyperboloidILNN` (8192 pixels, `P = D = 64`) across the two autotune settings measured (the 2.5× is the head at `--xla_gpu_autotune_level=0`, the 1.8× is ILNN at the default level; one timing repeat each) with 26–36 % more peak
-    memory on an H100 (`logs/2026-09-11_vda_w3_gpu/cost_summary.md`;
-    `HypLinearHyperboloidPLFC` at `B = 512`, `P = D = 64` was within 4 % forward+backward at the default autotune level and 3× faster at level 0, but 22 % slower forward at the default level). A regime that needs all
-    three conditions at once does not buy that on every step.
+#### Input Overflow {#input-overflow-fingerprint}
 
-#### FGG's Spacelike `V` Columns Are Short by the `eps` Floor {#fgg-spacelike-v}
+A hyperboloid point whose spatial part passes float32's `1.84e19` has an `inf` time coordinate
+(scaled radius `a ≈ 45` at `c = 1`; see [Norms](#safe-norms) for where this ceiling comes from).
+`HypLinearHyperboloidPLFC`, `HypConv2DHyperboloidILNN` and `HypLinearHyperboloidBusemann` pass the
+resulting non-finite score through their sinh lift, so the loss is NaN at the minibatch where it
+happens. In 1.3.0 and earlier the lift clipped it to a finite, saturated point: the loss stayed
+finite and the next kernel and bias gradient was 100 % NaN.
 
-`build_spacelike_V` — the `FGGLinear` / `FGGConv2D` weight construction, Eq. 12 of Klis et al.
-2026 — floors the column norm on the **time** row, `√(‖w‖² + eps)` with `eps = 1e-7`, but multiplies
-the **space** rows by the raw `w`. The two rows are then no longer scaled by the same number, so a
-column's Minkowski norm comes out as `‖w‖² − eps·sinh²(ρ)` instead of `‖w‖²`, with `ρ = −√c·b/‖w‖`
-the column's transport argument. The relative distortion `eps·sinh²(ρ)/‖w‖²` is exactly zero at the shipped init, where `init_bias = 0.0` gives `ρ = 0`; 1e-9 at `‖w‖ = 2`, `ρ = 0.2`, 5.5e-4 at `‖w‖ = 1`, `ρ = 5`, and 89 % at `‖w‖ = 0.5`, `ρ = 8`
-(`logs/2026-09-11_mlr_half_angle/audit/fgg.py`). It needs a small weight column together with a
-large bias, which is far outside the init regime, and it is left as it is.
-
-#### Input Overflow: A Finite Loss, Then a 100 % NaN Gradient {#input-overflow-fingerprint}
-
-A hyperboloid point whose spatial coordinate passes float32's `1.8e19` can no longer have a time
-coordinate: `x₀ = √(1/c + ‖x_s‖²)` overflows to `inf`. That is scaled radius `a ≈ 45` at `c = 1`, `44.7` at the probe's `c = 0.5`, i.e. geodesic
-radius `≈ 44/√c` — see [Norms: One Reduction, Gradient-Safe at Zero](#safe-norms) for where the
-coordinate ceiling comes from. `HypLinearHyperboloidPLFC`, `HypConv2DHyperboloidILNN` and
-`HypLinearHyperboloidBusemann` all finish in `sinh_lift_to_hyperboloid`, and an `inf` time
-coordinate reaches that lift as a non-finite MLR score.
-
-The lift used to clip that score to `±v_max` like any other, and what happened next depended on the
-MLR bias `r` (`logs/2026-09-11_plfc_residual_nan/fuzz_C6_bias_f32.out`; `B = 512`, `D = 64`,
-`c = 0.5`, symmetric InfoNCE, one row of 512 pushed to input scaled radius 50):
-
-- **`r = 0`, the shipped init.** `inf · sinh(0) = NaN`, the logits row is NaN, the loss is NaN. Loud,
-  and the minibatch that caused it is the one that reports it.
-- **`r ≠ 0`, i.e. anything trained.** The score is `±inf`, the clip maps it to `±v_max`, and the
-  layer returns a **finite, fully saturated point** at the output ceiling (`a_out = 12.1`). The loss
-  stays finite and unremarkable — 12.6 to 13.8, against 13.1 at the clean baseline corner of `fuzz_composite_5c2aa99_f32.out`
-  — and every logit is finite. The *backward* is not: the kernel gradient comes back 4096 of 4096
-  NaN and the bias gradient 64 of 64 NaN, where the clip's zero cotangent meets the `inf` in the
-  score. One Adam step later every weight the NaN gradient touches is NaN — inferred from the gradient, no optimizer step was run.
-
-So the fingerprint to recognise is **a finite loss, followed one minibatch later by a 100 % NaN
-kernel and bias gradient in a PLFC / ILNN / Busemann layer, with no NaN loss anywhere**. It means an
-input row went past the float32 ceiling, not that the layer's arithmetic is wrong.
-
-Since this change the lift passes a non-finite score straight through: the spatial slot stays
-`inf`/NaN, the reconstructed time slot follows, and the loss is NaN at the *onset* minibatch. For a
-`-inf` score at `r = 1` the old lift returned the plausible finite point
-`[22799.6, -13163.3, -13163.3, -13163.3]`; it now returns `[inf, -inf, -inf, -inf]`
-(`logs/2026-09-11_w1_sinh_lift_nonfinite/probe_old_vs_new.py`). Finite rows take the same expression
-op-for-op, in value and in gradient.
-
-What to do about it is a model-side decision, not a library one: hyperbolix deliberately adds no
-input-side bound here, because a bound would put the silent saturation back (see the
-*loud divergence over silent saturation* rule in `CLAUDE.md`). Monitor the per-row maximum input
-time coordinate — or `dist_0` of the input — at the layer's entry, and bound the trunk that feeds it
-in your own model.
+hyperbolix adds no input-side bound here, so as not to hide the divergence. Monitor `dist_0` (or
+the time coordinate) at the layer's input and bound the trunk that feeds it in your model.
 
 #### Where Float32 Overflow Still Collapses Silently {#silent-overflow-sites}
 
 The library lets non-finite values propagate so that a diverging model fails loudly. At the sites
 below, a float32 sum of squares or a clip still turns an absurdly large finite input (or, for the
 Poincaré lifts, an `inf` score) into a finite point. Each needs an input at or near the float32
-coordinate ceiling `√FLT_MAX ≈ 1.84e19` (see [above](#input-overflow-fingerprint)), which only an
-already-diverging model reaches, so the code is left as it is. Outputs checked in
-`logs/2026-09-29_follow-ups/2_docs/probe_silent_collapse.out`.
+coordinate ceiling `√FLT_MAX ≈ 1.84e19` (see [Norms](#safe-norms)), which only an already-diverging
+model reaches, so the code is left as it is.
 
-- **Poincaré and κ-stereographic `proj`:** a finite `x` with `‖x‖ > 1.84e19` becomes the zero vector ([changelog](../changelog.md), 1.2.1).
+- **Poincaré and κ-stereographic `proj`:** a finite `x` with `‖x‖ > 1.84e19` becomes the zero vector.
 - **`Poincare.expmap`, `Klein.expmap`:** `‖v‖ > 1.84e19` returns the base point.
 - **`Hyperboloid.expmap_0`:** `‖v‖ > 1.84e19` returns the origin; a shorter `v` whose image passes the ceiling gets an `inf` time slot, as intended.
 - **`HyperPPFeatureScaling`:** the mean of squares in its Flax `RMSNorm` overflows for a row with `‖x‖ > 1.84e19`; the row becomes zero, i.e. the origin after `expmap_0`.
-- **`HRCBatchNorm` (train mode):** a feature whose batch sum of squares overflows equals its BatchNorm bias in every row, and its running variance becomes `inf` for good, so eval mode does the same from then on. With all `N` rows near one value `X` this starts at `X > 1.84e19/√N` (1.15e18 at `N = 256`), below the ceiling.
+- **`HRCBatchNorm` (train mode):** a feature whose batch sum of squares overflows equals its BatchNorm bias in every row, and its running variance becomes `inf` for good, so eval mode does the same. This starts below the ceiling, at `1.84e19/√N` for `N` rows near one value (1.15e18 at `N = 256`).
 - **HRC (`HRCLayerNorm`, `HRCRMSNorm`, …):** reads only the spatial part, so the `inf` time slot of a point past the ceiling is dropped; the LayerNorm/RMSNorm mean of squares then overflows (`‖x_s‖ > 1.84e19`) and the row becomes the LayerNorm bias or the origin.
 - **`lorentz_residual` (`w_y ≤ 1`):** the `4h²/c` in its normalizer, `h = sinh(√c·d(x, y)/2)`, overflows once `h > √(min(c, 1)·FLT_MAX)/2` (9.2e18 at `c = 1`), and the output is the origin — e.g. two points at spatial radius 1.5e19, 120° apart.
 - **`lorentz_midpoint` with `c > 1`:** its normalizer, about `c·x₀²` times the weighted variance of the directions `x_s/x₀` (at most 1), overflows in a widely spread cloud from time coordinates of about `1.84e19/√c`, and the output is the origin. For `c ≤ 1` that is past the ceiling.
 - **FHCNN `normalize=True`:** a linear output whose spatial norm exceeds 1.84e19 gets spatial part 0 and a finite time slot — a finite point off the hyperboloid; its spatial part has zero gradient (the time slot's sigmoid gate still gets one).
 - **`HypLinearPoincarePP`, `HypLinearPoincareBusemann`:** an `inf` score is clipped — by the `sinh` argument clip at `±0.99·ln FLT_MAX ≈ ±87.8`, or by `v_max` — to a finite point at the ball's edge, where the hyperboloid lift above passes it through.
-- **`HypConv2DPoincare`:** the same `sinh` clip, but the layer now returns `logmap_0` of the lift in closed form, so an `inf` score comes out as a finite tangent vector along its channel with `√c‖out‖ = 43.9178`, half the clip, at both `c = 0.3` and `c = 1`, i.e. `‖out‖ = 43.9/√c` (80.18 at `c = 0.3`); the ball round trip it replaced returned the ball's ceiling, `√c‖out‖ = 6.3233` at `c = 1` and `6.6256` at `c = 0.3` (`logs/2026-09-29_cancellation-free/docs_a1/probe_conv_inf_score.out`).
+- **`HypConv2DPoincare`:** the same `sinh` clip; an `inf` score comes out as a finite tangent vector along its channel with `√c‖out‖ = 43.9`, half the clip.
 
 ### The Hyperboloid Origin Chart {#hyperboloid-origin-chart}
 
-`dist_0` and `logmap_0` used to recover the geodesic radius from the ambient **time** coordinate
-$x_0$, and that coordinate cannot resolve a small radius. On the sheet
-
-$$
-x_0 = \frac{\cosh(\sqrt{c}\,d)}{\sqrt{c}} \approx \frac{1 + c\,d^2/2}{\sqrt{c}},
-$$
-
-so $d$ is stored only to $\sqrt{\varepsilon}$ resolution (relative error $\varepsilon/(2cd^2)$),
-and `acosh`'s `1 + 10·eps` domain clamp flattened every float32 radius below
-$\sqrt{20\varepsilon}/\sqrt{c} = 1.54\text{e-}3$ onto exactly zero. Both operations now read the
-radius off the **spatial** part instead, where the same number is available exactly:
+The time coordinate $x_0 = \cosh(\sqrt{c}\,d)/\sqrt{c} \approx (1 + c\,d^2/2)/\sqrt{c}$ cannot
+resolve a small radius. `dist_0` and `logmap_0` therefore read the radius off the **spatial**
+part:
 
 $$
 d_0(x) = \frac{\operatorname{arcsinh}(\sqrt{c}\,\lVert x_s\rVert)}{\sqrt{c}},
@@ -511,209 +314,59 @@ d_0(x) = \frac{\operatorname{arcsinh}(\sqrt{c}\,\lVert x_s\rVert)}{\sqrt{c}},
 \log_0(y) = \Bigl[0,\; \frac{\operatorname{arcsinh}(u)}{u}\, y_s\Bigr],\quad u = \sqrt{c}\,\lVert y_s\rVert .
 $$
 
-`arcsinh` needs no domain clamp (its argument is a norm) and its derivative is bounded by 1, so
-$\lVert \log_0(y)\rVert = d_0(y)$ now holds by construction at every radius. Median relative
-error at $c = 1$, dim 8, before → after (A100, jax 0.9.1; the CPU backend and jax 0.11.0 agree in
-every floored cell):
-
-| radius | float32 `dist_0` | float32 `log_0(exp_0(v))` | float64 `dist_0` | float64 round trip |
-| --- | --- | --- | --- | --- |
-| 1e-6 | 1.5e3 → 2.5e-9 | 1.5e3 → 0 | 4.4e-5 → 0 | 4.4e-5 → 1.3e-16 |
-| 1e-3 | 5.4e-1 → 9.8e-8 | 5.4e-1 → 0 | 5.9e-11 → 0 | 1.5e-10 → 1.2e-16 |
-| 1e-2 | 5.0e-4 → 2.7e-8 | 5.2e-4 → 0 | 1.0e-12 → 1.7e-16 | 8.3e-13 → 1.2e-16 |
-| 0.1 | 3.5e-6 → 1.8e-8 | 1.4e-7 → 3.9e-8 | 7.6e-15 → 1.4e-16 | 9.5e-15 → 1.1e-16 |
-| 1 to 40 | ≤7.1e-8 → ≤5.2e-8 | ≤1.0e-7 → ≤8.8e-8 | ≤1.3e-16 → ≤1.9e-16 | ≤1.4e-16 → ≤1.4e-16 |
-
-!!! warning "A zero-initialised hyperboloid gyro-bias could not train"
-    The old `dist_0` returned a constant `0` under a bitwise `at_origin` guard, so
-    $\partial(x \oplus b)/\partial b$ at $b = $ origin was the exact zero matrix in **both**
-    dtypes. Gyro addition inherits that guard through `logmap_0`, so the bias of any
-    `HypLinearHyperboloidPLFC`, `HypConv2DHyperboloidILNN`, or `HypLinearHyperboloidBusemann`
-    built with `use_gyro_bias=True` sat at the origin, received an exactly-zero gradient, and
-    never moved. Measured gyro-bias gradient L2 at init (c = 1, dim 8, float32): `0.0` before,
-    `1.37` / `4.24` / `3.07` after. The Poincaré `HypLinearPoincareBusemann` bias uses Möbius
-    addition and was never affected. A model trained with one of the three hyperboloid biases was
-    trained with it pinned to the origin.
-
-Operations that inherit the fix without any change of their own: gyro `addition`, `scalar_mul`,
-`logmap`'s origin fallback, and `HyperboloidGyroRMSNorm`, which divides by `dist_0` and so
-mis-normalised every float32 sample inside radius 1.5e-3.
-
-`HypLinearHyperboloidFHNN` had the same problem near the origin in its own spelling: it builds the
-time slot as $y_0 = m + 1/\sqrt{c}$ from a positive height $m$ and read the target spatial norm
-back as $\sqrt{y_0 - 1/\sqrt{c}}\,\sqrt{y_0 + 1/\sqrt{c}}$, which rounds $m$ to the ulp of
-$1/\sqrt{c}$; it now reads it off the height, $\sqrt{m}\,\sqrt{m + 2/\sqrt{c}}$, and the float32
-relative error of $\lVert y_s\rVert$ goes from 6.8e-4 to ≤ 7.0e-8 at the layer's floor
-$m = 10^{-5}$ and from 2.4e-3 to ≤ 1.0e-7 at $m = 1.3\times10^{-5}$
-(`logs/2026-09-29_cancellation-free/1c/probe_old.out`,
-`logs/2026-09-29_cancellation-free/2_evidence/probes/1c_merged.out`, section C).
-
-!!! note "An infinitely far point gives an infinite tangent vector, not NaN"
-    A spatial entry that is `inf` passes through the radius as `inf` on purpose, so an out-of-range
-    point stays visibly degenerate instead of silently NaN-poisoning everything downstream. That made
-    `logmap_0`'s scale $\operatorname{arcsinh}(u)/u$ an $\infty/\infty$ NaN, which then multiplied
-    *every* entry — the time slot included. It is now
-    `where(isfinite(u), arcsinh(u)/u, 1)`: the infinite entries come back as $\pm\infty$ with their
-    signs, the finite entries keep their values, and the time slot stays exactly 0. This is the same
-    $\pm\infty$-not-NaN convention the pairwise `dist`/`logmap` already follow through
-    `_polar_frame`'s `isfinite` guard. The finite path is unchanged: the forward value is bit-identical on
-    both backends and the gradient is bit-identical on XLA:CPU, moving by at most 2 ulps on XLA:GPU
-    (where the extra `where` changes the VJP's fusion) against a 4-ulp CPU-vs-GPU spread the unchanged
-    code already had.
+$\lVert \log_0(y)\rVert = d_0(y)$ holds by construction at every radius, with float32 median
+relative error ≤ 1e-7 from radius 1e-6 to 40 ($c = 1$). The pairwise `dist` reads its radial gap
+off the spatial part too, so float32 `dist(origin, x)` agrees with `dist_0(x)` to 3.1e-7 at every
+radius from 1e-8 up; `dist_0` stays marginally cheaper and tighter. An `inf` spatial entry gives an
+infinite tangent vector from `logmap_0`, not NaN.
 
 ### Norms: One Reduction, Gradient-Safe at Zero {#safe-norms}
 
-On the operations that 1.2.0 made slower, the per-sample Euclidean norm is a **single pass over
-the data** again: `safe_sqrt(sum(v**2))` where the input can be exactly zero, a plain
-`sqrt(const + sum(v**2))` where a strictly positive constant is added, and
-`floor_at(..., MIN_NORM)` wrapped *around* either where the norm is a divisor. These run on every
-sample of every step, so the norm they use is judged by what it costs an SGD run — and a second
-read of the same `(B, dim)` array is a real cost, while the failure it guards against is not one
-training reaches.
+The per-sample Euclidean norms in hyperbolix are either `safe_sqrt(sum(v**2))`, a single pass over
+the data, or the max-scaled two-pass `safe_norm`. Both return an exact `0` with an **exactly zero**
+VJP at the zero vector, where `jnp.linalg.norm`'s VJP is NaN, and both pass a non-finite input
+through as `inf` rather than NaN.
 
-A site is converted only where 1.2.0 measured **slower** (hyperboloid `expmap_0` 1.28x, `HTCLinear`
-forward+backward 1.12x, on both A100 and H100) or where PR #75 raised the compiled kernel /
-reduction count. That is the whole list:
+The single reduction overflows once a coordinate passes $\sqrt{\texttt{finfo.max}}$
+($1.84\times10^{19}$ in float32). On the hyperboloid that is scaled radius $a \approx 45$
+(float32) / $356$ (float64) for `proj` and `dist_0`; `logmap_0` uses the two-pass norm and reaches
+$\approx 89$ / $710$. Typical embeddings sit far inside these limits. Past the ceiling
+(float32, $c = 1$) the single-reduction sites return:
 
-| Where | Operations |
-|---|---|
-| `Hyperboloid` | `proj`, `proj_batch`, `dist_0` (both version slots) |
-| `Poincare` / `Stereographic` | `proj`, `proj_batch` (the shared gyrovector core), and `Poincare.expmap` |
-| Layers | `spatial_to_hyperboloid` (so `HTCLinear`), the FHCNN and FGG linear forwards |
-
-Every other per-sample norm keeps the max-scaled two-pass form, which is full-range safe:
-hyperboloid `logmap_0` (which measured *faster* in 1.2.0), the pairwise `dist`/`logmap` polar
-frame, hyperboloid and Poincaré `tangent_norm`, `Poincare.expmap_0` (no measured change either
-way), the FHNN linear forward, the linear-attention `focus_transform` (converting it measured no
-speedup of its own), every `ProperVelocity` operation and the proper-velocity isometry
-maps, the rest of `Stereographic`, `Euclidean` and `ProductManifold`, the wrapped-normal
-`log_prob`, and every weight norm. Where nothing was measured slower there is no cost to trade the
-full-range guarantee against. The Poincaré metric-tensor distances left this list later: the
-pairwise `dist` in slot 2 now runs slot 0's body and `dist_0` in slot 2 reads $\lVert x\rVert$ and
-$1 - c\lVert x\rVert^2$ from one reduction, both through `safe_sqrt`, since the sum of squares of
-a ball point (or of the difference of two) cannot overflow (see
-[Far pairs](#poincare-far-pairs)).
-
-Neither of the two older idioms is used on that path any more. The **additive**
-`sqrt(sum(x**2) + MIN_NORM**2)` was a gradient guard: it gives `sqrt` a finite derivative at
-$x = 0$, which `jnp.linalg.norm` does not (its VJP there is $0/0 =$ NaN). It paid for that with a
-$\texttt{MIN\_NORM}^2 = 10^{-30}$ floor that dominates any genuinely small vector, relative
-residual $\texttt{MIN\_NORM}^2/(2r^2)$: $5.0\times10^{-15}$ for a float64 point at radius
-$10^{-8}$, and 41 % for a float32 point at radius $10^{-15}$, where `dist_0` returned
-$2.83\times10^{-15}$ for a true $2.00\times10^{-15}$. `safe_sqrt`'s double-`where` supplies the
-same finite (in fact exactly zero) derivative with no floor on the value at all.
-
-The **max-scaled** `safe_norm`/`safe_hypot_norm` reads the input twice — once for
-$\max_i |x_i|$, once for the sum — to keep $\sum_i x_i^2$ from overflowing float32, which happens
-once a coordinate passes $1.8\times10^{19}$. That is geodesic radius $\approx 45$ at $c = 1$ and
-$\approx 139$ at $c = 0.1$, in float32; a network that far out is already diverging, and `inf` is
-the signal you want. So the converted sites take the single reduction and give up their
-answer past that coordinate. What they give instead was measured, float32 at $c = 1$, rather than
-argued — and it is **not** uniform:
-
-| Converted operation | Past coordinate $1.8\times10^{19}$ (measured, float32, $c = 1$) |
+| Operation | Past coordinate $1.84\times10^{19}$ |
 |---|---|
 | `Hyperboloid.proj`, `proj_batch` | $x_0 = \infty$, spatial part unchanged, no NaN |
 | `Hyperboloid.dist_0` (both version slots) | $\infty$ |
 | `spatial_to_hyperboloid` (`HTCLinear`), FHCNN linear forward | $x_0 = \infty$, no NaN |
 | FGG linear forward | non-finite (NaN or $\infty$, depending on the input) |
-| Poincaré and $\kappa$-stereographic `proj` (the boundary clamp) | the **origin** — a finite point, with a finite (exactly zero) gradient |
-| `Poincare.expmap` | the **base point** — a finite point (the origin, when the base is the origin) |
-| everything on the two-pass form | unchanged from 1.2.0 |
+| Poincaré and $\kappa$-stereographic `proj` (the boundary clamp) | the **origin**, a finite point with a finite (exactly zero) gradient |
+| `Poincare.expmap` | the **base point**, a finite point (the origin, when the base is the origin) |
 
-So two of the converted sites do saturate to a finite point, and that is the clamp's documented
-behaviour rather than an accident: with $\lVert x\rVert = \infty$ the boundary clamp
-$x \cdot (r_{\max}/\lVert x\rVert)$ *is* the zero vector, which is the pre-1.2.0 behaviour, and
-`expmap` inherits it through the same clamp. Nothing is added to guard a regime SGD cannot reach.
-(`Poincare.expmap_0`, which kept the two-pass norm, still returns the correct boundary point
-there.)
+Where a norm is a *divisor*, floor it multiplicatively **around** the square root,
+`floor_at(safe_sqrt(sum(x**2)), MIN_NORM)`, not under it: under the `sqrt`, the untaken branch of
+the surrounding `where` still has `sqrt'(0) = inf`, and $0 \times \infty$ is NaN. When the floored
+norm feeds a $\sinh(t)/t$, floor $t$ itself, not only the denominator, or the ratio is $0$ at
+$t = 0$ instead of $1$.
 
-One consequence worth stating plainly: for the converted origin-chart operations the largest
-representable geodesic radius drops. It used to be set by $x_0 = \cosh(a)/\sqrt{c}$ fitting the
-dtype, i.e. $a = \ln(2\,\texttt{finfo.max})$ — radius $\approx 89$ in float32, $\approx 710$ in
-float64 at $c = 1$ (89.416 / 710.476; the same number as $\operatorname{arcsinh}(\texttt{finfo.max})$,
-since $\sinh(a)$ and $\cosh(a)$ leave the dtype together). For `proj` and `dist_0` it is now set by
-the **coordinate**, $\sinh(a)/\sqrt{c} < \sqrt{\texttt{finfo.max}}$ — radius $\approx 45$ in
-float32 and $\approx 356$ in float64. `logmap_0` and the pairwise `dist`/`logmap` keep the
-two-pass norm and therefore keep both their finite result and a ceiling of that order: `logmap_0`
-reads only $\lVert y_s\rVert$ and keeps the old $\approx 89$ / $\approx 710$ exactly, while the
-pairwise pair binds a fraction of a radius earlier, at $e^a/\sqrt{c} \le \texttt{finfo.max}$
-($a = \ln(\texttt{finfo.max})$: 88.72 / 709.78), because `_polar_frame` composes
-$u = x_0 + \lVert x_s\rVert$ and returns $\pm\infty$ once that overflows. Every hyperbolic model in
-the literature lives four to five orders of magnitude inside every one of these limits.
-
-What has **not** changed is how the constant is folded in. The hyperboloid time slot is
-$x_0 = \sqrt{1/c + \sum_i (x_s)_i^2}$ — the constant added to the sum *under* the square root, in
-the same reduction — and never `hypot(‖x_s‖, 1/√c)`, which rounds $\lVert x_s\rVert$ to the dtype
-and then squares it again. The library's own constraint check is
-$-x_0^2 + \lVert x_s\rVert^2 = -1/c$: when $x_0$ is built from the same $\sum_i (x_s)_i^2$ that
-check forms, the rounding of the sum cancels against itself and the residual is one rounding of
-$x_0$; when $x_0$ is built from a re-squared norm the two no longer cancel, and at
-$x_0 \approx 34$ one float32 ulp of $x_0^2$ is $1.2\times10^{-4}$. The constant is spelled `1/c`
-rather than `(1/√c)**2`, which is one rounding fewer.
-
-All the primitives stay public in `hyperbolix.utils.math_utils`, and each has its own job.
-`safe_norm`, `safe_hypot_norm` and `safe_normalize` are the max-scaled, full-range ones: they hold
-every per-sample site that was not converted, and the **weight** norms — computed once per forward
-over an `(in, out)` kernel, where a second reduction is not on the per-sample path. They also
-remain the right choice in user code that genuinely needs the full float32 exponent range.
-`safe_hypot` is different: it is a two-leg *scalar* composer $\sqrt{p^2+q^2}$, and it is on the hot
-path — the hyperboloid `_polar_frame` builds its radial and angular legs with it. `safe_sqrt` is
-the scalar counterpart used at the converted sites.
-
-All of them return an exact `0` with an **exactly zero** VJP at the zero vector — the finite,
-direction-free choice at a point where the derivative does not exist — and pass a non-finite input
-through as `inf` rather than turning it into NaN. Where a norm is a *divisor* the floor is still
-there, as `floor_at(safe_sqrt(sum(x**2)), MIN_NORM)`: a multiplicative floor, exact everywhere
-above itself, instead of an additive one that perturbs every value. It has to sit **around** the
-square root, not under it — `floor_at` under the `sqrt` still leaves `sqrt'(0) = inf` in the
-untaken branch of the surrounding `where`, and $0 \times \infty$ is NaN. One further subtlety when
-the floored norm feeds a $\sinh(t)/t$: the floor has to be applied to $t$ itself and not only to
-the denominator, or the ratio is $0$ at $t = 0$ instead of $1$.
-
-!!! note "The pairwise `dist` reads the same radial gap off the spatial part"
-    `dist` is a separate code path, and it used to carry its own $O(\varepsilon/r)$ relative error
-    near the origin: its polar decomposition needs $u_x - u_y$ with $u = x_0 + \lVert x_s\rVert$,
-    and forming that difference directly throws away the $\varepsilon\,x_0$ that $x_0$ is stored
-    with. In float32 that was 4.6e-2 relative at radius 1e-6 and 1.4e-4 at 1e-4. It now uses the
-    on-sheet identity $x_0 - y_0 = (\lVert x_s\rVert^2 - \lVert y_s\rVert^2)/(x_0 + y_0)$, i.e.
-
-    $$
-    u_x - u_y = (\lVert x_s\rVert - \lVert y_s\rVert)
-                \Bigl(1 + \frac{\lVert x_s\rVert + \lVert y_s\rVert}{x_0 + y_0}\Bigr),
-    $$
-
-    which subtracts only the spatial radii. Float32 `dist(origin, x)` is now within 3.1e-7 of
-    `dist_0(x)` at every radius from 1e-8 up, and two float32 points at radius 1e-3 separated by
-    1e-3 agree with the float64 answer to 1.5e-7 (was 3.3e-5). `dist_0(x, c)` remains marginally
-    cheaper and marginally tighter than `dist(origin, x, c)` — at $y$ exactly at the origin the
-    `MIN_NORM` floor on $\lVert y_s\rVert$ leaves a $\tfrac12\,$`MIN_NORM`$/\lVert x_s\rVert$
-    relative residual in the pairwise arm — but the two no longer disagree in any digit float32
-    can see.
+In your own code (all primitives are in `hyperbolix.utils.math_utils`), use `safe_norm` where you
+need the full float32 exponent range, and `safe_sqrt(sum(v**2))` on hot per-sample paths.
 
 ## Storage vs. Compute Dtype
 
-Hyperbolix separates two dtype concerns that are easy to conflate:
+- **Compute precision** is the dtype manifold operations run in, set by the
+  manifold's `dtype` (e.g. `Poincare(dtype=jnp.float64)`). Manifold methods
+  cast their array arguments to it on entry.
+- **Storage dtype** is the dtype of a layer's parameters and persistent state
+  (batch-norm statistics, VQ codebooks), set by the `param_dtype` argument on
+  every NN layer (default `jnp.float32`, as in Flax).
 
-- **Compute precision** — the dtype in which manifold operations (`dist`,
-  `expmap`, `logmap`, …) run. Controlled by the manifold's `dtype` attribute
-  (e.g. `Poincare(dtype=jnp.float64)`). Manifold methods cast their array
-  arguments to this dtype on entry.
-- **Storage dtype** — the dtype in which a layer's trainable parameters and
-  persistent state (batch-norm statistics, VQ codebooks) are kept. Controlled
-  by the `param_dtype` constructor argument on every NN layer
-  (default: `jnp.float32`, following the Flax convention).
+A float32 parameter entering a float64 manifold operation is promoted for that
+computation only. The Riemannian optimizers run in the manifold dtype and cast
+updates and momentum buffers back to the parameter's dtype.
 
-The two are decoupled: a float32-stored parameter that enters a float64
-manifold operation is promoted to float64 *for that computation only*; the
-parameter itself stays float32. The Riemannian optimizers follow the same
-contract — `egrad2rgrad`/`expmap`/`ptransp` run in the manifold dtype, but the
-returned updates and the momentum buffers are cast back to the parameter's
-storage dtype.
-
-**The recommended high-precision recipe** is therefore float64 *compute* with
-float32 *storage* — full precision where the geometry needs it, at half the
-parameter/optimizer-state memory and with float32 checkpoints:
+**The recommended high-precision recipe** is float64 *compute* with float32
+*storage*: full precision where the geometry needs it, at half the
+parameter/optimizer-state memory:
 
 ```python
 import jax.numpy as jnp
@@ -730,11 +383,9 @@ layer_f64 = HypLinearPoincarePP(manifold, 64, 32, rngs=nnx.Rngs(0), param_dtype=
 ```
 
 !!! note "Parameter dtype rarely matters"
-    Float32 parameter storage costs essentially nothing in accuracy: precision
-    in hyperbolic networks is consumed by the manifold operations (conformal
-    factors, `atanh`/`acosh` near their singularities), not by where the
-    weights are stored. Reach for `param_dtype=jnp.float64` only for
-    reproducibility studies or numerical debugging.
+    Precision in hyperbolic networks is lost in the manifold operations, not
+    in weight storage. Use `param_dtype=jnp.float64` only for reproducibility
+    studies or numerical debugging.
 
 ## The Conformal Factor Problem
 
