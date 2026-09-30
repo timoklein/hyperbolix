@@ -233,7 +233,9 @@ stays accurate past it; at $\sqrt{c}\,\lVert v\rVert = 8$ the float32 error of t
 [Tangent Inputs to the HNN++ and Busemann Layers](numerical-stability.md#poincare-tangent-input)).
 `HypLinearPoincarePP`, `HypRegressionPoincareBusemann` and `HypLinearPoincareBusemann` take the same
 flag. Keep the default `input_space="manifold"` when the input is already a ball point, such as the
-output of an earlier Poincaré layer.
+output of an earlier Poincaré layer. `HypConv2DPoincare` already defaults to `input_space="tangent"`
+and always returns tangent vectors, so a stack of these convs takes the tangent path without
+setting the flag.
 
 ```python
 from hyperbolix import LearnableCurvature

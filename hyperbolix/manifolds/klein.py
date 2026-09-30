@@ -73,9 +73,9 @@ def _gap(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     ``logmap``, ``ptransp``, ``⊕``, ``tangent_norm``, ``egrad2rgrad`` and ``lorentz_factor``, up to
     7.9 for ``expmap`` w.r.t. its base point (float64). With the half floor the gradients there are
     bit-identical to the unfloored ones in both dtypes. On pairs of two capped points the float32 ``⊕``
-    error drops from 1.0 to 2.8e-3; on pairs of one capped and one free point the float32 errors of
-    ``⊕`` and ``expmap`` (1.2-1.3 and 1.0) do not come from the floor, since they are the same with no
-    floor. A point past the margin that was never projected (the maps into Klein do not project)
+    error drops from 1.0 to 2.8e-3 (c = 1) and 7.8e-3 (c = 0.3). Two float32 errors remain, and they do
+    not come from the floor, since they are the same with no floor: ``⊕`` on pairs of one capped and one
+    free point (0.47-1.3) and ``expmap`` w.r.t. a capped base point (1.0). A point past the margin that was never projected (the maps into Klein do not project)
     still meets the floor, which keeps the gap positive and reads it at scaled radius ≈ 6.67
     (float32) / 14.21 (float64) at c = 1.
     """

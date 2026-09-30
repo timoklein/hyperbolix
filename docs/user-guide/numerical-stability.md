@@ -983,7 +983,7 @@ Some float32 gradients at capped points stay wrong: Poincaré `expmap` with resp
 point and Poincaré `addition` with respect to $y$ keep relative errors up to 1.0, Klein `expmap`
 with respect to its base point up to 1.0 (above 0.1 on 40–48 % of the pairs), and Klein
 `addition` up to 1.3 on pairs of one capped and one free point (on pairs of two capped points it
-is fixed, 1.0 → 2.8e-3). The floor is not the cause: the gradients with the half floor and with no
+is fixed, 1.0 → 2.8e-3 at $c = 1$ and 7.8e-3 at $c = 0.3$). The floor is not the cause: the gradients with the half floor and with no
 floor are identical (`logs/2026-09-29_cancellation-free/floorfix/probe_grad_commit2.out`,
 `logs/2026-09-29_cancellation-free/floorfix2/summary_grad2_fix.out`,
 `logs/2026-09-29_cancellation-free/docs_b4b/check_floor_not_cause.out`).
@@ -1088,10 +1088,12 @@ than 6 % slower on the CPU or 10 % on the GPU.
   about 8 % slower on the CPU (1.063, 1.081, re-time 1.091), and `logmap` forward+backward
   measured 1.031 and 1.027.
 - **Faster on the CPU.** Slot 0 `dist` forward 0.671 / 0.651 and forward+backward 0.335 / 0.292;
-  slot 2 `dist` forward 0.676 / 0.635; `apollonian_dist` forward 0.777 / 0.770. Forward+backward:
-  `HypRegressionPoincarePP` with tangent input 0.802 / 0.793, `HypConv2DPoincare` 0.837 / 0.840,
-  the wrapped-normal `log_prob` 0.787 / 0.844, and `PoincareBatchNorm2D` in training mode
-  0.905 / 0.906.
+  slot 2 `dist` forward 0.676 / 0.635 and forward+backward 0.782 / 0.786; `apollonian_dist`
+  forward 0.777 / 0.770 and forward+backward 0.758 / 0.748. Forward+backward:
+  `HypRegressionPoincarePP` with tangent input 0.802 / 0.793, `HypLinearPoincarePP` with tangent
+  input 0.938 / 0.929, `HypConv2DPoincare` 0.837 / 0.840, the wrapped-normal `log_prob`
+  0.787 / 0.844, and `PoincareBatchNorm2D` in training mode 0.905 / 0.906. `HoroPCA.fit`
+  0.957 / 0.963.
 
 ## Init Scale vs. Depth
 
