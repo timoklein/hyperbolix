@@ -25,6 +25,7 @@ from hyperbolix.nn_layers.hyperboloid_moe import (
     RoutingBias,
     moe_sequence_balance_loss,
 )
+from hyperbolix.utils.curvature import LearnableCurvature
 
 DIM, INTER, NUM_ROUTED, NUM_SHARED, TOP_K = 9, 6, 4, 1, 2
 BATCH, SEQ = 2, 8
@@ -340,6 +341,33 @@ def test_moe_default_curvatures_are_paper_linspace():
     assert not any("curvatures" in str(path) for path, _ in nnx.to_flat_state(nnx.state(fixed, nnx.Param)))
 
 
+@pytest.mark.parametrize("parameterization", ["log", "softplus"])
+def test_moe_curvature_bounds_default_per_expert(parameterization):
+    """Each expert's clamp defaults to LearnableCurvature's own [c_i / 10, c_i * 10]; explicit bounds are used as given."""
+    moe = _make_moe(curvature_parameterization=parameterization)
+    for ci, curvature in zip(np.linspace(0.1, 2.0, NUM_ROUTED), moe.curvatures, strict=True):
+        assert curvature._c_min == pytest.approx(ci / 10, rel=1e-12)
+        assert curvature._c_max == pytest.approx(ci * 10, rel=1e-12)
+
+    explicit = _make_moe(curvature_parameterization=parameterization, c_min=0.05, c_max=None)
+    assert all(curvature._c_min == 0.05 and curvature._c_max is None for curvature in explicit.curvatures)
+
+
+def test_moe_calls_each_expert_curvature_once_per_forward(monkeypatch):
+    """The clamp masks each call's gradient separately, so the forward reads each curvature once and reuses it."""
+    counts = {}
+    original_call = LearnableCurvature.__call__
+
+    def counting_call(self):
+        counts[id(self)] = counts.get(id(self), 0) + 1
+        return original_call(self)
+
+    moe = _make_moe()
+    monkeypatch.setattr(LearnableCurvature, "__call__", counting_call)
+    moe(_make_points(jax.random.key(3), 1.0), 1.0)
+    assert counts == {id(curvature): 1 for curvature in moe.curvatures}
+
+
 def test_moe_rejects_bad_config():
     with pytest.raises(ValueError, match="top_k"):
         _make_moe(top_k=NUM_ROUTED + 1)
@@ -384,7 +412,9 @@ def test_moe_matches_paper_transcription(dtype, score_func, num_shared):
 
 
 def test_moe_independent_of_expert_order():
-    moe = _make_moe(jnp.float64)
+    # One clamp for all experts: the default bounds are per expert ([c_i / 10, c_i * 10]) and stay with the slot,
+    # so permuting only the raw curvatures would clamp them to the wrong windows.
+    moe = _make_moe(jnp.float64, c_min=0.01, c_max=20.0)
     _randomize_biases(moe)
     moe.gate.bias[...] = jnp.asarray([0.05, -0.05, 0.02, 0.0], dtype=jnp.float64)
     x = _make_points(jax.random.key(7), 1.0, jnp.float64)
@@ -439,15 +469,14 @@ def _grads_over_batch(moe, seed=10):
     return nnx.grad(loss_fn)(moe)
 
 
-@pytest.mark.parametrize("straight_through_clamp", [True, False], ids=["straight_through", "hard_clamp"])
 @pytest.mark.parametrize("expert", range(NUM_ROUTED))
-def test_moe_gradient_reaches_every_expert_curvature(expert, straight_through_clamp):
-    """Default (paper) curvatures linspace(0.1, 2.0, E), default log parameterization, at init.
+def test_moe_gradient_reaches_every_expert_curvature(expert):
+    """Default (paper) curvatures linspace(0.1, 2.0, E), default log parameterization and bounds, at init.
 
-    Expert 0 starts at c = 0.1, the LearnableCurvature clamp floor. Under the hard clamp with the
-    pre-fix LearnableCurvature, float32 rounds exp(log 0.1) below the floor and this gradient is 0.
+    Expert 0 starts at c = 0.1. Under the old fixed floor c_min = 0.1 and hard clamp, float32 rounded
+    exp(log 0.1) below the floor and this gradient was 0; its default floor is now 0.01.
     """
-    moe = _make_moe(jnp.float32, straight_through_clamp=straight_through_clamp)
+    moe = _make_moe(jnp.float32)
     _randomize_biases(moe)
     grads = _grads_over_batch(moe)
     raw_grad = float(grads["curvatures"][expert]["raw"][...])

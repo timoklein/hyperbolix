@@ -52,7 +52,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float, Int
 
 from hyperbolix.manifolds.protocol import ScalarCurvature
-from hyperbolix.utils.curvature import LearnableCurvature, Parameterization
+from hyperbolix.utils.curvature import _AUTO, LearnableCurvature, Parameterization, _Auto
 from hyperbolix.utils.math_utils import floor_at
 
 from .hyperboloid_core import lorentz_midpoint, spatial_to_hyperboloid
@@ -418,12 +418,15 @@ class LorentzMoE(nnx.Module):
     ----------
     The routed experts start at ``c_i = linspace(0.1, 2.0, E)`` (the paper: "curvature initiated
     uniformly from -0.1 to -2.0"), or at ``expert_curvatures``. With ``learnable_curvature=True``
-    each routed expert has its own :class:`~hyperbolix.utils.curvature.LearnableCurvature`
-    (clamped to ``[c_min, c_max]``). The lowest paper expert starts exactly at the default
-    ``c_min = 0.1``; under LearnableCurvature's own default hard clamp, the first optimizer step
-    that takes it below ``c_min`` pins it at the floor with zero gradient for good. So
-    ``straight_through_clamp`` defaults to True here, unlike LearnableCurvature's default False:
-    the forward value stays clamped, the gradient still passes, and ``c_i`` can move back up.
+    each routed expert has its own :class:`~hyperbolix.utils.curvature.LearnableCurvature`,
+    clamped to ``[c_min, c_max]``. By default these are LearnableCurvature's own bounds, set per
+    expert: ``[c_i / 10, c_i * 10]`` for ``log``/``softplus``, so with the paper's
+    ``linspace(0.1, 2.0, E)`` the first expert is held to ``[0.01, 1]`` and the last to
+    ``[0.2, 20]``. On a bound the clamp passes only a gradient that points back inside, so no
+    ``c_i`` gets pinned there. The forward reads each expert's curvature once
+    (:meth:`routed_curvatures`) and reuses it. Forward-mode autodiff (``jax.jvp``,
+    ``jax.jacfwd``) through learnable curvatures raises, because the clamp is a custom VJP;
+    ``jax.grad`` works, and ``c_min=None, c_max=None`` gives plain autodiff.
     HELM trains the raw curvatures with its AdamW weight decay (0.01); here decay of
     ``curvatures[i].raw`` is up to the caller's optax chain (under ``log`` it pulls ``c_i`` toward 1).
 
@@ -503,12 +506,11 @@ class LorentzMoE(nnx.Module):
     curvature_parameterization : {"log", "softplus", "identity"}, optional
         Passed to each ``LearnableCurvature`` (default: "log").
     c_min, c_max : float or None, optional
-        Clamp of each learnable expert curvature, passed to ``LearnableCurvature`` (defaults
-        0.1 and 10.0, LearnableCurvature's own defaults for ``log``/``softplus``; the expert
-        maps need ``c_i > 0``). ``None`` disables that side.
-    straight_through_clamp : bool, optional
-        Passed to each ``LearnableCurvature`` (default: True, unlike LearnableCurvature's False;
-        see "Curvatures" above).
+        Clamp of each learnable expert curvature, passed to ``LearnableCurvature``. The default
+        is LearnableCurvature's own, per expert: ``[c_i / 10, c_i * 10]`` for ``log``/``softplus``
+        (see "Curvatures" above), ``[-10, 10]`` for ``identity``. The expert maps need
+        ``c_i > 0``, so with ``identity`` pass a positive ``c_min``. A float is used as given
+        for every expert; ``None`` disables that side.
     init_bound : float or None, optional
         Uniform init bound of every expert projection; ``None`` (the default) is HELM's
         ``sqrt(12 / (in + out))`` per projection (see :class:`LorentzSwiGLU`).
@@ -543,9 +545,8 @@ class LorentzMoE(nnx.Module):
         expert_curvatures: Sequence[float] | None = None,
         learnable_curvature: bool = True,
         curvature_parameterization: Parameterization = "log",
-        c_min: float | None = 0.1,
-        c_max: float | None = 10.0,
-        straight_through_clamp: bool = True,
+        c_min: float | None | _Auto = _AUTO,
+        c_max: float | None | _Auto = _AUTO,
         init_bound: float | None = None,
         param_dtype: DTypeLike = jnp.float32,
         eps: float = 1e-7,
@@ -582,7 +583,6 @@ class LorentzMoE(nnx.Module):
                         parameterization=curvature_parameterization,
                         c_min=c_min,
                         c_max=c_max,
-                        straight_through_clamp=straight_through_clamp,
                     )
                     for ci in init_curvatures
                 ]
@@ -591,7 +591,11 @@ class LorentzMoE(nnx.Module):
             self.curvatures = None
 
     def routed_curvatures(self) -> Float[Array, "E"]:
-        """Current curvatures ``c_i`` of the routed experts, shape ``(E,)``."""
+        """Current curvatures ``c_i`` of the routed experts, shape ``(E,)``.
+
+        Calls each expert's ``LearnableCurvature`` once. Call this once per forward and reuse the
+        result: the clamp masks each call's gradient separately.
+        """
         if self.curvatures is None:
             return jnp.asarray(self.init_curvatures, dtype=jnp.float32)
         return jnp.stack([curvature() for curvature in self.curvatures])
