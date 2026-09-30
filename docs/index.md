@@ -60,7 +60,7 @@ cd hyperbolix
 uv sync  # or pip install -e .
 ```
 
-Requirements: Python 3.12+, JAX, Flax NNX, Optax
+Requirements: Python 3.12+, JAX 0.9+, Flax 0.12+, Optax 0.2.6+
 
 ## Architecture
 
@@ -69,9 +69,12 @@ Hyperbolix follows a **class-based manifold design** with functional transformat
 ```python
 # Manifold classes with automatic dtype casting
 from hyperbolix.manifolds import Poincare
+import jax
 import jax.numpy as jnp
 
+jax.config.update("jax_enable_x64", True)  # float64 needs x64 enabled
 poincare = Poincare(dtype=jnp.float64)  # Optional float64 precision
+x, y = jnp.array([0.1, 0.2]), jnp.array([0.3, -0.1])
 distance = poincare.dist(x, y, c=1.0)
 
 # Neural network layers as Flax NNX modules
@@ -84,7 +87,8 @@ model = HypLinearPoincare(
     out_dim=16,
     rngs=nnx.Rngs(0)
 )
-output = model(input_data, c=1.0)
+input_data = jnp.full((4, 32), 0.01)  # (B, in_dim) points in the ball
+output = model(input_data, c=1.0)  # (4, 16)
 ```
 
 ## Project Status
@@ -147,8 +151,10 @@ Curvature can be made trainable via the `LearnableCurvature` module.
 Instantiate one per distinct curvature in your model and call it at runtime:
 
 ```python
+from flax import nnx
 from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Hyperboloid
+from hyperbolix.nn_layers import FGGLinear
 
 class Model(nnx.Module):
     def __init__(self, rngs):
@@ -182,6 +188,7 @@ product = ProductManifold(
     (Euclidean(), 4),          # flat factor
 )
 c = product.curvatures               # (1.0, 0.1, 0.0)
+x = y = product.origin(c)            # (12,) points
 d = product.dist(x, y, c)            # sqrt(sum d_i^2) over factors
 ```
 
@@ -190,7 +197,7 @@ d = product.dist(x, y, c)            # sqrt(sum d_i^2) over factors
 Each manifold provides:
 
 - **proj**: Project points onto the manifold
-- **dist**: Compute distances (multiple versions for numerical stability)
+- **dist**: Geodesic distance (Poincaré and Hyperboloid offer several formulations via `version_idx`)
 - **expmap/logmap**: Exponential and logarithmic maps
 - **ptransp**: Parallel transport
 - **egrad2rgrad**: Convert Euclidean to Riemannian gradients

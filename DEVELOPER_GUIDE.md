@@ -6,7 +6,7 @@ Quick reference for development workflows and tooling.
 
 ```bash
 # Clone and install
-git clone <repo>
+git clone https://github.com/timoklein/hyperbolix.git
 cd hyperbolix
 uv sync --locked --dev
 
@@ -35,10 +35,9 @@ hyperbolix/
 
 Pre-commit hooks will automatically run on staged files:
 
-- Ruff linting and formatting
-- Trailing whitespace removal
-- YAML/TOML validation
-- Large file checks
+- isort, Ruff lint (`--fix`) and Ruff format
+- Pyright on `hyperbolix/`
+- trailing whitespace, end-of-file, YAML/TOML syntax, merge-conflict markers, large files (>500 KB), debug statements
 
 To run manually on all files:
 
@@ -62,8 +61,8 @@ uv run pyright hyperbolix
 ### Running Tests
 
 ```bash
-# All tests
-uv run pytest
+# All tests, on all cores (~9 min on 48 workers; hours single-process)
+uv run pytest -n auto
 
 # Specific test suite
 uv run pytest tests/test_manifolds.py
@@ -72,7 +71,7 @@ uv run pytest tests/nn_layers/test_hyperboloid_fgg.py   # one file
 
 # Fast slice of the dim-parametrized suites: dimension 2, float32 only
 # (the ids spell the dimension as a bare number, e.g. [PoincareBall-c1-2-float32-10],
-#  so "2-float32" is the selector; 78 of the 386 tests in tests/test_manifolds.py)
+#  so "2-float32" is the selector; 134 of the 650 tests in tests/test_manifolds.py)
 uv run pytest -k "2-float32"
 
 # Verbose output
@@ -108,21 +107,20 @@ All tensor/array local variables in function bodies use **shape suffixes** — s
 
 ```python
 # poincare_regression.py — MLR forward pass
-sub_PBD = addition_fn(p_neg_PD, x_BD, c)        # (P, B, D) from broadcasting
+sub_PBD = addition_fn(p_neg_PD, x, c)            # (P, B, D) from broadcasting
 sub_BPD = jnp.transpose(sub_PBD, (1, 0, 2))      # reorder to (B, P, D)
-res_BP  = lambda_p_P1.T * a_norm_P1.T * signed_dist2hyp_BP
 
-# hyperboloid_conv.py — patch extraction
+# hyperboloid_core.py — patch extraction
 patches_BHWCkhkw = patches_flat_BHW_CKhKw.reshape(B, H, W, C, kh, kw)
 patches_BHWkhkwC = patches_BHWCkhkw.transpose(0, 1, 2, 4, 5, 3)
 
-# poincare.py — conformal factor broadcast
-res_BP = 2 * z_norm_1P * signed_dist2hyp_BP  # z_norm.T broadcasts (1,P) over (B,P)
+# poincare.py — MLR logits
+res_BP = 2 * z_norm_P1.T * signed_dist2hyp_BP  # z_norm.T broadcasts (1, P) over (B, P)
 ```
 
 **Rules:**
 - Use compound suffixes for flattened dims: `x_flat_NC` with a comment explaining the merge
-- `_B1` for `keepdims=True` results, `_1P` for transposed broadcast tensors
+- `_B1` for `keepdims=True` results; `_P1.T` or `_1P` for transposed broadcasts
 - Add a dimension key docstring at the top of each file that uses shape suffixes
 
 Each annotated file begins with a docstring like:
@@ -137,7 +135,7 @@ Dimension key:
 
 ## CI/CD Pipeline
 
-The CI pipeline runs automatically on push and pull requests:
+CI (`.github/workflows/ci.yaml`) runs on every push. The docs build (`.github/workflows/docs.yml`) runs on pushes to `main` and on pull requests to `main`, and deploys the site from `main`.
 
 ### Jobs
 
@@ -151,11 +149,7 @@ The CI pipeline runs automatically on push and pull requests:
 
 ### CI Caching
 
-The pipeline caches `uv` dependencies (speeds up installation). Cache keys are
-based on:
-
-- `uv.lock` file hash
-- OS and Python version
+Caching is off: `uv sync --locked --dev` takes about 7 s with or without a cache (see the comment in `ci.yaml`).
 
 ## Common Tasks
 
@@ -210,7 +204,7 @@ uv run pytest tests/test_manifolds.py -s
 uv run pytest tests/test_manifolds.py -vv
 
 # Run specific test
-uv run pytest tests/test_manifolds.py::test_dist -v
+uv run pytest tests/test_manifolds.py::test_dist_properties -v
 ```
 
 ### Profile Performance
@@ -249,13 +243,6 @@ Current setting: `typeCheckingMode = "basic"`
 ### Common Type Issues
 
 ```python
-# Missing type annotation
-def foo(x):  # ❌ Pyright error
-    return x * 2
-
-def foo(x: float) -> float:  # ✅ OK
-    return x * 2
-
 # Using jaxtyping for array shapes
 from jaxtyping import Float, Array
 
@@ -294,9 +281,9 @@ adding a neural network layer, and contributing documentation.
     - `addition`, `scalar_mul`, `retraction`
     - `ptransp`, `ptransp_0`
     - `tangent_inner`, `tangent_norm`, `tangent_proj`
-    - `egrad2rgrad`, `is_in_manifold`
-    - `c` property and `_cast` (inherit from `ManifoldBase` to get these
-      plus dtype-casting machinery for free)
+    - `egrad2rgrad`, `is_in_manifold`, `is_in_tangent_space`
+    - a `dtype` attribute and `_cast` (inherit from `ManifoldBase` to get
+      these, the `c` property and the dtype casting)
 2. **Add to exports**: `hyperbolix/manifolds/__init__.py`.
 3. **Wire into tests**: extend `manifold_and_c` in `tests/conftest.py` so
    your manifold gets exercised by the shared test suite (parametrized over
@@ -332,8 +319,7 @@ instance (an `nnx.Module`) on the *caller's* model and passing its output as
     - Accept `manifold_module` (a `Manifold`-protocol instance), not raw
       functions
     - Accept `rngs: nnx.Rngs` keyword-only
-    - Name trainable params `kernel` and `bias` (Flax NNX convention; the
-      `simplify-conv-layers` work standardized this across conv layers too)
+    - Name trainable params `kernel` and `bias`
     - Accept `c` (or `c_in` / `c_out`) at **call time**, not in `__init__`
 4. **Add tests** under `tests/nn_layers/test_<your_layer>.py`, parametrized
    over the standard fixtures (`seed_jax`, `dtype`, `manifold_and_c`).
@@ -353,6 +339,9 @@ instance (an `nnx.Module`) on the *caller's* model and passing its output as
 The docs site is built with MkDocs + Material + mkdocstrings.
 
 ```bash
+# Once per checkout: vendor MathJax (gitignored)
+uv run python scripts/vendor_mathjax.py
+
 # Live-reload local preview
 uv run mkdocs serve
 
@@ -396,7 +385,6 @@ uv run pre-commit autoupdate
 ### Tests Pass Locally, Fail in CI
 
 ```bash
-# Check if it's a caching issue - clear caches in GitHub Actions
 # Check if it's a dependency issue - uv.lock might be out of sync
 uv lock --check
 
@@ -407,13 +395,11 @@ cat .python-version
 ### Out of Memory During Tests
 
 ```bash
-# Run tests sequentially (no parallel)
-uv run pytest --maxprocesses=1
+# Use fewer xdist workers
+uv run pytest -n 4
 
 # Run smaller test subset (dimension 2, float32)
 uv run pytest -k "2-float32"
-
-# Reduce batch sizes in conftest.py
 ```
 
 ## Git Workflow
@@ -447,8 +433,8 @@ git push
 
 ### Branch Strategy
 
-- `main` — release-tracked production code; release tags follow `vMAJOR.MINOR.PATCH`
-- Feature branches — `feature/<short-name>` (e.g. `feature/product-manifolds`)
+- `main` — the released code; release tags follow `vMAJOR.MINOR.PATCH`
+- Feature branches — `feat/<short-name>` (e.g. `feat/klein-manifold`)
 - Fix branches — `fix/<short-name>` (e.g. `fix/float32-stability`)
 
 ## Resources

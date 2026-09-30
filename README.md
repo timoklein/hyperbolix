@@ -24,19 +24,21 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 - 🧠 **40+ Neural Network Layers**: Linear, convolutional, regression, attention, normalization, positional encoding, PV
 - ⚡ **5 Hyperbolic Activations**: ReLU, Leaky ReLU, Tanh, Swish, GELU
 - 📈 **Riemannian Optimizers**: RAdam and RSGD with automatic manifold detection
+- 📊 **Wrapped Normal Distributions** and **Dimensionality Reduction** (HoroPCA, CO-SNE, Fréchet mean)
 - 🚀 **Pure JAX/Flax NNX**: vmap-native API, JIT-compatible
 - ✅ **7,000+ tests passing** (1,390 test functions, parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
 
 ## Quick Start
 
 ```python
+import jax
 import jax.numpy as jnp
 from flax import nnx
 from hyperbolix.manifolds import Poincare
 from hyperbolix.nn_layers import HypLinearPoincare
 
 # Plain Python manifold class (optionally float64; pass `c=` for fixed curvature)
-poincare = Poincare()  # add dtype=jnp.float64 as needed
+poincare = Poincare()  # dtype=jnp.float64 also needs jax.config.update("jax_enable_x64", True)
 
 # Manifold operations (single-point; use jax.vmap for batches)
 x = jnp.array([0.1, 0.2])
@@ -50,7 +52,9 @@ layer = HypLinearPoincare(
     out_dim=64,
     rngs=nnx.Rngs(0),
 )
-output = layer(x_batch, c=1.0)
+v_batch = 0.1 * jax.random.normal(jax.random.PRNGKey(0), (8, 128))
+x_batch = jax.vmap(poincare.expmap_0, (0, None))(v_batch, 1.0)  # (8, 128) ball points
+output = layer(x_batch, c=1.0)  # (8, 64)
 ```
 
 ### Mixed-Curvature Product Spaces
@@ -65,6 +69,7 @@ product = ProductManifold(
     (Euclidean(), 4),
 )
 cs = product.curvatures        # (1.0, 0.1, 0.0) — pass per-factor at call time
+x = y = product.origin(cs)     # (12,) points
 d = product.dist(x, y, cs)     # sqrt(sum d_i^2) over factors
 ```
 
@@ -91,7 +96,7 @@ uv sync  # or: pip install -e .
 - **[API Reference](docs/api-reference/)** - Complete API documentation
 - **[Developer Guide](DEVELOPER_GUIDE.md)** - Development setup and workflows
 
-Build docs locally: `uv run mkdocs serve`
+Build docs locally: `uv run python scripts/vendor_mathjax.py` (once per checkout), then `uv run mkdocs serve`
 
 ## Key Concepts
 
@@ -99,7 +104,7 @@ Build docs locally: `uv run mkdocs serve`
 
 ```python
 from hyperbolix.manifolds import Poincare
-poincare = Poincare()  # add dtype=jnp.float64 as needed
+poincare = Poincare()  # dtype=jnp.float64 also needs jax_enable_x64
 dist = poincare.dist(x, y, c=1.0)  # (dim,) → scalar
 ```
 
@@ -111,11 +116,14 @@ distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(
 )
 ```
 
-**Learnable curvature:** Use the `LearnableCurvature` module — assign one instance per distinct curvature in your model and call it to obtain a positive (optionally clamped) value. The manifold itself stays a fixed plain Python class, which keeps it out of the NNX state pytree (safe to share the same instance across layers and inside `nnx.scan` / `nnx.fori_loop`). The default clamp `[0.1, 10.0]` matches published reference ranges; pass `c_min=None, c_max=None` to disable. The default `parameterization="log"` (MERU-style) is scale-invariant and preferred when `c` may span orders of magnitude or for long compiled training loops; `parameterization="softplus"` gives a bounded gradient near zero instead — the reparameterization geoopt's `Stereographic`/`PoincareBall` use, and also the code default in the van Spengler et al. 2023 Poincare ResNet reference implementation (their reported curvature experiments use a fixed `c`, not this learnable scheme).
+**Learnable curvature:** Use the `LearnableCurvature` module: one instance per distinct curvature in your model, called to obtain `c`. The manifold stays a plain Python class outside the NNX state, so one instance can be shared across layers and inside `nnx.scan` / `nnx.fori_loop`. The default `parameterization="log"` suits a `c` that may span orders of magnitude; `"softplus"` has a bounded gradient near zero; `"identity"` gives the signed curvature of `Stereographic`. `c` is clamped to `[init_c/10, init_c·10]` by default (`[0.1, 10]` at `init_c=1.0`; `[-10, 10]` for identity); pass `c_min=None, c_max=None` to disable.
 
 ```python
+import optax
+from flax import nnx
 from hyperbolix import LearnableCurvature
 from hyperbolix.manifolds import Hyperboloid
+from hyperbolix.nn_layers import HypLinearHyperboloidPLFC
 
 class Model(nnx.Module):
     def __init__(self, rngs):
@@ -126,6 +134,8 @@ class Model(nnx.Module):
     def __call__(self, x):
         c = self.curvature()                              # positive, clamped
         return self.fc(x, c=c)
+
+model = Model(nnx.Rngs(0))
 
 # Updated by any standard Euclidean optimizer — no Riemannian optimizer needed.
 optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
@@ -150,11 +160,16 @@ Implements methods from:
 - Bécigneul & Ganea (2019): Riemannian Adaptive Optimization
 - Gu et al. (2019): Learning Mixed-Curvature Representations in Product Spaces
 - Nagano et al. (2019): Wrapped Normal Distribution on Hyperbolic Space
+- Bachmann et al. (2020): Constant Curvature Graph Convolutional Networks
 - Shimizu et al. (2020): Hyperbolic Neural Networks++
+- Chami et al. (2021): HoroPCA: Hyperbolic Dimensionality Reduction via Horospherical Projections
+- Guo et al. (2022): CO-SNE: Dimensionality Reduction and Visualization for Hyperbolic Data
 - Bdeir et al. (2023): Fully Hyperbolic CNNs
+- Mao et al. (2024): Klein Model for Hyperbolic Neural Networks
 - Bdeir et al. (2025): Robust Hyperbolic Learning
 - Klis et al. (2026): Fast and Geometrically Grounded Lorentz Neural Networks
 - Chen et al. (2026): Proper Velocity Neural Networks
+- Zhang et al. (2026): Klein Hyperbolic Metric Learning
 
 See individual module docstrings for detailed references.
 

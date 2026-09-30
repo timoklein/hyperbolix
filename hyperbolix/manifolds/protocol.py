@@ -1,8 +1,8 @@
 """Manifold Protocol for structural typing.
 
 Defines the common interface shared by all concrete manifold classes
-(``Poincare``, ``Hyperboloid``, ``ProperVelocity``, ``Euclidean``,
-``Stereographic``, and ``ProductManifold``). Use ``Manifold`` as a type hint
+(``Poincare``, ``Hyperboloid``, ``ProperVelocity``, ``Klein``, ``HalfSpace``,
+``Euclidean``, ``Stereographic``, and ``ProductManifold``). Use ``Manifold`` as a type hint
 for any parameter that accepts an arbitrary manifold instance.
 
 This is a ``typing.Protocol`` -- no classes need to explicitly inherit from it.
@@ -18,8 +18,8 @@ from jaxtyping import Array, Float
 
 # A single curvature value: a Python float (static, fixed curvature) or a scalar
 # jax.Array (traced, e.g. the value returned by calling a `LearnableCurvature`
-# module). This is what `Poincare`, `Hyperboloid`, `ProperVelocity`, and
-# `Euclidean` accept directly.
+# module). This is what `Poincare`, `Hyperboloid`, `ProperVelocity`, `Klein`,
+# `HalfSpace`, `Stereographic`, and `Euclidean` accept directly.
 ScalarCurvature = float | Float[Array, ""]
 
 # Curvature in either of the two shapes the library accepts: a scalar, or the
@@ -36,8 +36,9 @@ class Manifold(Protocol):
     """Structural protocol for manifold classes.
 
     All concrete manifold classes (``Poincare``, ``Hyperboloid``,
-    ``ProperVelocity``, ``Euclidean``, ``Stereographic``, ``ProductManifold``)
-    satisfy this protocol without modification.
+    ``ProperVelocity``, ``Klein``, ``HalfSpace``, ``Euclidean``,
+    ``Stereographic``, ``ProductManifold``) satisfy this protocol without
+    modification.
 
     ``c`` is typed ``ScalarCurvature`` -- this is the *scalar-curvature*
     interface, which is what every single manifold accepts and what the
