@@ -870,7 +870,10 @@ argument, the wrappers can go and the call sites can return to `jnp.arcsinh`.
 `HyperbolicFullAttention`, `HyperboloidGyroBatchNorm`/`ProperVelocityGyroBatchNorm`'s batch mean,
 and the hyperboloid Fréchet mean) both form a raw ambient vector $h = (h_0, h_s)$ — time
 coordinate $h_0$, spatial part $h_s$ — and pull it back onto the sheet by dividing by
-$\sqrt{\lvert\langle h,h\rangle_L\rvert}$. Computing that Minkowski square directly,
+$\sqrt{-c\,\langle h,h\rangle_L}$. The midpoint takes the absolute value
+$\sqrt{c\,\lvert\langle h,h\rangle_L\rvert}$; the residual does not, so a negative weight that
+makes $h$ spacelike gives NaN rather than a wrong point on the sheet. Computing that Minkowski
+square directly,
 
 $$
 \langle h, h\rangle_L = -h_0^2 + \lVert h_s\rVert^2,

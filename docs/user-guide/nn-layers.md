@@ -358,6 +358,11 @@ gradient). The token table is a `LorentzEmbedding(vocab, hidden, rngs=rngs, c=c)
 `riemannian_adam` inside the same `nnx.Optimizer` as the Euclidean weights. The expert curvatures start
 at `linspace(0.1, 2.0, E)`; `expert_curvatures=[1.0] * E` reproduces the released HELM checkpoint.
 
+`weight_parameterization="identity"` is there to reproduce HELM: its trainable `w_y` can go
+negative, which is outside the range where LResNet guarantees a valid output (Lemma 4.1 covers
+non-negative weights only), and a combination that turns spacelike then gives NaN. Outside a
+reproduction, keep the default softplus parameterization.
+
 ## Common Pitfalls
 
 ### 1. Wrong channel count (ambient vs. spatial)
