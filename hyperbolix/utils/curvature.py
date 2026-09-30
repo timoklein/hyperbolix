@@ -150,13 +150,13 @@ class LearnableCurvature(nnx.Module):
     lowers ``c``); an outward gradient is set to exactly 0. This is projected
     gradient descent with the projection folded into the forward pass, so the
     train step needs no extra call: ``c`` rests on a bound while the loss pushes
-    it outward, leaves it on the first step the loss pulls it back, and a blocked
+    it outward and comes off it once the loss pulls it back, and a blocked
     gradient does not feed Adam's moments. ``raw`` itself is not clamped, but it
     does not drift: it leaves the interval only by the step that crossed the bound
-    (plus the optimizer's decaying momentum), so the step that brings ``c`` back is
-    sized like an interior step at the bound and needs no damping. A ``c`` that
-    sits on a bound for many steps is held there by the loss; widen the bound if
-    that is unwanted.
+    (plus the optimizer's decaying momentum). Coming back takes only the few steps
+    that walk that overshoot back, each sized like an interior step at the bound,
+    so no damping is needed. A ``c`` that sits on a bound for many steps is held
+    there by the loss; widen the bound if that is unwanted.
 
     Init: ``raw`` is the inverse of ``init_c`` rounded to ``param_dtype``. For an
     ``init_c`` on a bound, that rounding can recover a ``c`` one float outside it

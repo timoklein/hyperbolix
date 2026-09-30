@@ -93,7 +93,7 @@ Most defaults from Euclidean training transfer. The exceptions:
 |---|---|
 | **Learning rate** | Adam `1e-3` works as a starting point for HTC / HCat / PP / PV. For deep Poincaré nets at `c=0.1`, try `5e-4`–`1e-3` |
 | **Gradient clipping** | Norm-clip at `1.0` is a safe default; not strictly required for most setups |
-| **Curvature init** | Hyperboloid: `c=1.0`. PV: `c=1.0`. Poincaré (deep nets): `c=0.1` with `LearnableCurvature(init_c=0.1, straight_through_clamp=True)` per layer. `0.1` is the default clamp floor: under the default clamp, one step that takes `c` below it pins `c` there for the rest of training |
+| **Curvature init** | Hyperboloid: `c=1.0`. PV: `c=1.0`. Poincaré (deep nets): `c=0.1` with `LearnableCurvature(init_c=0.1)` per layer. The default clamp is a decade either side of `init_c` (`[0.01, 1]` here), and a `c` resting on a bound comes off it within a few steps of the loss pulling it back inside |
 | **Float precision** | `float32` is fine for Hyperboloid and PV at modest depths. Use `Poincare(dtype=jnp.float64)` for high curvature, deep nets, or boundary-near training. Parameters stay float32 regardless (`param_dtype` default) — float64 affects manifold compute only. See [Numerical Stability](numerical-stability.md#storage-vs-compute-dtype) |
 | **Layer init** | Keep each family's default (HTC uses a fan-in-aware uniform `U(-√(3/in), √(3/in))`, PP uses scaled normal, etc.). Standard He/Xavier is too large for most hyperbolic layers, and a fixed small bound can silently *freeze* deep stacks — see the [NN Layers guide](nn-layers.md#initialization-scales) |
 
@@ -102,7 +102,7 @@ Most defaults from Euclidean training transfer. The exceptions:
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | NaN loss in the first step | Init too large, or `version_idx` left dynamic under JIT | Verify per-family init defaults; bind `version_idx` with `functools.partial` before JIT |
-| Stuck at random-chance accuracy (Poincaré) | Curvature too high — features hit the boundary where the conformal factor collapses | Use `Poincare(c=0.1)` with `LearnableCurvature(init_c=0.1, straight_through_clamp=True)` per layer |
+| Stuck at random-chance accuracy (Poincaré) | Curvature too high — features hit the boundary where the conformal factor collapses | Use `Poincare(c=0.1)` with `LearnableCurvature(init_c=0.1)` per layer |
 | Loss explodes after some warmup (Hyperboloid float32) | Lorentz-constraint drift accumulated past the layer's tolerance | Periodically call `manifold.proj(x, c)` between blocks, or switch to float64 |
 | Loss is decreasing on training data but eval is wild | Float precision mismatch between train and eval | Make sure both code paths use the same dtype on inputs and manifold (`param_dtype` storage is shared, so the mismatch is almost always inputs or manifold dtype) |
 | Using `riemannian_adam` for `HTC` / `FGG` / `PP` / `PV` layers | Wrong optimizer for Euclidean-weighted layers | Switch to `optax.adam` — see [Optimizers Guide](optimizers.md) |
