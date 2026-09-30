@@ -992,7 +992,7 @@ floor are identical (`logs/2026-09-29_cancellation-free/floorfix/probe_grad_comm
 `HypConv2DPoincare` (tangent in, tangent out), used to lift the tangent input with `expmap_0` and
 read the conformal factor back off the stored ball point; in float32 that lift stops at the
 ball's ceiling, $t = \sqrt{c}\,\lVert v\rVert = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})$,
-≈ 6.32 at $c = 1$ and ≈ 6.63 at $c = 0.3$ (the conv's old output map measured 6.3233 and 6.6256;
+≈ 6.33 at $c = 1$ and ≈ 6.63 at $c = 0.3$ (the conv's old output map measured 6.3233 and 6.6256;
 `logs/2026-09-29_cancellation-free/docs_a1/probe_conv_inf_score.out`), and
 past it the scores were those of the ceiling, with a zero radial gradient. They now score the
 tangent vector in closed form,
