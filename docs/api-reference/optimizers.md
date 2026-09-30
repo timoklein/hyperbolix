@@ -7,7 +7,7 @@ Riemannian optimization algorithms for training neural networks with hyperbolic 
 Hyperbolix provides two Riemannian optimizers that extend standard Euclidean optimizers to manifold-valued parameters:
 
 - **Riemannian SGD (RSGD)**: Stochastic gradient descent with momentum
-- **Riemannian Adam (RAdam)**: Adaptive learning rates with moment transport
+- **Riemannian Adam**: Adaptive learning rates with moment transport
 
 Both optimizers:
 
@@ -99,7 +99,7 @@ from hyperbolix.optim import ManifoldParam
 
 # Layer tags hyperbolic parameters using ManifoldParam
 class HypLinearPoincare(nnx.Module):
-    def __init__(self, manifold_module, in_dim, out_dim, *, rngs):
+    def __init__(self, manifold_module, in_dim, out_dim, *, rngs, curvature=1.0):
         self.manifold = manifold_module
 
         # Kernel is Euclidean (plain nnx.Param)
@@ -111,7 +111,7 @@ class HypLinearPoincare(nnx.Module):
         self.bias = ManifoldParam(
             jnp.zeros(out_dim),
             manifold=manifold_module,
-            curvature=1.0,
+            curvature=curvature,  # the optimizer's bias update uses this, not the call-time c
         )
 ```
 
@@ -122,12 +122,9 @@ The optimizer automatically:
 3. Performs parallel transport for momentum/adaptive moments
 4. Falls back to Euclidean updates for plain `nnx.Param` parameters
 
-**Dtype contract:** the Riemannian math (steps 2-3) runs in the manifold's
-`dtype`, but the returned updates and the moment buffers are cast back to each
-parameter's storage dtype before they leave the transformation. A float32
-parameter tagged with a float64 manifold keeps float32 weights and float32
-optimizer state across steps, while the geometry itself is computed in
-float64.
+**Dtype contract:** Riemannian math runs in the manifold's dtype; updates and
+moments keep each parameter's storage dtype. See the
+[Numerical Stability](../user-guide/numerical-stability.md#storage-vs-compute-dtype).
 
 ### API Reference
 
@@ -158,13 +155,11 @@ Both optimizers support two update modes:
 ### Choosing Update Mode
 
 ```python
-# Use exponential map (default, recommended)
-opt = riemannian_adam(learning_rate=0.001)
-
-# For extremely performance-critical applications,
-# you can experiment with retraction-based updates
-# by modifying the optimizer implementation
+opt = riemannian_adam(learning_rate=0.001)                    # expmap (default)
+opt = riemannian_adam(learning_rate=0.001, use_expmap=False)  # retraction
 ```
+
+`riemannian_sgd` takes the same `use_expmap` flag.
 
 In practice, exponential maps provide better stability and convergence, especially for hyperbolic neural networks.
 
@@ -175,6 +170,7 @@ The optimizers seamlessly handle models with both Euclidean and hyperbolic param
 ```python
 from hyperbolix.manifolds import Poincare
 from hyperbolix.nn_layers import HypLinearPoincare
+from hyperbolix.optim import riemannian_adam
 
 poincare = Poincare()
 
@@ -194,6 +190,8 @@ class MixedModel(nnx.Module):
         # Another Euclidean layer
         self.fc2 = nnx.Linear(16, 10, rngs=rngs)
 
+model = MixedModel(nnx.Rngs(0))
+
 # Optimizer handles all parameter types automatically
 optimizer = nnx.Optimizer(model, riemannian_adam(learning_rate=0.001), wrt=nnx.Param)
 ```
@@ -207,10 +205,11 @@ The optimizer will:
 ## Performance Considerations
 
 !!! tip "JIT Compilation"
-    Both optimizers are JIT-compatible. For best performance:
+    Both optimizers are JIT-compatible. Use `nnx.jit`, not `jax.jit`: a
+    `jax.jit` step drops the in-place parameter and optimizer updates.
 
     ```python
-    @jax.jit
+    @nnx.jit
     def train_step(model, optimizer, x, y):
         def loss_fn(model):
             return compute_loss(model, x, y)
@@ -218,24 +217,6 @@ The optimizer will:
         loss, grads = nnx.value_and_grad(loss_fn)(model)
         optimizer.update(model, grads)
         return loss
-    ```
-
-!!! note "Curvature as Static Argument"
-    If curvature `c` is constant during training, pass it as a static argument to enable better JIT optimization:
-
-    ```python
-    @jax.jit
-    def forward(model, x):
-        return model(x, c=1.0)  # c is traced, not ideal
-
-    # Better: use partial application
-    from functools import partial
-
-    @partial(jax.jit, static_argnums=(2,))
-    def forward(model, x, c):
-        return model(x, c=c)
-
-    output = forward(model, x, 1.0)  # c=1.0 is static
     ```
 
 ## References

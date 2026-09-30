@@ -64,7 +64,7 @@ nothing on a manifold.
 from hyperbolix import LearnableCurvature
 
 class Model(nnx.Module):
-    def __init__(self, ...):
+    def __init__(self, *, rngs: nnx.Rngs):
         self.curvature = LearnableCurvature(init_c=1.0)  # raw is a plain nnx.Param
         ...
 
@@ -88,6 +88,11 @@ from hyperbolix.nn_layers import HypLinearPoincare
 model = HypLinearPoincare(manifold_module=poincare, in_dim=32, out_dim=16, rngs=rngs)
 optimizer = nnx.Optimizer(model, riemannian_adam(1e-3), wrt=nnx.Param)
 ```
+
+Pass the curvature you call the layer with to the constructor too
+(`curvature=0.1`, or a callable such as `lambda: self.curvature()` for
+learnable curvature). The optimizer's bias update uses it, not the call-time
+`c`.
 
 No manual tagging step is required for these built-in layers. If you're
 writing your **own** manifold-valued parameter instead — e.g. a hyperbolic
@@ -163,8 +168,8 @@ learning rates are unaffected by this distinction.
    nothing to do for them. The tag matters only when *you* add your own
    manifold-valued parameter (e.g. a hyperbolic embedding table stored as a
    plain `nnx.Param`): without `ManifoldParam` / `mark_manifold_param`,
-   `riemannian_adam` falls back to Euclidean Adam on it and the values drift
-   off the ball within a few steps.
+   `riemannian_adam` falls back to Euclidean Adam on it: the update ignores
+   the ball's metric and can step the values off the ball.
 3. **Expecting `riemannian_adam` to need a separate optimizer for the
    Euclidean parts.** It doesn't. One optimizer with `wrt=nnx.Param` handles
    everything; dispatch is via the `ManifoldParam` tag.

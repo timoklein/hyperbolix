@@ -8,8 +8,8 @@ actually hit.
 
 ## Minimal Training Loop
 
-The following classifier trains on synthetic data and is verified to drop the
-loss from ~2.5 to <0.05 in 200 steps. Copy, run, modify.
+The following classifier trains on synthetic data and drops the loss from
+~2.4 to ~0.25 in 200 steps (CPU run). Copy, run, modify.
 
 ```python
 import jax
@@ -101,9 +101,9 @@ Most defaults from Euclidean training transfer. The exceptions:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| NaN loss in the first step | Init too large, or `version_idx` left dynamic under JIT | Verify per-family init defaults; bind `version_idx` with `functools.partial` before JIT |
-| Stuck at random-chance accuracy (Poincaré) | Curvature too high — features hit the boundary where the conformal factor collapses | Use `Poincare(c=0.1)` with `LearnableCurvature(init_c=0.1)` per layer |
-| Loss explodes after some warmup (Hyperboloid float32) | Lorentz-constraint drift accumulated past the layer's tolerance | Periodically call `manifold.proj(x, c)` between blocks, or switch to float64 |
+| NaN loss in the first step | Init too large (e.g. a He/Xavier override) | Keep each family's default init |
+| Stuck at random-chance accuracy (Poincaré) | Curvature too high — features hit the boundary where the conformal factor collapses | Pass `c=0.1` at every layer call (or `self.curvature()` from a per-layer `LearnableCurvature(init_c=0.1)`); the manifold constructor's `c` is not read by layers |
+| Loss explodes after some warmup (Hyperboloid float32) | Lorentz-constraint drift accumulated past the layer's tolerance | Call `jax.vmap(manifold.proj, in_axes=(0, None))(x, c)` between blocks, or switch to float64 |
 | Loss is decreasing on training data but eval is wild | Float precision mismatch between train and eval | Make sure both code paths use the same dtype on inputs and manifold (`param_dtype` storage is shared, so the mismatch is almost always inputs or manifold dtype) |
 | Using `riemannian_adam` for `HTC` / `FGG` / `PP` / `PV` layers | Wrong optimizer for Euclidean-weighted layers | Switch to `optax.adam` — see [Optimizers Guide](optimizers.md) |
 
