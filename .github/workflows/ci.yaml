@@ -92,6 +92,8 @@ jobs:
           - "test_busemann.py test_frechet_mean.py test_horopca.py test_cosne.py"
           - "test_helpers.py test_math_utils.py test_precision.py test_smooth_clamp.py"
           - "test_imports.py test_package_surface.py"
+          # Derivative oracles at the origin, at coincidence and at c = 0 (both levels)
+          - "test_origin_map_derivatives.py test_signed_origin_derivatives.py nn_layers/test_midpoint_origin_derivatives.py nn_layers/test_origin_derivative_consumers.py"
           # NN layer tests (subdirectory): hyperboloid family
           - "nn_layers/test_hyperboloid_conv.py nn_layers/test_hyperboloid_conv_fhnn.py nn_layers/test_hyperboloid_conv_ilnn.py"
           - "nn_layers/test_hyperboloid_linear_fhnn.py nn_layers/test_hyperboloid_linear_plfc.py"
