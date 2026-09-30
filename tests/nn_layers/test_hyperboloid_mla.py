@@ -33,7 +33,7 @@ def _make_points(key, c, dtype=jnp.float32, batch=BATCH, seq=SEQ, scale=0.5):
 
 
 def _randomize_params(layer, seed=1):
-    """Move biases, RMSNorm scale, tau and b off their init so the reference match exercises them."""
+    """Move biases, RMSNorm scale and tau off their init so the reference match exercises them."""
     rng = np.random.default_rng(seed)
     for proj in (layer.wq, layer.wkv_a, layer.wkv_b, layer.wo):
         bias = proj.bias
@@ -41,7 +41,6 @@ def _randomize_params(layer, seed=1):
     scale = layer.kv_norm.rms.scale
     scale[...] = jnp.asarray(1.0 + 0.1 * rng.standard_normal(scale.shape), dtype=scale[...].dtype)
     layer.softmax_scale[...] = jnp.asarray(3.0, dtype=layer.softmax_scale[...].dtype)
-    layer.attn_bias[...] = jnp.asarray(0.3, dtype=layer.attn_bias[...].dtype)
 
 
 def _lorentz_residual(y, c):
@@ -55,7 +54,11 @@ def _lorentz_residual(y, c):
 # written against the reference's own code, not the layer: torch-layout weights, the complex
 # rotary multiply, HELM's `project`, `cinner`, clamped `lorentzian_centroid`, LorentzRMSNorm and
 # LorentzLinear time rebuilds, and masked_fill(mask, -1e18). HELM's k is 1/c here.
+# HELM's learnable scalar score bias (`scores / self.softmax_scale + self.bias`) is kept in the
+# transcription at a nonzero value; the layer omits it, so the match also checks that it cancels.
 # ---------------------------------------------------------------------------
+
+HELM_SCORE_BIAS = 0.3
 
 
 def _ref_linear(x, kernel, bias):
@@ -111,7 +114,7 @@ def _helm_reference_forward(layer, x, c, positions, masked_BST, rope_base=10000.
     qs_neg = qs.copy()
     qs_neg[..., 0] *= -1  # cinner
     scores = 2 * k + 2 * (qs_neg @ np.swapaxes(ks, -1, -2))  # (B, H, S, T)
-    scores = scores / p(layer.softmax_scale) + p(layer.attn_bias)
+    scores = scores / p(layer.softmax_scale) + HELM_SCORE_BIAS
     if masked_BST is not None:
         scores = np.where(np.asarray(masked_BST)[:, None], -1e18, scores)  # shape_mask: [B,N,N] -> [B,1,N,N]
     scores = np.exp(scores - scores.max(axis=-1, keepdims=True))
@@ -186,7 +189,7 @@ def test_output_shape_and_on_manifold(c, dtype):
 
 
 def test_init_matches_helm_reference():
-    """Xavier-uniform gain sqrt(2) per projection (ambient in, spatial out), zero biases, tau, b."""
+    """Xavier-uniform gain sqrt(2) per projection (ambient in, spatial out), zero biases, tau."""
     layer = _make_layer()
     shapes = {
         "wq": (DIM, HEADS * (QK_NOPE + QK_ROPE - 1)),
@@ -203,7 +206,7 @@ def test_init_matches_helm_reference():
         assert np.max(np.abs(kernel)) > 0.5 * bound
         assert np.all(np.asarray(proj.bias[...]) == 0.0)
     assert float(layer.softmax_scale[...]) == pytest.approx(math.sqrt(HEADS * (QK_NOPE + QK_ROPE)))
-    assert float(layer.attn_bias[...]) == 0.0
+    assert float(_make_layer(init_tau=2.5).softmax_scale[...]) == pytest.approx(2.5)
     fixed = _make_layer(init_bound=0.05)
     assert np.max(np.abs(np.asarray(fixed.wq.kernel[...]))) <= 0.05
 
@@ -353,11 +356,9 @@ def test_gradients_finite():
     leaves = jax.tree_util.tree_leaves_with_path(nnx.state(param_grads, nnx.Param))
     assert leaves
     for path, leaf in leaves:
-        assert bool(jnp.all(jnp.isfinite(leaf))), path
         name = jax.tree_util.keystr(path)
-        # HELM's scalar score bias is a softmax shift: its gradient is exactly zero by construction.
-        if "attn_bias" not in name:
-            assert float(jnp.max(jnp.abs(leaf))) > 0.0, name
+        assert bool(jnp.all(jnp.isfinite(leaf))), name
+        assert float(jnp.max(jnp.abs(leaf))) > 0.0, name
     assert bool(jnp.all(jnp.isfinite(x_grad)))
     assert float(jnp.max(jnp.abs(x_grad))) > 0.0
 

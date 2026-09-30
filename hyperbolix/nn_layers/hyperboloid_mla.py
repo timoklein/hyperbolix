@@ -70,9 +70,9 @@ class LorentzMLA(nnx.Module):
        then ``wkv_b`` decompresses it into ``k_nope`` (``N``) and the value space (``V``) per head.
     4. ``q = [q_nope, q_pe]``, ``k = [k_nope, k_pe]`` and ``v`` get their time coordinates
        rebuilt from the hyperboloid constraint (HELM's "Lorentz concatenation").
-    5. Scores ``(2/c + 2 <q, k>_L) / tau + b`` -- the negative squared Lorentzian distance,
-       scaled by one learnable temperature ``tau`` (init ``sqrt(H * L)``) and shifted by one
-       learnable bias ``b`` (init 0); masked, softmaxed in at least float32.
+    5. Scores ``(2/c + 2 <q, k>_L) / tau`` -- the negative squared Lorentzian distance divided
+       by one learnable temperature ``tau`` shared by all heads; masked, softmaxed in at least
+       float32.
     6. Each head takes the weighted Lorentzian centroid of its values (:func:`lorentz_midpoint`,
        the cancellation-free form of HELM's ``lorentzian_centroid``), the per-head ambient points
        (time included) are flattened to ``(H * W,)``, and ``wo`` maps them to the output point.
@@ -82,6 +82,21 @@ class LorentzMLA(nnx.Module):
     Only HELM's ``q_lora_rank = 0`` path (a direct query projection) is implemented; HELM's
     YaRN ``mscale`` adjustment of ``tau`` for extended contexts and its (commented-out) KV cache
     are not.
+
+    Differences from the HELM code
+    ------------------------------
+    - **Temperature init.** HELM initializes ``tau = sqrt(H * L)`` (``L`` the ambient query/key
+      head width), ``sqrt(H)`` larger than the per-head ``sqrt(L)`` of standard scaled
+      dot-product attention, so its initial softmax is ``sqrt(H)`` times flatter. That is the
+      default here too; ``init_tau=math.sqrt(qk_nope_head_dim + qk_rope_head_dim)`` gives the
+      per-head scaling.
+    - **No score bias.** HELM adds one learnable scalar to every score
+      (``scores / self.softmax_scale + self.bias``). A constant shared by all keys of a row
+      cancels in the softmax, so that parameter changes nothing and its gradient is exactly zero;
+      it is omitted.
+    - **Library forms** replace HELM's clamps: the centroid is :func:`lorentz_midpoint` (no
+      ``clamp_min(eps)`` on ``|<h, h>_L|``, and cancellation-free at large radius), the time
+      coordinates come from :func:`spatial_to_hyperboloid`.
 
     Conventions
     -----------
@@ -128,6 +143,10 @@ class LorentzMLA(nnx.Module):
         HOPE frequency base (default: 10000.0, HELM's).
     rms_epsilon : float, optional
         Epsilon of the latent RMSNorm (default: 1e-8, HELM's ``LorentzRMSNorm``).
+    init_tau : float or None, optional
+        Initial temperature ``tau``. ``None`` (the default) is HELM's
+        ``sqrt(num_heads * (qk_nope_head_dim + qk_rope_head_dim))``; see "Differences from the
+        HELM code" for the per-head alternative.
     init_bound : float or None, optional
         Uniform init bound shared by all four projections. ``None`` (the default) gives each
         projection HELM's reference init, Xavier-uniform with gain ``sqrt(2)``:
@@ -151,9 +170,7 @@ class LorentzMLA(nnx.Module):
     wo : HTCLinear
         ``num_heads * v_head_dim -> dim - 1`` output projection.
     softmax_scale : nnx.Param
-        Scalar temperature ``tau``, init ``sqrt(num_heads * (qk_nope_head_dim + qk_rope_head_dim))``.
-    attn_bias : nnx.Param
-        Scalar score bias ``b``, init 0.
+        Scalar temperature ``tau`` (HELM's name), init ``init_tau``.
 
     References
     ----------
@@ -173,6 +190,7 @@ class LorentzMLA(nnx.Module):
         rngs: nnx.Rngs,
         rope_base: float = 10000.0,
         rms_epsilon: float = 1e-8,
+        init_tau: float | None = None,
         init_bound: float | None = None,
         param_dtype: DTypeLike = jnp.float32,
         eps: float = 1e-7,
@@ -215,8 +233,8 @@ class LorentzMLA(nnx.Module):
         self.kv_norm = HRCRMSNorm(kv_lora_rank, rngs=rngs, epsilon=rms_epsilon, eps=eps, param_dtype=param_dtype)
         self.wkv_b = projection(kv_lora_rank + 1, num_heads * (qk_nope_head_dim + v_head_dim - 1))
         self.wo = projection(num_heads * v_head_dim, dim - 1)
-        self.softmax_scale = nnx.Param(jnp.asarray(math.sqrt(num_heads * self.qk_head_dim), dtype=param_dtype))
-        self.attn_bias = nnx.Param(jnp.zeros((), dtype=param_dtype))
+        tau = init_tau if init_tau is not None else math.sqrt(num_heads * self.qk_head_dim)
+        self.softmax_scale = nnx.Param(jnp.asarray(tau, dtype=param_dtype))
 
     def _valid_mask(
         self,
@@ -347,8 +365,8 @@ class LorentzMLA(nnx.Module):
         lorentz_inner_BHST = lorentz_inner_BHST.astype(softmax_dtype)
         inv_c = jnp.asarray(1.0, dtype=softmax_dtype) / jnp.asarray(c, dtype=softmax_dtype)
         softmax_scale = self.softmax_scale[...].astype(softmax_dtype)
-        attn_bias = self.attn_bias[...].astype(softmax_dtype)
-        scores_BHST = (2.0 * inv_c + 2.0 * lorentz_inner_BHST) / softmax_scale + attn_bias  # (B, H, S, T)
+        # No score bias: HELM's `+ self.bias` is one scalar for every key and cancels in the softmax.
+        scores_BHST = (2.0 * inv_c + 2.0 * lorentz_inner_BHST) / softmax_scale  # (B, H, S, T)
         valid_BST = self._valid_mask(B, S, causal, segment_ids, attention_mask)
         if valid_BST is not None:
             scores_BHST = jnp.where(valid_BST[:, None], scores_BHST, jnp.asarray(_MASK_FILL, dtype=softmax_dtype))
