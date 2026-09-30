@@ -278,10 +278,10 @@ def test_input_model_equivalence(model):
 
     # atol 1e-5 (matching HoroPCA's equivalence test): the two paths are identical in exact
     # arithmetic, but the ``to_ball ∘ from_ball`` round-trip on the input injects ~1e-15
-    # relative error. It does not grow over the run: it enters at step 2, when the exploration
-    # step throws most points onto the float64 cap, and then stays flat (max |Δ| 1.8e-8 to 5.6e-8
-    # over the four models). A floor on 1 - c‖x‖² that bound at the cap once zeroed part of the
-    # gradient there, and the two runs drifted apart to 3.0e-5 (ProperVelocity).
+    # relative error. It does not grow over the run: it enters at step 2, the first update computed
+    # from the points the exploration step put on the float64 cap (16-24 of 24), and then stays flat
+    # (max |Δ| 1.8e-8 to 5.6e-8 over the four models). A floor on 1 - c‖x‖² that bound at the cap
+    # once zeroed part of the gradient there, and the two runs drifted apart to 3.0e-5 (ProperVelocity).
     assert np.allclose(np.array(emb_ball), np.array(emb_model_ball), atol=1e-5)
 
 

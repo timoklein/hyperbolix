@@ -439,8 +439,8 @@ def test_hypconv_poincare_chained_tangent_flow(make_tangent_input, dtype):
 #
 # The layer used to lift each patch vector v with expmap_0, run the HNN++ FC on the ball point, and
 # read the result back with logmap_0 after the lift and proj. In float32 that capped the patch at
-# t = √c‖v‖ ≈ 6.33 and the output tangent norm at ≈ 6.33/√c, both with a zero radial gradient. It
-# now scores v directly and returns logmap_0(lift(s)) = asinh(‖s‖)/(2√c‖s‖)·s, s = sinh(√c·score)
+# t = √c‖v‖ ≈ 6.33 (c = 1) and the output tangent norm at ≈ 6.33/√c, both with a zero radial
+# gradient. It now scores v directly and returns logmap_0(lift(s)) = asinh(‖s‖)/(2√c‖s‖)·s, s = sinh(√c·score)
 # (logs/2026-09-29_cancellation-free/1b/).
 # ============================================================================
 
@@ -565,9 +565,9 @@ def test_hypconv_poincare_far_patches_f32(c):
     """float32, every 3x3 patch at t = √c‖v‖ = 8 (beta_scale included): outputs and input gradients
     match float64 on the same inputs and parameters.
 
-    The ball route capped the patch at t ≈ 6.33 and the output tangent norm at ≈ 6.33/√c: outputs
-    1.7e-1 … 2.3e-1 and input gradients 2.0e-1 … 3.5e-1 off (probe_old.out, default identity init);
-    here 5.7e-7 / 8.1e-7 at most.
+    The ball route capped the patch at t ≈ 6.33 (c = 1) and the output tangent norm at ≈ 6.33/√c:
+    outputs 1.7e-1 … 2.3e-1 and input gradients 2.0e-1 … 3.5e-1 off (probe_old.out, default identity
+    init); here 5.7e-7 / 8.1e-7 at most.
     """
     in_ch, out_ch, t = 4, 8, 8.0
     layer32, layer64 = (

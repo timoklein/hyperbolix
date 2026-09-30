@@ -991,10 +991,11 @@ def test_sample_hyperboloid_float32_tracks_float64_at_scaled_radius_10() -> None
     and the float64 one is finite for all 64 draws, but they differ by up to 1.7e-3 (``|log_prob|``
     ≈ 0.6). More than half of the earlier gap was the transport of ``u = log_μ(z)`` to the origin,
     whose generic Cartesian form cancelled two ``O(cosh a)`` terms in the radial part (4.3e-3 on
-    these draws before 68419a6). What remains is the float32 representation of ``u`` itself: it is
-    formed from two points stored at scaled radius ``a``, so it carries ``≈ eps·cosh(a)`` = 1.3e-3
-    relative error — measured 5.4e-4 of ``‖u‖`` in its perpendicular part, which the transport hands
-    through unchanged — not an implementation defect. Over 512 draws with random mean directions the
+    these draws before 68419a6). What remains is the float32 representation of ``u`` itself, not an
+    implementation defect: it is formed from two points stored at scaled radius ``a``, which sets the
+    scale of its relative error, ``eps·cosh(a)`` = 1.3e-3. The measured parts, as transported to the
+    origin, are 5.35e-4 of ``‖u‖`` perpendicular (the transport hands that part through unchanged) and
+    3.21e-4 radial. Over 512 draws with random mean directions the
     gap is 2.2e-3 to 4.5e-3 (``logs/2026-09-29_cancellation-free/1c/probe_new.out``,
     ``fixup/probe_item3.out``). No configuration at ``a = 10`` reaches the 1e-3 that leg would need.
     """

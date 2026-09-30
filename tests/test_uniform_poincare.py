@@ -509,7 +509,7 @@ def test_rejection_sampler_terminates_outside_its_float32_range(scaled_R: float)
     ``timeout 60`` killed all four cases (c = 1) while the loop ran there; with the flat limit and the exponential
     tail taking over, each process exits within 7.6 s, JAX import and compilation included
     (``logs/2026-09-29_cancellation-free/samplerhang/``). As in ``test_rejection_sampler_terminates_in_high_dimension``,
-    termination is the assertion. Past √c·R ≈ 12.6 the float32 points sit at the chart edge.
+    termination is the assertion. Past √c·R ≈ 13.0 (c = 0.5) the float32 points sit at the chart edge.
     """
     c = 0.5
     R = float(scaled_R / np.sqrt(c))
@@ -531,8 +531,8 @@ def test_rejection_sampler_radii_outside_its_float32_range(scaled_R: float) -> N
     Outside the loop's range ``_sample_radial`` inverts a closed form from ``V ~ U(0, 1]``: the flat limit
     ``R·V^{1/n}`` (√c·R = 0, 1e-30) or the exponential tail ``R + log(V)/((n-1)·√c)`` (√c·R = 50, 100), whose
     largest value is R itself. Read from ``_sample_radial`` directly, since ``dist_0`` of a saturated point cannot
-    recover a radius past √c·R ≈ 12.6. The KS statistic is 0.0082 in each case; the flat law with exponent n - 1,
-    or the tail with rate n in place of n - 1, would give 0.15.
+    recover a radius past √c·R ≈ 13.0 (c = 0.5). The KS statistic is 0.0082 in each case with R > 0; the flat
+    law with exponent n - 1, or the tail with rate n in place of n - 1, would give 0.15.
     """
     c, n = 0.5, 3
     R = float(np.float32(scaled_R / np.sqrt(c)))  # the float32 radius the sampler works with

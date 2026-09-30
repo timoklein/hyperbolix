@@ -1133,9 +1133,10 @@ def test_apollonian_is_exactly_zero_at_coincidence_with_the_central_difference_g
 
     ``G`` at ``x = y`` is ``√(B_x·B_y)`` of two bitwise-equal factors, i.e. exactly the denominator
     ``B_y = 1 - c‖y‖²``. Before, the denominator went through ``2/λ_y`` (two roundings) and
-    ``δ(x, x)`` came back 2.2e-16 / -1.1e-16 in float64 at a = 3 / 12 and 1.2e-7 in float32 at
-    a = 12; the Gram-determinant ``G`` was also noisy enough there that central differences
-    landed 8 % off the gradient at a = 12.
+    ``δ(x, x)`` came back 2.2e-16 in float64 at a = 3, and 1.2e-7 in float32 at a = 12, for this
+    point. Along another direction (``logs/2026-09-29_cancellation-free/1a/probe_old.out``) it was
+    -1.1e-16 in float64 at a = 12, and the Gram-determinant ``G`` was noisy enough there that
+    central differences landed 8 % off the gradient.
 
     The derivative at ``x = y`` exists apart from the ``√c‖x - y‖`` cone, whose ``safe_sqrt``
     zero is what a central difference returns up to a bias of ``√c·h/B`` relative. With rounding
@@ -2159,10 +2160,11 @@ def test_poincare_gradients_at_capped_points_match_the_unfloored_reference(dtype
 
     Oracle: :func:`_capped_pair_reference`, exact on the stored inputs. The tolerance is the chart
     floor, ``8·eps/min(B_x, B_y)``: a capped point's ``B`` is itself only known to a few eps. When
-    the floor on ``B`` sat at the analytic cap value it bound for about a third of the capped
-    points, and there the gradient lost its dominant ``2c·x/B`` term: relative error 1.0 (at c = 1,
-    for 55-67 % of the cap-cap pairs in float32 and float64 alike). Pairs are cap-cap, free-cap and
-    cap-free (free at scaled radius 2); only the derivative w.r.t. a capped point is checked.
+    the floor on ``B`` sat at the analytic cap value it bound for 11-76 % (mean 39 %; float32 and
+    float64, c in {0.1, 0.3, 1, 2.5}) of the capped points, and there the gradient lost its dominant
+    ``2c·x/B`` term: relative error 1.0 (at c = 1, for 53-67 % of the cap-cap pairs in float32 and
+    float64 alike; probe, 64 pairs). Pairs are cap-cap, free-cap and cap-free (free at scaled
+    radius 2); only the derivative w.r.t. a capped point is checked.
     """
     manifold = hj.manifolds.Poincare(dtype=dtype)
     eps = float(jnp.finfo(dtype).eps)
@@ -2200,9 +2202,10 @@ def test_poincare_one_point_gradients_at_capped_points_match_the_unfloored_refer
     Each reads ``B = 1 - c‖x‖²``, and at the cap its gradient is dominated by ``B``'s derivative:
     ``λ = 2/B`` (``∇λ = 4c·x/B²``, also behind ``tangent_norm = λ‖v‖``),
     ``B^v(x) = log(‖v - √c·x‖²/B)/√c`` and ``d₀ = 2·asinh(√c‖x‖/√B)/√c``. With ``B`` floored at the
-    analytic cap value the floor bound for about a third of the capped points and zeroed that term:
-    relative error 1.0. Oracle: the closed forms in longdouble on the stored inputs. Tolerance
-    ``16·eps/B``, twice the pairwise one, because ``∇λ`` carries ``B`` squared.
+    analytic cap value the floor bound for 11-76 % (mean 39 %; float32 and float64, c in
+    {0.1, 0.3, 1, 2.5}) of the capped points and zeroed that term: relative error 1.0. Oracle: the
+    closed forms in longdouble on the stored inputs. Tolerance ``16·eps/B``, twice the pairwise one,
+    because ``∇λ`` carries ``B`` squared.
     """
     manifold = hj.manifolds.Poincare(dtype=dtype)
     eps = float(jnp.finfo(dtype).eps)

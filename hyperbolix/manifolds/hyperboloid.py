@@ -1513,8 +1513,8 @@ def _ptransp_to_0(
 
     **The radial residue is replaced, not kept.** ``u_⊥`` is itself ``v_s`` minus an ``O(u_r)`` vector,
     so it carries a rounding residue of ``~eps·u_r`` *along* ``x̂``, which the formula above would add to
-    ``u_r/cosh a`` — the same ``eps·cosh a`` error again (the one-pass spelling measured 1.6e-3 at
-    ``a = 10``, no better than the Cartesian chart). One more dot measures that residue, and the radial
+    ``u_r/cosh a`` — the same ``eps·cosh a`` error again (the one-pass spelling measured 1.6e-3 to
+    2.0e-3 at ``a = 10``, no better than the Cartesian chart). One more dot measures that residue, and the radial
     coefficient becomes ``u_r/(√c·x₀) - ⟨u_⊥, x̂⟩``: radial error ≤ 3e-7 at every measured radius
     ``a ≤ 10``. What remains is perpendicular — ``x̂``'s own direction rounding times ``u_r``, 5.5e-4 at
     ``a = 10`` — the order of the float32 ``logmap`` output that feeds ``log_prob`` (1.3e-3 there): the

@@ -441,7 +441,7 @@ def test_poincare_busemann_tangent_input_origin_jacobian(layer_cls, c):
 
     jac_OI = jax.jacobian(layer_O)(jnp.zeros((in_dim,), dtype=dtype))
     fd_OI = jnp.stack([(layer_O(h * e_I) - layer_O(-h * e_I)) / (2 * h) for e_I in jnp.eye(in_dim, dtype=dtype)], axis=-1)
-    assert _max_rel(jac_OI, fd_OI) < 1e-7, _max_rel(jac_OI, fd_OI)  # measured ≤ 1.7e-9 (FD truncation)
+    assert _max_rel(jac_OI, fd_OI) < 1e-7, _max_rel(jac_OI, fd_OI)  # measured ≤ 2.2e-10 (FD rounding, ~eps/h)
     if layer_cls is HypRegressionPoincareBusemann:
         kernel_OI = layer.kernel[...]
         omega_OI = kernel_OI / jnp.linalg.norm(kernel_OI, axis=-1, keepdims=True)
@@ -454,9 +454,9 @@ def test_poincare_busemann_tangent_input_origin_jacobian(layer_cls, c):
 def test_poincare_busemann_tangent_input_far_point_f32(layer_cls, c):
     """float32 at t = √c‖v‖ = 8: outputs and input gradients match float64 on the same inputs and parameters.
 
-    The lift onto the ball capped this input at the float32 ceiling t ≈ 6.33, past which the score
-    was constant along the ray: outputs 6.3e-2 … 2.1e-1 and input gradients 1.0 … 1.2 off relative
-    to their largest entry, the radial derivative being zero. Here 4.8e-7 and 1.3e-6 at most.
+    The lift onto the ball capped this input at the float32 ceiling t ≈ 6.33 (c = 1), past which the
+    score was constant along the ray: outputs 6.3e-2 … 2.1e-1 and input gradients 1.0 … 1.2 off
+    relative to their largest entry, the radial derivative being zero. Here 4.8e-7 and 1.3e-6 at most.
     """
     batch, in_dim, out_dim, t = 32, 16, 12, 8.0
     layer32, layer64 = (

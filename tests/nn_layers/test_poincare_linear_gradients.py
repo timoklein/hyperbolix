@@ -326,10 +326,12 @@ def test_hyp_linear_poincare_pp_tangent_input_matches_the_ball_route(c):
 def test_hyp_linear_poincare_pp_tangent_input_far_point_f32(c):
     """float32 at t = √c‖v‖ = 8: outputs and input gradients match float64 on the same inputs and parameters.
 
-    The lift onto the ball capped this input at t ≈ 6.33: outputs 8.0e-2 … 9.0e-2 and input
-    gradients 4.3e-2 off (probe_new.out, old-route columns); here 1.4e-6 / 3.3e-5 at most. The
-    kernel is scaled by 0.1 so the outputs land well inside the ball: at the default init they sit
-    on the float32 ``proj`` margin, which bounds the output's accuracy, not the input's. The
+    The lift onto the ball capped this input at t ≈ 6.33 (c = 1): outputs 8.0e-2 … 9.0e-2 and input
+    gradients 4.3e-2 off (probe_new.out, old-route columns, measured in the probe's configuration,
+    B = 64 and input/bias keys 11/7, not this test's B = 32 and keys 0/2); here, in the test's own
+    configuration, 1.4e-6 / 3.3e-5 at most. The kernel is scaled by 0.1 so the outputs land well
+    inside the ball: at the default init they sit on the float32 ``proj`` margin, which bounds the
+    output's accuracy, not the input's. The
     gradient bound is not eps-sized for the reason given in ``test_regression_layers.py::
     test_hyp_regression_poincare_pp_tangent_input_far_point_f32``.
     """

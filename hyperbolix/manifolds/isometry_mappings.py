@@ -169,8 +169,9 @@ def poincare_to_hyperboloid(
     # by the Poincaré conformal factor 1/(1 - c·||y||²); only the time component
     # carries the extra 1/√c, so the two denominators differ.
     # `_boundary_divisor_floor` is the floor `_conformal_factor` puts on this quantity: half its
-    # analytic minimum over projected points. The computed value of a capped point lands within
-    # ~6 eps of that minimum on either side; floored at the minimum itself, as it was, it bound for
+    # analytic minimum over projected points. The computed value of a capped point lands from 6.2 eps
+    # below that minimum to 6 eps above it (Poincaré expmap at c <= 0.3 also returns points farther
+    # inside, up to 17 eps above in float32); floored at the minimum itself, as it was, it bound for
     # 12-76 % of the capped points and zeroed the Jacobian's dominant 4c·y/(1 - c‖y‖²)² terms
     # (relative gradient error 1.0; logs/2026-09-29_cancellation-free/floorfix2/). The half floor
     # still keeps an unprojected point outside the ball finite.

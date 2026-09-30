@@ -9,7 +9,9 @@ The radial density is p(r) ∝ sinh^{n-1}(√c·r) on [0, R].  A substitution
 u = cosh(√c·r) - 1 = 2·sinh²(√c·r/2) (evaluated in the half-angle form, and inverted as
 r = 2·asinh(√(u/2))/√c, so small radii do not round away) simplifies sampling:
   - n = 2: u is uniform on [0, cosh(√c·R) - 1]  (closed-form)
-  - n ≥ 3: rejection sampling with acceptance ∝ (u·(u+2))^{(n-2)/2}
+  - n ≥ 3: rejection sampling with acceptance ∝ (u·(u+2))^{(n-2)/2}. Where the loop cannot accept
+    a draw (u_max is not a normal float, or u_max·(u_max+2) overflows), the radius is drawn in
+    closed form instead, from V ~ U(0, 1]: the flat limit r = R·V^{1/n}, or the exponential tail.
 
 Dimension key:
   S: sample dimensions (from sample_shape)
@@ -160,6 +162,12 @@ def _sample_radial_n2(
     """Closed-form radial sampling for n = 2.
 
     u = cosh(√c·r) - 1 is uniform on [0, u_max] when n = 2.
+
+    In float32, u_max overflows past √c·R ≈ 89.42, so every radius is inf and every point NaN: the
+    intended loud failure (the old cosh form returned finite, saturated radii). Below √c·R ≈ 2.2e-19
+    (float64: 3.0e-154) u_max flushes to 0 on XLA:CPU and every radius is exactly 0. Near that limit
+    part of the draws flush too and give r = 0 exactly: 5 % of the samples at √c·R = 1e-18 and 53 %
+    at 3e-19 (float32).
     """
     sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=dtype))
     # u_max = cosh(√c·R) - 1 in the half-angle form 2·sinh²(√c·R/2), which does not cancel: the
@@ -189,7 +197,9 @@ def _sample_radial_rejection(
 
     Uses jax.lax.while_loop for JIT compatibility. Where u_max is not a normal float or u_max·(u_max+2)
     overflows, the loop could never accept a draw; there the radius comes from the flat limit or the
-    exponential tail of p(r), both exact at the working precision.
+    exponential tail of p(r), both exact at the working precision. The loop itself is exact only above
+    the range where its draws flush to 0: at √c·R = 1e-18 (float32, n = 3) every radius below 0.153·R
+    comes out as exactly 0, 2564 of 400000 draws where the law puts 1442.
     """
     sqrt_c = jnp.asarray(jnp.sqrt(c), dtype=dtype)
     # Half-angle form, as in `_sample_radial_n2`. The literal cosh(√c·R) - 1 rounded to 0 in float32

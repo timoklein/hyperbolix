@@ -1185,8 +1185,9 @@ def test_ball_map_gradients_at_capped_points_match_the_unfloored_reference(curva
     Each map reads the gap ``g = 1 - c‖·‖²`` of its input — ``poincare_to_hyperboloid``,
     ``poincare_to_pv`` and ``poincare_to_halfspace`` the Poincaré one, the Klein maps
     ``_klein_gap`` — and at the cap its Jacobian is dominated by the gap's derivative ``-2c·y``.
-    The computed gap of a capped point lands -6.2 to +6 eps from its analytic value
-    ``_boundary_floor``; floored at that value, the floor bound for 11-84 % of the capped points and
+    The computed gap of a capped point lands from 6.2 eps below its analytic value ``_boundary_floor``
+    to 6 eps above it (Poincaré ``expmap`` at c ≤ 0.3 also returns points farther inside, up to 17 eps
+    above in float32); floored at that value, the floor bound for 11-84 % of the capped points and
     zeroed that term: relative error 1.0 for every map
     (``logs/2026-09-29_cancellation-free/floorfix2/``). Checked: the vector-Jacobian product with a
     fixed ambient ``w`` against its closed form in longdouble on the stored inputs, with the

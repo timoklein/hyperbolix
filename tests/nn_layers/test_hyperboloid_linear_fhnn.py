@@ -248,7 +248,8 @@ def test_fhnn_spatial_norm_float32_tracks_float64_at_the_eps_floor(c):
 
     There ||y_s|| = sqrt(m)*sqrt(m + 2/sqrt(c)) is set by the height m = y0 - 1/sqrt(c) ~ eps = 1e-5.
     Forming y0 first and taking 1/sqrt(c) back off rounds m to the ulp of 1/sqrt(c): the old spelling
-    was 6.8e-4 off at m = eps and 2.4e-3 at z0 = -15, where m itself is exact to float32 rounding.
+    was 6.8e-4 off at m = eps and 2.4e-3 at z0 = -15 for c ≤ 1 (8.8e-5 at c = 2), where m itself is
+    exact to float32 rounding.
     """
     in_dim, out_dim = 4, 4
     z0_B = np.asarray([-40.0, -30.0, -20.0, -15.0, -12.0], dtype=np.float32)

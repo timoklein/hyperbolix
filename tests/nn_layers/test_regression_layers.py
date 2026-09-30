@@ -273,7 +273,7 @@ def test_hyperboloid_mlr_gradient_survives_a_far_point():
 # With x = expmap_0(v) and t = √c‖v‖, the HNN++ argument's λ_x·√c·⟨x, ẑ⟩ is sinh(2t)·⟨v, ẑ⟩/‖v‖ and
 # λ_x - 1 is cosh(2t), so `input_space="tangent"` evaluates the score from v itself. The old route
 # (expmap_0, then λ read back off the stored point) capped float32 inputs at the ball ceiling
-# t ≈ 6.33, past which the scores were constant with a zero radial gradient
+# t ≈ 6.33 (c = 1), past which the scores were constant with a zero radial gradient
 # (logs/2026-09-29_cancellation-free/1b/).
 # --------------------------------------------------------------------------- #
 
@@ -344,8 +344,8 @@ def test_hyp_regression_poincare_pp_tangent_input_origin_jacobian(c):
 def test_hyp_regression_poincare_pp_tangent_input_far_point_f32(c):
     """float32 at t = √c‖v‖ = 8 scores like float64 on the same inputs and parameters.
 
-    The ball lift capped this input at t ≈ 6.33: scores 1.7e-1 … 2.0e-1 off relative to the largest
-    one, input gradients 1.1e-1 … 3.8e-1 (probe_old.out). Here 1.0e-6 / 1.2e-5 at most. The bounds
+    The ball lift capped this input at t ≈ 6.33 (c = 1): scores 1.7e-1 … 2.0e-1 off relative to the
+    largest one, input gradients 1.1e-1 … 3.8e-1 (probe_old.out). Here 1.0e-6 / 1.2e-5 at most. The bounds
     are not eps-sized because at radius 2t = 16 one float32 rounding of ⟨v, ẑ⟩ is amplified by
     ≈ e^{2t}/2 in a cell near its hyperplane; other input seeds reach 1e-4 / 1.5e-3 there, the same
     with the float64 dot rounded once to float32 (logs/2026-09-29_cancellation-free/1b/).

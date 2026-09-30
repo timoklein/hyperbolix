@@ -61,8 +61,9 @@ For numerical accuracy with large distances or near-boundary points:
 - Use Poincare(dtype=jnp.float64)
 - Far pairs: the default dist (slots 0 and 2), logmap and ptransp stay accurate up to the ball
   chart's ceiling, scaled radius √c·d(0,x) ≈ 12.6 per point in float32 (27.7 in float64) at
-  c = 1. What is left is the rounding of 1 - c||x||², eps/(1 - c||x||²) relative. Two float32
-  points at scaled radius 7.2 on opposite sides (true √c·d = 14.4, c = 1) give 14.400112.
+  c = 1. What is left is the rounding of 1 - c||x||², eps/(1 - c||x||²) relative (ptransp up to
+  1.7 times that). Two float32 points at scaled radius 7.2 on opposite sides (true √c·d = 14.4,
+  c = 1) give 14.400112.
   VERSION_MOBIUS (1) takes the norm of the projected (-x) ⊕ y, which cannot pass the ceiling,
   so in float32 it still saturates: 12.637328 for the same pair, and its gradient is lost
   (relative error 1.0). In float64 it saturates once √c·d passes the float64 ceiling 27.7:
@@ -186,8 +187,9 @@ def _dist_mobius_direct(x: Float[Array, "dim"], y: Float[Array, "dim"], c: Scala
     num = safe_sqrt(jnp.sum((y - x) ** 2))
     # B_x, B_y floored below the cap's rounding band (`_boundary_divisor_floor`), so an unprojected
     # point outside the ball cannot drive the divisor to 0 while a capped one keeps its gradient.
-    # The analytic minimum `_boundary_floor` sat inside that band and bound for about a third of
-    # the capped points, zeroing the dominant 2c·x/B_x term of their gradient.
+    # The analytic minimum `_boundary_floor` sat inside that band and bound for 11-76 % (mean 39 %;
+    # float32 and float64, c in {0.1, 0.3, 1, 2.5}) of the capped points, zeroing the dominant
+    # 2c·x/B_x term of their gradient.
     # Taken directly rather than as `2/λ`, which would round twice.
     floor_b = _boundary_divisor_floor(x, c)
     one_minus_cx = floor_at(1.0 - c * jnp.dot(x, x, precision=MATMUL_PRECISION), floor_b)
@@ -338,9 +340,10 @@ def _dist_0_metric_tensor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[A
 
     ``1 - c‖x‖²`` is floored at :func:`_boundary_divisor_floor`, below every capped point's rounding
     band. A capped point reads as the chart's ceiling, ``√c·d₀ ≈ 12.6`` (float32) / ``27.7``
-    (float64) at c = 1, with its gradient intact. At ``_boundary_floor``, the floor bound for about
-    a third of the capped points and zeroed the dominant ``2c·x/(1 - c‖x‖²)`` term of the gradient
-    (relative error 1.0). Only a point past the cap, never projected, meets the floor.
+    (float64) at c = 1, with its gradient intact. At ``_boundary_floor``, the floor bound for 11-76 %
+    (mean 39 %; float32 and float64, c in {0.1, 0.3, 1, 2.5}) of the capped points and zeroed the
+    dominant ``2c·x/(1 - c‖x‖²)`` term of the gradient (relative error 1.0). Only a point past the
+    cap, never projected, meets the floor.
     """
     sqrt_c = jnp.sqrt(c)
     x_sqnorm = jnp.dot(x, x, precision=MATMUL_PRECISION)
@@ -779,9 +782,10 @@ def _compute_mlr_pp_tangent(
     ceiling ``t ≈ 6.33`` (c = 1), past which the scores were constant with a zero radial gradient.
     Measured through ``HypRegressionPoincarePP`` (float32 vs float64 on the same inputs, relative
     to the largest entry, c ∈ {0.3, 1}): at t = 6 scores 1.1e-3 → 8.4e-7 and input gradients
-    1.4e-3 → 1.3e-5; at t = 8 2.0e-1 → 1.5e-6 and 3.8e-1 → 2.8e-5. What remains is the one float32
-    rounding of ``⟨v, ẑ⟩``, amplified by ≈ ``e^{2t}/2`` in a cell near its hyperplane — the
-    point-representation floor, which the ball route shared.
+    1.4e-3 → 1.3e-5; at t = 8 2.0e-1 → 1.5e-6 and 3.8e-1 → 2.8e-5. What remains is bounded above by
+    one float32 rounding of ``⟨v, ẑ⟩``, amplified by ≈ ``e^{2t}/2`` in a cell near its hyperplane —
+    the point-representation floor, which the ball route shared. The bound is loose: 1.3e-2 in the
+    worst cell at t = 8 (c = 1, 20 seeds), where 8.5e-4 was measured.
 
     Args:
         v: Tangent vector(s) at the origin, shape (batch, in_dim)
@@ -955,12 +959,11 @@ def _busemann_tangent(v: Float[Array, "dim"], omega: Float[Array, "dim"], c: Sca
     n = jnp.sum((omega - w) ** 2)
     # Both forms as `offset + log(n + shift)` with per-point `offset` and `shift`, so the pair's
     # cotangent is 1/(n + shift). Spelled `log(a + b·n)`, the per-point `b` in that cotangent was
-    # fused into the backward pass over the (pair, dim) difference and recomputed for every element:
-    # seven extra ops per element in the compiled CPU HLO, ≈ 5 % of the fwd+bwd at K = 64. The t > 1
-    # form reads `t` floored at the seam: it divides by 1 - e^{-4t} = 0 at v = 0, and the unselected
-    # branch of a `where` must stay finite, or its zero cotangent times an infinite derivative is a
-    # NaN gradient. The t ≤ 1 offset 2·log(cosh t) = -log(1 - tanh²t) reuses the tanh of `w`, finite
-    # on every row because `tanh` caps its output at 1 - 10·eps.
+    # fused into the backward pass over the (pair, dim) difference and recomputed for every element.
+    # The t > 1 form reads `t` floored at the seam: it divides by 1 - e^{-4t} = 0 at v = 0, and the
+    # unselected branch of a `where` must stay finite, or its zero cotangent times an infinite
+    # derivative is a NaN gradient. The t ≤ 1 offset 2·log(cosh t) = -log(1 - tanh²t) reuses the
+    # tanh of `w`, finite on every row because `tanh` caps its output at 1 - 10·eps.
     exp_m4t = jnp.exp(-4.0 * floor_at(t, 1.0))
     offset = jnp.where(far, 2.0 * t + jnp.log(0.25 * (1.0 - exp_m4t)), -jnp.log1p(-(tanh_t**2)))
     shift = jnp.where(far, 4.0 * exp_m4t / (1.0 - exp_m4t), 0.0)

@@ -72,9 +72,12 @@ def _gap(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
     dominant term of every gradient w.r.t. a capped point: relative error 1.0 for ``dist``,
     ``logmap``, ``ptransp``, ``⊕``, ``tangent_norm``, ``egrad2rgrad`` and ``lorentz_factor``, up to
     7.9 for ``expmap`` w.r.t. its base point (float64). With the half floor the gradients there are
-    bit-identical to the unfloored ones in both dtypes. A point past the margin that was never
-    projected (the maps into Klein do not project) still meets the floor, which keeps the gap
-    positive and reads it at scaled radius ≈ 6.67 (float32) / 14.21 (float64) at c = 1.
+    bit-identical to the unfloored ones in both dtypes. On pairs of two capped points the float32 ``⊕``
+    error drops from 1.0 to 2.8e-3; on pairs of one capped and one free point the float32 errors of
+    ``⊕`` and ``expmap`` (1.2-1.3 and 1.0) do not come from the floor, since they are the same with no
+    floor. A point past the margin that was never projected (the maps into Klein do not project)
+    still meets the floor, which keeps the gap positive and reads it at scaled radius ≈ 6.67
+    (float32) / 14.21 (float64) at c = 1.
     """
     x2 = jnp.dot(x, x, precision=MATMUL_PRECISION)
     return floor_at(1.0 - c * x2, _boundary_divisor_floor(x, c))
@@ -109,10 +112,10 @@ def _xcothx_minus_x(theta: Float[Array, "..."]) -> Float[Array, "..."]:
     finite for every finite θ (``2θ/expm1(2θ)`` has a NaN derivative past θ ≈ 44 in float32, 354 in
     float64, where ``expm1`` overflows). Just above the threshold ``1 - e^{-2θ} ≈ 2θ`` cancels, so ``A``
     is off by ``≈ eps/(2θ)`` relative — for a step of length θ that is ``eps/2`` nats, under the chart
-    floor (float64 steps around the threshold measured ≤ 0.4 floors). Double ``where``: the exponential
-    form is ``0/0`` at ``θ = 0``, so its *argument* is sanitised too, or the NaN derivative would leak
-    into the selected branch's cotangent. At ``θ = inf`` the value is NaN (``inf·0``); :func:`_expmap`
-    selects around it.
+    floor (float64 steps measured ≤ 0.51 floors, from the tiny and short-step sets spanning the
+    threshold). Double ``where``: the exponential form is ``0/0`` at ``θ = 0``, so its *argument* is
+    sanitised too, or the NaN derivative would leak into the selected branch's cotangent. At
+    ``θ = inf`` the value is NaN (``inf·0``); :func:`_expmap` selects around it.
     """
     threshold = (945.0 / 2.0 * float(jnp.finfo(theta.dtype).eps)) ** (1.0 / 6.0)
     small = theta < threshold

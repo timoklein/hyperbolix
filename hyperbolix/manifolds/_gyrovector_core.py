@@ -94,9 +94,10 @@ def _boundary_divisor_floor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float
 
     :func:`_boundary_floor` is where a capped point sits in exact arithmetic, not where its
     *computed* ``1 - c‖x‖²`` lands. The cap (``_proj``, ``_expmap_0``'s scalar cap, ``_addition``'s
-    clamp) rounds the stored coordinates, and the computed value of a capped point falls within
-    about 6 eps of the analytic floor on either side: -6.2 to +6 eps over 20000 capped points per
-    producer, dtype and c in {0.1, 0.3, 1, 2.5}, below it for 11-76 % of them (mean 39 %;
+    clamp) rounds the stored coordinates, and the computed value of a capped point lands from 6.2 eps
+    below the analytic floor to 6 eps above it (Poincaré ``expmap`` at c ≤ 0.3 also returns points
+    farther inside, up to 17 eps above in float32), over 20000 capped points per producer, dtype and
+    c in {0.1, 0.3, 1, 2.5}, and below it for 11-76 % of them (mean 39 %;
     ``logs/2026-09-29_cancellation-free/floorfix/probe_band.py``). A floor that binds returns a
     constant, so every derivative through it is zero. On those points the dominant radial term
     ``2c·x/(1 - c‖x‖²)`` of a distance gradient vanished, and ``dist``'s gradient came back with
