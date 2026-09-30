@@ -17,10 +17,10 @@ Hyperbolix provides seven base manifold classes plus a composition class:
 
 All manifolds share a common interface defined by the `Manifold` protocol and support:
 
-- **Automatic dtype casting**: Pass `dtype=jnp.float64` for higher precision
+- **Automatic dtype casting**: Pass `dtype=jnp.float64` for higher precision (needs `jax_enable_x64`)
 - **vmap-native methods**: Methods operate on single points; use `jax.vmap` for batching
 - **JIT compatibility**: All methods are JIT-compilable
-- **Learnable curvature**: Use the `LearnableCurvature` module to add trainable curvature to any model (positive `softplus`/`log` or signed `identity` reparameterization, optional clamping)
+- **Learnable curvature**: Use the `LearnableCurvature` module to add trainable curvature to any model (positive `softplus`/`log` or signed `identity` reparameterization, clamped by default to `[init_c/10, init_c·10]`, or `[-10, 10]` for identity)
 
 ## Manifold Protocol
 
@@ -28,8 +28,8 @@ All manifolds share a common interface defined by the `Manifold` protocol and su
     Manifold methods take the curvature as a positional `c: Curvature` argument
     (`hyperbolix.manifolds.Curvature`). It is the union
     `ScalarCurvature | Sequence[ScalarCurvature]`, where `ScalarCurvature = float |
-    jax.Array`: single manifolds (`Poincare`, `Hyperboloid`, `ProperVelocity`,
-    `Euclidean`) take a **scalar** `c`, while `ProductManifold` takes a **sequence**
+    jax.Array`: every single manifold (`Poincare`, `Hyperboloid`, `ProperVelocity`,
+    `Klein`, `HalfSpace`, `Stereographic`, `Euclidean`) takes a **scalar** `c`, while `ProductManifold` takes a **sequence**
     of per-factor scalars. Passing a traced `jax.Array` (e.g. the value returned by a
     `LearnableCurvature` call) makes the curvature differentiable.
 
@@ -63,8 +63,7 @@ The Poincaré ball model with Möbius operations.
 
     Slot 2 of **both** `dist` and `dist_0` evaluates the metric-tensor distance through the
     half-angle identity $\operatorname{acosh}(1 + 2t) = 2\operatorname{arcsinh}(\sqrt{t})$ rather
-    than the `acosh` form directly — the same function, without the `acosh` domain clamp that used
-    to floor every small radius (`dist_0`) and every small separation (`dist`). See
+    than the `acosh` form directly — the same function, which needs no domain clamp. See
     [slot 2 reads the radius through `arcsinh`](
     ../user-guide/numerical-stability.md#poincare-metric-tensor-dist-0).
 
@@ -135,10 +134,8 @@ A single constant-curvature manifold spanning **hyperbolic, Euclidean, and spher
     $c>0$ and $c\le0$ sides. For nonzero operands they match the literal
     polynomial value and curvature derivative at $c=0$; an exactly zero operand
     retains only the bounded residual from the existing `MIN_NORM` radial floor.
-    The previous `abs(c)` factorization selected the wrong one-sided denominator
-    slope at zero, affecting signed-curvature gradients through Möbius operations.
 
-!!! note "Scope of this release"
+!!! note "Scope"
     Provides the complete core Riemannian manifold — the `Manifold` protocol plus `conformal_factor`, `gyration`, `geodesic`, `geodesic_unit`, and `antipode`. The $\kappa$-GCN neural-network layers and building blocks (`mobius_matvec`, weighted gyromidpoint, `dist2plane`, `sproj`/`inv_sproj`) are not yet included. Signed learnable curvature — spanning hyperbolic/Euclidean/spherical — is available via `LearnableCurvature(parameterization="identity")` (with a symmetric default clamp around zero); the `softplus`/`log` parameterizations remain positive-only. Double precision (`dtype=jnp.float64`) is strongly recommended, per Bachmann et al.
 
 ::: hyperbolix.manifolds.stereographic.Stereographic
@@ -176,7 +173,6 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
     The Hyperboloid class includes specialized operations for convolutional layers:
 
     - `lorentz_boost`: Lorentz boost transformation
-    - `distance_rescale`: Distance-based rescaling
     - `hcat`: Lorentz direct concatenation for convolutions
     - `log_radius_concat`: log-radius–preserving concatenation (digamma-scaled `hcat`; Shi et al. 2026, Sec. 4.3)
 
@@ -185,7 +181,7 @@ The hyperboloid (Lorentz) model with Minkowski geometry.
     scaled spatial radius is at most 1e-1, and retain the stable polar frame
     otherwise. `logmap` uses the regular Cartesian expression at an exact origin
     endpoint and the stable polar frame otherwise. Ordinary autodiff preserves derivatives with respect to
-    an origin endpoint; earlier value-only origin fallbacks erased them. `busemann` uses a projected-coordinate
+    an origin endpoint. `busemann` uses a projected-coordinate
     branch whose value and constrained first derivative agree at its branch surface.
     See [Origin derivatives and the Cartesian chart](
     ../user-guide/numerical-stability.md#origin-derivatives).
@@ -203,7 +199,7 @@ The Proper Velocity (PV) model — an **unconstrained** $\mathbb{R}^n$ represent
     Unlike the bounded Poincaré ball (points must stay in the open unit ball) and the constrained hyperboloid (points must satisfy $\langle x, x \rangle_L = -1/c$), PV points live in all of $\mathbb{R}^n$ with no constraint. This gives:
 
     - **No projection step** after updates — the manifold *is* $\mathbb{R}^n$
-    - **Better numerical stability** for large radii (no boundary collapse, no Lorentz constraint drift)
+    - **No boundary and no constraint to drift from**; accuracy equals the hyperboloid's, since the pairwise ops go through it
     - **Drop-in with Euclidean optimizers** — the retraction reduces to $x + v$
 
     The metric $g_x(u,v) = \langle u, v\rangle - c\beta_x^2\langle x,u\rangle\langle x,v\rangle$ still gives sectional curvature $-c$; only the coordinates change.
@@ -218,7 +214,7 @@ The Proper Velocity (PV) model — an **unconstrained** $\mathbb{R}^n$ represent
     $v\in T_x$ lifts to $(\langle x,v\rangle/X_0,v)$. The PV result is the
     spatial part of the hyperboloid result; no Poincaré chart conversion is used.
     `gyro_difference`, `ptransp`, and `logmap` inherit the hyperboloid's exact-origin
-    Cartesian branch and its repaired origin derivatives.
+    Cartesian branch and its origin derivatives.
     `ProperVelocityGyroBatchNorm` centers with `gyro_difference`. See
     [ProperVelocity operation bridges](
     ../user-guide/numerical-stability.md#pv-operation-lifts).
@@ -314,7 +310,7 @@ The origin is $o = e_n/\sqrt{c}$, not 0, and every `_0` method is the general me
 
 ## Product Manifold
 
-Heterogeneous-curvature product space $P = M_1 \times M_2 \times \dots \times M_n$ where each factor $M_i$ can be any base manifold (Poincaré, Hyperboloid, Euclidean, Proper Velocity) with its own curvature $c_i$. Points are represented as flat concatenated arrays of shape `(total_dim,)`.
+Heterogeneous-curvature product space $P = M_1 \times M_2 \times \dots \times M_n$ where each factor $M_i$ can be any single manifold (Poincaré, Hyperboloid, Proper Velocity, Klein, HalfSpace, Stereographic, Euclidean) with its own curvature $c_i$. Points are represented as flat concatenated arrays of shape `(total_dim,)`.
 
 The geodesic distance on a product Riemannian manifold is Pythagorean over component distances:
 
@@ -323,10 +319,7 @@ $$d_P(x, y) \;=\; \sqrt{\sum_{i=1}^{n} d_{M_i}(x_i, y_i)^2}$$
 where $x_i$, $y_i$ are the per-factor slices of the flat points.
 
 !!! note "Per-factor `c` argument"
-    Every geometry method (`dist`, `expmap`, `logmap`, `proj`, `origin`, …) takes a positional `c` argument that must be a sequence of length `n_factors` — one curvature per factor. There is no scalar fallback and no broadcast: pass `product.curvatures` for static curvatures, or a tuple built from `LearnableCurvature` calls for trainable ones. `ProductManifold` satisfies the `Manifold` protocol — the protocol-level `Curvature` type unions scalar and sequence-of-scalars, so `isinstance(product, Manifold)` is `True` and generic code typed against `Manifold` accepts product instances. The product itself has **no `c` attribute** — read factor-stored values via `product.curvatures`.
-
-!!! tip "Static vs learnable curvature"
-    Factor instances may carry an initial `c` (`Hyperboloid(c=1.0)`), but `ProductManifold` never reads it in its geometry methods — it is exposed via `product.curvatures` as a convenience default. For learnable curvature, instantiate one `LearnableCurvature` per factor on your `nnx.Module` and pass `c=(self.curv_a(), self.curv_b(), ...)` to the product. See the [Manifolds User Guide — Curvature in ProductManifold](../user-guide/manifolds.md#curvature-in-productmanifold) for the full pattern.
+    Every geometry method takes a positional `c` that must be a sequence of length `n_factors`: pass `product.curvatures` for static curvatures, or a tuple of `LearnableCurvature` calls for trainable ones. `isinstance(product, Manifold)` is `True`, but `Manifold` is typed with a scalar `c`; annotate code that passes a per-factor sequence as `ProductManifold`. See the [Manifolds User Guide — Curvature in ProductManifold](../user-guide/manifolds.md#curvature-in-productmanifold) for the full pattern.
 
 ::: hyperbolix.manifolds.product.ProductManifold
     options:
@@ -384,13 +377,18 @@ distance = poincare.dist(x, y, c)
 ### Float64 Precision
 
 ```python
+import jax
+
+jax.config.update("jax_enable_x64", True)  # float64 needs x64 enabled
+
 from hyperbolix.manifolds import Poincare
 import jax.numpy as jnp
 
 # High-precision manifold
 poincare_f64 = Poincare(dtype=jnp.float64)
 
-x = jnp.array([0.1, 0.2])  # float32 input
+x = jnp.array([0.1, 0.2], dtype=jnp.float32)  # float32 input
+y = jnp.array([0.3, -0.1], dtype=jnp.float32)
 distance = poincare_f64.dist(x, y, c=1.0)  # automatically cast to float64
 print(distance.dtype)  # float64
 ```
@@ -492,6 +490,30 @@ p = isometry_mappings.klein_to_poincare(x, c)
 x_back = isometry_mappings.poincare_to_klein(p, c)
 ```
 
+### HalfSpace Operations
+
+```python
+import jax.numpy as jnp
+from hyperbolix.manifolds import HalfSpace, Poincare, isometry_mappings
+
+halfspace = HalfSpace()
+c = 1.0
+
+x = jnp.array([0.1, 1.0])   # (x_s, x_n): the height x_n > 0 is the last coordinate
+y = jnp.array([0.3, 0.5])
+
+d = halfspace.dist(x, y, c)                # (2/√c)·asinh(‖r‖/2), cancellation-free
+v = halfspace.logmap(y, x, c)              # tangent_norm(v, x, c) equals d
+y_rec = halfspace.expmap(v, x, c)          # back to y
+o = halfspace.expmap_0(jnp.zeros(2), c)    # the origin e_n/√c = [0, 1]
+
+# The Cayley transform to the Poincaré ball preserves the distance
+p_x = isometry_mappings.halfspace_to_poincare(x, c)
+p_y = isometry_mappings.halfspace_to_poincare(y, c)
+d_ball = Poincare().dist(p_x, p_y, c)                     # equals d
+x_back = isometry_mappings.poincare_to_halfspace(p_x, c)  # round trip to x
+```
+
 ### Product Manifolds (Mixed Curvature)
 
 ```python
@@ -541,7 +563,7 @@ from hyperbolix.manifolds import isometry_mappings
 import jax.numpy as jnp
 
 # Hyperboloid point (ambient coordinates, d+1 dims)
-x_hyperboloid = jnp.array([1.5, 0.5, 0.3])  # Must satisfy Lorentz constraint
+x_hyperboloid = isometry_mappings.pv_to_hyperboloid(jnp.array([0.5, 0.3]), c=1.0)  # on the hyperboloid
 
 # Map to Poincaré ball (intrinsic coordinates, d dims)
 x_poincare = isometry_mappings.hyperboloid_to_poincare(x_hyperboloid, c=1.0)
@@ -553,10 +575,6 @@ x_hyperboloid_recovered = isometry_mappings.poincare_to_hyperboloid(x_poincare, 
 ## Numerical Considerations
 
 !!! warning "Float32 Precision"
-    Float32 can cause numerical issues, especially in the Poincaré ball near the boundary. Use `Poincare(dtype=jnp.float64)` for:
-
-    - High curvature values (`c > 1.0`)
-    - Points near manifold boundaries
-    - Deep neural networks with many layers
+    Each model holds pairwise ops to a fixed scaled radius $\sqrt{c}\,d$ in float32 (Hyperboloid 16.6, Poincaré 12.6, Klein 6.32 at $c = 1$). Past it, use float64 (`jax_enable_x64` plus `dtype=jnp.float64`).
 
 See the [Numerical Stability](../user-guide/numerical-stability.md) guide for details.
