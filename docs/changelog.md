@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-01
+
 Two new models, Klein and HalfSpace. Far-pair Poincaré and Stereographic operations are now cancellation-free, and the Poincaré and Busemann layers score tangent input in closed form. `LearnableCurvature`'s clamp keeps the gradient that points back inside, and non-finite input now stays non-finite instead of turning into a plausible finite output. The HELM decoder layers (`LorentzMLA`, `LorentzMoE`, `LorentzEmbedding`) are new. Full numbers and mechanisms are in the [numerical stability guide](user-guide/numerical-stability.md).
 
 ### Added
@@ -486,7 +488,8 @@ versioning.
 ### References
 - Based on research by Ganea et al. (2018), Bécigneul & Ganea (2019), Bdeir et al. (2023)
 
-[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/timoklein/hyperbolix/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/timoklein/hyperbolix/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/timoklein/hyperbolix/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/timoklein/hyperbolix/compare/v1.1.2...v1.2.0
