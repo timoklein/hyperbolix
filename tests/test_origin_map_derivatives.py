@@ -730,6 +730,53 @@ def test_small_radius_chart_values_and_gradients_match_independent_fd(operation:
         np.testing.assert_allclose(dc_B, expected_dc_B, rtol=rtol, atol=atol)
 
 
+@pytest.mark.parametrize("c", [0.1, 1.0])
+@pytest.mark.parametrize("dim", [2, 64])
+def test_logmap_base_point_jacobian_near_origin_far_pair_matches_independent_fd(c: float, dim: int) -> None:
+    """A base point near the origin, far from the mapped point (theta = 3): both dtypes against FD.
+
+    The polar-frame assembly lost eps/(sqrt(c)*radius) in this Jacobian while the value stayed right:
+    float32 was about 4e-4 off at scaled radius 3e-4 and above 1 at 1e-7. The last two radii sit on
+    either side of the scaled-spatial-radius switch.
+    """
+    rng = np.random.default_rng(7)
+    direction_D = rng.normal(size=dim)
+    direction_D /= np.linalg.norm(direction_D)
+    far_D = rng.normal(size=dim)
+    far_D *= np.sinh(3.0) / (np.sqrt(c) * np.linalg.norm(far_D))
+    # Round once: float32 and the independent reference see identical spatial coordinates.
+    stored_far_D = np.asarray(far_D, dtype=np.float32)
+    for radius in (1e-7, 1e-5, 1e-3, 0.03, 0.0999, 0.1001):
+        stored_base_D = np.asarray(radius * direction_D / np.sqrt(c), dtype=np.float32)
+        expected_AD = _fd_jacobian(
+            lambda z_D: _np_logmap(z_D, stored_far_D.astype(np.float64), c), stored_base_D.astype(np.float64)
+        )
+        jacobians = {}
+        for dtype in (jnp.float32, jnp.float64):
+            typed_far_D = jnp.asarray(stored_far_D, dtype=dtype)
+
+            def jax_fn(z_D: jax.Array, typed_far_D=typed_far_D) -> jax.Array:
+                return _hyperboloid_map("logmap", z_D, typed_far_D, jnp.zeros_like(z_D), c)
+
+            base_D = jnp.asarray(stored_base_D, dtype=dtype)
+            rtol, atol = (2e-5, 2e-6) if dtype == jnp.float32 else (5e-6, 5e-7)
+            if dtype == jnp.float32 and radius > 0.1:
+                # Outside the switch the frame keeps its eps/radius error, up to 9e-6 just past it.
+                atol = 2e-5
+            jacobians[dtype] = np.asarray(jax.jacfwd(jax_fn)(base_D))
+            np.testing.assert_allclose(jacobians[dtype], expected_AD, rtol=rtol, atol=atol, err_msg=f"jacfwd radius={radius}")
+            np.testing.assert_allclose(
+                jax.jacrev(jax_fn)(base_D), expected_AD, rtol=rtol, atol=atol, err_msg=f"jacrev radius={radius}"
+            )
+        np.testing.assert_allclose(
+            jacobians[jnp.float32],
+            jacobians[jnp.float64],
+            rtol=2e-5,
+            atol=2e-6 if radius <= 0.1 else 2e-5,
+            err_msg=f"float32 vs float64 radius={radius}",
+        )
+
+
 @pytest.mark.parametrize("step", [1e-4, 1e-6])
 @pytest.mark.parametrize("kind", ["radial", "angular"])
 def test_float32_near_coincident_gyro_difference_matches_longdouble_stored_inputs(step: float, kind: str) -> None:

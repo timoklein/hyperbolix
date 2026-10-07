@@ -983,10 +983,24 @@ transport is the closed-form geodesic transport, with the input tangent's time c
 $v_0=\langle x_s,v_s\rangle/x_0$. Otherwise both use the stable geodesic frame.
 
 `logmap` uses the Cartesian expression when either endpoint is exactly the origin and the polar
-frame otherwise. For close pairs, with the frame's separation $S=\sinh(\sqrt c\,d(x,y)/2)$, it
-uses the equivalent spatial displacement
-$\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}$ when $S\le0.5$. At coincidence the
-Jacobians through spatial lifts are $+I$ for the target and $-I$ for the base.
+frame otherwise. With the frame's separation $S=\sinh(\sqrt c\,d(x,y)/2)$, it uses the equivalent
+spatial displacement $\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}$ in two cases: for
+close pairs ($S\le0.5$), and at every separation for a base point $x$ with scaled spatial radius
+$\sqrt c\,\lVert x_s\rVert\le$ 1e-1. At coincidence the Jacobians through spatial lifts are $+I$
+for the target and $-I$ for the base.
+
+The second case is there for the derivative, not for the value. The frame builds the result from
+two legs that each depend on $\hat x_s$, whose derivative grows like $1/\lVert x_s\rVert$, and
+only their sum is smooth in $x_s$. The Jacobian with respect to the base point therefore lost
+about $\varepsilon/(\sqrt c\,\lVert x_s\rVert)$: in float32 a relative error of 4e-4 at scaled
+radius 3e-4 and above 1 at 1e-7, with a correct value. With the displacement form it is within
+1e-6. Just outside the neighbourhood the frame's error is up to 9e-6 and falls like
+$1/\lVert x_s\rVert$.
+
+A nonzero point closer to the origin than `MIN_NORM` $=10^{-15}$ is below what the frame
+resolves, because it floors the radius there. `logmap` still returns the right value for such a
+point, but its Jacobian with respect to that point is off by order 1. The exact origin is not
+affected.
 
 The polar frame never normalizes a direction that vanishes on a collinear pair (two points on one
 ray, $y = x$ included). Its angular leg is a non-negative combination of $\hat y_s - \hat x_s$ and

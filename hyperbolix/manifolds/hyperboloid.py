@@ -1175,6 +1175,31 @@ def _logmap_frame(
     explicit preserves the exact signed identity Jacobians at coincidence. The time component
     is reconstructed from tangency; larger separations retain the bounded frame coefficients.
 
+    A base point within scaled spatial radius ``√c·‖x_s‖ <= 1e-1`` (the threshold of
+    :func:`_pair_near_origin`, applied to the base point alone) takes the displacement spelling at
+    every separation. The frame assembly is value-exact there but not derivative-exact: its radial
+    and its angular leg each depend on ``x̂_s = x_s/‖x_s‖``, whose derivative is ``O(1/‖x_s‖)``,
+    and only their sum is smooth in ``x_s``. The base-point Jacobian is then a sum of three pieces
+    of size ``d/‖x_s‖`` that cancel to ``O(1)``, a float32 relative error of about 1 to 5 times
+    ``eps/(√c·‖x_s‖)``: measured medians of 3e-4 to 5e-4 at ``√c·‖x_s‖ = 3e-4`` and 3e-2 to 8e-2 at
+    3e-6 (``c = 0.1``, ``D`` = 8 and 64, ``θ = 3``, 16 pairs), and above 1 at 1e-7, with a forward
+    value and a mapped-point Jacobian that stay at rounding level. The displacement spelling reads
+    ``x̂_s`` only through the scalar ``S``, and ``2S²·x_s`` is at most a tenth of the result this
+    close to the origin: with it the base-point Jacobian is within 1e-6 for scaled radii from 1e-1
+    down to 1e-7 and ``θ`` up to 38 (largest measured 8.6e-7). Outside the neighborhood the frame's
+    base-point Jacobian is within 9e-6 (largest just outside, with a median of 1.6e-6 there, falling
+    like ``1/‖x_s‖`` to 1e-6 at scaled radius 1). The mapped point needs no such switch: its
+    Jacobian is at rounding level at every small radius from ``MIN_NORM`` up.
+
+    Below ``MIN_NORM`` (a nonzero ``‖x_s‖ < 1e-15``) the floored radius leaves ``x̂_s`` shorter than
+    a unit vector. The displacement spelling still returns the right value there (the frame assembly
+    was off by half for a far pair), but the Jacobian with respect to the sub-floor point is wrong in
+    either spelling: 7 % to 90 % off for a base point here, up to 1.4 for a mapped point. Only the
+    exact origin has its own chart (:func:`_logmap_impl`).
+    (``logs/2026-10-07_logmap-base-point-jacobian/``: ``issue_repro/old_main.out``,
+    ``verify/seam_summary.out``, ``audit/big_in_summary.out``, ``audit/big_out_at_1001.out``,
+    ``spellings.out``.)
+
     Args:
         y: Hyperboloid point to map, shape (dim+1,)
         x: Hyperboloid point serving as the base of the tangent space, shape (dim+1,)
@@ -1203,15 +1228,20 @@ def _logmap_frame(
     res = radial_coeff * e_rad_A + (asinhc_s / frame.cosh_half) * perp_A
     # For close pairs, keep the displacement explicit: at coincidence its spatial Jacobian
     # is exactly the identity. S comes from the stable frame, never an ambient inner product.
-    # Restrict this spelling to small separation so 2*S**2*x cannot overflow or cancel at
-    # large separation. Sanitize the inactive coefficient before squaring it under vmap.
-    close_pair = frame.sinh_half <= 0.5
-    small_s = jnp.where(close_pair, frame.sinh_half, 0.0)
+    # A base point near the origin takes the same spelling at every separation: the two legs
+    # above each carry x̂'s O(1/‖x_s‖) derivative and only their sum is smooth in x_s, which costs
+    # the base-point Jacobian eps/(√c·‖x_s‖), while 2*S**2*x is at most a tenth of the result
+    # there. Everywhere else this spelling is restricted to small separation so 2*S**2*x cannot
+    # overflow or cancel at large separation. Sanitize the inactive coefficient before squaring
+    # it under vmap.
+    base_near_origin = frame.sqrt_c * frame.r_x <= 1e-1  # the threshold of `_pair_near_origin`
+    use_displacement = (frame.sinh_half <= 0.5) | base_near_origin
+    small_s = jnp.where(use_displacement, frame.sinh_half, 0.0)
     close_scale = _asinhc(small_s) / jnp.sqrt(1.0 + small_s**2)
     close_s_D = close_scale * ((y[1:] - x[1:]) - (2.0 * small_s**2) * x[1:])
     close_time = jnp.dot(x[1:] / x[0], close_s_D, precision=MATMUL_PRECISION)
     close_A = jnp.concatenate([close_time[None], close_s_D])
-    return jnp.where(close_pair, close_A, res)
+    return jnp.where(use_displacement, close_A, res)
 
 
 def _logmap_impl(
@@ -1220,9 +1250,13 @@ def _logmap_impl(
     """Logarithmic map with a regular Cartesian chart at either exact origin.
 
     Unlike :func:`_gyro_difference` and :func:`_ptransp`, this stays on the exact-origin switch
-    rather than the 1e-1 scaled-radius neighborhood: the polar frame's gradients here are already
-    accurate at every small nonzero radius (measured relative error at rounding level through
-    scaled radius 1e-8), so widening the switch would buy nothing.
+    rather than the 1e-1 scaled-radius neighborhood, because :func:`_logmap_frame` covers that
+    neighborhood itself: for a base point inside it, and for any close pair, it takes the
+    displacement spelling, whose gradients are at rounding level at every small radius from
+    ``MIN_NORM`` up (float32 base-point Jacobian within 1e-6 of the exact one from scaled radius
+    1e-1 down to 1e-7, and within 7e-7 at ``‖x_s‖ = 1.1e-15``).
+    That does not hold for the frame assembly, which loses ``eps/(√c·‖x_s‖)`` in the base-point
+    Jacobian there; see :func:`_logmap_frame`. Widening this switch would buy nothing.
     """
     use_cartesian = _pair_has_origin(x, y)
     # Keep inactive Cartesian coefficients finite: reverse mode must not multiply zero by overflow.
