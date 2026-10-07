@@ -1052,3 +1052,58 @@ def test_origin_log_squared_spatial_norm_hessian_matches_independent_scalar_refe
             lambda base_D: _np_logmap_squared_spatial_norm(target_D, base_D, c), np.zeros(2), 1e-4
         )
     np.testing.assert_allclose(got_DD, expected_DD, rtol=1e-6, atol=1e-6)
+
+
+def _decimal_inverse_boost_along_base(stored_x_D: np.ndarray, stored_y_D: np.ndarray, c: float) -> tuple[float, float]:
+    """``(<x̂, s>, ‖s‖)`` of the inverse boost ``s = (⊖x) ⊕ y`` at 50 digits, from the exact stored spatial operands.
+
+    Along the base ray the boost reduces to ``<x̂, s> = √c·(x₀·<x̂, y_s> - y₀·‖x_s‖)``, two terms of size
+    ``cosh²(a)`` that cancel, which is why this oracle is not evaluated in ``np.longdouble``.
+    """
+    with localcontext() as ctx:
+        ctx.prec = 50
+        x_D = [Decimal(float(t)) for t in stored_x_D]
+        y_D = [Decimal(float(t)) for t in stored_y_D]
+        c_dec = Decimal(float(c))
+        sqrt_c = c_dec.sqrt()
+        r_x = sum(t * t for t in x_D).sqrt()
+        x0 = (1 / c_dec + r_x * r_x).sqrt()
+        y0 = (1 / c_dec + sum(t * t for t in y_D)).sqrt()
+        xy = sum(s * t for s, t in zip(x_D, y_D, strict=True))
+        coeff = c_dec * xy / (1 + sqrt_c * x0) - sqrt_c * y0
+        s_D = [y_i + coeff * x_i for x_i, y_i in zip(x_D, y_D, strict=True)]
+        along = sum(s * t for s, t in zip(s_D, x_D, strict=True)) / r_x
+        return float(along), float(sum(t * t for t in s_D).sqrt())
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("a", [8.0, 10.0])
+def test_gyro_difference_of_a_close_pair_keeps_its_component_along_the_base_ray(dtype, a: float) -> None:
+    """Centering a point 0.15 .. 0.6 nats along its base point's ray at scaled radius 8 and 10 keeps the radial part.
+
+    The polar frame returned the part of ``y_s`` across ``x̂`` from unit vectors, which leaves ``eps·‖y_s‖`` of
+    rounding *along* ``x̂``; that went straight into a result of size ``0.15 .. 0.6``. Error of ``<x̂, s>`` relative
+    to ``‖s‖`` on these inputs: 9.3e-4 (float32) and 1.0e-12 (float64) at ``a = 8``, 4.8e-3 and 1.1e-11 at 10. The
+    close-pair spelling reads both parts off ``y_s - x_s``: at most 2.0e-6 (17 eps) and 7.3e-16 (3.3 eps).
+    (``logs/2026-10-07_wrapped-normal-far-mean/probe_test_numbers_{main,new}.out``.)
+    """
+    c, dim, n_draw = 0.5, 16, 16
+    rng = np.random.default_rng(int(a))
+    manifold = Hyperboloid(dtype=dtype)
+    worst = 0.0
+    for _ in range(n_draw):
+        direction_D = rng.normal(size=dim)
+        direction_D /= np.linalg.norm(direction_D)
+        step = rng.choice([-1.0, 1.0]) * rng.uniform(0.15, 0.6)
+        # Round once: the library and the oracle see identical spatial coordinates.
+        stored_x_D = np.asarray(direction_D * np.sinh(a) / np.sqrt(c), dtype=np.float32)
+        stored_y_D = np.asarray(direction_D * np.sinh(a + step) / np.sqrt(c), dtype=np.float32)
+        got_A = manifold.gyro_difference(
+            _j_lift(jnp.asarray(stored_x_D, dtype=dtype), c), _j_lift(jnp.asarray(stored_y_D, dtype=dtype), c), c
+        )
+        x_hat_D = stored_x_D.astype(np.float64) / np.linalg.norm(stored_x_D.astype(np.float64))
+        expected_along, expected_norm = _decimal_inverse_boost_along_base(stored_x_D, stored_y_D, c)
+        worst = max(
+            worst, abs(float(np.dot(np.asarray(got_A, dtype=np.float64)[1:], x_hat_D)) - expected_along) / expected_norm
+        )
+    assert worst <= 128 * float(jnp.finfo(dtype).eps), f"a={a}: {worst:.3e} of the result's norm along the base ray"

@@ -410,7 +410,30 @@ def _gyro_difference_frame(
     """Cancellation-free polar-frame evaluation used away from both endpoints' origins."""
     frame = _polar_frame(x, y, c)
     s_cos_phi, perp_y_D = _logmap_direction(frame)
-    res_s_D = ((-2.0 / frame.sqrt_c) * frame.cosh_half * s_cos_phi) * frame.x_hat_D + perp_y_D
+    radial_far = (-2.0 / frame.sqrt_c) * frame.cosh_half * s_cos_phi
+
+    # Close pairs (S <= 0.5, the seam of `_logmap_frame`'s displacement spelling) keep the coordinate
+    # difference d = y_s - x_s explicit. The boost along x̂ leaves the part of y_s across x̂ unchanged,
+    # so perp_y = d - <d, x̂>·x̂, and the component along x̂ is (<d, x̂> - 2·S²·r_x)/(√c·x₀): the transport
+    # of `_logmap_frame`'s close-pair tangent d - 2·S²·x_s to the origin. Both round at eps·|d|, where
+    # `perp_y_D` and the radial gap behind `s_cos_phi` round at eps·r_y. S is sanitized before it is
+    # squared, as in `_logmap_frame`; √c·x₀ = cosh a >= 1 on the sheet, so its floor only guards a
+    # degenerate all-zero "point".
+    close_pair = frame.sinh_half <= 0.5
+    small_s = jnp.where(close_pair, frame.sinh_half, 0.0)
+    diff_D = y[1:] - x[1:]
+    diff_radial = jnp.dot(diff_D, frame.x_hat_D, precision=MATMUL_PRECISION)
+    perp_close_D = diff_D - diff_radial * frame.x_hat_D
+    radial_close = (diff_radial - (2.0 * small_s**2) * frame.r_x) / floor_at(frame.sqrt_c * frame.x_time, MIN_NORM)
+
+    # A pair whose two unit directions are bitwise equal (chord == 0) keeps `perp_y_D`, which is exactly
+    # zero there; d - <d, x̂>·x̂ would leave eps·|d| of the cancelled radial part across x̂.
+    perp_D = jnp.where(close_pair & (frame.chord > 0), perp_close_D, perp_y_D)
+    radial = jnp.where(close_pair, radial_close, radial_far)
+    # Whatever of `perp_D` lies along x̂ is rounding, not signal (~eps·r_y in the unit-vector form):
+    # measure it and take it out of the radial coefficient, as `_ptransp_to_0` does.
+    residue = jnp.dot(perp_D, frame.x_hat_D, precision=MATMUL_PRECISION)
+    res_s_D = perp_D + (radial - residue) * frame.x_hat_D
     inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
     return jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
 
@@ -471,6 +494,25 @@ def _gyro_difference(
     The general :func:`_addition` deliberately keeps the ambient boost: for the ordinary gyro-bias
     ``x ⊕ exp_0(b)``, whose result is as far out as its base point, the boost is the accurate
     spelling and needs no frame.
+
+    **Close pairs keep the coordinate difference.** For ``sinh(θ/2) <= 0.5`` (the seam of
+    :func:`_logmap_frame`'s displacement spelling) both parts are read off ``d = y_s - x_s``::
+
+        s = (d - ⟨d, x̂⟩·x̂) + (⟨d, x̂⟩ - 2·S²·r_x)/(√c·x₀)·x̂
+
+    which is the same vector: the boost leaves the part of ``y_s`` across ``x̂`` unchanged, and the
+    component along ``x̂`` is the transport of the close-pair tangent ``d - 2·S²·x_s`` to the origin. It
+    rounds at ``eps·‖d‖`` where ``perp_y`` and the radial gap behind ``S·cos φ`` round at ``eps·r_y``.
+    In both branches the part of the perpendicular term that rounding leaves along ``x̂`` is measured
+    and taken out of the radial coefficient; in the frame spelling it was ``eps·r_y``, larger than a
+    close pair's whole result at large radius. Float32 against a high-precision reference on the same
+    stored points, separations 1e-2 to 0.6 at scaled base radius 6-8: median relative error about
+    4e-4 → 1e-5 (3e-6 for displacements across ``x̂``, 2e-5 for displacements along it), worst pair
+    1.6e-2 → 6.7e-5, and no pair worse than before. A pair whose two unit directions are bitwise
+    equal keeps ``perp_y``, which is exactly zero there. The numbers in the two paragraphs above were
+    measured before this branch existed.
+    (``logs/2026-10-07_wrapped-normal-far-mean/``: ``verify/probe_6d_mix_{main,new}.out``, and
+    ``probe_gyro_primitive_key_table.out`` for the radius bands up to 12.)
 
     When either scaled spatial radius is at most 1e-1, the inverse boost supplies well-conditioned
     Cartesian derivatives. Outside that neighborhood, the polar frame preserves precision near coincidence, including
@@ -1552,7 +1594,8 @@ def _ptransp_to_0(
     2.0e-3 at ``a = 10``, no better than the Cartesian chart). One more dot measures that residue, and the radial
     coefficient becomes ``u_r/(√c·x₀) - ⟨u_⊥, x̂⟩``: radial error ≤ 3e-7 at every measured radius
     ``a ≤ 10``. What remains is perpendicular — ``x̂``'s own direction rounding times ``u_r``, 5.5e-4 at
-    ``a = 10`` — the order of the float32 ``logmap`` output that feeds ``log_prob`` (1.3e-3 there): the
+    ``a = 10`` — the order of the float32 ``logmap`` output that fed ``log_prob`` before it moved to
+    :func:`_gyro_difference` (1.3e-3 there): the
     ambient chart stores a tangent vector's components at ``cosh a`` times its length (see
     :func:`_tangent_norm`), and no spelling reading ``(v, x)`` gets below that.
 

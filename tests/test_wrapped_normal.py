@@ -1153,3 +1153,147 @@ def test_ptransp_to_0_matches_the_generic_transport_in_float64() -> None:
             assert float(jnp.max(jnp.abs(got_A - expected_A))) <= 1e-12 * scale, f"scaled radius {scaled_radius}"
             back_A = hyp.ptransp_0(got_A, x_A, c)
             assert float(jnp.max(jnp.abs(back_A[1:] - v_A[1:]))) <= 1e-12 * max(1.0, float(jnp.max(jnp.abs(v_A))))
+
+
+def _far_mean_sigma_for(kind: str, n: int, dtype):
+    """Scalar, diagonal and full sigma of O(1) scale, for displacements of several nats."""
+    if kind == "scalar":
+        return jnp.asarray(1.0, dtype=dtype)
+    if kind == "diag":
+        return jnp.asarray(np.linspace(0.6, 1.8, n), dtype=dtype)
+    chol = np.tril(0.15 * np.ones((n, n))) + 0.85 * np.eye(n)
+    return jnp.asarray(chol @ chol.T, dtype=dtype)
+
+
+def _log_prob_and_mean_grad(z_s_ND: np.ndarray, mu_s_ND: np.ndarray, sigma, c: float, dtype, closed_form: bool = False):
+    """``log_prob`` and its gradient w.r.t. the mean's spatial part (time slot rebuilt by ``proj``), in ``dtype``.
+
+    ``closed_form`` evaluates the scalar-sigma density through ``dist`` instead: the same function of
+    the two points, spelled without the origin-tangent vector.
+    """
+    hyp = Hyperboloid(dtype=dtype)
+    n = mu_s_ND.shape[-1]
+
+    def lift(s_D):
+        return hyp.proj(jnp.concatenate([jnp.zeros(1, dtype=dtype), s_D]), c)
+
+    def log_p(mu_s_D, z_s_D):
+        if not closed_form:
+            return wrapped_normal_hyperboloid.log_prob(lift(z_s_D), lift(mu_s_D), sigma, c, manifold_module=hyp)
+        d = hyp.dist(lift(z_s_D), lift(mu_s_D), c)
+        return -(d**2) / (2 * sigma**2) - _log_det_jacobian_from_r(d, c, n) - 0.5 * n * jnp.log(2 * jnp.pi * sigma**2)
+
+    val_N, grad_ND = jax.vmap(jax.value_and_grad(log_p))(jnp.asarray(mu_s_ND, dtype), jnp.asarray(z_s_ND, dtype))
+    return np.asarray(val_N, np.float64), np.asarray(grad_ND, np.float64)
+
+
+def _far_mean_and_distant_point(a: float, c: float, n: int, n_draw: int) -> tuple[np.ndarray, np.ndarray]:
+    """float32 spatial parts of a mean at scaled radius ``a`` and of ``z`` at scaled radius 1, independent directions."""
+    rng = np.random.default_rng(int(a))
+    dir_2ND = rng.normal(size=(2, n_draw, n))
+    dir_2ND /= np.linalg.norm(dir_2ND, axis=-1, keepdims=True)
+    return np.float32(dir_2ND[1] * np.sinh(1.0) / np.sqrt(c)), np.float32(dir_2ND[0] * np.sinh(a) / np.sqrt(c))
+
+
+@pytest.mark.parametrize("sigma_kind", ["scalar", "diag", "full"])
+@pytest.mark.parametrize("a", [12.0, 16.0, 20.0])
+def test_log_prob_hyperboloid_float32_tracks_float64_for_a_far_mean_and_a_distant_point(a: float, sigma_kind: str) -> None:
+    """Float32 ``log_prob`` and its mean-gradient match float64 for a mean at scaled radius ``a`` and ``z`` near the origin.
+
+    The pair is well conditioned: ``z`` sits at scaled radius 1, about ``a`` away from the mean, so rounding
+    the stored points costs about 1e-8. The composition ``logmap`` -> transport stored ``log_μ(z)`` in the
+    ambient chart at ``μ``, whose components are ``cosh a`` times the vector's length, and lost ``eps·cosh a``
+    of it: gradient error 2.7e-4 .. 1.8e-2 at ``a = 12``, 0.73 .. 2.8 at 16 and 6.7e2 .. 4.7e3 at 20 on these
+    inputs, now at most 5.8e-6 (value: 9.9e-6 .. 1.5e2, now at most 4.0e-7).
+    (``logs/2026-10-07_wrapped-normal-far-mean/probe_test_numbers_{main,new}.out``.)
+    """
+    c, n = 0.5, 5
+    z_s32_ND, mu_s32_ND = _far_mean_and_distant_point(a, c, n, n_draw=16)
+    val32_N, grad32_ND = _log_prob_and_mean_grad(
+        z_s32_ND, mu_s32_ND, _far_mean_sigma_for(sigma_kind, n, jnp.float32), c, jnp.float32
+    )
+    val64_N, grad64_ND = _log_prob_and_mean_grad(z_s32_ND, mu_s32_ND, _far_mean_sigma_for(sigma_kind, n, _F64), c, _F64)
+
+    err_val = float(np.max(np.abs(val32_N - val64_N) / np.abs(val64_N)))
+    err_grad = float(np.max(np.linalg.norm(grad32_ND - grad64_ND, axis=-1) / np.linalg.norm(grad64_ND, axis=-1)))
+    assert err_val < 1e-5, f"float32 log_prob is {err_val:.2e} relative off float64 at a = {a}"
+    assert err_grad < 1e-4, f"float32 mean-gradient is {err_grad:.2e} relative off float64 at a = {a}"
+
+
+@pytest.mark.parametrize("a", [16.0, 20.0])
+def test_log_prob_hyperboloid_mean_gradient_matches_the_closed_form_for_a_far_mean(a: float) -> None:
+    """The float32 mean-gradient of ``log_prob`` matches the float64 closed form in ``dist`` for a far mean.
+
+    An independent spelling of the same scalar-sigma density, ``-d²/(2·sigma²) - (n-1)·log(sinh(√c·d)/(√c·d))`` plus
+    the normalizer, with ``d = dist(z, μ)`` on the same stored points. Relative error of the float32 gradient
+    against it: 2.8 at ``a = 16`` and 4.3e3 at 20 before, 3.2e-6 and 5.8e-6 now. (The float64 gradient was
+    already within 3.3e-14 of it.) (``logs/2026-10-07_wrapped-normal-far-mean/probe_test_numbers_{main,new}.out``.)
+    """
+    c, n, bound = 0.5, 5, 1e-4
+    z_s32_ND, mu_s32_ND = _far_mean_and_distant_point(a, c, n, n_draw=16)
+    _, grad_ND = _log_prob_and_mean_grad(z_s32_ND, mu_s32_ND, jnp.asarray(1.0, dtype=jnp.float32), c, jnp.float32)
+    _, expected_ND = _log_prob_and_mean_grad(z_s32_ND, mu_s32_ND, jnp.asarray(1.0, dtype=_F64), c, _F64, closed_form=True)
+
+    err = float(np.max(np.linalg.norm(grad_ND - expected_ND, axis=-1) / np.linalg.norm(expected_ND, axis=-1)))
+    assert err < bound, f"mean-gradient is {err:.2e} relative off the closed form at a = {a}"
+
+
+@pytest.mark.parametrize("mean_norm", [1e-1, 1e-3, 1e-5])
+def test_log_prob_hyperboloid_mean_gradient_float32_tracks_float64_near_the_origin(mean_norm: float) -> None:
+    """The mean-gradient of float32 ``log_prob`` matches float64 for a mean of tangent norm 1e-1 .. 1e-5.
+
+    ``z`` is three nats (scaled) away. ``logmap`` is then in its polar-frame branch, whose derivative with
+    respect to the base point loses ``~5·eps/(√c·‖μ_s‖)``: 4.0e-5, 4.8e-3 and 0.51 on these inputs. ``log_prob``
+    no longer differentiates it: at most 9.9e-7.
+    (``logs/2026-10-07_wrapped-normal-far-mean/probe_test_numbers_{main,new}.out``.)
+    """
+    c, n, n_draw = 0.1, 5, 16
+    rng = np.random.default_rng(3)
+    dir_2ND = rng.normal(size=(2, n_draw, n))
+    dir_2ND /= np.linalg.norm(dir_2ND, axis=-1, keepdims=True)
+    hyp = Hyperboloid(dtype=_F64)
+    mu_NA = jax.vmap(lambda u_D: hyp.expmap_0(hyp.embed_spatial_0(u_D), c))(jnp.asarray(dir_2ND[0] * mean_norm))
+    w_ND = jnp.asarray(dir_2ND[1] * 3.0 / np.sqrt(c))
+    z_NA = jax.vmap(lambda w_D, m_A: hyp.expmap(hyp.ptransp_0(hyp.embed_spatial_0(w_D), m_A, c), m_A, c))(w_ND, mu_NA)
+    z_s32_ND, mu_s32_ND = np.float32(np.asarray(z_NA)[:, 1:]), np.float32(np.asarray(mu_NA)[:, 1:])
+
+    _, grad32_ND = _log_prob_and_mean_grad(z_s32_ND, mu_s32_ND, jnp.asarray(1.0, dtype=jnp.float32), c, jnp.float32)
+    _, grad64_ND = _log_prob_and_mean_grad(z_s32_ND, mu_s32_ND, jnp.asarray(1.0, dtype=_F64), c, _F64)
+    err = float(np.max(np.linalg.norm(grad32_ND - grad64_ND, axis=-1) / np.linalg.norm(grad64_ND, axis=-1)))
+    assert err < 1e-5, f"float32 mean-gradient is {err:.2e} relative off float64 at |u| = {mean_norm}"
+
+
+@pytest.mark.parametrize(("dtype", "rtol"), [(jnp.float32, 1e-4), (jnp.float64, 1e-12)])
+@pytest.mark.parametrize(("model", "mean_radius"), [("hyperboloid", 0.0), ("hyperboloid", 0.05), ("poincare", 0.0)])
+def test_log_prob_hessian_at_the_mean_matches_the_closed_form(model: str, mean_radius: float, dtype, rtol: float) -> None:
+    """``jax.hessian`` of ``log_prob`` at ``z == mu`` is ``-(1/sigma² + (n-1)·c/3)·I`` in the chart of ``sample``.
+
+    With ``z(w)`` built from the Gaussian draw ``w`` as ``sample`` builds it, the density is
+    ``log N(w; 0, sigma²·I) - (n-1)·log(sinh(x)/x)``, ``x = √c·‖w‖``, whose Hessian at ``w = 0`` is the value above.
+    The log-det used to read ``‖v‖`` through ``safe_norm``, whose second derivative at zero is zero, so the
+    Hessian came out as ``-I/sigma²``: 10 % short for this cell.
+    (``logs/2026-10-07_wrapped-normal-far-mean/probe_hessian_at_mean_{main,new}.out``.)
+
+    The Poincaré mean stays at the origin here: away from it the Hessian at the mode has a second defect
+    in the manifold's own maps, which this test does not cover.
+    """
+    c, n, sigma = 0.7, 3, 0.5
+    mean_tangent_D = jnp.asarray([0.6, -0.48, 0.64], dtype=dtype) * mean_radius / np.sqrt(c)
+    if model == "hyperboloid":
+        hyp = Hyperboloid(dtype=dtype)
+        mu = hyp.expmap_0(hyp.embed_spatial_0(mean_tangent_D), c)
+
+        def log_p(w_D):
+            z_A = hyp.expmap(hyp.ptransp_0(hyp.embed_spatial_0(w_D), mu, c), mu, c)
+            return wrapped_normal_hyperboloid.log_prob(z_A, mu, sigma, c, manifold_module=hyp)
+    else:
+        ball = Poincare(dtype=dtype)
+        mu = ball.expmap_0(mean_tangent_D / 2.0, c)
+
+        def log_p(w_D):
+            z_D = ball.addition(mu, ball.expmap_0(w_D / 2.0, c), c)
+            return wrapped_normal_poincare.log_prob(z_D, mu, sigma, c, manifold_module=ball)
+
+    hess_DD = jax.hessian(log_p)(jnp.zeros(n, dtype=dtype))
+    expected_DD = -(1.0 / sigma**2 + (n - 1) * c / 3.0) * np.eye(n)
+    np.testing.assert_allclose(np.asarray(hess_DD), expected_DD, rtol=rtol, atol=rtol)

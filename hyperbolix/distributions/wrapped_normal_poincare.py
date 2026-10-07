@@ -221,8 +221,11 @@ def log_prob(
     # norm at 1e-15 pinned r at 2·3.16e-8 for every tangent vector shorter than that, and
     # `sum(v**2)` overflowed float32 past ||v|| = 1.8e19. `_log_det_jacobian_from_r` is already
     # NaN-free and stationary at r = 0 (double-`where` plus the Taylor branch), so r = 0 is safe.
+    # The Taylor branch reads the un-rooted `sum(v**2)`, which keeps the log-det's second derivative
+    # at z == mu.
     r_SB = 2.0 * safe_norm(v_SBD)
-    log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
+    r_sq_SB = 4.0 * jnp.sum(v_SBD**2, axis=-1)
+    log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n, r_sq=r_sq_SB)
 
     # Step 5: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
     log_p_z_SB = log_p_v_SB - log_det_jac_SB

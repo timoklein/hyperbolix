@@ -184,11 +184,21 @@ Five places still lose accuracy at large radius:
    `HyperbolicFullAttention` forms `2/c + 2⟨Q,K⟩_L` from a matrix product, and a GEMM cannot be
    made cancellation-free the way a single pairwise `dist` can — see
    [Full Attention's Float32 Score Floor](#attention-score-floor) below.
-3. **Transport to the origin from a far point.** The wrapped-normal `log_prob` uses its own
-   transport to the origin and is accurate up to the float32 storage of its tangent vector $u$
-   (the ambient chart stores a tangent vector's components at $\cosh a$ times its length). The
-   generic `Hyperboloid.ptransp(v, far_point, origin)` still cancels: its radial component has a
-   float32 error of 1.95e-3 at scaled radius 10.
+3. **Transport to the origin from a far point.** The generic
+   `Hyperboloid.ptransp(v, far_point, origin)` still cancels: its radial component has a float32
+   error of 1.95e-3 at scaled radius 10. The wrapped-normal `log_prob` does not use it: it reads
+   the origin-tangent vector off `gyro_difference` and never stores a tangent vector at the mean.
+   What limits it is the storage of the two points. With `z` within O(1) of a mean at scaled
+   radius $a$, the stored float32 points are themselves rounded at $\varepsilon\sinh a$, and no
+   formula recovers what that removes: for `z` at scaled distance 0.5 from the mean, the float32
+   gradient with respect to the mean is off by 5e-4 at $a = 12$ and 5e-2 at $a = 16$ (medians
+   over 16 directions, `n = 10`), and from $a \approx 20$ by order 1. With `z` at scaled radius 1
+   the same gradient stays within about 1e-5 of float64 through $a = 40$. The result is
+   non-finite once the mean's spatial coordinate passes the float32 limit of 1.8e19, between
+   $a = 40$ and 44 at `c = 0.1` and between 44 and 46 at `c = 1`. One finite wrong output remains
+   just below that: with the mean at $a = 44$, `z` at scaled radius 1 and `c = 1`, the float32
+   value is still right while the gradient with respect to the mean is off by a factor of about
+   45.
 4. **The MLR score, when the hyperplane itself sits far from the origin.** The reference Lorentz
    MLR subtracts two terms of size `e^(a+ρ)`, with `ρ` the scaled hyperplane offset, so a large
    bias costs as many digits as a large input radius — see
