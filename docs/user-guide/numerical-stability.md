@@ -190,8 +190,10 @@ Five places still lose accuracy at large radius:
    generic `Hyperboloid.ptransp(v, far_point, origin)` still cancels: its radial component has a
    float32 error of 1.95e-3 at scaled radius 10.
 4. **The MLR score, when the hyperplane itself sits far from the origin.** The reference Lorentz
-   MLR subtracts two terms of size `e^(a+ρ)`, with `ρ` the scaled hyperplane offset, so a large
-   bias costs as many digits as a large input radius — see
+   MLR assembles an `O(1)` score from parts of size up to `e^(a+|ρ|)/4`, with `ρ` the scaled
+   hyperplane offset, so a large bias costs as many digits as a large input radius: near a
+   hyperplane the float32 logit is off by about 1e-3 at `a + |ρ| ≈ 10.4`, and in the worst case
+   measured from 9 — see
    [The MLR Score at a Large Hyperplane Offset](#mlr-large-bias) below.
 5. **Busemann gradients at a far stored point.** When the Busemann layers score a stored float32
    point, from scaled radius $a \approx 29.8$ at $c = 1$ ($29.4$ at $c = 0.3$) the gradients of the
@@ -242,33 +244,77 @@ $$
 \sinh(a)\cosh(\rho)\cos\theta \;-\; \cosh(a)\sinh(\rho),
 $$
 
-two terms of size `e^(a+ρ)` whose difference is `O(1)` for a point near the hyperplane, so the
-rounding error is `eps·e^(a+ρ)`: **a hyperplane far from the origin costs as many digits as an
-input far from the origin.** The same expression sits in the PLFC / ILNN layers, the Poincaré++
-MLR (where `ρ = 2√c·r`), and `FGGLinear`'s spacelike-`V` GEMM.
+an `O(1)` number near the hyperplane, assembled from parts of size up to `e^(a+|ρ|)/4`: the terms
+of the dot product, which cancel among themselves, and the offset term. In our measurements **the
+float32 logit of a point near a hyperplane is off by about `eps·e^(a+|ρ|)/4`**, with `eps = 2^-23`
+(for `c = 1` and `‖z‖ = 1`, where the logit is a signed distance; multiply by `‖z‖/√c` otherwise).
+A hyperplane far from the origin costs as many digits as an input far from the origin. The same
+expression sits in the PLFC / ILNN layers, the Poincaré++ MLR (where `ρ = 2√c·r`), and
+`FGGLinear`'s spacelike-`V` GEMM; the numbers below are measured on the hyperboloid head only.
 
-Median relative error of the float32 gradient with respect to the point, hyperboloid, points
-exactly on the hyperplane:
+| Float32 logit error | 1e-4 | 1e-3 | 1e-2 | 0.1 |
+| --- | --- | --- | --- | --- |
+| reached at $a + \lvert\rho\rvert \approx$ | 8.1 | 10.4 | 12.7 | 15.0 |
 
-| `a` \ `ρ` | 0.5 | 1 | 2 | 4 | 8 |
-| --- | --- | --- | --- | --- | --- |
-| 8 | 8e-8 | 1e-7 | 4e-7 | 8e-6 | n/a |
-| 10 | 2e-7 | 4e-7 | 5e-6 | 3e-4 | 0.52 |
-| 12 | 1e-5 | 5e-5 | 3e-4 | 0.013 | 0.84 |
-| 14 | 9e-4 | 1.3e-3 | 0.013 | 0.32 | 0.98 |
-| 16 | 0.042 | 0.040 | 0.39 | 0.86 | 1.0 |
+Measured on the hyperboloid head (CPU, `c = 1`, 15 classes with unit normals, 32 and 512
+dimensions, `|ρ| ≤ a`), the largest error was 0.6–4 times this law while the law's value is below
+about 2; a factor 4 is 1.4 units of `a + |ρ|`. Past that the `asinh` compresses the error, which
+then grows only logarithmically. Largest logit error for inputs placed exactly on a class
+hyperplane, by the largest offset `ρ` in the head (32 dimensions; draws vary by up to 1.6×):
 
-`n/a` marks `ρ ≥ a`, where the hyperplane cannot cross the point. The rule of thumb: **the float32
-gradient is about 0.1 % wrong at `a + ρ ≈ 15`, about 1 % at 16, roughly 40 % by 18, and entirely
-wrong by 22**. At `ρ = 8` the *score* itself can take the wrong sign. Float64's limit is about
-`a + ρ ≈ 36` (extrapolated).
+| `a` \ `ρ` | 0 | 0.2 | 1 | 2 | 4 | 8 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | 1e-4 | 1e-4 | 5e-4 | 1e-3 | 1e-2 | 0.25 |
+| 10 | 5e-4 | 9e-4 | 3e-3 | 1e-2 | 7e-2 | 2 |
+| 12 | 4e-3 | 7e-3 | 3e-2 | 8e-2 | 0.5 | 3.9 |
 
-It takes an input far from the origin, **and** a hyperplane far from the origin, **and** points
-close to that hyperplane. With normalized features (`a ≲ 8`) and an `O(1)` bias none of this
-arises. Remedies: run the head in float64, or keep `a + ρ` under ≈ 15 by bounding the trunk's
-radius and weight-decaying the head's bias. A cancellation-free half-angle form was measured at
-1.8–2.5× the cost and not adopted. `FGGLinear`'s spacelike `V` has a related `eps` floor on its
-column norm, which matters only for a small weight column with a large bias.
+At `ρ = 0` an error remains (the first column). Only part of it is beyond the head's reach: at
+`a = 10` the float32 rounding of the stored input alone moves the exact logit by 2e-4 at 32
+dimensions and by 5e-5 at 512, against a head error of 5e-4. The offset lifts the error further,
+roughly in proportion to `e^|ρ|` (measured 1–7 times `e^|ρ|`).
+
+The gradient follows the logit. Off the hyperplane, the relative error of that class's logit
+gradient with respect to the input is about `|tanh δ|` times the logit error, with `δ` the scaled
+signed distance from the point to the hyperplane (measured within 2 % for `a ≤ 12` and offsets up
+to 2, and within a factor 0.7–1.25 up to `a = 14` and offset 4). Largest relative gradient error
+for inputs within a scaled distance of 2 of their hyperplane (32 dimensions, ranges over five
+seeds; up to 1.5× larger at 512 dimensions):
+
+| largest offset | `a = 8` | 10 | 12 |
+| --- | --- | --- | --- |
+| 0.2 | 4.9e-5–7.2e-5 | 3.8e-4–4.4e-4 | 2.5e-3–3.3e-3 |
+| 2 | 5.4e-4–8.0e-4 | 3.4e-3–6.6e-3 | 3.1e-2–4.6e-2 |
+
+Exactly on the hyperplane the first-order term vanishes and the gradient error is far smaller (at
+most 1.1e-4 at `a = 10` and 7e-3 at `a = 12` for offsets up to 2), so a measurement taken only there
+understates it.
+
+It takes a point close to a hyperplane. Far from all hyperplanes the `asinh` compresses the error:
+for inputs in random directions (32 and 512 dimensions, 15 classes), 99.9 % of all logits were
+within 1.1e-4 at every radius up to `a = 14` and every offset up to 8, with rare largest errors of
+9e-3 at `a = 12` and 4e-2 at `a = 14`. With normalized features (`a ≲ 8`) and offsets up to 1 the
+logit error stays below 1e-3; at offset 2 it reaches 2e-3–3e-3.
+
+Neither trained head measured so far shows the error. A Lorentz ResNet-18 on CIFAR-100 (HCNN
+reference code, three runs) has offsets of 0.4–0.6 with inputs up to `a = 5.7`. A Procgen
+actor-critic agent trained without a radius cap (three seeds, `c = 0.1`) has offsets of at most
+0.15 with inputs up to `a = 10`, so its `a + |ρ|` reaches 10.1; its largest actor-logit error was
+4.6e-5. Recomputing each head at higher precision on its stored inputs changed none of the
+3 × 10,000 test predictions and none of the 36,864 greedy actions.
+
+Remedies: keep `a + |ρ|` under the value for the accuracy you need, by bounding the trunk's radius
+and weight-decaying the head's bias, or run the head in float64. For that, enable x64 and build the
+head on `Hyperboloid(dtype=jnp.float64)`: the head computes in its manifold's dtype, and without
+x64 a float64 manifold computes in float32 with only a warning. Also rebuild the time coordinate in
+float64 from the spatial part, `x_0 = √(1/c + ‖x_s‖²)`, because the offset multiplies the rounding
+of a stored float32 time coordinate by `sinh|ρ|`. At `a = 10`, `ρ = 2` the largest error against the
+unrounded input is 8e-3–1.6e-2 in float32, 2e-3–2.6e-3 with a float64 head on the stored point,
+and 2e-4 (32 dimensions) or 5e-5 (512) with the time coordinate rebuilt, which is the rounding of
+the spatial coordinates themselves. With float64 inputs as well, the law puts a logit error of 1e-3
+at `a + |ρ| ≈ 30.5`; measured there it was 2e-3–6e-3. A cancellation-free half-angle form was
+measured at 1.8–2.5× the cost and not adopted.
+`FGGLinear`'s spacelike `V` has a related `eps` floor on its column norm, which matters only for a
+small weight column with a large bias.
 
 #### Input Overflow {#input-overflow-fingerprint}
 
