@@ -1002,6 +1002,17 @@ resolves, because it floors the radius there. `logmap` still returns the right v
 point, but its Jacobian with respect to that point is off by order 1. The exact origin is not
 affected.
 
+`tangent_norm`, `tangent_inner` and the geodesic length inside `expmap` have the same property
+with respect to the base point: their radial/perpendicular split of the tangent vector divides by
+$\lVert x_s\rVert$. For a base point with scaled spatial radius at most 1e-1 they take the
+Cartesian form of the transport to the origin,
+$v_s - \dfrac{v_0}{x_0 + 1/\sqrt c}\,x_s$ with $v_0=\langle x_s,v_s\rangle/x_0$, whose Euclidean
+products are the tangent inner products at $x$. Before, the float32 Jacobian of `expmap` with
+respect to such a base point was off by 7e-4 at scaled radius 1e-3 and above 1 at 1e-7 for a step
+of scaled length 10, with a correct value; now it is within 1e-6. The reparameterized
+`wrapped_normal_hyperboloid.sample` goes through this `expmap` at the mean. The proper-velocity
+`tangent_norm`, `tangent_inner` and `expmap` do the same.
+
 The polar frame never normalizes a direction that vanishes on a collinear pair (two points on one
 ray, $y = x$ included). Its angular leg is a non-negative combination of $\hat y_s - \hat x_s$ and
 $\hat x_s + \hat y_s$, which is exactly zero on both degenerate rays, so `logmap`, `ptransp` and

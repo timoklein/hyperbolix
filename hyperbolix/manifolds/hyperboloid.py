@@ -1609,6 +1609,57 @@ def _ptransp_to_0(
     return jnp.concatenate([jnp.zeros(1, dtype=v.dtype), res_s_D])
 
 
+def _tangent_at_origin_cartesian(
+    v_s_D: Float[Array, "dim"], x: Float[Array, "dim_plus_1"], near_origin: Array, c: ScalarCurvature
+) -> Float[Array, "dim"]:
+    """Spatial part of ``PT_{x→origin}(v)`` in the Cartesian chart, for a base point near the origin.
+
+    The Cartesian arm of :func:`_ptransp_to_0`: ``v_s - (v₀/(x₀ + 1/√c))·x_s`` with the tangency time
+    slot ``v₀ = ⟨x_s, v_s⟩/x₀``. Transport is an isometry and the metric at the origin is Euclidean, so
+    Euclidean products of these vectors are the tangent inner products at ``x``. :func:`_tangent_norm`
+    and :func:`_tangent_inner` take them for a base point within scaled spatial radius
+    ``√c·‖x_s‖ <= 1e-1``.
+
+    The reason is the derivative with respect to ``x``, not the value. The radial/perpendicular split
+    divides by ``‖x_s‖``: its two terms each change with ``x̂_s`` at a rate ``1/‖x_s‖`` and only their
+    sum is smooth in ``x_s``, so the gradient of the split form with respect to a near-origin base
+    point carries an absolute error of about ``eps/(√c·‖x_s‖)`` times its natural scale
+    ``√c·‖u‖·‖v‖``, while the true gradient there is ``O(‖x_s‖)``. :func:`_expmap` reads its geodesic
+    length from :func:`_tangent_norm`, so its base-point Jacobian lost the same factor. Measured in
+    float32 against float64 on the same inputs (``D`` = 8 and 64, ``c`` = 0.1 and 1, steps of scaled
+    length 0.3 to 10, 16 pairs, largest relative error): the Jacobian of ``expmap`` with respect to the
+    base point was off by 7e-4 at scaled radius 1e-3, 4e-2 at 1e-5 and 4 at 1e-7, and is within about
+    1e-6 with this arm (largest measured 1.2e-6, at the inside edge of the neighborhood for a step of
+    length 10). Just outside the neighborhood the split's error is 4e-6 for ``expmap`` and falls
+    like ``1/‖x_s‖``. The raw gradient with respect to the ambient point differs between the two arms
+    along the sheet's normal, which the lift or ``egrad2rgrad`` removes.
+    (``logs/2026-10-07_logmap-base-point-jacobian/``: ``siblings/screen_fix.json`` before,
+    ``siblings/screen_port2.json`` after, ``siblings/sample_check.out`` and ``sample_check_port.out``
+    for the wrapped normal's ``sample``, ``expmap_port/verify/`` for the edge cases.)
+
+    This form has no ``‖x_s‖`` in a denominator. Its subtraction removes at most ``(√c·‖x_s‖)²/2`` of
+    ``v_s``, 0.5 % inside the neighborhood; at large radius it would cancel like the literal
+    Minkowski form, which is why the split stays everywhere else.
+
+    The arm is fed the origin where ``near_origin`` is false, so its coefficients stay finite however
+    far ``x`` is.
+
+    Args:
+        v_s_D: Spatial part of a tangent vector at x, shape (dim,)
+        x: Hyperboloid point, shape (dim+1,)
+        near_origin: Scalar bool, whether ``x`` is inside the neighborhood
+        c: Curvature (positive)
+
+    Returns:
+        Spatial part of the transported vector, shape (dim,)
+    """
+    sqrt_c = jnp.sqrt(c)
+    origin = _create_origin(c, x.shape[0] - 1, dtype=x.dtype)
+    cartesian_x = jnp.where(near_origin, x, origin)
+    v0 = jnp.dot(cartesian_x[1:] / cartesian_x[0], v_s_D, precision=MATMUL_PRECISION)
+    return v_s_D - (v0 / (cartesian_x[0] + 1.0 / sqrt_c)) * cartesian_x[1:]
+
+
 def _tangent_inner(
     u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, ""]:
@@ -1633,6 +1684,10 @@ def _tangent_inner(
     :func:`~hyperbolix.utils.math_utils.radial_perp_decomposition`) and under ``√c·x₀``, both no-ops
     for every valid base point.
 
+    A base point within scaled spatial radius ``1e-1`` takes the Cartesian chart instead
+    (:func:`_tangent_at_origin_cartesian`): the split is value-exact there, but its gradient with
+    respect to the base point is not.
+
     Args:
         u: Tangent vector at x, shape (dim+1,)
         v: Tangent vector at x, shape (dim+1,)
@@ -1649,7 +1704,16 @@ def _tangent_inner(
     # √c·x₀ = cosh a >= 1 on the upper sheet, so the floor is a no-op for every valid base point;
     # it only keeps a degenerate x (x₀ = 0) from dividing by zero.
     time_scale = floor_at(sqrt_c * x[0], MIN_NORM)
-    return jnp.dot(perp_u_D, perp_v_D, precision=MATMUL_PRECISION) + (radial_u / time_scale) * (radial_v / time_scale)
+    polar = jnp.dot(perp_u_D, perp_v_D, precision=MATMUL_PRECISION) + (radial_u / time_scale) * (radial_v / time_scale)
+    # A base point near the origin takes the Cartesian chart, for the derivative with respect to x:
+    # see `_tangent_at_origin_cartesian`.
+    near_origin = sqrt_c * safe_norm(x_s_D) <= 1e-1  # the threshold of `_pair_near_origin`
+    cartesian = jnp.dot(
+        _tangent_at_origin_cartesian(u[1:], x, near_origin, c),
+        _tangent_at_origin_cartesian(v[1:], x, near_origin, c),
+        precision=MATMUL_PRECISION,
+    )
+    return jnp.where(near_origin, cartesian, polar)
 
 
 def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -1678,6 +1742,10 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     ``v = 0`` returns exactly 0 with an exactly-zero (hence finite) gradient — the ``MIN_NORM²``
     floor the previous implementation needed for that is no longer required.
 
+    A base point within scaled spatial radius ``1e-1`` takes the Cartesian chart instead
+    (:func:`_tangent_at_origin_cartesian`): the split is value-exact there, but its gradient with
+    respect to the base point is not.
+
     Args:
         v: Tangent vector at x, shape (dim+1,)
         x: Hyperboloid point, shape (dim+1,)
@@ -1694,7 +1762,13 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     perp_norm = safe_norm(perp_D)
     # √c·x₀ = cosh a >= 1 on the upper sheet, so the floor is a no-op for every valid base point;
     # it only keeps a degenerate x (x₀ = 0) from dividing by zero.
-    return safe_hypot(perp_norm, radial / floor_at(sqrt_c * x[0], MIN_NORM))
+    polar = safe_hypot(perp_norm, radial / floor_at(sqrt_c * x[0], MIN_NORM))
+    # A base point near the origin takes the Cartesian chart, for the derivative with respect to x:
+    # see `_tangent_at_origin_cartesian`. `safe_norm` keeps the exact zero and the zero gradient at
+    # v = 0.
+    near_origin = sqrt_c * safe_norm(x[1:]) <= 1e-1  # the threshold of `_pair_near_origin`
+    cartesian = safe_norm(_tangent_at_origin_cartesian(v[1:], x, near_origin, c))
+    return jnp.where(near_origin, cartesian, polar)
 
 
 def _egrad2rgrad(
