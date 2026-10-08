@@ -75,7 +75,7 @@ Full table: `docs/user-guide/nn-layers.md#initialization-scales`.
 ### Speed against accuracy
 
 - Trade-offs between speed and precision or stability are the maintainer's call, made on measured timings; kernel counts are only a proxy. Put both costs in one table, with a recommendation.
-- An accuracy fix that reaches the training regime may cost up to 20 % on relevant workloads: batches up to 2,048 or layers up to 2,048 wide. Sizes far beyond that (10M elements) are not relevant and decide nothing. A fix at ~2× is not worth it. A fix for a regime training never reaches becomes a docs paragraph instead.
+- An accuracy fix that reaches the training regime may cost up to 20 % on relevant workloads: batches up to 2,048 or layers up to 2,048 wide. Sizes far beyond that (10M elements) are not relevant and decide nothing. A fix at ~2× is not worth it in code that gets stacked, where depth multiplies the cost. It can be worth it at an endpoint that runs once per step (the wrapped normal's `log_prob`, for example). A fix for a regime training never reaches becomes a docs paragraph instead.
 - Per-PR timing gates (new/old ≤ 1.06 on CPU, ≤ 1.10 on an A100) are soft. A row a few percent over the gate with an accuracy gain is kept and reported, not reworked to pass the number.
 - A100 A/A runs have reached 1.11 at B = 4096. Interleave old and new in alternating processes, and read the ratio against an A/A run.
 - Keep code that measured no slower, and don't convert a site to a "faster" spelling without a measurement. Never unpin a geometry dot to pass a gate.
