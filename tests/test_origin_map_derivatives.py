@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from hyperbolix.manifolds import Hyperboloid, ProperVelocity
-from hyperbolix.manifolds.hyperboloid import _logmap_impl
+from hyperbolix.manifolds.hyperboloid import _gyro_difference, _logmap_impl
 
 
 def _np_lift(s_D: np.ndarray, c: float) -> np.ndarray:
@@ -1089,7 +1089,6 @@ def test_gyro_difference_of_a_close_pair_keeps_its_component_along_the_base_ray(
     """
     c, dim, n_draw = 0.5, 16, 16
     rng = np.random.default_rng(int(a))
-    manifold = Hyperboloid(dtype=dtype)
     worst = 0.0
     for _ in range(n_draw):
         direction_D = rng.normal(size=dim)
@@ -1098,8 +1097,12 @@ def test_gyro_difference_of_a_close_pair_keeps_its_component_along_the_base_ray(
         # Round once: the library and the oracle see identical spatial coordinates.
         stored_x_D = np.asarray(direction_D * np.sinh(a) / np.sqrt(c), dtype=np.float32)
         stored_y_D = np.asarray(direction_D * np.sinh(a + step) / np.sqrt(c), dtype=np.float32)
-        got_A = manifold.gyro_difference(
-            _j_lift(jnp.asarray(stored_x_D, dtype=dtype), c), _j_lift(jnp.asarray(stored_y_D, dtype=dtype), c), c
+        # The close-pair branch is opt-in (`wrapped_normal_hyperboloid.log_prob` sets it).
+        got_A = _gyro_difference(
+            _j_lift(jnp.asarray(stored_x_D, dtype=dtype), c),
+            _j_lift(jnp.asarray(stored_y_D, dtype=dtype), c),
+            c,
+            close_pairs=True,
         )
         x_hat_D = stored_x_D.astype(np.float64) / np.linalg.norm(stored_x_D.astype(np.float64))
         expected_along, expected_norm = _decimal_inverse_boost_along_base(stored_x_D, stored_y_D, c)

@@ -405,12 +405,19 @@ def _gyro_difference_cartesian(
 
 
 def _gyro_difference_frame(
-    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
+    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature, close_pairs: bool = False
 ) -> Float[Array, "dim_plus_1"]:
-    """Cancellation-free polar-frame evaluation used away from both endpoints' origins."""
+    """Cancellation-free polar-frame evaluation used away from both endpoints' origins.
+
+    ``close_pairs`` (static) adds the coordinate-difference branch described in :func:`_gyro_difference`.
+    """
     frame = _polar_frame(x, y, c)
     s_cos_phi, perp_y_D = _logmap_direction(frame)
     radial_far = (-2.0 / frame.sqrt_c) * frame.cosh_half * s_cos_phi
+    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    if not close_pairs:
+        res_s_D = radial_far * frame.x_hat_D + perp_y_D
+        return jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
 
     # Close pairs (S <= 0.5, the seam of `_logmap_frame`'s displacement spelling) keep the coordinate
     # difference d = y_s - x_s explicit. The boost along x̂ leaves the part of y_s across x̂ unchanged,
@@ -434,12 +441,11 @@ def _gyro_difference_frame(
     # measure it and take it out of the radial coefficient, as `_ptransp_to_0` does.
     residue = jnp.dot(perp_D, frame.x_hat_D, precision=MATMUL_PRECISION)
     res_s_D = perp_D + (radial - residue) * frame.x_hat_D
-    inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
     return jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
 
 
 def _gyro_difference(
-    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
+    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature, close_pairs: bool = False
 ) -> Float[Array, "dim_plus_1"]:
     """Gyro-difference ``(⊖x) ⊕ y`` on the Hyperboloid, free of the ambient cancellation.
 
@@ -495,16 +501,20 @@ def _gyro_difference(
     ``x ⊕ exp_0(b)``, whose result is as far out as its base point, the boost is the accurate
     spelling and needs no frame.
 
-    **Close pairs keep the coordinate difference.** For ``sinh(θ/2) <= 0.5`` (the seam of
-    :func:`_logmap_frame`'s displacement spelling) both parts are read off ``d = y_s - x_s``::
+    **Close pairs can keep the coordinate difference** (``close_pairs=True``, a static flag that only
+    ``wrapped_normal_hyperboloid.log_prob`` sets). It is off by default because of its cost where the
+    primitive is stacked: the gyro batch norm layers measured 1.21x to 1.33x on forward plus backward
+    (CPU, ``logs/2026-10-07_wrapped-normal-far-mean/final/timing_gyrobn_stacked.out``); with the flag
+    off the code is the one before this branch existed. With it on, for ``sinh(θ/2) <= 0.5`` (the seam
+    of :func:`_logmap_frame`'s displacement spelling) both parts are read off ``d = y_s - x_s``::
 
         s = (d - ⟨d, x̂⟩·x̂) + (⟨d, x̂⟩ - 2·S²·r_x)/(√c·x₀)·x̂
 
     which is the same vector: the boost leaves the part of ``y_s`` across ``x̂`` unchanged, and the
     component along ``x̂`` is the transport of the close-pair tangent ``d - 2·S²·x_s`` to the origin. It
     rounds at ``eps·‖d‖`` where ``perp_y`` and the radial gap behind ``S·cos φ`` round at ``eps·r_y``.
-    In both branches the part of the perpendicular term that rounding leaves along ``x̂`` is measured
-    and taken out of the radial coefficient; in the frame spelling it was ``eps·r_y``, larger than a
+    With the flag on, in both branches the part of the perpendicular term that rounding leaves along
+    ``x̂`` is measured and taken out of the radial coefficient; in the frame spelling it was ``eps·r_y``, larger than a
     close pair's whole result at large radius. Float32 against a high-precision reference on the same
     stored points, separations 1e-2 to 0.6 at scaled base radius 6-8: median relative error about
     4e-4 → 1e-5 (3e-6 for displacements across ``x̂``, 2e-5 for displacements along it), worst pair
@@ -543,7 +553,7 @@ def _gyro_difference(
     cartesian_x = jnp.where(use_cartesian, x, origin)
     cartesian_y = jnp.where(use_cartesian, y, origin)
     cartesian = _gyro_difference_cartesian(cartesian_x, cartesian_y, c)
-    return jnp.where(use_cartesian, cartesian, _gyro_difference_frame(x, y, c))
+    return jnp.where(use_cartesian, cartesian, _gyro_difference_frame(x, y, c, close_pairs))
 
 
 def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:

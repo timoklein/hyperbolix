@@ -18,6 +18,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds.hyperboloid import Hyperboloid
+from ..manifolds.hyperboloid import _gyro_difference as _hyperboloid_gyro_difference
 from ..utils.math_utils import safe_norm
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
@@ -190,8 +191,11 @@ def log_prob(
     # `_gyro_difference`'s docstring, shape (..., A). The composition `logmap` -> transport it replaces
     # stored u = log_μ(z) in the ambient chart at μ, whose components are cosh(a) times the vector's
     # length (a = scaled radius of the mean), so float32 lost eps·cosh(a) of v.
+    # `close_pairs=True` reads a close pair off z_s - μ_s; the public `gyro_difference` leaves that
+    # branch off because of its cost in the stacked layers, and here only correctness counts.
     def _origin_tangent_single(z_A, mu_A):
-        return manifold.logmap_0(manifold.gyro_difference(mu_A, z_A, c), c)
+        centred_A = _hyperboloid_gyro_difference(manifold._cast(mu_A), manifold._cast(z_A), c, close_pairs=True)
+        return manifold.logmap_0(centred_A, c)
 
     v_SBA = _vmap_sample_and_batch(_origin_tangent_single, n_sample_dims, n_batch_dims)(z, mu)
 
