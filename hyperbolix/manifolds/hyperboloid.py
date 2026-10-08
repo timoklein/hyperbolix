@@ -2225,7 +2225,7 @@ class Hyperboloid(ManifoldBase):
 
     def create_origin(self, c: ScalarCurvature, dim: int) -> Float[Array, "dim_plus_1"]:
         """Create hyperboloid origin [1/√c, 0, ..., 0]."""
-        return _create_origin(c, dim, self.dtype)
+        return _create_origin(self._cast_c(c), dim, self.dtype)
 
     def minkowski_inner(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"]) -> Float[Array, ""]:
         """Compute Minkowski inner product ⟨x, y⟩_L = -x₀y₀ + ⟨x_rest, y_rest⟩.
@@ -2241,11 +2241,11 @@ class Hyperboloid(ManifoldBase):
 
     def proj(self, x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
         """Project point onto hyperboloid."""
-        return _proj(self._cast(x), c)
+        return _proj(self._cast(x), self._cast_c(c))
 
     def proj_batch(self, x: Float[Array, "... dim_plus_1"], c: ScalarCurvature) -> Float[Array, "... dim_plus_1"]:
         """Project batched points onto hyperboloid (handles arbitrary leading dimensions)."""
-        return _proj_batch(self._cast(x), c)
+        return _proj_batch(self._cast(x), self._cast_c(c))
 
     def addition(
         self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
@@ -2257,7 +2257,7 @@ class Hyperboloid(ManifoldBase):
         ``⊖x = (-1) ⊙ x = [x₀, -x_s]``; matches Poincaré Möbius addition under the
         stereographic isometry. ``scalar_mul`` provides the companion gyro scaling (Eq. 2).
         """
-        return _addition(self._cast(x), self._cast(y), c)
+        return _addition(self._cast(x), self._cast(y), self._cast_c(c))
 
     def gyro_difference(
         self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
@@ -2268,7 +2268,7 @@ class Hyperboloid(ManifoldBase):
         result is expected much closer to the origin than the operands (centering a batch,
         differences, distances between far points). See :func:`_gyro_difference`.
         """
-        return _gyro_difference(self._cast(x), self._cast(y), c)
+        return _gyro_difference(self._cast(x), self._cast(y), self._cast_c(c))
 
     def scalar_mul(
         self, r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
@@ -2276,7 +2276,7 @@ class Hyperboloid(ManifoldBase):
         """Scalar multiplication on hyperboloid."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
-        return _scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
+        return _scalar_mul(r_cast, x, self._cast_c(c))  # type: ignore[arg-type]
 
     def dist(
         self,
@@ -2286,7 +2286,7 @@ class Hyperboloid(ManifoldBase):
         version_idx: int = VERSION_DEFAULT,
     ) -> Float[Array, ""]:
         """Compute geodesic distance between hyperboloid points."""
-        return _dist(self._cast(x), self._cast(y), c, version_idx)
+        return _dist(self._cast(x), self._cast(y), self._cast_c(c), version_idx)
 
     def dist_0(
         self, x: Float[Array, "dim_plus_1"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT
@@ -2300,7 +2300,7 @@ class Hyperboloid(ManifoldBase):
         :meth:`egrad2rgrad` / :meth:`tangent_proj` is identical and optimizers are unaffected.
 
         """
-        return _dist_0(self._cast(x), c, version_idx)
+        return _dist_0(self._cast(x), self._cast_c(c), version_idx)
 
     def sqdist(self, x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
         """Squared Lorentzian distance ``d_L²(x, y) = -2/c - 2⟨x,y⟩_L`` (Law et al. 2019).
@@ -2315,29 +2315,29 @@ class Hyperboloid(ManifoldBase):
         a true metric. Prefer it where a smooth monotone distance proxy suffices (contrastive /
         commitment / attention scores); use :meth:`dist` when the geodesic length is required.
         """
-        return _sqdist(self._cast(x), self._cast(y), c)
+        return _sqdist(self._cast(x), self._cast(y), self._cast_c(c))
 
     def expmap(
         self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Exponential map: map tangent vector v at point x to manifold."""
-        return _expmap(self._cast(v), self._cast(x), c)
+        return _expmap(self._cast(v), self._cast(x), self._cast_c(c))
 
     def expmap_0(self, v: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
         """Exponential map from origin."""
-        return _expmap_0(self._cast(v), c)
+        return _expmap_0(self._cast(v), self._cast_c(c))
 
     def retraction(
         self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Retraction: first-order approximation of exponential map."""
-        return _retraction(self._cast(v), self._cast(x), c)
+        return _retraction(self._cast(v), self._cast(x), self._cast_c(c))
 
     def logmap(
         self, y: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Logarithmic map: map point y to tangent space at point x."""
-        return _logmap(self._cast(y), self._cast(x), c)
+        return _logmap(self._cast(y), self._cast(x), self._cast_c(c))
 
     def logmap_0(self, y: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
         """Logarithmic map from the origin, ``[0, arcsinh(√c‖y_s‖)/(√c‖y_s‖) · y_s]``.
@@ -2346,53 +2346,53 @@ class Hyperboloid(ManifoldBase):
         off-sheet input is treated as its :meth:`proj` projection. ``‖log_0(y)‖ = dist_0(y)`` holds
         by construction at every radius.
         """
-        return _logmap_0(self._cast(y), c)
+        return _logmap_0(self._cast(y), self._cast_c(c))
 
     def ptransp(
         self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Parallel transport tangent vector v from point x to point y."""
-        return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
+        return _ptransp(self._cast(v), self._cast(x), self._cast(y), self._cast_c(c))
 
     def ptransp_0(
         self, v: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Parallel transport tangent vector v from origin to point y."""
-        return _ptransp_0(self._cast(v), self._cast(y), c)
+        return _ptransp_0(self._cast(v), self._cast(y), self._cast_c(c))
 
     def tangent_inner(
         self, u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, ""]:
         """Compute inner product of tangent vectors u and v at point x."""
-        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
+        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), self._cast_c(c))
 
     def tangent_norm(
         self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, ""]:
         """Compute norm of tangent vector v at point x."""
-        return _tangent_norm(self._cast(v), self._cast(x), c)
+        return _tangent_norm(self._cast(v), self._cast(x), self._cast_c(c))
 
     def egrad2rgrad(
         self, grad: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Convert Euclidean gradient to Riemannian gradient."""
-        return _egrad2rgrad(self._cast(grad), self._cast(x), c)
+        return _egrad2rgrad(self._cast(grad), self._cast(x), self._cast_c(c))
 
     def tangent_proj(
         self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
     ) -> Float[Array, "dim_plus_1"]:
         """Project vector v onto tangent space at point x."""
-        return _tangent_proj(self._cast(v), self._cast(x), c)
+        return _tangent_proj(self._cast(v), self._cast(x), self._cast_c(c))
 
     def is_in_manifold(self, x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: float | None = None) -> Array:
         """Check if point x lies on hyperboloid (``atol`` default: :func:`default_atol`)."""
-        return _is_in_manifold(self._cast(x), c, atol)
+        return _is_in_manifold(self._cast(x), self._cast_c(c), atol)
 
     def is_in_tangent_space(
         self, v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature, atol: float | None = None
     ) -> Array:
         """Check if vector v lies in tangent space at point x (``atol`` default: :func:`default_atol`)."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
+        return _is_in_tangent_space(self._cast(v), self._cast(x), self._cast_c(c), atol)
 
     def hcat(
         self,
@@ -2400,7 +2400,7 @@ class Hyperboloid(ManifoldBase):
         c: ScalarCurvature = 1.0,
     ) -> Float[Array, "dN_plus_1"]:
         """Hyperbolic concatenation of N points into one point."""
-        return _hcat(self._cast(points), c)
+        return _hcat(self._cast(points), self._cast_c(c))
 
     def log_radius_concat(
         self,
@@ -2414,7 +2414,7 @@ class Hyperboloid(ManifoldBase):
         invariant to the number of concatenated blocks. Reduces to :meth:`hcat` when
         ``N == 1``.
         """
-        return _log_radius_concat(self._cast(points), c)
+        return _log_radius_concat(self._cast(points), self._cast_c(c))
 
     def embed_spatial_0(self, v_spatial: Float[Array, "... n"]) -> Float[Array, "... n_plus_1"]:
         """Embed spatial vector as tangent vector at origin."""
@@ -2429,7 +2429,7 @@ class Hyperboloid(ManifoldBase):
         min_enorm: float = 1e-15,
     ) -> Float[Array, "batch out_dim"]:
         """Compute multinomial linear regression on hyperboloid."""
-        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)
+        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), self._cast_c(c), min_enorm)
 
     def busemann(self, x: Float[Array, "dim_plus_1"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Closed-form Lorentz Busemann function ``B^v(x) = (1/√c)·log(√c·(x_t - ⟨x_s, v⟩))``.
@@ -2446,7 +2446,7 @@ class Hyperboloid(ManifoldBase):
         :meth:`Poincare.apollonian_dist` expecting asymmetry — it is a coboundary
         (symmetrizes to ``√c·dist``) and cannot deliver circulation.
         """
-        return _busemann(self._cast(x), self._cast(v), c)
+        return _busemann(self._cast(x), self._cast(v), self._cast_c(c))
 
     def _busemann_tangent(
         self, v: Float[Array, "dim_plus_1"], omega: Float[Array, "dim"], c: ScalarCurvature
@@ -2456,7 +2456,7 @@ class Hyperboloid(ManifoldBase):
         Private: the tangent-input path of the Busemann layers (see :func:`_busemann_tangent`).
         ``omega`` must be a unit spatial direction; the time slot ``v[0]`` is not read.
         """
-        return _busemann_tangent(self._cast(v), self._cast(omega), c)
+        return _busemann_tangent(self._cast(v), self._cast(omega), self._cast_c(c))
 
     def lorentz_boost(self, mu: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1 dim_plus_1"]:
         """Lorentz boost matrix ``B`` with ``B @ mu = origin`` (sends ``mu`` to the origin).
@@ -2466,4 +2466,4 @@ class Hyperboloid(ManifoldBase):
         boost is the boost of ``[mu₀, -mu_s]``. Used to Fréchet-mean-center data for
         HoroPCA (Chami et al. 2021). See :func:`_lorentz_boost`.
         """
-        return _lorentz_boost(self._cast(mu), c)
+        return _lorentz_boost(self._cast(mu), self._cast_c(c))

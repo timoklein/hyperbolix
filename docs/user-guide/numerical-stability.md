@@ -355,7 +355,8 @@ need the full float32 exponent range, and `safe_sqrt(sum(v**2))` on hot per-samp
 
 - **Compute precision** is the dtype manifold operations run in, set by the
   manifold's `dtype` (e.g. `Poincare(dtype=jnp.float64)`). Manifold methods
-  cast their array arguments to it on entry.
+  cast their array arguments and the curvature `c` to it on entry, so the output
+  dtype is the manifold's whatever the dtype of the points or of `c`.
 - **Storage dtype** is the dtype of a layer's parameters and persistent state
   (batch-norm statistics, VQ codebooks), set by the `param_dtype` argument on
   every NN layer (default `jnp.float32`, as in Flax).

@@ -557,27 +557,27 @@ class Stereographic(ManifoldBase):
 
     def proj(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project point onto the manifold (identity for ``c ≤ 0``)."""
-        return _proj(self._cast(x), c)
+        return _proj(self._cast(x), self._cast_c(c))
 
     def conformal_factor(self, x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... 1"]:
         """Conformal factor ``λ^κ_x = 2/(1 - c‖x‖²)``, batch-compatible over arbitrary leading dims."""
-        return _conformal_factor_batch(self._cast(x), c)
+        return _conformal_factor_batch(self._cast(x), self._cast_c(c))
 
     def gyration(
         self, x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Gyration ``gyr[x, y]z``."""
-        return _gyration(self._cast(x), self._cast(y), self._cast(z), c)
+        return _gyration(self._cast(x), self._cast(y), self._cast(z), self._cast_c(c))
 
     def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """κ-Möbius gyrovector addition ``x ⊕_κ y`` (paper Eq. 2)."""
-        return _addition(self._cast(x), self._cast(y), c)
+        return _addition(self._cast(x), self._cast(y), self._cast_c(c))
 
     def scalar_mul(self, r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """κ-scalar multiplication ``r ⊗_κ x`` (paper Eq. 3)."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
-        return _scalar_mul(r_cast, x, c)
+        return _scalar_mul(r_cast, x, self._cast_c(c))
 
     def dist(
         self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT
@@ -589,7 +589,7 @@ class Stereographic(ManifoldBase):
         ``hyperbolix.utils.helpers.compute_pairwise_distances``) work here too.
         """
         del version_idx
-        return _dist(self._cast(x), self._cast(y), c)
+        return _dist(self._cast(x), self._cast(y), self._cast_c(c))
 
     def dist_0(self, x: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
         """Geodesic distance to the origin ``d_κ(0, x)`` (``version_idx`` accepted and ignored).
@@ -597,65 +597,65 @@ class Stereographic(ManifoldBase):
         Note ``→ 2‖x‖`` as ``c → 0``.
         """
         del version_idx
-        return _dist_0(self._cast(x), c)
+        return _dist_0(self._cast(x), self._cast_c(c))
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map ``exp^κ_x(v)`` (paper Eq. 6)."""
-        return _expmap(self._cast(v), self._cast(x), c)
+        return _expmap(self._cast(v), self._cast(x), self._cast_c(c))
 
     def expmap_0(self, v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map at the origin ``exp^κ_0(v)``."""
-        return _expmap_0(self._cast(v), c)
+        return _expmap_0(self._cast(v), self._cast_c(c))
 
     def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """First-order retraction ``proj(x + v)``."""
-        return _retraction(self._cast(v), self._cast(x), c)
+        return _retraction(self._cast(v), self._cast(x), self._cast_c(c))
 
     def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map ``log^κ_x(y)`` (paper Eq. 7)."""
-        return _logmap(self._cast(y), self._cast(x), c)
+        return _logmap(self._cast(y), self._cast(x), self._cast_c(c))
 
     def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map at the origin ``log^κ_0(y)``."""
-        return _logmap_0(self._cast(y), c)
+        return _logmap_0(self._cast(y), self._cast_c(c))
 
     def ptransp(
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Parallel transport ``v`` from ``x`` to ``y``."""
-        return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
+        return _ptransp(self._cast(v), self._cast(x), self._cast(y), self._cast_c(c))
 
     def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Parallel transport ``v`` from the origin to ``y``."""
-        return _ptransp_0(self._cast(v), self._cast(y), c)
+        return _ptransp_0(self._cast(v), self._cast(y), self._cast_c(c))
 
     def tangent_inner(
         self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, ""]:
         """Riemannian inner product ``⟨u, v⟩_x``."""
-        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
+        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), self._cast_c(c))
 
     def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Riemannian norm ``‖v‖_x``."""
-        return _tangent_norm(self._cast(v), self._cast(x), c)
+        return _tangent_norm(self._cast(v), self._cast(x), self._cast_c(c))
 
     def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Euclidean → Riemannian gradient."""
-        return _egrad2rgrad(self._cast(grad), self._cast(x), c)
+        return _egrad2rgrad(self._cast(grad), self._cast(x), self._cast_c(c))
 
     def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project ``v`` onto the tangent space at ``x`` (identity)."""
-        return _tangent_proj(self._cast(v), self._cast(x), c)
+        return _tangent_proj(self._cast(v), self._cast(x), self._cast_c(c))
 
     def is_in_manifold(self, x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
         """Check whether ``x`` lies on the manifold (``atol`` default: :func:`default_atol`)."""
-        return _is_in_manifold(self._cast(x), c, atol)
+        return _is_in_manifold(self._cast(x), self._cast_c(c), atol)
 
     def is_in_tangent_space(
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None
     ) -> Array:
         """Check that ``v`` has finite entries (the tangent space is all of R^d)."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
+        return _is_in_tangent_space(self._cast(v), self._cast(x), self._cast_c(c), atol)
 
     def geodesic(
         self, t: Float[Array, ""], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
@@ -663,7 +663,7 @@ class Stereographic(ManifoldBase):
         """Point at time ``t`` on the geodesic through ``x`` and ``y`` (paper Eq. 5)."""
         x = self._cast(x)
         t_cast = jnp.asarray(t, dtype=x.dtype)
-        return _geodesic(t_cast, x, self._cast(y), c)
+        return _geodesic(t_cast, x, self._cast(y), self._cast_c(c))
 
     def geodesic_unit(
         self, t: Float[Array, ""], x: Float[Array, "dim"], u: Float[Array, "dim"], c: ScalarCurvature
@@ -671,8 +671,8 @@ class Stereographic(ManifoldBase):
         """Point at time ``t`` on the unit-speed geodesic from ``x`` in direction ``u``."""
         x = self._cast(x)
         t_cast = jnp.asarray(t, dtype=x.dtype)
-        return _geodesic_unit(t_cast, x, self._cast(u), c)
+        return _geodesic_unit(t_cast, x, self._cast(u), self._cast_c(c))
 
     def antipode(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Antipode of ``x`` (diametrically-opposite point for ``c < 0``; ``-x`` otherwise)."""
-        return _antipode(self._cast(x), c)
+        return _antipode(self._cast(x), self._cast_c(c))

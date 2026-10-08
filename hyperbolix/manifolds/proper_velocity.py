@@ -829,21 +829,21 @@ class ProperVelocity(ManifoldBase):
 
     def create_origin(self, c: ScalarCurvature, dim: int) -> Float[Array, "dim"]:
         """Create the PV origin (zero vector in R^n)."""
-        return _create_origin(c, dim, self.dtype)
+        return _create_origin(self._cast_c(c), dim, self.dtype)
 
     def beta(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """PV beta factor β_x = 1/√(1 + c·||x||²)."""
-        return _beta(self._cast(x), c)
+        return _beta(self._cast(x), self._cast_c(c))
 
     # -- Gyro-operations -----------------------------------------------------
 
     def proj(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Projection onto PV: the identity (PV is R^n; non-finite entries pass through)."""
-        return _proj(self._cast(x), c)
+        return _proj(self._cast(x), self._cast_c(c))
 
     def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """PV gyroaddition x ⊕_U y."""
-        return _addition(self._cast(x), self._cast(y), c)
+        return _addition(self._cast(x), self._cast(y), self._cast_c(c))
 
     def gyro_difference(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """PV gyro-difference ``(⊖x) ⊕ y``, evaluated without the ambient cancellation.
@@ -854,13 +854,13 @@ class ProperVelocity(ManifoldBase):
         inverse boost when either endpoint's scaled spatial radius is at most 1e-1
         and the stable polar frame otherwise. See :func:`_gyro_difference`.
         """
-        return _gyro_difference(self._cast(x), self._cast(y), c)
+        return _gyro_difference(self._cast(x), self._cast(y), self._cast_c(c))
 
     def scalar_mul(self, r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """PV scalar multiplication r ⊗_U x."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
-        return _scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
+        return _scalar_mul(r_cast, x, self._cast_c(c))  # type: ignore[arg-type]
 
     # -- Distance ------------------------------------------------------------
 
@@ -873,22 +873,22 @@ class ProperVelocity(ManifoldBase):
     ) -> Float[Array, ""]:
         """Geodesic distance between PV points."""
         del version_idx  # only one implementation currently
-        return _dist(self._cast(x), self._cast(y), c)
+        return _dist(self._cast(x), self._cast(y), self._cast_c(c))
 
     def dist_0(self, x: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
         """Geodesic distance from the PV origin."""
         del version_idx
-        return _dist_0(self._cast(x), c)
+        return _dist_0(self._cast(x), self._cast_c(c))
 
     # -- Exp / log maps ------------------------------------------------------
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map at x."""
-        return _expmap(self._cast(v), self._cast(x), c)
+        return _expmap(self._cast(v), self._cast(x), self._cast_c(c))
 
     def expmap_0(self, v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map from the origin."""
-        return _expmap_0(self._cast(v), c)
+        return _expmap_0(self._cast(v), self._cast_c(c))
 
     def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map at x through the exact hyperboloid lift.
@@ -897,15 +897,15 @@ class ProperVelocity(ManifoldBase):
         origin; otherwise the stable polar frame is used. Ordinary autodiff
         preserves the base-point derivative at the origin.
         """
-        return _logmap(self._cast(y), self._cast(x), c)
+        return _logmap(self._cast(y), self._cast(x), self._cast_c(c))
 
     def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map to the origin."""
-        return _logmap_0(self._cast(y), c)
+        return _logmap_0(self._cast(y), self._cast_c(c))
 
     def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Euclidean retraction (exact for PV)."""
-        return _retraction(self._cast(v), self._cast(x), c)
+        return _retraction(self._cast(v), self._cast(x), self._cast_c(c))
 
     # -- Parallel transport --------------------------------------------------
 
@@ -922,11 +922,11 @@ class ProperVelocity(ManifoldBase):
         endpoint's scaled spatial radius is at most 1e-1 and the stable polar frame
         otherwise.
         """
-        return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
+        return _ptransp(self._cast(v), self._cast(x), self._cast(y), self._cast_c(c))
 
     def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Parallel transport v from T_0 PV to T_y PV."""
-        return _ptransp_0(self._cast(v), self._cast(y), c)
+        return _ptransp_0(self._cast(v), self._cast(y), self._cast_c(c))
 
     # -- Tangent space -------------------------------------------------------
 
@@ -938,31 +938,31 @@ class ProperVelocity(ManifoldBase):
         c: ScalarCurvature,
     ) -> Float[Array, ""]:
         """Riemannian inner product ⟨u, v⟩_x."""
-        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
+        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), self._cast_c(c))
 
     def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Riemannian norm ||v||_x."""
-        return _tangent_norm(self._cast(v), self._cast(x), c)
+        return _tangent_norm(self._cast(v), self._cast(x), self._cast_c(c))
 
     def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Tangent-space projection (identity for PV)."""
-        return _tangent_proj(self._cast(v), self._cast(x), c)
+        return _tangent_proj(self._cast(v), self._cast(x), self._cast_c(c))
 
     def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Convert Euclidean gradient to Riemannian gradient."""
-        return _egrad2rgrad(self._cast(grad), self._cast(x), c)
+        return _egrad2rgrad(self._cast(grad), self._cast(x), self._cast_c(c))
 
     # -- Validation ----------------------------------------------------------
 
     def is_in_manifold(self, x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
         """Check that all entries are finite (PV has no constraint, so ``atol`` is unused)."""
-        return _is_in_manifold(self._cast(x), c, atol)
+        return _is_in_manifold(self._cast(x), self._cast_c(c), atol)
 
     def is_in_tangent_space(
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None
     ) -> Array:
         """Check that v has finite entries (T_x PV = R^n, so ``atol`` is unused)."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
+        return _is_in_tangent_space(self._cast(v), self._cast(x), self._cast_c(c), atol)
 
     def embed_spatial_0(self, v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
         """Identity embedding (no time coordinate). Kept for API parity."""
@@ -979,4 +979,4 @@ class ProperVelocity(ManifoldBase):
         min_enorm: float = 1e-15,
     ) -> Float[Array, "batch out_dim"]:
         """PV multinomial logistic regression (paper Thm 5.2)."""
-        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)
+        return _compute_mlr(self._cast(x), self._cast(z), self._cast(r), self._cast_c(c), min_enorm)
