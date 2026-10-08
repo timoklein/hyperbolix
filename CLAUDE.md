@@ -33,6 +33,7 @@ Pure JAX on Flax NNX.
 
 - **Manifold ops take single points**, `(dim,) -> scalar` or `(dim,) -> (dim,)`; batch with an explicit `jax.vmap`. NN layers batch internally in `__call__`.
 - **Manifolds are plain Python classes** (not `nnx.Module`), instantiated with a dtype (`Poincare(dtype=jnp.float64)`). All manifolds satisfy the `Manifold` protocol in `manifolds/protocol.py`, which types `c` as a scalar. `ProductManifold` takes a per-factor `cs` sequence instead and has no `c` attribute.
+- **A manifold's dtype decides.** Every manifold operation computes in, and returns, the dtype the manifold was instantiated with, whatever JAX's type promotion would do with the arguments (a float64 `c` with float32 points, for example). Cast every floating argument at the method boundary (`_cast` for points, `_cast_c` for `c`); an operation whose dtype depends on an argument's dtype is a bug.
 - **Curvature `c` is passed at call time**, never stored on a layer. Trainable curvature is `LearnableCurvature` (`utils/curvature.py`): it lives on the user's `nnx.Module` and returns the (optionally clamped) `c`. (The one exception is the `curvature=` tag on a `ManifoldParam`, which the Riemannian optimizers read; it must match the call-time `c`.)
 - **`version_idx`** selects an op variant. Keep it static under JIT (`functools.partial` or `static_argnums`): a traced index compiles every variant into one `lax.switch`.
 - **Layers take `manifold_module`** (a manifold instance), never raw functions, and name their parameters `kernel`/`bias`.
@@ -74,7 +75,7 @@ Full table: `docs/user-guide/nn-layers.md#initialization-scales`.
 ### Speed against accuracy
 
 - Trade-offs between speed and precision or stability are the maintainer's call, made on measured timings; kernel counts are only a proxy. Put both costs in one table, with a recommendation.
-- A fix that reaches the training regime and costs ≤ ~20 % at the layer level is worth it; one at ~2× is not. A fix for a regime training never reaches becomes a docs paragraph instead.
+- An accuracy fix that reaches the training regime may cost up to 20 % on relevant workloads: batches up to 2,048 or layers up to 2,048 wide. Sizes far beyond that (10M elements) are not relevant and decide nothing. A fix at ~2× is not worth it. A fix for a regime training never reaches becomes a docs paragraph instead.
 - Per-PR timing gates (new/old ≤ 1.06 on CPU, ≤ 1.10 on an A100) are soft. A row a few percent over the gate with an accuracy gain is kept and reported, not reworked to pass the number.
 - A100 A/A runs have reached 1.11 at B = 4096. Interleave old and new in alternating processes, and read the ratio against an A/A run.
 - Keep code that measured no slower, and don't convert a site to a "faster" spelling without a measurement. Never unpin a geometry dot to pass a gate.
