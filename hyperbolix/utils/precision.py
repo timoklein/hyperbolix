@@ -165,7 +165,8 @@ loss that ``HIGHEST`` removes. The eager float32 gradient of the hyperboloid MLR
 1.5e-4 to 2.7e-7 relative over the same switch. These are not throughput-critical sites, so
 the library pays for the accuracy rather than exposing the choice. The FGG product is different
 in kind, the weight GEMM of every FGG layer, and is pinned on the measurement in the section
-above.
+above. Its cost on one H100: 2 % on the forward pass and 9 % on forward plus backward for an
+IMPALA-ResNet of FGG layers at batch 1,024, and 5 to 16 % on forward plus backward for a single layer.
 
 This module lives in ``utils/`` — a neutral home both ``manifolds/`` and ``nn_layers/`` can
 import from, since ``manifolds/`` must not depend on ``nn_layers/``. ``MATMUL_PRECISION`` was

@@ -120,7 +120,9 @@ hyperbolix splits its float32 dot products in two:
   score and aggregation einsums, the point-to-hyperplane einsums of the MLR heads and of the
   PLFC, Poincaré++ and proper-velocity linear and conv layers, and the Minkowski product `x @ V`
   of `FGGLinear`/`FGGConv2D`. These dots cancel, and apart from the FGG product they are not
-  where the throughput is.
+  where the throughput is. The FGG pin measured 2 % on the forward pass and 9 % on forward plus
+  backward for an IMPALA-ResNet of FGG layers at batch 1,024 (one H100; single layers 5 to 16 %
+  on forward plus backward).
 - **The other layer weight GEMMs follow JAX**: `HTCLinear` (the attention Q/K/V projections
   included), the FHCNN/FHNN linears, `HypLinearPoincare`, `LorentzConv2D`'s convolution, the VQ
   codebook matmul. On an Ampere or Hopper card these run in TF32 unless you say otherwise.
