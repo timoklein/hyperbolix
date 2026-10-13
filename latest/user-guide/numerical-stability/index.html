@@ -2869,14 +2869,26 @@ stored time slot with the value the spatial part implies, so an on-sheet point p
    <code>HyperbolicFullAttention</code> forms <code>2/c + 2⟨Q,K⟩_L</code> from a matrix product, and a GEMM cannot be
    made cancellation-free the way a single pairwise <code>dist</code> can — see
    <a href="#attention-score-floor">Full Attention's Float32 Score Floor</a> below.</li>
-<li><strong>Transport to the origin from a far point.</strong> The wrapped-normal <code>log_prob</code> uses its own
-   transport to the origin and is accurate up to the float32 storage of its tangent vector <span class="arithmatex">\(u\)</span>
-   (the ambient chart stores a tangent vector's components at <span class="arithmatex">\(\cosh a\)</span> times its length). The
-   generic <code>Hyperboloid.ptransp(v, far_point, origin)</code> still cancels: its radial component has a
-   float32 error of 1.95e-3 at scaled radius 10.</li>
+<li><strong>Transport to the origin from a far point.</strong> The generic
+   <code>Hyperboloid.ptransp(v, far_point, origin)</code> still cancels: its radial component has a float32
+   error of 1.95e-3 at scaled radius 10. The wrapped-normal <code>log_prob</code> does not use it: it reads
+   the origin-tangent vector off <code>gyro_difference</code> and never stores a tangent vector at the mean.
+   What limits it is the storage of the two points. With <code>z</code> within O(1) of a mean at scaled
+   radius <span class="arithmatex">\(a\)</span>, the stored float32 points are themselves rounded at <span class="arithmatex">\(\varepsilon\sinh a\)</span>, and no
+   formula recovers what that removes: for <code>z</code> at scaled distance 0.5 from the mean, the float32
+   gradient with respect to the mean is off by 5e-4 at <span class="arithmatex">\(a = 12\)</span> and 5e-2 at <span class="arithmatex">\(a = 16\)</span> (medians
+   over 16 directions, <code>n = 10</code>), and from <span class="arithmatex">\(a \approx 20\)</span> by order 1. With <code>z</code> at scaled radius 1
+   the same gradient stays within about 1e-5 of float64 through <span class="arithmatex">\(a = 40\)</span>. The result is
+   non-finite once the mean's spatial coordinate passes the float32 limit of 1.8e19, between
+   <span class="arithmatex">\(a = 40\)</span> and 44 at <code>c = 0.1</code> and between 44 and 46 at <code>c = 1</code>. One finite wrong output remains
+   just below that: with the mean at <span class="arithmatex">\(a = 44\)</span>, <code>z</code> at scaled radius 1 and <code>c = 1</code>, the float32
+   value is still right while the gradient with respect to the mean is off by a factor of about
+   45.</li>
 <li><strong>The MLR score, when the hyperplane itself sits far from the origin.</strong> The reference Lorentz
-   MLR subtracts two terms of size <code>e^(a+ρ)</code>, with <code>ρ</code> the scaled hyperplane offset, so a large
-   bias costs as many digits as a large input radius — see
+   MLR assembles an <code>O(1)</code> score from parts of size up to <code>e^(a+|ρ|)/4</code>, with <code>ρ</code> the scaled
+   hyperplane offset, so a large bias costs as many digits as a large input radius: near a
+   hyperplane the float32 logit is off by about 1e-3 at <code>a + |ρ| ≈ 10.4</code>, and in the worst case
+   measured from 9 — see
    <a href="#mlr-large-bias">The MLR Score at a Large Hyperplane Offset</a> below.</li>
 <li><strong>Busemann gradients at a far stored point.</strong> When the Busemann layers score a stored float32
    point, from scaled radius <span class="arithmatex">\(a \approx 29.8\)</span> at <span class="arithmatex">\(c = 1\)</span> (<span class="arithmatex">\(29.4\)</span> at <span class="arithmatex">\(c = 0.3\)</span>) the gradients of the
@@ -2917,17 +2929,44 @@ hyperplane normal, that is</p>
 <div class="arithmatex">\[
 \sinh(a)\cosh(\rho)\cos\theta \;-\; \cosh(a)\sinh(\rho),
 \]</div>
-<p>two terms of size <code>e^(a+ρ)</code> whose difference is <code>O(1)</code> for a point near the hyperplane, so the
-rounding error is <code>eps·e^(a+ρ)</code>: <strong>a hyperplane far from the origin costs as many digits as an
-input far from the origin.</strong> The same expression sits in the PLFC / ILNN layers, the Poincaré++
-MLR (where <code>ρ = 2√c·r</code>), and <code>FGGLinear</code>'s spacelike-<code>V</code> GEMM.</p>
-<p>Median relative error of the float32 gradient with respect to the point, hyperboloid, points
-exactly on the hyperplane:</p>
+<p>an <code>O(1)</code> number near the hyperplane, assembled from parts of size up to <code>e^(a+|ρ|)/4</code>: the terms
+of the dot product, which cancel among themselves, and the offset term. In our measurements <strong>the
+float32 logit of a point near a hyperplane is off by about <code>eps·e^(a+|ρ|)/4</code></strong>, with <code>eps = 2^-23</code>
+(for <code>c = 1</code> and <code>‖z‖ = 1</code>, where the logit is a signed distance; multiply by <code>‖z‖/√c</code> otherwise).
+A hyperplane far from the origin costs as many digits as an input far from the origin. The same
+expression sits in the PLFC / ILNN layers, the Poincaré++ MLR (where <code>ρ = 2√c·r</code>), and
+<code>FGGLinear</code>'s spacelike-<code>V</code> GEMM; the numbers below are measured on the hyperboloid head only.</p>
+<table>
+<thead>
+<tr>
+<th>Float32 logit error</th>
+<th>1e-4</th>
+<th>1e-3</th>
+<th>1e-2</th>
+<th>0.1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>reached at <span class="arithmatex">\(a + \lvert\rho\rvert \approx\)</span></td>
+<td>8.1</td>
+<td>10.4</td>
+<td>12.7</td>
+<td>15.0</td>
+</tr>
+</tbody>
+</table>
+<p>Measured on the hyperboloid head (CPU, <code>c = 1</code>, 15 classes with unit normals, 32 and 512
+dimensions, <code>|ρ| ≤ a</code>), the largest error was 0.6–4 times this law while the law's value is below
+about 2; a factor 4 is 1.4 units of <code>a + |ρ|</code>. Past that the <code>asinh</code> compresses the error, which
+then grows only logarithmically. Largest logit error for inputs placed exactly on a class
+hyperplane, by the largest offset <code>ρ</code> in the head (32 dimensions; draws vary by up to 1.6×):</p>
 <table>
 <thead>
 <tr>
 <th><code>a</code> \ <code>ρ</code></th>
-<th>0.5</th>
+<th>0</th>
+<th>0.2</th>
 <th>1</th>
 <th>2</th>
 <th>4</th>
@@ -2937,56 +2976,94 @@ exactly on the hyperplane:</p>
 <tbody>
 <tr>
 <td>8</td>
-<td>8e-8</td>
-<td>1e-7</td>
-<td>4e-7</td>
-<td>8e-6</td>
-<td>n/a</td>
+<td>1e-4</td>
+<td>1e-4</td>
+<td>5e-4</td>
+<td>1e-3</td>
+<td>1e-2</td>
+<td>0.25</td>
 </tr>
 <tr>
 <td>10</td>
-<td>2e-7</td>
-<td>4e-7</td>
-<td>5e-6</td>
-<td>3e-4</td>
-<td>0.52</td>
+<td>5e-4</td>
+<td>9e-4</td>
+<td>3e-3</td>
+<td>1e-2</td>
+<td>7e-2</td>
+<td>2</td>
 </tr>
 <tr>
 <td>12</td>
-<td>1e-5</td>
-<td>5e-5</td>
-<td>3e-4</td>
-<td>0.013</td>
-<td>0.84</td>
-</tr>
-<tr>
-<td>14</td>
-<td>9e-4</td>
-<td>1.3e-3</td>
-<td>0.013</td>
-<td>0.32</td>
-<td>0.98</td>
-</tr>
-<tr>
-<td>16</td>
-<td>0.042</td>
-<td>0.040</td>
-<td>0.39</td>
-<td>0.86</td>
-<td>1.0</td>
+<td>4e-3</td>
+<td>7e-3</td>
+<td>3e-2</td>
+<td>8e-2</td>
+<td>0.5</td>
+<td>3.9</td>
 </tr>
 </tbody>
 </table>
-<p><code>n/a</code> marks <code>ρ ≥ a</code>, where the hyperplane cannot cross the point. The rule of thumb: <strong>the float32
-gradient is about 0.1 % wrong at <code>a + ρ ≈ 15</code>, about 1 % at 16, roughly 40 % by 18, and entirely
-wrong by 22</strong>. At <code>ρ = 8</code> the <em>score</em> itself can take the wrong sign. Float64's limit is about
-<code>a + ρ ≈ 36</code> (extrapolated).</p>
-<p>It takes an input far from the origin, <strong>and</strong> a hyperplane far from the origin, <strong>and</strong> points
-close to that hyperplane. With normalized features (<code>a ≲ 8</code>) and an <code>O(1)</code> bias none of this
-arises. Remedies: run the head in float64, or keep <code>a + ρ</code> under ≈ 15 by bounding the trunk's
-radius and weight-decaying the head's bias. A cancellation-free half-angle form was measured at
-1.8–2.5× the cost and not adopted. <code>FGGLinear</code>'s spacelike <code>V</code> has a related <code>eps</code> floor on its
-column norm, which matters only for a small weight column with a large bias.</p>
+<p>At <code>ρ = 0</code> an error remains (the first column). Only part of it is beyond the head's reach: at
+<code>a = 10</code> the float32 rounding of the stored input alone moves the exact logit by 2e-4 at 32
+dimensions and by 5e-5 at 512, against a head error of 5e-4. The offset lifts the error further,
+roughly in proportion to <code>e^|ρ|</code> (measured 1–7 times <code>e^|ρ|</code>).</p>
+<p>The gradient follows the logit. Off the hyperplane, the relative error of that class's logit
+gradient with respect to the input is about <code>|tanh δ|</code> times the logit error, with <code>δ</code> the scaled
+signed distance from the point to the hyperplane (measured within 2 % for <code>a ≤ 12</code> and offsets up
+to 2, and within a factor 0.7–1.25 up to <code>a = 14</code> and offset 4). Largest relative gradient error
+for inputs within a scaled distance of 2 of their hyperplane (32 dimensions, ranges over five
+seeds; up to 1.5× larger at 512 dimensions):</p>
+<table>
+<thead>
+<tr>
+<th>largest offset</th>
+<th><code>a = 8</code></th>
+<th>10</th>
+<th>12</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0.2</td>
+<td>4.9e-5–7.2e-5</td>
+<td>3.8e-4–4.4e-4</td>
+<td>2.5e-3–3.3e-3</td>
+</tr>
+<tr>
+<td>2</td>
+<td>5.4e-4–8.0e-4</td>
+<td>3.4e-3–6.6e-3</td>
+<td>3.1e-2–4.6e-2</td>
+</tr>
+</tbody>
+</table>
+<p>Exactly on the hyperplane the first-order term vanishes and the gradient error is far smaller (at
+most 1.1e-4 at <code>a = 10</code> and 7e-3 at <code>a = 12</code> for offsets up to 2), so a measurement taken only there
+understates it.</p>
+<p>It takes a point close to a hyperplane. Far from all hyperplanes the <code>asinh</code> compresses the error:
+for inputs in random directions (32 and 512 dimensions, 15 classes), 99.9 % of all logits were
+within 1.1e-4 at every radius up to <code>a = 14</code> and every offset up to 8, with rare largest errors of
+9e-3 at <code>a = 12</code> and 4e-2 at <code>a = 14</code>. With normalized features (<code>a ≲ 8</code>) and offsets up to 1 the
+logit error stays below 1e-3; at offset 2 it reaches 2e-3–3e-3.</p>
+<p>Neither trained head measured so far shows the error. A Lorentz ResNet-18 on CIFAR-100 (HCNN
+reference code, three runs) has offsets of 0.4–0.6 with inputs up to <code>a = 5.7</code>. A Procgen
+actor-critic agent trained without a radius cap (three seeds, <code>c = 0.1</code>) has offsets of at most
+0.15 with inputs up to <code>a = 10</code>, so its <code>a + |ρ|</code> reaches 10.1; its largest actor-logit error was
+4.6e-5. Recomputing each head at higher precision on its stored inputs changed none of the
+3 × 10,000 test predictions and none of the 36,864 greedy actions.</p>
+<p>Remedies: keep <code>a + |ρ|</code> under the value for the accuracy you need, by bounding the trunk's radius
+and weight-decaying the head's bias, or run the head in float64. For that, enable x64 and build the
+head on <code>Hyperboloid(dtype=jnp.float64)</code>: the head computes in its manifold's dtype, and without
+x64 a float64 manifold computes in float32 with only a warning. Also rebuild the time coordinate in
+float64 from the spatial part, <code>x_0 = √(1/c + ‖x_s‖²)</code>, because the offset multiplies the rounding
+of a stored float32 time coordinate by <code>sinh|ρ|</code>. At <code>a = 10</code>, <code>ρ = 2</code> the largest error against the
+unrounded input is 8e-3–1.6e-2 in float32, 2e-3–2.6e-3 with a float64 head on the stored point,
+and 2e-4 (32 dimensions) or 5e-5 (512) with the time coordinate rebuilt, which is the rounding of
+the spatial coordinates themselves. With float64 inputs as well, the law puts a logit error of 1e-3
+at <code>a + |ρ| ≈ 30.5</code>; measured there it was 2e-3–6e-3. A cancellation-free half-angle form was
+measured at 1.8–2.5× the cost and not adopted.
+<code>FGGLinear</code>'s spacelike <code>V</code> has a related <code>eps</code> floor on its column norm, which matters only for a
+small weight column with a large bias.</p>
 <h4 id="input-overflow-fingerprint">Input Overflow<a class="headerlink" href="#input-overflow-fingerprint" title="Permanent link">&para;</a></h4>
 <p>A hyperboloid point whose spatial part passes float32's <code>1.84e19</code> has an <code>inf</code> time coordinate
 (scaled radius <code>a ≈ 45</code> at <code>c = 1</code>; see <a href="#safe-norms">Norms</a> for where this ceiling comes from).
@@ -3703,10 +3780,32 @@ radius is at most 1e-1: the difference is the inverse Lorentz boost with reconst
 transport is the closed-form geodesic transport, with the input tangent's time coordinate taken as
 <span class="arithmatex">\(v_0=\langle x_s,v_s\rangle/x_0\)</span>. Otherwise both use the stable geodesic frame.</p>
 <p><code>logmap</code> uses the Cartesian expression when either endpoint is exactly the origin and the polar
-frame otherwise. For close pairs, with the frame's separation <span class="arithmatex">\(S=\sinh(\sqrt c\,d(x,y)/2)\)</span>, it
-uses the equivalent spatial displacement
-<span class="arithmatex">\(\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}\)</span> when <span class="arithmatex">\(S\le0.5\)</span>. At coincidence the
-Jacobians through spatial lifts are <span class="arithmatex">\(+I\)</span> for the target and <span class="arithmatex">\(-I\)</span> for the base.</p>
+frame otherwise. With the frame's separation <span class="arithmatex">\(S=\sinh(\sqrt c\,d(x,y)/2)\)</span>, it uses the equivalent
+spatial displacement <span class="arithmatex">\(\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}\)</span> in two cases: for
+close pairs (<span class="arithmatex">\(S\le0.5\)</span>), and at every separation for a base point <span class="arithmatex">\(x\)</span> with scaled spatial radius
+<span class="arithmatex">\(\sqrt c\,\lVert x_s\rVert\le\)</span> 1e-1. At coincidence the Jacobians through spatial lifts are <span class="arithmatex">\(+I\)</span>
+for the target and <span class="arithmatex">\(-I\)</span> for the base.</p>
+<p>The second case is there for the derivative, not for the value. The frame builds the result from
+two legs that each depend on <span class="arithmatex">\(\hat x_s\)</span>, whose derivative grows like <span class="arithmatex">\(1/\lVert x_s\rVert\)</span>, and
+only their sum is smooth in <span class="arithmatex">\(x_s\)</span>. The Jacobian with respect to the base point therefore lost
+about <span class="arithmatex">\(\varepsilon/(\sqrt c\,\lVert x_s\rVert)\)</span>: in float32 a relative error of 4e-4 at scaled
+radius 3e-4 and above 1 at 1e-7, with a correct value. With the displacement form it is within
+1e-6. Just outside the neighbourhood the frame's error is up to 9e-6 and falls like
+<span class="arithmatex">\(1/\lVert x_s\rVert\)</span>.</p>
+<p>A nonzero point closer to the origin than <code>MIN_NORM</code> <span class="arithmatex">\(=10^{-15}\)</span> is below what the frame
+resolves, because it floors the radius there. <code>logmap</code> still returns the right value for such a
+point, but its Jacobian with respect to that point is off by order 1. The exact origin is not
+affected.</p>
+<p><code>tangent_norm</code>, <code>tangent_inner</code> and the geodesic length inside <code>expmap</code> have the same property
+with respect to the base point: their radial/perpendicular split of the tangent vector divides by
+<span class="arithmatex">\(\lVert x_s\rVert\)</span>. For a base point with scaled spatial radius at most 1e-1 they take the
+Cartesian form of the transport to the origin,
+<span class="arithmatex">\(v_s - \dfrac{v_0}{x_0 + 1/\sqrt c}\,x_s\)</span> with <span class="arithmatex">\(v_0=\langle x_s,v_s\rangle/x_0\)</span>, whose Euclidean
+products are the tangent inner products at <span class="arithmatex">\(x\)</span>. Before, the float32 Jacobian of <code>expmap</code> with
+respect to such a base point was off by 7e-4 at scaled radius 1e-3 and above 1 at 1e-7 for a step
+of scaled length 10, with a correct value; now it is within 1e-6. The reparameterized
+<code>wrapped_normal_hyperboloid.sample</code> goes through this <code>expmap</code> at the mean. The proper-velocity
+<code>tangent_norm</code>, <code>tangent_inner</code> and <code>expmap</code> do the same.</p>
 <p>The polar frame never normalizes a direction that vanishes on a collinear pair (two points on one
 ray, <span class="arithmatex">\(y = x\)</span> included). Its angular leg is a non-negative combination of <span class="arithmatex">\(\hat y_s - \hat x_s\)</span> and
 <span class="arithmatex">\(\hat x_s + \hat y_s\)</span>, which is exactly zero on both degenerate rays, so <code>logmap</code>, <code>ptransp</code> and
