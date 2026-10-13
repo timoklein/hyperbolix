@@ -2803,11 +2803,14 @@ error against float32's ~1e-7, so it silently costs three of your seven signific
 <ul>
 <li><strong>Geometry is pinned</strong> to <code>jax.lax.Precision.HIGHEST</code> and is not configurable: the manifold
   vector dots, the Lorentz and Poincaré midpoints, the conv patch extraction, the attention
-  score and aggregation einsums, and the point-to-hyperplane einsums of the MLR heads and of the
-  PLFC, Poincaré++ and proper-velocity linear and conv layers. These dots cancel, and they are
-  not where the throughput is.</li>
+  score and aggregation einsums, the point-to-hyperplane einsums of the MLR heads and of the
+  PLFC, Poincaré++ and proper-velocity linear and conv layers, and the Minkowski product <code>x @ V</code>
+  of <code>FGGLinear</code>/<code>FGGConv2D</code>. These dots cancel, and apart from the FGG product they are not
+  where the throughput is. The FGG pin measured 2 % on the forward pass and 9 % on forward plus
+  backward for an IMPALA-ResNet of FGG layers at batch 1,024 (one H100; single layers 5 to 16 %
+  on forward plus backward).</li>
 <li><strong>The other layer weight GEMMs follow JAX</strong>: <code>HTCLinear</code> (the attention Q/K/V projections
-  included), <code>FGGLinear</code>/<code>FGGConv2D</code>, the FHCNN/FHNN linears, <code>HypLinearPoincare</code>, the VQ
+  included), the FHCNN/FHNN linears, <code>HypLinearPoincare</code>, <code>LorentzConv2D</code>'s convolution, the VQ
   codebook matmul. On an Ampere or Hopper card these run in TF32 unless you say otherwise.</li>
 </ul>
 <p>To run everything in full float32, set JAX's own knob:</p>
@@ -2817,14 +2820,23 @@ error against float32's ~1e-7, so it silently costs three of your seven signific
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">with</span> <span class="n">jax</span><span class="o">.</span><span class="n">default_matmul_precision</span><span class="p">(</span><span class="s2">&quot;highest&quot;</span><span class="p">):</span>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">logits</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 </span></code></pre></div>
-<p>On an A100 (float32 against a float64 reference), the relative error of <code>FGGLinear</code> is
-<strong>2.6e-4</strong> at the TF32 default against <strong>6.8e-8</strong> under <code>HIGHEST</code>. <code>HIGHEST</code> replaces one TF32
-pass with a three-pass float32 emulation, measured <strong>+5.5 %</strong> on a jitted hyperbolic attention
-forward.</p>
+<p>What TF32 costs on one layer was measured on the FGG product before it was pinned: on an A100
+(float32 against a float64 reference), the relative error of <code>FGGLinear</code> was <strong>2.6e-4</strong> at TF32
+against <strong>6.8e-8</strong> under <code>HIGHEST</code>. <code>HIGHEST</code> replaces one TF32 pass with a three-pass float32
+emulation, measured <strong>+5.5 %</strong> on a jitted hyperbolic attention forward.</p>
 <p><strong>Depth decides whether you need it.</strong> At depth 2 the default and <code>HIGHEST</code> train identically; the
 float32 gradient error grows with depth (1.5 % at depth 16 for an <code>HTCLinear</code> stack against 2.5e-6
-under <code>HIGHEST</code>). For a deep or gradient-sensitive stack, set the global knob. Details:
-<a href="../../api-reference/utils/#matmul-precision"><code>hyperbolix.utils.precision</code></a>.</p>
+under <code>HIGHEST</code>). For a deep or gradient-sensitive stack of these layers, set the global knob.
+Details: <a href="../../api-reference/utils/#matmul-precision"><code>hyperbolix.utils.precision</code></a>.</p>
+<p><strong>Why the FGG product is pinned.</strong> <code>FGGLinear</code> and <code>FGGConv2D</code> used to follow JAX as well. A
+float64 replay of a trained network changed that: a Procgen PPO agent (BigFish) with an encoder
+of 15 <code>FGGConv2D</code> and one <code>FGGLinear</code> (<code>c = 0.1</code>, trained on an A100 under the JAX default), 72
+checkpoints of 2,048 states each. At the JAX default the greedy action changed 120 times, and in
+the runs trained without a cap on the feature radius the actor logits were up to <strong>0.14</strong> off
+float64 (median 2.8e-4 to 1.0e-3). With <code>jax_default_matmul_precision="highest"</code>, which in
+that network changes only the 16 FGG products, no greedy action changed and the logits were
+within <strong>1.03e-4</strong>. The relative error entered at the first conv stage (4e-4) and stayed near
+1e-3; it did not accumulate with depth. The effect on the return was not measured.</p>
 <p><code>HIGHEST</code> is a no-op on CPU (there is no TF32 path) and for float64 anywhere.</p>
 <h3 id="the-hyperboloids-two-point-cancellation-failure-mode">The Hyperboloid's Two-Point Cancellation Failure Mode<a class="headerlink" href="#the-hyperboloids-two-point-cancellation-failure-mode" title="Permanent link">&para;</a></h3>
 <p>The table above is for the Poincaré ball. For the hyperboloid, being far from the origin is not

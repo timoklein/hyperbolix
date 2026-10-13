@@ -3720,7 +3720,7 @@ itself does not use it.</p>
 finite value with zero gradient; the library's layers no longer use it, so a runaway scale
 parameter shows up as a NaN loss.</p>
 <h2 id="matmul-precision">Matmul Precision<a class="headerlink" href="#matmul-precision" title="Permanent link">&para;</a></h2>
-<p><code>MATMUL_PRECISION</code> pins the geometry dots (manifold reductions, midpoints, attention scores, MLR heads) to <code>jax.lax.Precision.HIGHEST</code>, so XLA:GPU's default TF32 rounding does not hit the cancellations they rely on; it is not user-configurable. The layer weight GEMMs pass no <code>precision</code> and follow JAX's <code>jax_default_matmul_precision</code>, which means TF32 on Ampere/Hopper GPUs. To run those in full float32 too, at some cost in throughput, set:</p>
+<p><code>MATMUL_PRECISION</code> pins the geometry dots (manifold reductions, midpoints, attention scores, MLR heads, the point-to-hyperplane layers, and the <code>x @ V</code> product of <code>FGGLinear</code>/<code>FGGConv2D</code>) to <code>jax.lax.Precision.HIGHEST</code>, so XLA:GPU's default TF32 rounding does not hit the cancellations they rely on; it is not user-configurable. The other layer weight GEMMs (<code>HTCLinear</code>, the FHCNN/FHNN linears, <code>HypLinearPoincare</code>, <code>LorentzConv2D</code>) pass no <code>precision</code> and follow JAX's <code>jax_default_matmul_precision</code>, which means TF32 on Ampere/Hopper GPUs. To run those in full float32 too, at some cost in throughput, set:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># JAX-wide (jit-cache aware — changing it re-traces)</span>
@@ -3747,10 +3747,11 @@ parameter shows up as a NaN loss.</p>
 
         <p>Matmul precision for the float32 dot products that touch manifold data.</p>
 <p>:data:<code>MATMUL_PRECISION</code> (<code>jax.lax.Precision.HIGHEST</code>, not user-configurable) is pinned on
-the sites where the <em>geometry</em> is computed, and nowhere else. Most layer weight GEMMs pass no
-<code>precision</code> keyword at all and follow JAX's own <code>jax_default_matmul_precision</code>, which on
-Ampere/Hopper means TF32. The exception is the point-to-hyperplane layers, whose kernel dot <em>is</em>
-one of the pinned geometry einsums — see the two lists below.</p>
+the sites where the <em>geometry</em> is computed, and nowhere else. A layer's weight GEMM passes no
+<code>precision</code> keyword at all and follows JAX's own <code>jax_default_matmul_precision</code>, which on
+Ampere/Hopper means TF32, with two exceptions: the point-to-hyperplane layers, whose kernel dot
+<em>is</em> one of the pinned geometry einsums, and the FGG layers, whose <code>x @ V</code> is a Minkowski inner
+product — see the two lists below.</p>
 
 
 <details class="pinned-to-``highest``" open>
@@ -3776,26 +3777,24 @@ one of the pinned geometry einsums — see the two lists below.</p>
   term that cancels. The hidden PLFC, Poincaré++ and proper-velocity linear and convolution
   layers <em>are</em> those einsums applied to their own kernel, so their weight GEMM runs at
   <code>HIGHEST</code> too: <code>HypLinearHyperboloidPLFC</code>, <code>HypLinearPoincarePP</code>, <code>HypLinearPV</code>,
-  <code>HypConv2DHyperboloidILNN</code>, <code>HypConv2DPoincare</code> and <code>HypConv2DPV</code>.</li>
+  <code>HypConv2DHyperboloidILNN</code>, <code>HypConv2DPoincare</code> and <code>HypConv2DPV</code>;</li>
+<li>the FGG product <code>x @ V</code> in <code>nn_layers/hyperboloid_linear._fgg_linear_forward</code>, the one
+  weight GEMM of <code>FGGLinear</code> and <code>FGGConv2D</code>. <code>V</code> absorbs the Minkowski metric, so the
+  <code>-x0*V0 + &lt;x_s, V_s&gt;</code> cancellation happens <em>inside</em> a single accumulation — the same
+  product <code>FGGLorentzMLR</code> pins. It followed the default until it was measured on a trained
+  network: see "Why the FGG product is pinned" below.</li>
 </ul>
 </details>
 
 <details class="following-jax&#39;s-default" open>
   <summary>Following JAX's default</summary>
   <p>The remaining layer weight GEMMs — <code>HTCLinear</code> (including the attention Q/K/V projections),
-<code>FGGLinear</code>/<code>FGGConv2D</code>, the FHCNN and FHNN linears, <code>HypLinearPoincare</code>,
+the FHCNN and FHNN linears, <code>HypLinearPoincare</code>, <code>LorentzConv2D</code>'s Euclidean convolution,
 <code>HypVQMLRPoincare</code>'s implicit-codebook matmul and <code>hybrid_regularization</code>'s <code>nnx.Linear</code>
-— carry no <code>precision</code> keyword. These are the sites where <code>HIGHEST</code> actually costs
+— carry no <code>precision</code> keyword. These are sites where <code>HIGHEST</code> actually costs
 throughput (it replaces one TF32 pass with a three-pass float32 emulation; measured +5.5 % on a
 jitted hyperbolic attention forward), and whether to pay that is the user's call, not the
 library's.</p>
-<p>One of them does carry a cancellation and is still left on the default: the FGG hidden dot
-<code>x @ V</code> absorbs the Minkowski metric into <code>V</code>, so the <code>-x0*V0 + &lt;x_s, V_s&gt;</code> cancellation
-happens <em>inside</em> a single accumulation — the same product <code>FGGLorentzMLR</code> pins. The comment on
-the <code>jnp.matmul</code> in <code>nn_layers/hyperboloid_linear._fgg_linear_forward</code> states the reasoning.
-The depth grid below is why it is left alone: <strong>at depth 16</strong> an FGG stack's float32 gradient
-error under the default is smaller than an <code>HTCLinear</code> stack's, which has no cancellation at
-all, so the cancellation is not what dominates there.</p>
 <p>To run <strong>everything</strong> in full float32, set JAX's own knob — one line, and jit-cache aware, so
 changing it re-traces::</p>
 <div class="language-text highlight"><pre><span></span><code>jax.config.update(&quot;jax_default_matmul_precision&quot;, &quot;highest&quot;)
@@ -3804,12 +3803,16 @@ changing it re-traces::</p>
 <div class="language-text highlight"><pre><span></span><code>with jax.default_matmul_precision(&quot;highest&quot;):
     logits = model(x)
 </code></pre></div>
-<p>A deep, fully hyperbolic stack is a good reason to do so: the pinned sites keep the geometry
-honest, but a TF32 error introduced in an early layer's weight GEMM is carried forward by
-every layer after it. Measured on an A100 (jax 0.9.1, ambient dim 33, batch 64,
+<p>A deep, fully hyperbolic stack of these layers is a good reason to do so: the pinned sites keep
+the geometry honest, but a TF32 error introduced in an early layer's weight GEMM is carried
+forward by every layer after it. The size of that error on one layer was measured on the FGG
+product before it was pinned (A100, jax 0.9.1, ambient dim 33, batch 64,
 <code>c in {0.1, 1.0}</code> x spatial radius <code>in {0.5, 5, 20}</code>, float32 against a float64 reference):
 <code>FGGLinear</code> 2.6e-4 under TF32 against 6.8e-8 under <code>HIGHEST</code> — roughly ~1e-4 against
-~1e-7 on the layers, three of float32's seven significant digits.</p>
+~1e-7 on a layer, three of float32's seven significant digits. The <code>FGGLinear</code> arms of the
+depth comparisons in the next paragraph predate the pin in the same way: their "default" is the
+FGG product at TF32, which the library no longer runs, and they stay as the comparison for
+<code>HTCLinear</code>.</p>
 <p>Depth decides whether that matters, and at depth 2 it does not. An independent teacher-student
 comparison (5 seeds per arm, <code>D = 128</code>, <code>B = 256</code>, <code>c = 1</code>, 2 000 Adam updates,
 independent A100 measurement, jax 0.9.1) found no mean heldout-loss difference between the
@@ -3859,7 +3862,32 @@ radius 5 the head kernel carries 86 % of HTC's squared error and 87 % of its squ
 (<code>FGGLinear</code> 49 % / 34 %); the per-leaf errors are individually elevated (HTC layers 5-15 ~1.7e-2
 against FGG's ~2.5e-3), so this is not a layer-counting artefact, but the reported number is in
 practice the head-kernel gradient's relative error, on a gradient whose norm the radius inflates
-(60.8 against 3.53). For a deep or gradient-sensitive stack, set the global knob (the snippet above).</p>
+(60.8 against 3.53). For a deep or gradient-sensitive stack of these layers, set the global knob
+(the snippet above).</p>
+</details>
+
+<details class="why-the-fgg-product-is-pinned" open>
+  <summary>Why the FGG product is pinned</summary>
+  <p>Until this pin <code>FGGLinear</code> and <code>FGGConv2D</code> followed the default as well, although their
+<code>x @ V</code> carries the cancellation described in the first list. The depth grid above was the
+reason: at depth 16 an FGG stack's float32 gradient error under TF32 is smaller than an
+<code>HTCLinear</code> stack's, which has no cancellation at all. That grid measures gradients at one
+initialisation per cell. A float64 replay of a trained network overrules that reading.</p>
+<p>The network is a Procgen PPO agent (BigFish) with an IMPALA-style encoder of 15 <code>FGGConv2D</code>
+and one <code>FGGLinear</code>, <code>c = 0.1</code>, trained on an A100 under the JAX default. 72 checkpoints,
+2 048 states each, were replayed in float32 at the JAX default, in float32 with
+<code>jax_default_matmul_precision="highest"</code> and in float64 (audit scripts:
+<code>logs/2026-10-07_rl-f64-replay-audit/</code>). At the JAX default the greedy action changes 120
+times over the 72 checkpoints. In the runs trained without a cap on the feature radius, the
+relative gap of the head input to float64 is 6e-4 to 7.5e-3 (maxima over the replayed states)
+and the actor logits are up to 0.14 off (the largest of the 6 144 states of one checkpoint age,
+three seeds; the median is 2.8e-4 to 1.0e-3). With <code>"highest"</code> no greedy action changes, the
+head input is within about 5e-6 and the actor logits within 1.03e-4, and the forward gaps of
+those runs drop by a factor of 740 to
+2 570. The 16 FGG products are the only products in that network that the setting changes, and
+they are the products this pin sets to <code>HIGHEST</code>. The relative error enters at the first conv
+stage (4e-4) and stays near 1e-3: in this network it does not grow with depth. Not measured: any
+effect on the return.</p>
 </details>
 
 <details class="why-the-geometry-is-pinned-rather-than-left-to-the-same-knob" open>
@@ -3868,9 +3896,10 @@ practice the head-kernel gradient's relative error, on a gradient whose norm the
 ~1e-3 relative error — far coarser than float32's ~1e-7. Hyperbolic geometry spends that
 budget on cancellations whose entire design assumes float32 accuracy:</p>
 <ul>
-<li>the Lorentz inner product <code>&lt;x,y&gt;_L = -x_0 y_0 + &lt;x_s, x_s&gt;</code>, formed as a difference of two
+<li>the Lorentz inner product <code>&lt;x,y&gt;_L = -x_0 y_0 + &lt;x_s, y_s&gt;</code>, formed as a difference of two
   dots (hyperboloid <code>dist</code>/<code>expmap</code>/<code>ptransp</code>, the attention scores, the Busemann
-  coordinate, the HoroPCA ideal-span projections);</li>
+  coordinate, the HoroPCA ideal-span projections) or inside one accumulation, with the metric
+  absorbed into the weight (the FGG product and the <code>FGGLorentzMLR</code> logits);</li>
 <li>the <code>lorentz_midpoint</code> normalizer, a cancellation-free identity that exists precisely to
   keep the float32 error at <code>O(eps)</code> at any radius;</li>
 <li>the Poincaré/stereographic boundary factors <code>1 - c*||x||^2</code> and
@@ -3881,7 +3910,10 @@ budget on cancellations whose entire design assumes float32 accuracy:</p>
 4.6e-5 … 2.6e-4 at the TF32 default and 2.6e-8 … 1.6e-7 with <code>HIGHEST</code> — a ~2000x accuracy
 loss that <code>HIGHEST</code> removes. The eager float32 gradient of the hyperboloid MLR improves from
 1.5e-4 to 2.7e-7 relative over the same switch. These are not throughput-critical sites, so
-the library pays for the accuracy rather than exposing the choice.</p>
+the library pays for the accuracy rather than exposing the choice. The FGG product is different
+in kind, the weight GEMM of every FGG layer, and is pinned on the measurement in the section
+above. Its cost on one H100: 2 % on the forward pass and 9 % on forward plus backward for an
+IMPALA-ResNet of FGG layers at batch 1,024, and 5 to 16 % on forward plus backward for a single layer.</p>
 <p>This module lives in <code>utils/</code> — a neutral home both <code>manifolds/</code> and <code>nn_layers/</code> can
 import from, since <code>manifolds/</code> must not depend on <code>nn_layers/</code>. <code>MATMUL_PRECISION</code> was
 originally defined in <code>hyperbolix.nn_layers.hyperboloid_core</code>, which re-exports it, so
@@ -3929,7 +3961,7 @@ nothing outside float32 GPU matmuls.</p>
 not a knob. The module docstring lists the pinned sites and the measurements behind them. The
 layer weight GEMMs pass no <code>precision</code> keyword and follow <code>jax_default_matmul_precision</code>
 instead — all but the point-to-hyperplane layers, whose kernel dot is one of the pinned
-einsums.</p>
+einsums, and the FGG layers, whose <code>x @ V</code> is a Minkowski inner product.</p>
 
     </div>
 

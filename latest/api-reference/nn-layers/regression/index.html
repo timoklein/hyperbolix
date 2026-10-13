@@ -3934,7 +3934,8 @@ input array's dtype (the parameters are cast to it).</p>
 <span class="normal"><a href="#__codelineno-0-228">228</a></span>
 <span class="normal"><a href="#__codelineno-0-229">229</a></span>
 <span class="normal"><a href="#__codelineno-0-230">230</a></span>
-<span class="normal"><a href="#__codelineno-0-231">231</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-194"><a id="__codelineno-0-194" name="__codelineno-0-194"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-0-231">231</a></span>
+<span class="normal"><a href="#__codelineno-0-232">232</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-194"><a id="__codelineno-0-194" name="__codelineno-0-194"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
 </span><span id="__span-0-195"><a id="__codelineno-0-195" name="__codelineno-0-195"></a>    <span class="bp">self</span><span class="p">,</span>
 </span><span id="__span-0-196"><a id="__codelineno-0-196" name="__codelineno-0-196"></a>    <span class="n">x_BAi</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;batch in_features&quot;</span><span class="p">],</span>
 </span><span id="__span-0-197"><a id="__codelineno-0-197" name="__codelineno-0-197"></a>    <span class="n">c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
@@ -3960,18 +3961,19 @@ input array's dtype (the parameters are cast to it).</p>
 </span><span id="__span-0-217"><a id="__codelineno-0-217" name="__codelineno-0-217"></a>
 </span><span id="__span-0-218"><a id="__codelineno-0-218" name="__codelineno-0-218"></a>    <span class="c1"># 2. Minkowski inner products, pinned HIGHEST: the metric is absorbed into V, so the</span>
 </span><span id="__span-0-219"><a id="__codelineno-0-219" name="__codelineno-0-219"></a>    <span class="c1"># Lorentz cancellation happens inside one accumulation, and this is a decision quantity</span>
-</span><span id="__span-0-220"><a id="__codelineno-0-220" name="__codelineno-0-220"></a>    <span class="c1"># (the MLR logits) rather than a hidden activation — TF32 would leave ~1e-3 of the</span>
-</span><span id="__span-0-221"><a id="__codelineno-0-221" name="__codelineno-0-221"></a>    <span class="c1"># pre-cancellation magnitude in the logit. Measured on the sibling HypRegressionHyperboloid</span>
-</span><span id="__span-0-222"><a id="__codelineno-0-222" name="__codelineno-0-222"></a>    <span class="c1"># head (the same pinned x @ V shape): its forward alone at B=1e7, 10 classes on an H100 is</span>
-</span><span id="__span-0-223"><a id="__codelineno-0-223" name="__codelineno-0-223"></a>    <span class="c1"># 2.6x (D=128) / 2.0x (D=32) of a TF32 head, and 1.05x on a whole training step. This</span>
-</span><span id="__span-0-224"><a id="__codelineno-0-224" name="__codelineno-0-224"></a>    <span class="c1"># layer&#39;s own share was not measured.</span>
-</span><span id="__span-0-225"><a id="__codelineno-0-225" name="__codelineno-0-225"></a>    <span class="n">mink_BK</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">x_BAi</span><span class="p">,</span> <span class="n">V_AiK</span><span class="p">,</span> <span class="n">precision</span><span class="o">=</span><span class="n">MATMUL_PRECISION</span><span class="p">)</span>  <span class="c1"># (B, K)</span>
-</span><span id="__span-0-226"><a id="__codelineno-0-226" name="__codelineno-0-226"></a>
-</span><span id="__span-0-227"><a id="__codelineno-0-227" name="__codelineno-0-227"></a>    <span class="c1"># 3. Signed scaled distances (matching reference fc_mlr: no norm scaling)</span>
-</span><span id="__span-0-228"><a id="__codelineno-0-228" name="__codelineno-0-228"></a>    <span class="n">sqrt_c</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
-</span><span id="__span-0-229"><a id="__codelineno-0-229" name="__codelineno-0-229"></a>    <span class="n">logits_BK</span> <span class="o">=</span> <span class="n">asinh</span><span class="p">(</span><span class="n">sqrt_c</span> <span class="o">*</span> <span class="n">mink_BK</span><span class="p">)</span> <span class="o">/</span> <span class="n">sqrt_c</span>  <span class="c1"># (B, K)</span>
-</span><span id="__span-0-230"><a id="__codelineno-0-230" name="__codelineno-0-230"></a>
-</span><span id="__span-0-231"><a id="__codelineno-0-231" name="__codelineno-0-231"></a>    <span class="k">return</span> <span class="n">logits_BK</span>
+</span><span id="__span-0-220"><a id="__codelineno-0-220" name="__codelineno-0-220"></a>    <span class="c1"># (the MLR logits) — TF32 would leave ~1e-3 of the pre-cancellation magnitude in the</span>
+</span><span id="__span-0-221"><a id="__codelineno-0-221" name="__codelineno-0-221"></a>    <span class="c1"># logit. The hidden FGG product (`_fgg_linear_forward`) is pinned for the same</span>
+</span><span id="__span-0-222"><a id="__codelineno-0-222" name="__codelineno-0-222"></a>    <span class="c1"># cancellation. Measured on the sibling HypRegressionHyperboloid head (the same pinned</span>
+</span><span id="__span-0-223"><a id="__codelineno-0-223" name="__codelineno-0-223"></a>    <span class="c1"># x @ V shape): its forward alone at B=1e7, 10 classes on an H100 is 2.6x (D=128) / 2.0x</span>
+</span><span id="__span-0-224"><a id="__codelineno-0-224" name="__codelineno-0-224"></a>    <span class="c1"># (D=32) of a TF32 head, and 1.05x on a whole training step. This layer&#39;s own share was</span>
+</span><span id="__span-0-225"><a id="__codelineno-0-225" name="__codelineno-0-225"></a>    <span class="c1"># not measured.</span>
+</span><span id="__span-0-226"><a id="__codelineno-0-226" name="__codelineno-0-226"></a>    <span class="n">mink_BK</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">x_BAi</span><span class="p">,</span> <span class="n">V_AiK</span><span class="p">,</span> <span class="n">precision</span><span class="o">=</span><span class="n">MATMUL_PRECISION</span><span class="p">)</span>  <span class="c1"># (B, K)</span>
+</span><span id="__span-0-227"><a id="__codelineno-0-227" name="__codelineno-0-227"></a>
+</span><span id="__span-0-228"><a id="__codelineno-0-228" name="__codelineno-0-228"></a>    <span class="c1"># 3. Signed scaled distances (matching reference fc_mlr: no norm scaling)</span>
+</span><span id="__span-0-229"><a id="__codelineno-0-229" name="__codelineno-0-229"></a>    <span class="n">sqrt_c</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
+</span><span id="__span-0-230"><a id="__codelineno-0-230" name="__codelineno-0-230"></a>    <span class="n">logits_BK</span> <span class="o">=</span> <span class="n">asinh</span><span class="p">(</span><span class="n">sqrt_c</span> <span class="o">*</span> <span class="n">mink_BK</span><span class="p">)</span> <span class="o">/</span> <span class="n">sqrt_c</span>  <span class="c1"># (B, K)</span>
+</span><span id="__span-0-231"><a id="__codelineno-0-231" name="__codelineno-0-231"></a>
+</span><span id="__span-0-232"><a id="__codelineno-0-232" name="__codelineno-0-232"></a>    <span class="k">return</span> <span class="n">logits_BK</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
