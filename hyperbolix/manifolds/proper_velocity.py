@@ -596,6 +596,36 @@ def _ptransp(
 # ---------------------------------------------------------------------------
 
 
+def _tangent_at_origin_cartesian(
+    v: Float[Array, "dim"], x: Float[Array, "dim"], near_origin: Array, c: ScalarCurvature
+) -> Float[Array, "dim"]:
+    """``PT_{x→origin}(v)`` in the Cartesian chart, for a base point near the origin.
+
+    The PV spelling of the hyperboloid helper of the same name, with ``1/β_x = √c·x₀``:
+    ``v - c·⟨x, v⟩/((1/β_x)·(1/β_x + 1))·x``. Transport is an isometry and the metric at the origin
+    is Euclidean, so Euclidean products of these vectors are the tangent inner products at ``x``.
+    :func:`_tangent_norm` and :func:`_tangent_inner` take them for a base point within scaled radius
+    ``√c·‖x‖ <= 1e-1``, because the radial/perpendicular split divides by ``‖x‖`` and its gradient
+    with respect to a near-origin base point loses about ``eps/(√c·‖x‖)`` of its natural scale
+    (see ``Hyperboloid``'s helper). The arm is fed the zero vector where ``near_origin`` is false, so
+    its coefficients stay finite however far ``x`` is.
+
+    Args:
+        v: Tangent vector at x, shape (dim,)
+        x: PV point, shape (dim,)
+        near_origin: Scalar bool, whether ``x`` is inside the neighborhood
+        c: Curvature (positive)
+
+    Returns:
+        The transported vector, shape (dim,)
+    """
+    cartesian_x = jnp.where(near_origin, x, jnp.zeros_like(x))
+    beta_inv = _beta_inv(cartesian_x, c)
+    xv = jnp.dot(cartesian_x, v, precision=MATMUL_PRECISION)
+    # Cast c: a strongly typed float64 curvature must not promote float32 points (the split arm does not).
+    return v - (jnp.asarray(c, dtype=x.dtype) * xv / (beta_inv * (beta_inv + 1.0))) * cartesian_x
+
+
 def _tangent_inner(
     u: Float[Array, "dim"],
     v: Float[Array, "dim"],
@@ -639,7 +669,16 @@ def _tangent_inner(
     radial_u, perp_u_D = radial_perp_decomposition(u, x)
     radial_v, perp_v_D = radial_perp_decomposition(v, x)
     beta_inv = _beta_inv(x, c)  # 1/β_x = √(1 + c‖x‖²) ≥ 1, so no floor is needed
-    return jnp.dot(perp_u_D, perp_v_D, precision=MATMUL_PRECISION) + (radial_u / beta_inv) * (radial_v / beta_inv)
+    polar = jnp.dot(perp_u_D, perp_v_D, precision=MATMUL_PRECISION) + (radial_u / beta_inv) * (radial_v / beta_inv)
+    # A base point near the origin takes the Cartesian chart, for the derivative with respect to x:
+    # see `_tangent_at_origin_cartesian`.
+    near_origin = jnp.sqrt(jnp.asarray(c, dtype=x.dtype)) * safe_norm(x) <= 1e-1  # `_pair_near_origin`'s threshold
+    cartesian = jnp.dot(
+        _tangent_at_origin_cartesian(u, x, near_origin, c),
+        _tangent_at_origin_cartesian(v, x, near_origin, c),
+        precision=MATMUL_PRECISION,
+    )
+    return jnp.where(near_origin, cartesian, polar)
 
 
 def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -667,7 +706,13 @@ def _tangent_norm(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurva
         Riemannian norm ‖v‖_x, scalar
     """
     radial, perp_D = radial_perp_decomposition(v, x)
-    return safe_hypot_norm(perp_D, radial / _beta_inv(x, c))
+    polar = safe_hypot_norm(perp_D, radial / _beta_inv(x, c))
+    # A base point near the origin takes the Cartesian chart, for the derivative with respect to x:
+    # see `_tangent_at_origin_cartesian`. `safe_norm` keeps the exact zero and the zero gradient at
+    # v = 0.
+    near_origin = jnp.sqrt(jnp.asarray(c, dtype=x.dtype)) * safe_norm(x) <= 1e-1  # `_pair_near_origin`'s threshold
+    cartesian = safe_norm(_tangent_at_origin_cartesian(v, x, near_origin, c))
+    return jnp.where(near_origin, cartesian, polar)
 
 
 def _tangent_proj(v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:

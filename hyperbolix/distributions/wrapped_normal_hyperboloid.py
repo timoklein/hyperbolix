@@ -14,9 +14,11 @@ References:
     NeurIPS 2019. https://arxiv.org/abs/1901.06033
 """
 
+import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from ..manifolds.hyperboloid import Hyperboloid, _ptransp_to_0
+from ..manifolds.hyperboloid import Hyperboloid
+from ..manifolds.hyperboloid import _gyro_difference as _hyperboloid_gyro_difference
 from ..utils.math_utils import safe_norm
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
@@ -185,22 +187,17 @@ def log_prob(
     n_sample_dims = max(z.ndim - mu.ndim, 0)
     n_batch_dims = mu.ndim - 1
 
-    # Step 1: Map z to tangent space at mu: u = log_μ(z), shape (..., A)
-    def _logmap_single(z_A, mu_A):
-        return manifold.logmap(z_A, mu_A, c)
+    # Steps 1 and 2 as one map: v = PT_{μ→μ₀}(log_μ(z)) = log_0((⊖μ) ⊕ z), the identity in
+    # `_gyro_difference`'s docstring, shape (..., A). The composition `logmap` -> transport it replaces
+    # stored u = log_μ(z) in the ambient chart at μ, whose components are cosh(a) times the vector's
+    # length (a = scaled radius of the mean), so float32 lost eps·cosh(a) of v.
+    # `close_pairs=True` reads a close pair off z_s - μ_s; the public `gyro_difference` leaves that
+    # branch off because of its cost in the stacked layers, and here only correctness counts.
+    def _origin_tangent_single(z_A, mu_A):
+        centred_A = _hyperboloid_gyro_difference(manifold._cast(mu_A), manifold._cast(z_A), c, close_pairs=True)
+        return manifold.logmap_0(centred_A, c)
 
-    u_SBA = _vmap_sample_and_batch(_logmap_single, n_sample_dims, n_batch_dims)(z, mu)
-
-    # Step 2: Parallel transport from mu to origin: v = PT_{μ→μ₀}(u). `_ptransp_to_0`, not the generic
-    # `manifold.ptransp(u, mu, origin)`: with the origin as an endpoint that one takes its Cartesian
-    # chart, whose radial component cancels two O(cosh a) terms down to u_r/cosh a — the float32
-    # log_prob error it caused grows like eps·cosh(a): 5.5e-3..1.1e-2 at scaled radius a = 10 for
-    # radial displacements, below 5e-5 now with an isotropic sigma (see `_ptransp_to_0`). The mean is
-    # cast to the manifold dtype here because the helper, unlike the class method, does not cast.
-    def _ptransp_single(u_A, mu_A):
-        return _ptransp_to_0(u_A, manifold._cast(mu_A), c)
-
-    v_SBA = _vmap_sample_and_batch(_ptransp_single, n_sample_dims, n_batch_dims)(u_SBA, mu)
+    v_SBA = _vmap_sample_and_batch(_origin_tangent_single, n_sample_dims, n_batch_dims)(z, mu)
 
     # Step 3: Extract spatial components: v = [0, v_bar] at origin
     v_spatial_SBD = v_SBA[..., 1:]
@@ -212,9 +209,11 @@ def log_prob(
     # Minkowski norm at origin: r = ||v_spatial|| (since v = [0, v_bar]). `safe_norm` gives the
     # finite (zero) gradient at z == mu that the old `floor_at(sum(v**2), MIN_NORM)` was there
     # for, without flooring r at 3.16e-8 and without `sum(v**2)` overflowing float32.
-    # `_log_det_jacobian_from_r` is already NaN-free and stationary at r = 0.
+    # `_log_det_jacobian_from_r` is already NaN-free and stationary at r = 0. Its Taylor branch reads
+    # the un-rooted `sum(v**2)`, which keeps the log-det's second derivative at z == mu.
     r_SB = safe_norm(v_spatial_SBD)
-    log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n)
+    r_sq_SB = jnp.sum(v_spatial_SBD**2, axis=-1)
+    log_det_jac_SB = _log_det_jacobian_from_r(r_SB, c, n, r_sq=r_sq_SB)
 
     # Step 6: log p(z) = log p(v) - log det(∂proj_μ(v)/∂v)
     log_p_z_SB = log_p_v_SB - log_det_jac_SB

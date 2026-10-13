@@ -197,11 +197,21 @@ Five places still lose accuracy at large radius:
    `HyperbolicFullAttention` forms `2/c + 2⟨Q,K⟩_L` from a matrix product, and a GEMM cannot be
    made cancellation-free the way a single pairwise `dist` can — see
    [Full Attention's Float32 Score Floor](#attention-score-floor) below.
-3. **Transport to the origin from a far point.** The wrapped-normal `log_prob` uses its own
-   transport to the origin and is accurate up to the float32 storage of its tangent vector $u$
-   (the ambient chart stores a tangent vector's components at $\cosh a$ times its length). The
-   generic `Hyperboloid.ptransp(v, far_point, origin)` still cancels: its radial component has a
-   float32 error of 1.95e-3 at scaled radius 10.
+3. **Transport to the origin from a far point.** The generic
+   `Hyperboloid.ptransp(v, far_point, origin)` still cancels: its radial component has a float32
+   error of 1.95e-3 at scaled radius 10. The wrapped-normal `log_prob` does not use it: it reads
+   the origin-tangent vector off `gyro_difference` and never stores a tangent vector at the mean.
+   What limits it is the storage of the two points. With `z` within O(1) of a mean at scaled
+   radius $a$, the stored float32 points are themselves rounded at $\varepsilon\sinh a$, and no
+   formula recovers what that removes: for `z` at scaled distance 0.5 from the mean, the float32
+   gradient with respect to the mean is off by 5e-4 at $a = 12$ and 5e-2 at $a = 16$ (medians
+   over 16 directions, `n = 10`), and from $a \approx 20$ by order 1. With `z` at scaled radius 1
+   the same gradient stays within about 1e-5 of float64 through $a = 40$. The result is
+   non-finite once the mean's spatial coordinate passes the float32 limit of 1.8e19, between
+   $a = 40$ and 44 at `c = 0.1` and between 44 and 46 at `c = 1`. One finite wrong output remains
+   just below that: with the mean at $a = 44$, `z` at scaled radius 1 and `c = 1`, the float32
+   value is still right while the gradient with respect to the mean is off by a factor of about
+   45.
 4. **The MLR score, when the hyperplane itself sits far from the origin.** The reference Lorentz
    MLR subtracts two terms of size `e^(a+ρ)`, with `ρ` the scaled hyperplane offset, so a large
    bias costs as many digits as a large input radius — see
@@ -996,10 +1006,35 @@ transport is the closed-form geodesic transport, with the input tangent's time c
 $v_0=\langle x_s,v_s\rangle/x_0$. Otherwise both use the stable geodesic frame.
 
 `logmap` uses the Cartesian expression when either endpoint is exactly the origin and the polar
-frame otherwise. For close pairs, with the frame's separation $S=\sinh(\sqrt c\,d(x,y)/2)$, it
-uses the equivalent spatial displacement
-$\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}$ when $S\le0.5$. At coincidence the
-Jacobians through spatial lifts are $+I$ for the target and $-I$ for the base.
+frame otherwise. With the frame's separation $S=\sinh(\sqrt c\,d(x,y)/2)$, it uses the equivalent
+spatial displacement $\operatorname{asinhc}(S)((y_s-x_s)-2S^2x_s)/\sqrt{1+S^2}$ in two cases: for
+close pairs ($S\le0.5$), and at every separation for a base point $x$ with scaled spatial radius
+$\sqrt c\,\lVert x_s\rVert\le$ 1e-1. At coincidence the Jacobians through spatial lifts are $+I$
+for the target and $-I$ for the base.
+
+The second case is there for the derivative, not for the value. The frame builds the result from
+two legs that each depend on $\hat x_s$, whose derivative grows like $1/\lVert x_s\rVert$, and
+only their sum is smooth in $x_s$. The Jacobian with respect to the base point therefore lost
+about $\varepsilon/(\sqrt c\,\lVert x_s\rVert)$: in float32 a relative error of 4e-4 at scaled
+radius 3e-4 and above 1 at 1e-7, with a correct value. With the displacement form it is within
+1e-6. Just outside the neighbourhood the frame's error is up to 9e-6 and falls like
+$1/\lVert x_s\rVert$.
+
+A nonzero point closer to the origin than `MIN_NORM` $=10^{-15}$ is below what the frame
+resolves, because it floors the radius there. `logmap` still returns the right value for such a
+point, but its Jacobian with respect to that point is off by order 1. The exact origin is not
+affected.
+
+`tangent_norm`, `tangent_inner` and the geodesic length inside `expmap` have the same property
+with respect to the base point: their radial/perpendicular split of the tangent vector divides by
+$\lVert x_s\rVert$. For a base point with scaled spatial radius at most 1e-1 they take the
+Cartesian form of the transport to the origin,
+$v_s - \dfrac{v_0}{x_0 + 1/\sqrt c}\,x_s$ with $v_0=\langle x_s,v_s\rangle/x_0$, whose Euclidean
+products are the tangent inner products at $x$. Before, the float32 Jacobian of `expmap` with
+respect to such a base point was off by 7e-4 at scaled radius 1e-3 and above 1 at 1e-7 for a step
+of scaled length 10, with a correct value; now it is within 1e-6. The reparameterized
+`wrapped_normal_hyperboloid.sample` goes through this `expmap` at the mean. The proper-velocity
+`tangent_norm`, `tangent_inner` and `expmap` do the same.
 
 The polar frame never normalizes a direction that vanishes on a collinear pair (two points on one
 ray, $y = x$ included). Its angular leg is a non-negative combination of $\hat y_s - \hat x_s$ and

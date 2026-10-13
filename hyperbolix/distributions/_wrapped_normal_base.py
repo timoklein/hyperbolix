@@ -47,6 +47,7 @@ def _log_det_jacobian_from_r(
     r: Float[Array, "..."],
     c: float,
     n: int,
+    r_sq: Float[Array, "..."] | None = None,
 ) -> Float[Array, "..."]:
     """Compute log determinant of projection Jacobian given Riemannian norm r.
 
@@ -61,6 +62,10 @@ def _log_det_jacobian_from_r(
         r: Riemannian norm of tangent vector, shape (...)
         c: Curvature (positive scalar)
         n: Spatial/manifold dimension
+        r_sq: Optional ``r**2`` formed without a square root (``sum(v**2)``), shape (...). The Taylor
+            branch then reads it instead of squaring ``r``. A norm has no second derivative at zero
+            and ``safe_norm`` returns zero for it, so with ``r`` alone the Hessian of the log-det at
+            ``r = 0`` came out as 0 instead of ``(n-1)·c/3``.
 
     Returns:
         Log determinant of Jacobian, shape (...)
@@ -84,7 +89,12 @@ def _log_det_jacobian_from_r(
 
     # Taylor: log(sinh(x)/x) = x^2/6 - x^4/180 + O(x^6). A plain polynomial in x^2, so this
     # branch is NaN-free for every finite r and its gradient is exactly 0 at r = 0.
-    x2 = sqrt_c_r * sqrt_c_r
+    if r_sq is None:
+        x2 = sqrt_c_r * sqrt_c_r
+    else:
+        # Zero where the standard branch wins: `sum(v**2)` overflows float32 past ||v|| = 1.8e19, and
+        # the polynomial's derivative would turn that inf into a NaN under the unselected `where`.
+        x2 = c * jnp.where(small, r_sq, jnp.zeros_like(r_sq))
     log_ratio_taylor = x2 * (1.0 / 6.0 - x2 / 180.0)
 
     log_ratio = jnp.where(small, log_ratio_taylor, log_ratio_standard)

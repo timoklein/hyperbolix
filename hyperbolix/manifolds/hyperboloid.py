@@ -405,18 +405,47 @@ def _gyro_difference_cartesian(
 
 
 def _gyro_difference_frame(
-    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
+    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature, close_pairs: bool = False
 ) -> Float[Array, "dim_plus_1"]:
-    """Cancellation-free polar-frame evaluation used away from both endpoints' origins."""
+    """Cancellation-free polar-frame evaluation used away from both endpoints' origins.
+
+    ``close_pairs`` (static) adds the coordinate-difference branch described in :func:`_gyro_difference`.
+    """
     frame = _polar_frame(x, y, c)
     s_cos_phi, perp_y_D = _logmap_direction(frame)
-    res_s_D = ((-2.0 / frame.sqrt_c) * frame.cosh_half * s_cos_phi) * frame.x_hat_D + perp_y_D
+    radial_far = (-2.0 / frame.sqrt_c) * frame.cosh_half * s_cos_phi
     inv_c = jnp.asarray(1.0, dtype=x.dtype) / jnp.asarray(c, dtype=x.dtype)
+    if not close_pairs:
+        res_s_D = radial_far * frame.x_hat_D + perp_y_D
+        return jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
+
+    # Close pairs (S <= 0.5, the seam of `_logmap_frame`'s displacement spelling) keep the coordinate
+    # difference d = y_s - x_s explicit. The boost along x̂ leaves the part of y_s across x̂ unchanged,
+    # so perp_y = d - <d, x̂>·x̂, and the component along x̂ is (<d, x̂> - 2·S²·r_x)/(√c·x₀): the transport
+    # of `_logmap_frame`'s close-pair tangent d - 2·S²·x_s to the origin. Both round at eps·|d|, where
+    # `perp_y_D` and the radial gap behind `s_cos_phi` round at eps·r_y. S is sanitized before it is
+    # squared, as in `_logmap_frame`; √c·x₀ = cosh a >= 1 on the sheet, so its floor only guards a
+    # degenerate all-zero "point".
+    close_pair = frame.sinh_half <= 0.5
+    small_s = jnp.where(close_pair, frame.sinh_half, 0.0)
+    diff_D = y[1:] - x[1:]
+    diff_radial = jnp.dot(diff_D, frame.x_hat_D, precision=MATMUL_PRECISION)
+    perp_close_D = diff_D - diff_radial * frame.x_hat_D
+    radial_close = (diff_radial - (2.0 * small_s**2) * frame.r_x) / floor_at(frame.sqrt_c * frame.x_time, MIN_NORM)
+
+    # A pair whose two unit directions are bitwise equal (chord == 0) keeps `perp_y_D`, which is exactly
+    # zero there; d - <d, x̂>·x̂ would leave eps·|d| of the cancelled radial part across x̂.
+    perp_D = jnp.where(close_pair & (frame.chord > 0), perp_close_D, perp_y_D)
+    radial = jnp.where(close_pair, radial_close, radial_far)
+    # Whatever of `perp_D` lies along x̂ is rounding, not signal (~eps·r_y in the unit-vector form):
+    # measure it and take it out of the radial coefficient, as `_ptransp_to_0` does.
+    residue = jnp.dot(perp_D, frame.x_hat_D, precision=MATMUL_PRECISION)
+    res_s_D = perp_D + (radial - residue) * frame.x_hat_D
     return jnp.concatenate([_time_slot(res_s_D, inv_c)[None], res_s_D])
 
 
 def _gyro_difference(
-    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature
+    x: Float[Array, "dim_plus_1"], y: Float[Array, "dim_plus_1"], c: ScalarCurvature, close_pairs: bool = False
 ) -> Float[Array, "dim_plus_1"]:
     """Gyro-difference ``(⊖x) ⊕ y`` on the Hyperboloid, free of the ambient cancellation.
 
@@ -472,6 +501,29 @@ def _gyro_difference(
     ``x ⊕ exp_0(b)``, whose result is as far out as its base point, the boost is the accurate
     spelling and needs no frame.
 
+    **Close pairs can keep the coordinate difference** (``close_pairs=True``, a static flag that only
+    ``wrapped_normal_hyperboloid.log_prob`` sets). It is off by default because of its cost where the
+    primitive is stacked: the gyro batch norm layers measured 1.21x to 1.33x on forward plus backward
+    (CPU, ``logs/2026-10-07_wrapped-normal-far-mean/final/timing_gyrobn_stacked.out``); with the flag
+    off the code is the one before this branch existed. With it on, for ``sinh(θ/2) <= 0.5`` (the seam
+    of :func:`_logmap_frame`'s displacement spelling) both parts are read off ``d = y_s - x_s``::
+
+        s = (d - ⟨d, x̂⟩·x̂) + (⟨d, x̂⟩ - 2·S²·r_x)/(√c·x₀)·x̂
+
+    which is the same vector: the boost leaves the part of ``y_s`` across ``x̂`` unchanged, and the
+    component along ``x̂`` is the transport of the close-pair tangent ``d - 2·S²·x_s`` to the origin. It
+    rounds at ``eps·‖d‖`` where ``perp_y`` and the radial gap behind ``S·cos φ`` round at ``eps·r_y``.
+    With the flag on, in both branches the part of the perpendicular term that rounding leaves along
+    ``x̂`` is measured and taken out of the radial coefficient; in the frame spelling it was ``eps·r_y``, larger than a
+    close pair's whole result at large radius. Float32 against a high-precision reference on the same
+    stored points, separations 1e-2 to 0.6 at scaled base radius 6-8: median relative error about
+    4e-4 → 1e-5 (3e-6 for displacements across ``x̂``, 2e-5 for displacements along it), worst pair
+    1.6e-2 → 6.7e-5, and no pair worse than before. A pair whose two unit directions are bitwise
+    equal keeps ``perp_y``, which is exactly zero there. The numbers in the two paragraphs above were
+    measured before this branch existed.
+    (``logs/2026-10-07_wrapped-normal-far-mean/``: ``verify/probe_6d_mix_{main,new}.out``, and
+    ``probe_gyro_primitive_key_table.out`` for the radius bands up to 12.)
+
     When either scaled spatial radius is at most 1e-1, the inverse boost supplies well-conditioned
     Cartesian derivatives. Outside that neighborhood, the polar frame preserves precision near coincidence, including
     small radii.
@@ -501,7 +553,7 @@ def _gyro_difference(
     cartesian_x = jnp.where(use_cartesian, x, origin)
     cartesian_y = jnp.where(use_cartesian, y, origin)
     cartesian = _gyro_difference_cartesian(cartesian_x, cartesian_y, c)
-    return jnp.where(use_cartesian, cartesian, _gyro_difference_frame(x, y, c))
+    return jnp.where(use_cartesian, cartesian, _gyro_difference_frame(x, y, c, close_pairs))
 
 
 def _scalar_mul(r: float | Float[Array, ""], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, "dim_plus_1"]:
@@ -1175,6 +1227,31 @@ def _logmap_frame(
     explicit preserves the exact signed identity Jacobians at coincidence. The time component
     is reconstructed from tangency; larger separations retain the bounded frame coefficients.
 
+    A base point within scaled spatial radius ``√c·‖x_s‖ <= 1e-1`` (the threshold of
+    :func:`_pair_near_origin`, applied to the base point alone) takes the displacement spelling at
+    every separation. The frame assembly is value-exact there but not derivative-exact: its radial
+    and its angular leg each depend on ``x̂_s = x_s/‖x_s‖``, whose derivative is ``O(1/‖x_s‖)``,
+    and only their sum is smooth in ``x_s``. The base-point Jacobian is then a sum of three pieces
+    of size ``d/‖x_s‖`` that cancel to ``O(1)``, a float32 relative error of about 1 to 5 times
+    ``eps/(√c·‖x_s‖)``: measured medians of 3e-4 to 5e-4 at ``√c·‖x_s‖ = 3e-4`` and 3e-2 to 8e-2 at
+    3e-6 (``c = 0.1``, ``D`` = 8 and 64, ``θ = 3``, 16 pairs), and above 1 at 1e-7, with a forward
+    value and a mapped-point Jacobian that stay at rounding level. The displacement spelling reads
+    ``x̂_s`` only through the scalar ``S``, and ``2S²·x_s`` is at most a tenth of the result this
+    close to the origin: with it the base-point Jacobian is within 1e-6 for scaled radii from 1e-1
+    down to 1e-7 and ``θ`` up to 38 (largest measured 8.6e-7). Outside the neighborhood the frame's
+    base-point Jacobian is within 9e-6 (largest just outside, with a median of 1.6e-6 there, falling
+    like ``1/‖x_s‖`` to 1e-6 at scaled radius 1). The mapped point needs no such switch: its
+    Jacobian is at rounding level at every small radius from ``MIN_NORM`` up.
+
+    Below ``MIN_NORM`` (a nonzero ``‖x_s‖ < 1e-15``) the floored radius leaves ``x̂_s`` shorter than
+    a unit vector. The displacement spelling still returns the right value there (the frame assembly
+    was off by half for a far pair), but the Jacobian with respect to the sub-floor point is wrong in
+    either spelling: 7 % to 90 % off for a base point here, up to 1.4 for a mapped point. Only the
+    exact origin has its own chart (:func:`_logmap_impl`).
+    (``logs/2026-10-07_logmap-base-point-jacobian/``: ``issue_repro/old_main.out``,
+    ``verify/seam_summary.out``, ``audit/big_in_summary.out``, ``audit/big_out_at_1001.out``,
+    ``spellings.out``.)
+
     Args:
         y: Hyperboloid point to map, shape (dim+1,)
         x: Hyperboloid point serving as the base of the tangent space, shape (dim+1,)
@@ -1203,15 +1280,20 @@ def _logmap_frame(
     res = radial_coeff * e_rad_A + (asinhc_s / frame.cosh_half) * perp_A
     # For close pairs, keep the displacement explicit: at coincidence its spatial Jacobian
     # is exactly the identity. S comes from the stable frame, never an ambient inner product.
-    # Restrict this spelling to small separation so 2*S**2*x cannot overflow or cancel at
-    # large separation. Sanitize the inactive coefficient before squaring it under vmap.
-    close_pair = frame.sinh_half <= 0.5
-    small_s = jnp.where(close_pair, frame.sinh_half, 0.0)
+    # A base point near the origin takes the same spelling at every separation: the two legs
+    # above each carry x̂'s O(1/‖x_s‖) derivative and only their sum is smooth in x_s, which costs
+    # the base-point Jacobian eps/(√c·‖x_s‖), while 2*S**2*x is at most a tenth of the result
+    # there. Everywhere else this spelling is restricted to small separation so 2*S**2*x cannot
+    # overflow or cancel at large separation. Sanitize the inactive coefficient before squaring
+    # it under vmap.
+    base_near_origin = frame.sqrt_c * frame.r_x <= 1e-1  # the threshold of `_pair_near_origin`
+    use_displacement = (frame.sinh_half <= 0.5) | base_near_origin
+    small_s = jnp.where(use_displacement, frame.sinh_half, 0.0)
     close_scale = _asinhc(small_s) / jnp.sqrt(1.0 + small_s**2)
     close_s_D = close_scale * ((y[1:] - x[1:]) - (2.0 * small_s**2) * x[1:])
     close_time = jnp.dot(x[1:] / x[0], close_s_D, precision=MATMUL_PRECISION)
     close_A = jnp.concatenate([close_time[None], close_s_D])
-    return jnp.where(close_pair, close_A, res)
+    return jnp.where(use_displacement, close_A, res)
 
 
 def _logmap_impl(
@@ -1220,9 +1302,13 @@ def _logmap_impl(
     """Logarithmic map with a regular Cartesian chart at either exact origin.
 
     Unlike :func:`_gyro_difference` and :func:`_ptransp`, this stays on the exact-origin switch
-    rather than the 1e-1 scaled-radius neighborhood: the polar frame's gradients here are already
-    accurate at every small nonzero radius (measured relative error at rounding level through
-    scaled radius 1e-8), so widening the switch would buy nothing.
+    rather than the 1e-1 scaled-radius neighborhood, because :func:`_logmap_frame` covers that
+    neighborhood itself: for a base point inside it, and for any close pair, it takes the
+    displacement spelling, whose gradients are at rounding level at every small radius from
+    ``MIN_NORM`` up (float32 base-point Jacobian within 1e-6 of the exact one from scaled radius
+    1e-1 down to 1e-7, and within 7e-7 at ``‖x_s‖ = 1.1e-15``).
+    That does not hold for the frame assembly, which loses ``eps/(√c·‖x_s‖)`` in the base-point
+    Jacobian there; see :func:`_logmap_frame`. Widening this switch would buy nothing.
     """
     use_cartesian = _pair_has_origin(x, y)
     # Keep inactive Cartesian coefficients finite: reverse mode must not multiply zero by overflow.
@@ -1518,7 +1604,8 @@ def _ptransp_to_0(
     2.0e-3 at ``a = 10``, no better than the Cartesian chart). One more dot measures that residue, and the radial
     coefficient becomes ``u_r/(√c·x₀) - ⟨u_⊥, x̂⟩``: radial error ≤ 3e-7 at every measured radius
     ``a ≤ 10``. What remains is perpendicular — ``x̂``'s own direction rounding times ``u_r``, 5.5e-4 at
-    ``a = 10`` — the order of the float32 ``logmap`` output that feeds ``log_prob`` (1.3e-3 there): the
+    ``a = 10`` — the order of the float32 ``logmap`` output that fed ``log_prob`` before it moved to
+    :func:`_gyro_difference` (1.3e-3 there): the
     ambient chart stores a tangent vector's components at ``cosh a`` times its length (see
     :func:`_tangent_norm`), and no spelling reading ``(v, x)`` gets below that.
 
@@ -1575,6 +1662,57 @@ def _ptransp_to_0(
     return jnp.concatenate([jnp.zeros(1, dtype=v.dtype), res_s_D])
 
 
+def _tangent_at_origin_cartesian(
+    v_s_D: Float[Array, "dim"], x: Float[Array, "dim_plus_1"], near_origin: Array, c: ScalarCurvature
+) -> Float[Array, "dim"]:
+    """Spatial part of ``PT_{x→origin}(v)`` in the Cartesian chart, for a base point near the origin.
+
+    The Cartesian arm of :func:`_ptransp_to_0`: ``v_s - (v₀/(x₀ + 1/√c))·x_s`` with the tangency time
+    slot ``v₀ = ⟨x_s, v_s⟩/x₀``. Transport is an isometry and the metric at the origin is Euclidean, so
+    Euclidean products of these vectors are the tangent inner products at ``x``. :func:`_tangent_norm`
+    and :func:`_tangent_inner` take them for a base point within scaled spatial radius
+    ``√c·‖x_s‖ <= 1e-1``.
+
+    The reason is the derivative with respect to ``x``, not the value. The radial/perpendicular split
+    divides by ``‖x_s‖``: its two terms each change with ``x̂_s`` at a rate ``1/‖x_s‖`` and only their
+    sum is smooth in ``x_s``, so the gradient of the split form with respect to a near-origin base
+    point carries an absolute error of about ``eps/(√c·‖x_s‖)`` times its natural scale
+    ``√c·‖u‖·‖v‖``, while the true gradient there is ``O(‖x_s‖)``. :func:`_expmap` reads its geodesic
+    length from :func:`_tangent_norm`, so its base-point Jacobian lost the same factor. Measured in
+    float32 against float64 on the same inputs (``D`` = 8 and 64, ``c`` = 0.1 and 1, steps of scaled
+    length 0.3 to 10, 16 pairs, largest relative error): the Jacobian of ``expmap`` with respect to the
+    base point was off by 7e-4 at scaled radius 1e-3, 4e-2 at 1e-5 and 4 at 1e-7, and is within about
+    1e-6 with this arm (largest measured 1.2e-6, at the inside edge of the neighborhood for a step of
+    length 10). Just outside the neighborhood the split's error is 4e-6 for ``expmap`` and falls
+    like ``1/‖x_s‖``. The raw gradient with respect to the ambient point differs between the two arms
+    along the sheet's normal, which the lift or ``egrad2rgrad`` removes.
+    (``logs/2026-10-07_logmap-base-point-jacobian/``: ``siblings/screen_fix.json`` before,
+    ``siblings/screen_port2.json`` after, ``siblings/sample_check.out`` and ``sample_check_port.out``
+    for the wrapped normal's ``sample``, ``expmap_port/verify/`` for the edge cases.)
+
+    This form has no ``‖x_s‖`` in a denominator. Its subtraction removes at most ``(√c·‖x_s‖)²/2`` of
+    ``v_s``, 0.5 % inside the neighborhood; at large radius it would cancel like the literal
+    Minkowski form, which is why the split stays everywhere else.
+
+    The arm is fed the origin where ``near_origin`` is false, so its coefficients stay finite however
+    far ``x`` is.
+
+    Args:
+        v_s_D: Spatial part of a tangent vector at x, shape (dim,)
+        x: Hyperboloid point, shape (dim+1,)
+        near_origin: Scalar bool, whether ``x`` is inside the neighborhood
+        c: Curvature (positive)
+
+    Returns:
+        Spatial part of the transported vector, shape (dim,)
+    """
+    sqrt_c = jnp.sqrt(c)
+    origin = _create_origin(c, x.shape[0] - 1, dtype=x.dtype)
+    cartesian_x = jnp.where(near_origin, x, origin)
+    v0 = jnp.dot(cartesian_x[1:] / cartesian_x[0], v_s_D, precision=MATMUL_PRECISION)
+    return v_s_D - (v0 / (cartesian_x[0] + 1.0 / sqrt_c)) * cartesian_x[1:]
+
+
 def _tangent_inner(
     u: Float[Array, "dim_plus_1"], v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature
 ) -> Float[Array, ""]:
@@ -1599,6 +1737,10 @@ def _tangent_inner(
     :func:`~hyperbolix.utils.math_utils.radial_perp_decomposition`) and under ``√c·x₀``, both no-ops
     for every valid base point.
 
+    A base point within scaled spatial radius ``1e-1`` takes the Cartesian chart instead
+    (:func:`_tangent_at_origin_cartesian`): the split is value-exact there, but its gradient with
+    respect to the base point is not.
+
     Args:
         u: Tangent vector at x, shape (dim+1,)
         v: Tangent vector at x, shape (dim+1,)
@@ -1615,7 +1757,16 @@ def _tangent_inner(
     # √c·x₀ = cosh a >= 1 on the upper sheet, so the floor is a no-op for every valid base point;
     # it only keeps a degenerate x (x₀ = 0) from dividing by zero.
     time_scale = floor_at(sqrt_c * x[0], MIN_NORM)
-    return jnp.dot(perp_u_D, perp_v_D, precision=MATMUL_PRECISION) + (radial_u / time_scale) * (radial_v / time_scale)
+    polar = jnp.dot(perp_u_D, perp_v_D, precision=MATMUL_PRECISION) + (radial_u / time_scale) * (radial_v / time_scale)
+    # A base point near the origin takes the Cartesian chart, for the derivative with respect to x:
+    # see `_tangent_at_origin_cartesian`.
+    near_origin = sqrt_c * safe_norm(x_s_D) <= 1e-1  # the threshold of `_pair_near_origin`
+    cartesian = jnp.dot(
+        _tangent_at_origin_cartesian(u[1:], x, near_origin, c),
+        _tangent_at_origin_cartesian(v[1:], x, near_origin, c),
+        precision=MATMUL_PRECISION,
+    )
+    return jnp.where(near_origin, cartesian, polar)
 
 
 def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], c: ScalarCurvature) -> Float[Array, ""]:
@@ -1644,6 +1795,10 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     ``v = 0`` returns exactly 0 with an exactly-zero (hence finite) gradient — the ``MIN_NORM²``
     floor the previous implementation needed for that is no longer required.
 
+    A base point within scaled spatial radius ``1e-1`` takes the Cartesian chart instead
+    (:func:`_tangent_at_origin_cartesian`): the split is value-exact there, but its gradient with
+    respect to the base point is not.
+
     Args:
         v: Tangent vector at x, shape (dim+1,)
         x: Hyperboloid point, shape (dim+1,)
@@ -1660,7 +1815,13 @@ def _tangent_norm(v: Float[Array, "dim_plus_1"], x: Float[Array, "dim_plus_1"], 
     perp_norm = safe_norm(perp_D)
     # √c·x₀ = cosh a >= 1 on the upper sheet, so the floor is a no-op for every valid base point;
     # it only keeps a degenerate x (x₀ = 0) from dividing by zero.
-    return safe_hypot(perp_norm, radial / floor_at(sqrt_c * x[0], MIN_NORM))
+    polar = safe_hypot(perp_norm, radial / floor_at(sqrt_c * x[0], MIN_NORM))
+    # A base point near the origin takes the Cartesian chart, for the derivative with respect to x:
+    # see `_tangent_at_origin_cartesian`. `safe_norm` keeps the exact zero and the zero gradient at
+    # v = 0.
+    near_origin = sqrt_c * safe_norm(x[1:]) <= 1e-1  # the threshold of `_pair_near_origin`
+    cartesian = safe_norm(_tangent_at_origin_cartesian(v[1:], x, near_origin, c))
+    return jnp.where(near_origin, cartesian, polar)
 
 
 def _egrad2rgrad(

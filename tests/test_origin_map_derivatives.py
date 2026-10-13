@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from hyperbolix.manifolds import Hyperboloid, ProperVelocity
-from hyperbolix.manifolds.hyperboloid import _logmap_impl
+from hyperbolix.manifolds.hyperboloid import _gyro_difference, _logmap_impl
 
 
 def _np_lift(s_D: np.ndarray, c: float) -> np.ndarray:
@@ -56,6 +56,12 @@ def _np_logmap(x_D: np.ndarray, y_D: np.ndarray, c: float) -> np.ndarray:
     alpha = -c * _np_lorentz(x_A, y_A)
     theta = np.arccosh(alpha)
     return theta * (y_A - alpha * x_A) / np.sqrt(alpha * alpha - 1.0)
+
+
+def _np_expmap(x_D: np.ndarray, w_D: np.ndarray, c: float) -> np.ndarray:
+    x_A, v_A = _np_lift(x_D, c), _np_tangent(x_D, w_D, c)
+    theta = np.sqrt(c * _np_lorentz(v_A, v_A))
+    return np.cosh(theta) * x_A + np.sinh(theta) / theta * v_A
 
 
 def _np_ptransp(x_D: np.ndarray, y_D: np.ndarray, w_D: np.ndarray, c: float) -> np.ndarray:
@@ -730,6 +736,160 @@ def test_small_radius_chart_values_and_gradients_match_independent_fd(operation:
         np.testing.assert_allclose(dc_B, expected_dc_B, rtol=rtol, atol=atol)
 
 
+@pytest.mark.parametrize("c", [0.1, 1.0])
+@pytest.mark.parametrize("dim", [2, 64])
+def test_logmap_base_point_jacobian_near_origin_far_pair_matches_independent_fd(c: float, dim: int) -> None:
+    """A base point near the origin, far from the mapped point (theta = 3): both dtypes against FD.
+
+    The polar-frame assembly lost eps/(sqrt(c)*radius) in this Jacobian while the value stayed right:
+    float32 was about 4e-4 off at scaled radius 3e-4 and above 1 at 1e-7. The last two radii sit on
+    either side of the scaled-spatial-radius switch.
+    """
+    rng = np.random.default_rng(7)
+    direction_D = rng.normal(size=dim)
+    direction_D /= np.linalg.norm(direction_D)
+    far_D = rng.normal(size=dim)
+    far_D *= np.sinh(3.0) / (np.sqrt(c) * np.linalg.norm(far_D))
+    # Round once: float32 and the independent reference see identical spatial coordinates.
+    stored_far_D = np.asarray(far_D, dtype=np.float32)
+    for radius in (1e-7, 1e-5, 1e-3, 0.03, 0.0999, 0.1001):
+        stored_base_D = np.asarray(radius * direction_D / np.sqrt(c), dtype=np.float32)
+        expected_AD = _fd_jacobian(
+            lambda z_D: _np_logmap(z_D, stored_far_D.astype(np.float64), c), stored_base_D.astype(np.float64)
+        )
+        jacobians = {}
+        for dtype in (jnp.float32, jnp.float64):
+            typed_far_D = jnp.asarray(stored_far_D, dtype=dtype)
+
+            def jax_fn(z_D: jax.Array, typed_far_D=typed_far_D) -> jax.Array:
+                return _hyperboloid_map("logmap", z_D, typed_far_D, jnp.zeros_like(z_D), c)
+
+            base_D = jnp.asarray(stored_base_D, dtype=dtype)
+            rtol, atol = (2e-5, 2e-6) if dtype == jnp.float32 else (5e-6, 5e-7)
+            if dtype == jnp.float32 and radius > 0.1:
+                # Outside the switch the frame keeps its eps/radius error, up to 9e-6 just past it.
+                atol = 2e-5
+            jacobians[dtype] = np.asarray(jax.jacfwd(jax_fn)(base_D))
+            np.testing.assert_allclose(jacobians[dtype], expected_AD, rtol=rtol, atol=atol, err_msg=f"jacfwd radius={radius}")
+            np.testing.assert_allclose(
+                jax.jacrev(jax_fn)(base_D), expected_AD, rtol=rtol, atol=atol, err_msg=f"jacrev radius={radius}"
+            )
+        np.testing.assert_allclose(
+            jacobians[jnp.float32],
+            jacobians[jnp.float64],
+            rtol=2e-5,
+            atol=2e-6 if radius <= 0.1 else 2e-5,
+            err_msg=f"float32 vs float64 radius={radius}",
+        )
+
+
+@pytest.mark.parametrize("c", [0.1, 1.0])
+@pytest.mark.parametrize("dim", [2, 64])
+def test_expmap_base_point_jacobian_near_origin_matches_independent_fd(c: float, dim: int) -> None:
+    """A base point near the origin and a tangent of scaled length 3: both dtypes against FD.
+
+    `expmap` read its geodesic length from the radial/perpendicular split, whose gradient with respect
+    to the base point lost eps/(sqrt(c)*radius) while the value stayed right: the float32 Jacobian was
+    about 1e-4 off at scaled radius 1e-3 and of order 1 at 1e-7. The last two radii sit on either side
+    of the scaled-spatial-radius switch. The proper-velocity `expmap` lifts through the same code.
+    """
+    rng = np.random.default_rng(11)
+    direction_D = rng.normal(size=dim)
+    direction_D /= np.linalg.norm(direction_D)
+    tangent_D = rng.normal(size=dim)
+    tangent_D *= 3.0 / (np.sqrt(c) * np.linalg.norm(tangent_D))
+    # Round once: float32 and the independent reference see identical spatial coordinates.
+    stored_tangent_D = np.asarray(tangent_D, dtype=np.float32)
+    for radius in (1e-7, 1e-5, 1e-3, 0.03, 0.0999, 0.1001):
+        stored_base_D = np.asarray(radius * direction_D / np.sqrt(c), dtype=np.float32)
+        expected_AD = _fd_jacobian(
+            lambda z_D: _np_expmap(z_D, stored_tangent_D.astype(np.float64), c), stored_base_D.astype(np.float64)
+        )
+        for dtype in (jnp.float32, jnp.float64):
+            typed_tangent_D = jnp.asarray(stored_tangent_D, dtype=dtype)
+
+            def hyperboloid_fn(z_D: jax.Array, typed_tangent_D=typed_tangent_D) -> jax.Array:
+                manifold = Hyperboloid(dtype=z_D.dtype)
+                return manifold.expmap(_j_tangent(z_D, typed_tangent_D, c), _j_lift(z_D, c), c)
+
+            def pv_fn(z_D: jax.Array, typed_tangent_D=typed_tangent_D) -> jax.Array:
+                return ProperVelocity(dtype=z_D.dtype).expmap(typed_tangent_D, z_D, c)
+
+            base_D = jnp.asarray(stored_base_D, dtype=dtype)
+            rtol, atol = (2e-5, 2e-5) if dtype == jnp.float32 else (5e-6, 5e-7)
+            for name, fn, expected in (("hyperboloid", hyperboloid_fn, expected_AD), ("pv", pv_fn, expected_AD[1:])):
+                for mode, jacobian in (("jacfwd", jax.jacfwd), ("jacrev", jax.jacrev)):
+                    np.testing.assert_allclose(
+                        jacobian(fn)(base_D), expected, rtol=rtol, atol=atol, err_msg=f"{name} {mode} radius={radius}"
+                    )
+
+
+@pytest.mark.parametrize("c", [0.1, 1.0])
+@pytest.mark.parametrize("dim", [2, 64])
+def test_tangent_metric_base_point_gradient_near_origin_matches_independent_fd(c: float, dim: int) -> None:
+    """`tangent_inner` and `tangent_norm` differentiated with respect to a base point near the origin.
+
+    The true gradient is O(radius) there. The radial/perpendicular split returned it with an absolute
+    error of about eps/(sqrt(c)*radius) times its natural scale (sqrt(c)*|u|*|w| for the inner product,
+    sqrt(c)*|w| for the norm): 1e-4 of that scale at scaled radius 1e-3 in float32, all of it at 1e-7.
+    """
+    rng = np.random.default_rng(13)
+    direction_D = rng.normal(size=dim)
+    direction_D /= np.linalg.norm(direction_D)
+    u_D = rng.normal(size=dim)
+    u_D *= 1.0 / (np.sqrt(c) * np.linalg.norm(u_D))
+    w_D = rng.normal(size=dim)
+    w_D *= 3.0 / (np.sqrt(c) * np.linalg.norm(w_D))
+    stored_u_D, stored_w_D = np.asarray(u_D, dtype=np.float32), np.asarray(w_D, dtype=np.float32)
+    u64_D, w64_D = stored_u_D.astype(np.float64), stored_w_D.astype(np.float64)
+    inner_scale, norm_scale = 3.0 / np.sqrt(c), 3.0
+
+    def np_inner(z_D: np.ndarray) -> float:
+        return _np_lorentz(_np_tangent(z_D, u64_D, c), _np_tangent(z_D, w64_D, c))
+
+    def np_norm(z_D: np.ndarray) -> float:
+        return float(np.sqrt(_np_lorentz(_np_tangent(z_D, w64_D, c), _np_tangent(z_D, w64_D, c))))
+
+    for radius in (1e-7, 1e-5, 1e-3, 0.03, 0.0999, 0.1001):
+        stored_base_D = np.asarray(radius * direction_D / np.sqrt(c), dtype=np.float32)
+        expected_inner_D = _fd_jacobian(np_inner, stored_base_D.astype(np.float64))
+        expected_norm_D = _fd_jacobian(np_norm, stored_base_D.astype(np.float64))
+        for dtype in (jnp.float32, jnp.float64):
+            typed_u_D, typed_w_D = jnp.asarray(stored_u_D, dtype=dtype), jnp.asarray(stored_w_D, dtype=dtype)
+            hyperboloid, pv = Hyperboloid(dtype=dtype), ProperVelocity(dtype=dtype)
+
+            def hyperboloid_inner(z_D: jax.Array, m=hyperboloid, u=typed_u_D, w=typed_w_D) -> jax.Array:
+                return m.tangent_inner(_j_tangent(z_D, u, c), _j_tangent(z_D, w, c), _j_lift(z_D, c), c)
+
+            def hyperboloid_norm(z_D: jax.Array, m=hyperboloid, w=typed_w_D) -> jax.Array:
+                return m.tangent_norm(_j_tangent(z_D, w, c), _j_lift(z_D, c), c)
+
+            def pv_inner(z_D: jax.Array, m=pv, u=typed_u_D, w=typed_w_D) -> jax.Array:
+                return m.tangent_inner(u, w, z_D, c)
+
+            def pv_norm(z_D: jax.Array, m=pv, w=typed_w_D) -> jax.Array:
+                return m.tangent_norm(w, z_D, c)
+
+            base_D = jnp.asarray(stored_base_D, dtype=dtype)
+            # Relative to the natural scale; float64 is limited by the difference quotient.
+            tol = 1e-5 if dtype == jnp.float32 else 1e-7
+            for name, inner_fn, norm_fn in (("hyperboloid", hyperboloid_inner, hyperboloid_norm), ("pv", pv_inner, pv_norm)):
+                np.testing.assert_allclose(
+                    jax.grad(inner_fn)(base_D),
+                    expected_inner_D,
+                    rtol=0.0,
+                    atol=tol * inner_scale,
+                    err_msg=f"{name} tangent_inner radius={radius}",
+                )
+                np.testing.assert_allclose(
+                    jax.grad(norm_fn)(base_D),
+                    expected_norm_D,
+                    rtol=0.0,
+                    atol=tol * norm_scale,
+                    err_msg=f"{name} tangent_norm radius={radius}",
+                )
+
+
 @pytest.mark.parametrize("step", [1e-4, 1e-6])
 @pytest.mark.parametrize("kind", ["radial", "angular"])
 def test_float32_near_coincident_gyro_difference_matches_longdouble_stored_inputs(step: float, kind: str) -> None:
@@ -892,3 +1052,61 @@ def test_origin_log_squared_spatial_norm_hessian_matches_independent_scalar_refe
             lambda base_D: _np_logmap_squared_spatial_norm(target_D, base_D, c), np.zeros(2), 1e-4
         )
     np.testing.assert_allclose(got_DD, expected_DD, rtol=1e-6, atol=1e-6)
+
+
+def _decimal_inverse_boost_along_base(stored_x_D: np.ndarray, stored_y_D: np.ndarray, c: float) -> tuple[float, float]:
+    """``(<x̂, s>, ‖s‖)`` of the inverse boost ``s = (⊖x) ⊕ y`` at 50 digits, from the exact stored spatial operands.
+
+    Along the base ray the boost reduces to ``<x̂, s> = √c·(x₀·<x̂, y_s> - y₀·‖x_s‖)``, two terms of size
+    ``cosh²(a)`` that cancel, which is why this oracle is not evaluated in ``np.longdouble``.
+    """
+    with localcontext() as ctx:
+        ctx.prec = 50
+        x_D = [Decimal(float(t)) for t in stored_x_D]
+        y_D = [Decimal(float(t)) for t in stored_y_D]
+        c_dec = Decimal(float(c))
+        sqrt_c = c_dec.sqrt()
+        r_x = sum(t * t for t in x_D).sqrt()
+        x0 = (1 / c_dec + r_x * r_x).sqrt()
+        y0 = (1 / c_dec + sum(t * t for t in y_D)).sqrt()
+        xy = sum(s * t for s, t in zip(x_D, y_D, strict=True))
+        coeff = c_dec * xy / (1 + sqrt_c * x0) - sqrt_c * y0
+        s_D = [y_i + coeff * x_i for x_i, y_i in zip(x_D, y_D, strict=True)]
+        along = sum(s * t for s, t in zip(s_D, x_D, strict=True)) / r_x
+        return float(along), float(sum(t * t for t in s_D).sqrt())
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
+@pytest.mark.parametrize("a", [8.0, 10.0])
+def test_gyro_difference_of_a_close_pair_keeps_its_component_along_the_base_ray(dtype, a: float) -> None:
+    """Centering a point 0.15 .. 0.6 nats along its base point's ray at scaled radius 8 and 10 keeps the radial part.
+
+    The polar frame returned the part of ``y_s`` across ``x̂`` from unit vectors, which leaves ``eps·‖y_s‖`` of
+    rounding *along* ``x̂``; that went straight into a result of size ``0.15 .. 0.6``. Error of ``<x̂, s>`` relative
+    to ``‖s‖`` on these inputs: 9.3e-4 (float32) and 1.0e-12 (float64) at ``a = 8``, 4.8e-3 and 1.1e-11 at 10. The
+    close-pair spelling reads both parts off ``y_s - x_s``: at most 2.0e-6 (17 eps) and 7.3e-16 (3.3 eps).
+    (``logs/2026-10-07_wrapped-normal-far-mean/probe_test_numbers_{main,new}.out``.)
+    """
+    c, dim, n_draw = 0.5, 16, 16
+    rng = np.random.default_rng(int(a))
+    worst = 0.0
+    for _ in range(n_draw):
+        direction_D = rng.normal(size=dim)
+        direction_D /= np.linalg.norm(direction_D)
+        step = rng.choice([-1.0, 1.0]) * rng.uniform(0.15, 0.6)
+        # Round once: the library and the oracle see identical spatial coordinates.
+        stored_x_D = np.asarray(direction_D * np.sinh(a) / np.sqrt(c), dtype=np.float32)
+        stored_y_D = np.asarray(direction_D * np.sinh(a + step) / np.sqrt(c), dtype=np.float32)
+        # The close-pair branch is opt-in (`wrapped_normal_hyperboloid.log_prob` sets it).
+        got_A = _gyro_difference(
+            _j_lift(jnp.asarray(stored_x_D, dtype=dtype), c),
+            _j_lift(jnp.asarray(stored_y_D, dtype=dtype), c),
+            c,
+            close_pairs=True,
+        )
+        x_hat_D = stored_x_D.astype(np.float64) / np.linalg.norm(stored_x_D.astype(np.float64))
+        expected_along, expected_norm = _decimal_inverse_boost_along_base(stored_x_D, stored_y_D, c)
+        worst = max(
+            worst, abs(float(np.dot(np.asarray(got_A, dtype=np.float64)[1:], x_hat_D)) - expected_along) / expected_norm
+        )
+    assert worst <= 128 * float(jnp.finfo(dtype).eps), f"a={a}: {worst:.3e} of the result's norm along the base ray"
