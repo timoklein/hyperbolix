@@ -9,7 +9,13 @@ globally, so ``jnp.array([0.1, 0.2])`` is f64 and ``ManifoldBase._cast`` was nev
 Also removed: two ``test_dist_values_match`` tests that compared ``_dist(x.astype(f64), …)`` to
 itself, and ``TestVmapJitCompat``, a byte-identical clone (same literal points) of
 ``tests/test_class_based_manifolds.py``'s vmap/jit block, which asserts strictly more.
+
+Dimension key:
+  B: batch size    D: point dimension    P: hyperplanes
+  Ai: in_ambient (in_features)    H, W: feature-map height/width    C: ambient channels
 """
+
+import re
 
 import jax
 import jax.numpy as jnp
@@ -22,7 +28,8 @@ from hyperbolix.manifolds import proper_velocity as proper_velocity_module
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
-from hyperbolix.nn_layers.hyperboloid_linear import FGGLinear
+from hyperbolix.nn_layers.hyperboloid_conv import FGGConv2D
+from hyperbolix.nn_layers.hyperboloid_linear import FGGLinear, HTCLinear
 from hyperbolix.utils.precision import MATMUL_PRECISION
 
 
@@ -258,10 +265,11 @@ class TestMLRFunctions:
 # ---------------------------------------------------------------------------------------
 # The precision split (hyperbolix.utils.precision)
 #
-# The geometry dots are pinned at HIGHEST; the layer weight GEMMs pass no `precision` kwarg
-# and follow JAX's own `jax_default_matmul_precision`. On CPU, DEFAULT and HIGHEST are the
-# same arithmetic (there is no TF32 path), so the only way to observe the setting here is the
-# lowered StableHLO — which is what the lowering tests below read.
+# The geometry dots are pinned at HIGHEST, and so is the FGG layers' Minkowski product
+# `x @ V`; the other layer weight GEMMs (`HTCLinear` below) pass no `precision` kwarg and follow
+# JAX's own `jax_default_matmul_precision`. On CPU, DEFAULT and HIGHEST are the same arithmetic
+# (there is no TF32 path), so the only way to observe the setting here is the lowered StableHLO
+# — which is what the lowering tests below read.
 # ---------------------------------------------------------------------------------------
 
 
@@ -270,21 +278,21 @@ def test_matmul_precision_stays_pinned_at_highest():
     assert MATMUL_PRECISION is jax.lax.Precision.HIGHEST
 
 
-def _lower_fgg_linear_forward():
-    """Lower a jitted float32 FGGLinear forward and return the StableHLO text.
+def _lower_htc_linear_forward():
+    """Lower a jitted float32 HTCLinear forward and return the StableHLO text.
 
     The layer is constructed inside this helper on purpose: every site captures the precision
     when it is traced (and `nnx.Linear` already at construction), so the surrounding
     `jax.default_matmul_precision` context has to be entered before the model is built.
     """
-    layer = FGGLinear(9, 5, rngs=nnx.Rngs(0), param_dtype=jnp.float32)
+    layer = HTCLinear(9, 5, rngs=nnx.Rngs(0), param_dtype=jnp.float32)
     x_BAi = jnp.zeros((4, 9), dtype=jnp.float32).at[:, 0].set(1.0)  # origin, curvature 1
-    return jax.jit(lambda a: layer(a, 1.0)).lower(x_BAi).as_text()
+    return jax.jit(lambda a: layer(a, 1.0, 1.0)).lower(x_BAi).as_text()
 
 
 def test_default_lowering_leaves_the_layer_gemm_at_the_jax_default_precision():
-    """`FGGLinear`'s `x @ V` carries no `precision` kwarg, so it lowers at DEFAULT."""
-    text = _lower_fgg_linear_forward()
+    """`HTCLinear`'s weight GEMM carries no `precision` kwarg, so it lowers at DEFAULT."""
+    text = _lower_htc_linear_forward()
     assert "precision = [DEFAULT, DEFAULT]" in text
     assert "HIGHEST" not in text
 
@@ -292,5 +300,37 @@ def test_default_lowering_leaves_the_layer_gemm_at_the_jax_default_precision():
 def test_jax_default_matmul_precision_context_reaches_the_layer_gemm():
     """`jax.default_matmul_precision("highest")` is the supported way to force full float32."""
     with jax.default_matmul_precision("highest"):
-        text = _lower_fgg_linear_forward()
+        text = _lower_htc_linear_forward()
     assert "precision = [HIGHEST, HIGHEST]" in text
+
+
+def _lower_fgg_forward(layer_name):
+    """Lower a jitted float32 `FGGLinear` or `FGGConv2D` forward and return the StableHLO text.
+
+    As in `_lower_htc_linear_forward`, the layer is built here so that the caller's
+    `jax.default_matmul_precision` context is the one the trace sees.
+    """
+    if layer_name == "FGGLinear":
+        linear = FGGLinear(9, 5, rngs=nnx.Rngs(0), param_dtype=jnp.float32)
+        x_BAi = jnp.zeros((4, 9), dtype=jnp.float32).at[:, 0].set(1.0)  # origin, curvature 1
+        return jax.jit(lambda a: linear(a, 1.0)).lower(x_BAi).as_text()
+    conv = FGGConv2D(Hyperboloid(dtype=jnp.float32), 5, 7, kernel_size=3, rngs=nnx.Rngs(0), param_dtype=jnp.float32)
+    x_BHWC = jnp.zeros((2, 6, 6, 5), dtype=jnp.float32).at[..., 0].set(1.0)  # origin map, curvature 1
+    return jax.jit(lambda a: conv(a, 1.0)).lower(x_BHWC).as_text()
+
+
+@pytest.mark.parametrize("layer_name", ["FGGLinear", "FGGConv2D"])
+def test_fgg_minkowski_product_lowers_at_highest_with_the_jax_default_unset(layer_name):
+    """`FGGLinear` and `FGGConv2D` pin their `x @ V` at HIGHEST instead of following the JAX default.
+
+    The Minkowski metric is absorbed into `V`, so the Lorentz cancellation happens inside this one
+    product; the float64 replay of a trained network that led to the pin is described in
+    `hyperbolix.utils.precision`. TF32 does not exist on CPU, so no numeric test can tell the two
+    precisions apart here, and the check is on the graph: `x @ V` is the only `dot_general` of
+    either forward (`FGGConv2D`'s patch extraction lowers to a convolution).
+    """
+    with jax.default_matmul_precision(None):  # unset, whatever JAX_DEFAULT_MATMUL_PRECISION says
+        text = _lower_fgg_forward(layer_name)
+    precisions = re.findall(r"stablehlo\.dot_general\b[^\n]*\bprecision = \[([A-Z, ]+)\]", text)
+    assert len(precisions) == text.count("stablehlo.dot_general")  # no dot_general went unread
+    assert precisions == ["HIGHEST, HIGHEST"]

@@ -30,7 +30,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.utils.math_utils import MIN_NORM, floor_at, safe_hypot, safe_norm, safe_sqrt
 
 from ._helpers import validate_hyperboloid_manifold
-from .hyperboloid_core import build_spacelike_V, htc, sinh_lift_to_hyperboloid
+from .hyperboloid_core import MATMUL_PRECISION, build_spacelike_V, htc, sinh_lift_to_hyperboloid
 
 
 def _fhcnn_forward(
@@ -374,13 +374,16 @@ def _fgg_linear_forward(
     # Cast V to match input dtype (avoids float32/float64 scatter warnings)
     V_AiO = V_AiO.astype(x_BAi.dtype)
 
-    # Minkowski inner products via matmul (metric in V). The Minkowski metric is absorbed into
-    # V, so the -x0*V0 + <x_s, V_s> cancellation happens *inside* this single accumulation, and
-    # TF32 inputs leave ~1e-3 of the pre-cancellation magnitude in the result. This is a layer
-    # weight GEMM and takes no `precision` kwarg, so it follows JAX's own
-    # `jax_default_matmul_precision`; a deep FGG stack is a good reason to set that to
-    # "highest" (see hyperbolix.utils.precision).
-    z_BO = jnp.matmul(x_BAi, V_AiO)  # (B, O)
+    # Minkowski inner products via matmul (metric in V), pinned HIGHEST. The Minkowski metric is
+    # absorbed into V, so the -x0*V0 + <x_s, V_s> cancellation happens *inside* this single
+    # accumulation, and TF32 would leave ~1e-3 of the pre-cancellation magnitude in the result.
+    # That error reaches the outputs of a trained network: replayed against float64, a Procgen
+    # PPO agent with an encoder of 15 FGGConv2D and one FGGLinear (c = 0.1, trained on an A100
+    # under the JAX default) had 120 changed greedy actions over 72 checkpoints and, without a
+    # radius cap, actor logits up to 0.14 off; with these 16 products at HIGHEST no action
+    # changes and the logits are within 1.03e-4. The measurement, and what it does not cover:
+    # hyperbolix.utils.precision.
+    z_BO = jnp.matmul(x_BAi, V_AiO, precision=MATMUL_PRECISION)  # (B, O)
 
     # Apply Euclidean activation (Lorentzian wrapping implicit via cancellation)
     if activation is not None:

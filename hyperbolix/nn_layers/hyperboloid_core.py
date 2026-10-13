@@ -49,8 +49,8 @@ from hyperbolix.utils.precision import MATMUL_PRECISION as MATMUL_PRECISION  # r
 # neutral module both manifolds/ and nn_layers/ import from (manifolds/ must not depend on
 # nn_layers/). The import above keeps `hyperboloid_core.MATMUL_PRECISION` working for existing
 # importers; see hyperbolix/utils/precision.py for which sites are pinned, the TF32 rationale
-# and the measurements. Layer weight GEMMs pass no `precision` kwarg and follow JAX's own
-# `jax_default_matmul_precision`.
+# and the measurements. The layer weight GEMMs that are not on that list (the FGG product
+# `x @ V` is on it) pass no `precision` kwarg and follow JAX's own `jax_default_matmul_precision`.
 
 
 def build_spacelike_V(
