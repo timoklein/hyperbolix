@@ -110,6 +110,8 @@ class LorentzMLA(nnx.Module):
       ``eps`` floor sits on ``c |<h, h>_L|`` rather than HELM's ``1e-8`` on ``|<h, h>_L|`` and
       whose time coordinate is rebuilt from the spatial part; the other time coordinates come
       from :func:`spatial_to_hyperboloid`.
+    - **Score and centroid GEMMs.** The score and centroid GEMMs are pinned to HIGHEST by
+      default (HELM's code runs them at the framework default); see ``score_precision``.
 
     Conventions
     -----------
@@ -133,15 +135,16 @@ class LorentzMLA(nnx.Module):
     these GEMMs in bfloat16, whose ``eps`` is ``2^16`` times float32's; since the error grows as
     ``e^(2a)``, that moves the same error down by ``ln(2^16) / 2 ~ 5.5`` nats of radius. The
     weights stay finite either way, just wrong. Keep the radius down, or run the layer in
-    float32/float64.
+    float32/float64. The two score GEMMs are pinned to HIGHEST by default; a lower
+    ``score_precision`` (``DEFAULT``, which is TF32 on Ampere/Hopper) adds its own rounding on top
+    of the cancellation described here.
 
     Centroid form
     -------------
     ``centroid_form="gemm"`` (the default) normalizes ``h = sum_t w_t v_t`` by the literal
     ``c (h_0^2 - ||h_s||^2)``: one GEMM and ``O(S T)`` memory per head, like the scores. This
-    is the centroid of HELM's own reference code (its ``lorentzian_centroid``), which trains
-    in bfloat16. It is the default because at LLM context lengths the alternative is
-    impractical on GPU: ``centroid_form="variance"``, the cancellation-free direct variance
+    is the HELM paper form of the centroid, the one HELM uses. It is the default because at LLM
+    context lengths the alternative is impractical on GPU: ``centroid_form="variance"``, the cancellation-free direct variance
     of :func:`lorentz_midpoint`, forms an elementwise ``(B, H, S, T, v_head_dim - 1)``
     intermediate, ``O(S T D)`` work outside the GEMMs and as much memory where XLA
     materializes it (XLA:CPU does in the backward, about 100 GB in float32 at ``B = 8,
@@ -158,7 +161,8 @@ class LorentzMLA(nnx.Module):
     ``"variance"``; ``logs/2026-09-30_helm-decisions/mla_far_values_probe.out``, pinned by
     ``test_variance_centroid_aggregates_far_values_accurately``). For short sequences, or
     whenever the values can lie far out, use ``centroid_form="variance"``, which is accurate
-    to the storage floor.
+    to the storage floor. The centroid GEMM ``h = sum_t w_t v_t`` follows ``score_precision``
+    like the two score GEMMs (HIGHEST by default).
 
     Parameters
     ----------
@@ -198,6 +202,11 @@ class LorentzMLA(nnx.Module):
         ``form`` of the per-head :func:`lorentz_midpoint` (default: ``"gemm"``, ``O(S T)``
         memory, HELM's centroid); ``"variance"`` for short sequences or far-out values. See
         "Centroid form".
+    score_precision : jax.lax.PrecisionLike, optional
+        Precision of the two attention-score einsums and of the centroid GEMM inside
+        :func:`lorentz_midpoint` (default: ``MATMUL_PRECISION``, i.e. ``jax.lax.Precision.HIGHEST``).
+        The Q/K/V projections (``wq``, ``wkv_a``, ``wkv_b``) and ``wo`` follow JAX's default
+        regardless. See "Float32 score floor" for why the default is pinned.
 
     Attributes
     ----------
@@ -238,6 +247,7 @@ class LorentzMLA(nnx.Module):
         param_dtype: DTypeLike = jnp.float32,
         eps: float = 1e-7,
         centroid_form: Literal["gemm", "variance"] = "gemm",
+        score_precision: jax.lax.PrecisionLike = MATMUL_PRECISION,
     ):
         if dim < 2:
             raise ValueError(f"dim is the ambient model width and must be >= 2, got {dim}")
@@ -268,6 +278,7 @@ class LorentzMLA(nnx.Module):
         self.rope_base = rope_base
         self.eps = eps
         self.centroid_form: Literal["gemm", "variance"] = centroid_form
+        self.score_precision: jax.lax.PrecisionLike = score_precision
 
         def projection(in_features: int, out_features: int) -> HTCLinear:
             bound = init_bound if init_bound is not None else _helm_xavier_bound(in_features, out_features)
@@ -403,11 +414,14 @@ class LorentzMLA(nnx.Module):
         value_BTHW = spatial_to_hyperboloid(value_space_BSHV, c, c, eps)  # (B, T, H, W)
 
         # 5. Scores: negative squared Lorentzian distance 2/c + 2<q, k>_L.
-        # The two GEMMs cancel at large radius (class docstring, "Float32 score floor"), so they are
-        # pinned HIGHEST as in HyperbolicFullAttention; the projection GEMMs above follow JAX's default.
+        # The two GEMMs cancel at large radius (class docstring, "Float32 score floor"), so they default
+        # to HIGHEST as in HyperbolicFullAttention (`score_precision`); the projection GEMMs above
+        # follow JAX's default.
         lorentz_inner_BHST = -jnp.einsum(
-            "bshl,bthl->bhst", query_BSHL[..., :1], key_BTHL[..., :1], precision=MATMUL_PRECISION
-        ) + jnp.einsum("bshk,bthk->bhst", query_BSHL[..., 1:], key_BTHL[..., 1:], precision=MATMUL_PRECISION)  # (B, H, S, T)
+            "bshl,bthl->bhst", query_BSHL[..., :1], key_BTHL[..., :1], precision=self.score_precision
+        ) + jnp.einsum(
+            "bshk,bthk->bhst", query_BSHL[..., 1:], key_BTHL[..., 1:], precision=self.score_precision
+        )  # (B, H, S, T)
         # Scale, mask and softmax run in at least float32 (HELM: softmax(dtype=float32)); a
         # float64 forward keeps float64.
         softmax_dtype = jnp.promote_types(work_dtype, jnp.float32)
@@ -424,7 +438,9 @@ class LorentzMLA(nnx.Module):
 
         # 6. Per-head weighted Lorentzian centroid of the values.
         value_BHTW = jnp.transpose(value_BTHW, (0, 2, 1, 3))  # (B, H, T, W)
-        centroid_BHSW = lorentz_midpoint(value_BHTW, weights_BHST, c, eps, form=self.centroid_form)  # (B, H, S, W)
+        centroid_BHSW = lorentz_midpoint(
+            value_BHTW, weights_BHST, c, eps, form=self.centroid_form, precision=self.score_precision
+        )  # (B, H, S, W)
 
         # 7. Flatten the per-head ambient points (time included) and project to the output point.
         heads_BSF = jnp.transpose(centroid_BHSW, (0, 2, 1, 3)).reshape(B, S, H * self.v_head_dim)  # (B, S, H*W)

@@ -54,7 +54,7 @@ parameter shows up as a NaN loss.
 
 ## Matmul Precision
 
-`MATMUL_PRECISION` pins the geometry dots (manifold reductions, midpoints, attention scores, MLR heads, the point-to-hyperplane layers, and the `x @ V` product of `FGGLinear`/`FGGConv2D`) to `jax.lax.Precision.HIGHEST`, so XLA:GPU's default TF32 rounding does not hit the cancellations they rely on; it is not user-configurable. The other layer weight GEMMs (`HTCLinear`, the FHCNN/FHNN linears, `HypLinearPoincare`, `LorentzConv2D`) pass no `precision` and follow JAX's `jax_default_matmul_precision`, which means TF32 on Ampere/Hopper GPUs. To run those in full float32 too, at some cost in throughput, set:
+`MATMUL_PRECISION` pins the geometry dots (manifold reductions, midpoints, attention scores, MLR heads, the point-to-hyperplane layers, and the `x @ V` product of `FGGLinear`/`FGGConv2D`) to `jax.lax.Precision.HIGHEST`, so XLA:GPU's default TF32 rounding does not hit the cancellations they rely on; it is not user-configurable, with one exception: `LorentzMLA(score_precision=...)` (and the `lorentz_midpoint(precision=...)` keyword it passes on) sets the precision of the attention-score and centroid GEMMs, and defaults to this pin. The other layer weight GEMMs (`HTCLinear`, the FHCNN/FHNN linears, `HypLinearPoincare`, `LorentzConv2D`) pass no `precision` and follow JAX's `jax_default_matmul_precision`, which means TF32 on Ampere/Hopper GPUs. To run those in full float32 too, at some cost in throughput, set:
 
 ```python
 import jax

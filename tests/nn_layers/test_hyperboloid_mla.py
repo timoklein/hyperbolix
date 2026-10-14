@@ -565,3 +565,52 @@ def test_overfit_reduces_loss():
     final = float(loss_fn(layer))
     assert np.isfinite(final)
     assert final < 0.5 * initial
+
+
+def _pinned_dot_precisions(layer, x, c):
+    """`precision` params of the forward's dot_generals that carry one (the score and centroid GEMMs).
+
+    The Q/K/V and output projections pass no `precision` (params None) and are skipped.
+    """
+
+    def walk(jaxpr):
+        for eqn in jaxpr.eqns:
+            yield eqn
+            for value in eqn.params.values():
+                for sub in value if isinstance(value, (list, tuple)) else [value]:
+                    inner = getattr(sub, "jaxpr", sub)
+                    if hasattr(inner, "eqns"):
+                        yield from walk(inner)
+
+    jaxpr = jax.make_jaxpr(lambda points: layer(points, c))(x).jaxpr
+    return [
+        e.params["precision"] for e in walk(jaxpr) if e.primitive.name == "dot_general" and e.params["precision"] is not None
+    ]
+
+
+def test_score_precision_defaults_to_highest():
+    c = 1.0
+    layer = _make_layer()
+    assert layer.score_precision == jax.lax.Precision.HIGHEST
+    precisions = _pinned_dot_precisions(layer, _make_points(jax.random.key(0), c), c)
+    assert len(precisions) == 3  # two score einsums, one centroid GEMM
+    assert all(p == (jax.lax.Precision.HIGHEST,) * 2 for p in precisions)
+
+
+def test_score_precision_reaches_score_and_centroid_gemms():
+    c = 1.0
+    layer = _make_layer(score_precision=jax.lax.Precision.DEFAULT)
+    precisions = _pinned_dot_precisions(layer, _make_points(jax.random.key(0), c), c)
+    assert len(precisions) == 3
+    assert all(p == (jax.lax.Precision.DEFAULT,) * 2 for p in precisions)
+
+
+def test_score_precision_default_matches_highest_on_cpu():
+    # CPU has no reduced-precision matmul path, so both settings are full float32 there.
+    if jax.default_backend() != "cpu":
+        pytest.skip("equality of DEFAULT and HIGHEST holds only on CPU")
+    c = 1.0
+    x = _make_points(jax.random.key(0), c)
+    highest = _make_layer(seed=3)(x, c)
+    default = _make_layer(seed=3, score_precision=jax.lax.Precision.DEFAULT)(x, c)
+    np.testing.assert_allclose(np.asarray(default), np.asarray(highest), rtol=1e-6, atol=1e-6)
