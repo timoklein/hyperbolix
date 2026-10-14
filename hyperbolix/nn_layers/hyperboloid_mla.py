@@ -209,19 +209,12 @@ class LorentzMLA(nnx.Module):
         HIGHEST. The Q/K/V projections (``wq``, ``wkv_a``, ``wkv_b``) and ``wo`` follow JAX's
         default regardless. See "Float32 score floor" for why the default is pinned.
 
-        Measured in float32 on one ``LorentzMLA`` with the weights of the trained HELM-MiCE 120M
-        model (Zenodo record 18729608, trailing optimizer step undone; the released file gives
-        the same radii), 256 Wikipedia rows of 2,048 tokens, A100, ``c = 1``. There the queries
-        and keys stay below scaled radius ``a = 3.9`` and the values below 2.83. With the score
-        einsums at ``DEFAULT`` (TF32 on Ampere/Hopper), the worst-token output error is 0.035
-        nats, against 0.017 nats at ``HIGHEST``. Both include the error of the TF32 Q/K/V and
-        output projections, which follow JAX's default; with every GEMM at ``HIGHEST`` it is
-        8.7e-4 nats. The softmax weights of the layer are off by up to 3.9e-3 at ``DEFAULT``
-        against 2.3e-3 at ``HIGHEST``. Forward plus backward at 4 x 2,048 tokens took 0.74x the
-        ``HIGHEST`` time (A/A 1.00). Lowering the centroid GEMM as well cost 0.26 nats on the
-        worst token, which is why it stays pinned. So ``DEFAULT`` is a reasonable choice while
-        queries and keys stay below about ``a = 4``; past that, keep the pin. See "Float32 score
-        floor" for the growth with radius and the bfloat16 note.
+        In the trained HELM-MiCE 120M model (queries and keys below scaled radius ``a = 3.9``),
+        ``DEFAULT`` (TF32 on an A100) raised the worst-token output error from 0.017 to 0.035
+        nats and cut the layer's forward plus backward time to 0.74x at 4 x 2,048 tokens. So
+        ``DEFAULT`` is a reasonable choice while queries and keys stay below about ``a = 4``;
+        past that, keep the pin. Measurement and the growth with radius are in the docs:
+        ``numerical-stability.md#attention-score-floor``.
 
     Attributes
     ----------
