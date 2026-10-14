@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`LorentzMLA(score_precision=...)` and `lorentz_midpoint(precision=...)`.** The precision of `LorentzMLA`'s two attention-score einsums and of its centroid GEMM is now a constructor argument. The default stays `MATMUL_PRECISION` (`HIGHEST`), so outputs are unchanged. It is the one geometry dot a user can lower; every other geometry dot stays pinned. See [the attention score floor](user-guide/numerical-stability.md#attention-score-floor).
+
+### Removed
+- **Breaking: `LorentzResidual(weight_parameterization="identity")`, `LorentzResidual.project_w_y()` and `project_residual_weights(model)`.** The identity mode mirrored the raw learnable `w_y` of HELM's released code, which gives NaN once `w_y < 0`, and needed a projection after every optimizer step. A learnable `w_y` is now always softplus-constrained. Passing `weight_parameterization` raises a `TypeError`. The fixed-weight mode, `scale_parameterization="exp"` and the call-time `weight=` stay.
+- **Breaking: `LorentzMoEGate.update_bias(rule=...)` and `LorentzMoE.update_bias(rule=...)`.** Only DeepSeek-V3's sign rule, the one the HELM paper cites, remains. The removed `rule="proportional"` mirrored an `update_bias` that HELM's released training loop never calls.
+
+### Documentation
+- The HELM layers (`LorentzMLA`, `LorentzMoE`, `LorentzMoEGate`, `LorentzSwiGLU`, `LorentzResidual`) are described as the HELM paper's form, not as reproductions of HELM's released code. Their docstrings list the differences from that code. `LorentzResidual` matches HELM's LResNet in the forward pass for `w_y >= 0`; its input gradients differ along the hyperboloid normal only.
+
 ## [1.4.0] - 2026-10-01
 
 Two new models, Klein and HalfSpace. Far-pair Poincaré and Stereographic operations are now cancellation-free, and the Poincaré and Busemann layers score tangent input in closed form. `LearnableCurvature`'s clamp keeps the gradient that points back inside, and non-finite input now stays non-finite instead of turning into a plausible finite output. The HELM decoder layers (`LorentzMLA`, `LorentzMoE`, `LorentzEmbedding`) are new. Full numbers and mechanisms are in the [numerical stability guide](user-guide/numerical-stability.md).
