@@ -431,7 +431,6 @@ def lorentz_midpoint(
     c: ScalarCurvature,
     eps: float = 1e-7,
     form: Literal["variance", "gemm"] = "variance",
-    precision: jax.lax.PrecisionLike = MATMUL_PRECISION,
 ) -> Float[Array, "... N A"]:
     """Weighted Lorentzian midpoint over M points.
 
@@ -465,8 +464,8 @@ def lorentz_midpoint(
 
     Cost is ``O(N*M*D)``: the direct variance uses one ``(..., N, M, D)``
     broadcast and reduction. For batch means and head averages, ``N = 1`` and
-    this is linear in the number of points. The contractions use ``precision``
-    (default HIGHEST). Output time is reconstructed from the normalized spatial part.
+    this is linear in the number of points. All contractions use HIGHEST
+    precision. Output time is reconstructed from the normalized spatial part.
 
     ``form="gemm"`` instead evaluates ``-c<h,h>_L = c*(h_0² - ||h_s||²)`` on ``h`` itself,
     the literal HELM centroid ``h / sqrt(c*|<h,h>_L|)`` (floored at ``eps``), with the same
@@ -523,12 +522,6 @@ def lorentz_midpoint(
         How ``-c<h,h>_L`` is evaluated; a static Python choice (default: ``"variance"``, the
         cancellation-free direct variance; ``"gemm"`` is the single-GEMM literal form, see
         above).
-    precision : jax.lax.PrecisionLike, optional
-        Precision of the two contractions (the weighted sum ``weights @ points`` and the weighted
-        variance sum). The default, ``MATMUL_PRECISION`` (HIGHEST), is the geometry pin of
-        :mod:`hyperbolix.utils.precision`; the other library callers keep it. A lower value
-        (e.g. ``jax.lax.Precision.DEFAULT``, TF32 on Ampere/Hopper) adds that precision's rounding
-        to the inputs of the normalization above.
 
     Returns
     -------
@@ -559,10 +552,10 @@ def lorentz_midpoint(
     if form not in ("variance", "gemm"):
         raise ValueError(f"form must be 'variance' or 'gemm', got {form!r}")
     # h = sum_m w_{n,m} * points_m  →  (..., N, A)
-    # Pinned HIGHEST by default: the cancellation-free identity below only holds to O(eps) if its inputs
+    # Pinned HIGHEST: the cancellation-free identity below only holds to O(eps) if its inputs
     # are float32-accurate; at the TF32 default the f32-vs-f64 relative error of this function
     # is 4.6e-5 … 2.6e-4 instead of 2.6e-8 … 1.6e-7 (see hyperbolix.utils.precision).
-    h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=precision)
+    h_NA = jnp.einsum("...nm,...ma->...na", weights, points, precision=MATMUL_PRECISION)
     if form == "gemm":
         # Literal -c<h,h>_L from h alone: O(N*A) elementwise work, no (..., N, M, D) intermediate.
         # Cancels as eps*cosh²(a) at large radius (docstring); elementwise, so no TF32 either.
@@ -576,7 +569,7 @@ def lorentz_midpoint(
         # Direct variance: expanding these squares reintroduces large-radius cancellation.
         dev_sq_NM = jnp.sum((velocity_MD[..., None, :, :] - mean_ND[..., :, None, :]) ** 2, axis=-1)
         terms_NM = 1.0 / time_M[..., None, :] + c * time_M[..., None, :] * dev_sq_NM
-        weighted_N = jnp.einsum("...nm,...nm->...n", weights, terms_NM, precision=precision)
+        weighted_N = jnp.einsum("...nm,...nm->...n", weights, terms_NM, precision=MATMUL_PRECISION)
         neg_c_mink_N1 = (time_N * weighted_N)[..., None]  # (..., N, 1), = -c*<h,h>_L
     denom_N1 = jnp.sqrt(floor_at(jnp.abs(neg_c_mink_N1), eps))  # (..., N, 1)
     z_NA = h_NA / denom_N1  # (..., N, A)

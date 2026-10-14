@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **`LorentzMLA(score_precision=...)` and `lorentz_midpoint(precision=...)`.** The precision of `LorentzMLA`'s two attention-score einsums and of its centroid GEMM is now a constructor argument. The default stays `MATMUL_PRECISION` (`HIGHEST`), so outputs are unchanged. It is the one geometry dot a user can lower; every other geometry dot stays pinned. See [the attention score floor](user-guide/numerical-stability.md#attention-score-floor).
+- **`LorentzMLA(score_precision=...)`.** The precision of `LorentzMLA`'s two attention-score einsums is now a constructor argument. The default stays `MATMUL_PRECISION` (`HIGHEST`), so outputs are unchanged. At the radii of the trained HELM-MiCE 120M model, `DEFAULT` took 0.74× the time and gave a worst-token error of 0.035 against 0.017 nats. The centroid GEMM stays pinned, because lowering it cost 0.26 nats. It is the one geometry dot a user can lower; every other geometry dot stays pinned. See [the attention score floor](user-guide/numerical-stability.md#attention-score-floor).
 
 ### Removed
 - **Breaking: `LorentzResidual(weight_parameterization="identity")`, `LorentzResidual.project_w_y()` and `project_residual_weights(model)`.** The identity mode mirrored the raw learnable `w_y` of HELM's released code, which gives NaN once `w_y < 0`, and needed a projection after every optimizer step. A learnable `w_y` is now always softplus-constrained. Passing `weight_parameterization` raises a `TypeError`. The fixed-weight mode, `scale_parameterization="exp"` and the call-time `weight=` stay.

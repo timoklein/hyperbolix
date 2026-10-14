@@ -110,8 +110,9 @@ class LorentzMLA(nnx.Module):
       ``eps`` floor sits on ``c |<h, h>_L|`` rather than HELM's ``1e-8`` on ``|<h, h>_L|`` and
       whose time coordinate is rebuilt from the spatial part; the other time coordinates come
       from :func:`spatial_to_hyperboloid`.
-    - **Score and centroid GEMMs.** The score and centroid GEMMs are pinned to HIGHEST by
-      default (HELM's code runs them at the framework default); see ``score_precision``.
+    - **Score and centroid GEMMs.** The two score GEMMs default to HIGHEST and can be lowered
+      with ``score_precision``. The centroid GEMM is always HIGHEST. HELM's code runs both at
+      the framework default.
 
     Conventions
     -----------
@@ -137,7 +138,7 @@ class LorentzMLA(nnx.Module):
     weights stay finite either way, just wrong. Keep the radius down, or run the layer in
     float32/float64. The two score GEMMs are pinned to HIGHEST by default; a lower
     ``score_precision`` (``DEFAULT``, which is TF32 on Ampere/Hopper) adds its own rounding on top
-    of the cancellation described here.
+    of the cancellation described here. The measured trade-off is under ``score_precision``.
 
     Centroid form
     -------------
@@ -161,8 +162,8 @@ class LorentzMLA(nnx.Module):
     ``"variance"``; ``logs/2026-09-30_helm-decisions/mla_far_values_probe.out``, pinned by
     ``test_variance_centroid_aggregates_far_values_accurately``). For short sequences, or
     whenever the values can lie far out, use ``centroid_form="variance"``, which is accurate
-    to the storage floor. The centroid GEMM ``h = sum_t w_t v_t`` follows ``score_precision``
-    like the two score GEMMs (HIGHEST by default).
+    to the storage floor. The centroid GEMM ``h = sum_t w_t v_t`` is always HIGHEST, whatever
+    ``score_precision`` says.
 
     Parameters
     ----------
@@ -203,10 +204,24 @@ class LorentzMLA(nnx.Module):
         memory, HELM's centroid); ``"variance"`` for short sequences or far-out values. See
         "Centroid form".
     score_precision : jax.lax.PrecisionLike, optional
-        Precision of the two attention-score einsums and of the centroid GEMM inside
-        :func:`lorentz_midpoint` (default: ``MATMUL_PRECISION``, i.e. ``jax.lax.Precision.HIGHEST``).
-        The Q/K/V projections (``wq``, ``wkv_a``, ``wkv_b``) and ``wo`` follow JAX's default
-        regardless. See "Float32 score floor" for why the default is pinned.
+        Precision of the two attention-score einsums only (default: ``MATMUL_PRECISION``, i.e.
+        ``jax.lax.Precision.HIGHEST``). The centroid GEMM inside :func:`lorentz_midpoint` stays
+        HIGHEST. The Q/K/V projections (``wq``, ``wkv_a``, ``wkv_b``) and ``wo`` follow JAX's
+        default regardless. See "Float32 score floor" for why the default is pinned.
+
+        Measured in float32 on one ``LorentzMLA`` with the weights of the trained HELM-MiCE 120M
+        model (Zenodo record 18729608, trailing optimizer step undone; the released file gives
+        the same radii), 256 Wikipedia rows of 2,048 tokens, A100, ``c = 1``. There the queries
+        and keys stay below scaled radius ``a = 3.9`` and the values below 2.83. With the score
+        einsums at ``DEFAULT`` (TF32 on Ampere/Hopper), the worst-token output error is 0.035
+        nats, against 0.017 nats at ``HIGHEST``. Both include the error of the TF32 Q/K/V and
+        output projections, which follow JAX's default; with every GEMM at ``HIGHEST`` it is
+        8.7e-4 nats. The softmax weights of the layer are off by up to 3.9e-3 at ``DEFAULT``
+        against 2.3e-3 at ``HIGHEST``. Forward plus backward at 4 x 2,048 tokens took 0.74x the
+        ``HIGHEST`` time (A/A 1.00). Lowering the centroid GEMM as well cost 0.26 nats on the
+        worst token, which is why it stays pinned. So ``DEFAULT`` is a reasonable choice while
+        queries and keys stay below about ``a = 4``; past that, keep the pin. See "Float32 score
+        floor" for the growth with radius and the bfloat16 note.
 
     Attributes
     ----------
@@ -415,8 +430,8 @@ class LorentzMLA(nnx.Module):
 
         # 5. Scores: negative squared Lorentzian distance 2/c + 2<q, k>_L.
         # The two GEMMs cancel at large radius (class docstring, "Float32 score floor"), so they default
-        # to HIGHEST as in HyperbolicFullAttention (`score_precision`); the projection GEMMs above
-        # follow JAX's default.
+        # to HIGHEST as in HyperbolicFullAttention; `score_precision` can lower these two only. The
+        # centroid GEMM in step 6 stays HIGHEST, and the projection GEMMs above follow JAX's default.
         lorentz_inner_BHST = -jnp.einsum(
             "bshl,bthl->bhst", query_BSHL[..., :1], key_BTHL[..., :1], precision=self.score_precision
         ) + jnp.einsum(
@@ -438,9 +453,7 @@ class LorentzMLA(nnx.Module):
 
         # 6. Per-head weighted Lorentzian centroid of the values.
         value_BHTW = jnp.transpose(value_BTHW, (0, 2, 1, 3))  # (B, H, T, W)
-        centroid_BHSW = lorentz_midpoint(
-            value_BHTW, weights_BHST, c, eps, form=self.centroid_form, precision=self.score_precision
-        )  # (B, H, S, W)
+        centroid_BHSW = lorentz_midpoint(value_BHTW, weights_BHST, c, eps, form=self.centroid_form)  # (B, H, S, W)
 
         # 7. Flatten the per-head ambient points (time included) and project to the output point.
         heads_BSF = jnp.transpose(centroid_BHSW, (0, 2, 1, 3)).reshape(B, S, H * self.v_head_dim)  # (B, S, H*W)

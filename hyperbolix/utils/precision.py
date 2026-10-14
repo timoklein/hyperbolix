@@ -2,8 +2,8 @@ r"""Matmul precision for the float32 dot products that touch manifold data.
 
 :data:`MATMUL_PRECISION` (``jax.lax.Precision.HIGHEST``) is pinned on
 the sites where the *geometry* is computed, and nowhere else. It is not user-configurable, with one
-named exception: ``LorentzMLA(score_precision=...)`` and the ``lorentz_midpoint(precision=...)``
-keyword set the precision of the attention-score and centroid GEMMs, and default to this pin. A layer's weight GEMM passes no
+named exception: ``LorentzMLA(score_precision=...)`` sets the precision of the two attention-score
+einsums only, and defaults to this pin. A layer's weight GEMM passes no
 ``precision`` keyword at all and follows JAX's own ``jax_default_matmul_precision``, which on
 Ampere/Hopper means TF32, with two exceptions: the point-to-hyperplane layers, whose kernel dot
 *is* one of the pinned geometry einsums, and the FGG layers, whose ``x @ V`` is a Minkowski inner
@@ -184,8 +184,8 @@ import jax
 MATMUL_PRECISION = jax.lax.Precision.HIGHEST
 """Precision for every dot product that computes geometry rather than a layer's weights.
 
-Fixed at ``HIGHEST`` and not user-configurable, except for ``LorentzMLA(score_precision=...)`` and
-``lorentz_midpoint(precision=...)`` (both default to this value): accuracy here is a property of
+Fixed at ``HIGHEST`` and not user-configurable, except for the two score einsums of ``LorentzMLA(score_precision=...)``
+(which default to this value): accuracy here is a property of
 the geometry, not a knob. The module docstring lists the pinned sites and the measurements behind them. The
 layer weight GEMMs pass no ``precision`` keyword and follow ``jax_default_matmul_precision``
 instead — all but the point-to-hyperplane layers, whose kernel dot is one of the pinned
