@@ -115,7 +115,9 @@ error against float32's ~1e-7, so it silently costs three of your seven signific
 
 hyperbolix splits its float32 dot products in two:
 
-- **Geometry is pinned** to `jax.lax.Precision.HIGHEST` and is not configurable: the manifold
+- **Geometry is pinned** to `jax.lax.Precision.HIGHEST` and is not configurable, with one named exception
+  (`LorentzMLA(score_precision=...)`, and the `lorentz_midpoint(precision=)` keyword it passes
+  on, for the score and centroid GEMMs; the default keeps the pin): the manifold
   vector dots, the Lorentz and Poincaré midpoints, the conv patch extraction, the attention
   score and aggregation einsums, the point-to-hyperplane einsums of the MLR heads and of the
   PLFC, Poincaré++ and proper-velocity linear and conv layers, and the Minkowski product `x @ V`
@@ -249,6 +251,10 @@ in 10 min; `HyperbolicFullAttention` at N = 512 takes 15.9 s against 4.0 s. `"ge
 `LorentzMLA`, as in HELM) is one GEMM, but in float32 it loses the centroid once the *values* pass
 `a ≈ 6`, even when the scores are accurate: values at `a ≈ 9` give 11.4 nats of error against 6.4e-4
 for `"variance"`. bfloat16 activations (`eps` 2^16 times float32's) make both worse.
+
+`LorentzMLA(score_precision=...)` sets the precision of its two score einsums and of the centroid
+GEMM. The default keeps them at `HIGHEST`; a lower value (`DEFAULT` is TF32 on Ampere/Hopper) adds
+its own rounding to the cancellation above.
 
 #### The MLR Score at a Large Hyperplane Offset {#mlr-large-bias}
 
