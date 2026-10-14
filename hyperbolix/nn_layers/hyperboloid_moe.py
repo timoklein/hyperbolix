@@ -466,8 +466,9 @@ class LorentzMoE(nnx.Module):
     - **Curvature parameterization.** The routed curvatures are trained through
       :class:`~hyperbolix.utils.curvature.LearnableCurvature` with the default
       ``curvature_parameterization="log"``: ``c_i = exp(raw_i)``, with ``raw_i`` initialised to
-      ``log(c_i)`` and trained by the optimizer. This keeps ``c_i > 0``. It is a choice of this
-      library, not something the paper or the released code specifies.
+      ``log(c_i)`` and trained by the optimizer. This keeps ``c_i > 0``. The released code trains
+      the curvature parameter ``k`` of its geoopt-based ``Lorentz`` manifold directly
+      (``Lorentz(c=1.0, learnable=args.train_curv)``).
     - **Library forms** replace the code's ``clamp_min(1e-8)`` time rebuilds and centroid
       normalizer: :func:`spatial_to_hyperboloid` and :func:`lorentz_midpoint`.
     - **Shared-expert curvature.** The paper's equations give each shared expert its own curvature
