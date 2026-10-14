@@ -44,10 +44,6 @@ NNX module wrapper is here.
     options:
       heading_level: 3
 
-::: hyperbolix.nn_layers.project_residual_weights
-    options:
-      heading_level: 3
-
 ## Example
 
 ```python
