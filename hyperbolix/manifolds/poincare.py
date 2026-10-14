@@ -1036,7 +1036,7 @@ class Poincare(ManifoldBase):
 
     def proj(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project point onto Poincaré ball by clipping norm."""
-        return _proj(self._cast(x), c)
+        return _proj(self._cast(x), self._cast_c(c))
 
     def proj_batch(self, x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... dim"]:
         """Project batched points onto the ball (handles arbitrary leading dimensions).
@@ -1044,23 +1044,23 @@ class Poincare(ManifoldBase):
         Batched sibling of :meth:`proj`, matching ``Hyperboloid.proj_batch``. Equivalent to
         ``jax.vmap(proj, in_axes=(0, None))`` on a 2D input, without materializing the vmap.
         """
-        return _proj_batch(self._cast(x), c)
+        return _proj_batch(self._cast(x), self._cast_c(c))
 
     def gyration(
         self, x: Float[Array, "dim"], y: Float[Array, "dim"], z: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Compute gyration gyr[x,y]z to restore commutativity."""
-        return _gyration(self._cast(x), self._cast(y), self._cast(z), c)
+        return _gyration(self._cast(x), self._cast(y), self._cast(z), self._cast_c(c))
 
     def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Möbius gyrovector addition x ⊕ y."""
-        return _addition(self._cast(x), self._cast(y), c)
+        return _addition(self._cast(x), self._cast(y), self._cast_c(c))
 
     def scalar_mul(self, r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Scalar multiplication r ⊗ x on Poincaré ball."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
-        return _scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
+        return _scalar_mul(r_cast, x, self._cast_c(c))  # type: ignore[arg-type]
 
     def dist(
         self,
@@ -1070,11 +1070,11 @@ class Poincare(ManifoldBase):
         version_idx: int = VERSION_MOBIUS_DIRECT,
     ) -> Float[Array, ""]:
         """Compute geodesic distance between Poincaré ball points."""
-        return _dist(self._cast(x), self._cast(y), c, version_idx)
+        return _dist(self._cast(x), self._cast(y), self._cast_c(c), version_idx)
 
     def dist_0(self, x: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_MOBIUS_DIRECT) -> Float[Array, ""]:
         """Compute geodesic distance from Poincaré ball origin."""
-        return _dist_0(self._cast(x), c, version_idx)
+        return _dist_0(self._cast(x), self._cast_c(c), version_idx)
 
     def apollonian_dist(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Apollonian weak metric δ(x, y) — non-symmetric; symmetrizes to √c·dist(x, y).
@@ -1086,72 +1086,72 @@ class Poincare(ManifoldBase):
             expecting genuine asymmetry — use a :meth:`busemann` coordinate fed to an external
             quasimetric combinator (IQE/MRN) instead.
         """
-        return _apollonian_dist(self._cast(x), self._cast(y), c)
+        return _apollonian_dist(self._cast(x), self._cast(y), self._cast_c(c))
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map: map tangent vector v at point x to manifold."""
-        return _expmap(self._cast(v), self._cast(x), c)
+        return _expmap(self._cast(v), self._cast(x), self._cast_c(c))
 
     def expmap_0(self, v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map from origin: map tangent vector v at origin to manifold."""
-        return _expmap_0(self._cast(v), c)
+        return _expmap_0(self._cast(v), self._cast_c(c))
 
     def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Retraction: first-order approximation of exponential map."""
-        return _retraction(self._cast(v), self._cast(x), c)
+        return _retraction(self._cast(v), self._cast(x), self._cast_c(c))
 
     def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map: map point y to tangent space at point x."""
-        return _logmap(self._cast(y), self._cast(x), c)
+        return _logmap(self._cast(y), self._cast(x), self._cast_c(c))
 
     def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map from origin: map point y to tangent space at origin."""
-        return _logmap_0(self._cast(y), c)
+        return _logmap_0(self._cast(y), self._cast_c(c))
 
     def ptransp(
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Parallel transport tangent vector v from point x to point y."""
-        return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
+        return _ptransp(self._cast(v), self._cast(x), self._cast(y), self._cast_c(c))
 
     def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Parallel transport tangent vector v from origin to point y."""
-        return _ptransp_0(self._cast(v), self._cast(y), c)
+        return _ptransp_0(self._cast(v), self._cast(y), self._cast_c(c))
 
     def tangent_inner(
         self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, ""]:
         """Compute inner product of tangent vectors u and v at point x."""
-        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
+        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), self._cast_c(c))
 
     def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Compute norm of tangent vector v at point x."""
-        return _tangent_norm(self._cast(v), self._cast(x), c)
+        return _tangent_norm(self._cast(v), self._cast(x), self._cast_c(c))
 
     def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Convert Euclidean gradient to Riemannian gradient."""
-        return _egrad2rgrad(self._cast(grad), self._cast(x), c)
+        return _egrad2rgrad(self._cast(grad), self._cast(x), self._cast_c(c))
 
     def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project vector v onto tangent space at point x."""
-        return _tangent_proj(self._cast(v), self._cast(x), c)
+        return _tangent_proj(self._cast(v), self._cast(x), self._cast_c(c))
 
     def is_in_manifold(self, x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
         """Check if point x lies in Poincaré ball (``atol`` default: :func:`default_atol`)."""
-        return _is_in_manifold(self._cast(x), c, atol)
+        return _is_in_manifold(self._cast(x), self._cast_c(c), atol)
 
     def is_in_tangent_space(
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None
     ) -> Array:
         """Check that v has finite entries (T_x B = R^d, so there is no other constraint)."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
+        return _is_in_tangent_space(self._cast(v), self._cast(x), self._cast_c(c), atol)
 
     def conformal_factor(self, x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... 1"]:
         """Numerically stable conformal factor lambda(x) = 2 / (1 - c||x||^2).
 
         Batch-compatible version that handles arbitrary leading dimensions.
         """
-        return _conformal_factor_batch(self._cast(x), c)
+        return _conformal_factor_batch(self._cast(x), self._cast_c(c))
 
     def embed_spatial_0(self, v_spatial: Float[Array, "... n"]) -> Float[Array, "... n"]:
         """Identity embedding (the ball has no time coordinate). Kept for API parity."""
@@ -1166,7 +1166,7 @@ class Poincare(ManifoldBase):
         min_enorm: float = 1e-15,
     ) -> Float[Array, "batch out_dim"]:
         """Compute HNN++ multinomial linear regression on the Poincare ball."""
-        return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), c, min_enorm)
+        return _compute_mlr_pp(self._cast(x), self._cast(z), self._cast(r), self._cast_c(c), min_enorm)
 
     def _compute_mlr_pp_tangent(
         self,
@@ -1180,11 +1180,11 @@ class Poincare(ManifoldBase):
 
         Private: the tangent-input path of the HNN++ layers (see :func:`_compute_mlr_pp_tangent`).
         """
-        return _compute_mlr_pp_tangent(self._cast(v), self._cast(z), self._cast(r), c, min_enorm)
+        return _compute_mlr_pp_tangent(self._cast(v), self._cast(z), self._cast(r), self._cast_c(c), min_enorm)
 
     def beta_concat(self, points: Float[Array, "M n_i"], c: ScalarCurvature) -> Float[Array, "n"]:
         """Beta-concatenation of M equal-dimensional Poincaré ball points."""
-        return _beta_concat(self._cast(points), c)
+        return _beta_concat(self._cast(points), self._cast_c(c))
 
     def busemann(self, x: Float[Array, "dim"], v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Closed-form Poincaré Busemann function ``B^v(x) = (1/√c)·log(‖v - √c·x‖²/(1 - c‖x‖²))``.
@@ -1201,7 +1201,7 @@ class Poincare(ManifoldBase):
         :meth:`apollonian_dist` expecting asymmetry — it is a coboundary (symmetrizes to
         ``√c·dist``) and cannot deliver circulation.
         """
-        return _busemann(self._cast(x), self._cast(v), c)
+        return _busemann(self._cast(x), self._cast(v), self._cast_c(c))
 
     def _busemann_tangent(self, v: Float[Array, "dim"], omega: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """``busemann(expmap_0(v), omega, c)`` from the tangent vector ``v``, without the ball point.
@@ -1209,4 +1209,4 @@ class Poincare(ManifoldBase):
         Private: the tangent-input path of the Busemann layers (see :func:`_busemann_tangent`).
         ``omega`` must be a unit direction.
         """
-        return _busemann_tangent(self._cast(v), self._cast(omega), c)
+        return _busemann_tangent(self._cast(v), self._cast(omega), self._cast_c(c))

@@ -425,7 +425,7 @@ class HalfSpace(ManifoldBase):
 
     def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Gyro addition ``x ⊕ y = exp_x(PT_{o→x}(log_o y))`` (Möbius addition via the Cayley map)."""
-        return _addition(self._cast(x), self._cast(y), c)
+        return _addition(self._cast(x), self._cast(y), self._cast_c(c))
 
     def gyro_difference(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Gyro difference ``(⊖x) ⊕ y``, evaluated from ``log_x y`` without cancellation.
@@ -434,13 +434,13 @@ class HalfSpace(ManifoldBase):
         the result is expected much closer to the origin than the operands (centering, differences
         of two close points).
         """
-        return _gyro_difference(self._cast(x), self._cast(y), c)
+        return _gyro_difference(self._cast(x), self._cast(y), self._cast_c(c))
 
     def scalar_mul(self, r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Gyro scalar multiplication ``r ⊗ x = exp_o(r·log_o x)`` (scales the distance to ``o`` by ``r``)."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
-        return _scalar_mul(r_cast, x, c)
+        return _scalar_mul(r_cast, x, self._cast_c(c))
 
     # -- Distance ------------------------------------------------------------
 
@@ -453,34 +453,34 @@ class HalfSpace(ManifoldBase):
     ) -> Float[Array, ""]:
         """Geodesic distance ``(2/√c)·arsinh(‖r‖/2)`` (single implementation)."""
         del version_idx  # only one implementation
-        return _dist(self._cast(x), self._cast(y), c)
+        return _dist(self._cast(x), self._cast(y), self._cast_c(c))
 
     def dist_0(self, x: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
         """Geodesic distance from the origin ``o = e_n/√c``."""
         del version_idx
-        return _dist_0(self._cast(x), c)
+        return _dist_0(self._cast(x), self._cast_c(c))
 
     # -- Exp / log maps ------------------------------------------------------
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map: tangent vector v at x to the manifold."""
-        return _expmap(self._cast(v), self._cast(x), c)
+        return _expmap(self._cast(v), self._cast(x), self._cast_c(c))
 
     def expmap_0(self, v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map from the origin."""
-        return _expmap_0(self._cast(v), c)
+        return _expmap_0(self._cast(v), self._cast_c(c))
 
     def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Retraction ``proj((x_s + v_s, x_n·exp(v_n/x_n)))``."""
-        return _retraction(self._cast(v), self._cast(x), c)
+        return _retraction(self._cast(v), self._cast(x), self._cast_c(c))
 
     def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map: point y to the tangent space at x."""
-        return _logmap(self._cast(y), self._cast(x), c)
+        return _logmap(self._cast(y), self._cast(x), self._cast_c(c))
 
     def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map at the origin."""
-        return _logmap_0(self._cast(y), c)
+        return _logmap_0(self._cast(y), self._cast_c(c))
 
     # -- Parallel transport --------------------------------------------------
 
@@ -488,11 +488,11 @@ class HalfSpace(ManifoldBase):
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Parallel transport of v from x to y."""
-        return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
+        return _ptransp(self._cast(v), self._cast(x), self._cast(y), self._cast_c(c))
 
     def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Parallel transport of v from the origin to y."""
-        return _ptransp_0(self._cast(v), self._cast(y), c)
+        return _ptransp_0(self._cast(v), self._cast(y), self._cast_c(c))
 
     # -- Metric --------------------------------------------------------------
 
@@ -500,26 +500,26 @@ class HalfSpace(ManifoldBase):
         self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, ""]:
         """Metric ``g_x(u, v) = (u·v)/(c·x_n²)``."""
-        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
+        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), self._cast_c(c))
 
     def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Riemannian norm ``‖v‖_x = ‖v‖/(√c·x_n)``."""
-        return _tangent_norm(self._cast(v), self._cast(x), c)
+        return _tangent_norm(self._cast(v), self._cast(x), self._cast_c(c))
 
     def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Convert a Euclidean gradient to the Riemannian gradient, ``c·x_n²·grad``."""
-        return _egrad2rgrad(self._cast(grad), self._cast(x), c)
+        return _egrad2rgrad(self._cast(grad), self._cast(x), self._cast_c(c))
 
     def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project v onto the tangent space at x (identity)."""
-        return _tangent_proj(self._cast(v), self._cast(x), c)
+        return _tangent_proj(self._cast(v), self._cast(x), self._cast_c(c))
 
     def is_in_manifold(self, x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
         """Check that x is finite with ``x_n > 0`` (``atol`` accepted and unused: the constraint is exact)."""
-        return _is_in_manifold(self._cast(x), c, atol)
+        return _is_in_manifold(self._cast(x), self._cast_c(c), atol)
 
     def is_in_tangent_space(
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None
     ) -> Array:
         """Check that v has finite entries (``T_x H = R^n``, so there is no other constraint)."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
+        return _is_in_tangent_space(self._cast(v), self._cast(x), self._cast_c(c), atol)

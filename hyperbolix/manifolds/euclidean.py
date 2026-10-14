@@ -385,84 +385,84 @@ class Euclidean(ManifoldBase):
 
     def proj(self, x: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Project point onto Euclidean space (identity)."""
-        return _proj(self._cast(x), c)
+        return _proj(self._cast(x), self._cast_c(c))
 
     def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Add Euclidean points."""
-        return _addition(self._cast(x), self._cast(y), c)
+        return _addition(self._cast(x), self._cast(y), self._cast_c(c))
 
     def scalar_mul(self, r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Scalar multiplication."""
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
-        return _scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
+        return _scalar_mul(r_cast, x, self._cast_c(c))  # type: ignore[arg-type]
 
     def dist(
         self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature = 0.0, version_idx: int = VERSION_DEFAULT
     ) -> Float[Array, ""]:
         """Compute distance (``version_idx`` accepted and ignored — see the module docstring)."""
         del version_idx
-        return _dist(self._cast(x), self._cast(y), c)
+        return _dist(self._cast(x), self._cast(y), self._cast_c(c))
 
     def dist_0(self, x: Float[Array, "dim"], c: ScalarCurvature = 0.0, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
         """Distance from origin (``version_idx`` accepted and ignored)."""
         del version_idx
-        return _dist_0(self._cast(x), c)
+        return _dist_0(self._cast(x), self._cast_c(c))
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Exponential map."""
-        return _expmap(self._cast(v), self._cast(x), c)
+        return _expmap(self._cast(v), self._cast(x), self._cast_c(c))
 
     def expmap_0(self, v: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Exponential map from origin."""
-        return _expmap_0(self._cast(v), c)
+        return _expmap_0(self._cast(v), self._cast_c(c))
 
     def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Retraction."""
-        return _retraction(self._cast(v), self._cast(x), c)
+        return _retraction(self._cast(v), self._cast(x), self._cast_c(c))
 
     def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Logarithmic map."""
-        return _logmap(self._cast(y), self._cast(x), c)
+        return _logmap(self._cast(y), self._cast(x), self._cast_c(c))
 
     def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Logarithmic map from origin."""
-        return _logmap_0(self._cast(y), c)
+        return _logmap_0(self._cast(y), self._cast_c(c))
 
     def ptransp(
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature = 0.0
     ) -> Float[Array, "dim"]:
         """Parallel transport."""
-        return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
+        return _ptransp(self._cast(v), self._cast(x), self._cast(y), self._cast_c(c))
 
     def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Parallel transport from origin."""
-        return _ptransp_0(self._cast(v), self._cast(y), c)
+        return _ptransp_0(self._cast(v), self._cast(y), self._cast_c(c))
 
     def tangent_inner(
         self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature = 0.0
     ) -> Float[Array, ""]:
         """Tangent inner product."""
-        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
+        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), self._cast_c(c))
 
     def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, ""]:
         """Tangent norm."""
-        return _tangent_norm(self._cast(v), self._cast(x), c)
+        return _tangent_norm(self._cast(v), self._cast(x), self._cast_c(c))
 
     def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Euclidean to Riemannian gradient."""
-        return _egrad2rgrad(self._cast(grad), self._cast(x), c)
+        return _egrad2rgrad(self._cast(grad), self._cast(x), self._cast_c(c))
 
     def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature = 0.0) -> Float[Array, "dim"]:
         """Project onto tangent space."""
-        return _tangent_proj(self._cast(v), self._cast(x), c)
+        return _tangent_proj(self._cast(v), self._cast(x), self._cast_c(c))
 
     def is_in_manifold(self, x: Float[Array, "dim"], c: ScalarCurvature = 0.0, atol: float | None = None) -> Array:
         """Check that all entries are finite (Euclidean space has no other constraint)."""
-        return _is_in_manifold(self._cast(x), c, atol)
+        return _is_in_manifold(self._cast(x), self._cast_c(c), atol)
 
     def is_in_tangent_space(
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature = 0.0, atol: float | None = None
     ) -> Array:
         """Check that all entries are finite (T_x R^n = R^n has no other constraint)."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
+        return _is_in_tangent_space(self._cast(v), self._cast(x), self._cast_c(c), atol)

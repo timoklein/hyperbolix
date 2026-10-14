@@ -445,17 +445,17 @@ class Klein(ManifoldBase):
 
     def proj(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project a point onto the Klein ball by clipping its norm (same clamp as Poincaré)."""
-        return _proj(self._cast(x), c)
+        return _proj(self._cast(x), self._cast_c(c))
 
     def proj_batch(self, x: Float[Array, "... dim"], c: ScalarCurvature) -> Float[Array, "... dim"]:
         """Project batched points onto the ball (arbitrary leading dimensions)."""
-        return _proj_batch(self._cast(x), c)
+        return _proj_batch(self._cast(x), self._cast_c(c))
 
     # -- Gyro-operations -----------------------------------------------------
 
     def addition(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Einstein gyrovector addition ``x ⊕_E y``."""
-        return _addition(self._cast(x), self._cast(y), c)
+        return _addition(self._cast(x), self._cast(y), self._cast_c(c))
 
     def gyro_difference(self, x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Einstein gyro-difference ``(⊖x) ⊕_E y``, evaluated without the ``1 - c x·y`` cancellation.
@@ -463,7 +463,7 @@ class Klein(ManifoldBase):
         Mathematically identical to ``addition(-x, y)``; use it when the result is expected much
         closer to the origin than the operands (centering, differences of two close points).
         """
-        return _gyro_difference(self._cast(x), self._cast(y), c)
+        return _gyro_difference(self._cast(x), self._cast(y), self._cast_c(c))
 
     def scalar_mul(self, r: float | Float[Array, ""], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Einstein scalar multiplication ``r ⊗ x = tanh(r·artanh(√c‖x‖))·x/(√c‖x‖)``.
@@ -474,7 +474,7 @@ class Klein(ManifoldBase):
         """
         x = self._cast(x)
         r_cast = jnp.asarray(r, dtype=x.dtype)
-        return _poincare_scalar_mul(r_cast, x, c)  # type: ignore[arg-type]
+        return _poincare_scalar_mul(r_cast, x, self._cast_c(c))  # type: ignore[arg-type]
 
     # -- Distance ------------------------------------------------------------
 
@@ -487,34 +487,34 @@ class Klein(ManifoldBase):
     ) -> Float[Array, ""]:
         """Geodesic distance ``arsinh(S)/√c`` between Klein points (single implementation)."""
         del version_idx  # only one implementation
-        return _dist(self._cast(x), self._cast(y), c)
+        return _dist(self._cast(x), self._cast(y), self._cast_c(c))
 
     def dist_0(self, x: Float[Array, "dim"], c: ScalarCurvature, version_idx: int = VERSION_DEFAULT) -> Float[Array, ""]:
         """Geodesic distance from the origin."""
         del version_idx
-        return _dist_0(self._cast(x), c)
+        return _dist_0(self._cast(x), self._cast_c(c))
 
     # -- Exp / log maps ------------------------------------------------------
 
     def expmap(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map: tangent vector v at x to the manifold."""
-        return _expmap(self._cast(v), self._cast(x), c)
+        return _expmap(self._cast(v), self._cast(x), self._cast_c(c))
 
     def expmap_0(self, v: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Exponential map from the origin (the Poincaré formula; see :func:`_expmap_0`)."""
-        return _expmap_0(self._cast(v), c)
+        return _expmap_0(self._cast(v), self._cast_c(c))
 
     def retraction(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Retraction ``proj(x + v)``."""
-        return _retraction(self._cast(v), self._cast(x), c)
+        return _retraction(self._cast(v), self._cast(x), self._cast_c(c))
 
     def logmap(self, y: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map: point y to the tangent space at x."""
-        return _logmap(self._cast(y), self._cast(x), c)
+        return _logmap(self._cast(y), self._cast(x), self._cast_c(c))
 
     def logmap_0(self, y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Logarithmic map from the origin."""
-        return _logmap_0(self._cast(y), c)
+        return _logmap_0(self._cast(y), self._cast_c(c))
 
     # -- Parallel transport --------------------------------------------------
 
@@ -522,11 +522,11 @@ class Klein(ManifoldBase):
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, "dim"]:
         """Parallel transport of v from x to y."""
-        return _ptransp(self._cast(v), self._cast(x), self._cast(y), c)
+        return _ptransp(self._cast(v), self._cast(x), self._cast(y), self._cast_c(c))
 
     def ptransp_0(self, v: Float[Array, "dim"], y: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Parallel transport of v from the origin to y."""
-        return _ptransp_0(self._cast(v), self._cast(y), c)
+        return _ptransp_0(self._cast(v), self._cast(y), self._cast_c(c))
 
     # -- Metric --------------------------------------------------------------
 
@@ -534,35 +534,35 @@ class Klein(ManifoldBase):
         self, u: Float[Array, "dim"], v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature
     ) -> Float[Array, ""]:
         """Klein metric ``g_x(u, v)``."""
-        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), c)
+        return _tangent_inner(self._cast(u), self._cast(v), self._cast(x), self._cast_c(c))
 
     def tangent_norm(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Riemannian norm ``‖v‖_x``."""
-        return _tangent_norm(self._cast(v), self._cast(x), c)
+        return _tangent_norm(self._cast(v), self._cast(x), self._cast_c(c))
 
     def egrad2rgrad(self, grad: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Convert a Euclidean gradient to the Riemannian gradient (inverse Klein metric)."""
-        return _egrad2rgrad(self._cast(grad), self._cast(x), c)
+        return _egrad2rgrad(self._cast(grad), self._cast(x), self._cast_c(c))
 
     def tangent_proj(self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, "dim"]:
         """Project v onto the tangent space at x (identity)."""
-        return _tangent_proj(self._cast(v), self._cast(x), c)
+        return _tangent_proj(self._cast(v), self._cast(x), self._cast_c(c))
 
     def is_in_manifold(self, x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None) -> Array:
         """Check ``c‖x‖² < 1 + atol`` (``atol`` default: :func:`default_atol`)."""
-        return _is_in_manifold(self._cast(x), c, atol)
+        return _is_in_manifold(self._cast(x), self._cast_c(c), atol)
 
     def is_in_tangent_space(
         self, v: Float[Array, "dim"], x: Float[Array, "dim"], c: ScalarCurvature, atol: float | None = None
     ) -> Array:
         """Check that v has finite entries (``T_x K = R^d``, so there is no other constraint)."""
-        return _is_in_tangent_space(self._cast(v), self._cast(x), c, atol)
+        return _is_in_tangent_space(self._cast(v), self._cast(x), self._cast_c(c), atol)
 
     # -- Einstein extras -----------------------------------------------------
 
     def lorentz_factor(self, x: Float[Array, "dim"], c: ScalarCurvature) -> Float[Array, ""]:
         """Einstein Lorentz factor ``gamma_x = 1/√(1 - c‖x‖²)``, scalar."""
-        return _lorentz_factor(self._cast(x), c)
+        return _lorentz_factor(self._cast(x), self._cast_c(c))
 
     def einstein_midpoint(
         self, x_ND: Float[Array, "N dim"], weights_N: Float[Array, "N"] | None, c: ScalarCurvature
@@ -578,4 +578,4 @@ class Klein(ManifoldBase):
             Midpoint, shape (dim,) — the normalized weighted Lorentz centroid mapped to Klein.
         """
         weights = None if weights_N is None else self._cast(weights_N)
-        return _einstein_midpoint(self._cast(x_ND), weights, c)
+        return _einstein_midpoint(self._cast(x_ND), weights, self._cast_c(c))

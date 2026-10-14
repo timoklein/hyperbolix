@@ -5,6 +5,8 @@ import jax.numpy as jnp
 from jax.typing import DTypeLike
 from jaxtyping import Array
 
+from .protocol import ScalarCurvature
+
 
 def default_atol(dtype: DTypeLike) -> float:
     """Default absolute tolerance for a manifold constraint check, ``sqrt(finfo(dtype).eps)``.
@@ -65,3 +67,10 @@ class ManifoldBase:
         if isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, jnp.inexact):
             return x.astype(self.dtype)
         return x
+
+    def _cast_c(self, c: ScalarCurvature) -> Array:
+        """Cast the curvature to the target dtype, so it cannot promote the result under x64.
+
+        Accepts Python floats, NumPy scalars, 0-d arrays and tracers; differentiable.
+        """
+        return jnp.asarray(c, dtype=self.dtype)

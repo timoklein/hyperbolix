@@ -23,6 +23,7 @@ What each contract now checks:
 from __future__ import annotations
 
 import functools
+import inspect
 from collections.abc import Callable
 from typing import NamedTuple
 
@@ -37,6 +38,7 @@ from hyperbolix.manifolds.hyperboloid import VERSION_DEFAULT, Hyperboloid
 from hyperbolix.manifolds.klein import Klein
 from hyperbolix.manifolds.poincare import VERSION_MOBIUS_DIRECT, Poincare
 from hyperbolix.manifolds.proper_velocity import ProperVelocity
+from hyperbolix.manifolds.stereographic import Stereographic
 
 # ---------------------------------------------------------------------------
 # Independent distance oracles (NumPy transcriptions of the textbook closed forms).
@@ -437,3 +439,123 @@ def test_hyperboloid_proj_batch_equals_the_per_row_proj() -> None:
     expected = jnp.stack([manifold.proj(row, case.c) for row in batch])
     assert got.shape == expected.shape
     assert jnp.array_equal(got, expected)
+
+
+# ---------------------------------------------------------------------------
+# Output dtype follows the manifold's dtype, whatever the dtype of the points and of ``c``.
+#
+# With x64 enabled (tests/conftest.py), a float64 0-d ``c`` next to float32 points used to promote
+# the result of several ops to float64, because only the points were cast. Every public method
+# that takes ``c`` is called here and every inexact output is checked. The methods are found by
+# introspection; an argument name the builder below does not know raises, so a new method cannot
+# slip through uncovered.
+#
+# Not covered: methods without a ``c`` argument (``minkowski_inner``, ``embed_spatial_0``), and
+# outputs that are not inexact (``is_in_manifold``, ``is_in_tangent_space`` return ``bool``; they
+# are still called). ``ProductManifold`` takes a per-factor ``cs`` and is checked by its own tests.
+
+_DTYPE_MANIFOLDS: dict[str, Callable[[jnp.dtype], object]] = {
+    "Hyperboloid": lambda dtype: Hyperboloid(dtype=dtype),
+    "Poincare": lambda dtype: Poincare(dtype=dtype),
+    "ProperVelocity": lambda dtype: ProperVelocity(dtype=dtype),
+    "Klein": lambda dtype: Klein(dtype=dtype),
+    "HalfSpace": lambda dtype: HalfSpace(dtype=dtype),
+    "Stereographic": lambda dtype: Stereographic(dtype=dtype),
+    "Euclidean": lambda dtype: Euclidean(dtype=dtype),
+}
+
+# Underscore methods that the layers call and that forward ``c``.
+_PRIVATE_C_METHODS = ("_compute_mlr_pp_tangent", "_busemann_tangent")
+
+_C_KINDS = {
+    "python-float": lambda: 1.0,
+    "float32-0d": lambda: jnp.asarray(1.0, dtype=jnp.float32),
+    "float64-0d": lambda: jnp.asarray(1.0, dtype=jnp.float64),
+}
+
+
+def _methods_taking_c(manifold: object) -> list[str]:
+    names = []
+    for name, _ in inspect.getmembers(type(manifold), inspect.isfunction):
+        if name.startswith("_") and name not in _PRIVATE_C_METHODS:
+            continue
+        if "c" in inspect.signature(getattr(manifold, name)).parameters:
+            names.append(name)
+    return names
+
+
+def _dtype_test_arguments(manifold, name: str, point_dtype: jnp.dtype) -> dict[str, object]:
+    """Build valid-ish arguments (in ``point_dtype``) for every parameter of method ``name``."""
+    dim = 4
+    rng = np.random.default_rng(0)
+    # Tangent vector at the origin; the hyperboloid's time component is zero.
+    raw = 0.3 * rng.standard_normal((4, dim))
+    if isinstance(manifold, Hyperboloid):
+        raw = np.concatenate([np.zeros((4, 1)), raw], axis=1)
+    raw = jnp.asarray(raw, dtype=manifold.dtype)
+    points = jnp.stack([manifold.expmap_0(row, 1.0) for row in raw[:3]])
+    x, y, z = points[0], points[1], points[2]
+    tangent = manifold.tangent_proj(raw[3], x, 1.0)
+    spatial = jnp.asarray(rng.standard_normal(dim), dtype=manifold.dtype)
+    direction = spatial / jnp.linalg.norm(spatial)
+
+    mlr = name in ("compute_mlr", "compute_mlr_pp", "_compute_mlr_pp_tangent")
+    busemann = name in ("busemann", "_busemann_tangent")
+    in_dim = points.shape[-1]
+    z_dim = dim if isinstance(manifold, Hyperboloid) else in_dim  # hyperboloid hyperplanes are spatial
+    known: dict[str, object] = {
+        "x": x,
+        "y": y,
+        "z": z,
+        "u": tangent,
+        "v": tangent,
+        "grad": tangent,
+        "mu": x,
+        "omega": direction,
+        "points": points,
+        "x_ND": points,
+        "weights_N": None,
+        "r": 0.7,
+        "t": 0.3,
+        "dim": dim,
+    }
+    if mlr:
+        known["x"] = points[:2]
+        if name == "_compute_mlr_pp_tangent":
+            known["v"] = raw[:2]
+        known["z"] = jnp.asarray(rng.standard_normal((3, z_dim)), dtype=manifold.dtype)
+        known["r"] = jnp.asarray(0.1 * rng.standard_normal((3, 1)), dtype=manifold.dtype)
+    if busemann and name == "busemann":
+        known["v"] = direction
+    if busemann and name == "_busemann_tangent":
+        known["v"] = raw[3]  # tangent at the origin
+    args = {}
+    for param in inspect.signature(getattr(manifold, name)).parameters:
+        if param in ("c", "min_enorm", "atol", "version_idx"):
+            continue  # defaults (``c`` is set by the caller)
+        value = known[param]  # KeyError: a new argument name needs a rule above
+        if isinstance(value, jax.Array) and jnp.issubdtype(value.dtype, jnp.inexact):
+            value = value.astype(point_dtype)
+        args[param] = value
+    return args
+
+
+@pytest.mark.parametrize("c_kind", list(_C_KINDS))
+@pytest.mark.parametrize("point_dtype", [jnp.float32, jnp.float64], ids=["points-f32", "points-f64"])
+@pytest.mark.parametrize("manifold_dtype", [jnp.float32, jnp.float64], ids=["manifold-f32", "manifold-f64"])
+@pytest.mark.parametrize("name", list(_DTYPE_MANIFOLDS))
+def test_every_method_returns_the_manifold_dtype(name: str, manifold_dtype, point_dtype, c_kind: str) -> None:
+    """Output dtype == ``manifold.dtype`` for every method taking ``c``, for any point and ``c`` dtype."""
+    manifold = _DTYPE_MANIFOLDS[name](manifold_dtype)
+    c = _C_KINDS[c_kind]()
+    methods = _methods_taking_c(manifold)
+    assert len(methods) >= 15, methods  # introspection found the API
+
+    wrong = []
+    for method in methods:
+        args = _dtype_test_arguments(manifold, method, point_dtype)
+        out = getattr(manifold, method)(**args, c=c)
+        for leaf in jax.tree_util.tree_leaves(out):
+            if jnp.issubdtype(jnp.asarray(leaf).dtype, jnp.inexact) and jnp.asarray(leaf).dtype != manifold_dtype:
+                wrong.append(f"{method}: {jnp.asarray(leaf).dtype}")
+    assert not wrong, f"{name}({jnp.dtype(manifold_dtype).name}), points {jnp.dtype(point_dtype).name}, c {c_kind}: {wrong}"
