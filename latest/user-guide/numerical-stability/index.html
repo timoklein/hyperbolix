@@ -3161,7 +3161,8 @@ need the full float32 exponent range, and <code>safe_sqrt(sum(v**2))</code> on h
 <ul>
 <li><strong>Compute precision</strong> is the dtype manifold operations run in, set by the
   manifold's <code>dtype</code> (e.g. <code>Poincare(dtype=jnp.float64)</code>). Manifold methods
-  cast their array arguments to it on entry.</li>
+  cast their array arguments and the curvature <code>c</code> to it on entry, so the output
+  dtype is the manifold's whatever the dtype of the points or of <code>c</code>.</li>
 <li><strong>Storage dtype</strong> is the dtype of a layer's parameters and persistent state
   (batch-norm statistics, VQ codebooks), set by the <code>param_dtype</code> argument on
   every NN layer (default <code>jnp.float32</code>, as in Flax).</li>
