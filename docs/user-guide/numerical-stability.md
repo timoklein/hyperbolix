@@ -115,7 +115,8 @@ error against float32's ~1e-7, so it silently costs three of your seven signific
 
 hyperbolix splits its float32 dot products in two:
 
-- **Geometry is pinned** to `jax.lax.Precision.HIGHEST` and is not configurable: the manifold
+- **Geometry is pinned** to `jax.lax.Precision.HIGHEST` and is not configurable, with one named exception
+  (`LorentzMLA(score_precision=...)`, for its two score einsums only; the default keeps the pin): the manifold
   vector dots, the Lorentz and Poincaré midpoints, the conv patch extraction, the attention
   score and aggregation einsums, the point-to-hyperplane einsums of the MLR heads and of the
   PLFC, Poincaré++ and proper-velocity linear and conv layers, and the Minkowski product `x @ V`
@@ -249,6 +250,27 @@ in 10 min; `HyperbolicFullAttention` at N = 512 takes 15.9 s against 4.0 s. `"ge
 `LorentzMLA`, as in HELM) is one GEMM, but in float32 it loses the centroid once the *values* pass
 `a ≈ 6`, even when the scores are accurate: values at `a ≈ 9` give 11.4 nats of error against 6.4e-4
 for `"variance"`. bfloat16 activations (`eps` 2^16 times float32's) make both worse.
+
+`LorentzMLA(score_precision=...)` sets the precision of its two score einsums only. The default keeps
+them at `HIGHEST`. A lower value (`DEFAULT` is TF32 on Ampere/Hopper) adds its own rounding to the
+cancellation above. The centroid GEMM always stays at `HIGHEST`.
+
+The measurement is in float32, on one `LorentzMLA` with the weights of the trained HELM-MiCE 120M
+model (Zenodo record 18729608 with its trailing optimizer step undone; the released file gives the
+same radii), on 256 Wikipedia rows of 2,048 tokens, on an A100, with `c = 1`. There the queries and
+keys stay below scaled radius `a = 3.9` and the values below 2.83. With the score einsums at `DEFAULT`
+(TF32 on Ampere/Hopper), the worst-token output error is 0.035 nats, against 0.017 nats at `HIGHEST`.
+Both include the error of the TF32 Q/K/V and output projections, which follow JAX's default. With
+every GEMM at `HIGHEST` it is 8.7e-4 nats. The softmax weights of the layer are off by up to 3.9e-3 at
+`DEFAULT` against 2.3e-3 at `HIGHEST`. On random points, the `DEFAULT` softmax error grows with
+radius: 2.6e-4 at `a = 3`, 3.9e-3 at `a = 4` and 0.16 at `a = 6` (median over 5 seeds of the per-seed
+maximum, `tau = sqrt(300)`). `HIGHEST` stays at or below 2.1e-4 through `a = 6`. Forward plus backward
+of the layer at 4 × 2,048 tokens took 0.74× the `HIGHEST` time (A/A 1.00). Lowering the centroid GEMM
+as well was measured at 0.26 nats on the worst token (0.13 to 0.18 at positions 16 and later), which
+is why it stays pinned. With bfloat16 inputs the precision setting made no material accuracy
+difference (scores and centroid lowered together). So `DEFAULT` is a reasonable choice while queries
+and keys stay below about `a = 4`. Past that, keep the pin. For full float32 everywhere, set
+`jax_default_matmul_precision="highest"`.
 
 #### The MLR Score at a Large Hyperplane Offset {#mlr-large-bias}
 

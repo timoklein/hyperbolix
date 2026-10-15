@@ -665,9 +665,9 @@ def lorentz_residual(
     The bound holds
     per point, so it covers per-point weight arrays as well.
 
-    Negative weights. The weight is not checked: an unconstrained learnable ``w_y`` (HELM's raw
-    ``nn.Parameter``, or ``LorentzResidual(weight_parameterization="identity")``) can go
-    negative, and ``w_y < 0`` is evaluated, not rejected. Such a weight leaves the domain of the
+    Negative weights. The weight is not checked: an unconstrained ``w_y`` (HELM's raw
+    ``nn.Parameter``, a call-time ``LorentzResidual`` ``weight=`` override, or a direct call
+    of this function) can go negative, and ``w_y < 0`` is evaluated, not rejected. Such a weight leaves the domain of the
     paper's guarantee: LResNet's Lemma 4.1 bounds the normalizer only for
     ``(w_x, w_y) in R+ x R+ \\ {(0, 0)}``, where ``ave`` is future timelike, so the absolute value
     in its Lorentzian norm is notation there, not a mechanism. Where ``ave`` turns spacelike (always
@@ -679,9 +679,8 @@ def lorentz_residual(
     midpoint of ``x`` and ``y`` in any sense. One case stays silent: for ``w_y < -1``, ``ave``
     can be timelike but past-directed (``ave_0 < 0``); the normalizer is then finite and the
     time-coordinate rebuild below returns the upper-sheet point with spatial part
-    ``ave_s / sqrt(-c <ave, ave>_L)``, with no error. To keep a trained identity-mode
-    ``LorentzResidual`` weight in the domain, call
-    :func:`~hyperbolix.nn_layers.project_residual_weights` after each optimizer step.
+    ``ave_s / sqrt(-c <ave, ave>_L)``, with no error. A learnable
+    ``LorentzResidual`` weight is softplus-constrained and stays in the domain.
 
     The identity assumes ``x``, ``y`` are *exactly* on-sheet — an assumption float storage cannot
     honour at large radius, since ``x_0`` is only accurate to ``eps * x_0`` and the sheet constraint

@@ -16,11 +16,10 @@ reparameterized through ``softplus`` so a *trainable* weight can never leave the
 upper hyperboloid sheet. ``gamma`` is likewise softplus-constrained to keep the
 "slide toward / away from the origin" semantics (``gamma > 0``).
 
-For reproducing HELM (He et al. 2025), which uses LResNet with a raw, unconstrained
-``w_y`` and an ``exp``-parameterized learnable scale, the module also offers
-``weight_parameterization="identity"`` and ``scale_parameterization="exp"``, plus a
-call-time ``weight=`` override for per-token gate weights. These are opt-in; the
-defaults are the softplus parameterizations above.
+For building HELM-style blocks (He et al. 2025), which learn the scale as
+``exp(s_raw)`` and weight routed experts by per-token gates, the module also offers
+``scale_parameterization="exp"`` and a call-time ``weight=`` override for per-token
+gate weights. These are opt-in; the defaults are the softplus parameterizations above.
 
 References
 ----------
@@ -60,24 +59,28 @@ class LorentzResidual(nnx.Module):
     *fixed* (a trainable position weight is unsafe there), whereas this module
     makes a *trainable* ``w_y`` safe via the softplus reparameterization.
 
-    HELM configuration (He et al. 2025, ``helm/modules/helm_mice.py`` and
-    ``mice.py``; HELM's curvature ``k`` is ``1/c`` here). HELM's LResNet keeps
-    ``w_y`` as a raw, unconstrained ``nn.Parameter`` and learns the scale as
-    ``exp(s_raw)``::
+    HELM building blocks (He et al. 2025, ``helm/modules/helm_mice.py`` and
+    ``mice.py``; HELM's curvature ``k`` is ``1/c`` here). The forward pass matches
+    HELM's LResNet for ``w_y >= 0``. The ambient input gradients differ from HELM's
+    naive ``|<ave, ave>|`` normalizer only along the hyperboloid normal; the
+    tangential parts agree (measured in float64 by the HELM port: below 7e-16 after
+    projection onto the tangent space, Riemannian gradients equal to 1.3e-14).
+    There is no ``abs`` / ``1e-4`` clamp. The rescale is not skipped at a log-scale
+    of exactly 0, which in the released code is a torch tensor-truthiness quirk that
+    this building block does not copy. HELM learns ``w_y`` as a raw, unconstrained
+    ``nn.Parameter``; here a learnable ``w_y`` is always softplus-constrained, so it
+    cannot make the combination spacelike (NaN). ::
 
-        # after each attention / FFN block: learnable raw w_y, fixed scale sqrt(dim)
-        block_res = LorentzResidual(
-            weight_parameterization="identity", scale=True, init_gamma=math.sqrt(dim)
-        )
+        # after each attention / FFN block: learnable softplus w_y, fixed scale sqrt(dim)
+        block_res = LorentzResidual(scale=True, init_gamma=math.sqrt(dim))
         x = block_res(x, attn_out, c=c)
 
         # MoE weighted sum of routed experts: per-token gate weight, fixed scale 2.0
         weighted_sum = LorentzResidual(learnable_weight=False, scale=True, init_gamma=2.0)
         y = weighted_sum(y, expert_out, c=c, weight=gate_N1)   # gate_N1: shape (N, 1) or (N,)
 
-        # shared + routed experts combine: learnable raw w_y, learnable exp scale init 2.0
+        # shared + routed experts combine: learnable softplus w_y, learnable exp scale init 2.0
         add_experts = LorentzResidual(
-            weight_parameterization="identity",
             scale=True,
             init_gamma=2.0,
             learnable_scale=True,
@@ -85,27 +88,23 @@ class LorentzResidual(nnx.Module):
         )
         out = add_experts(shared_out, y, c=c)
 
-    With ``weight_parameterization="identity"`` a trainable ``w_y`` can go
-    negative. Where that makes the combination spacelike,
-    :func:`~hyperbolix.nn_layers.hyperboloid_core.lorentz_residual` returns NaN,
-    where the HELM reference's ``.abs()`` returns a valid but wrong point; a
-    past-directed combination (``w_y < -1``) still gives a valid but wrong point
+    The call-time ``weight=`` override is not constrained: a negative value that
+    makes the combination spacelike gives NaN from
+    :func:`~hyperbolix.nn_layers.hyperboloid_core.lorentz_residual`, and a
+    past-directed combination (``w_y < -1``) gives a valid-looking but wrong point
     with no error (see its Notes). A negative ``w_y`` is outside the domain of
     LResNet's Lemma 4.1, which bounds the normalizer only for
-    ``(w_x, w_y) in R+ x R+ \\ {(0, 0)}``. Keep the default softplus
-    parameterization unless you are reproducing HELM; there, call
-    :func:`project_residual_weights` (or :meth:`project_w_y`) after each
-    ``optimizer.update`` to project ``w_y`` back onto ``w_y >= 0``.
+    ``(w_x, w_y) in R+ x R+ \\ {(0, 0)}``.
 
     Parameters
     ----------
     init_w_y : float, optional
         Initial value of the residual-branch weight ``w_y`` (default: 1.0). Must
-        be ``>= 0`` (``> 0`` when ``learnable_weight=True`` with the softplus
-        parameterization, since ``softplus`` cannot represent exactly 0).
+        be ``>= 0`` (``> 0`` when ``learnable_weight=True``, since ``softplus`` cannot
+        represent exactly 0).
     learnable_weight : bool, optional
-        If ``True`` (default), ``w_y`` is a learnable ``nnx.Param`` (see
-        ``weight_parameterization``); if ``False`` it is a fixed Python float.
+        If ``True`` (default), ``w_y`` is a learnable ``nnx.Param`` with
+        ``w_y = softplus(raw) > 0``; if ``False`` it is a fixed Python float.
     scale : bool, optional
         If ``True``, apply the Eq. 10 Klein-geodesic output scaling after the
         residual (default: ``False`` -- the paper frames it as optional, for
@@ -124,12 +123,6 @@ class LorentzResidual(nnx.Module):
     eps : float, optional
         Numerical stability floor passed to ``lorentz_residual`` / ``lorentz_scale``
         (default: 1e-7).
-    weight_parameterization : {"softplus", "identity"}, optional
-        How a learnable ``w_y`` is recovered from its raw parameter:
-        ``"softplus"`` (default) gives ``w_y = softplus(raw) > 0``;
-        ``"identity"`` gives ``w_y = raw``, unconstrained, initialized at
-        ``init_w_y`` (HELM's LResNet; project it with :meth:`project_w_y`).
-        Ignored when ``learnable_weight=False``.
     scale_parameterization : {"softplus", "exp"}, optional
         How a learnable ``gamma`` is recovered from its raw parameter:
         ``"softplus"`` (default) gives ``gamma = softplus(raw)``; ``"exp"``
@@ -140,8 +133,7 @@ class LorentzResidual(nnx.Module):
     Attributes
     ----------
     w_y_raw : nnx.Param or None
-        Raw weight (pre-softplus, or ``w_y`` itself under ``"identity"``) when
-        ``learnable_weight=True``; otherwise ``None`` (the fixed value is stored
+        Raw weight (pre-softplus) when ``learnable_weight=True``; otherwise ``None`` (the fixed value is stored
         statically).
     gamma_raw : nnx.Param or None
         Raw scaling constant (pre-softplus, or ``log gamma`` under ``"exp"``)
@@ -167,20 +159,15 @@ class LorentzResidual(nnx.Module):
         learnable_scale: bool = False,
         param_dtype: DTypeLike = jnp.float32,
         eps: float = 1e-7,
-        weight_parameterization: Literal["softplus", "identity"] = "softplus",
         scale_parameterization: Literal["softplus", "exp"] = "softplus",
     ):
-        if weight_parameterization not in ("softplus", "identity"):
-            raise ValueError(
-                f"LorentzResidual: weight_parameterization must be 'softplus' or 'identity', got {weight_parameterization!r}"
-            )
         if scale_parameterization not in ("softplus", "exp"):
             raise ValueError(
                 f"LorentzResidual: scale_parameterization must be 'softplus' or 'exp', got {scale_parameterization!r}"
             )
         if init_w_y < 0:
             raise ValueError(f"LorentzResidual requires init_w_y >= 0, got {init_w_y}")
-        if learnable_weight and weight_parameterization == "softplus" and init_w_y == 0:
+        if learnable_weight and init_w_y == 0:
             raise ValueError(
                 "LorentzResidual with learnable_weight=True requires init_w_y > 0 (softplus cannot represent exactly 0)."
             )
@@ -189,13 +176,11 @@ class LorentzResidual(nnx.Module):
 
         self.use_scale = scale
         self.eps = eps
-        self.weight_parameterization = weight_parameterization
         self.scale_parameterization = scale_parameterization
 
-        # y-weight: learnable nnx.Param (softplus-constrained or raw) when learnable, plain float otherwise.
+        # y-weight: learnable nnx.Param (softplus-constrained) when learnable, plain float otherwise.
         if learnable_weight:
-            raw_w_y = _inv_softplus(init_w_y) if weight_parameterization == "softplus" else init_w_y
-            self.w_y_raw = nnx.Param(jnp.array(raw_w_y, dtype=param_dtype))
+            self.w_y_raw = nnx.Param(jnp.array(_inv_softplus(init_w_y), dtype=param_dtype))
             self._w_y = None
         else:
             self.w_y_raw = None
@@ -240,17 +225,15 @@ class LorentzResidual(nnx.Module):
         Array, shape (..., d+1)
             Points on the hyperboloid with curvature ``c``.
         """
-        # Recover w_y from its raw param when learnable (softplus > 0, or the raw value itself);
+        # Recover w_y from its raw param when learnable (softplus > 0);
         # cast to the input dtype so a float32-pinned param does not silently downcast a float64
         # forward pass. A call-time `weight` overrides the module's own w_y.
         if weight is not None:
             w_y = weight
         elif self.w_y_raw is None:
             w_y = self._w_y
-        elif self.weight_parameterization == "softplus":
-            w_y = jax.nn.softplus(self.w_y_raw[...])
         else:
-            w_y = self.w_y_raw[...]
+            w_y = jax.nn.softplus(self.w_y_raw[...])
         out = lorentz_residual(x, y, w_y=jnp.asarray(w_y, dtype=x.dtype), c=c, eps=self.eps)
 
         if self.use_scale:
@@ -263,43 +246,3 @@ class LorentzResidual(nnx.Module):
             out = lorentz_scale(out, gamma=jnp.asarray(gamma, dtype=x.dtype), c=c, eps=self.eps)
 
         return out
-
-    def project_w_y(self) -> None:
-        """Project a learnable identity-mode ``w_y`` back onto ``w_y >= 0``, in place.
-
-        Call it after each ``optimizer.update(model, grads)`` (inside the same
-        ``nnx.jit`` train step is fine), or call :func:`project_residual_weights`
-        on the whole model. Together with the optimizer step this is projected
-        gradient descent: LResNet's Lemma 4.1 bounds the normalizer only for
-        ``w_y >= 0``, and a negative ``w_y`` can make the combination spacelike
-        (NaN). Inside the domain HELM's dynamics are unchanged. ``w_y = 0`` is
-        valid (the output is ``x``), and the gradient there is nonzero, so the
-        weight can move back up.
-
-        A no-op under the softplus parameterization (already ``> 0``) and for a
-        fixed weight (``learnable_weight=False``).
-        """
-        if self.w_y_raw is not None and self.weight_parameterization == "identity":
-            self.w_y_raw[...] = jnp.maximum(self.w_y_raw[...], 0)
-
-
-def project_residual_weights(model: nnx.Module) -> None:
-    """Call :meth:`LorentzResidual.project_w_y` on every ``LorentzResidual`` in ``model``.
-
-    Call it after each ``optimizer.update(model, grads)``, inside the same
-    ``nnx.jit`` train step if you like::
-
-        optimizer.update(model, grads)
-        project_residual_weights(model)
-
-    It keeps every identity-mode (HELM) ``w_y`` in the domain ``w_y >= 0`` of
-    LResNet's Lemma 4.1; softplus-mode and fixed weights are left unchanged.
-
-    Parameters
-    ----------
-    model : nnx.Module
-        Any module; its submodules are searched recursively, ``model`` included.
-    """
-    for _, module in nnx.iter_modules(model):
-        if isinstance(module, LorentzResidual):
-            module.project_w_y()

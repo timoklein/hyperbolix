@@ -341,9 +341,9 @@ class HELMBlock(nnx.Module):
         )
         self.moe_norm = HRCRMSNorm(hidden - 1, rngs=rngs)
         self.moe = LorentzMoE(hidden, inter_dim=512, num_routed=8, num_shared=1, top_k=2, rngs=rngs)
-        # HELM's residual: raw learnable weight, fixed output scale sqrt(hidden)
-        self.attn_res = LorentzResidual(weight_parameterization="identity", scale=True, init_gamma=math.sqrt(hidden))
-        self.moe_res = LorentzResidual(weight_parameterization="identity", scale=True, init_gamma=math.sqrt(hidden))
+        # HELM-style residual: learnable softplus weight, fixed output scale sqrt(hidden)
+        self.attn_res = LorentzResidual(scale=True, init_gamma=math.sqrt(hidden))
+        self.moe_res = LorentzResidual(scale=True, init_gamma=math.sqrt(hidden))
 
     def __call__(self, x_BSA: jax.Array, c: float):
         h = self.attn(self.attn_norm(x_BSA, c, c), c)                   # causal by default
@@ -356,16 +356,8 @@ Add `moe_sequence_balance_loss(stats, alpha=1e-4)` to the loss, and call
 `block.moe.update_bias(stats.mask, speed)` after each optimizer step (`RoutingBias` is not trained by
 gradient). The token table is a `LorentzEmbedding(vocab, hidden, rngs=rngs, c=c)`; train it with
 `riemannian_adam` inside the same `nnx.Optimizer` as the Euclidean weights. The expert curvatures start
-at `linspace(0.1, 2.0, E)`; `expert_curvatures=[1.0] * E` reproduces the released HELM checkpoint.
-
-`weight_parameterization="identity"` is there to reproduce HELM: its trainable `w_y` can go
-negative, which is outside the range where LResNet guarantees a valid output (Lemma 4.1 covers
-non-negative weights only), and a combination that turns spacelike then gives NaN. Keep it in range
-with projected gradient descent: call `project_residual_weights(model)` right after
-`optimizer.update(model, grads)` (inside the same `nnx.jit` train step is fine). It sets every
-identity-mode `w_y` to `max(w_y, 0)` and leaves HELM's updates unchanged while `w_y >= 0`; `w_y = 0`
-is valid (the output is `x`) and its gradient is nonzero, so the weight can grow again. Outside a
-reproduction, keep the default softplus parameterization, which needs no projection.
+at `linspace(0.1, 2.0, E)`; `expert_curvatures=[1.0] * E` together with `learnable_curvature=False` reproduces the released HELM
+checkpoint.
 
 ## Common Pitfalls
 
