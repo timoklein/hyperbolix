@@ -1692,9 +1692,8 @@ the routing statistics; the Lorentzian residual with the block input is left to 
 caller (see <a href="../positional-encoding/#lorentzian-residual-connection"><code>LorentzResidual</code></a>).
 Attention for the same architecture is <a href="../attention/#latent-attention-helm"><code>LorentzMLA</code></a>.</p>
 <p>Load balancing follows DeepSeek-V3: add <code>moe_sequence_balance_loss(stats, alpha)</code> to the
-training loss and call <code>update_bias(stats.mask, speed)</code> after each optimizer step. Its
-default <code>rule="sign"</code> is the DeepSeek-V3 rule the HELM paper cites; <code>rule="proportional"</code> is
-the rule of the unused <code>update_bias</code> in HELM's released code. The routing bias is a <code>RoutingBias</code> variable, not an <code>nnx.Param</code>, so gradient transforms and
+training loss and call <code>update_bias(stats.mask, speed)</code> after each optimizer step. The
+update is DeepSeek-V3's sign rule, the one the HELM paper cites. The routing bias is a <code>RoutingBias</code> variable, not an <code>nnx.Param</code>, so gradient transforms and
 <code>nnx.Optimizer(..., wrt=nnx.Param)</code> skip it.</p>
 <h2 id="mixture-layer">Mixture layer<a class="headerlink" href="#mixture-layer" title="Permanent link">&para;</a></h2>
 
@@ -1752,19 +1751,17 @@ the rule of the unused <code>update_bias</code> in HELM's released code. The rou
    <code>E + R</code> outputs with weights <code>[g, 1, ..., 1]</code>.</p>
 <p>The block's Lorentzian residual <code>x ⊕_L MiCE(x)</code> is not part of this module; HELM applies it
 in the decoder block. With :class:<code>~hyperbolix.nn_layers.LorentzResidual</code> in HELM's block
-configuration (raw learnable weight, fixed <code>sqrt(dim)</code> output scale)::</p>
+configuration (learnable softplus weight, fixed <code>sqrt(dim)</code> output scale)::</p>
 <div class="language-text highlight"><pre><span></span><code>self.moe = LorentzMoE(dim, inter_dim, num_routed=8, num_shared=1, top_k=2, rngs=rngs)
-self.ffn_res = LorentzResidual(weight_parameterization=&quot;identity&quot;, scale=True, init_gamma=math.sqrt(dim))
+self.ffn_res = LorentzResidual(scale=True, init_gamma=math.sqrt(dim))
 ...
 moe_out_BSA, stats = self.moe(h_BSA, c)  # h_BSA: the normalised block input
 x_BSA = self.ffn_res(x_BSA, moe_out_BSA, c=c)
-# train step, after optimizer.update(model, grads): keeps the raw w_y &gt;= 0
-project_residual_weights(model)
 </code></pre></div>
 <p>Load balancing, as the paper takes it from DeepSeek-V3, uses the returned <code>stats</code>: add
 <code>moe_sequence_balance_loss(stats, alpha)</code> to the loss (HELM's <code>alpha = 1e-4</code>), and after
-the optimizer step call <code>moe.update_bias(stats.mask, speed)</code> (<code>rule="proportional"</code> for
-the rule in HELM's released code; see :meth:<code>LorentzMoEGate.update_bias</code>).</p>
+the optimizer step call <code>moe.update_bias(stats.mask, speed)</code> (DeepSeek-V3's sign rule; see
+:meth:<code>LorentzMoEGate.update_bias</code>).</p>
 
 
 <details class="curvatures" open>
@@ -1796,18 +1793,23 @@ reaches the centroid (<code>0 * inf</code>) and turns the token's output NaN.</p
 
 <details class="differences-from-the-helm-code" open>
   <summary>Differences from the HELM code</summary>
-  <p>The paper's form is implemented; where the released code differs, the code is not followed:</p>
+  <p>The paper's form is implemented, not the released code. Where the two differ, the paper (or
+the intended math) is followed, and the layer does not reproduce the released code:</p>
 <ul>
-<li><strong>Weights renormalised for softmax too.</strong> The code renormalises the top-k weights only for
+<li><strong>Weights always renormalised.</strong> The code renormalises the top-k weights only for
   sigmoid (<code>if self.score_func == "sigmoid": weights /= weights.sum(dim=-1, keepdim=True)</code>);
-  the paper renormalises in both cases.</li>
+  the paper renormalises in both cases, and so does :class:<code>LorentzMoEGate</code>, for either
+  score function.</li>
 <li><strong>One centroid, order-free.</strong> The code merges routed outputs one expert at a time with an
   LResNet that rescales the space part by a fixed 2 (<code>y[idx] = self.weighted_sum(y[idx],
   expert(x[idx]), weight=weights[idx, top, None])</code>), then merges the shared output with a
   second LResNet with a learnable log-scale (<code>out = self.add_experts(z, y)</code>), so the result
   depends on expert order and carries two extra scales. The two LResNets are also built under
   crossed conditions (<code>add_experts</code> under <code>n_activated_experts == 2</code>, used under
-  <code>n_shared_experts == 1</code>). Here the output is the paper's single centroid, with no scale.</li>
+  <code>n_shared_experts == 1</code>). Here the output is the paper's single centroid
+  (:func:<code>lorentz_midpoint</code>) of the <code>E + R</code> outputs, with no extra scale. Its curvature is
+  the model curvature <code>c</code> passed at call time, and the routed experts' curvatures enter
+  only through their own maps onto and back from their sheets.</li>
 <li><strong>Curvature init.</strong> The code builds every expert at <code>Lorentz(c=1.0, learnable=args.train_curv)</code>;
   its <code>np.linspace(0.1, 2.0, ...)</code> list is unused. Here <code>c_i = linspace(0.1, 2.0, E)</code>.
   The released HELM 120M checkpoint (Zenodo record 18729608) follows the code: with its one
@@ -1819,13 +1821,19 @@ reaches the centroid (<code>0 * inf</code>) and turns the token's output NaN.</p
   <code>n_shared_experts * moe_inter_dim</code>. They agree for <code>R = 1</code>.</li>
 <li><strong>Routing bias.</strong> The code's bias is an <code>nn.Parameter</code> that no gradient reaches and whose
   update is commented out of the training loop. Here it is a :class:<code>RoutingBias</code> updated by
-  :meth:<code>update_bias</code>, by default with the DeepSeek-V3 sign rule the paper cites;
-  <code>rule="proportional"</code> is the code's unused <code>update_bias</code>
-  (<code>self.bias += self.bias_update_spd * (mean - util)</code>).</li>
+  :meth:<code>update_bias</code> with the DeepSeek-V3 sign rule the paper cites. The code's proportional
+  <code>update_bias</code> (<code>self.bias += self.bias_update_spd * (mean - util)</code>), which its training
+  loop never calls, is not offered.</li>
 <li><strong>Balance loss.</strong> The code's <code>sequence_balance_loss</code> fixes <code>k=2</code>, overwrites the
   expert counts with the index tensor (<code>freq = indices * (E / (k * N))</code>, a shape error) and
   averages over all tokens of the batch; :func:<code>moe_sequence_balance_loss</code> is DeepSeek-V3's
   per-sequence form.</li>
+<li><strong>Curvature parameterization.</strong> The routed curvatures are trained through
+  :class:<code>~hyperbolix.utils.curvature.LearnableCurvature</code> with the default
+  <code>curvature_parameterization="log"</code>: <code>c_i = exp(raw_i)</code>, with <code>raw_i</code> initialised to
+  <code>log(c_i)</code> and trained by the optimizer. This keeps <code>c_i &gt; 0</code>. The released code trains
+  the curvature parameter <code>k</code> of its geoopt-based <code>Lorentz</code> manifold directly
+  (<code>Lorentz(c=1.0, learnable=args.train_curv)</code>).</li>
 <li><strong>Library forms</strong> replace the code's <code>clamp_min(1e-8)</code> time rebuilds and centroid
   normalizer: :func:<code>spatial_to_hyperboloid</code> and :func:<code>lorentz_midpoint</code>.</li>
 <li><strong>Shared-expert curvature.</strong> The paper's equations give each shared expert its own curvature
@@ -2188,7 +2196,11 @@ float32 (LearnableCurvature's default). Compute follows the input dtype.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_moe.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-538">538</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-534">534</a></span>
+<span class="normal"><a href="#__codelineno-0-535">535</a></span>
+<span class="normal"><a href="#__codelineno-0-536">536</a></span>
+<span class="normal"><a href="#__codelineno-0-537">537</a></span>
+<span class="normal"><a href="#__codelineno-0-538">538</a></span>
 <span class="normal"><a href="#__codelineno-0-539">539</a></span>
 <span class="normal"><a href="#__codelineno-0-540">540</a></span>
 <span class="normal"><a href="#__codelineno-0-541">541</a></span>
@@ -2241,68 +2253,64 @@ float32 (LearnableCurvature's default). Compute follows the input dtype.</p>
 <span class="normal"><a href="#__codelineno-0-588">588</a></span>
 <span class="normal"><a href="#__codelineno-0-589">589</a></span>
 <span class="normal"><a href="#__codelineno-0-590">590</a></span>
-<span class="normal"><a href="#__codelineno-0-591">591</a></span>
-<span class="normal"><a href="#__codelineno-0-592">592</a></span>
-<span class="normal"><a href="#__codelineno-0-593">593</a></span>
-<span class="normal"><a href="#__codelineno-0-594">594</a></span>
-<span class="normal"><a href="#__codelineno-0-595">595</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-538"><a id="__codelineno-0-538" name="__codelineno-0-538"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-539"><a id="__codelineno-0-539" name="__codelineno-0-539"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-540"><a id="__codelineno-0-540" name="__codelineno-0-540"></a>    <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-541"><a id="__codelineno-0-541" name="__codelineno-0-541"></a>    <span class="n">inter_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-542"><a id="__codelineno-0-542" name="__codelineno-0-542"></a>    <span class="n">num_routed</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-543"><a id="__codelineno-0-543" name="__codelineno-0-543"></a>    <span class="n">num_shared</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-544"><a id="__codelineno-0-544" name="__codelineno-0-544"></a>    <span class="n">top_k</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-545"><a id="__codelineno-0-545" name="__codelineno-0-545"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-546"><a id="__codelineno-0-546" name="__codelineno-0-546"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-547"><a id="__codelineno-0-547" name="__codelineno-0-547"></a>    <span class="n">route_scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-548"><a id="__codelineno-0-548" name="__codelineno-0-548"></a>    <span class="n">score_func</span><span class="p">:</span> <span class="n">ScoreFunc</span> <span class="o">=</span> <span class="s2">&quot;softmax&quot;</span><span class="p">,</span>
-</span><span id="__span-0-549"><a id="__codelineno-0-549" name="__codelineno-0-549"></a>    <span class="n">expert_curvatures</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-550"><a id="__codelineno-0-550" name="__codelineno-0-550"></a>    <span class="n">learnable_curvature</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="__span-0-551"><a id="__codelineno-0-551" name="__codelineno-0-551"></a>    <span class="n">curvature_parameterization</span><span class="p">:</span> <span class="n">Parameterization</span> <span class="o">=</span> <span class="s2">&quot;log&quot;</span><span class="p">,</span>
-</span><span id="__span-0-552"><a id="__codelineno-0-552" name="__codelineno-0-552"></a>    <span class="n">c_min</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">Auto</span> <span class="o">=</span> <span class="n">AUTO</span><span class="p">,</span>
-</span><span id="__span-0-553"><a id="__codelineno-0-553" name="__codelineno-0-553"></a>    <span class="n">c_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">Auto</span> <span class="o">=</span> <span class="n">AUTO</span><span class="p">,</span>
-</span><span id="__span-0-554"><a id="__codelineno-0-554" name="__codelineno-0-554"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-555"><a id="__codelineno-0-555" name="__codelineno-0-555"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-556"><a id="__codelineno-0-556" name="__codelineno-0-556"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
-</span><span id="__span-0-557"><a id="__codelineno-0-557" name="__codelineno-0-557"></a><span class="p">):</span>
-</span><span id="__span-0-558"><a id="__codelineno-0-558" name="__codelineno-0-558"></a>    <span class="k">if</span> <span class="n">num_shared</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="__span-0-559"><a id="__codelineno-0-559" name="__codelineno-0-559"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;num_shared must be &gt;= 0, got </span><span class="si">{</span><span class="n">num_shared</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-560"><a id="__codelineno-0-560" name="__codelineno-0-560"></a>    <span class="k">if</span> <span class="n">expert_curvatures</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-561"><a id="__codelineno-0-561" name="__codelineno-0-561"></a>        <span class="n">init_curvatures</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">ci</span><span class="p">)</span> <span class="k">for</span> <span class="n">ci</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="n">num_routed</span><span class="p">))</span>
-</span><span id="__span-0-562"><a id="__codelineno-0-562" name="__codelineno-0-562"></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-563"><a id="__codelineno-0-563" name="__codelineno-0-563"></a>        <span class="n">init_curvatures</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">ci</span><span class="p">)</span> <span class="k">for</span> <span class="n">ci</span> <span class="ow">in</span> <span class="n">expert_curvatures</span><span class="p">)</span>
-</span><span id="__span-0-564"><a id="__codelineno-0-564" name="__codelineno-0-564"></a>        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">init_curvatures</span><span class="p">)</span> <span class="o">!=</span> <span class="n">num_routed</span><span class="p">:</span>
-</span><span id="__span-0-565"><a id="__codelineno-0-565" name="__codelineno-0-565"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;expert_curvatures needs num_routed=</span><span class="si">{</span><span class="n">num_routed</span><span class="si">}</span><span class="s2"> values, got </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">init_curvatures</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-566"><a id="__codelineno-0-566" name="__codelineno-0-566"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">ci</span><span class="p">)</span> <span class="ow">and</span> <span class="n">ci</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">ci</span> <span class="ow">in</span> <span class="n">init_curvatures</span><span class="p">):</span>
-</span><span id="__span-0-567"><a id="__codelineno-0-567" name="__codelineno-0-567"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;expert curvatures must be finite and positive, got </span><span class="si">{</span><span class="n">init_curvatures</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-568"><a id="__codelineno-0-568" name="__codelineno-0-568"></a>
-</span><span id="__span-0-569"><a id="__codelineno-0-569" name="__codelineno-0-569"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">dim</span> <span class="o">=</span> <span class="n">dim</span>
-</span><span id="__span-0-570"><a id="__codelineno-0-570" name="__codelineno-0-570"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">inter_dim</span> <span class="o">=</span> <span class="n">inter_dim</span>
-</span><span id="__span-0-571"><a id="__codelineno-0-571" name="__codelineno-0-571"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">num_routed</span> <span class="o">=</span> <span class="n">num_routed</span>
-</span><span id="__span-0-572"><a id="__codelineno-0-572" name="__codelineno-0-572"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">num_shared</span> <span class="o">=</span> <span class="n">num_shared</span>
-</span><span id="__span-0-573"><a id="__codelineno-0-573" name="__codelineno-0-573"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">top_k</span> <span class="o">=</span> <span class="n">top_k</span>
-</span><span id="__span-0-574"><a id="__codelineno-0-574" name="__codelineno-0-574"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
-</span><span id="__span-0-575"><a id="__codelineno-0-575" name="__codelineno-0-575"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">gate</span> <span class="o">=</span> <span class="n">LorentzMoEGate</span><span class="p">(</span>
-</span><span id="__span-0-576"><a id="__codelineno-0-576" name="__codelineno-0-576"></a>        <span class="n">dim</span><span class="p">,</span> <span class="n">num_routed</span><span class="p">,</span> <span class="n">top_k</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span> <span class="n">score_func</span><span class="o">=</span><span class="n">score_func</span><span class="p">,</span> <span class="n">route_scale</span><span class="o">=</span><span class="n">route_scale</span><span class="p">,</span> <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span>
-</span><span id="__span-0-577"><a id="__codelineno-0-577" name="__codelineno-0-577"></a>    <span class="p">)</span>
-</span><span id="__span-0-578"><a id="__codelineno-0-578" name="__codelineno-0-578"></a>    <span class="n">expert_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;rngs&quot;</span><span class="p">:</span> <span class="n">rngs</span><span class="p">,</span> <span class="s2">&quot;init_bound&quot;</span><span class="p">:</span> <span class="n">init_bound</span><span class="p">,</span> <span class="s2">&quot;param_dtype&quot;</span><span class="p">:</span> <span class="n">param_dtype</span><span class="p">,</span> <span class="s2">&quot;eps&quot;</span><span class="p">:</span> <span class="n">eps</span><span class="p">}</span>
-</span><span id="__span-0-579"><a id="__codelineno-0-579" name="__codelineno-0-579"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">experts</span> <span class="o">=</span> <span class="n">_stacked_experts</span><span class="p">(</span><span class="n">num_routed</span><span class="p">,</span> <span class="n">dim</span><span class="p">,</span> <span class="n">inter_dim</span><span class="p">,</span> <span class="o">**</span><span class="n">expert_kwargs</span><span class="p">)</span>
-</span><span id="__span-0-580"><a id="__codelineno-0-580" name="__codelineno-0-580"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">shared_experts</span> <span class="o">=</span> <span class="n">_stacked_experts</span><span class="p">(</span><span class="n">num_shared</span><span class="p">,</span> <span class="n">dim</span><span class="p">,</span> <span class="n">inter_dim</span><span class="p">,</span> <span class="o">**</span><span class="n">expert_kwargs</span><span class="p">)</span> <span class="k">if</span> <span class="n">num_shared</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="kc">None</span>
-</span><span id="__span-0-581"><a id="__codelineno-0-581" name="__codelineno-0-581"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">init_curvatures</span> <span class="o">=</span> <span class="n">init_curvatures</span>  <span class="c1"># static Python floats; the fixed values if not learnable</span>
-</span><span id="__span-0-582"><a id="__codelineno-0-582" name="__codelineno-0-582"></a>    <span class="k">if</span> <span class="n">learnable_curvature</span><span class="p">:</span>
-</span><span id="__span-0-583"><a id="__codelineno-0-583" name="__codelineno-0-583"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvatures</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">List</span><span class="p">(</span>
-</span><span id="__span-0-584"><a id="__codelineno-0-584" name="__codelineno-0-584"></a>            <span class="p">[</span>
-</span><span id="__span-0-585"><a id="__codelineno-0-585" name="__codelineno-0-585"></a>                <span class="n">LearnableCurvature</span><span class="p">(</span>
-</span><span id="__span-0-586"><a id="__codelineno-0-586" name="__codelineno-0-586"></a>                    <span class="n">ci</span><span class="p">,</span>
-</span><span id="__span-0-587"><a id="__codelineno-0-587" name="__codelineno-0-587"></a>                    <span class="n">parameterization</span><span class="o">=</span><span class="n">curvature_parameterization</span><span class="p">,</span>
-</span><span id="__span-0-588"><a id="__codelineno-0-588" name="__codelineno-0-588"></a>                    <span class="n">c_min</span><span class="o">=</span><span class="n">c_min</span><span class="p">,</span>
-</span><span id="__span-0-589"><a id="__codelineno-0-589" name="__codelineno-0-589"></a>                    <span class="n">c_max</span><span class="o">=</span><span class="n">c_max</span><span class="p">,</span>
-</span><span id="__span-0-590"><a id="__codelineno-0-590" name="__codelineno-0-590"></a>                <span class="p">)</span>
-</span><span id="__span-0-591"><a id="__codelineno-0-591" name="__codelineno-0-591"></a>                <span class="k">for</span> <span class="n">ci</span> <span class="ow">in</span> <span class="n">init_curvatures</span>
-</span><span id="__span-0-592"><a id="__codelineno-0-592" name="__codelineno-0-592"></a>            <span class="p">]</span>
-</span><span id="__span-0-593"><a id="__codelineno-0-593" name="__codelineno-0-593"></a>        <span class="p">)</span>
-</span><span id="__span-0-594"><a id="__codelineno-0-594" name="__codelineno-0-594"></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-595"><a id="__codelineno-0-595" name="__codelineno-0-595"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvatures</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="normal"><a href="#__codelineno-0-591">591</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-534"><a id="__codelineno-0-534" name="__codelineno-0-534"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-535"><a id="__codelineno-0-535" name="__codelineno-0-535"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-536"><a id="__codelineno-0-536" name="__codelineno-0-536"></a>    <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-537"><a id="__codelineno-0-537" name="__codelineno-0-537"></a>    <span class="n">inter_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-538"><a id="__codelineno-0-538" name="__codelineno-0-538"></a>    <span class="n">num_routed</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-539"><a id="__codelineno-0-539" name="__codelineno-0-539"></a>    <span class="n">num_shared</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-540"><a id="__codelineno-0-540" name="__codelineno-0-540"></a>    <span class="n">top_k</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-541"><a id="__codelineno-0-541" name="__codelineno-0-541"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-542"><a id="__codelineno-0-542" name="__codelineno-0-542"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-543"><a id="__codelineno-0-543" name="__codelineno-0-543"></a>    <span class="n">route_scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-544"><a id="__codelineno-0-544" name="__codelineno-0-544"></a>    <span class="n">score_func</span><span class="p">:</span> <span class="n">ScoreFunc</span> <span class="o">=</span> <span class="s2">&quot;softmax&quot;</span><span class="p">,</span>
+</span><span id="__span-0-545"><a id="__codelineno-0-545" name="__codelineno-0-545"></a>    <span class="n">expert_curvatures</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-546"><a id="__codelineno-0-546" name="__codelineno-0-546"></a>    <span class="n">learnable_curvature</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-547"><a id="__codelineno-0-547" name="__codelineno-0-547"></a>    <span class="n">curvature_parameterization</span><span class="p">:</span> <span class="n">Parameterization</span> <span class="o">=</span> <span class="s2">&quot;log&quot;</span><span class="p">,</span>
+</span><span id="__span-0-548"><a id="__codelineno-0-548" name="__codelineno-0-548"></a>    <span class="n">c_min</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">Auto</span> <span class="o">=</span> <span class="n">AUTO</span><span class="p">,</span>
+</span><span id="__span-0-549"><a id="__codelineno-0-549" name="__codelineno-0-549"></a>    <span class="n">c_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">Auto</span> <span class="o">=</span> <span class="n">AUTO</span><span class="p">,</span>
+</span><span id="__span-0-550"><a id="__codelineno-0-550" name="__codelineno-0-550"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-551"><a id="__codelineno-0-551" name="__codelineno-0-551"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-552"><a id="__codelineno-0-552" name="__codelineno-0-552"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
+</span><span id="__span-0-553"><a id="__codelineno-0-553" name="__codelineno-0-553"></a><span class="p">):</span>
+</span><span id="__span-0-554"><a id="__codelineno-0-554" name="__codelineno-0-554"></a>    <span class="k">if</span> <span class="n">num_shared</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="__span-0-555"><a id="__codelineno-0-555" name="__codelineno-0-555"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;num_shared must be &gt;= 0, got </span><span class="si">{</span><span class="n">num_shared</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-556"><a id="__codelineno-0-556" name="__codelineno-0-556"></a>    <span class="k">if</span> <span class="n">expert_curvatures</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-557"><a id="__codelineno-0-557" name="__codelineno-0-557"></a>        <span class="n">init_curvatures</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">ci</span><span class="p">)</span> <span class="k">for</span> <span class="n">ci</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="n">num_routed</span><span class="p">))</span>
+</span><span id="__span-0-558"><a id="__codelineno-0-558" name="__codelineno-0-558"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-0-559"><a id="__codelineno-0-559" name="__codelineno-0-559"></a>        <span class="n">init_curvatures</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">ci</span><span class="p">)</span> <span class="k">for</span> <span class="n">ci</span> <span class="ow">in</span> <span class="n">expert_curvatures</span><span class="p">)</span>
+</span><span id="__span-0-560"><a id="__codelineno-0-560" name="__codelineno-0-560"></a>        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">init_curvatures</span><span class="p">)</span> <span class="o">!=</span> <span class="n">num_routed</span><span class="p">:</span>
+</span><span id="__span-0-561"><a id="__codelineno-0-561" name="__codelineno-0-561"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;expert_curvatures needs num_routed=</span><span class="si">{</span><span class="n">num_routed</span><span class="si">}</span><span class="s2"> values, got </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">init_curvatures</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-562"><a id="__codelineno-0-562" name="__codelineno-0-562"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">ci</span><span class="p">)</span> <span class="ow">and</span> <span class="n">ci</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">ci</span> <span class="ow">in</span> <span class="n">init_curvatures</span><span class="p">):</span>
+</span><span id="__span-0-563"><a id="__codelineno-0-563" name="__codelineno-0-563"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;expert curvatures must be finite and positive, got </span><span class="si">{</span><span class="n">init_curvatures</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-564"><a id="__codelineno-0-564" name="__codelineno-0-564"></a>
+</span><span id="__span-0-565"><a id="__codelineno-0-565" name="__codelineno-0-565"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">dim</span> <span class="o">=</span> <span class="n">dim</span>
+</span><span id="__span-0-566"><a id="__codelineno-0-566" name="__codelineno-0-566"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">inter_dim</span> <span class="o">=</span> <span class="n">inter_dim</span>
+</span><span id="__span-0-567"><a id="__codelineno-0-567" name="__codelineno-0-567"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">num_routed</span> <span class="o">=</span> <span class="n">num_routed</span>
+</span><span id="__span-0-568"><a id="__codelineno-0-568" name="__codelineno-0-568"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">num_shared</span> <span class="o">=</span> <span class="n">num_shared</span>
+</span><span id="__span-0-569"><a id="__codelineno-0-569" name="__codelineno-0-569"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">top_k</span> <span class="o">=</span> <span class="n">top_k</span>
+</span><span id="__span-0-570"><a id="__codelineno-0-570" name="__codelineno-0-570"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+</span><span id="__span-0-571"><a id="__codelineno-0-571" name="__codelineno-0-571"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">gate</span> <span class="o">=</span> <span class="n">LorentzMoEGate</span><span class="p">(</span>
+</span><span id="__span-0-572"><a id="__codelineno-0-572" name="__codelineno-0-572"></a>        <span class="n">dim</span><span class="p">,</span> <span class="n">num_routed</span><span class="p">,</span> <span class="n">top_k</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span> <span class="n">score_func</span><span class="o">=</span><span class="n">score_func</span><span class="p">,</span> <span class="n">route_scale</span><span class="o">=</span><span class="n">route_scale</span><span class="p">,</span> <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span>
+</span><span id="__span-0-573"><a id="__codelineno-0-573" name="__codelineno-0-573"></a>    <span class="p">)</span>
+</span><span id="__span-0-574"><a id="__codelineno-0-574" name="__codelineno-0-574"></a>    <span class="n">expert_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;rngs&quot;</span><span class="p">:</span> <span class="n">rngs</span><span class="p">,</span> <span class="s2">&quot;init_bound&quot;</span><span class="p">:</span> <span class="n">init_bound</span><span class="p">,</span> <span class="s2">&quot;param_dtype&quot;</span><span class="p">:</span> <span class="n">param_dtype</span><span class="p">,</span> <span class="s2">&quot;eps&quot;</span><span class="p">:</span> <span class="n">eps</span><span class="p">}</span>
+</span><span id="__span-0-575"><a id="__codelineno-0-575" name="__codelineno-0-575"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">experts</span> <span class="o">=</span> <span class="n">_stacked_experts</span><span class="p">(</span><span class="n">num_routed</span><span class="p">,</span> <span class="n">dim</span><span class="p">,</span> <span class="n">inter_dim</span><span class="p">,</span> <span class="o">**</span><span class="n">expert_kwargs</span><span class="p">)</span>
+</span><span id="__span-0-576"><a id="__codelineno-0-576" name="__codelineno-0-576"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">shared_experts</span> <span class="o">=</span> <span class="n">_stacked_experts</span><span class="p">(</span><span class="n">num_shared</span><span class="p">,</span> <span class="n">dim</span><span class="p">,</span> <span class="n">inter_dim</span><span class="p">,</span> <span class="o">**</span><span class="n">expert_kwargs</span><span class="p">)</span> <span class="k">if</span> <span class="n">num_shared</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="kc">None</span>
+</span><span id="__span-0-577"><a id="__codelineno-0-577" name="__codelineno-0-577"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">init_curvatures</span> <span class="o">=</span> <span class="n">init_curvatures</span>  <span class="c1"># static Python floats; the fixed values if not learnable</span>
+</span><span id="__span-0-578"><a id="__codelineno-0-578" name="__codelineno-0-578"></a>    <span class="k">if</span> <span class="n">learnable_curvature</span><span class="p">:</span>
+</span><span id="__span-0-579"><a id="__codelineno-0-579" name="__codelineno-0-579"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvatures</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">List</span><span class="p">(</span>
+</span><span id="__span-0-580"><a id="__codelineno-0-580" name="__codelineno-0-580"></a>            <span class="p">[</span>
+</span><span id="__span-0-581"><a id="__codelineno-0-581" name="__codelineno-0-581"></a>                <span class="n">LearnableCurvature</span><span class="p">(</span>
+</span><span id="__span-0-582"><a id="__codelineno-0-582" name="__codelineno-0-582"></a>                    <span class="n">ci</span><span class="p">,</span>
+</span><span id="__span-0-583"><a id="__codelineno-0-583" name="__codelineno-0-583"></a>                    <span class="n">parameterization</span><span class="o">=</span><span class="n">curvature_parameterization</span><span class="p">,</span>
+</span><span id="__span-0-584"><a id="__codelineno-0-584" name="__codelineno-0-584"></a>                    <span class="n">c_min</span><span class="o">=</span><span class="n">c_min</span><span class="p">,</span>
+</span><span id="__span-0-585"><a id="__codelineno-0-585" name="__codelineno-0-585"></a>                    <span class="n">c_max</span><span class="o">=</span><span class="n">c_max</span><span class="p">,</span>
+</span><span id="__span-0-586"><a id="__codelineno-0-586" name="__codelineno-0-586"></a>                <span class="p">)</span>
+</span><span id="__span-0-587"><a id="__codelineno-0-587" name="__codelineno-0-587"></a>                <span class="k">for</span> <span class="n">ci</span> <span class="ow">in</span> <span class="n">init_curvatures</span>
+</span><span id="__span-0-588"><a id="__codelineno-0-588" name="__codelineno-0-588"></a>            <span class="p">]</span>
+</span><span id="__span-0-589"><a id="__codelineno-0-589" name="__codelineno-0-589"></a>        <span class="p">)</span>
+</span><span id="__span-0-590"><a id="__codelineno-0-590" name="__codelineno-0-590"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-0-591"><a id="__codelineno-0-591" name="__codelineno-0-591"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">curvatures</span> <span class="o">=</span> <span class="kc">None</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -2339,23 +2347,23 @@ result: the clamp masks each call's gradient separately.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_moe.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-597">597</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-593">593</a></span>
+<span class="normal"><a href="#__codelineno-0-594">594</a></span>
+<span class="normal"><a href="#__codelineno-0-595">595</a></span>
+<span class="normal"><a href="#__codelineno-0-596">596</a></span>
+<span class="normal"><a href="#__codelineno-0-597">597</a></span>
 <span class="normal"><a href="#__codelineno-0-598">598</a></span>
 <span class="normal"><a href="#__codelineno-0-599">599</a></span>
 <span class="normal"><a href="#__codelineno-0-600">600</a></span>
-<span class="normal"><a href="#__codelineno-0-601">601</a></span>
-<span class="normal"><a href="#__codelineno-0-602">602</a></span>
-<span class="normal"><a href="#__codelineno-0-603">603</a></span>
-<span class="normal"><a href="#__codelineno-0-604">604</a></span>
-<span class="normal"><a href="#__codelineno-0-605">605</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-597"><a id="__codelineno-0-597" name="__codelineno-0-597"></a><span class="k">def</span><span class="w"> </span><span class="nf">routed_curvatures</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;E&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-598"><a id="__codelineno-0-598" name="__codelineno-0-598"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Current curvatures ``c_i`` of the routed experts, shape ``(E,)``.</span>
-</span><span id="__span-0-599"><a id="__codelineno-0-599" name="__codelineno-0-599"></a>
-</span><span id="__span-0-600"><a id="__codelineno-0-600" name="__codelineno-0-600"></a><span class="sd">    Calls each expert&#39;s ``LearnableCurvature`` once. Call this once per forward and reuse the</span>
-</span><span id="__span-0-601"><a id="__codelineno-0-601" name="__codelineno-0-601"></a><span class="sd">    result: the clamp masks each call&#39;s gradient separately.</span>
-</span><span id="__span-0-602"><a id="__codelineno-0-602" name="__codelineno-0-602"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-603"><a id="__codelineno-0-603" name="__codelineno-0-603"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvatures</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-604"><a id="__codelineno-0-604" name="__codelineno-0-604"></a>        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">init_curvatures</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-</span><span id="__span-0-605"><a id="__codelineno-0-605" name="__codelineno-0-605"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">curvature</span><span class="p">()</span> <span class="k">for</span> <span class="n">curvature</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvatures</span><span class="p">])</span>
+<span class="normal"><a href="#__codelineno-0-601">601</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-593"><a id="__codelineno-0-593" name="__codelineno-0-593"></a><span class="k">def</span><span class="w"> </span><span class="nf">routed_curvatures</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;E&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-594"><a id="__codelineno-0-594" name="__codelineno-0-594"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Current curvatures ``c_i`` of the routed experts, shape ``(E,)``.</span>
+</span><span id="__span-0-595"><a id="__codelineno-0-595" name="__codelineno-0-595"></a>
+</span><span id="__span-0-596"><a id="__codelineno-0-596" name="__codelineno-0-596"></a><span class="sd">    Calls each expert&#39;s ``LearnableCurvature`` once. Call this once per forward and reuse the</span>
+</span><span id="__span-0-597"><a id="__codelineno-0-597" name="__codelineno-0-597"></a><span class="sd">    result: the clamp masks each call&#39;s gradient separately.</span>
+</span><span id="__span-0-598"><a id="__codelineno-0-598" name="__codelineno-0-598"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-599"><a id="__codelineno-0-599" name="__codelineno-0-599"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvatures</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-600"><a id="__codelineno-0-600" name="__codelineno-0-600"></a>        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">init_curvatures</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+</span><span id="__span-0-601"><a id="__codelineno-0-601" name="__codelineno-0-601"></a>    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">curvature</span><span class="p">()</span> <span class="k">for</span> <span class="n">curvature</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">curvatures</span><span class="p">])</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -2371,10 +2379,8 @@ result: the clamp masks each call's gradient separately.</p>
 
 <a href="#hyperbolix.nn_layers.LorentzMoE.update_bias" class="headerlink" title="Permanent link">&para;</a></h4>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">update_bias</span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">mask</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... E&quot;</span><span class="p">],</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">speed</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">rule</span><span class="p">:</span> <span class="n">BiasUpdateRule</span> <span class="o">=</span> <span class="s2">&quot;sign&quot;</span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">mask</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... E&quot;</span><span class="p">],</span> <span class="n">speed</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents ">
@@ -2384,11 +2390,11 @@ result: the clamp masks each call's gradient separately.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_moe.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-607">607</a></span>
-<span class="normal"><a href="#__codelineno-0-608">608</a></span>
-<span class="normal"><a href="#__codelineno-0-609">609</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-607"><a id="__codelineno-0-607" name="__codelineno-0-607"></a><span class="k">def</span><span class="w"> </span><span class="nf">update_bias</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mask</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... E&quot;</span><span class="p">],</span> <span class="n">speed</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">rule</span><span class="p">:</span> <span class="n">BiasUpdateRule</span> <span class="o">=</span> <span class="s2">&quot;sign&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-608"><a id="__codelineno-0-608" name="__codelineno-0-608"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Auxiliary-loss-free bias update of the gate; see :meth:`LorentzMoEGate.update_bias`.&quot;&quot;&quot;</span>
-</span><span id="__span-0-609"><a id="__codelineno-0-609" name="__codelineno-0-609"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">gate</span><span class="o">.</span><span class="n">update_bias</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">speed</span><span class="p">,</span> <span class="n">rule</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-603">603</a></span>
+<span class="normal"><a href="#__codelineno-0-604">604</a></span>
+<span class="normal"><a href="#__codelineno-0-605">605</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-603"><a id="__codelineno-0-603" name="__codelineno-0-603"></a><span class="k">def</span><span class="w"> </span><span class="nf">update_bias</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mask</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... E&quot;</span><span class="p">],</span> <span class="n">speed</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-604"><a id="__codelineno-0-604" name="__codelineno-0-604"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Auxiliary-loss-free bias update of the gate; see :meth:`LorentzMoEGate.update_bias`.&quot;&quot;&quot;</span>
+</span><span id="__span-0-605"><a id="__codelineno-0-605" name="__codelineno-0-605"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">gate</span><span class="o">.</span><span class="n">update_bias</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">speed</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -2497,7 +2503,11 @@ curvature <code>c</code> (no residual; see the class docstring).</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_moe.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-611">611</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-607">607</a></span>
+<span class="normal"><a href="#__codelineno-0-608">608</a></span>
+<span class="normal"><a href="#__codelineno-0-609">609</a></span>
+<span class="normal"><a href="#__codelineno-0-610">610</a></span>
+<span class="normal"><a href="#__codelineno-0-611">611</a></span>
 <span class="normal"><a href="#__codelineno-0-612">612</a></span>
 <span class="normal"><a href="#__codelineno-0-613">613</a></span>
 <span class="normal"><a href="#__codelineno-0-614">614</a></span>
@@ -2544,62 +2554,58 @@ curvature <code>c</code> (no residual; see the class docstring).</p>
 <span class="normal"><a href="#__codelineno-0-655">655</a></span>
 <span class="normal"><a href="#__codelineno-0-656">656</a></span>
 <span class="normal"><a href="#__codelineno-0-657">657</a></span>
-<span class="normal"><a href="#__codelineno-0-658">658</a></span>
-<span class="normal"><a href="#__codelineno-0-659">659</a></span>
-<span class="normal"><a href="#__codelineno-0-660">660</a></span>
-<span class="normal"><a href="#__codelineno-0-661">661</a></span>
-<span class="normal"><a href="#__codelineno-0-662">662</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-611"><a id="__codelineno-0-611" name="__codelineno-0-611"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
-</span><span id="__span-0-612"><a id="__codelineno-0-612" name="__codelineno-0-612"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-613"><a id="__codelineno-0-613" name="__codelineno-0-613"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... A&quot;</span><span class="p">],</span>
-</span><span id="__span-0-614"><a id="__codelineno-0-614" name="__codelineno-0-614"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">ScalarCurvature</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-615"><a id="__codelineno-0-615" name="__codelineno-0-615"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... A&quot;</span><span class="p">],</span> <span class="n">MoERoutingStats</span><span class="p">]:</span>
-</span><span id="__span-0-616"><a id="__codelineno-0-616" name="__codelineno-0-616"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply the mixture of curvature experts.</span>
-</span><span id="__span-0-617"><a id="__codelineno-0-617" name="__codelineno-0-617"></a>
-</span><span id="__span-0-618"><a id="__codelineno-0-618" name="__codelineno-0-618"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-619"><a id="__codelineno-0-619" name="__codelineno-0-619"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-620"><a id="__codelineno-0-620" name="__codelineno-0-620"></a><span class="sd">    x : Array, shape (..., A)</span>
-</span><span id="__span-0-621"><a id="__codelineno-0-621" name="__codelineno-0-621"></a><span class="sd">        Tokens on the hyperboloid with curvature ``c``, e.g. ``(N, A)`` or ``(B, S, A)``.</span>
-</span><span id="__span-0-622"><a id="__codelineno-0-622" name="__codelineno-0-622"></a><span class="sd">    c : float or scalar Array, optional</span>
-</span><span id="__span-0-623"><a id="__codelineno-0-623" name="__codelineno-0-623"></a><span class="sd">        Model curvature (default: 1.0).</span>
-</span><span id="__span-0-624"><a id="__codelineno-0-624" name="__codelineno-0-624"></a>
-</span><span id="__span-0-625"><a id="__codelineno-0-625" name="__codelineno-0-625"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-626"><a id="__codelineno-0-626" name="__codelineno-0-626"></a><span class="sd">    -------</span>
-</span><span id="__span-0-627"><a id="__codelineno-0-627" name="__codelineno-0-627"></a><span class="sd">    out : Array, shape (..., A)</span>
-</span><span id="__span-0-628"><a id="__codelineno-0-628" name="__codelineno-0-628"></a><span class="sd">        The weighted Lorentzian centroid of the expert outputs, on the hyperboloid with</span>
-</span><span id="__span-0-629"><a id="__codelineno-0-629" name="__codelineno-0-629"></a><span class="sd">        curvature ``c`` (no residual; see the class docstring).</span>
-</span><span id="__span-0-630"><a id="__codelineno-0-630" name="__codelineno-0-630"></a><span class="sd">    stats : MoERoutingStats</span>
-</span><span id="__span-0-631"><a id="__codelineno-0-631" name="__codelineno-0-631"></a><span class="sd">        ``affinity`` and ``mask``, each of shape ``(..., E)``, for</span>
-</span><span id="__span-0-632"><a id="__codelineno-0-632" name="__codelineno-0-632"></a><span class="sd">        :func:`moe_sequence_balance_loss` and :meth:`update_bias`.</span>
-</span><span id="__span-0-633"><a id="__codelineno-0-633" name="__codelineno-0-633"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-634"><a id="__codelineno-0-634" name="__codelineno-0-634"></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim</span><span class="p">:</span>
-</span><span id="__span-0-635"><a id="__codelineno-0-635" name="__codelineno-0-635"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;x must have </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">dim</span><span class="si">}</span><span class="s2"> ambient coordinates on its last axis, got shape </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-636"><a id="__codelineno-0-636" name="__codelineno-0-636"></a>    <span class="n">lead_shape</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-</span><span id="__span-0-637"><a id="__codelineno-0-637" name="__codelineno-0-637"></a>    <span class="n">work_dtype</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">dtype</span>
-</span><span id="__span-0-638"><a id="__codelineno-0-638" name="__codelineno-0-638"></a>    <span class="n">x_NA</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim</span><span class="p">)</span>  <span class="c1"># (N, A)</span>
-</span><span id="__span-0-639"><a id="__codelineno-0-639" name="__codelineno-0-639"></a>    <span class="c1"># Curvatures in the working dtype, so a float32 curvature does not promote a bfloat16 forward.</span>
-</span><span id="__span-0-640"><a id="__codelineno-0-640" name="__codelineno-0-640"></a>    <span class="n">c_work</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">work_dtype</span><span class="p">)</span>
-</span><span id="__span-0-641"><a id="__codelineno-0-641" name="__codelineno-0-641"></a>    <span class="n">c_expert_E</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">routed_curvatures</span><span class="p">()</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">work_dtype</span><span class="p">)</span>  <span class="c1"># (E,)</span>
+<span class="normal"><a href="#__codelineno-0-658">658</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-607"><a id="__codelineno-0-607" name="__codelineno-0-607"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
+</span><span id="__span-0-608"><a id="__codelineno-0-608" name="__codelineno-0-608"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-609"><a id="__codelineno-0-609" name="__codelineno-0-609"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... A&quot;</span><span class="p">],</span>
+</span><span id="__span-0-610"><a id="__codelineno-0-610" name="__codelineno-0-610"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">ScalarCurvature</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-611"><a id="__codelineno-0-611" name="__codelineno-0-611"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... A&quot;</span><span class="p">],</span> <span class="n">MoERoutingStats</span><span class="p">]:</span>
+</span><span id="__span-0-612"><a id="__codelineno-0-612" name="__codelineno-0-612"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply the mixture of curvature experts.</span>
+</span><span id="__span-0-613"><a id="__codelineno-0-613" name="__codelineno-0-613"></a>
+</span><span id="__span-0-614"><a id="__codelineno-0-614" name="__codelineno-0-614"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-615"><a id="__codelineno-0-615" name="__codelineno-0-615"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-616"><a id="__codelineno-0-616" name="__codelineno-0-616"></a><span class="sd">    x : Array, shape (..., A)</span>
+</span><span id="__span-0-617"><a id="__codelineno-0-617" name="__codelineno-0-617"></a><span class="sd">        Tokens on the hyperboloid with curvature ``c``, e.g. ``(N, A)`` or ``(B, S, A)``.</span>
+</span><span id="__span-0-618"><a id="__codelineno-0-618" name="__codelineno-0-618"></a><span class="sd">    c : float or scalar Array, optional</span>
+</span><span id="__span-0-619"><a id="__codelineno-0-619" name="__codelineno-0-619"></a><span class="sd">        Model curvature (default: 1.0).</span>
+</span><span id="__span-0-620"><a id="__codelineno-0-620" name="__codelineno-0-620"></a>
+</span><span id="__span-0-621"><a id="__codelineno-0-621" name="__codelineno-0-621"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-622"><a id="__codelineno-0-622" name="__codelineno-0-622"></a><span class="sd">    -------</span>
+</span><span id="__span-0-623"><a id="__codelineno-0-623" name="__codelineno-0-623"></a><span class="sd">    out : Array, shape (..., A)</span>
+</span><span id="__span-0-624"><a id="__codelineno-0-624" name="__codelineno-0-624"></a><span class="sd">        The weighted Lorentzian centroid of the expert outputs, on the hyperboloid with</span>
+</span><span id="__span-0-625"><a id="__codelineno-0-625" name="__codelineno-0-625"></a><span class="sd">        curvature ``c`` (no residual; see the class docstring).</span>
+</span><span id="__span-0-626"><a id="__codelineno-0-626" name="__codelineno-0-626"></a><span class="sd">    stats : MoERoutingStats</span>
+</span><span id="__span-0-627"><a id="__codelineno-0-627" name="__codelineno-0-627"></a><span class="sd">        ``affinity`` and ``mask``, each of shape ``(..., E)``, for</span>
+</span><span id="__span-0-628"><a id="__codelineno-0-628" name="__codelineno-0-628"></a><span class="sd">        :func:`moe_sequence_balance_loss` and :meth:`update_bias`.</span>
+</span><span id="__span-0-629"><a id="__codelineno-0-629" name="__codelineno-0-629"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-630"><a id="__codelineno-0-630" name="__codelineno-0-630"></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim</span><span class="p">:</span>
+</span><span id="__span-0-631"><a id="__codelineno-0-631" name="__codelineno-0-631"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;x must have </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">dim</span><span class="si">}</span><span class="s2"> ambient coordinates on its last axis, got shape </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-632"><a id="__codelineno-0-632" name="__codelineno-0-632"></a>    <span class="n">lead_shape</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="__span-0-633"><a id="__codelineno-0-633" name="__codelineno-0-633"></a>    <span class="n">work_dtype</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">dtype</span>
+</span><span id="__span-0-634"><a id="__codelineno-0-634" name="__codelineno-0-634"></a>    <span class="n">x_NA</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim</span><span class="p">)</span>  <span class="c1"># (N, A)</span>
+</span><span id="__span-0-635"><a id="__codelineno-0-635" name="__codelineno-0-635"></a>    <span class="c1"># Curvatures in the working dtype, so a float32 curvature does not promote a bfloat16 forward.</span>
+</span><span id="__span-0-636"><a id="__codelineno-0-636" name="__codelineno-0-636"></a>    <span class="n">c_work</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">work_dtype</span><span class="p">)</span>
+</span><span id="__span-0-637"><a id="__codelineno-0-637" name="__codelineno-0-637"></a>    <span class="n">c_expert_E</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">routed_curvatures</span><span class="p">()</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">work_dtype</span><span class="p">)</span>  <span class="c1"># (E,)</span>
+</span><span id="__span-0-638"><a id="__codelineno-0-638" name="__codelineno-0-638"></a>
+</span><span id="__span-0-639"><a id="__codelineno-0-639" name="__codelineno-0-639"></a>    <span class="n">weights_NK</span><span class="p">,</span> <span class="n">indices_NK</span><span class="p">,</span> <span class="n">gate_stats</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gate</span><span class="p">(</span><span class="n">x_NA</span><span class="p">)</span>
+</span><span id="__span-0-640"><a id="__codelineno-0-640" name="__codelineno-0-640"></a>    <span class="c1"># Dense (N, E) gate weights: g_i for the selected experts, 0 for the rest.</span>
+</span><span id="__span-0-641"><a id="__codelineno-0-641" name="__codelineno-0-641"></a>    <span class="n">gate_NE</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">one_hot</span><span class="p">(</span><span class="n">indices_NK</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_routed</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">weights_NK</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span> <span class="o">*</span> <span class="n">weights_NK</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">],</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">2</span><span class="p">)</span>
 </span><span id="__span-0-642"><a id="__codelineno-0-642" name="__codelineno-0-642"></a>
-</span><span id="__span-0-643"><a id="__codelineno-0-643" name="__codelineno-0-643"></a>    <span class="n">weights_NK</span><span class="p">,</span> <span class="n">indices_NK</span><span class="p">,</span> <span class="n">gate_stats</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gate</span><span class="p">(</span><span class="n">x_NA</span><span class="p">)</span>
-</span><span id="__span-0-644"><a id="__codelineno-0-644" name="__codelineno-0-644"></a>    <span class="c1"># Dense (N, E) gate weights: g_i for the selected experts, 0 for the rest.</span>
-</span><span id="__span-0-645"><a id="__codelineno-0-645" name="__codelineno-0-645"></a>    <span class="n">gate_NE</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">one_hot</span><span class="p">(</span><span class="n">indices_NK</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_routed</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">weights_NK</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span> <span class="o">*</span> <span class="n">weights_NK</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">],</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="__span-0-646"><a id="__codelineno-0-646" name="__codelineno-0-646"></a>
-</span><span id="__span-0-647"><a id="__codelineno-0-647" name="__codelineno-0-647"></a>    <span class="n">outputs_ENA</span> <span class="o">=</span> <span class="n">_run_stacked_experts</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">experts</span><span class="p">,</span> <span class="n">c_expert_E</span><span class="p">,</span> <span class="n">x_NA</span><span class="p">,</span> <span class="n">c_work</span><span class="p">)</span>  <span class="c1"># (E, N, A)</span>
-</span><span id="__span-0-648"><a id="__codelineno-0-648" name="__codelineno-0-648"></a>    <span class="n">weights_NM</span> <span class="o">=</span> <span class="n">gate_NE</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">work_dtype</span><span class="p">)</span>  <span class="c1"># (N, E)</span>
-</span><span id="__span-0-649"><a id="__codelineno-0-649" name="__codelineno-0-649"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_experts</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-650"><a id="__codelineno-0-650" name="__codelineno-0-650"></a>        <span class="n">c_shared_R</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span><span class="n">c_work</span><span class="p">,</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_shared</span><span class="p">,))</span>  <span class="c1"># shared experts sit at the model c</span>
-</span><span id="__span-0-651"><a id="__codelineno-0-651" name="__codelineno-0-651"></a>        <span class="n">shared_RNA</span> <span class="o">=</span> <span class="n">_run_stacked_experts</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shared_experts</span><span class="p">,</span> <span class="n">c_shared_R</span><span class="p">,</span> <span class="n">x_NA</span><span class="p">,</span> <span class="n">c_work</span><span class="p">)</span>  <span class="c1"># (R, N, A)</span>
-</span><span id="__span-0-652"><a id="__codelineno-0-652" name="__codelineno-0-652"></a>        <span class="n">outputs_ENA</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">outputs_ENA</span><span class="p">,</span> <span class="n">shared_RNA</span><span class="p">],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># (M, N, A)</span>
-</span><span id="__span-0-653"><a id="__codelineno-0-653" name="__codelineno-0-653"></a>        <span class="n">weights_NM</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">weights_NM</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="n">x_NA</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_shared</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">work_dtype</span><span class="p">)],</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-0-654"><a id="__codelineno-0-654" name="__codelineno-0-654"></a>
-</span><span id="__span-0-655"><a id="__codelineno-0-655" name="__codelineno-0-655"></a>    <span class="n">points_NMA</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">outputs_ENA</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>  <span class="c1"># (N, M, A)</span>
-</span><span id="__span-0-656"><a id="__codelineno-0-656" name="__codelineno-0-656"></a>    <span class="n">centroid_N1A</span> <span class="o">=</span> <span class="n">lorentz_midpoint</span><span class="p">(</span><span class="n">points_NMA</span><span class="p">,</span> <span class="n">weights_NM</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:],</span> <span class="n">c_work</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (N, 1, A)</span>
-</span><span id="__span-0-657"><a id="__codelineno-0-657" name="__codelineno-0-657"></a>    <span class="n">out_LA</span> <span class="o">=</span> <span class="n">centroid_N1A</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim</span><span class="p">)</span>  <span class="c1"># (L..., A)</span>
-</span><span id="__span-0-658"><a id="__codelineno-0-658" name="__codelineno-0-658"></a>    <span class="n">routing_stats</span> <span class="o">=</span> <span class="n">MoERoutingStats</span><span class="p">(</span>
-</span><span id="__span-0-659"><a id="__codelineno-0-659" name="__codelineno-0-659"></a>        <span class="n">affinity</span><span class="o">=</span><span class="n">gate_stats</span><span class="o">.</span><span class="n">affinity</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_routed</span><span class="p">),</span>  <span class="c1"># (L..., E)</span>
-</span><span id="__span-0-660"><a id="__codelineno-0-660" name="__codelineno-0-660"></a>        <span class="n">mask</span><span class="o">=</span><span class="n">gate_stats</span><span class="o">.</span><span class="n">mask</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_routed</span><span class="p">),</span>  <span class="c1"># (L..., E)</span>
-</span><span id="__span-0-661"><a id="__codelineno-0-661" name="__codelineno-0-661"></a>    <span class="p">)</span>
-</span><span id="__span-0-662"><a id="__codelineno-0-662" name="__codelineno-0-662"></a>    <span class="k">return</span> <span class="n">out_LA</span><span class="p">,</span> <span class="n">routing_stats</span>
+</span><span id="__span-0-643"><a id="__codelineno-0-643" name="__codelineno-0-643"></a>    <span class="n">outputs_ENA</span> <span class="o">=</span> <span class="n">_run_stacked_experts</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">experts</span><span class="p">,</span> <span class="n">c_expert_E</span><span class="p">,</span> <span class="n">x_NA</span><span class="p">,</span> <span class="n">c_work</span><span class="p">)</span>  <span class="c1"># (E, N, A)</span>
+</span><span id="__span-0-644"><a id="__codelineno-0-644" name="__codelineno-0-644"></a>    <span class="n">weights_NM</span> <span class="o">=</span> <span class="n">gate_NE</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">work_dtype</span><span class="p">)</span>  <span class="c1"># (N, E)</span>
+</span><span id="__span-0-645"><a id="__codelineno-0-645" name="__codelineno-0-645"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_experts</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-646"><a id="__codelineno-0-646" name="__codelineno-0-646"></a>        <span class="n">c_shared_R</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span><span class="n">c_work</span><span class="p">,</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_shared</span><span class="p">,))</span>  <span class="c1"># shared experts sit at the model c</span>
+</span><span id="__span-0-647"><a id="__codelineno-0-647" name="__codelineno-0-647"></a>        <span class="n">shared_RNA</span> <span class="o">=</span> <span class="n">_run_stacked_experts</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shared_experts</span><span class="p">,</span> <span class="n">c_shared_R</span><span class="p">,</span> <span class="n">x_NA</span><span class="p">,</span> <span class="n">c_work</span><span class="p">)</span>  <span class="c1"># (R, N, A)</span>
+</span><span id="__span-0-648"><a id="__codelineno-0-648" name="__codelineno-0-648"></a>        <span class="n">outputs_ENA</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">outputs_ENA</span><span class="p">,</span> <span class="n">shared_RNA</span><span class="p">],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># (M, N, A)</span>
+</span><span id="__span-0-649"><a id="__codelineno-0-649" name="__codelineno-0-649"></a>        <span class="n">weights_NM</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">weights_NM</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="n">x_NA</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_shared</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">work_dtype</span><span class="p">)],</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-0-650"><a id="__codelineno-0-650" name="__codelineno-0-650"></a>
+</span><span id="__span-0-651"><a id="__codelineno-0-651" name="__codelineno-0-651"></a>    <span class="n">points_NMA</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">outputs_ENA</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>  <span class="c1"># (N, M, A)</span>
+</span><span id="__span-0-652"><a id="__codelineno-0-652" name="__codelineno-0-652"></a>    <span class="n">centroid_N1A</span> <span class="o">=</span> <span class="n">lorentz_midpoint</span><span class="p">(</span><span class="n">points_NMA</span><span class="p">,</span> <span class="n">weights_NM</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:],</span> <span class="n">c_work</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (N, 1, A)</span>
+</span><span id="__span-0-653"><a id="__codelineno-0-653" name="__codelineno-0-653"></a>    <span class="n">out_LA</span> <span class="o">=</span> <span class="n">centroid_N1A</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">:]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim</span><span class="p">)</span>  <span class="c1"># (L..., A)</span>
+</span><span id="__span-0-654"><a id="__codelineno-0-654" name="__codelineno-0-654"></a>    <span class="n">routing_stats</span> <span class="o">=</span> <span class="n">MoERoutingStats</span><span class="p">(</span>
+</span><span id="__span-0-655"><a id="__codelineno-0-655" name="__codelineno-0-655"></a>        <span class="n">affinity</span><span class="o">=</span><span class="n">gate_stats</span><span class="o">.</span><span class="n">affinity</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_routed</span><span class="p">),</span>  <span class="c1"># (L..., E)</span>
+</span><span id="__span-0-656"><a id="__codelineno-0-656" name="__codelineno-0-656"></a>        <span class="n">mask</span><span class="o">=</span><span class="n">gate_stats</span><span class="o">.</span><span class="n">mask</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">*</span><span class="n">lead_shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_routed</span><span class="p">),</span>  <span class="c1"># (L..., E)</span>
+</span><span id="__span-0-657"><a id="__codelineno-0-657" name="__codelineno-0-657"></a>    <span class="p">)</span>
+</span><span id="__span-0-658"><a id="__codelineno-0-658" name="__codelineno-0-658"></a>    <span class="k">return</span> <span class="n">out_LA</span><span class="p">,</span> <span class="n">routing_stats</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -2642,14 +2648,15 @@ curvature <code>c</code> (no residual; see the class docstring).</p>
 
 
 
-        <p>Top-k router of HELM-MiCE with DeepSeek-V3's auxiliary-loss-free balancing bias.</p>
-<p>For a token <code>x</code> on the hyperboloid with spatial part <code>x_s</code>, following the HELM paper:</p>
+        <p>Top-k router of HELM-MiCE, in the HELM paper's form, with DeepSeek-V3's balancing bias.</p>
+<p>For a token <code>x</code> on the hyperboloid with spatial part <code>x_s</code>, following the HELM paper (not
+the released code, which renormalises the weights only for sigmoid scores):</p>
 <ol>
 <li>Scores <code>s_j = act(&lt;x_s, y_j&gt;)</code>, with <code>y_j</code> the column <code>j</code> of :attr:<code>kernel</code> and
    <code>act</code> a softmax over the experts or an elementwise sigmoid, in at least float32.</li>
 <li>Selection: the <code>top_k</code> experts by <code>s_j + b_j</code>, <code>b</code> the routing bias.</li>
-<li>Weights: the <em>unbiased</em> scores of the selected experts, renormalised to sum to 1 over the
-   selection, times <code>route_scale</code>: <code>g_i = route_scale * s_i / sum_{j in TopK} s_j</code>.</li>
+<li>Weights: the <em>unbiased</em> scores of the selected experts, always renormalised (softmax and
+   sigmoid alike) to sum to 1 over the selection, times <code>route_scale</code>: <code>g_i = route_scale * s_i / sum_{j in TopK} s_j</code>.</li>
 </ol>
 <p>The bias only changes which experts are chosen, never their weights, and it is not trained by
 gradient descent: call :meth:<code>update_bias</code> once per training step with the step's routing
@@ -3088,31 +3095,20 @@ selection and scaled by <code>route_scale</code>.</p>
 
 <a href="#hyperbolix.nn_layers.LorentzMoEGate.update_bias" class="headerlink" title="Permanent link">&para;</a></h4>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">update_bias</span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">mask</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... E&quot;</span><span class="p">],</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">speed</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">rule</span><span class="p">:</span> <span class="n">BiasUpdateRule</span> <span class="o">=</span> <span class="s2">&quot;sign&quot;</span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">mask</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... E&quot;</span><span class="p">],</span> <span class="n">speed</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents ">
 
         <p>Auxiliary-loss-free bias update from the step's routing mask.</p>
-<p><code>load_i</code> is the number of tokens routed to expert <code>i</code> in <code>mask</code>. Two rules:</p>
-<ul>
-<li><code>"sign"</code> (the default): DeepSeek-V3's rule, the one the HELM paper cites,
-  <code>b_i += speed * sign(mean(load) - load_i)</code>. An overloaded expert's bias drops by
-  <code>speed</code>, an underloaded one's rises by <code>speed</code>, and an exactly average one's is
-  unchanged. DeepSeek-V3 applies it at the end of each training step, over all tokens of
-  the step (gather <code>mask</code> across data shards first); its <code>speed</code> (<code>gamma</code>) was
-  0.001, HELM's config sets 0.005.</li>
-<li><code>"proportional"</code>: the rule of the <code>update_bias</code> method in HELM's released code
-  (<code>helm/modules/mice.py</code>, never called by its training loop),
-  <code>b_i += speed * (mean(util) - util_i)</code> with <code>util_i = load_i / sum_j load_j</code> the
-  fraction of the step's selections that went to expert <code>i</code> (so <code>mean(util) = 1/E</code>).
-  The step is proportional to the imbalance, and the update sums to 0 over the experts,
-  so <code>sum(b)</code> does not change. A mask with no selections leaves the bias unchanged, as
-  HELM's early return does.</li>
-</ul>
+<p><code>load_i</code> is the number of tokens routed to expert <code>i</code> in <code>mask</code>. The update is
+DeepSeek-V3's sign rule, the one the HELM paper cites,
+<code>b_i += speed * sign(mean(load) - load_i)</code>. An overloaded expert's bias drops by
+<code>speed</code>, an underloaded one's rises by <code>speed</code>, and an exactly average one's is
+unchanged. DeepSeek-V3 applies it at the end of each training step, over all tokens of
+the step (gather <code>mask</code> across data shards first); its <code>speed</code> (<code>gamma</code>) was
+0.001, HELM's config sets 0.005.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -3158,22 +3154,6 @@ selection and scaled by <code>route_scale</code>.</p>
                 <em>required</em>
             </td>
           </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>rule</code>
-            </td>
-            <td>
-                  <code>(<span title="sign">sign</span>, <span title="proportional">proportional</span>)</code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Update rule (default: "sign").</p>
-              </div>
-            </td>
-            <td>
-                  <code>&#34;sign&#34;</code>
-            </td>
-          </tr>
       </tbody>
     </table>
 
@@ -3202,65 +3182,29 @@ selection and scaled by <code>route_scale</code>.</p>
 <span class="normal"><a href="#__codelineno-0-230">230</a></span>
 <span class="normal"><a href="#__codelineno-0-231">231</a></span>
 <span class="normal"><a href="#__codelineno-0-232">232</a></span>
-<span class="normal"><a href="#__codelineno-0-233">233</a></span>
-<span class="normal"><a href="#__codelineno-0-234">234</a></span>
-<span class="normal"><a href="#__codelineno-0-235">235</a></span>
-<span class="normal"><a href="#__codelineno-0-236">236</a></span>
-<span class="normal"><a href="#__codelineno-0-237">237</a></span>
-<span class="normal"><a href="#__codelineno-0-238">238</a></span>
-<span class="normal"><a href="#__codelineno-0-239">239</a></span>
-<span class="normal"><a href="#__codelineno-0-240">240</a></span>
-<span class="normal"><a href="#__codelineno-0-241">241</a></span>
-<span class="normal"><a href="#__codelineno-0-242">242</a></span>
-<span class="normal"><a href="#__codelineno-0-243">243</a></span>
-<span class="normal"><a href="#__codelineno-0-244">244</a></span>
-<span class="normal"><a href="#__codelineno-0-245">245</a></span>
-<span class="normal"><a href="#__codelineno-0-246">246</a></span>
-<span class="normal"><a href="#__codelineno-0-247">247</a></span>
-<span class="normal"><a href="#__codelineno-0-248">248</a></span>
-<span class="normal"><a href="#__codelineno-0-249">249</a></span>
-<span class="normal"><a href="#__codelineno-0-250">250</a></span>
-<span class="normal"><a href="#__codelineno-0-251">251</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-211"><a id="__codelineno-0-211" name="__codelineno-0-211"></a><span class="k">def</span><span class="w"> </span><span class="nf">update_bias</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mask</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... E&quot;</span><span class="p">],</span> <span class="n">speed</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">rule</span><span class="p">:</span> <span class="n">BiasUpdateRule</span> <span class="o">=</span> <span class="s2">&quot;sign&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="normal"><a href="#__codelineno-0-233">233</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-211"><a id="__codelineno-0-211" name="__codelineno-0-211"></a><span class="k">def</span><span class="w"> </span><span class="nf">update_bias</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mask</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;... E&quot;</span><span class="p">],</span> <span class="n">speed</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="__span-0-212"><a id="__codelineno-0-212" name="__codelineno-0-212"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Auxiliary-loss-free bias update from the step&#39;s routing mask.</span>
 </span><span id="__span-0-213"><a id="__codelineno-0-213" name="__codelineno-0-213"></a>
-</span><span id="__span-0-214"><a id="__codelineno-0-214" name="__codelineno-0-214"></a><span class="sd">    ``load_i`` is the number of tokens routed to expert ``i`` in ``mask``. Two rules:</span>
-</span><span id="__span-0-215"><a id="__codelineno-0-215" name="__codelineno-0-215"></a>
-</span><span id="__span-0-216"><a id="__codelineno-0-216" name="__codelineno-0-216"></a><span class="sd">    - ``&quot;sign&quot;`` (the default): DeepSeek-V3&#39;s rule, the one the HELM paper cites,</span>
-</span><span id="__span-0-217"><a id="__codelineno-0-217" name="__codelineno-0-217"></a><span class="sd">      ``b_i += speed * sign(mean(load) - load_i)``. An overloaded expert&#39;s bias drops by</span>
-</span><span id="__span-0-218"><a id="__codelineno-0-218" name="__codelineno-0-218"></a><span class="sd">      ``speed``, an underloaded one&#39;s rises by ``speed``, and an exactly average one&#39;s is</span>
-</span><span id="__span-0-219"><a id="__codelineno-0-219" name="__codelineno-0-219"></a><span class="sd">      unchanged. DeepSeek-V3 applies it at the end of each training step, over all tokens of</span>
-</span><span id="__span-0-220"><a id="__codelineno-0-220" name="__codelineno-0-220"></a><span class="sd">      the step (gather ``mask`` across data shards first); its ``speed`` (``gamma``) was</span>
-</span><span id="__span-0-221"><a id="__codelineno-0-221" name="__codelineno-0-221"></a><span class="sd">      0.001, HELM&#39;s config sets 0.005.</span>
-</span><span id="__span-0-222"><a id="__codelineno-0-222" name="__codelineno-0-222"></a><span class="sd">    - ``&quot;proportional&quot;``: the rule of the ``update_bias`` method in HELM&#39;s released code</span>
-</span><span id="__span-0-223"><a id="__codelineno-0-223" name="__codelineno-0-223"></a><span class="sd">      (``helm/modules/mice.py``, never called by its training loop),</span>
-</span><span id="__span-0-224"><a id="__codelineno-0-224" name="__codelineno-0-224"></a><span class="sd">      ``b_i += speed * (mean(util) - util_i)`` with ``util_i = load_i / sum_j load_j`` the</span>
-</span><span id="__span-0-225"><a id="__codelineno-0-225" name="__codelineno-0-225"></a><span class="sd">      fraction of the step&#39;s selections that went to expert ``i`` (so ``mean(util) = 1/E``).</span>
-</span><span id="__span-0-226"><a id="__codelineno-0-226" name="__codelineno-0-226"></a><span class="sd">      The step is proportional to the imbalance, and the update sums to 0 over the experts,</span>
-</span><span id="__span-0-227"><a id="__codelineno-0-227" name="__codelineno-0-227"></a><span class="sd">      so ``sum(b)`` does not change. A mask with no selections leaves the bias unchanged, as</span>
-</span><span id="__span-0-228"><a id="__codelineno-0-228" name="__codelineno-0-228"></a><span class="sd">      HELM&#39;s early return does.</span>
-</span><span id="__span-0-229"><a id="__codelineno-0-229" name="__codelineno-0-229"></a>
-</span><span id="__span-0-230"><a id="__codelineno-0-230" name="__codelineno-0-230"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-231"><a id="__codelineno-0-231" name="__codelineno-0-231"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-232"><a id="__codelineno-0-232" name="__codelineno-0-232"></a><span class="sd">    mask : Array, shape (..., E)</span>
-</span><span id="__span-0-233"><a id="__codelineno-0-233" name="__codelineno-0-233"></a><span class="sd">        The routing mask of the step (:attr:`MoERoutingStats.mask`), any leading shape.</span>
-</span><span id="__span-0-234"><a id="__codelineno-0-234" name="__codelineno-0-234"></a><span class="sd">    speed : float</span>
-</span><span id="__span-0-235"><a id="__codelineno-0-235" name="__codelineno-0-235"></a><span class="sd">        Bias update speed ``gamma``.</span>
-</span><span id="__span-0-236"><a id="__codelineno-0-236" name="__codelineno-0-236"></a><span class="sd">    rule : {&quot;sign&quot;, &quot;proportional&quot;}, optional</span>
-</span><span id="__span-0-237"><a id="__codelineno-0-237" name="__codelineno-0-237"></a><span class="sd">        Update rule (default: &quot;sign&quot;).</span>
-</span><span id="__span-0-238"><a id="__codelineno-0-238" name="__codelineno-0-238"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-239"><a id="__codelineno-0-239" name="__codelineno-0-239"></a>    <span class="k">if</span> <span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_experts</span><span class="p">:</span>
-</span><span id="__span-0-240"><a id="__codelineno-0-240" name="__codelineno-0-240"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;mask must have </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_experts</span><span class="si">}</span><span class="s2"> experts on its last axis, got shape </span><span class="si">{</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-241"><a id="__codelineno-0-241" name="__codelineno-0-241"></a>    <span class="k">if</span> <span class="n">rule</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;sign&quot;</span><span class="p">,</span> <span class="s2">&quot;proportional&quot;</span><span class="p">):</span>
-</span><span id="__span-0-242"><a id="__codelineno-0-242" name="__codelineno-0-242"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rule must be &#39;sign&#39; or &#39;proportional&#39;, got </span><span class="si">{</span><span class="n">rule</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-243"><a id="__codelineno-0-243" name="__codelineno-0-243"></a>    <span class="n">bias_E</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">]</span>  <span class="c1"># (E,)</span>
-</span><span id="__span-0-244"><a id="__codelineno-0-244" name="__codelineno-0-244"></a>    <span class="n">load_E</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">mask</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_experts</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">bias_E</span><span class="o">.</span><span class="n">dtype</span><span class="p">),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># (E,)</span>
-</span><span id="__span-0-245"><a id="__codelineno-0-245" name="__codelineno-0-245"></a>    <span class="k">if</span> <span class="n">rule</span> <span class="o">==</span> <span class="s2">&quot;sign&quot;</span><span class="p">:</span>
-</span><span id="__span-0-246"><a id="__codelineno-0-246" name="__codelineno-0-246"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="n">bias_E</span> <span class="o">+</span> <span class="n">speed</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">load_E</span><span class="p">)</span> <span class="o">-</span> <span class="n">load_E</span><span class="p">)</span>
-</span><span id="__span-0-247"><a id="__codelineno-0-247" name="__codelineno-0-247"></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="__span-0-248"><a id="__codelineno-0-248" name="__codelineno-0-248"></a>        <span class="c1"># HELM: util = bincount(indices) / its sum. An empty step gives util = 0, hence no update.</span>
-</span><span id="__span-0-249"><a id="__codelineno-0-249" name="__codelineno-0-249"></a>        <span class="n">tiny</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">load_E</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">tiny</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">load_E</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
-</span><span id="__span-0-250"><a id="__codelineno-0-250" name="__codelineno-0-250"></a>        <span class="n">util_E</span> <span class="o">=</span> <span class="n">load_E</span> <span class="o">/</span> <span class="n">floor_at</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">load_E</span><span class="p">),</span> <span class="n">tiny</span><span class="p">)</span>  <span class="c1"># (E,)</span>
-</span><span id="__span-0-251"><a id="__codelineno-0-251" name="__codelineno-0-251"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="n">bias_E</span> <span class="o">+</span> <span class="n">speed</span> <span class="o">*</span> <span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">util_E</span><span class="p">)</span> <span class="o">-</span> <span class="n">util_E</span><span class="p">)</span>
+</span><span id="__span-0-214"><a id="__codelineno-0-214" name="__codelineno-0-214"></a><span class="sd">    ``load_i`` is the number of tokens routed to expert ``i`` in ``mask``. The update is</span>
+</span><span id="__span-0-215"><a id="__codelineno-0-215" name="__codelineno-0-215"></a><span class="sd">    DeepSeek-V3&#39;s sign rule, the one the HELM paper cites,</span>
+</span><span id="__span-0-216"><a id="__codelineno-0-216" name="__codelineno-0-216"></a><span class="sd">    ``b_i += speed * sign(mean(load) - load_i)``. An overloaded expert&#39;s bias drops by</span>
+</span><span id="__span-0-217"><a id="__codelineno-0-217" name="__codelineno-0-217"></a><span class="sd">    ``speed``, an underloaded one&#39;s rises by ``speed``, and an exactly average one&#39;s is</span>
+</span><span id="__span-0-218"><a id="__codelineno-0-218" name="__codelineno-0-218"></a><span class="sd">    unchanged. DeepSeek-V3 applies it at the end of each training step, over all tokens of</span>
+</span><span id="__span-0-219"><a id="__codelineno-0-219" name="__codelineno-0-219"></a><span class="sd">    the step (gather ``mask`` across data shards first); its ``speed`` (``gamma``) was</span>
+</span><span id="__span-0-220"><a id="__codelineno-0-220" name="__codelineno-0-220"></a><span class="sd">    0.001, HELM&#39;s config sets 0.005.</span>
+</span><span id="__span-0-221"><a id="__codelineno-0-221" name="__codelineno-0-221"></a>
+</span><span id="__span-0-222"><a id="__codelineno-0-222" name="__codelineno-0-222"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-223"><a id="__codelineno-0-223" name="__codelineno-0-223"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-224"><a id="__codelineno-0-224" name="__codelineno-0-224"></a><span class="sd">    mask : Array, shape (..., E)</span>
+</span><span id="__span-0-225"><a id="__codelineno-0-225" name="__codelineno-0-225"></a><span class="sd">        The routing mask of the step (:attr:`MoERoutingStats.mask`), any leading shape.</span>
+</span><span id="__span-0-226"><a id="__codelineno-0-226" name="__codelineno-0-226"></a><span class="sd">    speed : float</span>
+</span><span id="__span-0-227"><a id="__codelineno-0-227" name="__codelineno-0-227"></a><span class="sd">        Bias update speed ``gamma``.</span>
+</span><span id="__span-0-228"><a id="__codelineno-0-228" name="__codelineno-0-228"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-229"><a id="__codelineno-0-229" name="__codelineno-0-229"></a>    <span class="k">if</span> <span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_experts</span><span class="p">:</span>
+</span><span id="__span-0-230"><a id="__codelineno-0-230" name="__codelineno-0-230"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;mask must have </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_experts</span><span class="si">}</span><span class="s2"> experts on its last axis, got shape </span><span class="si">{</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-231"><a id="__codelineno-0-231" name="__codelineno-0-231"></a>    <span class="n">bias_E</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">]</span>  <span class="c1"># (E,)</span>
+</span><span id="__span-0-232"><a id="__codelineno-0-232" name="__codelineno-0-232"></a>    <span class="n">load_E</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">mask</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_experts</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">bias_E</span><span class="o">.</span><span class="n">dtype</span><span class="p">),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># (E,)</span>
+</span><span id="__span-0-233"><a id="__codelineno-0-233" name="__codelineno-0-233"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="p">[</span><span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="n">bias_E</span> <span class="o">+</span> <span class="n">speed</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">load_E</span><span class="p">)</span> <span class="o">-</span> <span class="n">load_E</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -3301,7 +3245,7 @@ selection and scaled by <code>route_scale</code>.</p>
 
 
 
-        <p>HELM's Lorentzian SwiGLU feed-forward (HFFN), run on an expert's own hyperboloid sheet.</p>
+        <p>HELM's Lorentzian SwiGLU feed-forward (HFFN) in the paper's form, run on an expert's own hyperboloid sheet.</p>
 <p>For an input <code>x</code> on the model sheet (curvature <code>c</code>) and an expert curvature <code>c_e</code>:</p>
 <ol>
 <li>Map onto the expert sheet, <code>x_e = sqrt(c / c_e) x</code> (the paper's <code>sqrt(K / K_e) x</code>),
@@ -3313,7 +3257,12 @@ selection and scaled by <code>route_scale</code>.</p>
    <code>sqrt(c_e / c)</code> and rebuilds the time at <code>c</code>, which is the paper's map back
    <code>sqrt(K_e / K) HFFN_e(x_e)</code> (the ambient point on the <code>c_e</code> sheet, scaled).</li>
 </ol>
-<p>With <code>c_e = c</code> this is HELM's dense <code>LorentzFeedForward</code>.</p>
+<p>With <code>c_e = c</code> this is the paper's dense Lorentzian feed-forward: the forward map is the same
+as HELM's <code>LorentzFeedForward</code>, but the code is not a copy of HELM's. The input time
+coordinate is rebuilt from the space part (step 1) and not read from <code>x</code>, so the ambient
+input gradient differs from HELM's only along the hyperboloid normal. In float64 probes against
+a port of HELM's code the tangential difference was 3.6e-15 and the Riemannian gradients agreed
+to 2.3e-13.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -3473,7 +3422,20 @@ ambient <code>in</code> and spatial <code>out</code>. Biases start at 0.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_moe.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-295">295</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-282">282</a></span>
+<span class="normal"><a href="#__codelineno-0-283">283</a></span>
+<span class="normal"><a href="#__codelineno-0-284">284</a></span>
+<span class="normal"><a href="#__codelineno-0-285">285</a></span>
+<span class="normal"><a href="#__codelineno-0-286">286</a></span>
+<span class="normal"><a href="#__codelineno-0-287">287</a></span>
+<span class="normal"><a href="#__codelineno-0-288">288</a></span>
+<span class="normal"><a href="#__codelineno-0-289">289</a></span>
+<span class="normal"><a href="#__codelineno-0-290">290</a></span>
+<span class="normal"><a href="#__codelineno-0-291">291</a></span>
+<span class="normal"><a href="#__codelineno-0-292">292</a></span>
+<span class="normal"><a href="#__codelineno-0-293">293</a></span>
+<span class="normal"><a href="#__codelineno-0-294">294</a></span>
+<span class="normal"><a href="#__codelineno-0-295">295</a></span>
 <span class="normal"><a href="#__codelineno-0-296">296</a></span>
 <span class="normal"><a href="#__codelineno-0-297">297</a></span>
 <span class="normal"><a href="#__codelineno-0-298">298</a></span>
@@ -3486,46 +3448,33 @@ ambient <code>in</code> and spatial <code>out</code>. Biases start at 0.</p>
 <span class="normal"><a href="#__codelineno-0-305">305</a></span>
 <span class="normal"><a href="#__codelineno-0-306">306</a></span>
 <span class="normal"><a href="#__codelineno-0-307">307</a></span>
-<span class="normal"><a href="#__codelineno-0-308">308</a></span>
-<span class="normal"><a href="#__codelineno-0-309">309</a></span>
-<span class="normal"><a href="#__codelineno-0-310">310</a></span>
-<span class="normal"><a href="#__codelineno-0-311">311</a></span>
-<span class="normal"><a href="#__codelineno-0-312">312</a></span>
-<span class="normal"><a href="#__codelineno-0-313">313</a></span>
-<span class="normal"><a href="#__codelineno-0-314">314</a></span>
-<span class="normal"><a href="#__codelineno-0-315">315</a></span>
-<span class="normal"><a href="#__codelineno-0-316">316</a></span>
-<span class="normal"><a href="#__codelineno-0-317">317</a></span>
-<span class="normal"><a href="#__codelineno-0-318">318</a></span>
-<span class="normal"><a href="#__codelineno-0-319">319</a></span>
-<span class="normal"><a href="#__codelineno-0-320">320</a></span>
-<span class="normal"><a href="#__codelineno-0-321">321</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-295"><a id="__codelineno-0-295" name="__codelineno-0-295"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-296"><a id="__codelineno-0-296" name="__codelineno-0-296"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-297"><a id="__codelineno-0-297" name="__codelineno-0-297"></a>    <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-298"><a id="__codelineno-0-298" name="__codelineno-0-298"></a>    <span class="n">inter_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-299"><a id="__codelineno-0-299" name="__codelineno-0-299"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-300"><a id="__codelineno-0-300" name="__codelineno-0-300"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
-</span><span id="__span-0-301"><a id="__codelineno-0-301" name="__codelineno-0-301"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-302"><a id="__codelineno-0-302" name="__codelineno-0-302"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-</span><span id="__span-0-303"><a id="__codelineno-0-303" name="__codelineno-0-303"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
-</span><span id="__span-0-304"><a id="__codelineno-0-304" name="__codelineno-0-304"></a><span class="p">):</span>
-</span><span id="__span-0-305"><a id="__codelineno-0-305" name="__codelineno-0-305"></a>    <span class="k">if</span> <span class="n">dim</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
-</span><span id="__span-0-306"><a id="__codelineno-0-306" name="__codelineno-0-306"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;dim is the ambient model width and must be &gt;= 2, got </span><span class="si">{</span><span class="n">dim</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-307"><a id="__codelineno-0-307" name="__codelineno-0-307"></a>    <span class="k">if</span> <span class="n">inter_dim</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="__span-0-308"><a id="__codelineno-0-308" name="__codelineno-0-308"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;inter_dim (spatial) must be &gt;= 1, got </span><span class="si">{</span><span class="n">inter_dim</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="__span-0-309"><a id="__codelineno-0-309" name="__codelineno-0-309"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">dim</span> <span class="o">=</span> <span class="n">dim</span>
-</span><span id="__span-0-310"><a id="__codelineno-0-310" name="__codelineno-0-310"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">inter_dim</span> <span class="o">=</span> <span class="n">inter_dim</span>
-</span><span id="__span-0-311"><a id="__codelineno-0-311" name="__codelineno-0-311"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
-</span><span id="__span-0-312"><a id="__codelineno-0-312" name="__codelineno-0-312"></a>
-</span><span id="__span-0-313"><a id="__codelineno-0-313" name="__codelineno-0-313"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">projection</span><span class="p">(</span><span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">HTCLinear</span><span class="p">:</span>
-</span><span id="__span-0-314"><a id="__codelineno-0-314" name="__codelineno-0-314"></a>        <span class="n">bound</span> <span class="o">=</span> <span class="n">init_bound</span> <span class="k">if</span> <span class="n">init_bound</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">_helm_xavier_bound</span><span class="p">(</span><span class="n">in_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">)</span>
-</span><span id="__span-0-315"><a id="__codelineno-0-315" name="__codelineno-0-315"></a>        <span class="k">return</span> <span class="n">HTCLinear</span><span class="p">(</span>
-</span><span id="__span-0-316"><a id="__codelineno-0-316" name="__codelineno-0-316"></a>            <span class="n">in_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span> <span class="n">use_bias</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">init_bound</span><span class="o">=</span><span class="n">bound</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">,</span> <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span>
-</span><span id="__span-0-317"><a id="__codelineno-0-317" name="__codelineno-0-317"></a>        <span class="p">)</span>
-</span><span id="__span-0-318"><a id="__codelineno-0-318" name="__codelineno-0-318"></a>
-</span><span id="__span-0-319"><a id="__codelineno-0-319" name="__codelineno-0-319"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">w1</span> <span class="o">=</span> <span class="n">projection</span><span class="p">(</span><span class="n">dim</span><span class="p">,</span> <span class="n">inter_dim</span><span class="p">)</span>
-</span><span id="__span-0-320"><a id="__codelineno-0-320" name="__codelineno-0-320"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">w2</span> <span class="o">=</span> <span class="n">projection</span><span class="p">(</span><span class="n">inter_dim</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">dim</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-0-321"><a id="__codelineno-0-321" name="__codelineno-0-321"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">w3</span> <span class="o">=</span> <span class="n">projection</span><span class="p">(</span><span class="n">dim</span><span class="p">,</span> <span class="n">inter_dim</span><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-0-308">308</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-282"><a id="__codelineno-0-282" name="__codelineno-0-282"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-283"><a id="__codelineno-0-283" name="__codelineno-0-283"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-284"><a id="__codelineno-0-284" name="__codelineno-0-284"></a>    <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-285"><a id="__codelineno-0-285" name="__codelineno-0-285"></a>    <span class="n">inter_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-286"><a id="__codelineno-0-286" name="__codelineno-0-286"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-287"><a id="__codelineno-0-287" name="__codelineno-0-287"></a>    <span class="n">rngs</span><span class="p">:</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Rngs</span><span class="p">,</span>
+</span><span id="__span-0-288"><a id="__codelineno-0-288" name="__codelineno-0-288"></a>    <span class="n">init_bound</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-289"><a id="__codelineno-0-289" name="__codelineno-0-289"></a>    <span class="n">param_dtype</span><span class="p">:</span> <span class="n">DTypeLike</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+</span><span id="__span-0-290"><a id="__codelineno-0-290" name="__codelineno-0-290"></a>    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">,</span>
+</span><span id="__span-0-291"><a id="__codelineno-0-291" name="__codelineno-0-291"></a><span class="p">):</span>
+</span><span id="__span-0-292"><a id="__codelineno-0-292" name="__codelineno-0-292"></a>    <span class="k">if</span> <span class="n">dim</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+</span><span id="__span-0-293"><a id="__codelineno-0-293" name="__codelineno-0-293"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;dim is the ambient model width and must be &gt;= 2, got </span><span class="si">{</span><span class="n">dim</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-294"><a id="__codelineno-0-294" name="__codelineno-0-294"></a>    <span class="k">if</span> <span class="n">inter_dim</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="__span-0-295"><a id="__codelineno-0-295" name="__codelineno-0-295"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;inter_dim (spatial) must be &gt;= 1, got </span><span class="si">{</span><span class="n">inter_dim</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="__span-0-296"><a id="__codelineno-0-296" name="__codelineno-0-296"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">dim</span> <span class="o">=</span> <span class="n">dim</span>
+</span><span id="__span-0-297"><a id="__codelineno-0-297" name="__codelineno-0-297"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">inter_dim</span> <span class="o">=</span> <span class="n">inter_dim</span>
+</span><span id="__span-0-298"><a id="__codelineno-0-298" name="__codelineno-0-298"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+</span><span id="__span-0-299"><a id="__codelineno-0-299" name="__codelineno-0-299"></a>
+</span><span id="__span-0-300"><a id="__codelineno-0-300" name="__codelineno-0-300"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">projection</span><span class="p">(</span><span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">HTCLinear</span><span class="p">:</span>
+</span><span id="__span-0-301"><a id="__codelineno-0-301" name="__codelineno-0-301"></a>        <span class="n">bound</span> <span class="o">=</span> <span class="n">init_bound</span> <span class="k">if</span> <span class="n">init_bound</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">_helm_xavier_bound</span><span class="p">(</span><span class="n">in_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">)</span>
+</span><span id="__span-0-302"><a id="__codelineno-0-302" name="__codelineno-0-302"></a>        <span class="k">return</span> <span class="n">HTCLinear</span><span class="p">(</span>
+</span><span id="__span-0-303"><a id="__codelineno-0-303" name="__codelineno-0-303"></a>            <span class="n">in_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">,</span> <span class="n">rngs</span><span class="o">=</span><span class="n">rngs</span><span class="p">,</span> <span class="n">use_bias</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">init_bound</span><span class="o">=</span><span class="n">bound</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="n">eps</span><span class="p">,</span> <span class="n">param_dtype</span><span class="o">=</span><span class="n">param_dtype</span>
+</span><span id="__span-0-304"><a id="__codelineno-0-304" name="__codelineno-0-304"></a>        <span class="p">)</span>
+</span><span id="__span-0-305"><a id="__codelineno-0-305" name="__codelineno-0-305"></a>
+</span><span id="__span-0-306"><a id="__codelineno-0-306" name="__codelineno-0-306"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">w1</span> <span class="o">=</span> <span class="n">projection</span><span class="p">(</span><span class="n">dim</span><span class="p">,</span> <span class="n">inter_dim</span><span class="p">)</span>
+</span><span id="__span-0-307"><a id="__codelineno-0-307" name="__codelineno-0-307"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">w2</span> <span class="o">=</span> <span class="n">projection</span><span class="p">(</span><span class="n">inter_dim</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">dim</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-0-308"><a id="__codelineno-0-308" name="__codelineno-0-308"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">w3</span> <span class="o">=</span> <span class="n">projection</span><span class="p">(</span><span class="n">dim</span><span class="p">,</span> <span class="n">inter_dim</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -3650,7 +3599,20 @@ ambient <code>in</code> and spatial <code>out</code>. Biases start at 0.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_moe.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-323">323</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-310">310</a></span>
+<span class="normal"><a href="#__codelineno-0-311">311</a></span>
+<span class="normal"><a href="#__codelineno-0-312">312</a></span>
+<span class="normal"><a href="#__codelineno-0-313">313</a></span>
+<span class="normal"><a href="#__codelineno-0-314">314</a></span>
+<span class="normal"><a href="#__codelineno-0-315">315</a></span>
+<span class="normal"><a href="#__codelineno-0-316">316</a></span>
+<span class="normal"><a href="#__codelineno-0-317">317</a></span>
+<span class="normal"><a href="#__codelineno-0-318">318</a></span>
+<span class="normal"><a href="#__codelineno-0-319">319</a></span>
+<span class="normal"><a href="#__codelineno-0-320">320</a></span>
+<span class="normal"><a href="#__codelineno-0-321">321</a></span>
+<span class="normal"><a href="#__codelineno-0-322">322</a></span>
+<span class="normal"><a href="#__codelineno-0-323">323</a></span>
 <span class="normal"><a href="#__codelineno-0-324">324</a></span>
 <span class="normal"><a href="#__codelineno-0-325">325</a></span>
 <span class="normal"><a href="#__codelineno-0-326">326</a></span>
@@ -3665,48 +3627,35 @@ ambient <code>in</code> and spatial <code>out</code>. Biases start at 0.</p>
 <span class="normal"><a href="#__codelineno-0-335">335</a></span>
 <span class="normal"><a href="#__codelineno-0-336">336</a></span>
 <span class="normal"><a href="#__codelineno-0-337">337</a></span>
-<span class="normal"><a href="#__codelineno-0-338">338</a></span>
-<span class="normal"><a href="#__codelineno-0-339">339</a></span>
-<span class="normal"><a href="#__codelineno-0-340">340</a></span>
-<span class="normal"><a href="#__codelineno-0-341">341</a></span>
-<span class="normal"><a href="#__codelineno-0-342">342</a></span>
-<span class="normal"><a href="#__codelineno-0-343">343</a></span>
-<span class="normal"><a href="#__codelineno-0-344">344</a></span>
-<span class="normal"><a href="#__codelineno-0-345">345</a></span>
-<span class="normal"><a href="#__codelineno-0-346">346</a></span>
-<span class="normal"><a href="#__codelineno-0-347">347</a></span>
-<span class="normal"><a href="#__codelineno-0-348">348</a></span>
-<span class="normal"><a href="#__codelineno-0-349">349</a></span>
-<span class="normal"><a href="#__codelineno-0-350">350</a></span>
-<span class="normal"><a href="#__codelineno-0-351">351</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-323"><a id="__codelineno-0-323" name="__codelineno-0-323"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
-</span><span id="__span-0-324"><a id="__codelineno-0-324" name="__codelineno-0-324"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-325"><a id="__codelineno-0-325" name="__codelineno-0-325"></a>    <span class="n">x_NA</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;N A&quot;</span><span class="p">],</span>
-</span><span id="__span-0-326"><a id="__codelineno-0-326" name="__codelineno-0-326"></a>    <span class="n">c_expert</span><span class="p">:</span> <span class="n">ScalarCurvature</span><span class="p">,</span>
-</span><span id="__span-0-327"><a id="__codelineno-0-327" name="__codelineno-0-327"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">ScalarCurvature</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-</span><span id="__span-0-328"><a id="__codelineno-0-328" name="__codelineno-0-328"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;N A&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-329"><a id="__codelineno-0-329" name="__codelineno-0-329"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply the expert.</span>
-</span><span id="__span-0-330"><a id="__codelineno-0-330" name="__codelineno-0-330"></a>
-</span><span id="__span-0-331"><a id="__codelineno-0-331" name="__codelineno-0-331"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-332"><a id="__codelineno-0-332" name="__codelineno-0-332"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-333"><a id="__codelineno-0-333" name="__codelineno-0-333"></a><span class="sd">    x_NA : Array, shape (..., A)</span>
-</span><span id="__span-0-334"><a id="__codelineno-0-334" name="__codelineno-0-334"></a><span class="sd">        Points on the model hyperboloid with curvature ``c``.</span>
-</span><span id="__span-0-335"><a id="__codelineno-0-335" name="__codelineno-0-335"></a><span class="sd">    c_expert : float or scalar Array</span>
-</span><span id="__span-0-336"><a id="__codelineno-0-336" name="__codelineno-0-336"></a><span class="sd">        The expert&#39;s curvature ``c_e``.</span>
-</span><span id="__span-0-337"><a id="__codelineno-0-337" name="__codelineno-0-337"></a><span class="sd">    c : float or scalar Array, optional</span>
-</span><span id="__span-0-338"><a id="__codelineno-0-338" name="__codelineno-0-338"></a><span class="sd">        Model curvature (default: 1.0).</span>
-</span><span id="__span-0-339"><a id="__codelineno-0-339" name="__codelineno-0-339"></a>
-</span><span id="__span-0-340"><a id="__codelineno-0-340" name="__codelineno-0-340"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-341"><a id="__codelineno-0-341" name="__codelineno-0-341"></a><span class="sd">    -------</span>
-</span><span id="__span-0-342"><a id="__codelineno-0-342" name="__codelineno-0-342"></a><span class="sd">    Array, shape (..., A)</span>
-</span><span id="__span-0-343"><a id="__codelineno-0-343" name="__codelineno-0-343"></a><span class="sd">        Points on the model hyperboloid with curvature ``c``.</span>
-</span><span id="__span-0-344"><a id="__codelineno-0-344" name="__codelineno-0-344"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-345"><a id="__codelineno-0-345" name="__codelineno-0-345"></a>    <span class="c1"># HTCLinear annotates its curvatures as float; it takes traced scalars (learnable curvature) at runtime.</span>
-</span><span id="__span-0-346"><a id="__codelineno-0-346" name="__codelineno-0-346"></a>    <span class="n">c_e</span><span class="p">,</span> <span class="n">c_m</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">c_expert</span><span class="p">),</span> <span class="n">cast</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
-</span><span id="__span-0-347"><a id="__codelineno-0-347" name="__codelineno-0-347"></a>    <span class="n">x_expert_NA</span> <span class="o">=</span> <span class="n">spatial_to_hyperboloid</span><span class="p">(</span><span class="n">x_NA</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">:],</span> <span class="n">c_m</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (N, A) on the c_e sheet</span>
-</span><span id="__span-0-348"><a id="__codelineno-0-348" name="__codelineno-0-348"></a>    <span class="n">gate_NI</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">w1</span><span class="p">(</span><span class="n">x_expert_NA</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">return_space</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># (N, I)</span>
-</span><span id="__span-0-349"><a id="__codelineno-0-349" name="__codelineno-0-349"></a>    <span class="n">up_NI</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">w3</span><span class="p">(</span><span class="n">x_expert_NA</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">return_space</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># (N, I)</span>
-</span><span id="__span-0-350"><a id="__codelineno-0-350" name="__codelineno-0-350"></a>    <span class="n">hidden_NH</span> <span class="o">=</span> <span class="n">spatial_to_hyperboloid</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">silu</span><span class="p">(</span><span class="n">gate_NI</span><span class="p">)</span> <span class="o">*</span> <span class="n">up_NI</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (N, H)</span>
-</span><span id="__span-0-351"><a id="__codelineno-0-351" name="__codelineno-0-351"></a>    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">w2</span><span class="p">(</span><span class="n">hidden_NH</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">c_m</span><span class="p">)</span>  <span class="c1"># (N, A), mapped back onto the c sheet</span>
+<span class="normal"><a href="#__codelineno-0-338">338</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-310"><a id="__codelineno-0-310" name="__codelineno-0-310"></a><span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span>
+</span><span id="__span-0-311"><a id="__codelineno-0-311" name="__codelineno-0-311"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-312"><a id="__codelineno-0-312" name="__codelineno-0-312"></a>    <span class="n">x_NA</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;N A&quot;</span><span class="p">],</span>
+</span><span id="__span-0-313"><a id="__codelineno-0-313" name="__codelineno-0-313"></a>    <span class="n">c_expert</span><span class="p">:</span> <span class="n">ScalarCurvature</span><span class="p">,</span>
+</span><span id="__span-0-314"><a id="__codelineno-0-314" name="__codelineno-0-314"></a>    <span class="n">c</span><span class="p">:</span> <span class="n">ScalarCurvature</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-0-315"><a id="__codelineno-0-315" name="__codelineno-0-315"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;N A&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-316"><a id="__codelineno-0-316" name="__codelineno-0-316"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply the expert.</span>
+</span><span id="__span-0-317"><a id="__codelineno-0-317" name="__codelineno-0-317"></a>
+</span><span id="__span-0-318"><a id="__codelineno-0-318" name="__codelineno-0-318"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-319"><a id="__codelineno-0-319" name="__codelineno-0-319"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-320"><a id="__codelineno-0-320" name="__codelineno-0-320"></a><span class="sd">    x_NA : Array, shape (..., A)</span>
+</span><span id="__span-0-321"><a id="__codelineno-0-321" name="__codelineno-0-321"></a><span class="sd">        Points on the model hyperboloid with curvature ``c``.</span>
+</span><span id="__span-0-322"><a id="__codelineno-0-322" name="__codelineno-0-322"></a><span class="sd">    c_expert : float or scalar Array</span>
+</span><span id="__span-0-323"><a id="__codelineno-0-323" name="__codelineno-0-323"></a><span class="sd">        The expert&#39;s curvature ``c_e``.</span>
+</span><span id="__span-0-324"><a id="__codelineno-0-324" name="__codelineno-0-324"></a><span class="sd">    c : float or scalar Array, optional</span>
+</span><span id="__span-0-325"><a id="__codelineno-0-325" name="__codelineno-0-325"></a><span class="sd">        Model curvature (default: 1.0).</span>
+</span><span id="__span-0-326"><a id="__codelineno-0-326" name="__codelineno-0-326"></a>
+</span><span id="__span-0-327"><a id="__codelineno-0-327" name="__codelineno-0-327"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-328"><a id="__codelineno-0-328" name="__codelineno-0-328"></a><span class="sd">    -------</span>
+</span><span id="__span-0-329"><a id="__codelineno-0-329" name="__codelineno-0-329"></a><span class="sd">    Array, shape (..., A)</span>
+</span><span id="__span-0-330"><a id="__codelineno-0-330" name="__codelineno-0-330"></a><span class="sd">        Points on the model hyperboloid with curvature ``c``.</span>
+</span><span id="__span-0-331"><a id="__codelineno-0-331" name="__codelineno-0-331"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-332"><a id="__codelineno-0-332" name="__codelineno-0-332"></a>    <span class="c1"># HTCLinear annotates its curvatures as float; it takes traced scalars (learnable curvature) at runtime.</span>
+</span><span id="__span-0-333"><a id="__codelineno-0-333" name="__codelineno-0-333"></a>    <span class="n">c_e</span><span class="p">,</span> <span class="n">c_m</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">c_expert</span><span class="p">),</span> <span class="n">cast</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</span><span id="__span-0-334"><a id="__codelineno-0-334" name="__codelineno-0-334"></a>    <span class="n">x_expert_NA</span> <span class="o">=</span> <span class="n">spatial_to_hyperboloid</span><span class="p">(</span><span class="n">x_NA</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">:],</span> <span class="n">c_m</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (N, A) on the c_e sheet</span>
+</span><span id="__span-0-335"><a id="__codelineno-0-335" name="__codelineno-0-335"></a>    <span class="n">gate_NI</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">w1</span><span class="p">(</span><span class="n">x_expert_NA</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">return_space</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># (N, I)</span>
+</span><span id="__span-0-336"><a id="__codelineno-0-336" name="__codelineno-0-336"></a>    <span class="n">up_NI</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">w3</span><span class="p">(</span><span class="n">x_expert_NA</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">return_space</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># (N, I)</span>
+</span><span id="__span-0-337"><a id="__codelineno-0-337" name="__codelineno-0-337"></a>    <span class="n">hidden_NH</span> <span class="o">=</span> <span class="n">spatial_to_hyperboloid</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">silu</span><span class="p">(</span><span class="n">gate_NI</span><span class="p">)</span> <span class="o">*</span> <span class="n">up_NI</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>  <span class="c1"># (N, H)</span>
+</span><span id="__span-0-338"><a id="__codelineno-0-338" name="__codelineno-0-338"></a>    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">w2</span><span class="p">(</span><span class="n">hidden_NH</span><span class="p">,</span> <span class="n">c_e</span><span class="p">,</span> <span class="n">c_m</span><span class="p">)</span>  <span class="c1"># (N, A), mapped back onto the c sheet</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -3833,7 +3782,11 @@ every leading axis indexes sequences (<code>(B, S, E)</code> from a <code>(B, S,
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>hyperbolix/nn_layers/hyperboloid_moe.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-665">665</a></span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-661">661</a></span>
+<span class="normal"><a href="#__codelineno-0-662">662</a></span>
+<span class="normal"><a href="#__codelineno-0-663">663</a></span>
+<span class="normal"><a href="#__codelineno-0-664">664</a></span>
+<span class="normal"><a href="#__codelineno-0-665">665</a></span>
 <span class="normal"><a href="#__codelineno-0-666">666</a></span>
 <span class="normal"><a href="#__codelineno-0-667">667</a></span>
 <span class="normal"><a href="#__codelineno-0-668">668</a></span>
@@ -3880,62 +3833,58 @@ every leading axis indexes sequences (<code>(B, S, E)</code> from a <code>(B, S,
 <span class="normal"><a href="#__codelineno-0-709">709</a></span>
 <span class="normal"><a href="#__codelineno-0-710">710</a></span>
 <span class="normal"><a href="#__codelineno-0-711">711</a></span>
-<span class="normal"><a href="#__codelineno-0-712">712</a></span>
-<span class="normal"><a href="#__codelineno-0-713">713</a></span>
-<span class="normal"><a href="#__codelineno-0-714">714</a></span>
-<span class="normal"><a href="#__codelineno-0-715">715</a></span>
-<span class="normal"><a href="#__codelineno-0-716">716</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-665"><a id="__codelineno-0-665" name="__codelineno-0-665"></a><span class="k">def</span><span class="w"> </span><span class="nf">moe_sequence_balance_loss</span><span class="p">(</span><span class="n">stats</span><span class="p">:</span> <span class="n">MoERoutingStats</span><span class="p">,</span> <span class="n">alpha</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
-</span><span id="__span-0-666"><a id="__codelineno-0-666" name="__codelineno-0-666"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;DeepSeek-V3&#39;s complementary sequence-wise balance loss, averaged over sequences.</span>
-</span><span id="__span-0-667"><a id="__codelineno-0-667" name="__codelineno-0-667"></a>
-</span><span id="__span-0-668"><a id="__codelineno-0-668" name="__codelineno-0-668"></a><span class="sd">    For one sequence of ``T`` tokens, ``E`` routed experts and ``k`` experts per token</span>
-</span><span id="__span-0-669"><a id="__codelineno-0-669" name="__codelineno-0-669"></a><span class="sd">    (DeepSeek-V3, Eqs. 17-20)::</span>
+<span class="normal"><a href="#__codelineno-0-712">712</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-661"><a id="__codelineno-0-661" name="__codelineno-0-661"></a><span class="k">def</span><span class="w"> </span><span class="nf">moe_sequence_balance_loss</span><span class="p">(</span><span class="n">stats</span><span class="p">:</span> <span class="n">MoERoutingStats</span><span class="p">,</span> <span class="n">alpha</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]:</span>
+</span><span id="__span-0-662"><a id="__codelineno-0-662" name="__codelineno-0-662"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;DeepSeek-V3&#39;s complementary sequence-wise balance loss, averaged over sequences.</span>
+</span><span id="__span-0-663"><a id="__codelineno-0-663" name="__codelineno-0-663"></a>
+</span><span id="__span-0-664"><a id="__codelineno-0-664" name="__codelineno-0-664"></a><span class="sd">    For one sequence of ``T`` tokens, ``E`` routed experts and ``k`` experts per token</span>
+</span><span id="__span-0-665"><a id="__codelineno-0-665" name="__codelineno-0-665"></a><span class="sd">    (DeepSeek-V3, Eqs. 17-20)::</span>
+</span><span id="__span-0-666"><a id="__codelineno-0-666" name="__codelineno-0-666"></a>
+</span><span id="__span-0-667"><a id="__codelineno-0-667" name="__codelineno-0-667"></a><span class="sd">        L_bal = alpha * sum_i f_i P_i</span>
+</span><span id="__span-0-668"><a id="__codelineno-0-668" name="__codelineno-0-668"></a><span class="sd">        f_i   = E / (k T) * sum_t 1[expert i in the top-k of token t]</span>
+</span><span id="__span-0-669"><a id="__codelineno-0-669" name="__codelineno-0-669"></a><span class="sd">        P_i   = 1 / T * sum_t s&#39;_{i,t},   s&#39;_{i,t} = s_{i,t} / sum_j s_{j,t}</span>
 </span><span id="__span-0-670"><a id="__codelineno-0-670" name="__codelineno-0-670"></a>
-</span><span id="__span-0-671"><a id="__codelineno-0-671" name="__codelineno-0-671"></a><span class="sd">        L_bal = alpha * sum_i f_i P_i</span>
-</span><span id="__span-0-672"><a id="__codelineno-0-672" name="__codelineno-0-672"></a><span class="sd">        f_i   = E / (k T) * sum_t 1[expert i in the top-k of token t]</span>
-</span><span id="__span-0-673"><a id="__codelineno-0-673" name="__codelineno-0-673"></a><span class="sd">        P_i   = 1 / T * sum_t s&#39;_{i,t},   s&#39;_{i,t} = s_{i,t} / sum_j s_{j,t}</span>
+</span><span id="__span-0-671"><a id="__codelineno-0-671" name="__codelineno-0-671"></a><span class="sd">    ``f_i`` is the expert&#39;s load relative to a uniform share (it has no gradient) and ``P_i`` its</span>
+</span><span id="__span-0-672"><a id="__codelineno-0-672" name="__codelineno-0-672"></a><span class="sd">    mean normalised affinity (differentiable in the gate kernel). ``k`` is read off the mask:</span>
+</span><span id="__span-0-673"><a id="__codelineno-0-673" name="__codelineno-0-673"></a><span class="sd">    ``k T = sum_{i,t} mask``. HELM&#39;s config sets ``alpha = 1e-4``.</span>
 </span><span id="__span-0-674"><a id="__codelineno-0-674" name="__codelineno-0-674"></a>
-</span><span id="__span-0-675"><a id="__codelineno-0-675" name="__codelineno-0-675"></a><span class="sd">    ``f_i`` is the expert&#39;s load relative to a uniform share (it has no gradient) and ``P_i`` its</span>
-</span><span id="__span-0-676"><a id="__codelineno-0-676" name="__codelineno-0-676"></a><span class="sd">    mean normalised affinity (differentiable in the gate kernel). ``k`` is read off the mask:</span>
-</span><span id="__span-0-677"><a id="__codelineno-0-677" name="__codelineno-0-677"></a><span class="sd">    ``k T = sum_{i,t} mask``. HELM&#39;s config sets ``alpha = 1e-4``.</span>
-</span><span id="__span-0-678"><a id="__codelineno-0-678" name="__codelineno-0-678"></a>
-</span><span id="__span-0-679"><a id="__codelineno-0-679" name="__codelineno-0-679"></a><span class="sd">    Values. Balanced routing (every expert in the top-k of ``k T / E`` tokens) gives</span>
-</span><span id="__span-0-680"><a id="__codelineno-0-680" name="__codelineno-0-680"></a><span class="sd">    ``f_i = 1`` and ``L = alpha`` for any affinities, and so does any routing when the affinities</span>
-</span><span id="__span-0-681"><a id="__codelineno-0-681" name="__codelineno-0-681"></a><span class="sd">    are uniform. All tokens routed to the same ``k`` experts gives ``L &gt;= alpha``, with equality</span>
-</span><span id="__span-0-682"><a id="__codelineno-0-682" name="__codelineno-0-682"></a><span class="sd">    only for uniform affinities, since the selected experts&#39; affinities sum to at least ``k / E``</span>
-</span><span id="__span-0-683"><a id="__codelineno-0-683" name="__codelineno-0-683"></a><span class="sd">    per token. ``alpha`` is not a lower bound in general, though: a token routed to an expert it</span>
-</span><span id="__span-0-684"><a id="__codelineno-0-684" name="__codelineno-0-684"></a><span class="sd">    barely prefers lowers ``sum_i f_i P_i`` below 1 (``E = 2``, ``k = 1``, two tokens at</span>
-</span><span id="__span-0-685"><a id="__codelineno-0-685" name="__codelineno-0-685"></a><span class="sd">    ``s&#39; = (0.6, 0.4)`` on expert 0 and one at ``(0, 1)`` on expert 1 give ``14/15 alpha``).</span>
+</span><span id="__span-0-675"><a id="__codelineno-0-675" name="__codelineno-0-675"></a><span class="sd">    Values. Balanced routing (every expert in the top-k of ``k T / E`` tokens) gives</span>
+</span><span id="__span-0-676"><a id="__codelineno-0-676" name="__codelineno-0-676"></a><span class="sd">    ``f_i = 1`` and ``L = alpha`` for any affinities, and so does any routing when the affinities</span>
+</span><span id="__span-0-677"><a id="__codelineno-0-677" name="__codelineno-0-677"></a><span class="sd">    are uniform. All tokens routed to the same ``k`` experts gives ``L &gt;= alpha``, with equality</span>
+</span><span id="__span-0-678"><a id="__codelineno-0-678" name="__codelineno-0-678"></a><span class="sd">    only for uniform affinities, since the selected experts&#39; affinities sum to at least ``k / E``</span>
+</span><span id="__span-0-679"><a id="__codelineno-0-679" name="__codelineno-0-679"></a><span class="sd">    per token. ``alpha`` is not a lower bound in general, though: a token routed to an expert it</span>
+</span><span id="__span-0-680"><a id="__codelineno-0-680" name="__codelineno-0-680"></a><span class="sd">    barely prefers lowers ``sum_i f_i P_i`` below 1 (``E = 2``, ``k = 1``, two tokens at</span>
+</span><span id="__span-0-681"><a id="__codelineno-0-681" name="__codelineno-0-681"></a><span class="sd">    ``s&#39; = (0.6, 0.4)`` on expert 0 and one at ``(0, 1)`` on expert 1 give ``14/15 alpha``).</span>
+</span><span id="__span-0-682"><a id="__codelineno-0-682" name="__codelineno-0-682"></a>
+</span><span id="__span-0-683"><a id="__codelineno-0-683" name="__codelineno-0-683"></a><span class="sd">    Selection. DeepSeek-V3 writes the indicator with the top-k of the unbiased scores; here the</span>
+</span><span id="__span-0-684"><a id="__codelineno-0-684" name="__codelineno-0-684"></a><span class="sd">    mask is the routing actually used, selected on the biased scores, so ``f_i`` is the load that</span>
+</span><span id="__span-0-685"><a id="__codelineno-0-685" name="__codelineno-0-685"></a><span class="sd">    the bias is balancing. The two coincide while the bias is zero.</span>
 </span><span id="__span-0-686"><a id="__codelineno-0-686" name="__codelineno-0-686"></a>
-</span><span id="__span-0-687"><a id="__codelineno-0-687" name="__codelineno-0-687"></a><span class="sd">    Selection. DeepSeek-V3 writes the indicator with the top-k of the unbiased scores; here the</span>
-</span><span id="__span-0-688"><a id="__codelineno-0-688" name="__codelineno-0-688"></a><span class="sd">    mask is the routing actually used, selected on the biased scores, so ``f_i`` is the load that</span>
-</span><span id="__span-0-689"><a id="__codelineno-0-689" name="__codelineno-0-689"></a><span class="sd">    the bias is balancing. The two coincide while the bias is zero.</span>
-</span><span id="__span-0-690"><a id="__codelineno-0-690" name="__codelineno-0-690"></a>
-</span><span id="__span-0-691"><a id="__codelineno-0-691" name="__codelineno-0-691"></a><span class="sd">    Parameters</span>
-</span><span id="__span-0-692"><a id="__codelineno-0-692" name="__codelineno-0-692"></a><span class="sd">    ----------</span>
-</span><span id="__span-0-693"><a id="__codelineno-0-693" name="__codelineno-0-693"></a><span class="sd">    stats : MoERoutingStats</span>
-</span><span id="__span-0-694"><a id="__codelineno-0-694" name="__codelineno-0-694"></a><span class="sd">        Routing statistics with shape ``(..., S, E)``: the second-to-last axis is the sequence,</span>
-</span><span id="__span-0-695"><a id="__codelineno-0-695" name="__codelineno-0-695"></a><span class="sd">        every leading axis indexes sequences (``(B, S, E)`` from a ``(B, S, A)`` input, or</span>
-</span><span id="__span-0-696"><a id="__codelineno-0-696" name="__codelineno-0-696"></a><span class="sd">        ``(S, E)`` for one sequence).</span>
-</span><span id="__span-0-697"><a id="__codelineno-0-697" name="__codelineno-0-697"></a><span class="sd">    alpha : float</span>
-</span><span id="__span-0-698"><a id="__codelineno-0-698" name="__codelineno-0-698"></a><span class="sd">        Balance factor.</span>
-</span><span id="__span-0-699"><a id="__codelineno-0-699" name="__codelineno-0-699"></a>
-</span><span id="__span-0-700"><a id="__codelineno-0-700" name="__codelineno-0-700"></a><span class="sd">    Returns</span>
-</span><span id="__span-0-701"><a id="__codelineno-0-701" name="__codelineno-0-701"></a><span class="sd">    -------</span>
-</span><span id="__span-0-702"><a id="__codelineno-0-702" name="__codelineno-0-702"></a><span class="sd">    Array, shape ()</span>
-</span><span id="__span-0-703"><a id="__codelineno-0-703" name="__codelineno-0-703"></a><span class="sd">        The loss, averaged over sequences.</span>
-</span><span id="__span-0-704"><a id="__codelineno-0-704" name="__codelineno-0-704"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-705"><a id="__codelineno-0-705" name="__codelineno-0-705"></a>    <span class="n">affinity</span><span class="p">,</span> <span class="n">mask</span> <span class="o">=</span> <span class="n">stats</span><span class="o">.</span><span class="n">affinity</span><span class="p">,</span> <span class="n">stats</span><span class="o">.</span><span class="n">mask</span>
-</span><span id="__span-0-706"><a id="__codelineno-0-706" name="__codelineno-0-706"></a>    <span class="k">if</span> <span class="n">affinity</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&lt;</span> <span class="mi">2</span> <span class="ow">or</span> <span class="n">affinity</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
-</span><span id="__span-0-707"><a id="__codelineno-0-707" name="__codelineno-0-707"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="__span-0-708"><a id="__codelineno-0-708" name="__codelineno-0-708"></a>            <span class="sa">f</span><span class="s2">&quot;stats must hold (..., S, E) arrays of equal shape, got affinity </span><span class="si">{</span><span class="n">affinity</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2"> and mask </span><span class="si">{</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span>
-</span><span id="__span-0-709"><a id="__codelineno-0-709" name="__codelineno-0-709"></a>        <span class="p">)</span>
-</span><span id="__span-0-710"><a id="__codelineno-0-710" name="__codelineno-0-710"></a>    <span class="n">num_experts</span> <span class="o">=</span> <span class="n">affinity</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-</span><span id="__span-0-711"><a id="__codelineno-0-711" name="__codelineno-0-711"></a>    <span class="n">mask</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">mask</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">affinity</span><span class="o">.</span><span class="n">dtype</span><span class="p">))</span>
-</span><span id="__span-0-712"><a id="__codelineno-0-712" name="__codelineno-0-712"></a>    <span class="n">load_BE</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">2</span><span class="p">)</span>  <span class="c1"># (..., E), tokens routed to each expert</span>
-</span><span id="__span-0-713"><a id="__codelineno-0-713" name="__codelineno-0-713"></a>    <span class="c1"># f_i = E * load_i / (k T), with k T = sum_i load_i (every token selects exactly k experts).</span>
-</span><span id="__span-0-714"><a id="__codelineno-0-714" name="__codelineno-0-714"></a>    <span class="n">frequency_BE</span> <span class="o">=</span> <span class="n">num_experts</span> <span class="o">*</span> <span class="n">load_BE</span> <span class="o">/</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">load_BE</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># (..., E)</span>
-</span><span id="__span-0-715"><a id="__codelineno-0-715" name="__codelineno-0-715"></a>    <span class="n">probability_BE</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">affinity</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">2</span><span class="p">)</span>  <span class="c1"># (..., E), P_i</span>
-</span><span id="__span-0-716"><a id="__codelineno-0-716" name="__codelineno-0-716"></a>    <span class="k">return</span> <span class="n">alpha</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">frequency_BE</span> <span class="o">*</span> <span class="n">probability_BE</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">))</span>
+</span><span id="__span-0-687"><a id="__codelineno-0-687" name="__codelineno-0-687"></a><span class="sd">    Parameters</span>
+</span><span id="__span-0-688"><a id="__codelineno-0-688" name="__codelineno-0-688"></a><span class="sd">    ----------</span>
+</span><span id="__span-0-689"><a id="__codelineno-0-689" name="__codelineno-0-689"></a><span class="sd">    stats : MoERoutingStats</span>
+</span><span id="__span-0-690"><a id="__codelineno-0-690" name="__codelineno-0-690"></a><span class="sd">        Routing statistics with shape ``(..., S, E)``: the second-to-last axis is the sequence,</span>
+</span><span id="__span-0-691"><a id="__codelineno-0-691" name="__codelineno-0-691"></a><span class="sd">        every leading axis indexes sequences (``(B, S, E)`` from a ``(B, S, A)`` input, or</span>
+</span><span id="__span-0-692"><a id="__codelineno-0-692" name="__codelineno-0-692"></a><span class="sd">        ``(S, E)`` for one sequence).</span>
+</span><span id="__span-0-693"><a id="__codelineno-0-693" name="__codelineno-0-693"></a><span class="sd">    alpha : float</span>
+</span><span id="__span-0-694"><a id="__codelineno-0-694" name="__codelineno-0-694"></a><span class="sd">        Balance factor.</span>
+</span><span id="__span-0-695"><a id="__codelineno-0-695" name="__codelineno-0-695"></a>
+</span><span id="__span-0-696"><a id="__codelineno-0-696" name="__codelineno-0-696"></a><span class="sd">    Returns</span>
+</span><span id="__span-0-697"><a id="__codelineno-0-697" name="__codelineno-0-697"></a><span class="sd">    -------</span>
+</span><span id="__span-0-698"><a id="__codelineno-0-698" name="__codelineno-0-698"></a><span class="sd">    Array, shape ()</span>
+</span><span id="__span-0-699"><a id="__codelineno-0-699" name="__codelineno-0-699"></a><span class="sd">        The loss, averaged over sequences.</span>
+</span><span id="__span-0-700"><a id="__codelineno-0-700" name="__codelineno-0-700"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-701"><a id="__codelineno-0-701" name="__codelineno-0-701"></a>    <span class="n">affinity</span><span class="p">,</span> <span class="n">mask</span> <span class="o">=</span> <span class="n">stats</span><span class="o">.</span><span class="n">affinity</span><span class="p">,</span> <span class="n">stats</span><span class="o">.</span><span class="n">mask</span>
+</span><span id="__span-0-702"><a id="__codelineno-0-702" name="__codelineno-0-702"></a>    <span class="k">if</span> <span class="n">affinity</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&lt;</span> <span class="mi">2</span> <span class="ow">or</span> <span class="n">affinity</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+</span><span id="__span-0-703"><a id="__codelineno-0-703" name="__codelineno-0-703"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="__span-0-704"><a id="__codelineno-0-704" name="__codelineno-0-704"></a>            <span class="sa">f</span><span class="s2">&quot;stats must hold (..., S, E) arrays of equal shape, got affinity </span><span class="si">{</span><span class="n">affinity</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2"> and mask </span><span class="si">{</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span>
+</span><span id="__span-0-705"><a id="__codelineno-0-705" name="__codelineno-0-705"></a>        <span class="p">)</span>
+</span><span id="__span-0-706"><a id="__codelineno-0-706" name="__codelineno-0-706"></a>    <span class="n">num_experts</span> <span class="o">=</span> <span class="n">affinity</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="__span-0-707"><a id="__codelineno-0-707" name="__codelineno-0-707"></a>    <span class="n">mask</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">stop_gradient</span><span class="p">(</span><span class="n">mask</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">affinity</span><span class="o">.</span><span class="n">dtype</span><span class="p">))</span>
+</span><span id="__span-0-708"><a id="__codelineno-0-708" name="__codelineno-0-708"></a>    <span class="n">load_BE</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">2</span><span class="p">)</span>  <span class="c1"># (..., E), tokens routed to each expert</span>
+</span><span id="__span-0-709"><a id="__codelineno-0-709" name="__codelineno-0-709"></a>    <span class="c1"># f_i = E * load_i / (k T), with k T = sum_i load_i (every token selects exactly k experts).</span>
+</span><span id="__span-0-710"><a id="__codelineno-0-710" name="__codelineno-0-710"></a>    <span class="n">frequency_BE</span> <span class="o">=</span> <span class="n">num_experts</span> <span class="o">*</span> <span class="n">load_BE</span> <span class="o">/</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">load_BE</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># (..., E)</span>
+</span><span id="__span-0-711"><a id="__codelineno-0-711" name="__codelineno-0-711"></a>    <span class="n">probability_BE</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">affinity</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">2</span><span class="p">)</span>  <span class="c1"># (..., E), P_i</span>
+</span><span id="__span-0-712"><a id="__codelineno-0-712" name="__codelineno-0-712"></a>    <span class="k">return</span> <span class="n">alpha</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">frequency_BE</span> <span class="o">*</span> <span class="n">probability_BE</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>

@@ -3720,7 +3720,7 @@ itself does not use it.</p>
 finite value with zero gradient; the library's layers no longer use it, so a runaway scale
 parameter shows up as a NaN loss.</p>
 <h2 id="matmul-precision">Matmul Precision<a class="headerlink" href="#matmul-precision" title="Permanent link">&para;</a></h2>
-<p><code>MATMUL_PRECISION</code> pins the geometry dots (manifold reductions, midpoints, attention scores, MLR heads, the point-to-hyperplane layers, and the <code>x @ V</code> product of <code>FGGLinear</code>/<code>FGGConv2D</code>) to <code>jax.lax.Precision.HIGHEST</code>, so XLA:GPU's default TF32 rounding does not hit the cancellations they rely on; it is not user-configurable. The other layer weight GEMMs (<code>HTCLinear</code>, the FHCNN/FHNN linears, <code>HypLinearPoincare</code>, <code>LorentzConv2D</code>) pass no <code>precision</code> and follow JAX's <code>jax_default_matmul_precision</code>, which means TF32 on Ampere/Hopper GPUs. To run those in full float32 too, at some cost in throughput, set:</p>
+<p><code>MATMUL_PRECISION</code> pins the geometry dots (manifold reductions, midpoints, attention scores, MLR heads, the point-to-hyperplane layers, and the <code>x @ V</code> product of <code>FGGLinear</code>/<code>FGGConv2D</code>) to <code>jax.lax.Precision.HIGHEST</code>, so XLA:GPU's default TF32 rounding does not hit the cancellations they rely on; it is not user-configurable, with one exception: <code>LorentzMLA(score_precision=...)</code> sets the precision of its two attention-score einsums only, and defaults to this pin. The other layer weight GEMMs (<code>HTCLinear</code>, the FHCNN/FHNN linears, <code>HypLinearPoincare</code>, <code>LorentzConv2D</code>) pass no <code>precision</code> and follow JAX's <code>jax_default_matmul_precision</code>, which means TF32 on Ampere/Hopper GPUs. To run those in full float32 too, at some cost in throughput, set:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># JAX-wide (jit-cache aware — changing it re-traces)</span>
@@ -3746,8 +3746,10 @@ parameter shows up as a NaN loss.</p>
     <div class="doc doc-contents first">
 
         <p>Matmul precision for the float32 dot products that touch manifold data.</p>
-<p>:data:<code>MATMUL_PRECISION</code> (<code>jax.lax.Precision.HIGHEST</code>, not user-configurable) is pinned on
-the sites where the <em>geometry</em> is computed, and nowhere else. A layer's weight GEMM passes no
+<p>:data:<code>MATMUL_PRECISION</code> (<code>jax.lax.Precision.HIGHEST</code>) is pinned on
+the sites where the <em>geometry</em> is computed, and nowhere else. It is not user-configurable, with one
+named exception: <code>LorentzMLA(score_precision=...)</code> sets the precision of the two attention-score
+einsums only, and defaults to this pin. A layer's weight GEMM passes no
 <code>precision</code> keyword at all and follows JAX's own <code>jax_default_matmul_precision</code>, which on
 Ampere/Hopper means TF32, with two exceptions: the point-to-hyperplane layers, whose kernel dot
 <em>is</em> one of the pinned geometry einsums, and the FGG layers, whose <code>x @ V</code> is a Minkowski inner
@@ -3957,8 +3959,9 @@ nothing outside float32 GPU matmuls.</p>
     <div class="doc doc-contents ">
 
         <p>Precision for every dot product that computes geometry rather than a layer's weights.</p>
-<p>Fixed at <code>HIGHEST</code> and not user-configurable: accuracy here is a property of the geometry,
-not a knob. The module docstring lists the pinned sites and the measurements behind them. The
+<p>Fixed at <code>HIGHEST</code> and not user-configurable, except for the two score einsums of <code>LorentzMLA(score_precision=...)</code>
+(which default to this value): accuracy here is a property of
+the geometry, not a knob. The module docstring lists the pinned sites and the measurements behind them. The
 layer weight GEMMs pass no <code>precision</code> keyword and follow <code>jax_default_matmul_precision</code>
 instead — all but the point-to-hyperplane layers, whose kernel dot is one of the pinned
 einsums, and the FGG layers, whose <code>x @ V</code> is a Minkowski inner product.</p>
