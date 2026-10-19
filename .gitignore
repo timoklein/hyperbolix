@@ -28,3 +28,10 @@ results/
 
 # Session logs / probe scripts
 logs/
+
+# Zip files and session archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+CLAUDE_ARCHIVE_*
