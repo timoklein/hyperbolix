@@ -545,6 +545,28 @@ def test_forward_contract(spec):
     assert jnp.allclose(y_jit, y, atol=1e-5, rtol=1e-5), f"{spec.id}: jitted forward differs from eager"
 
 
+@pytest.mark.parametrize("jit", [jax.jit, nnx.jit], ids=["jax.jit", "nnx.jit"])
+@pytest.mark.parametrize("spec", SPECS, ids=_ids(SPECS))
+def test_builds_inside_jit(spec, jit):
+    """The constructor runs inside a jit trace and builds the same parameters as eagerly.
+
+    RL libraries build their networks inside the jitted train function, where every ``jnp`` op is
+    a tracer: a constructor check that needs a concrete value (``float(jnp.sinh(v_max))`` used to)
+    raises ``ConcretizationTypeError`` there. The compiled init rounds differently from the eager
+    one in the last bit, so the parameters are compared to float32 rounding, not bitwise.
+    """
+    dtype = jnp.float32
+
+    def build():
+        return jax.tree.leaves(nnx.state(spec.make_layer(dtype, "manifold"), nnx.Param))
+
+    params_jit = jit(build)()
+    params_eager = build()
+    assert len(params_jit) == len(params_eager)
+    for p_jit, p_eager in zip(params_jit, params_eager, strict=True):
+        assert jnp.allclose(p_jit, p_eager, rtol=1e-6, atol=1e-6), f"{spec.id}: parameters built inside jit differ from eager"
+
+
 # --------------------------------------------------------------------------- #
 # Contract 2 — manifold membership across curvatures
 # --------------------------------------------------------------------------- #
