@@ -12,10 +12,12 @@ Dimension key:
   Ai: in_ambient (in_features)       Ao: out_ambient (out_features)
 """
 
+import math
 from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import nnx
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
@@ -249,6 +251,10 @@ def _hyperboloid_plfc_forward(
     return res_BAo
 
 
+_F32_SAFE_SINH = float(np.finfo(np.float32).max) ** 0.5  # ~1.84e19
+_V_MAX_LIMIT = math.asinh(_F32_SAFE_SINH)  # ~45.0546
+
+
 def _assert_v_max_safe(v_max: float) -> None:
     """Reject a ``v_max`` whose single clipped sinh entry cannot be squared in float32.
 
@@ -258,9 +264,12 @@ def _assert_v_max_safe(v_max: float) -> None:
     ``inf`` (loudly) once ``O·sinh²(v_max)/c > finfo(float32).max``. The Poincaré Busemann output map
     does not square ``ω`` and cannot overflow for any ``O`` or ``c``. Stay near the default
     ``v_max=10`` (Shi et al. 2026).
+
+    The check compares ``v_max`` with ``asinh`` of the bound in plain Python, with no JAX op, so the
+    layers can be built inside ``jax.jit`` (a ``jnp`` op there returns a tracer, which ``float()``
+    rejects). ``math.sinh(v_max)`` would raise ``OverflowError`` above ~710 instead.
     """
-    f32_safe_sinh = float(jnp.finfo(jnp.float32).max) ** 0.5  # ~1.84e19
-    if float(jnp.sinh(v_max)) >= f32_safe_sinh:
+    if not v_max < _V_MAX_LIMIT:  # `not <` also rejects NaN
         raise ValueError(
             f"v_max={v_max} is too large: sinh(v_max) alone overflows float32 when squared. Even below "
             f"this bound the hyperboloid time slot overflows to inf once O·sinh²(v_max)/c exceeds the "

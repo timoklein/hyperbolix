@@ -31,7 +31,13 @@ import pytest
 from flax import nnx
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
-from hyperbolix.nn_layers import HypConv2DHyperboloidILNN, HypLinearHyperboloidPLFC
+from hyperbolix.manifolds.poincare import Poincare
+from hyperbolix.nn_layers import (
+    HypConv2DHyperboloidILNN,
+    HypLinearHyperboloidBusemann,
+    HypLinearHyperboloidPLFC,
+    HypLinearPoincareBusemann,
+)
 
 # The hard-clip guard under test is the SHIPPED implementation, imported rather than re-implemented.
 # This file previously defined its own `jnp.sinh(jnp.clip(x, -c, c))` copies, which made it a gate
@@ -127,26 +133,42 @@ def test_plfc_extreme_input_finite_gradient_hard_clip(dtype):
 
 
 # ==================================================================================================
-# 3. v_max overflow assertion (PLFC/ILNN construction guard)
+# 3. v_max overflow assertion (PLFC/ILNN/Busemann construction guard)
 # ==================================================================================================
-def test_v_max_overflow_assertion():
-    """Constructing PLFC/ILNN with a v_max whose single sinh entry overflows float32 when squared raises.
+_V_MAX_LAYERS = {
+    "plfc": lambda v_max: HypLinearHyperboloidPLFC(Hyperboloid(dtype=jnp.float32), 8, 8, rngs=nnx.Rngs(0), v_max=v_max),
+    "ilnn": lambda v_max: HypConv2DHyperboloidILNN(
+        Hyperboloid(dtype=jnp.float32), 5, 7, kernel_size=3, rngs=nnx.Rngs(0), v_max=v_max
+    ),
+    "busemann_hyperboloid": lambda v_max: HypLinearHyperboloidBusemann(
+        Hyperboloid(dtype=jnp.float32), 5, 4, rngs=nnx.Rngs(0), v_max=v_max
+    ),
+    "busemann_poincare": lambda v_max: HypLinearPoincareBusemann(
+        Poincare(dtype=jnp.float32), 4, 4, rngs=nnx.Rngs(0), v_max=v_max
+    ),
+}
+
+
+@pytest.mark.parametrize("make_layer", _V_MAX_LAYERS.values(), ids=_V_MAX_LAYERS.keys())
+def test_v_max_overflow_assertion(make_layer):
+    """Constructing a layer with a v_max whose single sinh entry overflows float32 when squared raises.
 
     The check bounds one entry, sinh(v_max) < sqrt(finfo(float32).max) (~1.84e19, v_max ≲ 45.05). It
     does not bound the time reconstruction, which still overflows to inf once
-    O·sinh²(v_max)/c > finfo(float32).max (O spatial outputs).
+    O·sinh²(v_max)/c > finfo(float32).max (O spatial outputs). The check is plain Python, so it
+    gives the same verdict inside ``jax.jit``, where it used to raise ``ConcretizationTypeError``.
     """
-    manifold = Hyperboloid(dtype=jnp.float32)
-    # Safe defaults construct fine.
-    HypLinearHyperboloidPLFC(manifold, 8, 8, rngs=nnx.Rngs(0))  # v_max=10 default
-    HypLinearHyperboloidPLFC(manifold, 8, 8, rngs=nnx.Rngs(0), v_max=44.0)
-    HypConv2DHyperboloidILNN(manifold, 5, 7, kernel_size=3, rngs=nnx.Rngs(0))
+    # Safe values construct fine, eagerly and inside jit.
+    make_layer(10.0)  # the default
+    make_layer(45.0)
+    jax.jit(lambda: nnx.state(make_layer(10.0), nnx.Param))()
 
-    # Too-large v_max is rejected loudly (sinh(50) ≈ 2.6e21 > 1.84e19).
+    # Too-large or NaN v_max is rejected loudly (sinh(50) ≈ 2.6e21 > 1.84e19).
+    for v_max in (50.0, 88.0, math.inf, math.nan):
+        with pytest.raises(ValueError, match="v_max"):
+            make_layer(v_max)
     with pytest.raises(ValueError, match="v_max"):
-        HypLinearHyperboloidPLFC(manifold, 8, 8, rngs=nnx.Rngs(0), v_max=50.0)
-    with pytest.raises(ValueError, match="v_max"):
-        HypConv2DHyperboloidILNN(manifold, 5, 7, kernel_size=3, rngs=nnx.Rngs(0), v_max=88.0)
+        jax.jit(lambda: nnx.state(make_layer(50.0), nnx.Param))()
 
 
 # ==================================================================================================
