@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-30
+
+Train/eval modes now reach every batch-norm and dropout layer through `model.eval()`, `model.train()` and `nnx.view`. The FGG layers compute their Minkowski product in full float32 on Ampere/Hopper GPUs, and several base-point Jacobians near the origin are fixed. Two HELM options that could give NaN are removed (breaking).
+
 ### Added
 - **`LorentzMLA(score_precision=...)`.** The precision of `LorentzMLA`'s two attention-score einsums is now a constructor argument. The default stays `MATMUL_PRECISION` (`HIGHEST`), so outputs are unchanged. At the radii of the trained HELM-MiCE 120M model, `DEFAULT` took 0.74× the time and gave a worst-token error of 0.035 against 0.017 nats. The centroid GEMM stays pinned, because lowering it cost 0.26 nats. It is the one geometry dot a user can lower; every other geometry dot stays pinned. See [the attention score floor](user-guide/numerical-stability.md#attention-score-floor).
 - **`FGGMeanOnlyBatchNorm(use_running_average=...)` and `update_running_mean=`.** The mode is now a constructor attribute, as in `nnx.BatchNorm`, so `model.eval()`, `model.train()` and `nnx.view` reach the layer. Before, only the call argument switched it, and `model.eval()` left it in training mode. The call argument now defaults to `None`, which uses the attribute; the constructor default stays `False`. The call-time `update_running_mean=False` centers with the batch mean and skips the running-mean write. It is meant for a call inside a JAX transform that does not carry the module as state, such as a module closed over in `nnx.fori_loop`, where the write raises flax's `TraceContextError`.
@@ -514,7 +518,8 @@ versioning.
 ### References
 - Based on research by Ganea et al. (2018), Bécigneul & Ganea (2019), Bdeir et al. (2023)
 
-[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/timoklein/hyperbolix/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/timoklein/hyperbolix/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/timoklein/hyperbolix/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/timoklein/hyperbolix/compare/v1.2.0...v1.2.1
