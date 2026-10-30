@@ -1374,7 +1374,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#150-2026-10-30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.5.0 - 2026-10-30
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.5.0 - 2026-10-30">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2651,7 +2662,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#150-2026-10-30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.5.0 - 2026-10-30
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.5.0 - 2026-10-30">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -3909,7 +3931,9 @@
 <p>All notable changes to Hyperbolix will be documented in this file.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
-<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.4.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.5.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="150-2026-10-30"><a href="https://github.com/timoklein/hyperbolix/compare/v1.4.0...v1.5.0">1.5.0</a> - 2026-10-30<a class="headerlink" href="#150-2026-10-30" title="Permanent link">&para;</a></h2>
+<p>Train/eval modes now reach every batch-norm and dropout layer through <code>model.eval()</code>, <code>model.train()</code> and <code>nnx.view</code>. The FGG layers compute their Minkowski product in full float32 on Ampere/Hopper GPUs, and several base-point Jacobians near the origin are fixed. Two HELM options that could give NaN are removed (breaking).</p>
 <h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong><code>LorentzMLA(score_precision=...)</code>.</strong> The precision of <code>LorentzMLA</code>'s two attention-score einsums is now a constructor argument. The default stays <code>MATMUL_PRECISION</code> (<code>HIGHEST</code>), so outputs are unchanged. At the radii of the trained HELM-MiCE 120M model, <code>DEFAULT</code> took 0.74× the time and gave a worst-token error of 0.035 against 0.017 nats. The centroid GEMM stays pinned, because lowering it cost 0.26 nats. It is the one geometry dot a user can lower; every other geometry dot stays pinned. See <a href="../user-guide/numerical-stability/#attention-score-floor">the attention score floor</a>.</li>
