@@ -60,6 +60,13 @@ def test_root_all_lists_exactly_the_six_subpackages_and_no_layers() -> None:
     assert not hasattr(hyperbolix, "PoincareBatchNorm2D")
 
 
+def test_version_matches_installed_metadata() -> None:
+    """``hyperbolix.__version__`` is the installed distribution's version."""
+    from importlib.metadata import version
+
+    assert hyperbolix.__version__ == version("hyperbolix")
+
+
 def test_fresh_import_exposes_every_subpackage_as_attribute() -> None:
     """``import hyperbolix`` alone makes all six subpackages reachable by attribute."""
     probe = "; ".join(

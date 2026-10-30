@@ -16,6 +16,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.utils.curvature import _inv_softplus
 
 from ._helpers import as_pair, validate_hyperboloid_manifold
 from .hyperboloid_core import extract_patches, hcat_ambient_dim, hrc
@@ -554,7 +555,13 @@ class FGGConv2D(nnx.Module):
         ``reset_params="lorentz_kaiming", init_bias=0.5`` to recover the previous init.
     use_weight_norm : bool, optional
         Weight normalization in FGGLinear (default: False). Note ``gain`` and the
-        ``"fan_out"`` scale are renormalized away in this mode.
+        ``"fan_out"`` scale are renormalized away in this mode; each column's norm is
+        ``softplus(kernel_scale)``.
+    init_kernel_scale : float or None, optional
+        Column norm of U at init under ``use_weight_norm=True`` (default: None).
+        None keeps the reference init ``kernel_scale = sqrt(1/(hcat_in + out_channels))``,
+        where ``hcat_in`` is the HCat ambient dimension, a column norm of about 0.7.
+        A float ``s > 0`` stores ``kernel_scale = softplus^-1(s)``.
     init_bias : float, optional
         Initial bias for FGGLinear (default: 0.0). A zero bias removes the
         ``~sqrt(out) * init_bias`` time-row term; pair with ``"fan_out"`` for norm
@@ -588,11 +595,14 @@ class FGGConv2D(nnx.Module):
         activation: Callable | None = None,
         reset_params: str = "fan_out",
         use_weight_norm: bool = False,
+        init_kernel_scale: float | None = None,
         init_bias: float = 0.0,
         gain: float = 1.0,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
     ):
+        if init_kernel_scale is not None and not use_weight_norm:
+            raise ValueError("init_kernel_scale requires use_weight_norm=True")
         if padding not in ("SAME", "VALID"):
             raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
         if pad_mode not in ("origin", "edge"):
@@ -628,7 +638,10 @@ class FGGConv2D(nnx.Module):
         # Weight normalization: decompose kernel = softplus(kernel_scale) * kernel_dir / ||kernel_dir||
         if use_weight_norm:
             self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
-            g_init_val = jnp.sqrt(1.0 / (hcat_out_ambient + out_channels))
+            if init_kernel_scale is None:
+                g_init_val = jnp.sqrt(1.0 / (hcat_out_ambient + out_channels))
+            else:
+                g_init_val = _inv_softplus(init_kernel_scale)
             self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val, dtype=param_dtype))  # (O,)
         else:
             self.kernel = nnx.Param(U_init)  # (I, O)

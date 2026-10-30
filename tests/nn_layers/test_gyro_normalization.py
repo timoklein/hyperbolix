@@ -223,6 +223,18 @@ def test_bn_train_vs_eval(cfg, dtype):
     assert not jnp.allclose(out_train, out_eval)
 
 
+def test_bn_nnx_view_sets_eval_mode(cfg):
+    """``nnx.view(..., use_running_average=True)`` reaches the layer through ``set_view``."""
+    manifold = cfg["make"](jnp.float64)
+    bn = cfg["bn"](manifold, num_features=6)
+    x = cfg["points"](jax.random.PRNGKey(2), (16, 6), 1.0, jnp.float64)
+    _ = bn(x, c=1.0)
+    bn_view = nnx.view(bn, use_running_average=True)
+    assert bn_view.use_running_average
+    assert not bn.use_running_average
+    assert jnp.array_equal(bn_view(x, c=1.0), bn(x, c=1.0, use_running_average=True))
+
+
 @pytest.mark.parametrize("dtype", DTYPES)
 def test_bn_gradients_and_jit_matches_eager(cfg, dtype):
     """Finite gradients for (bias, gamma), and ``nnx.jit`` reproduces eager values.

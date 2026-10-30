@@ -156,6 +156,7 @@ hyperbolic-aware default — keep it unless you have a reason to change it.
 | Family | Default init | Rationale |
 |---|---|---|
 | `FGGLinear` / `FGGConv2D` | `fan_out`, `std=sqrt(1/out_spatial)`, bias `0.0`, `gain=1.0` | Norm-preserving (`‖z‖ ≈ gain·‖x_spatial‖`) so deep *unnormalized* stacks don't saturate a bounded projection — a deliberate deviation from the Klis et al. BatchNorm-regime reference. Restore the reference with `reset_params="eye"`/`"lorentz_kaiming"` + `init_bias=0.5` |
+| `FGGLinear` / `FGGConv2D` with `use_weight_norm=True` | Column norm `softplus(kernel_scale)`, `kernel_scale = sqrt(1/(in+out))` (about 0.7) | `gain` and the `fan_out` scale are normalized away; each output column's norm is `softplus(kernel_scale)`. `init_kernel_scale=s` sets the column norm to `s` at init |
 | `HypConv2DHyperboloidILNN` | Fan-out normal `std=sqrt(1/out_spatial)` (`kernel_init_std=None`) | Norm-preserving: the PLFC chain linearizes to `y_spatial ≈ W @ u_spatial` near the origin, and the fixed LogCat hands over the per-pixel spatial radius, so this holds gain ≈ 1. `kernel_init_std=0.02` restores the Shi et al. 2026 regime bit-for-bit |
 | `HypLinearHyperboloidPLFC` | Small normal `std=0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init) | `kernel_init_std=1.0` recovers the old HNN++-style init (Shimizu et al. 2020) |
 | `HypLinearPoincare` / `HypLinearPoincarePP` | Fan-in normal `std=1/sqrt(in_dim)` | Keeps row norms small so outputs stay away from the boundary |
@@ -169,7 +170,7 @@ hyperbolic-aware default — keep it unless you have a reason to change it.
     If you wrap a hyperbolic layer in code that re-initializes its parameters
     with a default Flax init, the first-layer outputs can land far from the
     origin and training diverges. Tune the init with the layer's own arguments
-    (`kernel_init_std`, `init_bound`, `reset_params`, `init_bias`).
+    (`kernel_init_std`, `init_bound`, `reset_params`, `init_bias`, `init_kernel_scale`).
 
 !!! warning "Too small is as fatal as too large — and quieter"
     A too-small init doesn't NaN; it *freezes*. If a layer's per-layer gain

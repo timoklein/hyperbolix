@@ -237,6 +237,17 @@ class _GyroBatchNormBase(nnx.Module):
         x_out_NF = jax.vmap(self.manifold.proj, in_axes=(0, None))(x_out_NF, c)
         return x_out_NF.reshape(orig_shape)
 
+    def set_view(self, use_running_average: bool | None = None):
+        """Set the eval/train mode for ``nnx.view``, as ``nnx.BatchNorm.set_view``.
+
+        Parameters
+        ----------
+        use_running_average : bool or None, optional
+            If True, use the running statistics. None leaves it unchanged.
+        """
+        if use_running_average is not None:
+            self.use_running_average = use_running_average
+
 
 class HyperboloidGyroBatchNorm(_GyroBatchNormBase):
     """GyroBN for the Hyperboloid (Lorentz) model.

@@ -29,6 +29,7 @@ from hyperbolix.manifolds import Manifold
 # once-per-forward weight norms and the scalar compositions. Imported (not redefined) so there is
 # one value.
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.utils.curvature import _inv_softplus
 from hyperbolix.utils.math_utils import MIN_NORM, floor_at, safe_hypot, safe_norm, safe_sqrt
 
 from ._helpers import validate_hyperboloid_manifold
@@ -1055,9 +1056,14 @@ class FGGLinear(nnx.Module):
         regime does not apply. Pass ``reset_params="eye", init_bias=0.5`` to recover the
         previous reference-style init.
     use_weight_norm : bool, optional
-        If True, reparameterize U as ``g * v / ||v||`` for weight normalization
-        (default: False). Note that ``gain`` and the ``"fan_out"`` scale are
-        renormalized away in this mode (the magnitude is set by ``kernel_scale``).
+        If True, reparameterize U as ``softplus(kernel_scale) * v / ||v||`` per output
+        column (default: False). Note that ``gain`` and the ``"fan_out"`` scale are
+        renormalized away in this mode; each column's norm is ``softplus(kernel_scale)``.
+    init_kernel_scale : float or None, optional
+        Column norm of U at init under ``use_weight_norm=True`` (default: None).
+        None keeps the reference init ``kernel_scale = sqrt(1/(in_features + out_features))``,
+        a column norm of ``softplus(sqrt(1/(in_features + out_features)))`` (about 0.7).
+        A float ``s > 0`` stores ``kernel_scale = softplus^-1(s)``.
     init_bias : float, optional
         Initial value for bias entries (default: 0.0). A zero bias removes the
         ``~sqrt(out) * init_bias`` quadrature term that ``build_spacelike_V`` injects
@@ -1102,11 +1108,14 @@ class FGGLinear(nnx.Module):
         activation: Callable[[jax.Array], jax.Array] | None = None,
         reset_params: str = "fan_out",
         use_weight_norm: bool = False,
+        init_kernel_scale: float | None = None,
         init_bias: float = 0.0,
         gain: float = 1.0,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
     ):
+        if init_kernel_scale is not None and not use_weight_norm:
+            raise ValueError("init_kernel_scale requires use_weight_norm=True")
         in_spatial = in_features - 1  # I
         out_spatial = out_features - 1  # O
 
@@ -1126,7 +1135,10 @@ class FGGLinear(nnx.Module):
         if use_weight_norm:
             # Reference: kernel_dir from reset_params (normalized in forward), kernel_scale fixed magnitude
             self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
-            g_init_val = jnp.sqrt(1.0 / (in_features + out_features))
+            if init_kernel_scale is None:
+                g_init_val = jnp.sqrt(1.0 / (in_features + out_features))
+            else:
+                g_init_val = _inv_softplus(init_kernel_scale)
             self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val, dtype=param_dtype))  # (O,)
         else:
             self.kernel = nnx.Param(U_init)  # (I, O)

@@ -386,6 +386,10 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
     ----------
     num_features : int
         Number of spatial features (D, not D+1).
+    use_running_average : bool, optional
+        If True, center with the running mean instead of the batch mean
+        (default: False). Overridable at call time; ``model.eval()`` /
+        ``model.train()`` and ``nnx.view`` set it, as for ``nnx.BatchNorm``.
     momentum : float, optional
         Exponential moving average momentum for running mean (default: 0.99).
         Update: ``running_mean = momentum * running_mean + (1 - momentum) * batch_mean``.
@@ -405,11 +409,13 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
         self,
         num_features: int,
         *,
+        use_running_average: bool = False,
         momentum: float = 0.99,
         eps: float = 1e-7,
         param_dtype: DTypeLike = jnp.float32,
     ):
         self.num_features = num_features
+        self.use_running_average = use_running_average
         self.momentum = momentum
         self.eps = eps
 
@@ -429,7 +435,8 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
         x: Float[Array, "batch dim_plus_1"],
         c_in: float = 1.0,
         c_out: float = 1.0,
-        use_running_average: bool = False,
+        use_running_average: bool | None = None,
+        update_running_mean: bool = True,
     ) -> Float[Array, "batch dim_plus_1"]:
         """Apply mean-only batch normalization via HRC.
 
@@ -441,15 +448,25 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
             Input curvature (default: 1.0).
         c_out : float, optional
             Output curvature (default: 1.0).
-        use_running_average : bool, optional
+        use_running_average : bool or None, optional
             If True, use running mean (eval mode). If False, compute from
-            batch and update running mean (train mode). Default: False.
+            batch and update running mean (train mode). None uses the
+            constructor value (default: None).
+        update_running_mean : bool, optional
+            If False, a train-mode call centers with the batch mean but leaves
+            the running mean untouched; ignored in eval mode (default: True).
+            Use it where the module is called inside a JAX transform that does
+            not carry it as state (e.g. closed over in ``nnx.fori_loop``),
+            where the in-place write raises flax's ``TraceContextError``.
 
         Returns
         -------
         Array, same shape as input
             Points on hyperboloid with curvature ``c_out``.
         """
+        # Resolve use_running_average: call-time > constructor
+        if use_running_average is None:
+            use_running_average = self.use_running_average
 
         def mean_only_bn(z):
             # z: spatial components, shape (..., D). Cast state to the working
@@ -464,15 +481,27 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
                 z_flat = z.reshape(-1, z.shape[-1])  # (N, D)
                 mean = jnp.mean(z_flat, axis=0)  # (D,)
 
-                # Update running mean (EMA). Compute in the working dtype, then
-                # cast explicitly to the stat's own dtype: NNX casts assignments
-                # back to the Variable's init dtype anyway, and doing it
-                # explicitly avoids an unsafe-scatter FutureWarning when a float64
-                # network feeds the default float32 stat.
-                rm = self.running_mean[...]
-                new_rm = self.momentum * rm.astype(z.dtype) + (1.0 - self.momentum) * mean
-                self.running_mean[...] = new_rm.astype(rm.dtype)
+                if update_running_mean:
+                    # Update running mean (EMA). Compute in the working dtype, then
+                    # cast explicitly to the stat's own dtype: NNX casts assignments
+                    # back to the Variable's init dtype anyway, and doing it
+                    # explicitly avoids an unsafe-scatter FutureWarning when a float64
+                    # network feeds the default float32 stat.
+                    rm = self.running_mean[...]
+                    new_rm = self.momentum * rm.astype(z.dtype) + (1.0 - self.momentum) * mean
+                    self.running_mean[...] = new_rm.astype(rm.dtype)
 
             return z - mean + bias
 
         return hrc(x, mean_only_bn, c_in, c_out, self.eps)
+
+    def set_view(self, use_running_average: bool | None = None):
+        """Set the eval/train mode for ``nnx.view``, as ``nnx.BatchNorm.set_view``.
+
+        Parameters
+        ----------
+        use_running_average : bool or None, optional
+            If True, center with the running mean. None leaves it unchanged.
+        """
+        if use_running_average is not None:
+            self.use_running_average = use_running_average
