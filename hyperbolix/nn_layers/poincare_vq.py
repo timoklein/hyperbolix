@@ -374,6 +374,17 @@ class HypVQMLRPoincare(nnx.Module):
             param_dtype=param_dtype,
         )
 
+    def set_view(self, deterministic: bool | None = None):
+        """Set the eval/train mode for ``nnx.view``, as ``nnx.Dropout.set_view``.
+
+        Parameters
+        ----------
+        deterministic : bool or None, optional
+            If True, use the argmax code instead of a Gumbel sample. None leaves it unchanged.
+        """
+        if deterministic is not None:
+            self.deterministic = deterministic
+
     def __call__(
         self,
         x_NC: Float[Array, "N C"],

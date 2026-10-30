@@ -475,6 +475,16 @@ def test_mlr_train_eval_determinism(dtype, dim, c):
     assert not jnp.array_equal(layer(x, c, rngs=nnx.Rngs(1)).quantized, layer(x, c, rngs=nnx.Rngs(2)).quantized)
 
 
+def test_mlr_nnx_view_sets_deterministic():
+    """``nnx.view(..., deterministic=True)`` reaches the layer through ``set_view``."""
+    _manifold, layer = _mlr(jnp.float64, 8)
+    x = _inputs(8, 32, 8, jnp.float64)
+    view = nnx.view(layer, deterministic=True)
+    assert view.deterministic
+    assert not layer.deterministic
+    assert jnp.array_equal(view(x, 1.0, rngs=nnx.Rngs(1)).quantized, view(x, 1.0, rngs=nnx.Rngs(2)).quantized)
+
+
 @pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
 @pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
 def test_mlr_jit(dtype, c):

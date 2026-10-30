@@ -375,6 +375,10 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
         Activation function to apply before the linear transformation (default: None).
     dropout_rate : float or None
         Dropout rate applied before the linear transformation (default: None).
+    deterministic : bool, optional
+        If True, dropout is disabled (default: True, so a layer built with a
+        ``dropout_rate`` drops only after ``model.train()`` or an explicit
+        ``deterministic=False``). Overridable at call time.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
@@ -411,6 +415,7 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
         eps: float = 1e-5,
         activation: Callable[[Array], Array] | None = None,
         dropout_rate: float | None = None,
+        deterministic: bool = True,
         param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
@@ -448,7 +453,7 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
 
         # Optional dropout
         if dropout_rate is not None and dropout_rate > 0:
-            self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
+            self.dropout = nnx.Dropout(dropout_rate, deterministic=deterministic, rngs=rngs)
         else:
             self.dropout = None
 
@@ -456,7 +461,7 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
         self,
         x: Float[Array, "batch height width in_channels"],
         c: float = 1.0,
-        deterministic: bool = True,
+        deterministic: bool | None = None,
     ) -> Float[Array, "batch out_height out_width out_channels"]:
         """Forward pass through the FHNN hyperbolic convolutional layer.
 
@@ -466,8 +471,10 @@ class HypConv2DHyperboloidFHNN(nnx.Module):
             Input feature map where each pixel is a point on the Hyperboloid manifold
         c : float
             Manifold curvature (default: 1.0)
-        deterministic : bool
-            If True, dropout is disabled (default: True).
+        deterministic : bool or None
+            If True, dropout is disabled. None uses the inner ``nnx.Dropout``'s
+            setting, which the constructor sets and ``model.eval()`` /
+            ``model.train()`` / ``nnx.view`` change (default: None).
 
         Returns
         -------
