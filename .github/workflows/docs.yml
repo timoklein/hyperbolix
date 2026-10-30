@@ -9,6 +9,13 @@ on:
 permissions:
   contents: write
 
+# One run per ref at a time: two merges in quick succession otherwise deploy at
+# once, and the second `mike deploy --push` is rejected because gh-pages moved.
+# Queued, not cancelled, so the latest push still deploys.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
