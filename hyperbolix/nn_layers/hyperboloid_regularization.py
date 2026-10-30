@@ -44,6 +44,8 @@ class HRCDropout(nnx.Module):
         Dropout probability (fraction of units to drop).
     rngs : nnx.Rngs
         Random number generators for dropout.
+    deterministic : bool, optional
+        If True, no dropout is applied (default: False). Overridable at call time.
     eps : float, optional
         Small value for numerical stability (default: 1e-7).
 
@@ -63,8 +65,8 @@ class HRCDropout(nnx.Module):
     >>> y = dropout(x, c_in=1.0, c_out=1.0, deterministic=False)
     """
 
-    def __init__(self, rate: float, *, rngs: nnx.Rngs, eps: float = 1e-7):
-        self.dropout = nnx.Dropout(rate, rngs=rngs)
+    def __init__(self, rate: float, *, rngs: nnx.Rngs, deterministic: bool = False, eps: float = 1e-7):
+        self.dropout = nnx.Dropout(rate, deterministic=deterministic, rngs=rngs)
         self.eps = eps
 
     def __call__(
@@ -72,7 +74,7 @@ class HRCDropout(nnx.Module):
         x: Float[Array, "batch dim_plus_1"],
         c_in: float = 1.0,
         c_out: float = 1.0,
-        deterministic: bool = False,
+        deterministic: bool | None = None,
     ) -> Float[Array, "batch dim_plus_1"]:
         """Apply HRC dropout.
 
@@ -84,8 +86,10 @@ class HRCDropout(nnx.Module):
             Input curvature (default: 1.0).
         c_out : float, optional
             Output curvature (default: 1.0).
-        deterministic : bool, optional
-            If True, no dropout is applied (for evaluation mode).
+        deterministic : bool or None, optional
+            If True, no dropout is applied (for evaluation mode). None uses the
+            inner ``nnx.Dropout``'s setting, which the constructor sets and
+            ``model.eval()`` / ``model.train()`` / ``nnx.view`` change (default: None).
 
         Returns
         -------

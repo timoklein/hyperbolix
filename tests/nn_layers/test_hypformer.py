@@ -382,6 +382,20 @@ def test_hrc_dropout_training_vs_eval():
     assert not jnp.allclose(y_train, x, atol=1e-6)
 
 
+def test_hrc_dropout_mode_follows_eval_train_and_view():
+    """``model.eval()``/``model.train()`` and ``nnx.view`` reach the inner dropout when no flag is passed."""
+    dropout = HRCDropout(rate=0.5, rngs=nnx.Rngs(dropout=42))
+    x = jax.vmap(hyperboloid.proj, in_axes=(0, None))(jnp.ones((32, 5)), 1.0)
+
+    assert not jnp.allclose(dropout(x), x, atol=1e-6)  # default: training
+    assert jnp.allclose(nnx.view(dropout, deterministic=True)(x), x, atol=1e-6)
+    dropout.eval()
+    assert jnp.allclose(dropout(x), x, atol=1e-6)
+    dropout.train()
+    assert not jnp.allclose(dropout(x), x, atol=1e-6)
+    assert jnp.allclose(HRCDropout(rate=0.5, rngs=nnx.Rngs(dropout=42), deterministic=True)(x), x, atol=1e-6)
+
+
 def test_hrc_layernorm_forward():
     """Test HRCLayerNorm forward pass."""
     ln = HRCLayerNorm(num_features=4, rngs=nnx.Rngs(0))

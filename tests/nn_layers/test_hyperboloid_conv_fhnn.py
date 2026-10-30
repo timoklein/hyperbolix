@@ -40,6 +40,29 @@ def test_time_floor(dtype):
     assert (y[..., 0] >= 1.0 / jnp.sqrt(c)).all()
 
 
+def test_dropout_mode_follows_eval_train_and_view():
+    """Without a call-time flag the layer keeps its default (no dropout); ``train()``/``eval()``/``nnx.view`` switch it."""
+    manifold = Hyperboloid(dtype=jnp.float64)
+    x = jax.random.normal(jax.random.PRNGKey(42), (2, 4, 4, 3), dtype=jnp.float64) * 0.1
+    x_manifold = jax.vmap(jax.vmap(jax.vmap(lambda p: manifold.proj(p, 1.0))))(x)
+    layer = HypConv2DHyperboloidFHNN(
+        manifold_module=manifold,
+        in_channels=3,
+        out_channels=5,
+        kernel_size=2,
+        rngs=nnx.Rngs(params=42, dropout=43),
+        dropout_rate=0.5,
+    )
+    y_eval = layer(x_manifold, c=1.0, deterministic=True)
+
+    assert jnp.array_equal(layer(x_manifold, c=1.0), y_eval)  # the default is unchanged: no dropout
+    assert not jnp.allclose(nnx.view(layer, deterministic=False)(x_manifold, c=1.0), y_eval, atol=1e-4)
+    layer.train()
+    assert not jnp.allclose(layer(x_manifold, c=1.0), y_eval, atol=1e-4)
+    layer.eval()
+    assert jnp.array_equal(layer(x_manifold, c=1.0), y_eval)
+
+
 @pytest.mark.parametrize("c", [0.5, 1.0])
 def test_conv_fhnn_1x1_matches_numpy_transcription(c):
     """A 1x1 conv is HCat(single point) = identity followed by the FHNN linear map.

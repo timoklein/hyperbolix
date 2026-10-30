@@ -126,6 +126,22 @@ def test_activation_and_dropout(dtype):
     assert not jnp.allclose(y_train, y_eval, atol=1e-4)
 
 
+def test_dropout_mode_follows_eval_train_and_view():
+    """Without a call-time flag the layer keeps its default (no dropout); ``train()``/``eval()``/``nnx.view`` switch it."""
+    manifold = get_hyperboloid(jnp.float64)
+    v = jax.random.normal(jax.random.PRNGKey(42), (8, 6), dtype=jnp.float64) * 0.1
+    x = jax.vmap(manifold.expmap_0, in_axes=(0, None))(v, 1.0)
+    layer = HypLinearHyperboloidFHNN(manifold, 6, 10, rngs=nnx.Rngs(params=42, dropout=43), dropout_rate=0.5)
+    y_eval = layer(x, c=1.0, deterministic=True)
+
+    assert jnp.array_equal(layer(x, c=1.0), y_eval)  # the default is unchanged: no dropout
+    assert not jnp.allclose(nnx.view(layer, deterministic=False)(x, c=1.0), y_eval, atol=1e-4)
+    layer.train()
+    assert not jnp.allclose(layer(x, c=1.0), y_eval, atol=1e-4)
+    layer.eval()
+    assert jnp.array_equal(layer(x, c=1.0), y_eval)
+
+
 def test_init_time_column_zeroed():
     """Test that FHNN initializes kernel time column (column 0) to zero."""
     rngs = nnx.Rngs(42)
