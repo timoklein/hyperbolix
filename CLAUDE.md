@@ -107,5 +107,4 @@ Two things still cancel at large radius: `HyperbolicFullAttention`'s GEMM-formed
 
 ## Pull requests
 
-- Minor fixes (no changed numbers at default settings, no divergence from a reference, no speed/accuracy trade-off): commit, push and open the PR without asking. Major changes wait for the maintainer, who also does all merging.
 - Keep PR bodies short (under ~7k characters): one line per change with its main number. The details go to `docs/changelog.md` and `docs/user-guide/numerical-stability.md`.
