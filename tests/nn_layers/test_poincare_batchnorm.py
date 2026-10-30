@@ -158,6 +158,17 @@ def test_poincare_bn_output_shape(make_tangent_input, dtype):
     assert out.shape == (2, 4, 4, 8)
 
 
+def test_poincare_bn_nnx_view_sets_eval_mode(make_tangent_input):
+    """``nnx.view(..., use_running_average=True)`` reaches the layer through ``set_view``."""
+    bn = PoincareBatchNorm2D(Poincare(dtype=jnp.float64), num_features=8)
+    x_BHWC = make_tangent_input(jax.random.PRNGKey(42), (2, 4, 4, 8), jnp.float64)
+    _ = bn(x_BHWC, c=1.0)
+    bn_view = nnx.view(bn, use_running_average=True)
+    assert bn_view.use_running_average
+    assert not bn.use_running_average
+    assert jnp.array_equal(bn_view(x_BHWC, c=1.0), bn(x_BHWC, c=1.0, use_running_average=True))
+
+
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_poincare_bn_output_finite_and_jit_matches_eager(make_tangent_input, dtype):
     """No NaN/Inf, and ``nnx.jit`` reproduces the eager output exactly.

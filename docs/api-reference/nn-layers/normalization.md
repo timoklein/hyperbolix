@@ -70,7 +70,11 @@ above); the per-sample radial RMSNorm covers all three.
 HRC-wrapped normalizers and dropout for the Hyperboloid (Hypformer). They apply a
 Euclidean operation to the space components and reconstruct the time component, with
 curvature-change support. `FGGMeanOnlyBatchNorm` pairs with
-`FGGLinear(use_weight_norm=True)`.
+`FGGLinear(use_weight_norm=True)`. Like `nnx.BatchNorm`, it takes
+`use_running_average` in the constructor, so `model.eval()`, `model.train()` and
+`nnx.view` switch it. Its call-time `update_running_mean=False` centers with the batch
+mean without writing the running mean, for a call inside a JAX transform that does not
+carry the module as state.
 
 ::: hyperbolix.nn_layers.HRCBatchNorm
     options:

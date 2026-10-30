@@ -13,6 +13,7 @@ Dimension key: B=batch, I=in_spatial, O=out_spatial, Ai=in_ambient, Ao=out_ambie
 import jax
 import jax.numpy as jnp
 import numpy as np
+import flax
 import pytest
 from flax import nnx
 
@@ -603,6 +604,36 @@ def test_fgg_linear_weight_norm_softplus_positive():
     assert jnp.all(col_norms > 0), "All effective column magnitudes must be positive"
 
 
+@pytest.mark.parametrize("scale", [0.1, 1.0, 3.0])
+def test_fgg_weight_norm_init_kernel_scale_sets_column_norm(scale):
+    """``init_kernel_scale=s`` gives every effective column of U norm ``s``, for FGGLinear and FGGConv2D."""
+    layer = FGGLinear(17, 33, rngs=nnx.Rngs(0), use_weight_norm=True, init_kernel_scale=scale)
+    col_norms_O = jnp.linalg.norm(layer._get_kernel(), axis=0)  # (O,)
+    np.testing.assert_allclose(col_norms_O, scale, rtol=1e-6)
+
+    conv = FGGConv2D(
+        hyperboloid,
+        in_channels=5,
+        out_channels=9,
+        kernel_size=3,
+        rngs=nnx.Rngs(0),
+        use_weight_norm=True,
+        init_kernel_scale=scale,
+    )
+    np.testing.assert_allclose(jax.nn.softplus(conv.kernel_scale[...]), scale, rtol=1e-6)
+
+
+def test_fgg_weight_norm_init_kernel_scale_default_and_misuse():
+    """``None`` keeps the reference ``kernel_scale``; without weight norm the argument is rejected."""
+    default = FGGLinear(33, 65, rngs=nnx.Rngs(0), use_weight_norm=True)
+    explicit = FGGLinear(33, 65, rngs=nnx.Rngs(0), use_weight_norm=True, init_kernel_scale=None)
+    assert jnp.array_equal(explicit.kernel_scale[...], default.kernel_scale[...])
+    with pytest.raises(ValueError, match="use_weight_norm"):
+        FGGLinear(33, 65, rngs=nnx.Rngs(0), init_kernel_scale=1.0)
+    with pytest.raises(ValueError, match="use_weight_norm"):
+        FGGConv2D(hyperboloid, in_channels=5, out_channels=9, kernel_size=3, rngs=nnx.Rngs(0), init_kernel_scale=1.0)
+
+
 # ===========================================================================
 # fan_out / norm-preserving init tests (the new FGG default)
 # ===========================================================================
@@ -867,6 +898,60 @@ def test_fgg_mean_only_bn_running_mean_update():
     y_train = bn(x, c_in=1.0, c_out=1.0, use_running_average=False)
     y_eval = bn(x, c_in=1.0, c_out=1.0, use_running_average=True)
     assert not jnp.allclose(y_train, y_eval, atol=1e-6)
+
+
+def test_fgg_mean_only_bn_eval_train_and_view_reach_the_layer():
+    """``model.eval()``/``model.train()`` and ``nnx.view`` set the mode, as for ``nnx.BatchNorm``."""
+    bn = FGGMeanOnlyBatchNorm(num_features=4)
+    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 32, 5)
+    _ = bn(x)  # move the running mean off zero
+    y_train = bn(x, use_running_average=False, update_running_mean=False)
+    y_eval = bn(x, use_running_average=True)
+
+    bn.eval()
+    assert bn.use_running_average
+    assert jnp.array_equal(bn(x), y_eval)
+    bn.train()
+    assert not bn.use_running_average
+    assert jnp.array_equal(bn(x, update_running_mean=False), y_train)
+
+    bn_view = nnx.view(bn, use_running_average=True)
+    assert jnp.array_equal(bn_view(x), y_eval)
+    assert not bn.use_running_average  # the view leaves the original in training mode
+
+
+def test_fgg_mean_only_bn_update_running_mean_false():
+    """``update_running_mean=False`` centers with the batch mean and leaves the running mean alone."""
+    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 32, 5)
+    bn_update = FGGMeanOnlyBatchNorm(num_features=4)
+    bn_frozen = FGGMeanOnlyBatchNorm(num_features=4)
+
+    y_update = bn_update(x)
+    y_frozen = bn_frozen(x, update_running_mean=False)
+    assert jnp.array_equal(y_frozen, y_update)
+    assert jnp.array_equal(bn_frozen.running_mean[...], jnp.zeros(4))
+    assert not jnp.allclose(bn_update.running_mean[...], 0.0)
+
+
+def test_fgg_mean_only_bn_closed_over_in_fori_loop():
+    """A module closed over in ``nnx.fori_loop`` raises on the write; ``update_running_mean=False`` runs.
+
+    This is how an RL agent calls its actor for target-policy smoothing inside the critic's loop.
+    """
+    bn = FGGMeanOnlyBatchNorm(num_features=4)
+    x = _make_hyperboloid_points(jax.random.PRNGKey(1), 8, 5)
+
+    def run(update_running_mean):
+        def body(i, acc):
+            return acc + jnp.sum(bn(x, update_running_mean=update_running_mean))
+
+        return nnx.fori_loop(0, 2, body, jnp.zeros((), dtype=x.dtype))
+
+    with pytest.raises(flax.errors.TraceContextError):
+        run(update_running_mean=True)
+    out = run(update_running_mean=False)
+    assert jnp.isfinite(out)
+    assert jnp.array_equal(bn.running_mean[...], jnp.zeros(4))
 
 
 def test_fgg_mean_only_bn_gradients():
