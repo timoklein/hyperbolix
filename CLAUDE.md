@@ -104,3 +104,7 @@ Two things still cancel at large radius: `HyperbolicFullAttention`'s GEMM-formed
 - Shape suffixes on tensor names, one capital letter per dimension (`logits_BLV`, `hidden_BD`), with a dimension key at the top of each file.
 - Flax NNX (v0.12+): `nnx.Optimizer(..., wrt=nnx.Param)`; `optimizer.update(model, grads)`; lists of modules are `nnx.List([...])`.
 - Pre-commit runs ruff. It reformats on commit (`x ** 2` → `x**2`), so match the reformatted text in later edits, and it strips unused imports, so add an import together with its first use.
+
+## Pull requests
+
+- Keep PR bodies short (under ~7k characters): one line per change with its main number. The details go to `docs/changelog.md` and `docs/user-guide/numerical-stability.md`.
