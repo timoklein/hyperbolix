@@ -2313,6 +2313,11 @@ hyperbolic-aware default — keep it unless you have a reason to change it.</p>
 <td>Norm-preserving (<code>‖z‖ ≈ gain·‖x_spatial‖</code>) so deep <em>unnormalized</em> stacks don't saturate a bounded projection — a deliberate deviation from the Klis et al. BatchNorm-regime reference. Restore the reference with <code>reset_params="eye"</code>/<code>"lorentz_kaiming"</code> + <code>init_bias=0.5</code></td>
 </tr>
 <tr>
+<td><code>FGGLinear</code> / <code>FGGConv2D</code> with <code>use_weight_norm=True</code></td>
+<td>Column norm <code>softplus(kernel_scale)</code>, <code>kernel_scale = sqrt(1/(in+out))</code> (about 0.7)</td>
+<td><code>gain</code> and the <code>fan_out</code> scale are normalized away; each output column's norm is <code>softplus(kernel_scale)</code>. <code>init_kernel_scale=s</code> sets the column norm to <code>s</code> at init</td>
+</tr>
+<tr>
 <td><code>HypConv2DHyperboloidILNN</code></td>
 <td>Fan-out normal <code>std=sqrt(1/out_spatial)</code> (<code>kernel_init_std=None</code>)</td>
 <td>Norm-preserving: the PLFC chain linearizes to <code>y_spatial ≈ W @ u_spatial</code> near the origin, and the fixed LogCat hands over the per-pixel spatial radius, so this holds gain ≈ 1. <code>kernel_init_std=0.02</code> restores the Shi et al. 2026 regime bit-for-bit</td>
@@ -2359,7 +2364,7 @@ hyperbolic-aware default — keep it unless you have a reason to change it.</p>
 <p>If you wrap a hyperbolic layer in code that re-initializes its parameters
 with a default Flax init, the first-layer outputs can land far from the
 origin and training diverges. Tune the init with the layer's own arguments
-(<code>kernel_init_std</code>, <code>init_bound</code>, <code>reset_params</code>, <code>init_bias</code>).</p>
+(<code>kernel_init_std</code>, <code>init_bound</code>, <code>reset_params</code>, <code>init_bias</code>, <code>init_kernel_scale</code>).</p>
 </div>
 <div class="admonition warning">
 <p class="admonition-title">Too small is as fatal as too large — and quieter</p>
