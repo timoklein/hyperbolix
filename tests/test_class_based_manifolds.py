@@ -559,3 +559,35 @@ def test_every_method_returns_the_manifold_dtype(name: str, manifold_dtype, poin
             if jnp.issubdtype(jnp.asarray(leaf).dtype, jnp.inexact) and jnp.asarray(leaf).dtype != manifold_dtype:
                 wrong.append(f"{method}: {jnp.asarray(leaf).dtype}")
     assert not wrong, f"{name}({jnp.dtype(manifold_dtype).name}), points {jnp.dtype(point_dtype).name}, c {c_kind}: {wrong}"
+
+
+@pytest.mark.parametrize("name", list(_DTYPE_MANIFOLDS))
+def test_every_method_casts_numpy_points_to_the_manifold_dtype(name: str) -> None:
+    """NumPy float64 points and an ``np.float64`` ``c`` give float32 output on a float32 manifold.
+
+    ``_cast`` used to convert only ``jax.Array``: under x64 a NumPy point stayed float64 and promoted
+    the result, and ``Hyperboloid.egrad2rgrad`` / ``HalfSpace.proj`` raised ``AttributeError`` on
+    ``.at``. Values must equal the call with the same points as float32 ``jax.Array``.
+    """
+    manifold = _DTYPE_MANIFOLDS[name](jnp.float32)
+    methods = _methods_taking_c(manifold)
+    wrong = []
+    for method in methods:
+        args_jax = _dtype_test_arguments(manifold, method, jnp.float64)
+        args_np = {
+            k: np.asarray(v, dtype=np.float64) if isinstance(v, jax.Array) and jnp.issubdtype(v.dtype, jnp.inexact) else v
+            for k, v in args_jax.items()
+        }
+        try:
+            out = getattr(manifold, method)(**args_np, c=np.float64(1.0))
+        except AttributeError as e:
+            wrong.append(f"{method}: raised {e}")
+            continue
+        expected = getattr(manifold, method)(**args_jax, c=1.0)
+        for leaf, ref in zip(jax.tree_util.tree_leaves(out), jax.tree_util.tree_leaves(expected), strict=True):
+            leaf = jnp.asarray(leaf)
+            if jnp.issubdtype(leaf.dtype, jnp.inexact) and leaf.dtype != jnp.float32:
+                wrong.append(f"{method}: {leaf.dtype}")
+            elif not np.array_equal(np.asarray(leaf), np.asarray(ref), equal_nan=True):
+                wrong.append(f"{method}: values differ from the jax.Array call")
+    assert not wrong, f"{name}(float32), NumPy float64 points: {wrong}"

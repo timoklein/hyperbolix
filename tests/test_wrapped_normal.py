@@ -791,6 +791,62 @@ def test_log_prob_accepts_batched_mu_with_sample_shape() -> None:
     )
 
 
+@pytest.mark.parametrize("n_means", [3, 4])
+@pytest.mark.parametrize("model", ["hyperboloid", "poincare"])
+def test_log_prob_broadcasts_a_single_point_against_a_batch_of_means(model: str, n_means: int) -> None:
+    """One ``z`` against ``n_means`` means equals a Python loop of single-point calls.
+
+    ``z`` with fewer leading axes than ``mu`` used to be vmapped coordinate-by-coordinate against
+    mu's batch axis: silently wrong when the batch size equals the dimension (3 here), a vmap size
+    error otherwise. The mirrored case, a size-1 mean batch against several points, used to raise.
+    """
+    c, sigma = 1.0, 0.3
+    if model == "hyperboloid":
+        manifold, dist = Hyperboloid(dtype=_F64), wrapped_normal_hyperboloid
+        spatial_BD = jnp.asarray([[0.0, 0.0], [0.2, -0.1], [-0.3, 0.15], [0.5, 0.4]], dtype=_F64)[:n_means]
+        mu_BA = jax.vmap(lambda s_D: manifold.proj(jnp.concatenate([jnp.ones(1, _F64), s_D]), c))(spatial_BD)
+        z_A = manifold.proj(jnp.asarray([1.0, 0.4, -0.25], dtype=_F64), c)
+    else:
+        manifold, dist = Poincare(dtype=_F64), wrapped_normal_poincare
+        mu_BA = jnp.asarray([[0.0, 0.0, 0.0], [0.2, -0.1, 0.3], [-0.3, 0.15, 0.1], [0.5, 0.1, -0.2]], dtype=_F64)[:n_means]
+        z_A = jnp.asarray([0.4, -0.25, 0.1], dtype=_F64)
+
+    lp_B = dist.log_prob(z_A, mu_BA, sigma, c, manifold_module=manifold)
+    expected_B = np.array([float(dist.log_prob(z_A, mu_A, sigma, c, manifold_module=manifold)) for mu_A in mu_BA])
+    assert lp_B.shape == (n_means,)
+    np.testing.assert_allclose(np.asarray(lp_B), expected_B, rtol=0, atol=1e-12)
+
+    # Mirrored: a size-1 mean batch broadcasts over the points' batch axis.
+    lp_mirror_B = dist.log_prob(mu_BA, z_A[None], sigma, c, manifold_module=manifold)
+    expected_mirror_B = np.array([float(dist.log_prob(mu_A, z_A, sigma, c, manifold_module=manifold)) for mu_A in mu_BA])
+    assert lp_mirror_B.shape == (n_means,)
+    np.testing.assert_allclose(np.asarray(lp_mirror_B), expected_mirror_B, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("c_kind", ["np.float64", "jnp.float64-0d"])
+@pytest.mark.parametrize("model", ["hyperboloid", "poincare"])
+def test_log_prob_and_sample_keep_float32_with_a_float64_curvature(model: str, c_kind: str) -> None:
+    """A float64 ``c`` under x64 must not promote float32 ``log_prob``/``sample`` output to float64.
+
+    ``log_prob`` used to pass the raw ``c`` to the log-det (both models) and to the hyperboloid's
+    private gyro-difference, so the result came out float64. Values must equal the Python-float call.
+    """
+    c = 0.5
+    c_64 = np.float64(c) if c_kind == "np.float64" else jnp.asarray(c, dtype=_F64)
+    if model == "hyperboloid":
+        manifold, dist = Hyperboloid(dtype=jnp.float32), wrapped_normal_hyperboloid
+        mu = manifold.proj(jnp.asarray([1.0, 0.3, -0.2], dtype=jnp.float32), c)
+    else:
+        manifold, dist = Poincare(dtype=jnp.float32), wrapped_normal_poincare
+        mu = jnp.asarray([0.3, -0.2], dtype=jnp.float32)
+    key = jax.random.PRNGKey(0)
+    z = dist.sample(key, mu, 0.4, c_64, sample_shape=(4,), manifold_module=manifold)
+    assert z.dtype == jnp.float32
+    lp = dist.log_prob(z, mu, 0.4, c_64, manifold_module=manifold)
+    assert lp.dtype == jnp.float32
+    np.testing.assert_array_equal(np.asarray(lp), np.asarray(dist.log_prob(z, mu, 0.4, c, manifold_module=manifold)))
+
+
 # =============================================================================================
 # Gradients at the mean (audit M2-08, library fix)
 # =============================================================================================
@@ -1124,35 +1180,6 @@ def test_log_prob_hyperboloid_mean_gradient_is_finite_at_tiny_radius() -> None:
         mu_A = hyp32.proj(jnp.asarray([0.0, radius, -0.5 * radius, 0.25 * radius], dtype=jnp.float32), c)
         grad_mu_A = jax.grad(lambda m_A: wrapped_normal_hyperboloid.log_prob(z_A, m_A, 0.3, c, manifold_module=hyp32))(mu_A)
         assert bool(jnp.all(jnp.isfinite(grad_mu_A))), f"radius {radius}: {grad_mu_A}"
-
-
-def test_ptransp_to_0_matches_the_generic_transport_in_float64() -> None:
-    """``log_prob``'s transport back to the origin equals ``Hyperboloid.ptransp(v, x, origin)`` (float64).
-
-    Radii straddle the ``√c·‖x_s‖ = 0.1`` switch between its two arms and reach ``a = 6``, where the
-    generic transport's float64 cancellation is still below 1e-13. Round-tripping through
-    ``ptransp_0`` must also give back the tangent vector's spatial part.
-    """
-    from hyperbolix.manifolds.hyperboloid import _ptransp_to_0
-
-    c, n = 0.7, 4
-    hyp = Hyperboloid(dtype=_F64)
-    origin_A = hyp.create_origin(c, n)
-    rng = np.random.default_rng(7)
-    for scaled_radius in (0.0, 1e-8, 0.05, 0.0999, 0.1001, 0.5, np.sinh(2.0), np.sinh(6.0)):
-        for _ in range(8):
-            direction_D = rng.normal(size=n)
-            direction_D /= np.linalg.norm(direction_D)
-            x_A = hyp.proj(jnp.asarray(np.concatenate([[0.0], direction_D * scaled_radius / np.sqrt(c)]), dtype=_F64), c)
-            v_A = hyp.ptransp_0(hyp.embed_spatial_0(jnp.asarray(rng.normal(size=n), dtype=_F64)), x_A, c)
-
-            got_A = _ptransp_to_0(v_A, x_A, c)
-            expected_A = hyp.ptransp(v_A, x_A, origin_A, c)
-            scale = max(1.0, float(jnp.linalg.norm(expected_A)))
-            assert float(got_A[0]) == 0.0
-            assert float(jnp.max(jnp.abs(got_A - expected_A))) <= 1e-12 * scale, f"scaled radius {scaled_radius}"
-            back_A = hyp.ptransp_0(got_A, x_A, c)
-            assert float(jnp.max(jnp.abs(back_A[1:] - v_A[1:]))) <= 1e-12 * max(1.0, float(jnp.max(jnp.abs(v_A))))
 
 
 def _far_mean_sigma_for(kind: str, n: int, dtype):

@@ -117,6 +117,7 @@ def hyperboloid_to_poincare(
     References:
         Wikipedia: Hyperboloid model - Relation to other models
     """
+    c = jnp.asarray(c, dtype=x.dtype)
     sqrt_c = jnp.sqrt(c)
     t = x[0]  # Temporal component
     x_spatial = x[1:]  # Spatial components (x_1, ..., x_n)
@@ -162,6 +163,7 @@ def poincare_to_hyperboloid(
     References:
         Wikipedia: Hyperboloid model - Relation to other models
     """
+    c = jnp.asarray(c, dtype=y.dtype)
     y_sqnorm = jnp.dot(y, y, precision=MATMUL_PRECISION)
     sqrt_c = jnp.sqrt(c)
 
@@ -273,6 +275,7 @@ def poincare_to_pv(
     """
     # `_boundary_divisor_floor`: the floor `_conformal_factor` puts on `1 - c‖y‖²`; see
     # :func:`poincare_to_hyperboloid`.
+    c = jnp.asarray(c, dtype=y.dtype)
     denominator = floor_at(1.0 - c * jnp.dot(y, y, precision=MATMUL_PRECISION), _boundary_divisor_floor(y, c))
     return 2.0 * y / denominator
 

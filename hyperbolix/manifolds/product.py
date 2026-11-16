@@ -44,7 +44,6 @@ References:
 
 from collections.abc import Sequence
 
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
@@ -129,10 +128,8 @@ class ProductManifold:
         self._slices = tuple(slices)
         self._total_dim = pos
 
-    def _cast(self, x: Array) -> Array:
-        if isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, jnp.inexact):
-            return x.astype(self.dtype)
-        return x
+    # The same cast as every factor manifold: floating JAX and NumPy arrays go to ``self.dtype``.
+    _cast = ManifoldBase._cast
 
     def _validate_c(self, c: Curvature) -> Sequence[ScalarCurvature]:
         """Validate a per-factor curvature sequence.

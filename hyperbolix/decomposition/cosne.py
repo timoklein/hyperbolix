@@ -525,6 +525,10 @@ class CoSNE:
         if self.perplexity >= n_points:
             raise ValueError(f"perplexity must be < n_points ({n_points}), got {self.perplexity}.")
 
+        c_in = c
+        # The manifold's dtype decides: a float64 `c` would otherwise promote the cleaned input, the
+        # isometry maps and the embedding to float64. The fitted `c_` keeps the caller's value.
+        c = self._poincare._cast_c(c)
         x_ball_ND = self._to_ball(x_ND, c)
         dist_NN = compute_pairwise_distances(x_ball_ND, self._poincare, c, VERSION_MOBIUS_DIRECT)
         x_sqnorms_N = jnp.sum(x_ball_ND**2, axis=1)
@@ -551,7 +555,7 @@ class CoSNE:
         self.kl_divergence_ = final_kl
         self.losses_kl_ = kl_trace_S
         self.losses_h_ = h_trace_S
-        self.c_ = c
+        self.c_ = c_in
         return self
 
     def fit_transform(self, x_ND: Float[Array, "N R"], c: ScalarCurvature, key: PRNGKeyArray) -> Float[Array, "N out"]:

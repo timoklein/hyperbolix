@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.typing import DTypeLike
 from jaxtyping import Array
 
@@ -63,9 +64,17 @@ class ManifoldBase:
         return self._c_val
 
     def _cast(self, x: Array) -> Array:
-        """Cast array to target dtype if it's a floating-point array."""
-        if isinstance(x, jax.Array) and jnp.issubdtype(x.dtype, jnp.inexact):
-            return x.astype(self.dtype)
+        """Cast a floating-point array to the target dtype.
+
+        Accepts JAX arrays and tracers, and NumPy arrays and scalars (converted to JAX
+        arrays). Anything else, including integer arrays, passes through unchanged.
+        """
+        if isinstance(x, jax.Array):
+            if jnp.issubdtype(x.dtype, jnp.inexact):
+                return x.astype(self.dtype)
+            return x
+        if isinstance(x, (np.ndarray, np.generic)) and np.issubdtype(x.dtype, np.inexact):
+            return jnp.asarray(x, dtype=self.dtype)
         return x
 
     def _cast_c(self, c: ScalarCurvature) -> Array:

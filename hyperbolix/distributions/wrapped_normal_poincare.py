@@ -18,6 +18,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from hyperbolix.manifolds import Manifold
+from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.utils.math_utils import safe_norm
 
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
@@ -130,7 +131,7 @@ def log_prob(
     z: Float[Array, "... n"],
     mu: Float[Array, "... n"],
     sigma: Float[Array, "..."] | float,
-    c: float,
+    c: ScalarCurvature,
     manifold_module: Manifold | None = None,
 ) -> Float[Array, "..."]:
     """Compute log probability of wrapped normal distribution on Poincaré ball.
@@ -142,7 +143,9 @@ def log_prob(
 
     Args:
         z: Sample point(s) on Poincaré ball, shape (..., n)
-        mu: Mean point on Poincaré ball, shape (..., n)
+        mu: Mean point on Poincaré ball, shape (..., n). ``z`` and ``mu`` broadcast against
+            each other: mu's batch axes pair with z's trailing batch axes, and any further
+            leading axes of ``z`` are sample axes that share the mean.
         sigma: Covariance parameterization. Can be:
             - Scalar: isotropic covariance sigma^2 I (n x n)
             - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
@@ -184,6 +187,8 @@ def log_prob(
 
     # Determine dtype
     dtype = z.dtype
+    # The manifold's dtype decides: a float64 `c` must not promote the log-det to float64.
+    c = jnp.asarray(c, dtype=manifold.dtype)
 
     # Extract dimension
     n = mu.shape[-1]  # Dimension of Poincaré ball
@@ -192,7 +197,13 @@ def log_prob(
     # trailing axes; the leading sample axes broadcast the mean. Steps 1 and 2 must use the
     # *same* layout — vmapping u and mu together over axis 0 (as step 2 used to) pairs a sample
     # axis with a batch axis and fails on sample()'s own output whenever both are present.
-    n_sample_dims = max(z.ndim - mu.ndim, 0)
+    # Both are first broadcast to that layout: a `z` with fewer leading axes than `mu` (one point
+    # against a batch of means) would otherwise have its coordinate axis vmapped against mu's
+    # batch axis, which is silently wrong when the batch size equals the dimension.
+    full_shape = jnp.broadcast_shapes(z.shape, mu.shape)
+    z = jnp.broadcast_to(z, full_shape)
+    mu = jnp.broadcast_to(mu, full_shape[len(full_shape) - mu.ndim :])
+    n_sample_dims = z.ndim - mu.ndim
     n_batch_dims = mu.ndim - 1
 
     # Step 1: Map z to tangent space at mu: u = log_μ(z), shape (..., D)

@@ -156,6 +156,7 @@ def horo_projection(
     num_components = q_ortho_KD.shape[0]
     dim = q_ortho_KD.shape[1]
     dtype = x_A.dtype
+    c = jnp.asarray(c, dtype=dtype)  # the point's dtype decides, not a float64 `c`
 
     if num_components == 1:
         # Closed form: preserve the single Busemann coordinate B^q(x).
@@ -230,6 +231,7 @@ def horopca_loss(q_KD: Float[Array, "K D"], x_NA: Float[Array, "N A"], c: Scalar
     Returns:
         Scalar loss.
     """
+    c = jnp.asarray(c, dtype=x_NA.dtype)  # the points' dtype decides, not a float64 `c`
     q_ortho_KD = orthonormalize_rows(q_KD)
     proj_fn = functools.partial(horo_projection, version_idx=VERSION_SMOOTHENED)
     proj_NA = jax.vmap(proj_fn, in_axes=(0, None, None))(x_NA, q_ortho_KD, c)
@@ -267,6 +269,7 @@ def fit_horopca(
         trace (S,).
     """
     dim = x_NA.shape[1] - 1
+    c = jnp.asarray(c, dtype=x_NA.dtype)  # the points' dtype decides, not a float64 `c`
     q_KD = jax.random.normal(key, (n_components, dim), dtype=x_NA.dtype)
 
     tx = optax.chain(optax.clip_by_global_norm(1e5), optax.adam(lr))
@@ -306,6 +309,7 @@ def transform_horopca(
         Tuple ``(proj_NA, ball_NK)``: the projected hyperboloid points (N, A) and the
         low-dimensional Poincaré ball coordinates (N, K).
     """
+    c = jnp.asarray(c, dtype=x_NA.dtype)  # the points' dtype decides, not a float64 `c`
     proj_NA = jax.vmap(horo_projection, in_axes=(0, None, None, None))(x_NA, q_ortho_KD, c, VERSION_DEFAULT)
     ball_ND = jax.vmap(hyperboloid_to_poincare, in_axes=(0, None))(proj_NA, c)  # (N, D) full ball coords
     ball_NK = jnp.matmul(ball_ND, q_ortho_KD.T, precision=MATMUL_PRECISION)  # (N, K) coordinates in the component frame
@@ -444,6 +448,10 @@ class HoroPCA:
         if not (1 <= self.n_components <= dim):
             raise ValueError(f"n_components must satisfy 1 <= n_components <= {dim} (spatial dim), got {self.n_components}.")
 
+        c_in = c
+        # The manifold's dtype decides: a float64 `c` would otherwise promote the lifted points and
+        # break the Fréchet-mean loop's carry dtype. The fitted `c_` keeps the caller's value.
+        c = self._hyperboloid._cast_c(c)
         x_hyp_NA = self._to_hyperboloid(x_ND, c)
 
         if self.center_data:
@@ -477,7 +485,7 @@ class HoroPCA:
         self.components_ = components_KD
         self.mean_ = mean_A
         self.boost_ = boost_AA
-        self.c_ = c
+        self.c_ = c_in
         self.losses_ = losses_S
         self.total_variance_ = total_variance
         self.explained_variance_ = explained_variance
@@ -500,7 +508,7 @@ class HoroPCA:
         if self.components_ is None or self.c_ is None or self.mean_ is None:
             raise ValueError("HoroPCA must be fitted before calling transform().")
 
-        c = self.c_
+        c = self._hyperboloid._cast_c(self.c_)
         x_hyp_NA = self._to_hyperboloid(x_ND, c)
         x_work_NA = self._center(self.mean_, x_hyp_NA, c)
         _, ball_NK = _transform_jit(x_work_NA, self.components_, c)
