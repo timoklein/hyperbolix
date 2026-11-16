@@ -170,10 +170,12 @@ class HypVQEmbeddingPoincare(nnx.Module):
         self.out_dtype = out_dtype
 
         # Codebook BUFFER (nnx.Variable, not nnx.Param): a small zero-centred
-        # Gaussian projected onto the ball. The init is tiny so the proj is a
-        # no-op for any reasonable curvature (c=1.0 nominal here; every forward /
-        # ema_update applies the true call-time c). Stored in param_dtype; the
-        # proj runs in manifold.dtype, so cast back at the storage boundary.
+        # Gaussian projected onto the ball. The curvature is not known here, so
+        # this proj uses a nominal c = 1.0; the forward and ema_update project the
+        # codebook again at the call-time c, so a larger init_scale or c > 1 cannot
+        # leave a code off the ball. With the default init_scale every proj is a
+        # no-op. Stored in param_dtype; the proj runs in manifold.dtype, so cast
+        # back at the storage boundary.
         init_KC = jax.random.normal(rngs.params(), (num_codes, code_dim), dtype=param_dtype) * init_scale
         init_KC = jax.vmap(manifold_module.proj, in_axes=(0, None))(init_KC, 1.0)
         self.codebook = nnx.Variable(init_KC.astype(param_dtype))
@@ -196,8 +198,10 @@ class HypVQEmbeddingPoincare(nnx.Module):
         z_NC = jax.vmap(manifold.expmap_0, in_axes=(0, None))(x_NC, c)  # (N, C) on ball
 
         # Geodesic nearest-neighbour (non-differentiable). Double-vmap dist over
-        # the N tokens and K codes.
-        codebook_KC = self.codebook[...]
+        # the N tokens and K codes. The stored codebook is projected at the call-time
+        # c first (a no-op for codes already inside that ball): the init could only
+        # use a nominal c.
+        codebook_KC = jax.vmap(manifold.proj, in_axes=(0, None))(self.codebook[...], c)  # (K, C)
         dists_NK = jax.vmap(jax.vmap(manifold.dist, in_axes=(None, 0, None)), in_axes=(0, None, None))(
             z_NC, codebook_KC, c
         )  # (N, K)
@@ -258,7 +262,8 @@ class HypVQEmbeddingPoincare(nnx.Module):
         decay = self.ema_decay
 
         z_NC = z_NC.astype(dtype)
-        old_KC = self.codebook[...].astype(dtype)
+        # Projected at the call-time c, as in the forward, so an untouched code is stored on the ball.
+        old_KC = jax.vmap(manifold.proj, in_axes=(0, None))(self.codebook[...].astype(dtype), c)  # (K, C)
 
         # Assignment matrix A_NK = one-hot(argmin) — the indicator w_ij of Eq. 41.
         A_NK = jax.nn.one_hot(indices_N, K, dtype=dtype)  # (N, K)

@@ -76,9 +76,16 @@ class HypConv2DPoincare(nnx.Module):
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'tangent').
         Note: This is a static configuration - changing it after initialization requires recompilation.
     id_init : bool
-        If True, use identity initialization (1/2 * I) for the linear sublayer weights,
-        matching the reference Poincaré ResNet implementation (default: True).
-        The 1/2 factor compensates for the factor of 2 inside the HNN++ distance formula.
+        If True (default), initialize the linear sublayer weights as ``1/2 · eye(C_out, K²·C_in)``,
+        as the reference implementation does (``0.5 * torch.eye`` over the ``nn.Unfold`` patch
+        vector in HELM's ``hypercore/nn/conv/poincare_convolution.py``). This is not an identity
+        map on the channels. The patch vector is channel-major: entry ``c·K² + k`` is input
+        channel ``c`` at kernel offset ``k`` (offsets row-major), so output channel ``j`` reads
+        input channel ``j // K²`` at offset ``j mod K²``. With ``C_out ≤ K²`` every output channel
+        reads input channel 0, each at a different offset, and input channels 1 and up start with
+        zero weight; output channels ``j ≥ K²·C_in`` start with all-zero weights. The 1/2 factor
+        compensates for the factor of 2 inside the HNN++ distance formula. If False, the weights
+        are normal with std ``1/sqrt(K²·C_in)``.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
@@ -143,15 +150,21 @@ class HypConv2DPoincare(nnx.Module):
         kernel_h, kernel_w = self.kernel_size
         K2 = kernel_h * kernel_w
         concat_dim = K2 * in_channels
-        beta_n = jax.scipy.special.beta(concat_dim / 2.0, 0.5)
-        beta_ni = jax.scipy.special.beta(in_channels / 2.0, 0.5)
-        self.beta_scale = float(beta_n / beta_ni)
+        # Evaluated at compile time: inside a jit trace (a model built in a jitted train function)
+        # `beta` would return a tracer and `float()` would raise ConcretizationTypeError. The
+        # arguments are Python numbers, so the value is the eager one, bit for bit.
+        with jax.ensure_compile_time_eval():
+            beta_n = jax.scipy.special.beta(concat_dim / 2.0, 0.5)
+            beta_ni = jax.scipy.special.beta(in_channels / 2.0, 0.5)
+            self.beta_scale = float(beta_n / beta_ni)
 
         # Trainable parameters — owned directly for flat parameter paths
-        # Weight initialization: identity from reference (van Spengler et al. 2023)
+        # Weight initialization: the reference's 1/2 * eye (HELM's PoincareConvolution2d)
         # or scaled normal std = 1/sqrt(fan_in)
         if id_init:
-            # W = 1/2 * I(C_out, K^2*C_in)
+            # W = 1/2 * eye(C_out, K^2*C_in), the reference layout. Not a channel identity: the
+            # patch vector is channel-major, so output j reads input channel j // K^2 at kernel
+            # offset j % K^2 (for C_out <= K^2, input channel 0 only).
             # The 1/2 factor compensates for the factor of 2 in the HNN++ distance formula.
             kernel_init = 0.5 * jnp.eye(out_channels, concat_dim, dtype=param_dtype)
         else:

@@ -170,7 +170,7 @@ def _poincare_sinh_lift(s_BO: Float[Array, "batch out_dim"], c: float) -> Float[
     # s/(D·X), which overflows again. D carries no gradient; at s = 0 the Jacobian dy/ds is exactly
     # I/(2√c). Near the sinh clip the backward's cotangent·(1/D) can be subnormal, and XLA:CPU flushes
     # it to zero.
-    sqrt_c = jnp.sqrt(c)
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=s_BO.dtype))
     one = jnp.asarray(1.0, dtype=s_BO.dtype)
     scale_B1 = jax.lax.stop_gradient(floor_at(jnp.max(jnp.abs(s_BO), axis=-1, keepdims=True), one))  # (B, 1)
     inv_divisor_B1 = one / _pow2_divisor(scale_B1)  # (B, 1), exact power of two in (0, 1]
@@ -195,7 +195,7 @@ def _poincare_sinh_logmap_0(s_BO: Float[Array, "batch out_dim"], c: float) -> Fl
     # plain sum of squares cannot, and that one reduction gives both ‖t‖ and hypot(‖t‖, 1/D). The
     # route through the ball paid five reductions over (B, O) here (three in the lift, then proj and
     # logmap_0); this pays two.
-    sqrt_c = jnp.sqrt(c)
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=s_BO.dtype))
     one = jnp.asarray(1.0, dtype=s_BO.dtype)
     scale_B1 = jax.lax.stop_gradient(floor_at(jnp.max(jnp.abs(s_BO), axis=-1, keepdims=True), one))  # (B, 1)
     divisor_B1 = _pow2_divisor(scale_B1)  # (B, 1), exact power of two >= 1
@@ -242,7 +242,7 @@ def _poincare_pp_forward(
         v_BO = manifold.compute_mlr_pp(x_BI, kernel_OI, bias_O1, c)
 
     # Generalized linear transformation y = w / (1 + sqrt(1 + c‖w‖²)), w = sinh(√c·v)/√c.
-    s_BO = sinh(jnp.sqrt(c) * v_BO)  # (B, O)
+    s_BO = sinh(jnp.sqrt(jnp.asarray(c, dtype=v_BO.dtype)) * v_BO)  # (B, O)
     if tangent_output:
         return _poincare_sinh_logmap_0(s_BO, c)
     res_BO = _poincare_sinh_lift(s_BO, c)

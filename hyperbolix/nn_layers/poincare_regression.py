@@ -144,7 +144,7 @@ class HypRegressionPoincare(nnx.Module):
         Ganea Octavian, Gary Bécigneul, and Thomas Hofmann. "Hyperbolic neural networks."
             Advances in neural information processing systems 31 (2018).
         """
-        sqrt_c = jnp.sqrt(c)
+        sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=self.manifold.dtype))
 
         # Compute Möbius subtraction: -p ⊕ x for each (x, p_i) pair
         p_neg_PD = -p

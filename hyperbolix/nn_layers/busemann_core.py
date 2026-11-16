@@ -101,8 +101,8 @@ def _busemann_score(
     manifold : Manifold
         Class-based Hyperboloid or Poincaré instance exposing ``busemann(x, v, c)``.
     x_BI : Array, shape (B, in_features)
-        Input points (Hyperboloid: ambient ``d+1``; Poincaré: spatial ``d``). Assumed to be
-        at ``manifold.dtype``; params are cast to ``x_BI.dtype`` for the arithmetic.
+        Input points (Hyperboloid: ambient ``d+1``; Poincaré: spatial ``d``). Cast to
+        ``manifold.dtype``, and the params with it, so the logits are in the manifold's dtype.
     kernel_KI : Array, shape (K, I)
         Unnormalized direction weights.
     log_scale_K : Array, shape (K,)
@@ -124,13 +124,15 @@ def _busemann_score(
     # `busemann` and `_busemann_tangent` are defined on Hyperboloid and Poincare but are not part
     # of the `Manifold` protocol (Euclidean, ProperVelocity and Stereographic have no horosphere).
     horo_manifold = cast("Hyperboloid | Poincare", manifold)
+    # The manifold's dtype decides: a float64 input to a float32 manifold must not promote the
+    # params, alpha and bias below (`busemann` itself already casts).
+    x_BI = x_BI.astype(horo_manifold.dtype)
     busemann = horo_manifold.busemann
     if input_space == "tangent":
         # Scored without forming the point `expmap_0` would give: the float32 ball lift stops at
         # the ceiling t = √c‖x‖ ≈ 6.32 at c = 1 (see `poincare._busemann_tangent`); through the
         # float32 hyperboloid lift the score's gradient underflows from t ≈ 29.4 at c = 0.3 (29.8 at
         # c = 1) and the point overflows at t ≈ 45 (see `hyperboloid._busemann_tangent`).
-        x_BI = x_BI.astype(horo_manifold.dtype)  # the work dtype `expmap_0` gave the lifted input
         busemann = horo_manifold._busemann_tangent
 
     work_dtype = x_BI.dtype
@@ -194,7 +196,7 @@ def busemann_fc_poincare_output(
     Array, shape (B, O)
         Points in the Poincaré ball with curvature ``c``, before the caller's ``proj``.
     """
-    sqrt_c = jnp.sqrt(c)
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=u_BO.dtype))
     arg_BO = sqrt_c * u_BO  # (B, O)
     # `+ 0·arg` makes the clip loud: 0·(±inf) is NaN, so an overflowed logit (e.g. alpha = exp(log_scale)
     # = inf) gives a NaN output instead of a finite point at ±v_max with a zero gradient. For finite

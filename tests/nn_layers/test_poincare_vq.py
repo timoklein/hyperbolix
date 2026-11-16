@@ -208,6 +208,39 @@ def test_embedding_codebook_on_ball(dtype, dim):
 
 
 @pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
+def test_embedding_codes_on_ball_at_call_time_curvature(dtype):
+    """A wide init at c > 1: the forward and ``ema_update`` use the codebook projected at the
+    call-time ``c``, so every code they use, return or store lies inside that ball.
+
+    Regression: the codebook was projected only at init, at a hard-coded c = 1. With
+    ``init_scale=0.3`` and ``c = 2.5`` most codes sat off the ball (√c‖q‖ up to 1.58), the forward
+    measured finite distances to them, and untouched codes stayed there through the EMA.
+    """
+    c = 2.5
+    dim = 8
+    manifold, layer = _embedding(dtype, dim, num_codes=64, init_scale=0.3)
+    atol, rtol = _tol(dtype)
+    stored_KC = layer.codebook[...]
+    assert not _all_on_ball(manifold, stored_KC, c)  # precondition: the init leaves codes off the c = 2.5 ball
+
+    out = layer(_inputs(11, 32, dim, dtype), c)
+    codes_KC = jax.vmap(manifold.proj, in_axes=(0, None))(stored_KC, c)  # (K, C) the in-ball codes
+    q_NC = codes_KC[out.indices]  # (N, C)
+    assert _all_on_ball(manifold, q_NC, c)
+    # The returned tangent vectors and the commitment loss are those of the in-ball codes.
+    q_tangent_NC = jax.vmap(manifold.logmap_0, in_axes=(0, None))(q_NC, c)
+    assert jnp.allclose(out.quantized, q_tangent_NC.astype(out.quantized.dtype), atol=atol, rtol=rtol)
+    d_N = jax.vmap(manifold.dist, in_axes=(0, 0, None))(out.z, q_NC, c)
+    assert jnp.allclose(out.loss, layer.commitment_weight * jnp.mean(d_N), atol=atol, rtol=rtol)
+    # The nearest code is chosen among the in-ball codes.
+    d_NK = jax.vmap(jax.vmap(manifold.dist, in_axes=(None, 0, None)), in_axes=(0, None, None))(out.z, codes_KC, c)
+    assert jnp.array_equal(out.indices, jnp.argmin(d_NK, axis=-1))
+
+    layer.ema_update(out.z, out.indices, c)  # revival off: untouched codes keep their (projected) place
+    assert _all_on_ball(manifold, layer.codebook[...], c)
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=["f32", "f64"])
 @pytest.mark.parametrize("dim", [2, 8], ids=["dim2", "dim8"])
 @pytest.mark.parametrize("c", [0.1, 1.0], ids=["c0.1", "c1.0"])
 def test_embedding_ste_forward_identity(dtype, dim, c):

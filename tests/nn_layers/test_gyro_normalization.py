@@ -769,6 +769,25 @@ def test_rms_gradients_and_jit(cfg_rms, dtype):
     assert jnp.allclose(out, out_eager, atol=_tol(dtype)[0])
 
 
+@pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
+def test_rms_rejects_wrong_feature_width(cfg_rms, use_bias):
+    """An input whose last axis does not match ``num_features`` raises, with or without a bias.
+
+    Regression: without a bias nothing read ``num_features``, so a Hyperboloid layer built for
+    D = 4 returned a (8, 4) spatial tensor as if it were 3-dim points with a time slot, and the PV
+    and Poincaré layers built for D = 4 accepted width 5. Dtype is fixed: the check is on shapes.
+    """
+    dtype = jnp.float32
+    manifold = cfg_rms["make"](dtype)
+    rms = cfg_rms["rms"](manifold, num_features=4, use_bias=use_bias)
+    good = cfg_rms["points"](jax.random.PRNGKey(12), (8, 4), 1.0, dtype)  # (8, 4 + time)
+    assert rms(good, c=1.0).shape == good.shape
+    # One coordinate short (Hyperboloid: the spatial part without its time slot) and one too many.
+    for bad in (good[:, 1:], jnp.concatenate([good, good[:, :1]], axis=-1)):
+        with pytest.raises(ValueError, match="ambient coordinates"):
+            rms(bad, c=1.0)
+
+
 @pytest.mark.parametrize("dtype", DTYPES)
 def test_rms_origin_input_stays_finite(cfg_rms, dtype):
     """A point at the origin (radius 0) stays at the origin — no gamma/eps blow-up."""
