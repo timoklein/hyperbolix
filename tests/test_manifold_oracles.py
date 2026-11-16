@@ -442,7 +442,14 @@ def _old_sinh_lift(spatial_BO, c: float, v_max: float, eps: float = 1e-7):
     library spelling moves again. On a non-finite score this is the bug the pass-through replaced:
     ``clamp_to(-inf, -v_max, v_max)`` is ``-v_max``, and the caller gets a plausible on-sheet point
     back from a row that has already diverged.
+
+    ``c`` is cast to the input's dtype first, as the library does since 1.5.1 (a float64 ``c`` must
+    not promote float32 input). Without the cast the two spellings still agree in value, but under
+    jax 0.12 the gradient of a division by a weakly typed Python scalar rounds differently in the
+    last bit from a division by a float32 array, and the bit-equality below would test that
+    instead of the pass-through.
     """
+    c = jnp.asarray(c, dtype=spatial_BO.dtype)
     sqrt_c = jnp.sqrt(c)
     sinh_arg_BO = clamp_to(sqrt_c * spatial_BO, -v_max, v_max)
     res_rem_BO = safe_sinh(sinh_arg_BO) / sqrt_c
