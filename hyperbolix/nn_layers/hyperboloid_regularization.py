@@ -73,7 +73,7 @@ class HRCDropout(nnx.Module):
         self,
         x: Float[Array, "batch dim_plus_1"],
         c_in: float = 1.0,
-        c_out: float = 1.0,
+        c_out: float | None = None,
         deterministic: bool | None = None,
     ) -> Float[Array, "batch dim_plus_1"]:
         """Apply HRC dropout.
@@ -84,8 +84,9 @@ class HRCDropout(nnx.Module):
             Input points on hyperboloid with curvature c_in.
         c_in : float, optional
             Input curvature (default: 1.0).
-        c_out : float, optional
-            Output curvature (default: 1.0).
+        c_out : float or None, optional
+            Output curvature. None (the default) means the same as ``c_in``, so a caller who
+            passes only ``c_in`` stays on the input's sheet.
         deterministic : bool or None, optional
             If True, no dropout is applied (for evaluation mode). None uses the
             inner ``nnx.Dropout``'s setting, which the constructor sets and
@@ -96,6 +97,8 @@ class HRCDropout(nnx.Module):
         y : Array of shape (batch, dim+1)
             Output points on hyperboloid with curvature c_out.
         """
+        if c_out is None:  # plain Python branch, static under jit: stay on the input's sheet
+            c_out = c_in
 
         def drop_fn(z):
             return self.dropout(z, deterministic=deterministic)
@@ -154,7 +157,7 @@ class HRCLayerNorm(nnx.Module):
         self,
         x: Float[Array, "batch dim_plus_1"],
         c_in: float = 1.0,
-        c_out: float = 1.0,
+        c_out: float | None = None,
     ) -> Float[Array, "batch dim_plus_1"]:
         """Apply HRC layer normalization.
 
@@ -164,14 +167,17 @@ class HRCLayerNorm(nnx.Module):
             Input points on hyperboloid with curvature c_in.
         c_in : float, optional
             Input curvature (default: 1.0).
-        c_out : float, optional
-            Output curvature (default: 1.0).
+        c_out : float or None, optional
+            Output curvature. None (the default) means the same as ``c_in``, so a caller who
+            passes only ``c_in`` stays on the input's sheet.
 
         Returns
         -------
         y : Array of shape (batch, dim+1)
             Output points on hyperboloid with curvature c_out.
         """
+        if c_out is None:  # plain Python branch, static under jit: stay on the input's sheet
+            c_out = c_in
         return hrc(x, self.ln, c_in, c_out, self.eps)
 
 
@@ -236,7 +242,7 @@ class HRCRMSNorm(nnx.Module):
         self,
         x: Float[Array, "batch dim_plus_1"] | Float[Array, "batch dim"],
         c_in: float = 1.0,
-        c_out: float = 1.0,
+        c_out: float | None = None,
         space_only: bool = False,
     ) -> Float[Array, "batch dim_plus_1"]:
         """Apply HRC RMS normalization.
@@ -248,8 +254,9 @@ class HRCRMSNorm(nnx.Module):
             spatial components when ``space_only=True``.
         c_in : float, optional
             Input curvature (default: 1.0).
-        c_out : float, optional
-            Output curvature (default: 1.0).
+        c_out : float or None, optional
+            Output curvature. None (the default) means the same as ``c_in``, so a caller who
+            passes only ``c_in`` stays on the input's sheet.
         space_only : bool, optional
             If True, ``x`` is the spatial part ``(..., num_features)`` of a point
             (no time coordinate); it is normalized, scaled by ``sqrt(c_in / c_out)``
@@ -262,6 +269,8 @@ class HRCRMSNorm(nnx.Module):
         y : Array of shape (batch, dim+1)
             Output points on hyperboloid with curvature c_out.
         """
+        if c_out is None:  # plain Python branch, static under jit: stay on the input's sheet
+            c_out = c_in
         if space_only:
             # hrc's tail on an input that is already spatial: the time coordinate is never read.
             return spatial_to_hyperboloid(self.rms(x), c_in, c_out, self.eps)  # (..., D+1)
@@ -341,7 +350,7 @@ class HRCBatchNorm(nnx.Module):
         self,
         x: Float[Array, "batch dim_plus_1"],
         c_in: float = 1.0,
-        c_out: float = 1.0,
+        c_out: float | None = None,
         use_running_average: bool | None = None,
     ) -> Float[Array, "batch dim_plus_1"]:
         """Apply HRC batch normalization.
@@ -352,8 +361,9 @@ class HRCBatchNorm(nnx.Module):
             Input points on hyperboloid with curvature c_in.
         c_in : float, optional
             Input curvature (default: 1.0).
-        c_out : float, optional
-            Output curvature (default: 1.0).
+        c_out : float or None, optional
+            Output curvature. None (the default) means the same as ``c_in``, so a caller who
+            passes only ``c_in`` stays on the input's sheet.
         use_running_average : bool or None, optional
             If True, use running statistics (eval mode).
             If False, use batch statistics (train mode).
@@ -364,6 +374,8 @@ class HRCBatchNorm(nnx.Module):
         y : Array of shape (batch, dim+1)
             Output points on hyperboloid with curvature c_out.
         """
+        if c_out is None:  # plain Python branch, static under jit: stay on the input's sheet
+            c_out = c_in
 
         def bn_fn(z):
             return self.bn(z, use_running_average=use_running_average)
@@ -438,7 +450,7 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
         self,
         x: Float[Array, "batch dim_plus_1"],
         c_in: float = 1.0,
-        c_out: float = 1.0,
+        c_out: float | None = None,
         use_running_average: bool | None = None,
         update_running_mean: bool = True,
     ) -> Float[Array, "batch dim_plus_1"]:
@@ -450,8 +462,9 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
             Input points on hyperboloid with curvature ``c_in``.
         c_in : float, optional
             Input curvature (default: 1.0).
-        c_out : float, optional
-            Output curvature (default: 1.0).
+        c_out : float or None, optional
+            Output curvature. None (the default) means the same as ``c_in``, so a caller who
+            passes only ``c_in`` stays on the input's sheet.
         use_running_average : bool or None, optional
             If True, use running mean (eval mode). If False, compute from
             batch and update running mean (train mode). None uses the
@@ -471,6 +484,8 @@ class FGGMeanOnlyBatchNorm(nnx.Module):
         # Resolve use_running_average: call-time > constructor
         if use_running_average is None:
             use_running_average = self.use_running_average
+        if c_out is None:  # plain Python branch, static under jit: stay on the input's sheet
+            c_out = c_in
 
         def mean_only_bn(z):
             # z: spatial components, shape (..., D). Cast state to the working

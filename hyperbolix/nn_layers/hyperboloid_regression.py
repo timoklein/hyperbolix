@@ -13,6 +13,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
+from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.utils.math_utils import asinh
 
 from ._helpers import validate_hyperboloid_manifold
@@ -194,7 +195,7 @@ class FGGLorentzMLR(nnx.Module):
     def __call__(
         self,
         x_BAi: Float[Array, "batch in_features"],
-        c: float = 1.0,
+        c: ScalarCurvature = 1.0,
     ) -> Float[Array, "batch num_classes"]:
         """Forward pass returning Euclidean logits.
 
@@ -210,6 +211,7 @@ class FGGLorentzMLR(nnx.Module):
         logits_BK : Array, shape (B, K)
             Euclidean logits (signed scaled distances to hyperplanes).
         """
+        c = jnp.asarray(c, dtype=x_BAi.dtype)  # the input's dtype decides, not a float64 `c`
         # 1. Build V_mink from (z, a)
         V_AiK = build_spacelike_V(self.kernel[...], self.bias[...], c, self.eps)  # (Ai, K)
         # Cast V to match input dtype (avoids float32/float64 scatter warnings)
