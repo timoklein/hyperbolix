@@ -83,6 +83,17 @@ The full list of pinned sites and the measured costs are in [TF32 on Ampere and 
       show_source: true
       heading_level: 3
 
+`AUTO` is the default of `c_min` and `c_max`: it resolves each bound from the parameterization, as
+described above. `Auto` is its type.
+
+::: hyperbolix.utils.curvature.AUTO
+    options:
+      heading_level: 3
+
+::: hyperbolix.utils.curvature.Auto
+    options:
+      heading_level: 3
+
 ### Usage Example
 
 ```python

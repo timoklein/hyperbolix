@@ -3,7 +3,8 @@
 Three hyperbolic attention variants from the Hypformer paper (Yang et al. 2025,
 Section 4.3). All operate on hyperboloid points and support independent curvatures for
 input (`c_in`), attention computation (`c_attn`), and output (`c_out`), plus **causal
-(autoregressive) masking** via `causal=True`. For complexity/use-case trade-offs see
+(autoregressive) masking** via `causal=True`. `c_attn` and `c_out` default to `c_in`, so
+a call that passes only `c_in` keeps all three curvatures equal. For complexity/use-case trade-offs see
 the [NN Layers guide](../../user-guide/nn-layers.md#attention-normalization-positional-encoding).
 
 The supporting utilities (`spatial_to_hyperboloid`, `lorentz_midpoint`,
@@ -48,7 +49,8 @@ All three variants support `causal=True`: position `n` attends only to positions
 
 !!! info "How causal masking is implemented"
     - **`HyperbolicSoftmaxAttention`** / **`HyperbolicFullAttention`**: lower-triangular
-      `-inf` mask on the score matrix before softmax — O(N²) in both modes.
+      mask on the score matrix before softmax, which sets the masked scores to the finite
+      value `-1e18` — O(N²) in both modes.
     - **`HyperbolicLinearAttention`**: a cumulative-sum recurrence (`jax.lax.scan`,
       Katharopoulos et al. 2020): `S_i = Σ_{j≤i} φ(K_j) V_jᵀ`, O(1) per step →
       **O(N) total**, well-suited to long autoregressive sequences.

@@ -7,7 +7,7 @@
 
 Hyperbolix is a pure JAX implementation of hyperbolic deep learning, providing manifold operations, neural network layers, and Riemannian optimizers for hyperbolic geometry. Built with Flax NNX and Optax for modern JAX workflows.
 
-**Status:** Stable, v1.3.0; see the [Changelog](changelog.md).
+**Status:** Stable, v1.5.1; see the [Changelog](changelog.md).
 
 ## Features
 
@@ -52,7 +52,11 @@ distances = jax.vmap(poincare.dist, in_axes=(0, 0, None))(x_proj, y_proj, c)
 
 ## Installation
 
-Install from source:
+```bash
+pip install hyperbolix
+```
+
+Or install from source:
 
 ```bash
 git clone https://github.com/timoklein/hyperbolix.git
@@ -60,7 +64,7 @@ cd hyperbolix
 uv sync  # or pip install -e .
 ```
 
-Requirements: Python 3.12+, JAX 0.9+, Flax 0.12+, Optax 0.2.6+
+Requirements: Python 3.12+, JAX 0.9+, Flax 0.12.5+, Optax 0.2.6+
 
 ## Next Steps
 

@@ -47,6 +47,7 @@ Standard inits (He, Xavier) are too large for hyperbolic layers, and a too-small
 - `FGGLinear`/`FGGConv2D`: `reset_params="fan_out"`, `init_bias=0.0`. The Klis et al. 2026 reference (BatchNorm regime) is `reset_params="eye"` (linear) / `"lorentz_kaiming"` (conv) with `init_bias=0.5`.
 - `HTCLinear`: fan-in uniform `U(-√(3/in), √(3/in))`. `init_bound=0.02` restores the old init, which froze depth-≥2 stacks.
 - `HypConv2DHyperboloidILNN`: fan-out normal (`kernel_init_std=None`). `kernel_init_std=0.02` restores Shi et al. 2026, which was tuned against the LogCat digamma sign bug and collapses to the origin now that the sign is fixed.
+- `HypConv2DHyperboloid`: fan-in normal (`reset_params="fan_in"`). `reset_params="uniform"` restores the old default `U(-0.02, 0.02)`, which shrank the feature spread about 0.13× per layer. That old default was not the Bdeir et al. 2023 conv init (`U(-s, s)` with `s = √(2/((C−1)·k²))` for kernel and bias), which has no switch.
 - `HypLinearHyperboloidPLFC` keeps the reference `std=0.02`: it has no LogCat.
 
 Full table: `docs/user-guide/nn-layers.md#initialization-scales`.
@@ -86,7 +87,7 @@ Pairwise ops hold to the scaled radius `a = √c·d` below (float32 / float64, `
 
 | Model | Good to `a` | Limit |
 |---|---|---|
-| Hyperboloid | 16.6 / much further | the storage floor `eps·sinh(a)/√c` |
+| Hyperboloid | no fixed radius: float32 error grows as `eps·sinh(a)` (median `dist` error over pairs at distance 1: 5e-4 at 12, 6e-2 at 16.6) / much further | the storage floor `eps·sinh(a)/√c`, which reaches 1 at 16.6; computing the float32 time coordinate overflows past `a ≈ 45` |
 | Poincaré | 12.6 / 27.7 (13.8 / 28.9 at `c = 0.1`) | the ball chart's ceiling. `dist` slot 1 (`VERSION_MOBIUS`) saturates there: 12.637 for a true 14.4, gradient relative error 1.0 |
 | Klein | 6.32 / 13.86 | half the Poincaré radius, and the floor `eps·cosh²(a)`. The maps into Klein don't project, so call `Klein.proj` after mapping far points in |
 | HalfSpace | `inf`/NaN past 88.7 / 709.8 | the floor `≈ 0.4·(eps/2)·cosh(√c·δ)/√c`, where `δ` is the distance to the vertical axis through `e_n/√c` |
