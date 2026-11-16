@@ -287,9 +287,12 @@ class HyperbolicRoPE(nnx.Module):
     Parameters
     ----------
     dim : int
-        Spatial dimension d (must be even).
+        Spatial dimension d (must be even; an odd ``dim`` raises ``ValueError``). The call
+        raises ``ValueError`` on points whose spatial dimension is not ``dim``.
     max_seq_len : int, optional
-        Maximum sequence length (for documentation; not enforced, default: 2048).
+        Maximum sequence length (default: 2048). Stored only, it has no effect: the
+        rotation angles are computed from ``positions`` on the fly, and positions of any
+        size are accepted.
     base : float, optional
         Frequency base for rotation angles (default: 10000.0).
     eps : float, optional
@@ -307,6 +310,11 @@ class HyperbolicRoPE(nnx.Module):
         base: float = 10000.0,
         eps: float = 1e-7,
     ):
+        if dim < 2 or dim % 2 != 0:
+            raise ValueError(
+                f"HyperbolicRoPE: dim is the spatial dimension and must be even and >= 2 (the rotation "
+                f"acts on adjacent pairs), got {dim}"
+            )
         self.dim = dim
         self.max_seq_len = max_seq_len
         self.base = base
@@ -323,7 +331,8 @@ class HyperbolicRoPE(nnx.Module):
         Parameters
         ----------
         z : Array, shape (..., seq_len, d+1)
-            Points on hyperboloid (spatial dim must equal self.dim, must be even).
+            Points on hyperboloid; the spatial dim ``d`` must equal ``self.dim``, otherwise
+            ``ValueError``.
         positions : Array
             Integer position indices, broadcastable against ``z.shape[:-1]``
             (``(seq_len,)`` or e.g. ``(batch, seq_len)``; see :func:`hope`).
@@ -335,4 +344,9 @@ class HyperbolicRoPE(nnx.Module):
         Array, shape (..., seq_len, d+1)
             Rotated points on hyperboloid.
         """
+        if z.shape[-1] != self.dim + 1:
+            raise ValueError(
+                f"HyperbolicRoPE: z must have dim + 1 = {self.dim + 1} ambient coordinates (spatial dim "
+                f"{self.dim}) on its last axis, got shape {z.shape}"
+            )
         return hope(z, positions, c, self.base, self.eps)

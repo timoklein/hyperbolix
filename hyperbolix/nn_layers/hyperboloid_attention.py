@@ -214,8 +214,8 @@ class _HyperbolicAttentionBase(nnx.Module):
         self,
         x: Float[Array, "B N A_in"],
         c_in: float = 1.0,
-        c_attn: float = 1.0,
-        c_out: float = 1.0,
+        c_attn: float | None = None,
+        c_out: float | None = None,
         causal: bool = False,
     ) -> Float[Array, "B N A_out"]:
         """Forward pass.
@@ -225,11 +225,12 @@ class _HyperbolicAttentionBase(nnx.Module):
         x : Array, shape (B, N, A_in)
             Input points on the hyperboloid with curvature ``c_in``.
         c_in : float
-            Input curvature.
-        c_attn : float
-            Intermediate attention curvature.
-        c_out : float
-            Output curvature.
+            Input curvature (default: 1.0).
+        c_attn : float or None
+            Intermediate attention curvature. None (the default) means the same as ``c_in``.
+        c_out : float or None
+            Output curvature. None (the default) means the same as ``c_in``, so a caller who
+            passes only ``c_in`` stays on the input's sheet throughout.
         causal : bool
             If True, apply causal masking so position n only attends to
             positions m <= n (autoregressive attention).
@@ -239,6 +240,11 @@ class _HyperbolicAttentionBase(nnx.Module):
         Array, shape (B, N, out_features + 1)
             Output on the hyperboloid with curvature ``c_out``.
         """
+        # Plain Python branches, static under jit: unset curvatures stay on the input's sheet.
+        if c_attn is None:
+            c_attn = c_in
+        if c_out is None:
+            c_out = c_in
         query_BNHA, key_BNHA, value_BNHA = self._project_qkv(x, c_in, c_attn)
         return self._attend(query_BNHA, key_BNHA, value_BNHA, c_attn, c_out, causal)
 
@@ -607,11 +613,22 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
     finite. Three remedies, cheapest first: keep the
     radius down (a :class:`HyperboloidGyroRMSNorm` in front of the layer), use a
     smaller ``c``, or pass ``score_dtype=jnp.float64`` to run the score computation as
-    a float64 island. The island fixes the *arithmetic* only — float32 *storage* of
-    the ambient coordinates carries a floor of the same order at large radius, so
-    beyond ``a ≈ 8`` the activations themselves want float64 as well. The exact
-    pairwise polar-frame evaluation, which would remove the cancellation outright, is
-    O(N·M·D) in memory and is not implemented here.
+    a float64 island. The island casts only the spatial parts of the queries and keys
+    and rebuilds both time coordinates from them in float64, so its scores are those of
+    a float64 layer fed the same float32 spatial coordinates; what is left is the cost
+    of storing the spatial part in float32, far below the cancellation. Measured
+    against a float64 layer on the unrounded points (``c = 1``, ``tau = 1``, 16
+    spatial dimensions, 12 tokens, query and key clouds at scaled radius ``a`` whose
+    directions lie within about ``8/sinh(a)`` of each other, worst of three draws),
+    the largest score error at ``a = 4 / 8 / 12`` is 3.8e-4 / 1.1 / 4.2e3 by default
+    and 1.1e-5 / 4.9e-4 / 2.7e-2 with the island, and the largest attention-weight
+    error 7.5e-5 / 0.21 / 1.0 against 9.4e-7 / 3.4e-5 / 1.7e-3; other draws move
+    these maxima by up to a factor of 2. The value aggregation stays in the working
+    dtype: in self-attention at ``a = 8`` and ``a = 12`` the island's float32 output
+    lies 1.2e-4 and 7.7e-3 nats from the float64 output, against 6e-4 to 1e-2
+    (depending on the draw) and 4.2 by default. The exact pairwise polar-frame
+    evaluation, which would remove the cancellation in float32, is O(N·M·D) in memory
+    and is not implemented here.
 
     Centroid form
     -------------
@@ -662,13 +679,17 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         This layer takes no ``manifold_module``, so compute precision follows the
         input array's dtype (the parameters are cast to it).
     score_dtype : DTypeLike or None
-        When set, the Lorentzian similarity and the ``(2/c + 2<Q,K>_L) / tau`` score
-        are computed in this dtype and the scores are cast to the softmax dtype (the
-        working dtype, promoted to at least float32) before the softmax — an opt-in
-        float64 island against the floor above (``jnp.float64`` needs
-        ``jax.config.update("jax_enable_x64", True)``). ``None`` (the default) computes
-        the similarity in the working dtype and the rest of the score in at least
-        float32.
+        When set, the spatial parts of the queries and keys are cast to this dtype, both
+        time coordinates are rebuilt from them in this dtype at the attention curvature,
+        and the Lorentzian similarity and the ``(2/c + 2<Q,K>_L) / tau`` score are
+        computed in it; the scores are then cast to the softmax dtype (the working dtype,
+        promoted to at least float32) before the softmax. With ``jnp.float64`` this is an
+        opt-in float64 island against the floor above: the scores equal a float64
+        layer's on the same stored spatial coordinates, and at ``a = 8`` the largest
+        attention-weight error drops from 0.21 to 3.4e-5 (see "Float32 score floor").
+        ``jnp.float64`` needs ``jax.config.update("jax_enable_x64", True)``; without it
+        JAX computes in float32. ``None`` (the default) computes the similarity from the
+        stored points in the working dtype and the rest of the score in at least float32.
     centroid_form : {"variance", "gemm"}
         ``form`` of the per-head :func:`lorentz_midpoint` that aggregates the values
         (default: ``"variance"``, the aggregation of earlier releases, bit for bit);
@@ -735,15 +756,20 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
         Carries the float32 score floor documented on the class: the absolute error on
         a score is ``eps * cosh(a_q) * cosh(a_k) / (c * tau)``, which crosses the
         softmax's resolution around a geodesic radius of ``sqrt(c) d ≈ 8``. With
-        ``self.score_dtype`` set, the two einsums and the constant / ``tau`` /
+        ``self.score_dtype`` set, the time coordinates are rebuilt in that dtype from the
+        cast spatial parts, and the two einsums and the constant / ``tau`` /
         causal-mask arithmetic run in that dtype; with ``score_dtype=None`` the einsums
         run in the working dtype and the arithmetic after them in at least float32. The
         scores are returned in that arithmetic dtype.
         """
         score_dtype = self.score_dtype
         if score_dtype is not None:
-            query_BNHA = query_BNHA.astype(score_dtype)
-            key_BNHA = key_BNHA.astype(score_dtype)
+            # Only the spatial parts are cast; both time coordinates are rebuilt from them in
+            # `score_dtype` at the scores' curvature. The stored time coordinate is already rounded
+            # in the working dtype (it sits off the sheet by its own rounding), and casting it
+            # would carry that error into the cancelling difference below.
+            query_BNHA = spatial_to_hyperboloid(query_BNHA[..., 1:].astype(score_dtype), c, c, self.eps)  # (B, N, H, A)
+            key_BNHA = spatial_to_hyperboloid(key_BNHA[..., 1:].astype(score_dtype), c, c, self.eps)  # (B, M, H, A)
 
         # Pairwise Lorentzian similarity: <Q,K>_L = -Q_0 K_0 + Q_s · K_s
         # This is the exact cancellation `_polar_frame` was written to avoid, with both halves

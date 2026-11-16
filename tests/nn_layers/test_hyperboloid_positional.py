@@ -279,6 +279,21 @@ def test_hyperbolic_rope_module():
             assert hyperboloid.is_in_manifold(out[b, s], c, atol=1e-4)
 
 
+@pytest.mark.parametrize("dim", [0, 3, 5])
+def test_hyperbolic_rope_rejects_odd_or_zero_dim(dim):
+    # Regression: an odd dim was accepted and failed only at call time inside a reshape (TypeError).
+    with pytest.raises(ValueError, match="must be even"):
+        HyperbolicRoPE(dim=dim)
+
+
+@pytest.mark.parametrize("d_input", [4, 8])
+def test_hyperbolic_rope_rejects_wrong_spatial_dim(d_input):
+    # Regression: HyperbolicRoPE(dim=6) rotated points of any even spatial dimension without error.
+    z = _make_hyperboloid_seq(jax.random.PRNGKey(0), 2, 5, d_input)
+    with pytest.raises(ValueError, match="ambient coordinates"):
+        HyperbolicRoPE(dim=6)(z, jnp.arange(5))
+
+
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 def test_hope_batched_positions_match_per_row(dtype):
     """(B, S) positions give each batch row the result of hope with that row's (S,) positions."""

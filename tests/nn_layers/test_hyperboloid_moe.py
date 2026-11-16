@@ -486,6 +486,25 @@ def test_moe_jit_matches_eager(dtype):
     np.testing.assert_array_equal(np.asarray(stats_jit.mask), np.asarray(stats.mask))
 
 
+@pytest.mark.parametrize("transform", ["jit", "vmap", "scan"])
+@pytest.mark.parametrize("learnable_curvature", [True, False], ids=["learnable_c", "fixed_c"])
+def test_moe_closed_over_in_plain_jax_transforms(transform, learnable_curvature):
+    # Regression: the experts ran under an inner nnx.vmap, which raised "Cannot extract graph node
+    # from different trace level" when the module was closed over inside a plain JAX transform
+    # (an RL rollout scan that captures the network, for example).
+    moe = _make_moe(learnable_curvature=learnable_curvature)
+    _randomize_biases(moe)
+    xs = _make_points(jax.random.key(13), 0.5, shape=(2, SEQ))  # (2, S, A): two "steps"
+    eager = jnp.stack([moe(xs[i], 0.5)[0] for i in range(2)])  # (2, S, A)
+    if transform == "jit":
+        out = jnp.stack([jax.jit(lambda x: moe(x, 0.5)[0])(xs[i]) for i in range(2)])
+    elif transform == "vmap":
+        out = jax.vmap(lambda x: moe(x, 0.5)[0])(xs)
+    else:
+        out = jax.lax.scan(lambda carry, x: (carry, moe(x, 0.5)[0]), 0, xs)[1]
+    np.testing.assert_allclose(np.asarray(out), np.asarray(eager), rtol=1e-5, atol=1e-5)
+
+
 def test_moe_bfloat16_smoke():
     moe = _make_moe(jnp.float32)
     x = _make_points(jax.random.key(12), 1.0, jnp.float32).astype(jnp.bfloat16)
