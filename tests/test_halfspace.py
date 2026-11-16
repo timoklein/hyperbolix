@@ -802,33 +802,47 @@ def _bases(c: float, dtype, seed: int) -> jnp.ndarray:
     return jnp.asarray(bases_BD)
 
 
-def _assert_all_equal(jac_BDD, want_DD: np.ndarray, what: str, atol: float = 0.0) -> None:
+def _assert_all_equal(jac_BDD, want_DD: np.ndarray, what: str, atol: float = 0.0, diag_atol: float | None = None) -> None:
+    """Every entry within ``atol`` of ``want_DD``; the diagonal within ``diag_atol`` instead when it is given."""
     got_BDD = np.asarray(jac_BDD)
-    bad_B = ~np.all(np.abs(got_BDD - want_DD.astype(got_BDD.dtype)) <= atol, axis=(-2, -1))
+    tol_DD = np.full(want_DD.shape, atol)
+    if diag_atol is not None:
+        np.fill_diagonal(tol_DD, diag_atol)
+    bad_B = ~np.all(np.abs(got_BDD - want_DD.astype(got_BDD.dtype)) <= tol_DD, axis=(-2, -1))
     if bad_B.any():
         example = np.diag(got_BDD[bad_B][0]).tolist()
-        raise AssertionError(f"{what}: off by more than {atol} at {int(bad_B.sum())}/{bad_B.size} bases, e.g. diag {example}")
+        raise AssertionError(
+            f"{what}: off by more than {atol} (diagonal {diag_atol}) at {int(bad_B.sum())}/{bad_B.size} bases, "
+            f"e.g. diag {example}"
+        )
 
 
 def _expmap_dv_modes(dtype) -> tuple:
-    """(name, jacobian transform, atol) for the ``d exp_x(v)/dv`` checks (on CPU; see the float32 GPU skip below).
+    """(name, jacobian transform, atol, diagonal atol) for the ``d exp_x(v)/dv`` checks (on CPU; see the float32 GPU
+    skip below).
 
-    Reverse mode is exactly ``I``: the unit cotangent comes back as ``(1·x_n)/x_n = 1``. Forward mode is ``I`` to
-    one ulp: the tangent of ``p = v/x_n`` is ``fl(1/x_n)``, multiplied back by ``x_n``, and ``x_n·fl(1/x_n) ≠ 1``
-    at about one height in eight (``x_n = 49``: ``1 - 2⁻⁵³``). No spelling built on ``p = v/x_n`` avoids that
-    without forming ``x_n²``, which leaves the dtype at heights ``1e±19`` in float32.
+    Forward mode is ``I`` to one ulp: the tangent of ``p = v/x_n`` is ``fl(1/x_n)``, multiplied back by ``x_n``, and
+    ``x_n·fl(1/x_n) ≠ 1`` at about one height in eight (``x_n = 49``: ``1 - 2⁻⁵³``). No spelling built on
+    ``p = v/x_n`` avoids that without forming ``x_n²``, which leaves the dtype at heights ``1e±19`` in float32.
+    Reverse mode brings the unit cotangent back as ``(1·x_n)/x_n``: exactly 1 with jax 0.9, but jax 0.12 rounds it
+    to one ulp below 1 at a few bases in 25 (``0.9999999999999999``; float32 ``0.99999994``), so its diagonal is
+    allowed one ulp of the dtype at 1 (approved by the maintainer, 2026-11-16) and its off-diagonal stays exact.
     """
-    return (("jacfwd", jax.jacfwd, float(np.finfo(_np_dtype(dtype)).eps)), ("jacrev", jax.jacrev, 0.0))
+    ulp_at_1 = float(np.finfo(_np_dtype(dtype)).eps)
+    return (("jacfwd", jax.jacfwd, ulp_at_1, None), ("jacrev", jax.jacrev, 0.0, ulp_at_1))
 
 
 def test_expmap_jacobian_at_zero_step_is_identity(c):
-    """``d exp_x(v)/dv |_{v=0} = I``: exactly in reverse mode, to one ulp in forward mode, at ``o`` and generic points."""
+    """``d exp_x(v)/dv |_{v=0} = I`` to one ulp on the diagonal, at ``o`` and generic points; reverse mode's
+    off-diagonal is exactly zero."""
     bases_BD = _bases(c, jnp.float64, 2)
     zero_D = jnp.zeros(5)
-    for name, jac_fn, atol in _expmap_dv_modes(jnp.float64):
+    for name, jac_fn, atol, diag_atol in _expmap_dv_modes(jnp.float64):
         jac_BDD = jax.vmap(jac_fn(_H64.expmap, argnums=0), in_axes=(None, 0, None))(zero_D, bases_BD, c)
-        _assert_all_equal(jac_BDD, np.eye(5), f"expmap dv, {name}", atol)
-        _assert_all_equal(jac_fn(lambda v: _H64.expmap_0(v, c))(zero_D)[None], np.eye(5), f"expmap_0 dv, {name}", atol)
+        _assert_all_equal(jac_BDD, np.eye(5), f"expmap dv, {name}", atol, diag_atol)
+        _assert_all_equal(
+            jac_fn(lambda v: _H64.expmap_0(v, c))(zero_D)[None], np.eye(5), f"expmap_0 dv, {name}", atol, diag_atol
+        )
 
 
 @pytest.mark.parametrize(("step_dtype", "step"), [(jnp.float64, 1e-300), (jnp.float32, 1e-40)])
@@ -842,14 +856,14 @@ def test_expmap_jacobian_at_tiny_vertical_step_is_identity(c, step_dtype, step):
     bases_BD = _bases(c, step_dtype, 3)
     v_D = jnp.zeros(5, step_dtype).at[-1].set(step)
     jacs = []
-    for name, jac_fn, atol in _expmap_dv_modes(step_dtype):
+    for name, jac_fn, atol, diag_atol in _expmap_dv_modes(step_dtype):
         jac_BDD = jax.vmap(jac_fn(m.expmap, argnums=0), in_axes=(None, 0, None))(v_D, bases_BD, c)
         assert bool(jnp.all(jnp.isfinite(jac_BDD))), name
-        jacs.append((name, jac_BDD, atol))
+        jacs.append((name, jac_BDD, atol, diag_atol))
     if jax.default_backend() != "cpu" and step_dtype == jnp.float32:
         pytest.skip("float32 bit-exact equality is CPU-only")
-    for name, jac_BDD, atol in jacs:
-        _assert_all_equal(jac_BDD, np.eye(5), f"expmap dv at v = {step}·e_n, {name}", atol)
+    for name, jac_BDD, atol, diag_atol in jacs:
+        _assert_all_equal(jac_BDD, np.eye(5), f"expmap dv at v = {step}·e_n, {name}", atol, diag_atol)
 
 
 def test_expmap_jacobian_wrt_base_at_zero_step_is_identity(c):

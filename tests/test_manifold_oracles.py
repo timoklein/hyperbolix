@@ -1022,13 +1022,22 @@ def test_hyperboloid_logmap_matches_the_decimal_oracle(dtype, rtol: float, c: fl
     The input-resolution term is weighted 8x more heavily than for ``dist``: the tangent vector is
     ``d·(cos φ·e_rad + sin φ·e_ang)``, and near a purely radial geodesic ``cos φ ≈ ±1``, so a
     *relative* perturbation of ``sinh(θ/2)`` lands on ``cos φ`` at full size while it reaches ``d``
-    only after division by ``√c·C·d``. Measured worst case: 37% (float64) / 19% (float32) of tol.
+    only after division by ``√c·C·d``.
+
+    The weight is 64, twice the original 32, because the resolution model's angular leg assumes a
+    chord error of ``eps``, while two unit vectors that are each normalized to within one ulp can
+    differ by two ulps per component. Measured on ``c=1 dim=2 a=30 radial(10)`` in float64, where
+    the true chord is 0: with jax 0.12 the eager ``ŷ = y_s/r_y`` rounds one ulp higher than with
+    jax 0.9 (``0.7071067811865477`` against ``…476``), the computed chord becomes ``√2·eps``
+    instead of ``eps/√2``, and the angular leg, quadratic in the chord error, doubles. That case
+    then reaches 38x the resolution (119% of the old bound, 59% of this one); with jax 0.9 it
+    reached 9.5x. Measured worst case with jax 0.9: 37% (float64) / 19% (float32) of the old tol.
     """
     manifold = Hyperboloid(dtype=dtype)
     for case in _hyperboloid_cases(c, dtype):
         u = np.asarray(manifold.logmap(case.y_A, case.x_A, c), dtype=np.float64)
         scale = float(np.max(np.abs(case.u_ref_A)))
-        tol = (rtol + 32.0 * case.resolution / case.d_ref) * scale
+        tol = (rtol + 64.0 * case.resolution / case.d_ref) * scale
         assert np.max(np.abs(u - case.u_ref_A)) <= tol, f"{case.label}: max|u - u_ref| too large"
 
 
@@ -1766,10 +1775,14 @@ def test_hyperboloid_dist_matches_the_oracle_at_tiny_curvature():
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
 def test_hyperboloid_dist_and_logmap_are_jit_and_vmap_clean(dtype):
-    """Jitted == eager for the new arms, and a vmapped call equals the Python loop.
+    """Jitted == eager for the new arms, and a vmapped call equals the Python loop to one ulp.
 
     ``version_idx`` is static, so the switch must be resolved at trace time; the frame is a
     ``NamedTuple`` (a pytree), which is what keeps it traceable at all.
+
+    The vmapped ``dist`` is compared to one ulp, not bitwise: with jax 0.12 (not 0.9) the batched
+    float64 distance at radius 5 comes out one ulp above the eager one (``7.069482043668053``
+    against ``…052``; no NaN, no sign change), while jit stays bit-identical.
     """
     e1, e2 = _hyperboloid_basis(4)
     manifold = Hyperboloid(dtype=dtype)
@@ -1784,7 +1797,9 @@ def test_hyperboloid_dist_and_logmap_are_jit_and_vmap_clean(dtype):
             np.array([float(jitted(x, y, c, version_idx=version_idx)) for x, y in zip(xs, ys, strict=True)]), eager
         )
         batched = jax.vmap(manifold.dist, in_axes=(0, 0, None, None))(xs, ys, c, version_idx)
-        assert np.array_equal(np.asarray(batched, dtype=np.float64), eager)
+        batched_np = np.asarray(batched)
+        eager_np = eager.astype(batched_np.dtype)
+        assert np.all(np.abs(batched_np - eager_np) <= np.spacing(np.abs(eager_np))), (batched_np, eager_np)
 
     logs_eager = np.stack([np.asarray(manifold.logmap(y, x, c)) for x, y in zip(xs, ys, strict=True)])
     logs_vmap = np.asarray(jax.vmap(manifold.logmap, in_axes=(0, 0, None))(ys, xs, c))
