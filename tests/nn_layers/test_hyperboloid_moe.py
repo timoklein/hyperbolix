@@ -486,6 +486,7 @@ def test_moe_jit_matches_eager(dtype):
     np.testing.assert_array_equal(np.asarray(stats_jit.mask), np.asarray(stats.mask))
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 @pytest.mark.parametrize("transform", ["jit", "vmap", "scan"])
 @pytest.mark.parametrize("learnable_curvature", [True, False], ids=["learnable_c", "fixed_c"])
 def test_moe_closed_over_in_plain_jax_transforms(transform, learnable_curvature):

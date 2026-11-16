@@ -286,7 +286,9 @@ def test_log_volume_of_a_radius_zero_ball_is_neg_inf(n: int, dtype):
     assert log_vol == -jnp.inf, f"expected -inf, got {log_vol}"
     # R > 0: the log-space form agrees with the log of the volume (for n = 1 that is log(2R)).
     expected = np.log(2 * 0.7) if n == 1 else float(jnp.log(uniform_poincare.volume(4.0, n, 0.7, dtype=jnp.float64)))
-    np.testing.assert_allclose(float(uniform_poincare._log_volume(4.0, n, 0.7, dtype)), expected, rtol=1e-6)
+    # float32: a 64-term logsumexp of float32 logs; 2.4e-6 off on an A100, below 1e-6 on CPU.
+    rtol = 1e-5 if dtype == jnp.float32 else 1e-12
+    np.testing.assert_allclose(float(uniform_poincare._log_volume(4.0, n, 0.7, dtype)), expected, rtol=rtol)
 
 
 def test_log_prob_neg_inf_outside(dtype):

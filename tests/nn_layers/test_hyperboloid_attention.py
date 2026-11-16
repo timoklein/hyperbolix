@@ -1024,6 +1024,7 @@ def _far_cloud_spatial(rng, radius, n, spatial_dim, dtype=np.float32):
     return (np.sinh(radii_N1) * dirs_ND).astype(dtype)  # (n, D)
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 def test_full_attention_score_dtype_float64_rebuilds_time_coordinate():
     """Regression: ``score_dtype=jnp.float64`` at scaled radius 8 matches a float64 layer.
 
@@ -1118,6 +1119,7 @@ def test_full_attention_score_dtype_float64_tracks_the_unrounded_float64_layer(s
     assert err_default > 1e-2, f"float32 default is already accurate ({err_default:.3e}); raise the radius"
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 def test_full_attention_score_dtype_float64_with_mixed_curvatures():
     """The island rebuilds the time coordinates at ``c_attn``, the curvature the scores use.
 
