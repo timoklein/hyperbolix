@@ -79,12 +79,14 @@ def riemannian_sgd(
     Example
     -------
     >>> import jax
+    >>> import jax.numpy as jnp
     >>> from flax import nnx
     >>> from hyperbolix.optim import riemannian_sgd
     >>> from hyperbolix.nn_layers import HypLinearPoincare
-    >>> from hyperbolix.manifolds import poincare
+    >>> from hyperbolix.manifolds import Poincare
     >>>
     >>> # Create model with manifold parameters
+    >>> poincare = Poincare()
     >>> layer = HypLinearPoincare(poincare, 10, 5, rngs=nnx.Rngs(0))
     >>>
     >>> # Create Riemannian optimizer
@@ -96,7 +98,7 @@ def riemannian_sgd(
     ...     y = model(x, c=1.0)
     ...     return jnp.sum(y ** 2)
     >>>
-    >>> x = jax.random.normal(jax.random.key(1), (32, 10))
+    >>> x = 0.1 * jax.random.normal(jax.random.key(1), (32, 10))  # points inside the unit ball
     >>> grads = nnx.grad(loss_fn)(layer, x)
     >>> optimizer.update(layer, grads)  # Automatically handles manifold parameters
 

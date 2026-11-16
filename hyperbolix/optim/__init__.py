@@ -19,7 +19,7 @@ Example:
     >>> from hyperbolix.manifolds.poincare import Poincare
     >>>
     >>> # Create model with manifold parameters
-    >>> manifold = Poincare(dtype=jnp.float64)
+    >>> manifold = Poincare()
     >>> layer = HypLinearPoincare(manifold, 10, 5, rngs=nnx.Rngs(0))
     >>>
     >>> # Create Riemannian optimizer
@@ -37,11 +37,13 @@ from .manifold_metadata import (
     has_manifold_params,
     mark_manifold_param,
 )
-from .riemannian_adam import riemannian_adam
-from .riemannian_sgd import riemannian_sgd
+from .riemannian_adam import RAdamState, riemannian_adam
+from .riemannian_sgd import RSGDState, riemannian_sgd
 
 __all__ = [
     "ManifoldParam",
+    "RAdamState",
+    "RSGDState",
     "get_manifold_info",
     "has_manifold_params",
     # Metadata utilities

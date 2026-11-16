@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hyperbolix-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/hyperbolix-light.png">
-    <img src="docs/assets/hyperbolix-light.png" alt="Hyperbolix" width="360">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/timoklein/hyperbolix/main/docs/assets/hyperbolix-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/timoklein/hyperbolix/main/docs/assets/hyperbolix-light.png">
+    <img src="https://raw.githubusercontent.com/timoklein/hyperbolix/main/docs/assets/hyperbolix-light.png" alt="Hyperbolix" width="360">
   </picture>
 </p>
 
@@ -10,9 +10,9 @@
 
 <p align="center">
   <a href="https://github.com/timoklein/hyperbolix/actions/workflows/ci.yaml"><img src="https://github.com/timoklein/hyperbolix/actions/workflows/ci.yaml/badge.svg" alt="Tests"></a>
-  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python"></a>
+  <a href="https://github.com/timoklein/hyperbolix/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python"></a>
   <a href="https://jax.dev"><img src="https://img.shields.io/badge/JAX-compatible-orange" alt="JAX"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+  <a href="https://github.com/timoklein/hyperbolix/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
 </p>
 
 Pure JAX implementation of hyperbolic deep learning with manifold operations, neural network layers, and Riemannian optimizers. Built with Flax NNX and Optax.
@@ -26,7 +26,7 @@ Pure JAX implementation of hyperbolic deep learning with manifold operations, ne
 - 📈 **Riemannian Optimizers**: RAdam and RSGD with automatic manifold detection
 - 📊 **Wrapped Normal Distributions** and **Dimensionality Reduction** (HoroPCA, CO-SNE, Fréchet mean)
 - 🚀 **Pure JAX/Flax NNX**: vmap-native API, JIT-compatible
-- ✅ **7,000+ tests passing** (1,390 test functions, parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
+- ✅ **7,000+ tests passing** (over 1,400 test functions, parametrized across dtypes, dimensions, manifolds) checked against independently transcribed NumPy/SciPy oracles
 
 ## Quick Start
 
@@ -80,21 +80,29 @@ operations (see "Learnable curvature" below).
 ## Installation
 
 ```bash
+pip install hyperbolix
+# or, in a uv project:
+uv add hyperbolix
+```
+
+To install from source:
+
+```bash
 git clone https://github.com/timoklein/hyperbolix.git
 cd hyperbolix
 uv sync  # or: pip install -e .
 ```
 
-**Requirements**: Python 3.12+, JAX 0.9+, Flax 0.12+, Optax 0.2.6+
+**Requirements**: Python 3.12+, JAX 0.9+, Flax 0.12.5+, Optax 0.2.6+
 
 ## Documentation
 
 📖 **[Full Documentation](https://timoklein.github.io/hyperbolix/)**
 
-- **[Getting Started](docs/getting-started.md)** - Installation and first examples
-- **[User Guides](docs/user-guide/)** - Manifolds, layers, optimizers, batching, numerical stability
-- **[API Reference](docs/api-reference/)** - Complete API documentation
-- **[Developer Guide](DEVELOPER_GUIDE.md)** - Development setup and workflows
+- **[Getting Started](https://timoklein.github.io/hyperbolix/latest/getting-started/)** - Installation and first examples
+- **[User Guides](https://timoklein.github.io/hyperbolix/latest/user-guide/manifolds/)** - Manifolds, layers, optimizers, batching, numerical stability
+- **[API Reference](https://timoklein.github.io/hyperbolix/latest/api-reference/manifolds/)** - Complete API documentation
+- **[Developer Guide](https://timoklein.github.io/hyperbolix/latest/developer-guide/)** - Development setup and workflows
 
 Build docs locally: `uv run python scripts/vendor_mathjax.py` (once per checkout), then `uv run mkdocs serve`
 
@@ -175,7 +183,7 @@ See individual module docstrings for detailed references.
 
 ## Contributing
 
-Contributions welcome! See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for setup and guidelines.
+Contributions welcome! See [DEVELOPER_GUIDE.md](https://github.com/timoklein/hyperbolix/blob/main/DEVELOPER_GUIDE.md) for setup and guidelines.
 
 For bugs or questions, [open an issue](https://github.com/timoklein/hyperbolix/issues).
 

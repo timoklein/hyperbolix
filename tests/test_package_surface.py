@@ -60,6 +60,16 @@ def test_root_all_lists_exactly_the_six_subpackages_and_no_layers() -> None:
     assert not hasattr(hyperbolix, "PoincareBatchNorm2D")
 
 
+def test_optim_exports_the_optimizer_state_types() -> None:
+    """The optimizer state types documented on the Optimizers API page are exported from ``optim``."""
+    from hyperbolix.optim.riemannian_adam import RAdamState
+    from hyperbolix.optim.riemannian_sgd import RSGDState
+
+    assert {"RAdamState", "RSGDState"} <= set(hyperbolix.optim.__all__)
+    assert hyperbolix.optim.RAdamState is RAdamState
+    assert hyperbolix.optim.RSGDState is RSGDState
+
+
 def test_version_matches_installed_metadata() -> None:
     """``hyperbolix.__version__`` is the installed distribution's version."""
     from importlib.metadata import version

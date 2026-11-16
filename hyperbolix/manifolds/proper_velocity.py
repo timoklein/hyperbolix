@@ -858,14 +858,17 @@ class ProperVelocity(ManifoldBase):
         c: Curvature value (default: 1.0). Must be positive.
 
     Examples:
+        >>> import jax
         >>> import jax.numpy as jnp
         >>> from hyperbolix.manifolds.proper_velocity import ProperVelocity
         >>>
         >>> manifold = ProperVelocity(dtype=jnp.float64)
         >>> x = jnp.array([0.1, 0.2], dtype=jnp.float32)
         >>> y = jnp.array([0.3, 0.4], dtype=jnp.float32)
-        >>> d = manifold.dist(x, y, c=1.0)
-        >>> d.dtype  # float64
+        >>> with jax.enable_x64(True):  # float64 needs x64 enabled
+        ...     d = manifold.dist(x, y, c=1.0)
+        >>> d.dtype
+        dtype('float64')
     """
 
     VERSION_DEFAULT = VERSION_DEFAULT
