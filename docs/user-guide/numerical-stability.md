@@ -151,6 +151,16 @@ float32 gradient error grows with depth (1.5 % at depth 16 for an `HTCLinear` st
 under `HIGHEST`). For a deep or gradient-sensitive stack of these layers, set the global knob.
 Details: [`hyperbolix.utils.precision`](../api-reference/utils.md#matmul-precision).
 
+**The size of a product decides whether it runs in TF32.** At the JAX default, XLA compiled small
+float32 products into a fused loop, which is full precision, and larger ones into a GEMM kernel,
+which is TF32. Measured on an A100 (jax 0.9.1) with a bare `jnp.einsum("bi,oi->bo", x, w)`: a
+single row was full float32 at every width tried, 5 to 512 (relative error about 1e-7). The switch
+to TF32 (about 3e-4) came between 7 and 8 rows for a 5 → 12 product, between 4 and 5 rows for
+8 → 8, and between 1 and 2 rows for 9 → 14, 64 → 64 and 512 → 512. With the default, a sample
+evaluated alone can therefore differ from the same sample inside a batch by the TF32 error. `LorentzMLA` at the size its tests use (model width 9, 6 tokens) differed by 3.3e-3
+between one call on two sequences and two calls on one sequence each; under `"highest"` the
+difference was at most 7.6e-6, which is float32 rounding (on CPU the two are bitwise equal).
+
 **Why the FGG product is pinned.** `FGGLinear` and `FGGConv2D` used to follow JAX as well. A
 float64 replay of a trained network changed that: a Procgen PPO agent (BigFish) with an encoder
 of 15 `FGGConv2D` and one `FGGLinear` (`c = 0.1`, trained on an A100 under the JAX default), 72
