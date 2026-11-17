@@ -296,7 +296,8 @@ class HRCBatchNorm(nnx.Module):
     eps : float, optional
         Small value for numerical stability in HRC (default: 1e-7).
     param_dtype : DTypeLike
-        Storage dtype of the trainable parameters (default: jnp.float32).
+        Storage dtype of the trainable parameters (default: jnp.float32). The running mean and
+        variance are stored in the same dtype, and in float32 for half-precision parameters.
 
     Attributes
     ----------
@@ -344,6 +345,15 @@ class HRCBatchNorm(nnx.Module):
             param_dtype=param_dtype,
             rngs=rngs,
         )
+        # nnx.BatchNorm creates its running statistics in float32 whatever `param_dtype` says, and
+        # NNX casts every assignment back to a Variable's init dtype. A float64 layer would then
+        # store, and in eval mode normalize with, float32-rounded statistics. Recreate them in
+        # `param_dtype`, but never below float32: Flax computes the batch statistics in at least
+        # float32, and a bfloat16 moving average with momentum 0.99 would stop moving. The values
+        # are the same; for float32 and half-precision parameters nothing changes.
+        stats_dtype = jnp.promote_types(param_dtype, jnp.float32)
+        self.bn.mean = nnx.BatchStat(jnp.zeros((num_features,), dtype=stats_dtype))
+        self.bn.var = nnx.BatchStat(jnp.ones((num_features,), dtype=stats_dtype))
         self.eps = eps
 
     def __call__(

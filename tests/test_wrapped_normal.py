@@ -1324,3 +1324,29 @@ def test_log_prob_hessian_at_the_mean_matches_the_closed_form(model: str, mean_r
     hess_DD = jax.hessian(log_p)(jnp.zeros(n, dtype=dtype))
     expected_DD = -(1.0 / sigma**2 + (n - 1) * c / 3.0) * np.eye(n)
     np.testing.assert_allclose(np.asarray(hess_DD), expected_DD, rtol=rtol, atol=rtol)
+
+
+@pytest.mark.parametrize("module", [wrapped_normal_hyperboloid, wrapped_normal_poincare], ids=["hyperboloid", "poincare"])
+def test_stack_of_covariances_works_in_log_prob_and_is_rejected_in_sample(module):
+    """``log_prob`` takes one covariance per mean; ``sample`` takes one covariance and says so.
+
+    ``sample`` used to fail on a ``(B, n, n)`` stack inside ``jax.random.multivariate_normal``, with a
+    message about mismatched shapes.
+    """
+    n, c = 3, 1.0
+    is_hyperboloid = module is wrapped_normal_hyperboloid
+    manifold = (Hyperboloid if is_hyperboloid else Poincare)(dtype=jnp.float64)
+    v_BD = 0.3 * jax.random.normal(jax.random.PRNGKey(0), (2, 2, n), dtype=jnp.float64)
+    if is_hyperboloid:
+        v_BD = jnp.concatenate([jnp.zeros((2, 2, 1)), v_BD], axis=-1)
+    mu_BD, z_BD = jax.vmap(jax.vmap(manifold.expmap_0, in_axes=(0, None)), in_axes=(0, None))(v_BD, c)
+    cov_BDD = jnp.stack([jnp.eye(n), 2.0 * jnp.eye(n) + 0.1])
+    assert sigma_to_cov(cov_BDD, n, jnp.float64).shape == (2, n, n)
+
+    batched = module.log_prob(z_BD, mu_BD, cov_BDD, c, manifold_module=manifold)
+    looped = jnp.stack([module.log_prob(z_BD[b], mu_BD[b], cov_BDD[b], c, manifold_module=manifold) for b in range(2)])
+    np.testing.assert_allclose(np.asarray(batched), np.asarray(looped), rtol=1e-12)
+    assert not np.isclose(float(batched[0]), float(batched[1]))
+
+    with pytest.raises(ValueError, match="sampling takes one covariance"):
+        module.sample(jax.random.PRNGKey(1), mu_BD[0], cov_BDD, c, manifold_module=manifold)

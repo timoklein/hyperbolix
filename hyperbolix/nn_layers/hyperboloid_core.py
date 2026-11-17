@@ -718,8 +718,13 @@ def lorentz_residual(
     Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 1. 2025.
     (Also adopted as the residual connection in HELM, He et al. 2025.)
     """
-    # Per-point weights: (...,) -> (..., 1) so they broadcast over the ambient axis. Scalars (Python
-    # or 0-d) pass through untouched, which keeps the scalar path bit-for-bit unchanged.
+    # The input's dtype decides: a strongly typed weight (a float64 parameter in a float32 network,
+    # a NumPy scalar) is cast to it, or `x + w_y * y` would promote the output. A weakly typed one
+    # (a Python number, also once traced as a jit argument) never promotes and is left alone, which
+    # keeps that path bit-for-bit unchanged.
+    if type(w_y) not in (int, float) and not getattr(w_y, "weak_type", False):
+        w_y = jnp.asarray(w_y, dtype=x.dtype)
+    # Per-point weights: (...,) -> (..., 1) so they broadcast over the ambient axis.
     if jnp.ndim(w_y) > 0:
         w_shape = tuple(jnp.shape(w_y))
         if w_shape == tuple(x.shape[:-1]):

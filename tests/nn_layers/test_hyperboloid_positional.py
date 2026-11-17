@@ -286,6 +286,19 @@ def test_hyperbolic_rope_rejects_odd_or_zero_dim(dim):
         HyperbolicRoPE(dim=dim)
 
 
+@pytest.mark.parametrize("d", [1, 3, 5])
+def test_hope_rejects_odd_spatial_dim(d):
+    # Regression: the functional forms failed on an odd spatial dimension inside a reshape (TypeError).
+    z = _make_hyperboloid_seq(jax.random.PRNGKey(0), 2, 4, d)
+    positions = jnp.arange(4)
+    with pytest.raises(ValueError, match="must be even, got"):
+        hope_rotate_space(z[..., 1:], positions)
+    with pytest.raises(ValueError, match="must be even, got"):
+        hope(z, positions)
+    with pytest.raises(ValueError, match="must be even, got"):
+        jax.jit(hope)(z, positions)
+
+
 @pytest.mark.parametrize("d_input", [4, 8])
 def test_hyperbolic_rope_rejects_wrong_spatial_dim(d_input):
     # Regression: HyperbolicRoPE(dim=6) rotated points of any even spatial dimension without error.

@@ -386,6 +386,50 @@ def test_lorentz_residual_per_point_weight_matches_scalar_loop(dtype, trailing_a
             assert jnp.allclose(out_BLA[b, i], ref_A, atol=atol), f"point ({b}, {i})"
 
 
+@pytest.mark.parametrize(
+    "make_weight",
+    [
+        lambda: np.float64(0.7),
+        lambda: jnp.asarray(0.7, dtype=jnp.float64),
+        lambda: jnp.full((4,), 0.7, dtype=jnp.float64),
+        lambda: np.full((4, 1), 0.7),
+    ],
+    ids=["numpy_scalar", "jax_0d", "per_point", "numpy_per_point_keepdim"],
+)
+def test_lorentz_residual_float64_weight_keeps_float32_output(make_weight):
+    """The input's dtype decides: a float64 weight does not promote a float32 residual.
+
+    Regression: ``x + w_y * y`` promoted the output to float64 under x64 for every float64 weight
+    that is not a plain Python number.
+    """
+    c = 0.7
+    spatial = jax.random.normal(jax.random.PRNGKey(0), (2, 4, 5), dtype=jnp.float32)
+    x, y = spatial_to_hyperboloid(spatial[0], c, c), spatial_to_hyperboloid(spatial[1], c, c)
+    out = lorentz_residual(x, y, make_weight(), c)
+    assert out.dtype == jnp.float32
+    # Same value as the float32 weight; the weakly typed Python number agrees to rounding.
+    assert jnp.array_equal(out, lorentz_residual(x, y, jnp.asarray(0.7, dtype=jnp.float32), c))
+    np.testing.assert_allclose(np.asarray(out), np.asarray(lorentz_residual(x, y, 0.7, c)), rtol=2e-6)
+
+
+def test_lorentz_residual_weakly_typed_weight_is_left_alone():
+    """A weakly typed weight never promotes, so it is not cast: same bits as the Python number.
+
+    Casting it to float32 first would round ``1 + w`` before the term ``-(1 + w)^2 / c`` is formed
+    and move a float32 output by about two rounding steps under x64.
+    """
+    c = 0.7
+    spatial = jax.random.normal(jax.random.PRNGKey(0), (2, 4, 5), dtype=jnp.float32)
+    x, y = spatial_to_hyperboloid(spatial[0], c, c), spatial_to_hyperboloid(spatial[1], c, c)
+    weak = jnp.asarray(0.7)
+    assert weak.weak_type
+    assert jnp.array_equal(lorentz_residual(x, y, weak, c), lorentz_residual(x, y, 0.7, c))
+    # As a jit argument the Python number is traced weakly typed: same bits as the weak array under jit.
+    jitted = jax.jit(lambda w: lorentz_residual(x, y, w, c))
+    assert jitted(0.7).dtype == jnp.float32
+    assert jnp.array_equal(jitted(0.7), jitted(weak))
+
+
 def test_lorentz_residual_weight_shape_validation():
     """A weight array that is neither per-point nor scalar is rejected, not silently broadcast."""
     c = 1.0

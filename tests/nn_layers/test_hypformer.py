@@ -529,6 +529,37 @@ def test_hrc_batchnorm_training_vs_eval():
     assert not jnp.allclose(y_eval, y_train1, atol=1e-6)
 
 
+def test_hrc_batchnorm_float64_keeps_float64_running_statistics():
+    """``param_dtype=float64`` stores the running statistics in float64.
+
+    Regression: ``nnx.BatchNorm`` creates its running mean and variance in float32 whatever
+    ``param_dtype`` says, and NNX casts every update back to that dtype, so a float64 layer stored
+    float32-rounded statistics and normalized with them in eval mode.
+    """
+    bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0), param_dtype=jnp.float64)
+    assert bn.bn.mean[...].dtype == jnp.float64 and bn.bn.var[...].dtype == jnp.float64
+
+    spatial_BD = jax.random.normal(jax.random.PRNGKey(42), (32, 4), dtype=jnp.float64) + 0.3
+    x = jnp.concatenate([jnp.sqrt(1.0 + jnp.sum(spatial_BD**2, axis=-1, keepdims=True)), spatial_BD], axis=-1)
+    y_train = bn(x, c_in=1.0, c_out=1.0, use_running_average=False)
+    assert bn.bn.mean[...].dtype == jnp.float64 and bn.bn.var[...].dtype == jnp.float64
+
+    # One update from the zero init with momentum 0.99: the stored mean is 0.01 * batch mean,
+    # to float64 rounding and not to float32 rounding.
+    expected = 0.01 * jnp.mean(spatial_BD, axis=0)
+    assert jnp.allclose(bn.bn.mean[...], expected, rtol=1e-12, atol=0)
+    assert not jnp.allclose(expected.astype(jnp.float32).astype(jnp.float64), expected, rtol=1e-12, atol=0)  # non-vacuous
+
+    y_eval = bn(x, c_in=1.0, c_out=1.0, use_running_average=True)
+    assert y_train.dtype == jnp.float64 and y_eval.dtype == jnp.float64
+
+    # The float32 default keeps float32 statistics, and so do half-precision parameters: a bfloat16
+    # moving average with momentum 0.99 would stop moving.
+    for low_or_default in (jnp.float32, jnp.bfloat16, jnp.float16):
+        layer = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0), param_dtype=low_or_default)
+        assert layer.bn.mean[...].dtype == jnp.float32 and layer.bn.var[...].dtype == jnp.float32
+
+
 def test_hrc_batchnorm_gradient():
     """Test gradients through HRCBatchNorm."""
     bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))

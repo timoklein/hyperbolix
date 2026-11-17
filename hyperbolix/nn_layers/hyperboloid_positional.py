@@ -175,7 +175,8 @@ def hope_rotate_space(
     Parameters
     ----------
     x_space : Array, shape (..., seq_len, d)
-        Spatial components (``d`` must be even). Any leading axes.
+        Spatial components. ``d`` must be even, because the rotation acts on pairs of
+        coordinates; an odd ``d`` raises ``ValueError``. Any leading axes.
     positions : Array
         Integer position indices, broadcastable against ``x_space.shape[:-1]``
         after the angle axis is appended (``positions[..., None] * theta``):
@@ -206,6 +207,11 @@ def hope_rotate_space(
     He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
     """
     d = x_space.shape[-1]
+    if d % 2 != 0:
+        raise ValueError(
+            f"The rotation acts on pairs of spatial coordinates, so the spatial dimension must be even, got {d} "
+            f"(x_space has shape {x_space.shape}; for hope() this is the ambient dimension minus the time coordinate)."
+        )
     in_dtype = x_space.dtype
     dtype = jnp.promote_types(in_dtype, jnp.float32)  # f32 for bf16/f16, unchanged for f32/f64
     x_SD = x_space.astype(dtype)  # (..., S, D); no-op for f32/f64
@@ -244,7 +250,8 @@ def hope(
     Parameters
     ----------
     z : Array, shape (..., seq_len, d+1)
-        Points on hyperboloid (d must be even).
+        Points on hyperboloid. The spatial dimension ``d`` must be even; an odd ``d`` raises
+        ``ValueError``.
     positions : Array
         Integer position indices, broadcastable against ``z.shape[:-1]``:
         ``(seq_len,)`` for one position sequence shared by all leading axes,
