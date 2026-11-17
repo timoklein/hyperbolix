@@ -80,7 +80,8 @@ class ProductManifold:
 
     Args:
         *factors: Tuples of ``(manifold_instance, dim)``. At least one required.
-        dtype: Target JAX dtype for computations (default: jnp.float32).
+        dtype: Target JAX dtype for computations (default: jnp.float32). Every factor must have
+            been built with this dtype; a mismatch raises ``ValueError``.
 
     Examples:
         >>> product = ProductManifold((Hyperboloid(c=1.0), 5), (Poincare(c=0.1), 3))
@@ -118,6 +119,15 @@ class ProductManifold:
                 raise TypeError(f"Factor {i}: expected ManifoldBase instance, got {type(manifold).__name__}")
             if dim < 1:
                 raise ValueError(f"Factor {i}: dim must be >= 1, got {dim}")
+            # Each factor computes in its own dtype, so a factor of another dtype would make every
+            # method return that dtype instead of the product's.
+            if jnp.dtype(manifold.dtype) != jnp.dtype(dtype):
+                raise ValueError(
+                    f"Factor {i} ({type(manifold).__name__}) has dtype {jnp.dtype(manifold.dtype).name}, but the product "
+                    f"has dtype {jnp.dtype(dtype).name}. Build every factor with the product's dtype, e.g. "
+                    f"{type(manifold).__name__}(dtype=jnp.{jnp.dtype(dtype).name}), or pass "
+                    f"dtype=jnp.{jnp.dtype(manifold.dtype).name} to ProductManifold."
+                )
             manifolds.append(manifold)
             dims.append(dim)
             slices.append(slice(pos, pos + dim))

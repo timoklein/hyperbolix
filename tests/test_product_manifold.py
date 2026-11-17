@@ -179,6 +179,30 @@ class TestConstruction:
         with pytest.raises(TypeError, match="ManifoldBase"):
             ProductManifold(("not_a_manifold", 3))
 
+    @pytest.mark.parametrize(
+        ("factor_dtype", "product_dtype"),
+        [(jnp.float64, jnp.float32), (jnp.float32, jnp.float64)],
+        ids=["f64_in_f32", "f32_in_f64"],
+    )
+    def test_factor_dtype_mismatch_raises(self, factor_dtype, product_dtype):
+        """A factor computes in its own dtype, so a product of another dtype could not return its own.
+
+        Before the check, ``ProductManifold(dtype=float32)`` over float64 factors returned float64
+        from every array-valued method under x64.
+        """
+        with pytest.raises(ValueError, match=r"Factor 1 \(Hyperboloid\) has dtype"):
+            ProductManifold((Poincare(dtype=product_dtype), 2), (Hyperboloid(dtype=factor_dtype), 3), dtype=product_dtype)
+
+    @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64, np.float64, "float64"], ids=["jnp32", "jnp64", "np64", "str"])
+    def test_matching_factor_dtype_in_any_spelling_is_accepted(self, dtype):
+        product = ProductManifold((Poincare(dtype=jnp.dtype(dtype)), 2), (Hyperboloid(dtype=dtype), 3), dtype=dtype)
+        out = product.dist(product.origin((1.0, 1.0)), product.origin((1.0, 1.0)), (1.0, 1.0))
+        assert out.dtype == jnp.dtype(dtype)
+
+    def test_from_signature_builds_factors_at_the_product_dtype(self):
+        product = ProductManifold.from_signature((Hyperboloid, 3, 2, 1.0), (Poincare, 2, 1, 0.1), dtype=jnp.float64)
+        assert all(jnp.dtype(factor.dtype) == jnp.float64 for factor in product.factors)
+
     def test_curvatures_property(self):
         p = ProductManifold(
             (Hyperboloid(c=2.0), 5),
@@ -538,7 +562,9 @@ class TestDistMinIsNotAMetric:
     @pytest.fixture
     def two_factor(self):
         """P2 x P2 with distinct curvatures — split at index 2, both factors easy to construct on."""
-        return ProductManifold((Poincare(dtype=jnp.float64, c=1.0), 2), (Poincare(dtype=jnp.float64, c=0.5), 2))
+        return ProductManifold(
+            (Poincare(dtype=jnp.float64, c=1.0), 2), (Poincare(dtype=jnp.float64, c=0.5), 2), dtype=jnp.float64
+        )
 
     @staticmethod
     def _point(first, second):
