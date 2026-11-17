@@ -1,11 +1,22 @@
 name: CI
 
-on: push
+on:
+  push:
+  # Weekly, and on demand from the Actions tab: the test matrix against the
+  # newest dependency versions pyproject.toml allows instead of the locked ones
+  # (see "Install dependencies" in the test job). A scheduled run uses the
+  # default branch.
+  schedule:
+    - cron: "17 4 * * 1"  # Mondays 04:17 UTC
+  workflow_dispatch:
 
 jobs:
   # Linting job - runs quickly to catch simple errors
   lint:
     name: Lint (Ruff)
+    # Push only: the weekly run is about the runtime dependencies, and a new
+    # ruff release would only add noise there.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -39,6 +50,7 @@ jobs:
   # Type checking job
   typecheck:
     name: Type Check (Pyright)
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -132,8 +144,22 @@ jobs:
       - name: Set up Python
         run: uv python install
 
+      # A push tests the locked versions. The weekly and the manual run ignore
+      # the lockfile and install the newest versions pyproject.toml allows, so
+      # that a new jax, flax or numpy release that breaks the library shows up
+      # here first: the locked run cannot see it (1.5.0 failed 14 tests under
+      # jax 0.12 while this workflow was green). The versions are printed so
+      # that a failure names what it ran against.
       - name: Install dependencies
-        run: uv sync --locked --dev
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            uv sync --locked --dev
+          else
+            uv sync --upgrade --dev
+            uv pip list | grep -iE '^(jax|jaxlib|flax|optax|jaxtyping|numpy|scipy|pytest|pytest-xdist) '
+          fi
 
       - name: Run tests
         # matrix.test-suite may be a space-separated list of multiple paths
