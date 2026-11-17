@@ -34,7 +34,13 @@ pairs at distance 1).
 **Float32 (default)**:
 
 - Sufficient up to scaled radius $a = \sqrt{c}\,d \approx 7$, and up to $a \approx 10$ outside critical operations
-- Much faster on GPU: float64 runs at half rate on A100/H100 and 1/32–1/64 rate on consumer cards
+- Much faster on GPU for large matrix products: on an A100 a 4096 × 4096 matmul runs at 90 to
+  100 TFLOP/s in float32 at the JAX default (TF32), 17 in full float32 (`"highest"`) and 15 in
+  float64. Small stacks of hyperbolic layers (width 256, batch 2,048, forward plus backward) take
+  0.1 to 0.6 ms per step, and there the gap is much smaller: four `HTCLinear` or `FGGLinear` layers
+  cost 5 to 25 % more in float64, and the ratio varies with the stack (two `HTCLinear` layers:
+  about 1.9×, 0.2 ms against 0.1 ms). Consumer cards run float64 at 1/32–1/64 of their float32 rate (vendor
+  specifications)
 - Lower memory footprint (important for large models)
 - ~7 significant decimal digits
 
@@ -113,8 +119,9 @@ hyperboloid, see [The Hyperboloid Origin Chart](#hyperboloid-origin-chart) and t
 
 ### TF32 on Ampere and Hopper GPUs
 
-XLA:GPU runs float32 matmuls in **TF32** by default. Its 10-bit mantissa carries ~1e-3 relative
-error against float32's ~1e-7, so it silently costs three of your seven significant digits.
+XLA:GPU runs float32 matmuls in **TF32** by default. Its 10-bit mantissa has a machine
+epsilon of ~1e-3 against float32's ~1e-7 and leaves about 3e-4 relative error in a product of
+zero-mean matrices, so it silently costs three to four of your seven significant digits.
 
 hyperbolix splits its float32 dot products in two:
 
@@ -144,7 +151,9 @@ with jax.default_matmul_precision("highest"):
 What TF32 costs on one layer was measured on the FGG product before it was pinned: on an A100
 (float32 against a float64 reference), the relative error of `FGGLinear` was **2.6e-4** at TF32
 against **6.8e-8** under `HIGHEST`. `HIGHEST` replaces one TF32 pass with a three-pass float32
-emulation, measured **+5.5 %** on a jitted hyperbolic attention forward.
+emulation, measured **+10 % to +25 %** on a jitted `HyperbolicFullAttention` forward on an A100
+(B = 8, N = 256, 4 heads of 64; the two ends come from two sessions on the same card and code),
+and +1 to +3 % with `centroid_form="gemm"`, inside the run-to-run spread.
 
 **Depth decides whether you need it.** At depth 2 the default and `HIGHEST` train identically; the
 float32 gradient error grows with depth (1.5 % at depth 16 for an `HTCLinear` stack against 2.5e-6
@@ -166,7 +175,7 @@ float64 replay of a trained network changed that: a Procgen PPO agent (BigFish) 
 of 15 `FGGConv2D` and one `FGGLinear` (`c = 0.1`, trained on an A100 under the JAX default), 72
 checkpoints of 2,048 states each. At the JAX default the greedy action changed 120 times, and in
 the runs trained without a cap on the feature radius the actor logits were up to **0.14** off
-float64 (median 2.8e-4 to 1.0e-3). With `jax_default_matmul_precision="highest"`, which in
+float64 (median 2.8e-4 to 1.0e-3 from 32k training steps on, 8.7e-3 at initialisation). With `jax_default_matmul_precision="highest"`, which in
 that network changes only the 16 FGG products, no greedy action changed and the logits were
 within **1.03e-4**. The relative error entered at the first conv stage (4e-4) and stayed near
 1e-3; it did not accumulate with depth. The effect on the return was not measured.
@@ -292,8 +301,10 @@ and gained at most about 2× over the default (nothing in the attention weights 
 The value aggregation has its own form, `lorentz_midpoint(form=...)`, set by `centroid_form` on
 `HyperbolicFullAttention` and `LorentzMLA`. `"variance"` (the default of `lorentz_midpoint` and
 `HyperbolicFullAttention`) is accurate for far-out values but costs `O(N·M·D)` work and compiles
-slowly on an A100: `LorentzMLA` at S = 512 takes 104 s against 9.6 s and did not finish at S = 2048
-in 10 min; `HyperbolicFullAttention` at N = 512 takes 15.9 s against 4.0 s. `"gemm"` (the default of
+slowly on an A100. The forward-plus-backward step of `LorentzMLA` at S = 512 takes about 55 s
+against 9 s (jax 0.9.1) and did not finish at S = 2048 in 10 min; a forward-only jit at S = 512
+takes about 9 min against 3 s. `HyperbolicFullAttention` at N = 512 takes 15 s against 5 s
+(forward only: 12 s against 2 s). `"gemm"` (the default of
 `LorentzMLA`, as in HELM) is one GEMM, but in float32 it loses the centroid once the *values* pass
 `a ≈ 6`, even when the scores are accurate: values at `a ≈ 9` that lie on one geodesic ray
 (measured at `c = 0.5`) put the centroid 11.4 off in geodesic distance, against 6.4e-4 for
@@ -963,7 +974,7 @@ stored points:
 `Klein.dist`'s error does not depend on the separation, and it stays at or below the chart
 floor $\varepsilon\cosh^2(a)$ (last column, explained [below](#klein-chart-ceiling)). `Klein.logmap`'s error is the
 same size. `Klein.dist` forward+backward also runs in about half the
-time of the Eq. 4 spelling on an A100.
+time of the Eq. 4 spelling on an A100 (1e6 pairs; at 2,048 pairs the two do not separate).
 
 ### The Chart Ceiling and Floor {#klein-chart-ceiling}
 

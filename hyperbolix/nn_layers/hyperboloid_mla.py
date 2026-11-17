@@ -150,8 +150,9 @@ class LorentzMLA(nnx.Module):
     intermediate, ``O(S T D)`` work outside the GEMMs and as much memory where XLA
     materializes it (XLA:CPU does in the backward, about 100 GB in float32 at ``B = 8,
     H = 12, S = T = 2048, v_head_dim = 64``). XLA:GPU fuses it away, but that fused kernel
-    took 104 s to compile against 9.6 s for ``"gemm"`` at ``S = 512``, and ptxas had not
-    finished it after 10 min at ``S = 2048`` (``logs/2026-09-30_helm-centroid/``).
+    took about 55 s to compile against 9 s for ``"gemm"`` at ``S = 512`` (forward plus
+    backward, A100, jax 0.9.1; a forward-only jit took about 9 min against 3 s), and ptxas had
+    not finished it after 10 min at ``S = 2048``.
 
     The price of ``"gemm"`` is cancellation in the normalizer, with relative error up to
     ``eps cosh^2(a)`` at value radius ``a`` (float32: 9e-5 at ``a = 4``, 0.27 at ``a = 8``).
