@@ -615,7 +615,10 @@ class HypLinearHyperboloidFHNN(nnx.Module):
 
     Weight Initialization:
         Weights are initialized as tangent vectors at the hyperboloid origin: U(-0.02, 0.02)
-        with the time column (column 0) zeroed. This matches the Chen et al. 2021 init.
+        with the time column (column 0) zeroed. This is the init of ``LorentzLinear`` in the
+        machine-translation code of Chen et al. 2021 (``mt/onmt/modules/hyper_nets.py``); the
+        ``LorentzLinear`` of their graph code uses ``U(-1/sqrt(out), 1/sqrt(out))`` instead,
+        also with the time column zeroed.
 
     Relationship to FHCNN:
         Both FHNN and FHCNN ensure outputs lie on the hyperboloid, but differ in which

@@ -231,8 +231,9 @@ Five places still lose accuracy at large radius:
    finite wrong output remains: with the mean at $a = 44$ the float32 value is still right while
    the ambient gradient is off by a factor of about 45. Past the limit, float32 `expmap_0` gives
    the mean an `inf` time coordinate and the result is NaN. A mean stored with a finite time
-   coordinate, cast from float64 for example, still gives the right value up to $a \approx 86$,
-   but its gradient is wrong by orders of magnitude, and non-finite from $a \approx 86$.
+   coordinate, cast from float64 for example, still gives the right value up to $a \approx 87$
+   (from about 87.2 it is off, by up to 0.3 %, with no error raised), but its gradient is wrong by
+   orders of magnitude, and non-finite from $a \approx 84.5$.
 4. **The MLR score, when the hyperplane itself sits far from the origin.** The reference Lorentz
    MLR assembles an `O(1)` score from parts of size up to `e^(a+|ρ|)/4`, with `ρ` the scaled
    hyperplane offset, so a large bias costs as many digits as a large input radius: near a
@@ -252,9 +253,10 @@ See also [Gyro-Difference and GyroBatchNorm Centering at Large Radius](#gyro-dif
 
 `HyperbolicFullAttention`'s scores are `(2/c + 2⟨Q,K⟩_L)/τ`, and `⟨Q,K⟩_L` is a difference of two
 Minkowski terms each of size `cosh(a_q)·cosh(a_k)/c`. A matrix product returns the Gram matrix only
-to absolute `eps`, so no GEMM spelling avoids the cancellation. The absolute error on one score is
-about `eps·cosh(a_q)·cosh(a_k)/(c·τ)`: in float32 (`c = 1`, `τ = 1`) 4.8e-3 at `a = 6`, 0.26 at
-`a = 8`, and 2.0 at `a = 9`. The default `τ = √out_features` divides the error and the score spread
+to absolute `eps`, so no GEMM spelling avoids the cancellation. The absolute error on one score
+has the size `eps·cosh(a_q)·cosh(a_k)/(c·τ)`: in float32 (`c = 1`, `τ = 1`) 4.8e-3 at `a = 6`, 0.26
+at `a = 8`, and 2.0 at `a = 9`. Measured on 12 tokens in 16 dimensions, the median score is off by
+about half of that and the worst of the 144 scores by about 1 to 4 times it. The default `τ = √out_features` divides the error and the score spread
 alike, so from `a ≈ 8` the error still exceeds the spread softmax is meant to resolve, and the
 weights come out wrong while staying finite.
 
