@@ -71,10 +71,11 @@ For numerical accuracy with large distances or near-boundary points:
 - Consider projection after operations to maintain manifold constraints
 """
 
+import math
+
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
-import jax.scipy.special
 from jaxtyping import Array, Float
 
 from ..utils.math_utils import MIN_NORM, asinh, atanh, cap_at, cosh, floor_at, safe_norm, safe_sqrt, sinh, tanh
@@ -830,6 +831,25 @@ def _compute_mlr_pp_tangent(
 # ---------------------------------------------------------------------------
 
 
+def beta_concat_scale(n: int, n_i: int) -> float:
+    """Tangent-space scale ``B(n/2, 1/2) / B(n_i/2, 1/2)`` of the beta-concatenation.
+
+    ``n`` is the concatenated dimension and ``n_i`` the dimension of one part. Both are static
+    shapes, so the ratio is a Python float computed with :func:`math.lgamma` in double precision:
+    the same value with and without ``jax_enable_x64``, and safe to compute inside a ``jax.jit``
+    trace. ``jax.scipy.special.beta`` computes in JAX's default dtype instead, which put the
+    float32 result up to 1.3e-6 relative (12 to 17 rounding steps, depending on the kernel size)
+    from the true ratio and made it differ between x64 and non-x64 processes. The three ``lgamma``
+    terms cancel a little at large ``n``: the result is within 4e-11 relative of the true ratio up
+    to ``n = 2048 * 49``.
+    """
+
+    def log_beta(a: float, b: float) -> float:
+        return math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+
+    return math.exp(log_beta(n / 2.0, 0.5) - log_beta(n_i / 2.0, 0.5))
+
+
 def _beta_concat(points: Float[Array, "M n_i"], c: ScalarCurvature) -> Float[Array, "n"]:
     """Beta-concatenation of M equal-dimensional Poincaré ball points.
 
@@ -850,13 +870,8 @@ def _beta_concat(points: Float[Array, "M n_i"], c: ScalarCurvature) -> Float[Arr
     M, n_i = points.shape
     n = M * n_i  # concatenated dimension
 
-    # Euler beta function ratio: B(n/2, 1/2) / B(n_i/2, 1/2).
-    # jax.scipy.special.beta returns a strongly-typed float64 scalar under
-    # global jax_enable_x64 (unlike most scalar math, which stays weak-typed),
-    # so without the cast the ratio would promote the computation to float64.
-    beta_n = jax.scipy.special.beta(n / 2.0, 0.5)
-    beta_ni = jax.scipy.special.beta(n_i / 2.0, 0.5)
-    scale = jnp.asarray(beta_n / beta_ni, dtype=points.dtype)
+    # Euler beta function ratio B(n/2, 1/2) / B(n_i/2, 1/2), a Python float from static shapes.
+    scale = jnp.asarray(beta_concat_scale(n, n_i), dtype=points.dtype)
 
     # Map all points to tangent space at origin
     tangent_MD = jax.vmap(_logmap_0, in_axes=(0, None))(points, c)  # (M, n_i)

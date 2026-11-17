@@ -27,7 +27,7 @@ from flax import nnx
 from jax.typing import DTypeLike
 from jaxtyping import Array, Float
 
-from hyperbolix.manifolds.poincare import Poincare
+from hyperbolix.manifolds.poincare import Poincare, beta_concat_scale
 from hyperbolix.utils.precision import MATMUL_PRECISION
 
 from ._helpers import as_pair, validate_poincare_manifold
@@ -150,13 +150,9 @@ class HypConv2DPoincare(nnx.Module):
         kernel_h, kernel_w = self.kernel_size
         K2 = kernel_h * kernel_w
         concat_dim = K2 * in_channels
-        # Evaluated at compile time: inside a jit trace (a model built in a jitted train function)
-        # `beta` would return a tracer and `float()` would raise ConcretizationTypeError. The
-        # arguments are Python numbers, so the value is the eager one, bit for bit.
-        with jax.ensure_compile_time_eval():
-            beta_n = jax.scipy.special.beta(concat_dim / 2.0, 0.5)
-            beta_ni = jax.scipy.special.beta(in_channels / 2.0, 0.5)
-            self.beta_scale = float(beta_n / beta_ni)
+        # A Python float from static shapes: no JAX op, so the layer can be built inside a jit trace
+        # and the value does not depend on `jax_enable_x64`.
+        self.beta_scale = beta_concat_scale(concat_dim, in_channels)
 
         # Trainable parameters — owned directly for flat parameter paths
         # Weight initialization: the reference's 1/2 * eye (HELM's PoincareConvolution2d)

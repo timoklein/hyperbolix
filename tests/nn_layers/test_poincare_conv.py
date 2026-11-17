@@ -12,7 +12,10 @@ import numpy as np
 import pytest
 from flax import nnx
 
+import scipy.special
+
 from hyperbolix.manifolds import Poincare
+from hyperbolix.manifolds.poincare import beta_concat_scale
 from hyperbolix.nn_layers.poincare_conv import HypConv2DPoincare
 
 # ============================================================================
@@ -591,3 +594,27 @@ def test_hypconv_poincare_far_patches_f32(c):
 
     assert _max_rel_err(y32, y64) < 1e-5, _max_rel_err(y32, y64)
     assert _max_rel_err(g32, g64) < 1e-5, _max_rel_err(g32, g64)
+
+
+@pytest.mark.parametrize(("in_channels", "kernel"), [(1, 3), (3, 3), (16, 3), (64, 3), (512, 5), (2048, 7)])
+def test_beta_scale_is_the_double_precision_ratio(in_channels, kernel):
+    """``beta_scale`` is ``B(n/2, 1/2) / B(n_i/2, 1/2)`` computed in double precision, as a Python float.
+
+    On this grid it agrees with SciPy to 1e-10 (the three ``lgamma`` terms cancel a little at large ``n``).
+
+    Regression: ``jax.scipy.special.beta`` computed it in JAX's default dtype, which put the float32
+    value up to 1.3e-6 relative from the true ratio (12 rounding steps at one input channel) and
+    made a layer's scale differ between processes with and without ``jax_enable_x64``.
+    """
+    n, n_i = kernel * kernel * in_channels, in_channels
+    expected = scipy.special.beta(n / 2.0, 0.5) / scipy.special.beta(n_i / 2.0, 0.5)
+    layer = HypConv2DPoincare(Poincare(), in_channels, 4, kernel, rngs=nnx.Rngs(0))
+    assert type(layer.beta_scale) is float
+    assert layer.beta_scale == beta_concat_scale(n, n_i)
+    assert layer.beta_scale == pytest.approx(expected, rel=1e-10, abs=0)
+    # The manifold's beta-concatenation uses the same scale.
+    manifold = Poincare(dtype=jnp.float64)
+    v_MD = jnp.full((kernel * kernel, n_i), 1e-3, dtype=jnp.float64)
+    points_MD = jax.vmap(manifold.expmap_0, in_axes=(0, None))(v_MD, 1.0)
+    out = manifold.logmap_0(manifold.beta_concat(points_MD, 1.0), 1.0)
+    np.testing.assert_allclose(np.asarray(out), expected * 1e-3, rtol=1e-9)
