@@ -2521,9 +2521,10 @@ def test_hyperboloid_expmap_lands_at_the_tangent_norm_in_float32_at_large_radius
 #
 # The arm used to evaluate ``acosh(1 + 2c‖x‖²/(1 - c‖x‖²))/√c``, whose whole radial signal sits in
 # a perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every
-# float32 radius below ``sqrt(10·eps/c)`` ≈ 1.1e-3/√c onto exactly zero, and a second
-# ``arg < 1 + MIN_NORM`` guard zeroed the band below ``sqrt(MIN_NORM/2c)`` ≈ 2.2e-8/√c in *both*
-# dtypes. Measured median relative error against a 60-digit ``decimal`` reference at c = 1, dim 8,
+# float32 radius below ``sqrt(5·eps/c)`` ≈ 7.7e-4/√c onto the constant ``acosh(1 + 10·eps)/√c``
+# ≈ 1.5e-3/√c, and a second ``arg < 1 + MIN_NORM`` guard zeroed the band below
+# ``sqrt(MIN_NORM/2c)`` ≈ 2.2e-8/√c in float64.
+# Measured median relative error against a 60-digit ``decimal`` reference at c = 1, dim 8,
 # before → after: 7.7e4 → 1.4e-8 at r = 1e-8, 7.7e2 → 1.4e-8 at 1e-6, 6.6e-3 → 5.3e-8 at 1e-3
 # (float32); 1.0 → 1.7e-16 at 1e-8, 1.1e-5 → 0 at 1e-6 (float64). The ``jax.grad`` magnitude in the
 # floored band was exactly 0 instead of the analytic 2

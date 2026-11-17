@@ -315,9 +315,10 @@ def _dist_0_metric_tensor(x: Float[Array, "dim"], c: ScalarCurvature) -> Float[A
     ``acosh(√c·x₀)`` route (see ``hyperboloid._dist_0_stable``): the whole radial signal sits in the
     ``2t ≈ 2c‖x‖²`` perturbation of a leading 1, so ``r`` is stored to ``sqrt(eps)`` resolution at
     best, and ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp pinned every float32 radius
-    below ``sqrt(20·eps/(2c)) = sqrt(10·eps/c)`` ≈ 1.1e-3/√c to a constant floor (killing the
-    gradient). The extra ``arg < 1 + MIN_NORM`` guard zeroed a second, smaller band below
-    ``sqrt(MIN_NORM/(2c))`` ≈ 2.2e-8/√c.
+    below ``sqrt(10·eps/(2c)) = sqrt(5·eps/c)`` ≈ 7.7e-4/√c to the constant
+    ``acosh(1 + 10·eps)/√c`` ≈ 1.5e-3/√c (killing the gradient). The extra ``arg < 1 + MIN_NORM``
+    guard zeroed a second, smaller band below ``sqrt(MIN_NORM/(2c))`` ≈ 2.2e-8/√c in float64
+    (in float32 ``1 + MIN_NORM`` rounds to 1, so it never fired).
 
     The half-angle identity ``acosh(1 + 2t) = 2·arcsinh(√t)`` (both sides are ``2θ`` for the ``θ``
     with ``sinh²θ = t``, since ``cosh 2θ = 1 + 2 sinh²θ``) moves the radius out of the perturbed

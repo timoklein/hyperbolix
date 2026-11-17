@@ -197,12 +197,15 @@ and the places that still lose accuracy are listed below.
 
 #### Known Limitations {#hyperboloid-known-limitations}
 
-`expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, `egrad2rgrad`, gyro `addition` and
-`busemann` are also cancellation-free. `is_in_manifold` and `is_in_tangent_space` compare the
+`expmap`, `ptransp`, `tangent_proj`, `tangent_inner`, `egrad2rgrad` and `busemann` are also
+cancellation-free. Gyro `addition` is not when its result lies much closer to the origin than its
+operands: with `x` at scaled radius 8 and `y` at 7.5 on the opposite ray, the float32 result (at
+scaled radius 0.5) is off by 3 to 22 %, depending on the direction, and by about 2e-10 in float64. That case is what `gyro_difference` is
+for (see [Gyro-Difference and GyroBatchNorm Centering at Large Radius](#gyro-difference)). `is_in_manifold` and `is_in_tangent_space` compare the
 stored time slot with the value the spatial part implies, so an on-sheet point passes a fixed
 `atol` far out (see [The `atol` Convention](#the-atol-convention)).
 
-Five places still lose accuracy at large radius:
+Six places still lose accuracy at large radius:
 
 1. **`ptransp`'s direction below the float32 angular resolution.** A transport step shorter than
    the point-representation floor `eps·sinh(a)/√c` is lost in the endpoints' storage rounding, and
@@ -245,6 +248,17 @@ Five places still lose accuracy at large radius:
    scores with $\langle x_s, \omega\rangle \ge 0$ can be up to about 1 off relative to their largest
    entry while the scores stay right (measured on CPU; see
    [Tangent Inputs to the HNN++ and Busemann Layers](#poincare-tangent-input)).
+6. **Float32 gradients of `dist` within about 2 of the coordinate limit (measured on CPU).** The
+   squared time coordinate overflows float32 at $a \approx 45$ for $c = 1$ and at 43.9 for
+   $c = 0.1$. Shortly below that, the gradient of `dist` with respect to the far point goes wrong
+   while the value is still right. At $c = 1$ the reverse-mode gradient is off by a relative 0.2
+   at $a = 44$ to 44.25 in dimension 2 and by 0.6 to 1 at $a = 44$ in dimension 64, where it is
+   already off by 0.5 to 4 % at $a = 43$; the forward-mode derivative is right up to $a = 44.25$
+   and off by 0.7 to 1 at 44.5. At $c = 0.1$ the reverse-mode gradient at $a = 43$ is right in
+   dimension 2 and off by 3 to 8 % in dimension 8 and by 0.3 to 0.5 in dimension 64, and both
+   modes are off by 0.7 to 1 from 43.5. On an A100 the same gradients agree with float64 to 6e-7
+   up to the limit. The A100 keeps float32 subnormals, which XLA's CPU backend flushes to zero, so
+   that flushing is the likely cause.
 
 See also [Gyro-Difference and GyroBatchNorm Centering at Large Radius](#gyro-difference) and
 [ProperVelocity `dist`/`logmap` Through the Exact Lift](#pv-dist-lift) below.
@@ -281,8 +295,9 @@ The value aggregation has its own form, `lorentz_midpoint(form=...)`, set by `ce
 slowly on an A100: `LorentzMLA` at S = 512 takes 104 s against 9.6 s and did not finish at S = 2048
 in 10 min; `HyperbolicFullAttention` at N = 512 takes 15.9 s against 4.0 s. `"gemm"` (the default of
 `LorentzMLA`, as in HELM) is one GEMM, but in float32 it loses the centroid once the *values* pass
-`a ≈ 6`, even when the scores are accurate: values at `a ≈ 9` give 11.4 nats of error against 6.4e-4
-for `"variance"`. bfloat16 activations (`eps` 2^16 times float32's) make both worse.
+`a ≈ 6`, even when the scores are accurate: values at `a ≈ 9` that lie on one geodesic ray
+(measured at `c = 0.5`) put the centroid 11.4 off in geodesic distance, against 6.4e-4 for
+`"variance"`. bfloat16 activations (`eps` 2^16 times float32's) make both worse.
 
 `LorentzMLA(score_precision=...)` sets the precision of its two score einsums only. The default keeps
 them at `HIGHEST`. A lower value (`DEFAULT` is TF32 on Ampere/Hopper) adds its own rounding to the
@@ -390,7 +405,7 @@ unrounded input is 8e-3–1.6e-2 in float32, 2e-3–2.6e-3 with a float64 head o
 and 2e-4 (32 dimensions) or 5e-5 (512) with the time coordinate rebuilt, which is the rounding of
 the spatial coordinates themselves. With float64 inputs as well, the law puts a logit error of 1e-3
 at `a + |ρ| ≈ 30.5`; measured there it was 2e-3–6e-3. A cancellation-free half-angle form was
-measured at 1.8–2.5× the cost and not adopted.
+measured at 1.8–2.5× the cost (forward plus backward, on an H100) and not adopted.
 `FGGLinear`'s spacelike `V` has a related `eps` floor on its column norm, which matters only for a
 small weight column with a large bias.
 
@@ -629,7 +644,16 @@ cannot store the point.
   Jacobians do not: that of `addition` with respect to such an operand is off by a relative
   error that grows with the operand's norm, from about 5e-2 at norm 1e-16 to order 1 just below
   1e-15, and that of `expmap` with respect to a tangent of norm 1e-20 at a base point at scaled
-  radius 8 by 4 to 8 (relative; dimensions 8 and 2).
+  radius 8 by 4 to 8 (relative; dimensions 8 and 2). Second derivatives are wrong at the exact
+  zero as well, where the first derivative is right: the Hessian of `addition` in an operand
+  that is exactly zero is wrong by up to order $c\lVert x\rVert/$`MIN_NORM` (6e14 in one
+  direction where the true entry is $-0.98$, at $\lVert x\rVert = 0.5$, $c = 1$, both dtypes), and
+  `expmap` inherits this at a zero tangent. In float32 the Hessian of `expmap` in a small tangent
+  is unreliable in general: NaN for norms of 1e-15 to 1e-13, wrong by orders of magnitude at
+  1e-10, off by up to order 1 at 1e-6 (0.003 to 1.4, depending on direction and model) and by up
+  to a few 1e-4 at 1e-3 (float64 at norm 1e-10: 2e-6 on the Poincaré ball, 5e-5 for
+  Stereographic). The float32 Hessian of Stereographic `logmap` in its base point is
+  NaN at coincident points.
 - **Transport.** `ptransp` uses the gyration regrouped in $s = x + y$ ($= y - x$ for the transport), where each coefficient is
   $O(1 - c\lVert x\rVert^2)$ on its own; `ptransp(v, x, x)` returns `v` exactly. In
   dimension 1, where the gyration is exactly the identity, `gyration` of two operands on opposite
@@ -646,6 +670,11 @@ gradients of capped points. Some float32 gradients at capped points stay wrong, 
 up to 1.0 (1.3 for Klein `addition`): Poincaré `expmap` with respect to its base point, Poincaré `addition` with respect to
 $y$, Klein `expmap` with respect to its base point, and Klein `addition` on pairs of one capped and
 one free point. The floor is not the cause.
+
+Below the cap, the Jacobian of Poincaré `expmap` with respect to the tangent carries a relative
+error of the order of $\varepsilon\lambda_x$, with $\lambda_x = 2/(1 - c\lVert x\rVert^2)$ the conformal
+factor at the base point: about 1e-4 at scaled radius 8, 1e-3 at 10 and 5e-3 at 12 in float32 (for
+steps whose result stays below the cap), and 5e-8 at 20 and 2e-5 at 26 in float64.
 
 ### Tangent Inputs to the HNN++ and Busemann Layers {#poincare-tangent-input}
 
@@ -991,6 +1020,11 @@ Three cases return `inf`/NaN instead of a finite wrong value:
   the smallest normal number (87.34 in float32, 708.40 in float64), returns an infinite height with
   NaN horizontal coordinates. The gyro operations inherit this limit through $\exp_o$.
 
+The reverse-mode gradient of such a step fails earlier. For an exactly vertical upward step the
+float32 `jax.jacrev` of `expmap_0`, and of `gyro_difference` on a vertical pair, is not finite
+from $\theta \approx 33$ on, while the value is right and float64 is finite (tried up to 80); from
+$\theta \approx 44$ forward mode fails too. A step $10^{-6}$ off the vertical has a finite Jacobian.
+
 ## The `math_utils` Wrappers {#hyperbolic-function-overflow}
 
 The manifolds call the transcendentals in `hyperbolix.utils.math_utils`, not the `jnp` builtins.
@@ -1044,8 +1078,9 @@ $$
 cancels. On the sheet both terms are of size $\lVert s\rVert^2$, the squared spatial radius of the
 inputs, while their difference is only $O(1/c)$, so the float32 relative error grows as
 $\varepsilon_{32}\, c\, \lVert s\rVert^2$ ($\varepsilon_{32} \approx 1.19\times10^{-7}$). At
-$c = 0.1$ it reaches $10^{-3}$ at a spatial radius of about 290, gradients about three times
-sooner, and past $\lVert s\rVert \sim 10^4$ the computed square flips sign.
+$c = 0.1$ it reaches $10^{-3}$ at a spatial radius of about 290, where the gradient's error is about
+three times that of the residual's output, and past $\lVert s\rVert \sim 10^4$ the computed square
+flips sign.
 
 Hyperbolix instead evaluates $\langle h,h\rangle_L$ from exact identities, valid for any weights
 as long as the inputs are on the sheet. For the residual $h = x + w\,y$ with scalar weight $w$:
@@ -1193,7 +1228,9 @@ Two float32 derivatives with respect to `c` are wrong while the values are right
 derivative of `logmap_0`, `expmap_0` and `scalar_mul` at the exact origin is NaN, on the
 hyperboloid and in proper velocity (the first derivative is right). Forward-mode `jax.jacfwd` of
 `Hyperboloid.expmap` is `inf` at `c = 1e-3` for a base point at scaled radius 8 and a tangent of
-scaled length 30, where `jax.jacrev` is right.
+scaled length 30, where `jax.jacrev` is right. On the Poincaré ball the float32 first derivative
+with respect to `c` of the same three origin maps at the exact origin is NaN at `c = 1e-10` (true
+value 0); at `c = 1e-6` and in float64 it is right.
 
 ### ProperVelocity Through the Hyperboloid Lift {#pv-operation-lifts}
 
@@ -1262,8 +1299,9 @@ print(f"Version 2: {d2:.6f}")
 
 The metric-tensor distance is
 $d_0(x) = \frac{1}{\sqrt{c}}\operatorname{acosh}\big(1 + \frac{2c\lVert x\rVert^2}{1 - c\lVert x\rVert^2}\big)$,
-whose whole radial signal is a small perturbation of a leading 1: through `acosh`'s domain floor,
-every float32 radius below $\approx 1.1\times10^{-3}/\sqrt{c}$ would round to a distance of 0, with
+whose whole radial signal is a small perturbation of a leading 1: through `acosh`'s domain floor
+(`1 + 10·eps`), every float32 radius below $\approx 7.7\times10^{-4}/\sqrt{c}$ would read as the same
+distance, $\operatorname{acosh}(1 + 10\,\varepsilon_{32})/\sqrt{c} \approx 1.5\times10^{-3}/\sqrt{c}$, with
 zero gradient. Slot 2 therefore evaluates it with the half-angle identity
 $\operatorname{acosh}(1 + 2t) = 2\operatorname{arcsinh}(\sqrt{t})$,
 

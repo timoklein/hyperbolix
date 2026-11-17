@@ -529,7 +529,12 @@ def lorentz_midpoint(
     points : Array, shape (..., M, A)
         Points on the hyperboloid with curvature ``c``.  ``A = d + 1``.
     weights : Array, shape (..., N, M)
-        Combination weights (e.g. attention weights, uniform ``1/M``).
+        Combination weights (e.g. attention weights, uniform ``1/M``). Keep each row's sum near 1:
+        the centroid itself does not depend on the weights' common scale, but the ``eps`` floor
+        does. Once a row sums to less than ``sqrt(eps)`` (about 3e-4) the floor can bind, and then
+        the midpoint moves toward the origin (for a tight cloud at scaled radius 1: off by about
+        0.03 at a sum of 3e-4 and by 0.6 at 1e-4, in both dtypes). An all-zero row returns the
+        origin.
     c : float
         Curvature parameter (positive).
     eps : float, optional
