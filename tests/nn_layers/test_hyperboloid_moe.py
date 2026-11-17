@@ -136,6 +136,7 @@ def _ref_moe(moe, x, c, score_func="softmax", route_scale=1.0):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 @pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("score_func", ["softmax", "sigmoid"])
 @pytest.mark.parametrize("route_scale", [1.0, 2.5])
@@ -273,6 +274,7 @@ def test_expert_output_on_model_sheet(dtype, c, c_expert):
     assert np.max(_sheet_residual(y, c)) < tol
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 @pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("c,c_expert", [(1.0, 0.1), (0.5, 2.0), (1.0, 1.0)])
 def test_expert_matches_paper_transcription(dtype, c, c_expert):
@@ -374,6 +376,7 @@ def test_moe_output_on_manifold(dtype, c, shape):
     assert np.max(_sheet_residual(out, c)) < tol
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 @pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("score_func", ["softmax", "sigmoid"])
 @pytest.mark.parametrize("num_shared", [0, 1, 2])
@@ -484,6 +487,26 @@ def test_moe_jit_matches_eager(dtype):
     tol = 1e-5 if dtype == jnp.float32 else 1e-12
     np.testing.assert_allclose(np.asarray(out_jit), np.asarray(out), rtol=tol, atol=tol)
     np.testing.assert_array_equal(np.asarray(stats_jit.mask), np.asarray(stats.mask))
+
+
+@pytest.mark.usefixtures("full_float32_matmul")
+@pytest.mark.parametrize("transform", ["jit", "vmap", "scan"])
+@pytest.mark.parametrize("learnable_curvature", [True, False], ids=["learnable_c", "fixed_c"])
+def test_moe_closed_over_in_plain_jax_transforms(transform, learnable_curvature):
+    # Regression: the experts ran under an inner nnx.vmap, which raised "Cannot extract graph node
+    # from different trace level" when the module was closed over inside a plain JAX transform
+    # (an RL rollout scan that captures the network, for example).
+    moe = _make_moe(learnable_curvature=learnable_curvature)
+    _randomize_biases(moe)
+    xs = _make_points(jax.random.key(13), 0.5, shape=(2, SEQ))  # (2, S, A): two "steps"
+    eager = jnp.stack([moe(xs[i], 0.5)[0] for i in range(2)])  # (2, S, A)
+    if transform == "jit":
+        out = jnp.stack([jax.jit(lambda x: moe(x, 0.5)[0])(xs[i]) for i in range(2)])
+    elif transform == "vmap":
+        out = jax.vmap(lambda x: moe(x, 0.5)[0])(xs)
+    else:
+        out = jax.lax.scan(lambda carry, x: (carry, moe(x, 0.5)[0]), 0, xs)[1]
+    np.testing.assert_allclose(np.asarray(out), np.asarray(eager), rtol=1e-5, atol=1e-5)
 
 
 def test_moe_bfloat16_smoke():

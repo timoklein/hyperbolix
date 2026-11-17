@@ -132,6 +132,51 @@ def volume(c: float, n: int, R: float, dtype=None) -> Float[Array, ""]:
     return vol
 
 
+def _log_volume(c: float, n: int, R: float, dtype) -> Float[Array, ""]:
+    """``log(volume(c, n, R))`` computed in log space, so it stays finite where the volume overflows.
+
+    The same 64-point Gauss-Legendre quadrature as :func:`volume`, summed with ``logsumexp`` over
+    ``log(w_q) + (n-1)·log(sinh(√c·r_q))``. In float32 the volume itself passes the float32 maximum
+    at n = 11, R = 10 (log-volume 93.8), and ``log(volume)`` was ``inf`` there. ``log(sinh(x))``
+    is formed as ``x + log(-expm1(-2x)) - log 2``, which neither overflows for large ``x`` nor
+    cancels for small ``x``.
+
+    Args:
+        c: Positive curvature parameter.
+        n: Ambient dimension of the Poincaré ball.
+        R: Geodesic radius of the ball.
+        dtype: Working/output dtype.
+
+    Returns:
+        Scalar log-volume, of dtype ``dtype``.
+    """
+    working_dtype = jnp.dtype(dtype)
+
+    # log ω_{n-1} = log 2 + (n/2)·log π - log Γ(n/2)
+    half_n = jnp.asarray(n / 2.0, dtype=working_dtype)
+    log_omega = (
+        jnp.log(jnp.asarray(2.0, dtype=working_dtype))
+        + half_n * jnp.log(jnp.asarray(jnp.pi, dtype=working_dtype))
+        - jax.lax.lgamma(half_n)
+    )
+
+    c_arr = jnp.asarray(c, dtype=working_dtype)
+    sqrt_c = jnp.sqrt(c_arr)
+    R_arr = jnp.asarray(R, dtype=working_dtype)
+
+    # Map GL nodes from [-1, 1] to [0, R]: r = R/2 · (t + 1). Every node is strictly inside (0, R).
+    nodes_Q = jnp.asarray(_GL_NODES, dtype=working_dtype)
+    weights_Q = jnp.asarray(_GL_WEIGHTS, dtype=working_dtype)
+    x_Q = sqrt_c * (R_arr / 2.0) * (nodes_Q + 1.0)
+    log_sinh_Q = x_Q + jnp.log(-jnp.expm1(-2.0 * x_Q)) - jnp.log(jnp.asarray(2.0, dtype=working_dtype))
+    # n == 1 has no sinh factor. Skipping it (instead of multiplying by zero) keeps a radius-zero
+    # ball at log-volume -inf: there log_sinh_Q is -inf, and 0 * -inf would be NaN.
+    log_integrand_Q = jnp.log(weights_Q) + (n - 1) * log_sinh_Q if n > 1 else jnp.log(weights_Q)
+    log_integral = jnp.log(R_arr / 2.0) + jax.nn.logsumexp(log_integrand_Q)
+
+    return log_omega - (n - 1) / 2.0 * jnp.log(c_arr) + log_integral
+
+
 # ---------------------------------------------------------------------------
 # Direction sampling (Muller method)
 # ---------------------------------------------------------------------------
@@ -423,8 +468,9 @@ def log_prob(
     d_S = d_flat_T.reshape(leading_shape)
 
     # Quadrature at ``x``'s precision: a float64 log-volume would upcast the whole result and
-    # hand a float32 caller a float64 array.
-    log_vol = jnp.log(volume(c, n, R, dtype=x.dtype))
+    # hand a float32 caller a float64 array. In log space, because the volume itself overflows
+    # float32 (n = 11, R = 10) long before its log does.
+    log_vol = _log_volume(c, n, R, dtype=x.dtype)
 
     # -log(vol) inside ball, -inf outside
     inside_S = d_S <= R

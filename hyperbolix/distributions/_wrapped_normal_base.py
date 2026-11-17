@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 
 # Taylor gate for ``log(sinh(x)/x)``: the switch point is set where the two branches' error
@@ -45,7 +46,7 @@ def _taylor_gate_threshold(dtype: jnp.dtype) -> float:
 
 def _log_det_jacobian_from_r(
     r: Float[Array, "..."],
-    c: float,
+    c: ScalarCurvature,
     n: int,
     r_sq: Float[Array, "..."] | None = None,
 ) -> Float[Array, "..."]:

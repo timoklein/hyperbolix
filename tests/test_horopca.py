@@ -329,6 +329,38 @@ def test_fit_jit_cache_reuse():
     assert _fit_jit._cache_size() == size_after_first
 
 
+@pytest.mark.parametrize("c_kind", ["np.float64", "jnp.float64-0d"])
+@pytest.mark.parametrize("model", ["Hyperboloid", "Poincare"])
+def test_float64_curvature_keeps_float32_output(model, c_kind):
+    """A float64 ``c`` with float32 data under x64 gives float32 everywhere, equal to the Python-float call.
+
+    The module functions passed the raw ``c`` to the private hyperboloid ops and returned float64;
+    ``HoroPCA.fit`` lifted the points to float64 and then raised in the Fréchet-mean loop (carry
+    float64 in, float32 out).
+    """
+    c = 0.7
+    c_64 = np.float64(c) if c_kind == "np.float64" else jnp.asarray(c, dtype=jnp.float64)
+    dtype = jnp.float32
+    x_NA = _hyp_points(21, 16, 4, c, sigma=0.5, dtype=dtype)
+    q_KD = _ortho_q(3, 2, 4, dtype)
+    key = jax.random.PRNGKey(0)
+
+    assert horo_projection(x_NA[0], q_KD[:1], c_64).dtype == dtype
+    assert horo_projection(x_NA[0], q_KD, c_64).dtype == dtype
+    assert horopca_loss(q_KD, x_NA, c_64).dtype == dtype
+    q_fit_KD, losses_S = fit_horopca(x_NA, c_64, key, n_components=2, max_steps=3)
+    assert q_fit_KD.dtype == dtype and losses_S.dtype == dtype
+    proj_NA, ball_NK = transform_horopca(x_NA, q_KD, c_64)
+    assert proj_NA.dtype == dtype and ball_NK.dtype == dtype
+
+    cls, from_hyp = INPUT_MODELS[model]
+    data = _in_model(x_NA, from_hyp, c)
+    out_64 = HoroPCA(cls(dtype=dtype), 2, max_steps=5).fit_transform(data, c_64, key)
+    out_py = HoroPCA(cls(dtype=dtype), 2, max_steps=5).fit_transform(data, c, key)
+    assert out_64.dtype == dtype
+    np.testing.assert_allclose(np.asarray(out_64), np.asarray(out_py), rtol=0, atol=1e-6)
+
+
 # --- 17. shapes and output models ------------------------------------------------------
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
 @pytest.mark.parametrize("k", [1, 2])

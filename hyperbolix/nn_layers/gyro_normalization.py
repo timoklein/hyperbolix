@@ -347,7 +347,8 @@ class _GyroRMSNormBase(nnx.Module):
     manifold_module : Manifold
         Hyperboloid or ProperVelocity instance.
     num_features : int
-        Spatial feature dimension ``D`` (only used when ``use_bias=True``).
+        Spatial feature dimension ``D``. The input's last axis must be ``D + 1`` (Hyperboloid)
+        or ``D`` (PV, Poincaré); a different width raises ``ValueError``.
     use_bias : bool
         If True, apply a learned gyro-bias after the radial rescale (default: False,
         matching Euclidean RMSNorm which has a gain but no bias).
@@ -356,6 +357,8 @@ class _GyroRMSNormBase(nnx.Module):
     param_dtype : DTypeLike
         Storage dtype of learnable parameters (default: ``jnp.float32``).
     """
+
+    _time_dims: int = 0
 
     def __init__(
         self,
@@ -393,6 +396,11 @@ class _GyroRMSNormBase(nnx.Module):
             Curvature (positive, default: 1.0).
         """
         orig_shape = x.shape
+        # Without a bias nothing else reads `num_features`, so a wrong width (e.g. a spatial
+        # tensor where an ambient point with a time slot is expected) would pass silently.
+        n_ambient = self.num_features + self._time_dims
+        if orig_shape[-1] != n_ambient:
+            raise ValueError(f"x must have {n_ambient} ambient coordinates on its last axis, got shape {orig_shape}")
         x_NF = x.reshape(-1, orig_shape[-1])
 
         # Per-sample radius normalization: dist_0 -> ~gamma via a single gyro scaling.
@@ -413,6 +421,8 @@ class HyperboloidGyroRMSNorm(_GyroRMSNormBase):
 
     Inputs are ambient ``(..., D+1)`` hyperboloid points; ``num_features = D``.
     """
+
+    _time_dims = 1
 
     def __init__(self, manifold_module: Hyperboloid, num_features: int, **kwargs):
         validate_hyperboloid_manifold(manifold_module, required_methods=_GYRO_RMS_METHODS)

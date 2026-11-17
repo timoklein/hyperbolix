@@ -36,12 +36,14 @@ from hyperbolix.nn_layers._helpers import validate_hyperboloid_manifold
 from hyperbolix.utils.math_utils import (
     MIN_NORM,
     clamp_to,
+)
+from hyperbolix.utils.math_utils import cosh as safe_cosh
+from hyperbolix.utils.math_utils import (
     floor_at,
     safe_hypot,
     safe_hypot_norm,
     safe_norm,
 )
-from hyperbolix.utils.math_utils import cosh as safe_cosh
 from hyperbolix.utils.math_utils import sinh as safe_sinh
 from hyperbolix.utils.precision import MATMUL_PRECISION as MATMUL_PRECISION  # re-export
 
@@ -56,7 +58,7 @@ from hyperbolix.utils.precision import MATMUL_PRECISION as MATMUL_PRECISION  # r
 def build_spacelike_V(
     U_IO: Float[Array, "I O"],
     b_O: Float[Array, "O"],
-    c: float,
+    c: ScalarCurvature,
     eps: float = 1e-7,
 ) -> Float[Array, "Ai O"]:
     """Build spacelike V matrix with Minkowski metric absorbed.
@@ -88,6 +90,9 @@ def build_spacelike_V(
     Klis et al. "Fast and Geometrically Grounded Lorentz Neural Networks" (2026), Eq. 12.
     """
     # Dimension key: I=in_spatial, O=out_spatial, Ai=in_ambient (I+1)
+
+    # The weight's dtype decides: a float64 `c` must not promote a float32 V under x64.
+    c = jnp.asarray(c, dtype=U_IO.dtype)
 
     # Column norms of U: ||w^(i)||_E. `safe_hypot_norm(w, sqrt(eps))` **is** the old
     # `sqrt(sum(w**2) + eps)`, bit for bit, but never materialises the square, so a large-magnitude
@@ -185,11 +190,14 @@ def extract_patches(
             if c is None:
                 raise ValueError('hyp_pad2d: pad_mode="origin" needs an explicit curvature `c`.')
             # Pad with manifold origin: (√(1/c), 0, ..., 0).
-            # Buffer dtype follows x to avoid silent float64 promotion under x64.
+            # Buffer and fill value follow x's dtype: a float64 `c` would otherwise promote under
+            # x64 (and the scatter below warns about the float64 -> float32 cast). `1/c` is cast,
+            # not `c`, so a Python-float `c` gives the same fill value as before, bit for bit.
+            inv_c = jnp.asarray(1.0 / c, dtype=x.dtype)
             padded_h = height + pad_h
             padded_w = width + pad_w
             padded = jnp.zeros((batch, padded_h, padded_w, in_channels), dtype=x.dtype)
-            padded = padded.at[..., 0].set(jnp.sqrt(1.0 / c))
+            padded = padded.at[..., 0].set(jnp.sqrt(inv_c))
             x = padded.at[:, pad_top : pad_top + height, pad_left : pad_left + width, :].set(x)
         else:  # edge
             x = jnp.pad(
@@ -259,7 +267,10 @@ def spatial_to_hyperboloid(
     Array, shape (..., D+1)
         Points on the hyperboloid with curvature ``c_out``.
     """
-    scale = jnp.sqrt(c_in / c_out)
+    # The input's dtype decides: a float64 curvature must not promote a float32 point under x64.
+    # The ratio is cast, not `c_in` and `c_out` one by one, so Python-float curvatures give the same
+    # scale as before, bit for bit (`c_out` is cast below).
+    scale = jnp.sqrt(jnp.asarray(c_in / c_out, dtype=spatial.dtype))
     scaled_D = scale * spatial  # (..., D)
 
     # x0 = sqrt(sum(s**2) + 1/c_out) in ONE reduction over the spatial part. This is the hot path:
@@ -283,7 +294,7 @@ def spatial_to_hyperboloid(
 
 def sinh_lift_to_hyperboloid(
     spatial_BO: Float[Array, "... O"],
-    c: float,
+    c: ScalarCurvature,
     v_max: float,
     eps: float = 1e-7,
 ) -> Float[Array, "... O_plus_1"]:
@@ -329,6 +340,7 @@ def sinh_lift_to_hyperboloid(
     Array, shape (..., O+1)
         Points on the hyperboloid with curvature ``c`` (time coordinate first).
     """
+    c = jnp.asarray(c, dtype=spatial_BO.dtype)  # the input's dtype decides, not a float64 `c`
     sqrt_c = jnp.sqrt(c)
     arg_BO = sqrt_c * spatial_BO
     # Double `where`, both branching on a constant `isfinite` predicate (no measured quantity is
@@ -375,9 +387,12 @@ def _lorentz_sqdist_polar(x_A: Float[Array, "... A"], p_A: Float[Array, "... A"]
     ``√u_p`` separately (their product overflows float32 at ``a + b > 88``), ``√r_x·√r_p`` never
     ``√(r_x·r_p)`` (which squares a spatial radius), the gap between the radii rather than between
     the ``u``'s (Sterbenz-exact when the radii are close), and every norm through ``safe_norm``.
-    The ``MIN_NORM`` floors are the same guards: on the radii they keep ``x̂`` finite at the origin
-    (where ``r = 0`` makes ``q = 0`` regardless of the chord), on ``u`` and ``x₀ + p₀`` they only
-    stop a fully degenerate all-zero "point" from producing ``0/0``.
+    The ``MIN_NORM`` floors are the same guards: on the radii they keep ``x̂`` finite at the origin,
+    on ``u`` and ``x₀ + p₀`` they only stop a fully degenerate all-zero "point" from producing
+    ``0/0``. The radius floor also enters ``q``: at an exact origin ``r_x = 0`` it gives ``x̂ = 0``,
+    so the chord is 1 and ``q = ½·√c·√MIN_NORM·√r_p`` rather than 0, and the result carries an
+    extra ``4q²/c = MIN_NORM·r_p`` (5e-16 at ``r_p = 0.5``), far below the rounding of ``P²``
+    unless both radii are tiny.
 
     On the diagonal (``x_A`` and ``p_A`` the same point — :func:`lorentz_residual` with ``x == y``,
     and every ``m`` of such a pair table) the result is exactly ``0`` with an exactly zero
@@ -400,6 +415,7 @@ def _lorentz_sqdist_polar(x_A: Float[Array, "... A"], p_A: Float[Array, "... A"]
     Returns:
         ``<x - p, x - p>_L``, shape ``broadcast(x_A, p_A)[:-1]``, non-negative on-sheet.
     """
+    c = jnp.asarray(c, dtype=x_A.dtype)  # the input's dtype decides, not a float64 `c`
     sqrt_c = jnp.sqrt(c)
     x_time, p_time = x_A[..., 0], p_A[..., 0]
     x_s_D, p_s_D = x_A[..., 1:], p_A[..., 1:]
@@ -513,7 +529,12 @@ def lorentz_midpoint(
     points : Array, shape (..., M, A)
         Points on the hyperboloid with curvature ``c``.  ``A = d + 1``.
     weights : Array, shape (..., N, M)
-        Combination weights (e.g. attention weights, uniform ``1/M``).
+        Combination weights (e.g. attention weights, uniform ``1/M``). Keep each row's sum near 1:
+        the centroid itself does not depend on the weights' common scale, but the ``eps`` floor
+        does. Once a row sums to less than ``sqrt(eps)`` (about 3e-4) the floor can bind, and then
+        the midpoint moves toward the origin (for a tight cloud at scaled radius 1: off by about
+        0.03 at a sum of 3e-4 and by 0.6 at 1e-4, in both dtypes). An all-zero row returns the
+        origin.
     c : float
         Curvature parameter (positive).
     eps : float, optional
@@ -551,6 +572,7 @@ def lorentz_midpoint(
     """
     if form not in ("variance", "gemm"):
         raise ValueError(f"form must be 'variance' or 'gemm', got {form!r}")
+    c = jnp.asarray(c, dtype=points.dtype)  # the input's dtype decides, not a float64 `c`
     # h = sum_m w_{n,m} * points_m  →  (..., N, A)
     # Pinned HIGHEST: the cancellation-free identity below only holds to O(eps) if its inputs
     # are float32-accurate; at the TF32 default the f32-vs-f64 relative error of this function
@@ -586,7 +608,7 @@ def lorentz_residual(
     x: Float[Array, "... dim_plus_1"],
     y: Float[Array, "... dim_plus_1"],
     w_y: float | Float[Array, "..."],
-    c: float,
+    c: ScalarCurvature,
     eps: float = 1e-7,
 ) -> Float[Array, "... dim_plus_1"]:
     """Lorentzian residual connection (LResNet, He et al. 2025).
@@ -701,8 +723,13 @@ def lorentz_residual(
     Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining V. 1. 2025.
     (Also adopted as the residual connection in HELM, He et al. 2025.)
     """
-    # Per-point weights: (...,) -> (..., 1) so they broadcast over the ambient axis. Scalars (Python
-    # or 0-d) pass through untouched, which keeps the scalar path bit-for-bit unchanged.
+    # The input's dtype decides: a strongly typed weight (a float64 parameter in a float32 network,
+    # a NumPy scalar) is cast to it, or `x + w_y * y` would promote the output. A weakly typed one
+    # (a Python number, also once traced as a jit argument) never promotes and is left alone, which
+    # keeps that path bit-for-bit unchanged.
+    if type(w_y) not in (int, float) and not getattr(w_y, "weak_type", False):
+        w_y = jnp.asarray(w_y, dtype=x.dtype)
+    # Per-point weights: (...,) -> (..., 1) so they broadcast over the ambient axis.
     if jnp.ndim(w_y) > 0:
         w_shape = tuple(jnp.shape(w_y))
         if w_shape == tuple(x.shape[:-1]):
@@ -720,8 +747,13 @@ def lorentz_residual(
     # <x-y, x-y>_L is the polar form 4(P^2 + q^2)/c, not the literal -d_0^2 + ||d_s||^2, which is
     # itself a difference of two O(e^{2a}) squares and keeps no float32 bits for a radial pair
     # past a ~ 8 — the accuracy of the whole normalizer is the accuracy of this one term.
+    # The input's dtype decides, not a float64 `c`. The term `-(1 + w)^2/c` is formed from the
+    # caller's `c` and cast as a whole, so a Python-float `c` and `w_y` give the same value as
+    # before, bit for bit; everything after it uses `c` cast to x's dtype.
+    sheet_1 = jnp.asarray(-((1.0 + w_y) ** 2) / c, dtype=x.dtype)  # () or (..., 1)
+    c = jnp.asarray(c, dtype=x.dtype)
     dd_1 = _lorentz_sqdist_polar(x, y, c)[..., None]  # (..., 1), >= 0 on-sheet
-    mink_1 = -((1.0 + w_y) ** 2) / c - w_y * dd_1  # (..., 1)
+    mink_1 = sheet_1 - w_y * dd_1  # (..., 1)
     # No abs() and no floor: for w >= 0, -c*mink >= (1 + w)^2 >= 1 (see Notes), so both were
     # inactive and this is the same value bit for bit. Where a w < 0 makes ave spacelike,
     # -c*mink < 0 and the sqrt returns NaN, the intended signal.
@@ -788,6 +820,9 @@ def lorentz_scale(
     this complements.
     """
     spatial = m[..., 1:]  # (..., d)
+    # The input's dtype decides: a float64 `gamma` must not promote a float32 point under x64
+    # (`c` is cast by spatial_to_hyperboloid).
+    gamma = jnp.asarray(gamma, dtype=m.dtype)
     # Reuse the scale + time-reconstruction tail; c_in == c_out makes the curvature
     # factor sqrt(c/c) = 1, leaving a pure spatial gamma-scale.
     return spatial_to_hyperboloid(gamma * spatial, c_in=c, c_out=c, eps=eps)
@@ -855,14 +890,15 @@ def hyp_avg_pool2d(
     >>> hyperboloid = Hyperboloid(dtype=jnp.float32)
     >>> key = jax.random.PRNGKey(0)
     >>> v = jax.random.normal(key, (4, 7, 7, 64), dtype=jnp.float32) * 0.1
+    >>> v = v.at[..., 0].set(0.0)  # tangent vectors at the origin
     >>> x = jax.vmap(jax.vmap(jax.vmap(
     ...     hyperboloid.expmap_0, in_axes=(0, None)
     ... ), in_axes=(0, None)), in_axes=(0, None))(v, 1.0)
     >>> x.shape
-    (4, 7, 7, 65)
+    (4, 7, 7, 64)
     >>> y = hyp_avg_pool2d(x, c=1.0)
     >>> y.shape
-    (4, 65)
+    (4, 64)
     """
     # Dimension key: H=height, W=width, D=spatial_dim, A=ambient_dim (D+1)
 

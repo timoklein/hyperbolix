@@ -912,6 +912,7 @@ def test_stereographic_as_product_factor(dtype):
         (Stereographic(dtype=dtype), 3),
         (Stereographic(dtype=dtype), 3),
         (Euclidean(dtype=dtype), 2),
+        dtype=dtype,
     )
     cs = (1.0, -1.0, 0.0)  # per-factor signed curvatures, supplied at call time
     raw_x = jnp.array([0.1, 0.2, -0.05, 0.15, -0.1, 0.2, 1.0, -2.0], dtype=dtype)

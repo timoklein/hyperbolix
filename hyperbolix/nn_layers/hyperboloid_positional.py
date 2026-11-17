@@ -175,7 +175,8 @@ def hope_rotate_space(
     Parameters
     ----------
     x_space : Array, shape (..., seq_len, d)
-        Spatial components (``d`` must be even). Any leading axes.
+        Spatial components. ``d`` must be even, because the rotation acts on pairs of
+        coordinates; an odd ``d`` raises ``ValueError``. Any leading axes.
     positions : Array
         Integer position indices, broadcastable against ``x_space.shape[:-1]``
         after the angle axis is appended (``positions[..., None] * theta``):
@@ -206,6 +207,11 @@ def hope_rotate_space(
     He et al., "HELM: Hyperbolic Large Language Models via Mixture-of-Curvature Experts", 2025 (arXiv:2505.24722).
     """
     d = x_space.shape[-1]
+    if d % 2 != 0:
+        raise ValueError(
+            f"The rotation acts on pairs of spatial coordinates, so the spatial dimension must be even, got {d} "
+            f"(x_space has shape {x_space.shape}; for hope() this is the ambient dimension minus the time coordinate)."
+        )
     in_dtype = x_space.dtype
     dtype = jnp.promote_types(in_dtype, jnp.float32)  # f32 for bf16/f16, unchanged for f32/f64
     x_SD = x_space.astype(dtype)  # (..., S, D); no-op for f32/f64
@@ -244,7 +250,8 @@ def hope(
     Parameters
     ----------
     z : Array, shape (..., seq_len, d+1)
-        Points on hyperboloid (d must be even).
+        Points on hyperboloid. The spatial dimension ``d`` must be even; an odd ``d`` raises
+        ``ValueError``.
     positions : Array
         Integer position indices, broadcastable against ``z.shape[:-1]``:
         ``(seq_len,)`` for one position sequence shared by all leading axes,
@@ -287,9 +294,12 @@ class HyperbolicRoPE(nnx.Module):
     Parameters
     ----------
     dim : int
-        Spatial dimension d (must be even).
+        Spatial dimension d (must be even; an odd ``dim`` raises ``ValueError``). The call
+        raises ``ValueError`` on points whose spatial dimension is not ``dim``.
     max_seq_len : int, optional
-        Maximum sequence length (for documentation; not enforced, default: 2048).
+        Maximum sequence length (default: 2048). Stored only, it has no effect: the
+        rotation angles are computed from ``positions`` on the fly, and positions of any
+        size are accepted.
     base : float, optional
         Frequency base for rotation angles (default: 10000.0).
     eps : float, optional
@@ -307,6 +317,11 @@ class HyperbolicRoPE(nnx.Module):
         base: float = 10000.0,
         eps: float = 1e-7,
     ):
+        if dim < 2 or dim % 2 != 0:
+            raise ValueError(
+                f"HyperbolicRoPE: dim is the spatial dimension and must be even and >= 2 (the rotation "
+                f"acts on adjacent pairs), got {dim}"
+            )
         self.dim = dim
         self.max_seq_len = max_seq_len
         self.base = base
@@ -323,7 +338,8 @@ class HyperbolicRoPE(nnx.Module):
         Parameters
         ----------
         z : Array, shape (..., seq_len, d+1)
-            Points on hyperboloid (spatial dim must equal self.dim, must be even).
+            Points on hyperboloid; the spatial dim ``d`` must equal ``self.dim``, otherwise
+            ``ValueError``.
         positions : Array
             Integer position indices, broadcastable against ``z.shape[:-1]``
             (``(seq_len,)`` or e.g. ``(batch, seq_len)``; see :func:`hope`).
@@ -335,4 +351,9 @@ class HyperbolicRoPE(nnx.Module):
         Array, shape (..., seq_len, d+1)
             Rotated points on hyperboloid.
         """
+        if z.shape[-1] != self.dim + 1:
+            raise ValueError(
+                f"HyperbolicRoPE: z must have dim + 1 = {self.dim + 1} ambient coordinates (spatial dim "
+                f"{self.dim}) on its last axis, got shape {z.shape}"
+            )
         return hope(z, positions, c, self.base, self.eps)

@@ -10,7 +10,7 @@ wrap the assignment in ``nnx.data(...)`` or ``object.__setattr__``; both
 would be no-ops here and only obscure intent.
 """
 
-from hyperbolix.manifolds import Manifold
+from hyperbolix.manifolds import Hyperboloid, Manifold, Poincare, ProperVelocity, Stereographic
 
 
 def as_pair(x: int | tuple[int, int]) -> tuple[int, int]:
@@ -22,17 +22,27 @@ def _validate_manifold_methods(
     manifold_module: Manifold,
     required_methods: tuple[str, ...],
     *,
+    manifold_cls: type | tuple[type, ...],
     manifold_name: str,
     example_instance: str,
 ) -> None:
-    if not all(hasattr(manifold_module, method) for method in required_methods):
-        raise TypeError(f"manifold_module must be a class-based {manifold_name} manifold instance (e.g., {example_instance}).")
+    # The class is checked, not only the method names: the three models share most method names
+    # (`expmap_0`, `logmap_0`, `dist`, ...), so a layer built on another model's instance would
+    # run and compute with the wrong geometry.
+    if not isinstance(manifold_module, manifold_cls) or not all(
+        hasattr(manifold_module, method) for method in required_methods
+    ):
+        raise TypeError(
+            f"manifold_module must be a class-based {manifold_name} manifold instance (e.g., {example_instance}), "
+            f"got {type(manifold_module).__name__}."
+        )
 
 
 def validate_hyperboloid_manifold(manifold_module: Manifold, required_methods: tuple[str, ...]) -> None:
     _validate_manifold_methods(
         manifold_module,
         required_methods,
+        manifold_cls=Hyperboloid,
         manifold_name="Hyperboloid",
         example_instance="hyperbolix.manifolds.Hyperboloid()",
     )
@@ -42,6 +52,9 @@ def validate_poincare_manifold(manifold_module: Manifold, required_methods: tupl
     _validate_manifold_methods(
         manifold_module,
         required_methods,
+        # `Stereographic` is the same gyrovector space as the ball for c > 0 and has the ball's method
+        # names with the ball's meaning, so it stays accepted where it has the required methods.
+        manifold_cls=(Poincare, Stereographic),
         manifold_name="Poincare",
         example_instance="hyperbolix.manifolds.Poincare()",
     )
@@ -51,6 +64,7 @@ def validate_pv_manifold(manifold_module: Manifold, required_methods: tuple[str,
     _validate_manifold_methods(
         manifold_module,
         required_methods,
+        manifold_cls=ProperVelocity,
         manifold_name="ProperVelocity",
         example_instance="hyperbolix.manifolds.ProperVelocity()",
     )

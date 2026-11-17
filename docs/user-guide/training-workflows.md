@@ -78,7 +78,8 @@ for step in range(200):
 Two things worth pointing out:
 
 - **Curvature is passed at call time**, not stored on the layer. That's why
-  the `__call__` signatures take `c_in` / `c_out` (or `c`).
+  the `__call__` signatures take `c_in` / `c_out` (or `c`). When you leave
+  `c_out` out, it defaults to `c_in`.
 - **Inputs are constructed as ambient points** via the constraint projection
   (`x_0 = sqrt(||spatial||^2 + 1/c)`). This is Pattern B from the
   [Manifolds guide](manifolds.md#going-euclidean-manifold) — appropriate for

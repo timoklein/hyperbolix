@@ -5,6 +5,8 @@ every layer in the library lives in ``test_layer_contract.py``; only
 HypConv2DHyperboloid and hcat-specific tests stay here.
 """
 
+import itertools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -309,17 +311,18 @@ def test_log_radius_concat_time_formula(N, n, c, dtype):
 
 
 def test_hypconv_hyperboloid_kernel_init_reset_params():
-    """Default kernel init is U(-0.02, 0.02); reset_params='fan_in' gives
-    std=sqrt(1/hcat_out_ambient_dim)."""
+    """reset_params='uniform' is U(-0.02, 0.02); 'fan_in' gives std=sqrt(1/hcat_out_ambient_dim)
+    and is the default."""
     manifold = Hyperboloid(dtype=jnp.float32)
     in_channels, out_channels, kernel_size = 9, 17, 3
 
-    layer_default = HypConv2DHyperboloid(
+    layer_uniform = HypConv2DHyperboloid(
         manifold_module=manifold,
         in_channels=in_channels,
         out_channels=out_channels,
         kernel_size=kernel_size,
         rngs=nnx.Rngs(42),
+        reset_params="uniform",
     )
     layer_fan_in = HypConv2DHyperboloid(
         manifold_module=manifold,
@@ -329,14 +332,86 @@ def test_hypconv_hyperboloid_kernel_init_reset_params():
         rngs=nnx.Rngs(42),
         reset_params="fan_in",
     )
+    layer_default = HypConv2DHyperboloid(
+        manifold_module=manifold,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        rngs=nnx.Rngs(42),
+    )
 
     bound = 0.02
-    expected_default_std = bound / jnp.sqrt(3.0)  # std of U(-bound, bound)
-    assert abs(float(jnp.std(layer_default.kernel[...])) - float(expected_default_std)) < 0.2 * float(expected_default_std)
+    expected_uniform_std = bound / jnp.sqrt(3.0)  # std of U(-bound, bound)
+    assert abs(float(jnp.std(layer_uniform.kernel[...])) - float(expected_uniform_std)) < 0.2 * float(expected_uniform_std)
 
     hcat_out_ambient_dim = hcat_ambient_dim(in_channels, (kernel_size, kernel_size))
     expected_fan_in_std = float(jnp.sqrt(1.0 / hcat_out_ambient_dim))
     assert abs(float(jnp.std(layer_fan_in.kernel[...])) - expected_fan_in_std) < 0.2 * expected_fan_in_std
+    assert jnp.array_equal(layer_default.kernel[...], layer_fan_in.kernel[...])
+
+
+def test_hypconv_hyperboloid_uniform_and_default_alias_keep_old_kernel():
+    """'uniform' and its alias 'default' reproduce the default kernel of 1.5.0 and earlier bit for bit."""
+    manifold = Hyperboloid(dtype=jnp.float32)
+    in_channels, out_channels, kernel_size = 9, 17, 3
+    # The old default's draw, spelled out: U(-0.02, 0.02) from the first params key of the seed.
+    old_kernel = jax.random.uniform(
+        nnx.Rngs(42).params(),
+        (out_channels, hcat_ambient_dim(in_channels, (kernel_size, kernel_size))),
+        dtype=jnp.float32,
+        minval=-0.02,
+        maxval=0.02,
+    )
+    for name in ("uniform", "default"):
+        layer = HypConv2DHyperboloid(
+            manifold_module=manifold,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            rngs=nnx.Rngs(42),
+            reset_params=name,
+        )
+        assert jnp.array_equal(layer.kernel[...], old_kernel), name
+        assert jnp.array_equal(layer.bias[...], jnp.zeros((1, out_channels), jnp.float32)), name
+
+
+def test_hypconv_hyperboloid_default_stack_preserves_spread():
+    """A depth-4 stack at the default init keeps the spread of its features.
+
+    The old default ``U(-0.02, 0.02)`` (now ``reset_params="uniform"``) is width-independent and
+    shrinks the spread of the output spatial coordinates about 0.13x per layer at 16 channels and a
+    3x3 kernel, so four layers leave ~3e-4 of it: a silently frozen stack. The fan-in default holds
+    each layer within 0.99x to 1.09x. Deterministic: float64, fixed seeds. The ``"uniform"`` stack
+    is the witness that the band discriminates.
+    """
+    dtype = jnp.float64
+    c = 1.0
+    channels, kernel_size, depth = 16, 3, 4
+    manifold = Hyperboloid(dtype=dtype)
+
+    tangent_BHWC = jax.random.normal(jax.random.PRNGKey(0), (4, 8, 8, channels), dtype=dtype) * 0.5
+    tangent_BHWC = tangent_BHWC.at[..., 0].set(0.0)  # tangent at the origin
+    x0_BHWC = jax.vmap(jax.vmap(jax.vmap(lambda t: manifold.expmap_0(t, c))))(tangent_BHWC)
+
+    def spread(x_BHWC):
+        return float(jnp.mean(jnp.std(x_BHWC[..., 1:], axis=(0, 1, 2))))
+
+    def stack_spreads(**kwargs):
+        x_BHWC, spreads = x0_BHWC, [spread(x0_BHWC)]
+        for i in range(depth):
+            layer = HypConv2DHyperboloid(
+                manifold, channels, channels, kernel_size, rngs=nnx.Rngs(i), param_dtype=dtype, **kwargs
+            )
+            x_BHWC = layer(x_BHWC, c)
+            spreads.append(spread(x_BHWC))
+        return spreads
+
+    spreads = stack_spreads()
+    for i, (prev, cur) in enumerate(itertools.pairwise(spreads), start=1):
+        assert 0.5 * prev < cur < 2.0 * prev, f"layer {i} spread gain {cur / prev:.3g} out of band: {spreads}"
+
+    uniform = stack_spreads(reset_params="uniform")
+    assert uniform[-1] < 1e-2 * uniform[0], f"the 'uniform' witness no longer collapses: {uniform}"
 
 
 @pytest.mark.parametrize("c", [0.5, 1.0])

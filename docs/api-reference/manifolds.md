@@ -38,6 +38,16 @@ All manifolds share a common interface defined by the `Manifold` protocol and su
       show_source: true
       heading_level: 3
 
+The two curvature types are exported from `hyperbolix.manifolds`:
+
+::: hyperbolix.manifolds.protocol.ScalarCurvature
+    options:
+      heading_level: 3
+
+::: hyperbolix.manifolds.protocol.Curvature
+    options:
+      heading_level: 3
+
 ## Euclidean
 
 Flat Euclidean space (identity operations).
@@ -563,6 +573,6 @@ x_hyperboloid_recovered = isometry_mappings.poincare_to_hyperboloid(x_poincare, 
 ## Numerical Considerations
 
 !!! warning "Float32 Precision"
-    Each model holds pairwise ops to a fixed scaled radius $\sqrt{c}\,d$ in float32 (Hyperboloid 16.6, Poincaré 12.6, Klein 6.32 at $c = 1$). Past it, use float64 (`jax_enable_x64` plus `dtype=jnp.float64`).
+    The Poincaré and Klein charts hold pairwise ops to a fixed scaled radius $\sqrt{c}\,d$ in float32 (Poincaré 12.6, Klein 6.32 at $c = 1$). The hyperboloid has no fixed radius: its float32 error grows as $\varepsilon\sinh(\sqrt{c}\,d)$ and loses its last digit between about 16.6 and 18. Past these, use float64 (`jax_enable_x64` plus `dtype=jnp.float64`).
 
 See the [Numerical Stability](../user-guide/numerical-stability.md) guide for details.

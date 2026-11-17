@@ -442,7 +442,14 @@ def _old_sinh_lift(spatial_BO, c: float, v_max: float, eps: float = 1e-7):
     library spelling moves again. On a non-finite score this is the bug the pass-through replaced:
     ``clamp_to(-inf, -v_max, v_max)`` is ``-v_max``, and the caller gets a plausible on-sheet point
     back from a row that has already diverged.
+
+    ``c`` is cast to the input's dtype first, as the library does since 1.5.1 (a float64 ``c`` must
+    not promote float32 input). Without the cast the two spellings still agree in value, but under
+    jax 0.12 the gradient of a division by a weakly typed Python scalar rounds differently in the
+    last bit from a division by a float32 array, and the bit-equality below would test that
+    instead of the pass-through.
     """
+    c = jnp.asarray(c, dtype=spatial_BO.dtype)
     sqrt_c = jnp.sqrt(c)
     sinh_arg_BO = clamp_to(sqrt_c * spatial_BO, -v_max, v_max)
     res_rem_BO = safe_sinh(sinh_arg_BO) / sqrt_c
@@ -1022,13 +1029,22 @@ def test_hyperboloid_logmap_matches_the_decimal_oracle(dtype, rtol: float, c: fl
     The input-resolution term is weighted 8x more heavily than for ``dist``: the tangent vector is
     ``d·(cos φ·e_rad + sin φ·e_ang)``, and near a purely radial geodesic ``cos φ ≈ ±1``, so a
     *relative* perturbation of ``sinh(θ/2)`` lands on ``cos φ`` at full size while it reaches ``d``
-    only after division by ``√c·C·d``. Measured worst case: 37% (float64) / 19% (float32) of tol.
+    only after division by ``√c·C·d``.
+
+    The weight is 64, twice the original 32, because the resolution model's angular leg assumes a
+    chord error of ``eps``, while two unit vectors that are each normalized to within one ulp can
+    differ by two ulps per component. Measured on ``c=1 dim=2 a=30 radial(10)`` in float64, where
+    the true chord is 0: with jax 0.12 the eager ``ŷ = y_s/r_y`` rounds one ulp higher than with
+    jax 0.9 (``0.7071067811865477`` against ``…476``), the computed chord becomes ``√2·eps``
+    instead of ``eps/√2``, and the angular leg, quadratic in the chord error, doubles. That case
+    then reaches 38x the resolution (119% of the old bound, 59% of this one); with jax 0.9 it
+    reached 9.5x. Measured worst case with jax 0.9: 37% (float64) / 19% (float32) of the old tol.
     """
     manifold = Hyperboloid(dtype=dtype)
     for case in _hyperboloid_cases(c, dtype):
         u = np.asarray(manifold.logmap(case.y_A, case.x_A, c), dtype=np.float64)
         scale = float(np.max(np.abs(case.u_ref_A)))
-        tol = (rtol + 32.0 * case.resolution / case.d_ref) * scale
+        tol = (rtol + 64.0 * case.resolution / case.d_ref) * scale
         assert np.max(np.abs(u - case.u_ref_A)) <= tol, f"{case.label}: max|u - u_ref| too large"
 
 
@@ -1766,10 +1782,14 @@ def test_hyperboloid_dist_matches_the_oracle_at_tiny_curvature():
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=_HYP_DTYPE_IDS)
 def test_hyperboloid_dist_and_logmap_are_jit_and_vmap_clean(dtype):
-    """Jitted == eager for the new arms, and a vmapped call equals the Python loop.
+    """Jitted == eager for the new arms, and a vmapped call equals the Python loop to one ulp.
 
     ``version_idx`` is static, so the switch must be resolved at trace time; the frame is a
     ``NamedTuple`` (a pytree), which is what keeps it traceable at all.
+
+    The vmapped ``dist`` is compared to one ulp, not bitwise: with jax 0.12 (not 0.9) the batched
+    float64 distance at radius 5 comes out one ulp above the eager one (``7.069482043668053``
+    against ``…052``; no NaN, no sign change), while jit stays bit-identical.
     """
     e1, e2 = _hyperboloid_basis(4)
     manifold = Hyperboloid(dtype=dtype)
@@ -1784,7 +1804,9 @@ def test_hyperboloid_dist_and_logmap_are_jit_and_vmap_clean(dtype):
             np.array([float(jitted(x, y, c, version_idx=version_idx)) for x, y in zip(xs, ys, strict=True)]), eager
         )
         batched = jax.vmap(manifold.dist, in_axes=(0, 0, None, None))(xs, ys, c, version_idx)
-        assert np.array_equal(np.asarray(batched, dtype=np.float64), eager)
+        batched_np = np.asarray(batched)
+        eager_np = eager.astype(batched_np.dtype)
+        assert np.all(np.abs(batched_np - eager_np) <= np.spacing(np.abs(eager_np))), (batched_np, eager_np)
 
     logs_eager = np.stack([np.asarray(manifold.logmap(y, x, c)) for x, y in zip(xs, ys, strict=True)])
     logs_vmap = np.asarray(jax.vmap(manifold.logmap, in_axes=(0, 0, None))(ys, xs, c))
@@ -2499,9 +2521,10 @@ def test_hyperboloid_expmap_lands_at_the_tangent_norm_in_float32_at_large_radius
 #
 # The arm used to evaluate ``acosh(1 + 2c‖x‖²/(1 - c‖x‖²))/√c``, whose whole radial signal sits in
 # a perturbation of a leading 1: ``math_utils.acosh``'s ``1 + 10·eps`` domain clamp flattened every
-# float32 radius below ``sqrt(10·eps/c)`` ≈ 1.1e-3/√c onto exactly zero, and a second
-# ``arg < 1 + MIN_NORM`` guard zeroed the band below ``sqrt(MIN_NORM/2c)`` ≈ 2.2e-8/√c in *both*
-# dtypes. Measured median relative error against a 60-digit ``decimal`` reference at c = 1, dim 8,
+# float32 radius below ``sqrt(5·eps/c)`` ≈ 7.7e-4/√c onto the constant ``acosh(1 + 10·eps)/√c``
+# ≈ 1.5e-3/√c, and a second ``arg < 1 + MIN_NORM`` guard zeroed the band below
+# ``sqrt(MIN_NORM/2c)`` ≈ 2.2e-8/√c in float64.
+# Measured median relative error against a 60-digit ``decimal`` reference at c = 1, dim 8,
 # before → after: 7.7e4 → 1.4e-8 at r = 1e-8, 7.7e2 → 1.4e-8 at 1e-6, 6.6e-3 → 5.3e-8 at 1e-3
 # (float32); 1.0 → 1.7e-16 at 1e-8, 1.1e-5 → 0 at 1e-6 (float64). The ``jax.grad`` magnitude in the
 # floored band was exactly 0 instead of the analytic 2

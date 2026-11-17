@@ -124,7 +124,7 @@ class HyperPPFeatureScaling(nnx.Module):
         # Step 4: Learned rescaling
         if self._atanh_alpha is not None:
             assert self.xi_theta is not None
-            rho_max = self._atanh_alpha / jnp.sqrt(c)  # scalar
+            rho_max = self._atanh_alpha / jnp.sqrt(jnp.asarray(c, dtype=x_BD.dtype))  # scalar
             scale_B1 = rho_max * jax.nn.sigmoid(self.xi_theta(x_BD))  # (B, 1)
             x_BD = scale_B1 * x_BD
 

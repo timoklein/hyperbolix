@@ -32,6 +32,19 @@ def _make_tangent_input(key, shape, dtype):
 
 
 @pytest.fixture
+def full_float32_matmul():
+    """Run the test with ``jax.default_matmul_precision("highest")``.
+
+    On Ampere/Hopper GPUs JAX's default runs float32 matrix products in TF32, about 1e-3 relative.
+    The layers' weight GEMMs follow that default by design, so a test that compares a float32
+    layer against float64, or one traced form against another, to 1e-5 or tighter measures TF32
+    there instead of what it is about. On CPU the setting changes nothing.
+    """
+    with jax.default_matmul_precision("highest"):
+        yield
+
+
+@pytest.fixture
 def make_poincare_points():
     """Factory: ``(key, shape, c, dtype) -> on-ball points of that shape``."""
     return _make_poincare_points

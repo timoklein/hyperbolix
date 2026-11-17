@@ -15,11 +15,17 @@ For per-optimizer signatures, see the
   attention / normalization / regression heads.
 - Learnable curvature (via the `LearnableCurvature` module).
 
-**The single exception**: the legacy Ganea-style Poincaré layers
-(`HypLinearPoincare`, `HypRegressionPoincare`) parameterize their **bias**
-*directly on the Poincaré ball* (the kernel stays Euclidean), so they need
-`riemannian_adam` (or `riemannian_sgd`). You can usually just migrate to the
-`PP` equivalents and stay with `optax.adam`.
+**The exceptions** are the layers that store a parameter *on the manifold*. They
+need `riemannian_adam` (or `riemannian_sgd`):
+
+- The legacy Ganea-style Poincaré layers (`HypLinearPoincare`,
+  `HypRegressionPoincare`) parameterize their **bias** *directly on the Poincaré
+  ball* (the kernel stays Euclidean). You can usually just migrate to the `PP`
+  equivalents and stay with `optax.adam`.
+- `LorentzEmbedding` with its default `parameterization="manifold"` stores its
+  table as points on the hyperboloid. One `optax.adam` step moves the rows off
+  the hyperboloid. `parameterization="spatial"` stores a Euclidean table and
+  works with `optax.adam`.
 
 ## When to Use What
 
@@ -29,6 +35,7 @@ For per-optimizer signatures, see the
 | Learnable curvature (any manifold) | `optax.adam` |
 | Mixed Euclidean / hyperbolic networks | `optax.adam` |
 | Legacy `HypLinearPoincare` / `HypRegressionPoincare` | `riemannian_adam` |
+| `LorentzEmbedding` (default `parameterization="manifold"`) | `riemannian_adam` |
 
 That's the whole decision.
 
@@ -94,7 +101,9 @@ Pass the curvature you call the layer with to the constructor too
 learnable curvature). The optimizer's bias update uses it, not the call-time
 `c`.
 
-No manual tagging step is required for these built-in layers. If you're
+No manual tagging step is required for these built-in layers. The same holds
+for `LorentzEmbedding`: its default table is a `ManifoldParam` on the
+hyperboloid at the `c` given to its constructor. If you're
 writing your **own** manifold-valued parameter instead — e.g. a hyperbolic
 embedding table — that's when you reach for `ManifoldParam` (or the
 `mark_manifold_param` convenience wrapper around an existing `nnx.Param`)

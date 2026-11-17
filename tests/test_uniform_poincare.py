@@ -255,6 +255,42 @@ def test_log_prob_equals_neg_log_volume(dtype, tolerance):
     assert jnp.allclose(lp_jit, lp, atol=atol)
 
 
+@pytest.mark.parametrize(
+    "n, c, R",
+    [(11, 1.0, 10.0), (10, 1.0, 30.0), (3, 1.0, 45.0), (2, 1.0, 1.0), (5, 1.0, 1.5), (3, 1.0, 1e-3)],
+    ids=["overflow-n11-R10", "overflow-n10-R30", "overflow-n3-R45", "n2-R1", "n5-R1.5", "n3-R1e-3"],
+)
+def test_log_prob_float32_tracks_float64_where_the_volume_overflows(n: int, c: float, R: float):
+    """float32 log_prob inside the ball matches float64, also where the volume overflows float32.
+
+    ``log_prob`` used to take ``log(volume(...))``: in float32 the volume passes the float32
+    maximum at n = 11, R = 10 and the log-probability inside the ball came out ``-inf``
+    (expected -93.80). Rows without overflow pin that the log-space form keeps their values.
+    """
+    lp32 = uniform_poincare.log_prob(jnp.zeros(n, dtype=jnp.float32), c=c, R=R)
+    lp64 = uniform_poincare.log_prob(jnp.zeros(n, dtype=jnp.float64), c=c, R=R)
+    assert lp32.dtype == jnp.float32
+    np.testing.assert_allclose(float(lp32), float(lp64), rtol=1e-6)
+    # float64 agrees with -log of the float64 volume (finite there for every row).
+    np.testing.assert_allclose(float(lp64), -float(jnp.log(uniform_poincare.volume(c, n, R, dtype=jnp.float64))), rtol=1e-13)
+
+
+@pytest.mark.parametrize("n", [1, 2, 5])
+def test_log_volume_of_a_radius_zero_ball_is_neg_inf(n: int, dtype):
+    """A ball of radius zero has log-volume ``-inf`` in every dimension, as ``log(volume)`` gave.
+
+    For n = 1 the integrand has no ``sinh`` factor; multiplying its ``-inf`` log by ``n - 1 = 0``
+    would give NaN.
+    """
+    log_vol = uniform_poincare._log_volume(1.0, n, 0.0, dtype)
+    assert log_vol == -jnp.inf, f"expected -inf, got {log_vol}"
+    # R > 0: the log-space form agrees with the log of the volume (for n = 1 that is log(2R)).
+    expected = np.log(2 * 0.7) if n == 1 else float(jnp.log(uniform_poincare.volume(4.0, n, 0.7, dtype=jnp.float64)))
+    # float32: a 64-term logsumexp of float32 logs; 2.4e-6 off on an A100, below 1e-6 on CPU.
+    rtol = 1e-5 if dtype == jnp.float32 else 1e-12
+    np.testing.assert_allclose(float(uniform_poincare._log_volume(4.0, n, 0.7, dtype)), expected, rtol=rtol)
+
+
 def test_log_prob_neg_inf_outside(dtype):
     """log_prob is -inf for points outside the geodesic ball."""
     manifold = Poincare(dtype=dtype)

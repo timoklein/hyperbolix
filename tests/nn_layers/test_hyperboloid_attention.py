@@ -253,6 +253,24 @@ def test_attn_manifold_constraint(cls, c_in, c_attn, c_out):
 
 
 @pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
+def test_attn_unset_curvatures_follow_c_in(cls):
+    # Regression: c_attn and c_out defaulted to 1.0, so a caller passing only c_in=0.1 got attention
+    # and output on the c = 1 sheet without an error.
+    B, N, A_in, D_out, c = 2, 4, 6, 5, 0.1
+    model = _make_attn(cls, A_in, D_out, num_heads=2, rngs=nnx.Rngs(0))
+    x = _make_hyp_points(jax.random.PRNGKey(12), B, N, A_in, c=c)
+    y_only_c_in = model(x, c)
+    y_all = model(x, c_in=c, c_attn=c, c_out=c)
+    np.testing.assert_array_equal(np.asarray(y_only_c_in), np.asarray(y_all))
+    sheet = -(y_only_c_in[..., 0] ** 2) + jnp.sum(y_only_c_in[..., 1:] ** 2, axis=-1)  # <y, y>_L = -1/c
+    np.testing.assert_allclose(np.asarray(sheet), -1.0 / c, rtol=1e-4)
+    # An explicit c_out still places the output on its own sheet.
+    y_c1 = model(x, c, c_out=1.0)
+    sheet_c1 = -(y_c1[..., 0] ** 2) + jnp.sum(y_c1[..., 1:] ** 2, axis=-1)
+    np.testing.assert_allclose(np.asarray(sheet_c1), -1.0, rtol=1e-4)
+
+
+@pytest.mark.parametrize("cls", ATTN_CLASSES, ids=lambda c: c.__name__)
 def test_attn_gradient_finite(cls):
     """Gradient finite for all parameters."""
     B, N, A_in, D_out = 2, 4, 6, 5
@@ -968,7 +986,10 @@ def test_full_attention_score_dtype_float64_island():
 
     B, N, H, D_out, c, radius = 2, 16, 2, 8, 0.5, 9.0
     q32_BNHA, k32_BNHA = _far_cluster_qk(0, B, N, H, D_out, radius, c)
-    q64_BNHA, k64_BNHA = q32_BNHA.astype(jnp.float64), k32_BNHA.astype(jnp.float64)
+    # The float64 run of the same stored values: the float32 spatial parts, with the time coordinate
+    # on the sheet in float64 (the island rebuilds it so; the stored float32 time is off the sheet by
+    # its own rounding, which the cancelling score would carry).
+    q64_BNHA, k64_BNHA = (spatial_to_hyperboloid(p[..., 1:].astype(jnp.float64), c, c) for p in (q32_BNHA, k32_BNHA))
 
     # tau = 1, the temperature the error above is quoted for.
     plain = HyperbolicFullAttention(D_out + 1, D_out, num_heads=H, init_tau=1.0, rngs=nnx.Rngs(0))
@@ -985,6 +1006,146 @@ def test_full_attention_score_dtype_float64_island():
     err_f32 = float(jnp.max(jnp.abs(w_f32_BNHM.astype(jnp.float64) - w_ref_BNHM)))
     assert err_island <= 1e-4, f"float64 island differs from the float64 reference by {err_island:.3e}"
     assert err_f32 > 1e-4, f"float32 default path is already accurate ({err_f32:.3e}) — raise the radius"
+
+
+def _far_cloud_spatial(rng, radius, n, spatial_dim, dtype=np.float32):
+    """Spatial parts ``(n, D)`` at scaled radius ``radius ± 0.3`` around one axis (``c = 1``), float32 by default.
+
+    Angular jitter ``1/sinh(radius)``, so pairwise distances stay O(1) while each Minkowski term of
+    ``<Q,K>_L`` is ``O(cosh(radius)^2)``.
+    """
+    axis_D = rng.standard_normal(spatial_dim)
+    axis_D /= np.linalg.norm(axis_D)
+    offsets_ND = rng.standard_normal((n, spatial_dim)) / np.sinh(radius)
+    offsets_ND -= np.outer(offsets_ND @ axis_D, axis_D)
+    dirs_ND = axis_D[None] + offsets_ND
+    dirs_ND /= np.linalg.norm(dirs_ND, axis=1, keepdims=True)
+    radii_N1 = radius + rng.uniform(-0.3, 0.3, (n, 1))
+    return (np.sinh(radii_N1) * dirs_ND).astype(dtype)  # (n, D)
+
+
+@pytest.mark.usefixtures("full_float32_matmul")
+def test_full_attention_score_dtype_float64_rebuilds_time_coordinate():
+    """Regression: ``score_dtype=jnp.float64`` at scaled radius 8 matches a float64 layer.
+
+    The island used to cast the stored float32 query and key points, time coordinates included.
+    A float32 time coordinate is off the sheet by its own rounding, about ``eps cosh(a)``, which
+    the cancelling ``<Q,K>_L`` turns into a score error of the default path's order (1.06 against
+    1.10 at ``a = 8``). It now rebuilds both time coordinates from the cast spatial parts. The
+    reference is the float64 layer on the same parameters and the same float32-stored spatial
+    coordinates, with every time coordinate rebuilt in float64.
+    """
+    if jnp.zeros((), jnp.float64).dtype != jnp.float64:  # pragma: no cover - conftest enables x64
+        pytest.skip("score_dtype=float64 needs jax_enable_x64")
+
+    N, D, c, radius = 12, 16, 1.0, 8.0
+    eye_AD = jnp.concatenate([jnp.zeros((1, D)), jnp.eye(D)], axis=0).astype(jnp.float32)  # (A, D)
+
+    def make(score_dtype):
+        layer = HyperbolicFullAttention(D + 1, D, init_tau=1.0, score_dtype=score_dtype, rngs=nnx.Rngs(0))
+        for projections in (layer.query_projections, layer.key_projections, layer.value_projections):
+            for projection in projections:
+                projection.kernel[...] = eye_AD  # q = k = v = x
+        return layer
+
+    island, reference = make(jnp.float64), make(None)
+    rng = np.random.default_rng(0)
+
+    # Attention weights, queries and keys drawn separately from one cloud.
+    qk_s_MD = _far_cloud_spatial(rng, radius, 2 * N, D)  # (2N, D)
+    q_s_ND, k_s_ND = qk_s_MD[:N], qk_s_MD[N:]
+
+    def points(s_ND, dtype):
+        return spatial_to_hyperboloid(jnp.asarray(s_ND, dtype), c, c)[None, :, None, :]  # (1, N, 1, A)
+
+    w_island_BNHM = island._attention_weights(points(q_s_ND, jnp.float32), points(k_s_ND, jnp.float32), c)
+    w_ref_BNHM = reference._attention_weights(points(q_s_ND, jnp.float64), points(k_s_ND, jnp.float64), c)
+    assert w_island_BNHM.dtype == jnp.float32
+    err_w = float(jnp.max(jnp.abs(w_island_BNHM.astype(jnp.float64) - w_ref_BNHM)))
+    assert err_w <= 1e-5, f"attention weights differ from the float64 layer by {err_w:.3e}"
+
+    # Layer output (self-attention) and its gradient with respect to the input's spatial part.
+    x_s_ND = _far_cloud_spatial(rng, radius, N, D)
+    r_ND = jnp.asarray(np.random.default_rng(1).standard_normal((N, D)))
+
+    def forward(layer, s_ND):
+        return layer(spatial_to_hyperboloid(s_ND, c, c)[None], c, c, c)[0]  # (N, A)
+
+    def loss(layer, s_ND):
+        return jnp.sum(forward(layer, s_ND)[..., 1:] * r_ND.astype(s_ND.dtype))
+
+    out_island_NA = forward(island, jnp.asarray(x_s_ND))
+    out_ref_NA = forward(reference, jnp.asarray(x_s_ND, jnp.float64))
+    rebuilt_NA = spatial_to_hyperboloid(out_island_NA[..., 1:].astype(jnp.float64), c, c)
+    dist_N = jax.vmap(hyperboloid_f64.dist, in_axes=(0, 0, None))(rebuilt_NA, out_ref_NA, c)
+    assert float(jnp.max(dist_N)) <= 1e-3, f"output lies {float(jnp.max(dist_N)):.3e} from the float64 layer's"
+
+    grad_island_ND = jax.grad(lambda s: loss(island, s))(jnp.asarray(x_s_ND))
+    grad_ref_ND = jax.grad(lambda s: loss(reference, s))(jnp.asarray(x_s_ND, jnp.float64))
+    assert bool(jnp.all(jnp.isfinite(grad_island_ND)))
+    rel_grad = float(jnp.max(jnp.abs(grad_island_ND - grad_ref_ND)) / jnp.max(jnp.abs(grad_ref_ND)))
+    assert rel_grad <= 1e-4, f"input gradient differs from the float64 layer's by {rel_grad:.3e} (relative)"
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_full_attention_score_dtype_float64_tracks_the_unrounded_float64_layer(seed):
+    """The island on float32-stored points against a float64 layer on the *unrounded* points.
+
+    The test above shares its reference's rounding (both start from the float32-stored spatial
+    parts), so it shows the island's arithmetic is the float64 layer's. This one measures what a
+    user gets: at scaled radius 8 the island's attention weights are within 5e-4 of the float64
+    layer fed the unrounded points (measured 3e-5 to 7e-5 over nine draws; the bound leaves room
+    for other draws), where the float32 default is off by more than 1e-2 and the island of 1.5.0,
+    which cast the stored time coordinates, by 0.07 to 0.14.
+    """
+    if jnp.zeros((), jnp.float64).dtype != jnp.float64:  # pragma: no cover - conftest enables x64
+        pytest.skip("score_dtype=float64 needs jax_enable_x64")
+
+    N, D, c, radius = 12, 16, 1.0, 8.0
+    island = HyperbolicFullAttention(D + 1, D, init_tau=1.0, score_dtype=jnp.float64, rngs=nnx.Rngs(0))
+    default = HyperbolicFullAttention(D + 1, D, init_tau=1.0, rngs=nnx.Rngs(0))
+    qk_s_MD = _far_cloud_spatial(np.random.default_rng(seed), radius, 2 * N, D, dtype=np.float64)  # (2N, D), unrounded
+
+    def points(s_ND, dtype):
+        return spatial_to_hyperboloid(jnp.asarray(s_ND, dtype), c, c)[None, :, None, :]  # (1, N, 1, A)
+
+    q32_BNHA, k32_BNHA = points(qk_s_MD[:N], jnp.float32), points(qk_s_MD[N:], jnp.float32)
+    w_true_BNHM = default._attention_weights(points(qk_s_MD[:N], jnp.float64), points(qk_s_MD[N:], jnp.float64), c)
+
+    err_island = float(jnp.max(jnp.abs(island._attention_weights(q32_BNHA, k32_BNHA, c) - w_true_BNHM)))
+    err_default = float(jnp.max(jnp.abs(default._attention_weights(q32_BNHA, k32_BNHA, c) - w_true_BNHM)))
+    assert err_island <= 5e-4, f"island attention weights are {err_island:.3e} from the unrounded float64 layer's"
+    # The default path being clearly wrong on the same points shows the comparison is not vacuous.
+    assert err_default > 1e-2, f"float32 default is already accurate ({err_default:.3e}); raise the radius"
+
+
+@pytest.mark.usefixtures("full_float32_matmul")
+def test_full_attention_score_dtype_float64_with_mixed_curvatures():
+    """The island rebuilds the time coordinates at ``c_attn``, the curvature the scores use.
+
+    With ``c_in != c_attn != c_out`` the float32 layer with the island must still agree with the
+    float64 layer on the same parameters; a rebuild at ``c_in`` would put the queries and keys on
+    the wrong sheet and move the output at the 1e-1 level.
+    """
+    if jnp.zeros((), jnp.float64).dtype != jnp.float64:  # pragma: no cover - conftest enables x64
+        pytest.skip("score_dtype=float64 needs jax_enable_x64")
+
+    N, D, c_in, c_attn, c_out = 6, 8, 0.7, 0.4, 1.3
+    island = HyperbolicFullAttention(D + 1, D, num_heads=2, score_dtype=jnp.float64, rngs=nnx.Rngs(0))
+    default = HyperbolicFullAttention(D + 1, D, num_heads=2, rngs=nnx.Rngs(0))
+    s_ND = np.random.default_rng(0).standard_normal((N, D)).astype(np.float32)
+
+    def forward(layer, dtype, causal):
+        x_BNA = spatial_to_hyperboloid(jnp.asarray(s_ND, dtype), c_in, c_in)[None]  # (1, N, A)
+        return layer(x_BNA, c_in, c_attn, c_out, causal=causal)[0]  # (N, A)
+
+    for causal in (False, True):
+        out_island_NA = forward(island, jnp.float32, causal)
+        out_ref_NA = forward(default, jnp.float64, causal)
+        assert out_island_NA.dtype == jnp.float32
+        np.testing.assert_allclose(np.asarray(out_island_NA), np.asarray(out_ref_NA), rtol=2e-5, atol=2e-5)
+        sheet_N = -(out_island_NA[:, 0] ** 2) + jnp.sum(out_island_NA[:, 1:] ** 2, axis=-1)  # <y, y>_L = -1/c_out
+        np.testing.assert_allclose(np.asarray(sheet_N), -1.0 / c_out, rtol=1e-4)
 
 
 def _polar_points(a_arr, u_arr, c):

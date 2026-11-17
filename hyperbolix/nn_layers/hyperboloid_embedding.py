@@ -167,8 +167,11 @@ class LorentzEmbedding(nnx.Module):
         """Look up token ids.
 
         Args:
-            ids: Integer token ids of any shape ``(...)``. Out-of-range ids give NaN rows
-                (``jnp.take``'s fill mode) rather than a silently clamped valid row.
+            ids: Integer token ids of any shape ``(...)``, with ``V = num_embeddings``. Ids
+                ``>= V`` or ``< -V`` give NaN rows (``jnp.take``'s fill mode) rather than a
+                silently clamped valid row. Ids from ``-V`` to ``-1`` count from the end, like
+                Python indices, and return valid rows: a ``-1`` padding id gets the last token's
+                row without an error.
             c_out: Curvature of the output sheet; ``None`` (default) keeps the table's ``c``. May be
                 a traced value (e.g. from ``LearnableCurvature``).
 

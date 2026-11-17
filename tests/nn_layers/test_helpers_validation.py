@@ -22,9 +22,16 @@ import numpy as np
 import pytest
 from flax import nnx
 
-from hyperbolix.manifolds import Hyperboloid, Poincare
+from hyperbolix.manifolds import Hyperboloid, Poincare, ProperVelocity, Stereographic
 from hyperbolix.manifolds.isometry_mappings import hyperboloid_to_poincare
-from hyperbolix.nn_layers import HypConv2DHyperboloid, HypConv2DPoincare, sinh_lift_to_hyperboloid
+from hyperbolix.nn_layers import (
+    HypConv2DHyperboloid,
+    HypConv2DPoincare,
+    HypLinearPoincare,
+    HypLinearPV,
+    HypRegressionHyperboloid,
+    sinh_lift_to_hyperboloid,
+)
 from hyperbolix.nn_layers._helpers import (
     as_pair,
     validate_hyperboloid_manifold,
@@ -155,6 +162,57 @@ def test_layers_reject_the_wrong_manifold_family():
 
     with pytest.raises(TypeError, match="Hyperboloid"):
         HypConv2DHyperboloid(poincare_f64, 3, 5, 3, rngs=nnx.Rngs(0))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "validator,own,others",
+    [
+        (validate_hyperboloid_manifold, Hyperboloid, (Poincare, ProperVelocity, Stereographic)),
+        (validate_poincare_manifold, Poincare, (Hyperboloid, ProperVelocity)),
+        (validate_pv_manifold, ProperVelocity, (Hyperboloid, Poincare, Stereographic)),
+    ],
+    ids=["hyperboloid", "poincare", "pv"],
+)
+def test_validator_rejects_another_model_that_has_the_required_methods(validator, own, others):
+    """The models share method names, so the class is checked, not only the methods.
+
+    Regression: ``expmap_0`` and ``logmap_0`` exist on every model, and a validator that looked
+    only at method names accepted any of them.
+    """
+    shared = ("expmap_0", "logmap_0")
+    validator(own(), required_methods=shared)
+    for other in others:
+        assert all(hasattr(other(), method) for method in shared)  # non-vacuous: the methods are there
+        with pytest.raises(TypeError, match=f"got {other.__name__}"):
+            validator(other(), required_methods=shared)
+
+
+def test_validator_accepts_a_subclass():
+    class MyPoincare(Poincare):
+        pass
+
+    validate_poincare_manifold(MyPoincare(), required_methods=("expmap_0", "logmap_0"))
+
+
+def test_poincare_layers_keep_accepting_stereographic():
+    """``Stereographic`` is the ball's gyrovector space for ``c > 0``: where it has the methods, it still works."""
+    x_BD = 0.1 * jax.random.normal(jax.random.PRNGKey(0), (3, 4), dtype=jnp.float32)
+    ball = HypLinearPoincare(Poincare(), 4, 4, rngs=nnx.Rngs(0))(x_BD, c=1.0)
+    stereo = HypLinearPoincare(Stereographic(), 4, 4, rngs=nnx.Rngs(0))(x_BD, c=1.0)
+    np.testing.assert_allclose(np.asarray(stereo), np.asarray(ball), rtol=1e-5, atol=1e-6)
+    # A method the ball has and Stereographic lacks still rejects it.
+    with pytest.raises(TypeError, match="Poincare manifold instance"):
+        validate_poincare_manifold(Stereographic(), required_methods=("expmap_0", "compute_mlr_pp"))
+
+
+def test_layers_reject_another_model_that_shares_their_methods():
+    """Layers that need only shared methods used to accept any model and compute with the wrong geometry."""
+    with pytest.raises(TypeError, match=r"Poincare manifold instance.*got Hyperboloid"):
+        HypLinearPoincare(Hyperboloid(), 4, 4, rngs=nnx.Rngs(0))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match=r"ProperVelocity manifold instance.*got Poincare"):
+        HypLinearPV(Poincare(), 4, 4, rngs=nnx.Rngs(0))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match=r"Hyperboloid manifold instance.*got ProperVelocity"):
+        HypRegressionHyperboloid(ProperVelocity(), 5, 3, rngs=nnx.Rngs(0))  # type: ignore[arg-type]
 
 
 # ===================================================================

@@ -30,6 +30,10 @@ def sigma_to_cov(
 
     Raises:
         ValueError: If sigma dimensions don't match expected dimension n
+
+    A stack of covariances ``(..., n, n)`` passes through unchanged. ``log_prob`` broadcasts it
+    against the batch (one covariance per mean); sampling takes one covariance only and rejects
+    a stack in :func:`sample_gaussian`.
     """
     sigma_arr = jnp.asarray(sigma, dtype=dtype)
 
@@ -61,7 +65,17 @@ def sample_gaussian(
 
     Returns:
         Samples from N(0, cov), shape sample_shape + (n,)
+
+    Raises:
+        ValueError: If ``cov`` is a stack of covariances. The dimension is read off its first
+            axis, so a stack would otherwise fail inside ``jax.random.multivariate_normal`` with
+            a message about mismatched shapes.
     """
+    if cov.ndim != 2:
+        raise ValueError(
+            f"sampling takes one covariance (a scalar, a vector of length n or an (n, n) matrix), got a stack of "
+            f"shape {cov.shape}; draw per covariance with jax.vmap, or pass sample_shape for more samples"
+        )
     n = cov.shape[0]
     mean_D = jnp.zeros(n, dtype=dtype or cov.dtype)
     return jax.random.multivariate_normal(key, mean_D, cov, shape=sample_shape, dtype=dtype)

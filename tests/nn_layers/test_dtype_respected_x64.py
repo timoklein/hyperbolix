@@ -10,10 +10,22 @@ float64, ignoring the manifold dtype contract.
 Each test below constructs a float32 manifold + layer, feeds an explicitly
 float32 input, and asserts the output (and any persistent state) stays float32.
 These would fail on the un-cast code paths the boundary casts now guard.
+
+The same leak enters through a float64 *curvature*: a Python-float ``c`` is weak-typed and
+adopts float32, but ``np.float64(c)`` or a float64 ``jnp`` scalar is strong and promoted every
+layer that used ``c`` before casting it. ``test_float64_curvature_keeps_float32`` covers every
+public layer and functional op with both spellings.
+
+Dimension key: B batch  S sequence  H W feature-map height/width  A ambient dim (spatial + 1)
+  D spatial dim  M points averaged  N midpoints  I O in/out dim
 """
+
+import functools
+import warnings
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pytest
 from flax import nnx
@@ -21,27 +33,66 @@ from flax import nnx
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
 from hyperbolix.nn_layers import (
+    FGGConv2D,
     FGGLinear,
     FGGLorentzMLR,
     FGGMeanOnlyBatchNorm,
     HRCBatchNorm,
+    HRCDropout,
+    HRCLayerNorm,
+    HRCRMSNorm,
     HTCLinear,
     HypConv2DHyperboloid,
+    HypConv2DHyperboloidILNN,
+    HypConv2DPoincare,
     HyperbolicFullAttention,
+    HyperbolicLinearAttention,
+    HyperbolicRoPE,
+    HyperbolicSoftmaxAttention,
+    HyperPPFeatureScaling,
+    HypformerPositionalEncoding,
+    HypLinearHyperboloidBusemann,
     HypLinearHyperboloidFHCNN,
     HypLinearHyperboloidFHNN,
+    HypLinearHyperboloidPLFC,
     HypLinearPoincare,
+    HypLinearPoincareBusemann,
     HypLinearPoincarePP,
+    HypRegressionHyperboloidBusemann,
+    HypRegressionPoincare,
+    HypRegressionPoincareBusemann,
     HypVQEmbeddingPoincare,
     LorentzConv2D,
     LorentzEmbedding,
     LorentzMLA,
     LorentzMoE,
     LorentzMoEGate,
+    LorentzResidual,
     LorentzSwiGLU,
     PoincareBatchNorm2D,
+    build_spacelike_V,
+    busemann_fc_poincare_output,
+    extract_patches,
     hope,
     hope_rotate_space,
+    hrc,
+    hrc_gelu,
+    hrc_leaky_relu,
+    hrc_relu,
+    hrc_swish,
+    hrc_tanh,
+    htc,
+    hyp_avg_pool2d,
+    hyp_gelu,
+    hyp_leaky_relu,
+    hyp_relu,
+    hyp_swish,
+    hyp_tanh,
+    lorentz_midpoint,
+    lorentz_residual,
+    lorentz_scale,
+    sinh_lift_to_hyperboloid,
+    spatial_to_hyperboloid,
 )
 from hyperbolix.optim import mark_manifold_param, riemannian_adam, riemannian_sgd
 
@@ -208,6 +259,296 @@ def test_fhnn_linear_respects_float32_after_optimizer_step():
     layer = HypLinearHyperboloidFHNN(manifold, 6, 10, rngs=nnx.Rngs(0))
     _one_adam_step(layer, x, c=1.0)
     assert layer(x, c=1.0).dtype == F32
+
+
+# ---------------------------------------------------------------------------
+# A float64 curvature (np.float64 or a float64 jnp scalar) must not promote a
+# float32 layer. Each case below is fn(c) -> output on float32 inputs and, where
+# the entry point has one, a float32 manifold; it is called once with the
+# Python float C_VAL (the reference) and once with each float64 spelling.
+# ---------------------------------------------------------------------------
+
+C_VAL = 0.7
+C64_SPELLINGS = {
+    "np.float64": np.float64,
+    "jnp_f64": lambda value: jnp.asarray(value, dtype=F64),
+}
+
+
+def _like_c(c, value):
+    """``value`` spelled like ``c`` (Python float, np.float64 or float64 jnp scalar)."""
+    if isinstance(c, jax.Array):
+        return jnp.asarray(value, dtype=c.dtype)
+    if isinstance(c, np.floating):
+        return type(c)(value)
+    return value
+
+
+@functools.cache
+def _h(shape, seed=0):
+    """Float32 hyperboloid points on the C_VAL sheet; ``shape`` ends in the ambient dim A."""
+    ambient = shape[-1]
+    batch = int(np.prod(shape[:-1]))
+    return _hyperboloid_points(jax.random.PRNGKey(100 + seed), batch, ambient, c=C_VAL).reshape(shape)
+
+
+@functools.cache
+def _t(shape, seed=0, scale=0.3):
+    """Float32 Euclidean / tangent draw."""
+    return jax.random.normal(jax.random.PRNGKey(200 + seed), shape, dtype=F32) * scale
+
+
+@functools.cache
+def _p(shape, seed=0):
+    """Float32 Poincaré-ball points at curvature C_VAL."""
+    flat_ND = _t(shape, seed).reshape(-1, shape[-1])
+    return jax.vmap(Poincare(dtype=F32).expmap_0, in_axes=(0, None))(flat_ND, C_VAL).reshape(shape)
+
+
+def _rngs():
+    return nnx.Rngs(0)
+
+
+H32 = Hyperboloid(dtype=F32)
+P32 = Poincare(dtype=F32)
+SEQ_A = 9  # ambient dim of the sequence layers (attention, MLA, MoE, ...)
+
+
+def _core_cases():
+    x_BA, y_BA = _h((4, 6)), _h((4, 6), seed=1)
+    x_BHWA = _h((2, 4, 4, 4), seed=2)
+    x_BMA = _h((2, 5, 6), seed=3)
+    w_BNM = jnp.abs(_t((2, 3, 5), seed=4))
+    U_IO, b_O = _t((5, 7), seed=5), _t((7,), seed=6)
+    s_BD = _t((4, 5), seed=7, scale=1.0)
+    W_AD = _t((6, 5), seed=8)
+    return {
+        "core.build_spacelike_V": lambda c: build_spacelike_V(U_IO, b_O, c),
+        "core.spatial_to_hyperboloid": lambda c: spatial_to_hyperboloid(s_BD, c, c),
+        "core.sinh_lift_to_hyperboloid": lambda c: sinh_lift_to_hyperboloid(s_BD, c, 10.0),
+        "core.lorentz_midpoint[variance]": lambda c: lorentz_midpoint(x_BMA, w_BNM, c),
+        "core.lorentz_midpoint[gemm]": lambda c: lorentz_midpoint(x_BMA, w_BNM, c, form="gemm"),
+        "core.lorentz_residual": lambda c: lorentz_residual(x_BA, y_BA, 0.7, c),
+        # gamma is spelled like c, so the float64 legs also pass a float64 gamma.
+        "core.lorentz_scale": lambda c: lorentz_scale(x_BA, _like_c(c, 1.5), c),
+        "core.hyp_avg_pool2d": lambda c: hyp_avg_pool2d(x_BHWA, c),
+        "core.hrc": lambda c: hrc(x_BA, jax.nn.relu, c, c),
+        "core.htc": lambda c: htc(x_BA, lambda z_BA: z_BA @ W_AD, c, c),
+        # np.float64 c used to raise a JAX FutureWarning here; the test turns it into an error.
+        "core.extract_patches[origin]": lambda c: extract_patches(x_BHWA, (3, 3), (1, 1), "SAME", "origin", c),
+    }
+
+
+def _activation_cases():
+    x_BA = _h((4, 6))
+    cases = {
+        f"act.{f.__name__}": functools.partial(f, x_BA) for f in (hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish, hyp_gelu)
+    }
+    for f in (hrc_relu, hrc_leaky_relu, hrc_tanh, hrc_swish, hrc_gelu):
+        cases[f"act.{f.__name__}"] = functools.partial(lambda f_, c: f_(x_BA, c, c), f)
+    return cases
+
+
+def _hyperboloid_layer_cases():
+    x_BA = _h((4, 6))
+    x_BHWA = _h((2, 4, 4, 4), seed=2)
+    return {
+        "hyp.FHCNN[normalize]": lambda c: HypLinearHyperboloidFHCNN(H32, 6, 8, rngs=_rngs(), normalize=True)(x_BA, c),
+        "hyp.PLFC": lambda c: HypLinearHyperboloidPLFC(H32, 6, 8, rngs=_rngs())(x_BA, c),
+        "hyp.HTCLinear": lambda c: HTCLinear(6, 7, rngs=_rngs())(x_BA, c, c),
+        "hyp.LorentzConv2D": lambda c: LorentzConv2D(H32, 4, 5, 3, rngs=_rngs())(x_BHWA, c),
+        "hyp.HypConv2DHyperboloid": lambda c: HypConv2DHyperboloid(H32, 4, 5, 3, rngs=_rngs())(x_BHWA, c),
+        "hyp.ILNN": lambda c: HypConv2DHyperboloidILNN(H32, 4, 5, 3, rngs=_rngs())(x_BHWA, c),
+        "hyp.FGGLinear": lambda c: FGGLinear(6, 8, rngs=_rngs())(x_BA, c),
+        "hyp.FGGConv2D": lambda c: FGGConv2D(H32, 4, 5, 3, rngs=_rngs())(x_BHWA, c),
+        "hyp.FGGLorentzMLR": lambda c: FGGLorentzMLR(6, 3, rngs=_rngs())(x_BA, c),
+        # Train mode: the same Rngs(0) seed draws the same mask in every leg.
+        "hyp.HRCDropout": lambda c: HRCDropout(0.3, rngs=_rngs())(x_BA, c, c),
+        "hyp.HRCLayerNorm": lambda c: HRCLayerNorm(5, rngs=_rngs())(x_BA, c, c),
+        "hyp.HRCRMSNorm": lambda c: HRCRMSNorm(5, rngs=_rngs())(x_BA, c, c),
+        "hyp.HRCBatchNorm": lambda c: HRCBatchNorm(5, rngs=_rngs())(x_BA, c, c),
+        "hyp.FGGMeanOnlyBatchNorm": lambda c: FGGMeanOnlyBatchNorm(5)(x_BA, c, c),
+    }
+
+
+def _sequence_cases():
+    a = SEQ_A
+    x_BSA, y_BSA = _h((2, 5, a), seed=10), _h((2, 5, a), seed=11)
+    ids_BS = jnp.arange(10).reshape(2, 5)
+    positions_S = jnp.arange(5)
+    return {
+        "seq.HyperbolicFullAttention": lambda c: HyperbolicFullAttention(a, a - 1, num_heads=2, rngs=_rngs())(x_BSA, c, c, c),
+        "seq.HyperbolicLinearAttention": lambda c: HyperbolicLinearAttention(a, a - 1, num_heads=2, rngs=_rngs())(
+            x_BSA, c, c, c
+        ),
+        "seq.HyperbolicSoftmaxAttention": lambda c: HyperbolicSoftmaxAttention(a, a - 1, num_heads=2, rngs=_rngs())(
+            x_BSA, c, c, c
+        ),
+        "seq.LorentzMLA": lambda c: LorentzMLA(a, 2, 4, 3, 5, 4, rngs=_rngs())(x_BSA, c),
+        "seq.LorentzSwiGLU": lambda c: LorentzSwiGLU(a, 6, rngs=_rngs())(x_BSA, 2.0 * c, c),
+        "seq.LorentzResidual": lambda c: LorentzResidual()(x_BSA, y_BSA, c=c),
+        "seq.LorentzResidual[scaled]": lambda c: LorentzResidual(scale=True, init_gamma=3.0, learnable_scale=True)(
+            x_BSA, y_BSA, c=c
+        ),
+        "seq.HypformerPositionalEncoding": lambda c: HypformerPositionalEncoding(a, a - 1, rngs=_rngs())(x_BSA, c),
+        "seq.HyperbolicRoPE": lambda c: HyperbolicRoPE(a - 1)(x_BSA, positions_S, c),
+        "seq.hope": lambda c: hope(x_BSA, positions_S, c),
+        "seq.LorentzMoE": lambda c: LorentzMoE(a, 6, 4, 1, 2, rngs=_rngs())(x_BSA, c)[0],
+        "seq.LorentzEmbedding": lambda c: LorentzEmbedding(16, a, c=c, rngs=_rngs())(ids_BS, c_out=c),
+    }
+
+
+def _poincare_busemann_cases():
+    x5_BI, x6_BI = _p((8, 5)), _p((8, 6), seed=1)
+    x7_BA = _h((8, 7), seed=12)
+    v_BHWC = _t((2, 4, 4, 3), seed=13)
+    x_BHWC = _p((2, 4, 4, 3), seed=13)
+    return {
+        "poincare.HypConv2DPoincare[tangent]": lambda c: HypConv2DPoincare(
+            P32, 3, 4, 2, rngs=_rngs(), input_space="tangent", id_init=False
+        )(v_BHWC, c),
+        "poincare.HypConv2DPoincare[manifold]": lambda c: HypConv2DPoincare(
+            P32, 3, 4, 2, rngs=_rngs(), input_space="manifold", id_init=False
+        )(x_BHWC, c),
+        "poincare.HypRegressionPoincare": lambda c: HypRegressionPoincare(P32, 5, 3, rngs=_rngs())(x5_BI, c),
+        "poincare.HypLinearPoincarePP": lambda c: HypLinearPoincarePP(P32, 5, 3, rngs=_rngs())(x5_BI, c),
+        "busemann.HypLinearPoincareBusemann": lambda c: HypLinearPoincareBusemann(P32, 6, 4, rngs=_rngs(), use_gyro_bias=True)(
+            x6_BI, c
+        ),
+        "busemann.HypLinearHyperboloidBusemann[gyro_bias]": lambda c: HypLinearHyperboloidBusemann(
+            H32, 7, 5, rngs=_rngs(), use_gyro_bias=True
+        )(x7_BA, c),
+        "busemann.HypLinearHyperboloidBusemann": lambda c: HypLinearHyperboloidBusemann(H32, 7, 5, rngs=_rngs())(x7_BA, c),
+        "busemann.HypRegressionPoincareBusemann": lambda c: HypRegressionPoincareBusemann(P32, 6, 4, rngs=_rngs())(x6_BI, c),
+        "busemann.HypRegressionHyperboloidBusemann": lambda c: HypRegressionHyperboloidBusemann(H32, 7, 4, rngs=_rngs())(
+            x7_BA, c
+        ),
+        "busemann.busemann_fc_poincare_output": lambda c: busemann_fc_poincare_output(_t((8, 4), seed=14, scale=2.0), c, 10.0),
+        "hybrid.HyperPPFeatureScaling[alpha]": lambda c: HyperPPFeatureScaling(5, alpha=0.9, rngs=_rngs())(
+            _t((8, 5), seed=15, scale=1.0), c
+        ),
+    }
+
+
+def _c64_cases():
+    return {
+        **_core_cases(),
+        **_activation_cases(),
+        **_hyperboloid_layer_cases(),
+        **_sequence_cases(),
+        **_poincare_busemann_cases(),
+    }
+
+
+C64_CASE_NAMES = (
+    "core.build_spacelike_V",
+    "core.spatial_to_hyperboloid",
+    "core.sinh_lift_to_hyperboloid",
+    "core.lorentz_midpoint[variance]",
+    "core.lorentz_midpoint[gemm]",
+    "core.lorentz_residual",
+    "core.lorentz_scale",
+    "core.hyp_avg_pool2d",
+    "core.hrc",
+    "core.htc",
+    "core.extract_patches[origin]",
+    *(f"act.{f.__name__}" for f in (hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish, hyp_gelu)),
+    *(f"act.{f.__name__}" for f in (hrc_relu, hrc_leaky_relu, hrc_tanh, hrc_swish, hrc_gelu)),
+    "hyp.FHCNN[normalize]",
+    "hyp.PLFC",
+    "hyp.HTCLinear",
+    "hyp.LorentzConv2D",
+    "hyp.HypConv2DHyperboloid",
+    "hyp.ILNN",
+    "hyp.FGGLinear",
+    "hyp.FGGConv2D",
+    "hyp.FGGLorentzMLR",
+    "hyp.HRCDropout",
+    "hyp.HRCLayerNorm",
+    "hyp.HRCRMSNorm",
+    "hyp.HRCBatchNorm",
+    "hyp.FGGMeanOnlyBatchNorm",
+    "seq.HyperbolicFullAttention",
+    "seq.HyperbolicLinearAttention",
+    "seq.HyperbolicSoftmaxAttention",
+    "seq.LorentzMLA",
+    "seq.LorentzSwiGLU",
+    "seq.LorentzResidual",
+    "seq.LorentzResidual[scaled]",
+    "seq.HypformerPositionalEncoding",
+    "seq.HyperbolicRoPE",
+    "seq.hope",
+    "seq.LorentzMoE",
+    "seq.LorentzEmbedding",
+    "poincare.HypConv2DPoincare[tangent]",
+    "poincare.HypConv2DPoincare[manifold]",
+    "poincare.HypRegressionPoincare",
+    "poincare.HypLinearPoincarePP",
+    "busemann.HypLinearPoincareBusemann",
+    "busemann.HypLinearHyperboloidBusemann[gyro_bias]",
+    "busemann.HypLinearHyperboloidBusemann",
+    "busemann.HypRegressionPoincareBusemann",
+    "busemann.HypRegressionHyperboloidBusemann",
+    "busemann.busemann_fc_poincare_output",
+    "hybrid.HyperPPFeatureScaling[alpha]",
+)
+
+
+def test_c64_case_names_match_the_table():
+    # The parametrize ids are spelled out so collection builds no arrays; keep them in sync.
+    assert sorted(C64_CASE_NAMES) == sorted(_c64_cases())
+
+
+def _assert_float32_like(out, ref, what):
+    assert out.dtype == F32, f"{what}: output is {out.dtype}, expected float32"
+    # Both legs compute in float32 from the same float32 inputs (the boundary casts turn every
+    # float64 c into the same float32 value a Python float becomes); measured bit-identical on
+    # CPU, the tolerance leaves a few float32 ulps.
+    np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=1e-6, atol=1e-6, err_msg=what)
+
+
+@pytest.mark.parametrize("spelling", sorted(C64_SPELLINGS))
+@pytest.mark.parametrize("name", C64_CASE_NAMES)
+def test_float64_curvature_keeps_float32(name, spelling):
+    fn = _c64_cases()[name]
+    ref = fn(C_VAL)
+    assert ref.dtype == F32, f"{name}: Python-float c already gives {ref.dtype}"
+    with warnings.catch_warnings():
+        # extract_patches(pad_mode="origin") built its padding value from c with a FutureWarning.
+        warnings.simplefilter("error", FutureWarning)
+        out = fn(C64_SPELLINGS[spelling](C_VAL))
+    _assert_float32_like(out, ref, f"{name} with c as {spelling}")
+
+
+# Layers with a manifold whose input is a manifold point: a float64 input array (what
+# jnp.asarray(numpy_array) gives under x64) must still compute in the manifold's float32.
+# busemann_fc_poincare_output and HyperPPFeatureScaling have no manifold, so their output
+# legitimately follows a float64 input and they are not listed.
+FLOAT64_INPUT_CASES = {
+    "HypRegressionPoincareBusemann": lambda: (HypRegressionPoincareBusemann(P32, 6, 4, rngs=_rngs()), _p((8, 6), seed=1)),
+    "HypRegressionHyperboloidBusemann": lambda: (
+        HypRegressionHyperboloidBusemann(H32, 7, 4, rngs=_rngs()),
+        _h((8, 7), seed=12),
+    ),
+    "HypLinearHyperboloidBusemann": lambda: (HypLinearHyperboloidBusemann(H32, 7, 5, rngs=_rngs()), _h((8, 7), seed=12)),
+    "HypLinearHyperboloidBusemann[gyro_bias]": lambda: (
+        HypLinearHyperboloidBusemann(H32, 7, 5, rngs=_rngs(), use_gyro_bias=True),
+        _h((8, 7), seed=12),
+    ),
+    "HypLinearPoincareBusemann": lambda: (HypLinearPoincareBusemann(P32, 6, 4, rngs=_rngs()), _p((8, 6), seed=1)),
+    "HypLinearPoincareBusemann[gyro_bias]": lambda: (
+        HypLinearPoincareBusemann(P32, 6, 4, rngs=_rngs(), use_gyro_bias=True),
+        _p((8, 6), seed=1),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(FLOAT64_INPUT_CASES))
+def test_float64_input_on_float32_manifold_keeps_float32(name):
+    layer, x_BI = FLOAT64_INPUT_CASES[name]()
+    ref = layer(x_BI, C_VAL)
+    out = layer(x_BI.astype(F64), C_VAL)
+    _assert_float32_like(out, ref, f"{name} with a float64 input")
 
 
 # ---------------------------------------------------------------------------

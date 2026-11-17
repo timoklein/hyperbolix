@@ -2224,3 +2224,39 @@ def test_halfspace_expmap_logmap_ptransp_match_the_hyperboloid_through_the_jvp_p
     _, pt0_hs_pushed = push(ys, pt0_hs)
     pt0_h = jax.vmap(lambda v, y: hyperboloid.ptransp_0(v, y, c))(v0_BA, y_BA)
     assert jnp.allclose(pt0_hs_pushed, pt0_h, atol=atol, rtol=rtol), "dψ(HalfSpace.ptransp_0) != Hyperboloid.ptransp_0"
+
+
+# ---------------------------------------------------------------------------
+# Output dtype follows the point, whatever the dtype of ``c``
+# ---------------------------------------------------------------------------
+
+_ISO_MAPS = sorted(name for name in dir(iso) if "_to_" in name and not name.startswith("_"))
+
+
+def _float32_point_in(model: str, c: float) -> jnp.ndarray:
+    """A float32 point of ``model`` at curvature ``c``, away from the origin."""
+    spatial_D = np.array([0.3, -0.2, 0.25]) / np.sqrt(c)
+    if model == "hyperboloid":
+        point = np.concatenate([[np.sqrt(1.0 / c + spatial_D @ spatial_D)], spatial_D])
+    elif model == "halfspace":
+        point = np.array([0.3, -0.2, 1.3]) / np.sqrt(c)
+    else:  # poincare, klein, pv
+        point = spatial_D
+    return jnp.asarray(point, dtype=jnp.float32)
+
+
+@pytest.mark.parametrize("c_kind", ["np.float64", "jnp.float64-0d"])
+@pytest.mark.parametrize("name", _ISO_MAPS)
+def test_float64_c_keeps_float32_output(name: str, c_kind: str):
+    """A float64 ``c`` under x64 must not promote a float32 point's image to float64.
+
+    ``hyperboloid_to_poincare``, ``poincare_to_hyperboloid`` and ``poincare_to_pv`` used ``c`` raw
+    and returned float64; the other maps already cast ``c`` to the point's dtype.
+    """
+    c = 0.5
+    c_64 = np.float64(c) if c_kind == "np.float64" else jnp.asarray(c, dtype=jnp.float64)
+    fn = getattr(iso, name)
+    x = _float32_point_in(name.split("_to_")[0], c)
+    out = fn(x, c_64)
+    assert out.dtype == jnp.float32, f"{name}: {out.dtype}"
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(fn(x, c)))

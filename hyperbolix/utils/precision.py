@@ -44,9 +44,9 @@ The remaining layer weight GEMMs — ``HTCLinear`` (including the attention Q/K/
 the FHCNN and FHNN linears, ``HypLinearPoincare``, ``LorentzConv2D``'s Euclidean convolution,
 ``HypVQMLRPoincare``'s implicit-codebook matmul and ``hybrid_regularization``'s ``nnx.Linear``
 — carry no ``precision`` keyword. These are sites where ``HIGHEST`` actually costs
-throughput (it replaces one TF32 pass with a three-pass float32 emulation; measured +5.5 % on a
-jitted hyperbolic attention forward), and whether to pay that is the user's call, not the
-library's.
+throughput (it replaces one TF32 pass with a three-pass float32 emulation; measured +10 % to
++25 % on a jitted ``HyperbolicFullAttention`` forward on an A100, the two ends from two sessions
+on the same card), and whether to pay that is the user's call, not the library's.
 
 To run **everything** in full float32, set JAX's own knob — one line, and jit-cache aware, so
 changing it re-traces::
@@ -137,7 +137,8 @@ and one ``FGGLinear``, ``c = 0.1``, trained on an A100 under the JAX default. 72
 times over the 72 checkpoints. In the runs trained without a cap on the feature radius, the
 relative gap of the head input to float64 is 6e-4 to 7.5e-3 (maxima over the replayed states)
 and the actor logits are up to 0.14 off (the largest of the 6 144 states of one checkpoint age,
-three seeds; the median is 2.8e-4 to 1.0e-3). With ``"highest"`` no greedy action changes, the
+three seeds; the median is 2.8e-4 to 1.0e-3 from 32k training steps on and 8.7e-3 at
+initialisation). With ``"highest"`` no greedy action changes, the
 head input is within about 5e-6 and the actor logits within 1.03e-4, and the forward gaps of
 those runs drop by a factor of 740 to
 2 570. The 16 FGG products are the only products in that network that the setting changes, and

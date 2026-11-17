@@ -40,7 +40,7 @@ tables below collapse this into per-task decisions.
 
 | Layer | Manifold | When to pick |
 |---|---|---|
-| `HTCLinear` | Hyperboloid | **Default** for hyperboloid FC — simple, robust, just works. Also supports cross-curvature (`c_in != c_out`) for Hypformer blocks |
+| `HTCLinear` | Hyperboloid | **Default** for hyperboloid FC — simple, robust, just works. Also supports cross-curvature (`c_in != c_out`) for Hypformer blocks; `c_out` defaults to `c_in` |
 | `FGGLinear` | Hyperboloid | Advanced — ~3× faster than the FHNN layer in Klis et al., but init-sensitive. Defaults to the norm-preserving `fan_out` init (`init_bias=0.0`), which suits unnormalized stacks feeding a bounded projection; pass `reset_params="eye", init_bias=0.5` for the reference (BatchNorm-regime) init. Use once you have a working HTC baseline |
 | `HypLinearHyperboloidPLFC` | Hyperboloid | Deep hyperboloid networks — point-to-hyperplane Lorentz FC (PLFC, Shi et al. 2026), the Lorentz analog of the HNN++ formulation. Optional intrinsic gyro-bias via `use_gyro_bias=True` |
 | `HypLinearPoincarePP` | Poincaré | **Default** for Poincaré FC — Euclidean-parameterized weights, works with `optax.adam` |
@@ -123,8 +123,11 @@ optimizer choice:
 | **Ganea (legacy)** | Bias on Poincaré, kernel Euclidean | `riemannian_adam` | `HypLinearPoincare`, `HypRegressionPoincare` | Legacy — prefer `PP` |
 
 **Bottom line:** every layer keeps its kernel Euclidean, so plain `optax.adam`
-works for all of them except the legacy Ganea layers' manifold-valued bias;
-prefer their `PP` equivalents, or see the [Riemannian Optimizers guide](optimizers.md).
+works for all of them except two cases. The legacy Ganea layers have a
+manifold-valued bias; prefer their `PP` equivalents. `LorentzEmbedding` with its
+default `parameterization="manifold"` stores its table on the hyperboloid; train
+it with `riemannian_adam` or pass `parameterization="spatial"`. See the
+[Riemannian Optimizers guide](optimizers.md).
 
 ## Channel Conventions
 
@@ -158,9 +161,11 @@ hyperbolic-aware default — keep it unless you have a reason to change it.
 | `FGGLinear` / `FGGConv2D` | `fan_out`, `std=sqrt(1/out_spatial)`, bias `0.0`, `gain=1.0` | Norm-preserving (`‖z‖ ≈ gain·‖x_spatial‖`) so deep *unnormalized* stacks don't saturate a bounded projection — a deliberate deviation from the Klis et al. BatchNorm-regime reference. Restore the reference with `reset_params="eye"`/`"lorentz_kaiming"` + `init_bias=0.5` |
 | `FGGLinear` / `FGGConv2D` with `use_weight_norm=True` | Column norm `softplus(kernel_scale)`, `kernel_scale = sqrt(1/(in+out))` (about 0.7) | `gain` and the `fan_out` scale are normalized away; each output column's norm is `softplus(kernel_scale)`. `init_kernel_scale=s` sets the column norm to `s` at init |
 | `HypConv2DHyperboloidILNN` | Fan-out normal `std=sqrt(1/out_spatial)` (`kernel_init_std=None`) | Norm-preserving: the PLFC chain linearizes to `y_spatial ≈ W @ u_spatial` near the origin, and the fixed LogCat hands over the per-pixel spatial radius, so this holds gain ≈ 1. `kernel_init_std=0.02` restores the Shi et al. 2026 regime bit-for-bit |
+| `HypConv2DHyperboloid` | Fan-in normal `std=sqrt(1/((C-1)·k² + 1))`, bias `0` (`reset_params="fan_in"`); `(C-1)·k² + 1` is the ambient dimension of the HCat output for `C` input channels and kernel size `k` | Keeps the spread of the spatial coordinates: it changes by a factor of 0.98 to 1.09 per layer, while the mean distance from the origin grows by 1.04 to 1.22 per layer (16 channels, 3×3 kernels, `c = 1`). `reset_params="uniform"` restores the previous default `U(-0.02, 0.02)`, which shrank the spread by a factor of 0.13 to 0.14 per layer. The Bdeir et al. 2023 reference conv instead draws kernel and bias from `U(-s, s)` with `s = sqrt(2/((C-1)·k²))` |
 | `HypLinearHyperboloidPLFC` | Small normal `std=0.02`, gyro-bias zeros (Shi et al. 2026 PLFC reference init) | `kernel_init_std=1.0` recovers the old HNN++-style init (Shimizu et al. 2020) |
 | `HypLinearPoincare` / `HypLinearPoincarePP` | Fan-in normal `std=1/sqrt(in_dim)` | Keeps row norms small so outputs stay away from the boundary |
 | `HypRegressionPoincare` / `HypRegressionPoincarePP` | Scaled normal `std=(2·in·out)^{-0.5}` (van Spengler 2023) | Sibling-scaled: an unscaled `N(0,1)` kernel gives row norms ≈ `sqrt(in_dim)`, which overwhelms the MLR output scaling |
+| `HypRegressionHyperboloid` | Scaled normal `std=(2·in_spatial·out)^{-0.5}` with `in_spatial = in_dim - 1`, bias `N(0, 0.01²)` | The same scaling as the Poincaré MLR heads (van Spengler 2023), with the fan-in counted over the spatial dimensions, because the kernel lies in the tangent space at the origin |
 | `HTCLinear` | Fan-in uniform `U(-√(3/in), √(3/in))` | Norm-preserving (per-layer gain ≈ 1). The old `U(-0.02, 0.02)` froze depth-≥2 stacks (`init_bound=0.02` restores it). The Hypformer reference bound `2√(3/(in+out))` assumes ReLU + LayerNorm between layers; pass it as `init_bound` to recover |
 | `HypLinearHyperboloidFHCNN` | Small uniform `U(-0.02, 0.02)` | Keeps points near the apex `[1/sqrt(c), 0, …]` initially (matches the Bdeir et al. 2023 reference) |
 | `HypLinear*PV` | He init | PV is unconstrained $\mathbb{R}^n$; standard scales work |

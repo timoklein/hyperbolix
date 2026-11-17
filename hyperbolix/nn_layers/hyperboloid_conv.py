@@ -213,11 +213,28 @@ class HypConv2DHyperboloid(nnx.Module):
         Type of the input tensor, either 'tangent' or 'manifold' (default: 'manifold').
         Note: This is a static configuration - changing it after initialization requires recompilation.
     reset_params : str
-        Kernel initialization scheme (default: ``"default"``). ``"default"``:
-        uniform ``U(-0.02, 0.02)`` (unchanged FHCNN-style init). ``"fan_in"``:
-        normal, ``std = sqrt(1 / hcat_out_ambient_dim)`` — a norm-preserving
-        fan-in init (analogous to ``_fgg_weight_init``'s ``"lorentz_kaiming"``
-        branch) validated for BN-free encoders.
+        Kernel initialization scheme; the bias starts at zero in every scheme
+        (default: ``"fan_in"``).
+
+        - ``"fan_in"``: normal, ``std = sqrt(1 / hcat_out_ambient_dim)``, where
+          ``hcat_out_ambient_dim = (in_channels - 1) * kh * kw + 1`` is the width of
+          the HCat-ed receptive field. This fan-in init keeps the spread of the spatial
+          coordinates: the output's stays within about 1.0x to 1.1x of the input's
+          per layer (16 channels, 3x3 kernel, ``c = 1``), so a deep stack neither
+          freezes nor blows up. It is the analogue of ``_fgg_weight_init``'s
+          ``"lorentz_kaiming"`` branch.
+        - ``"uniform"``: ``U(-0.02, 0.02)``, the init of the library's FHCNN linear
+          layer (:class:`HypLinearHyperboloidFHCNN`) and this layer's default up to
+          1.5.0. It is width-independent and contractive: in the same setting it
+          shrinks that spread about 0.13x per layer (about 3e-4 after four
+          layers), so a stack built with it stops passing input variation through,
+          without any NaN. ``"default"`` is accepted as an alias for ``"uniform"``
+          and gives the same kernel bit for bit.
+
+        Neither is the reference init: the conv layer of Bdeir et al. 2023
+        (``LorentzConv2d.reset_parameters`` in HyperbolicCV) draws kernel *and*
+        bias from ``U(-s, s)`` with ``s = sqrt(2 / ((in_channels - 1) * kh * kw))``,
+        which shrinks the spread about 0.8x to 0.9x per layer in the same setting.
     param_dtype : DTypeLike
         Storage dtype of the trainable parameters (default: jnp.float32).
         Compute precision of manifold operations is set by ``manifold.dtype``.
@@ -245,15 +262,17 @@ class HypConv2DHyperboloid(nnx.Module):
         stride: int | tuple[int, int] = 1,
         padding: str = "SAME",
         input_space: str = "manifold",
-        reset_params: str = "default",
+        reset_params: str = "fan_in",
         param_dtype: DTypeLike = jnp.float32,
     ):
         if padding not in ["SAME", "VALID"]:
             raise ValueError(f"padding must be either 'SAME' or 'VALID', got '{padding}'")
         if input_space not in ["tangent", "manifold"]:
             raise ValueError(f"input_space must be either 'tangent' or 'manifold', got '{input_space}'")
-        if reset_params not in ("default", "fan_in"):
-            raise ValueError(f"reset_params must be 'default' or 'fan_in', got '{reset_params}'")
+        if reset_params not in ("fan_in", "uniform", "default"):
+            raise ValueError(
+                f"reset_params must be 'fan_in', 'uniform' or 'default' (alias of 'uniform'), got '{reset_params}'"
+            )
 
         # Static configuration
         validate_hyperboloid_manifold(manifold_module, required_methods=("expmap_0", "hcat"))
@@ -270,7 +289,7 @@ class HypConv2DHyperboloid(nnx.Module):
         hcat_out_ambient_dim = hcat_ambient_dim(in_channels, self.kernel_size)
 
         # Trainable parameters — owned directly for flat parameter paths
-        if reset_params == "default":
+        if reset_params in ("uniform", "default"):  # "default": its name up to 1.5.0, kept as an alias
             bound = 0.02
             kernel_init = jax.random.uniform(
                 rngs.params(), (out_channels, hcat_out_ambient_dim), dtype=param_dtype, minval=-bound, maxval=bound

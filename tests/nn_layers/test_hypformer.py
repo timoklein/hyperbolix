@@ -7,6 +7,7 @@ from flax import nnx
 
 from hyperbolix.manifolds import Hyperboloid
 from hyperbolix.nn_layers import (
+    FGGMeanOnlyBatchNorm,
     HRCBatchNorm,
     HRCDropout,
     HRCLayerNorm,
@@ -528,6 +529,37 @@ def test_hrc_batchnorm_training_vs_eval():
     assert not jnp.allclose(y_eval, y_train1, atol=1e-6)
 
 
+def test_hrc_batchnorm_float64_keeps_float64_running_statistics():
+    """``param_dtype=float64`` stores the running statistics in float64.
+
+    Regression: ``nnx.BatchNorm`` creates its running mean and variance in float32 whatever
+    ``param_dtype`` says, and NNX casts every update back to that dtype, so a float64 layer stored
+    float32-rounded statistics and normalized with them in eval mode.
+    """
+    bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0), param_dtype=jnp.float64)
+    assert bn.bn.mean[...].dtype == jnp.float64 and bn.bn.var[...].dtype == jnp.float64
+
+    spatial_BD = jax.random.normal(jax.random.PRNGKey(42), (32, 4), dtype=jnp.float64) + 0.3
+    x = jnp.concatenate([jnp.sqrt(1.0 + jnp.sum(spatial_BD**2, axis=-1, keepdims=True)), spatial_BD], axis=-1)
+    y_train = bn(x, c_in=1.0, c_out=1.0, use_running_average=False)
+    assert bn.bn.mean[...].dtype == jnp.float64 and bn.bn.var[...].dtype == jnp.float64
+
+    # One update from the zero init with momentum 0.99: the stored mean is 0.01 * batch mean,
+    # to float64 rounding and not to float32 rounding.
+    expected = 0.01 * jnp.mean(spatial_BD, axis=0)
+    assert jnp.allclose(bn.bn.mean[...], expected, rtol=1e-12, atol=0)
+    assert not jnp.allclose(expected.astype(jnp.float32).astype(jnp.float64), expected, rtol=1e-12, atol=0)  # non-vacuous
+
+    y_eval = bn(x, c_in=1.0, c_out=1.0, use_running_average=True)
+    assert y_train.dtype == jnp.float64 and y_eval.dtype == jnp.float64
+
+    # The float32 default keeps float32 statistics, and so do half-precision parameters: a bfloat16
+    # moving average with momentum 0.99 would stop moving.
+    for low_or_default in (jnp.float32, jnp.bfloat16, jnp.float16):
+        layer = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0), param_dtype=low_or_default)
+        assert layer.bn.mean[...].dtype == jnp.float32 and layer.bn.var[...].dtype == jnp.float32
+
+
 def test_hrc_batchnorm_gradient():
     """Test gradients through HRCBatchNorm."""
     bn = HRCBatchNorm(num_features=4, rngs=nnx.Rngs(0))
@@ -813,3 +845,35 @@ def test_htc_wrapper_defaults_inherit_fan_in_init():
     attn = HyperbolicLinearAttention(in_features, in_features - 1, rngs=nnx.Rngs(0))
     q_std = float(jnp.std(attn.query_projections[0].kernel[...]))
     assert abs(q_std - expected) / expected < 0.2
+
+
+# c_out defaults to c_in ------------------------------------------------------------------------
+
+_C_OUT_DEFAULT_LAYERS = {
+    "HTCLinear": lambda: HTCLinear(5, 4, rngs=nnx.Rngs(0)),
+    "HRCDropout": lambda: HRCDropout(0.3, rngs=nnx.Rngs(0), deterministic=True),
+    "HRCLayerNorm": lambda: HRCLayerNorm(4, rngs=nnx.Rngs(0)),
+    "HRCRMSNorm": lambda: HRCRMSNorm(4, rngs=nnx.Rngs(0)),
+    "HRCBatchNorm": lambda: HRCBatchNorm(4, rngs=nnx.Rngs(0)),
+    "FGGMeanOnlyBatchNorm": lambda: FGGMeanOnlyBatchNorm(4),
+}
+
+
+@pytest.mark.parametrize("name", list(_C_OUT_DEFAULT_LAYERS))
+def test_c_out_defaults_to_c_in(name):
+    """Passing only ``c_in`` keeps the output on the ``c_in`` sheet; an explicit ``c_out`` still wins.
+
+    Up to 1.5.0 ``c_out`` defaulted to 1.0: a caller who passed only ``c_in=0.1`` got points on
+    the ``c = 1`` sheet with no error (sheet residual ~9, far above the float32 tolerance here).
+    """
+    c = 0.1
+    x_BA = _sample_hyperboloid_batch(jax.random.PRNGKey(0), 5, 8, c)  # float32
+    layer = _C_OUT_DEFAULT_LAYERS[name]()
+
+    y_BA = layer(x_BA, c_in=c)
+    assert y_BA.dtype == jnp.float32
+    assert bool(jnp.all(jax.vmap(lambda p: hyperboloid.is_in_manifold(p, c, atol=1e-4))(y_BA)))
+    assert jnp.array_equal(y_BA, layer(x_BA, c, c))
+
+    y1_BA = layer(x_BA, c_in=c, c_out=1.0)
+    assert bool(jnp.all(jax.vmap(lambda p: hyperboloid.is_in_manifold(p, 1.0, atol=1e-4))(y1_BA)))

@@ -358,15 +358,25 @@ def _stacked_experts(
     return create(rngs)
 
 
-@nnx.vmap(in_axes=(0, 0, None, None), out_axes=0)
 def _run_stacked_experts(
     experts: LorentzSwiGLU,
-    c_expert: ScalarCurvature,
+    c_expert_E: Float[Array, "E"],
     x_NA: Float[Array, "N A"],
     c: ScalarCurvature,
-) -> Float[Array, "N A"]:
-    """Run each stacked expert, at its own curvature, on every token: ``(E,) x (N, A) -> (E, N, A)``."""
-    return experts(x_NA, c_expert, c)
+) -> Float[Array, "E N A"]:
+    """Run each stacked expert, at its own curvature, on every token: ``(E,) x (N, A) -> (E, N, A)``.
+
+    The functional route (split once, plain ``jax.vmap`` over the stacked state, merge inside), not
+    an ``nnx.vmap``: an NNX transform raises "Cannot extract graph node from different trace level"
+    when the enclosing module is closed over inside a plain ``jax.jit``/``jax.vmap``/``lax.scan``.
+    The experts hold parameters only and never write state, so nothing has to be merged back.
+    """
+    graphdef, state = nnx.split(experts)
+
+    def run_one(expert_state, c_e):
+        return nnx.merge(graphdef, expert_state)(x_NA, c_e, c)  # (N, A)
+
+    return jax.vmap(run_one, in_axes=(0, 0), out_axes=0)(state, c_expert_E)  # (E, N, A)
 
 
 class LorentzMoE(nnx.Module):
@@ -420,8 +430,8 @@ class LorentzMoE(nnx.Module):
     Dispatch
     --------
     Dense: every routed expert runs on every token (the experts are stacked on a leading
-    parameter axis and applied with ``nnx.vmap``), and unselected outputs enter the centroid with
-    weight 0, so they get zero gradient for that token. Cost is ``E / top_k`` times that of a
+    parameter axis and applied with ``jax.vmap`` over their split state), and unselected
+    outputs enter the centroid with weight 0, so they get zero gradient for that token. Cost is ``E / top_k`` times that of a
     sparse dispatch, fine for small ``E``; large ``E`` needs a gather or ragged dispatch. One
     difference from a sparse dispatch: a non-finite output of an *unselected* expert still
     reaches the centroid (``0 * inf``) and turns the token's output NaN.

@@ -395,6 +395,30 @@ def test_dtype_preserved():
     assert model.kl_divergence_.dtype == jnp.float32
 
 
+@pytest.mark.parametrize("c", [np.float64(1.0), jnp.asarray(1.0, dtype=jnp.float64)], ids=["np-float64", "jnp-float64"])
+@pytest.mark.parametrize("model_name", ["poincare", "hyperboloid"])
+def test_float64_curvature_keeps_float32_output(model_name, c):
+    """A float64 ``c`` on a float32 manifold must not promote the embedding or the loss traces."""
+    dtype = jnp.float32
+    x = _ball_points(19, 24, 5, 1.0, 0.4, dtype)
+    if model_name == "hyperboloid":
+        manifold = Hyperboloid(dtype=dtype)
+        x = jax.vmap(iso.poincare_to_hyperboloid, in_axes=(0, None))(x, 1.0)
+    else:
+        manifold = Poincare(dtype=dtype)
+    key = jax.random.PRNGKey(0)
+    fit_kwargs = {"perplexity": 10.0, "n_iter": 40, "exploration_n_iter": 20}
+    model = CoSNE(manifold, 2, **fit_kwargs).fit(x, c, key)
+    reference = CoSNE(manifold, 2, **fit_kwargs).fit(x, 1.0, key)
+
+    assert model.embedding_.dtype == jnp.float32
+    assert model.losses_kl_.dtype == jnp.float32
+    assert model.losses_h_.dtype == jnp.float32
+    assert model.kl_divergence_.dtype == jnp.float32
+    # c = 1.0 is exact in float32, so the float64 curvature gives the same fit bit for bit.
+    np.testing.assert_array_equal(np.asarray(model.embedding_), np.asarray(reference.embedding_))
+
+
 # --- 15. f32 joint P is not floor-dominated (sklearn float64-eps floor semantics) --------
 def test_joint_probabilities_f32_sum_close_to_one():
     """In float32 the P floor is float64 eps (sklearn's MACHINE_EPSILON), so ``ΣP ≈ 1``.

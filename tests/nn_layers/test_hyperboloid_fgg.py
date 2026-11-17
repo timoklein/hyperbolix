@@ -10,10 +10,10 @@ Tests cover:
 Dimension key: B=batch, I=in_spatial, O=out_spatial, Ai=in_ambient, Ao=out_ambient, K=classes
 """
 
+import flax
 import jax
 import jax.numpy as jnp
 import numpy as np
-import flax
 import pytest
 from flax import nnx
 
@@ -746,6 +746,45 @@ def test_fgg_conv2d_default_is_fan_out():
     assert jnp.allclose(conv_ref.bias[...], 0.5)
     y_ref = conv_ref(x, c=1.0)
     assert _check_on_hyperboloid(y_ref.reshape(-1, 9), c=1.0, atol=1e-6)
+
+
+def test_fgg_init_same_weights_with_and_without_x64():
+    """A seed gives the same float32 FGG weights whether or not x64 is on.
+
+    Up to 1.5.0 ``_fgg_weight_init`` drew in the default float dtype and cast afterwards, so
+    under x64 (which this file enables) it drew from the float64 stream: the same seed gave
+    weights up to 1.34 (``FGGLinear``) and 2.19 (``FGGConv2D``) away from a float32 user's.
+    The constants are the first three kernel entries printed by a process WITHOUT x64, with
+    1.5.0 and with the fix alike (``logs/2026-11-16_prerelease-audit/fix-hyp-layers-1/probe_fgg_init.py``, Rngs(0),
+    default ``reset_params="fan_out"``, float32 params).
+    """
+    linear = FGGLinear(6, 8, rngs=nnx.Rngs(0))
+    linear_wn = FGGLinear(6, 8, rngs=nnx.Rngs(0), use_weight_norm=True)
+    conv = FGGConv2D(Hyperboloid(dtype=jnp.float32), 4, 5, 3, rngs=nnx.Rngs(0))
+    expected_linear = np.float32([0.379481703042984, -0.342563271522522, -0.28278252482414246])
+    expected_conv = np.float32([0.5020071268081665, -0.4531686007976532, -0.3740861117839813])
+
+    np.testing.assert_array_equal(np.asarray(linear.kernel[...]).ravel()[:3], expected_linear)
+    np.testing.assert_array_equal(np.asarray(linear_wn.kernel_dir[...]).ravel()[:3], expected_linear)
+    np.testing.assert_array_equal(np.asarray(conv.kernel[...]).ravel()[:3], expected_conv)
+
+
+@pytest.mark.parametrize("param_dtype", [jnp.bfloat16, jnp.float16])
+@pytest.mark.parametrize("reset_params", ["fan_out", "xavier", "lorentz_kaiming"])
+def test_fgg_init_half_precision_params_round_the_float32_draw(param_dtype, reset_params):
+    """Half-precision FGG weights are the float32 draw of the same seed, rounded.
+
+    That is what 1.5.0 gave without x64 (draw in float32, cast afterwards). Drawing directly in
+    bfloat16/float16 would be a different random stream and change every seeded init.
+    """
+    half = FGGLinear(6, 8, rngs=nnx.Rngs(0), reset_params=reset_params, param_dtype=param_dtype)
+    single = FGGLinear(6, 8, rngs=nnx.Rngs(0), reset_params=reset_params, param_dtype=jnp.float32)
+
+    assert half.kernel[...].dtype == param_dtype
+    np.testing.assert_array_equal(
+        np.asarray(half.kernel[...].astype(jnp.float32)),
+        np.asarray(single.kernel[...].astype(param_dtype).astype(jnp.float32)),
+    )
 
 
 def test_fgg_invalid_reset_params_errors():

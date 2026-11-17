@@ -102,8 +102,9 @@ def _fhcnn_forward(
 
         res_BA = jnp.concatenate([res0_B1, res_rem_BD], axis=-1)  # (B, A)
 
-        # Cast near-zero-norm vectors to origin
-        origin_time_B1 = jnp.sqrt(1 / c) * jnp.ones_like(res0_B1)
+        # Cast near-zero-norm vectors to origin. `1 / c` is cast to x's dtype as in `res0_B1` above,
+        # so a float64 `c` cannot promote the output under x64.
+        origin_time_B1 = jnp.sqrt(jnp.asarray(1 / c, dtype=x_BO.dtype)) * jnp.ones_like(res0_B1)
         origin_BA = jnp.concatenate([origin_time_B1, jnp.zeros_like(res_rem_BD)], axis=-1)
 
         mask_B1 = x_rem_norm_B1 <= 1e-5
@@ -292,9 +293,10 @@ def _fgg_weight_init(
 
     Shared by ``FGGLinear`` and ``FGGConv2D``. The fan-in std variants compute their
     std from the *ambient* dimensions (``in_ambient``/``out_ambient`` = spatial + 1);
-    ``"fan_out"`` uses the *output spatial* dim. The result is pinned to ``param_dtype``
-    so a global ``jax_enable_x64`` does not silently promote the bare ``jnp.eye`` /
-    ``jax.random.normal`` to float64.
+    ``"fan_out"`` uses the *output spatial* dim. The random draws are made in float32
+    (float64 for a float64 ``param_dtype``), so a seed gives the same weights with and
+    without ``jax_enable_x64``, and the result is pinned to ``param_dtype`` so a global
+    ``jax_enable_x64`` does not promote the bare ``jnp.eye`` to float64.
 
     Parameters
     ----------
@@ -322,21 +324,27 @@ def _fgg_weight_init(
     Array, shape (I, O)
         Euclidean weight matrix in ``param_dtype``.
     """
+    # Every draw names its dtype: a draw without `dtype` is float64 under x64, a different random
+    # stream from the float32 one, so the same seed gave different weights with x64 on. The draw is
+    # float32 for every `param_dtype` up to 32 bits (cast below), so bfloat16/float16 parameters keep
+    # the weights a float32 draw rounds to, and float64 only for a float64 `param_dtype`.
+    draw_dtype = jnp.float64 if jnp.dtype(param_dtype) == jnp.float64 else jnp.float32
+    shape = (in_spatial, out_spatial)
     if reset_params == "eye":
         U_IO = 0.5 * jnp.eye(in_spatial, out_spatial)
     elif reset_params == "xavier":
-        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(1.0 / (in_ambient + out_ambient))
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(1.0 / (in_ambient + out_ambient))
     elif reset_params == "kaiming":
-        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(2.0 / in_ambient)
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(2.0 / in_ambient)
     elif reset_params == "lorentz_kaiming":
-        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(1.0 / in_ambient)
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(1.0 / in_ambient)
     elif reset_params == "fan_out":
         # Fan-out std sqrt(1/out_spatial): output spatial norm tracks the input
         # (norm-preserving) instead of growing as sqrt(out_channels) like fan-in.
         # max(.,1) guards the degenerate out_spatial == 0 case (out_features == 1).
-        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(1.0 / max(out_spatial, 1))
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(1.0 / max(out_spatial, 1))
     elif reset_params == "mlr":
-        U_IO = jax.random.normal(key, (in_spatial, out_spatial)) * jnp.sqrt(5.0 / in_ambient)
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(5.0 / in_ambient)
     else:
         raise ValueError(
             f"reset_params must be 'eye', 'xavier', 'kaiming', 'lorentz_kaiming', 'fan_out', or 'mlr', got '{reset_params}'"
@@ -607,7 +615,10 @@ class HypLinearHyperboloidFHNN(nnx.Module):
 
     Weight Initialization:
         Weights are initialized as tangent vectors at the hyperboloid origin: U(-0.02, 0.02)
-        with the time column (column 0) zeroed. This matches the Chen et al. 2021 init.
+        with the time column (column 0) zeroed. This is the init of ``LorentzLinear`` in the
+        machine-translation code of Chen et al. 2021 (``mt/onmt/modules/hyper_nets.py``); the
+        ``LorentzLinear`` of their graph code uses ``U(-1/sqrt(out), 1/sqrt(out))`` instead,
+        also with the time column zeroed.
 
     Relationship to FHCNN:
         Both FHNN and FHCNN ensure outputs lie on the hyperboloid, but differ in which
@@ -983,7 +994,7 @@ class HTCLinear(nnx.Module):
         self,
         x: Float[Array, "batch in_features"],
         c_in: float = 1.0,
-        c_out: float = 1.0,
+        c_out: float | None = None,
         return_space: bool = False,
     ) -> Float[Array, "batch out_features_plus_1"] | Float[Array, "batch out_features"]:
         """Apply HTC linear transformation.
@@ -994,8 +1005,9 @@ class HTCLinear(nnx.Module):
             Input points on hyperboloid with curvature c_in.
         c_in : float, optional
             Input curvature (default: 1.0).
-        c_out : float, optional
-            Output curvature (default: 1.0).
+        c_out : float or None, optional
+            Output curvature. None (the default) means the same as ``c_in``, so a caller who
+            passes only ``c_in`` stays on the input's sheet.
         return_space : bool, optional
             If True, return only the spatial components ``(batch, out_features)``
             of the output point, already scaled by ``sqrt(c_in / c_out)``, i.e.
@@ -1008,6 +1020,8 @@ class HTCLinear(nnx.Module):
         y : Array of shape (batch, out_features+1), or (batch, out_features) if return_space
             Output points on hyperboloid with curvature c_out, or their spatial part.
         """
+        if c_out is None:  # plain Python branch, static under jit: stay on the input's sheet
+            c_out = c_in
 
         def linear_fn(z):
             # Cast params to the working dtype so float64 weights (from global

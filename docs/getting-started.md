@@ -8,8 +8,16 @@ This guide will help you install Hyperbolix and run your first examples.
 
 - Python 3.12 or higher
 - JAX 0.9+ (with CPU or GPU support)
-- Flax NNX 0.12.0+
+- Flax NNX 0.12.5+
 - Optax 0.2.6+
+
+### Install from PyPI
+
+```bash
+pip install hyperbolix
+# or, in a uv project:
+uv add hyperbolix
+```
 
 ### Install from Source
 
@@ -93,7 +101,7 @@ Hyperbolix provides eight manifold types:
 
 The curvature `c` controls the "amount of hyperbolicity" (`c > 0` is the magnitude; the sectional curvature is `−c`):
 
-- `c = 0`: Euclidean space (flat)
+- `c → 0`: the geometry approaches Euclidean space (flat). The hyperbolic models need `c > 0`, and `Poincare().dist` returns NaN at `c = 0`. Only `Stereographic` accepts `c = 0`, where it is flat (see the [Manifolds guide](user-guide/manifolds.md))
 - `c = 1`: Unit curvature (standard hyperbolic space)
 - `c > 1`: Higher curvature (more curved)
 

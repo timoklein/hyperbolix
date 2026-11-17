@@ -96,7 +96,7 @@ class ManifoldParam(nnx.Param):
     ...         self.bias = ManifoldParam(
     ...             jax.random.normal(rngs.params(), (10,)) * 0.01,
     ...             manifold=manifold,
-    ...             curvature=lambda: self.c.value,
+    ...             curvature=lambda: self.c[...],
     ...         )
     """
 
@@ -156,6 +156,12 @@ def get_manifold_info(param: nnx.Variable) -> tuple[Manifold, Any] | None:
 
     Example
     -------
+    >>> import jax.numpy as jnp
+    >>> from hyperbolix.manifolds.poincare import Poincare
+    >>> from hyperbolix.optim import ManifoldParam, get_manifold_info
+    >>>
+    >>> param = ManifoldParam(jnp.zeros((3,)), manifold=Poincare(), curvature=1.0)
+    >>> grad = jnp.ones((3,))
     >>> manifold_info = get_manifold_info(param)
     >>> if manifold_info is not None:
     ...     manifold, c = manifold_info
@@ -188,13 +194,20 @@ def has_manifold_params(params_pytree: Any) -> bool:
 
     Example
     -------
-    >>> import jax
+    >>> import jax.numpy as jnp
     >>> from flax import nnx
+    >>> from hyperbolix.manifolds.poincare import Poincare
+    >>> from hyperbolix.optim import ManifoldParam, has_manifold_params
     >>>
-    >>> model = MyHyperbolicModel(rngs=nnx.Rngs(0))
-    >>> params = nnx.state(model, nnx.Param)
-    >>> if has_manifold_params(params):
-    ...     print("Model contains manifold parameters")
+    >>> class Model(nnx.Module):
+    ...     def __init__(self):
+    ...         self.bias = ManifoldParam(jnp.zeros((3,)), manifold=Poincare(), curvature=1.0)
+    ...         self.scale = nnx.Param(jnp.ones((3,)))
+    >>>
+    >>> has_manifold_params(nnx.state(Model(), nnx.Param))
+    True
+    >>> has_manifold_params(nnx.state(nnx.Linear(2, 2, rngs=nnx.Rngs(0)), nnx.Param))
+    False
     """
     from jax import tree_util
 

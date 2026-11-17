@@ -42,7 +42,13 @@ Layers whose call signature is not ``layer(x, c=c) -> array`` (the HELM MoE retu
 SwiGLU expert needs an expert curvature) are wrapped in the small adapter modules below;
 an adapter only fixes the call shape, and every parameter is still reached through
 ``grad_paths``.  ``LayerSpec.make_input`` replaces the lifted-tangent input for the
-embedding, whose input is token ids.
+embedding, whose input is token ids, and for the layers that take a tangent vector
+(``PoincareBatchNorm2D``, the VQ layers).  The same holds for the Hypformer attention layers (one
+curvature for ``c_in``/``c_attn``/``c_out``), ``LorentzResidual`` (its second input is the batch
+rolled by one), ``HyperbolicRoPE`` (positions ``0 .. S-1``), the VQ layers (their ``quantized``
+output) and the functional activations.  Rows without parameters (``grad_paths=()``) are left out
+of the gradient contract; a row that exposes a known library bug carries a strict xfail on that
+one test (``_KNOWN_FAILURES``).
 
 Dimension key:
   B: batch size        H, W: feature-map height/width
@@ -65,8 +71,16 @@ from hyperbolix.nn_layers import (
     HypConv2DHyperboloid,
     HypConv2DHyperboloidFHNN,
     HypConv2DHyperboloidILNN,
+    HypConv2DPoincare,
     HypConv2DPV,
+    HyperbolicFullAttention,
+    HyperbolicLinearAttention,
+    HyperbolicRoPE,
+    HyperbolicSoftmaxAttention,
+    HyperboloidGyroBatchNorm,
+    HyperboloidGyroRMSNorm,
     HyperPPFeatureScaling,
+    HypformerPositionalEncoding,
     HypLinearHyperboloidBusemann,
     HypLinearHyperboloidFHNN,
     HypLinearHyperboloidPLFC,
@@ -80,11 +94,31 @@ from hyperbolix.nn_layers import (
     HypRegressionPoincareBusemann,
     HypRegressionPoincarePP,
     HypRegressionPV,
+    HypVQEmbeddingPoincare,
+    HypVQMLRPoincare,
     LorentzEmbedding,
     LorentzMLA,
     LorentzMoE,
     LorentzMoEGate,
+    LorentzResidual,
     LorentzSwiGLU,
+    PoincareBatchNorm2D,
+    PoincareGyroRMSNorm,
+    ProperVelocityGyroBatchNorm,
+    ProperVelocityGyroRMSNorm,
+    hrc_gelu,
+    hrc_leaky_relu,
+    hrc_relu,
+    hrc_swish,
+    hrc_tanh,
+    hyp_gelu,
+    hyp_leaky_relu,
+    hyp_relu,
+    hyp_swish,
+    hyp_tanh,
+    poincare_leaky_relu,
+    poincare_relu,
+    poincare_tanh,
 )
 
 # Busemann layers were tested at c=0.7 upstream; keep that curvature so the
@@ -130,8 +164,9 @@ def _lift(v, manifold, c):
 
 
 def _resolve(obj, path: str):
-    """Follow a dotted attribute path, e.g. ``"xi_theta.kernel"``."""
-    return reduce(getattr, path.split("."), obj)
+    """Follow a dotted attribute path, e.g. ``"xi_theta.kernel"``; a numeric part indexes a list
+    (``"query_projections.0.kernel"``)."""
+    return reduce(lambda o, part: o[int(part)] if part.isdigit() else getattr(o, part), path.split("."), obj)
 
 
 def _tol(dtype, f32, f64):
@@ -202,6 +237,129 @@ class _EmbeddingAtCurvature(nnx.Module):
 
     def __call__(self, ids, c=1.0):
         return self.embedding(ids, c_out=c)
+
+
+class _AttentionAtOneCurvature(nnx.Module):
+    """The Hypformer attention layers take ``(x, c_in, c_attn, c_out)``; the contract uses one ``c`` for all three."""
+
+    def __init__(self, attention):
+        self.attention = attention
+
+    def __call__(self, x, c=1.0):
+        return self.attention(x, c, c, c)
+
+
+class _ResidualWithRolledBatch(nnx.Module):
+    """``LorentzResidual`` combines two points; the second is the input with its batch rolled by one."""
+
+    def __init__(self, residual: LorentzResidual):
+        self.residual = residual
+
+    def __call__(self, x, c=1.0):
+        return self.residual(x, jnp.roll(x, 1, axis=0), c=c)
+
+
+class _RoPEAtTokenIndex(nnx.Module):
+    """``HyperbolicRoPE`` takes the token positions; the contract uses ``0 .. S-1``."""
+
+    def __init__(self, rope: HyperbolicRoPE):
+        self.rope = rope
+
+    def __call__(self, x_BSA, c=1.0):
+        return self.rope(x_BSA, jnp.arange(x_BSA.shape[-2]), c)
+
+
+class _VQQuantized(nnx.Module):
+    """The VQ layers return a ``PoincareVQOutput`` tuple; the contract checks its ``quantized`` tangent vector."""
+
+    def __init__(self, vq):
+        self.vq = vq
+
+    def __call__(self, x, c=1.0):
+        return self.vq(x, c).quantized
+
+
+class _Activation(nnx.Module):
+    """A functional activation ``fn(x, c)`` as a parameter-free module."""
+
+    def __init__(self, fn: Callable):
+        self.fn = fn
+
+    def __call__(self, x, c=1.0):
+        return self.fn(x, c)
+
+
+def _vq_mlr_eval(dtype):
+    # Eval mode: deterministic argmax instead of a Gumbel sample, so eager and jit select the same
+    # codes without an rngs argument; the straight-through one-hot keeps the MLR differentiable.
+    vq = HypVQMLRPoincare(_poincare(dtype), 6, 5, rngs=nnx.Rngs(0), param_dtype=dtype)
+    vq.eval()
+    return _VQQuantized(vq)
+
+
+def _module_spec(
+    id_,
+    make_module,
+    tangent_shape,
+    *,
+    manifold_fn,
+    grad_paths=(),
+    output_is_manifold_point=True,
+    zero_time=False,
+    out_shape=None,
+    make_input=None,
+):
+    """Spec for a layer without an ``input_space`` option, built by ``make_module(dtype)``.
+
+    ``grad_paths=()`` marks a layer without parameters; it is left out of the gradient contract.
+    """
+    return LayerSpec(
+        id=id_,
+        make_layer=lambda dtype, input_space: make_module(dtype),
+        make_tangent=lambda dtype: _tangent(tangent_shape, dtype, zero_time=zero_time, scale=0.2),
+        out_shape=out_shape or tangent_shape,
+        grad_paths=grad_paths,
+        manifold_fn=manifold_fn,
+        output_is_manifold_point=output_is_manifold_point,
+        has_input_space=False,
+        make_input=make_input,
+    )
+
+
+def _activation_specs():
+    """One row per activation: the hyperboloid ``hyp_*(x, c)`` and ``hrc_*(x, c_in, c_out)`` at
+    ``c_in = c_out``, and the Poincaré ones with a manifold of the test's dtype."""
+    specs = []
+    for fn in (hyp_relu, hyp_leaky_relu, hyp_tanh, hyp_swish, hyp_gelu):
+        specs.append(
+            _module_spec(
+                f"act_{fn.__name__}",
+                lambda dtype, fn=fn: _Activation(fn),
+                (8, 6),
+                manifold_fn=_hyperboloid,
+                zero_time=True,
+            )
+        )
+    for fn in (hrc_relu, hrc_leaky_relu, hrc_tanh, hrc_swish, hrc_gelu):
+        specs.append(
+            _module_spec(
+                f"act_{fn.__name__}",
+                lambda dtype, fn=fn: _Activation(lambda x, c: fn(x, c, c)),
+                (8, 6),
+                manifold_fn=_hyperboloid,
+                zero_time=True,
+            )
+        )
+    for fn in (poincare_relu, poincare_leaky_relu, poincare_tanh):
+        specs.append(
+            _module_spec(
+                f"act_{fn.__name__}",
+                lambda dtype, fn=fn: _Activation(partial(fn, manifold_module=_poincare(dtype))),
+                (8, 5),
+                manifold_fn=_poincare,
+            )
+        )
+    return tuple(specs)
 
 
 def _linear_spec(
@@ -482,11 +640,156 @@ SPECS: tuple[LayerSpec, ...] = (
         has_input_space=False,
         make_input=lambda dtype, c: jax.random.randint(jax.random.PRNGKey(0), (2, 5), 0, 16),
     ),
+    # --- Hypformer attention on (B, S, A) sequences, one curvature for c_in / c_attn / c_out ---
+    _module_spec(
+        "hypformer_full_attention",
+        lambda dtype: _AttentionAtOneCurvature(
+            HyperbolicFullAttention(9, 8, num_heads=2, rngs=nnx.Rngs(0), param_dtype=dtype)
+        ),
+        (2, 5, 9),
+        manifold_fn=_hyperboloid,
+        grad_paths=(
+            "attention.query_projections.0.kernel",
+            "attention.key_projections.1.kernel",
+            "attention.value_projections.0.kernel",
+            "attention.log_tau",
+        ),
+        zero_time=True,
+    ),
+    _module_spec(
+        "hypformer_linear_attention",
+        lambda dtype: _AttentionAtOneCurvature(
+            HyperbolicLinearAttention(9, 8, num_heads=2, rngs=nnx.Rngs(0), param_dtype=dtype)
+        ),
+        (2, 5, 9),
+        manifold_fn=_hyperboloid,
+        grad_paths=(
+            "attention.query_projections.0.kernel",
+            "attention.key_projections.1.kernel",
+            "attention.value_projections.0.kernel",
+            "attention.residual_proj.kernel",
+        ),
+        zero_time=True,
+    ),
+    _module_spec(
+        "hypformer_softmax_attention",
+        lambda dtype: _AttentionAtOneCurvature(
+            HyperbolicSoftmaxAttention(9, 8, num_heads=2, rngs=nnx.Rngs(0), param_dtype=dtype)
+        ),
+        (2, 5, 9),
+        manifold_fn=_hyperboloid,
+        grad_paths=(
+            "attention.query_projections.0.kernel",
+            "attention.key_projections.1.kernel",
+            "attention.value_projections.0.kernel",
+            "attention.residual_proj.kernel",
+        ),
+        zero_time=True,
+    ),
+    # Learnable weight and learnable scale, so both parameters reach the gradient contract.
+    _module_spec(
+        "lorentz_residual",
+        lambda dtype: _ResidualWithRolledBatch(
+            LorentzResidual(scale=True, init_gamma=3.0, learnable_scale=True, param_dtype=dtype)
+        ),
+        (8, 6),
+        manifold_fn=_hyperboloid,
+        grad_paths=("residual.w_y_raw", "residual.gamma_raw"),
+        zero_time=True,
+    ),
+    _module_spec(
+        "hypformer_positional_encoding",
+        lambda dtype: HypformerPositionalEncoding(9, 8, rngs=nnx.Rngs(0), param_dtype=dtype),
+        (2, 5, 9),
+        manifold_fn=_hyperboloid,
+        grad_paths=("htc_linear.kernel", "htc_linear.bias"),
+        zero_time=True,
+    ),
+    _module_spec(
+        "hyperbolic_rope",
+        lambda dtype: _RoPEAtTokenIndex(HyperbolicRoPE(8)),
+        (2, 5, 9),
+        manifold_fn=_hyperboloid,
+        zero_time=True,
+    ),
+    # --- Poincaré conv (default id_init) ---
+    _conv_spec(HypConv2DPoincare, id_="conv_poincare", manifold_fn=_poincare),
+    # --- Gyro normalizations (train mode for the batch norms), on manifold points ---
+    _module_spec(
+        "gyro_bn_hyperboloid",
+        lambda dtype: HyperboloidGyroBatchNorm(_hyperboloid(dtype), 5, param_dtype=dtype),
+        (8, 6),
+        manifold_fn=_hyperboloid,
+        grad_paths=("gamma", "bias"),
+        zero_time=True,
+    ),
+    _module_spec(
+        "gyro_bn_pv",
+        lambda dtype: ProperVelocityGyroBatchNorm(_proper_velocity(dtype), 5, param_dtype=dtype),
+        (8, 5),
+        manifold_fn=_proper_velocity,
+        grad_paths=("gamma", "bias"),
+    ),
+    _module_spec(
+        "gyro_rms_hyperboloid",
+        lambda dtype: HyperboloidGyroRMSNorm(_hyperboloid(dtype), 5, use_bias=True, param_dtype=dtype),
+        (8, 6),
+        manifold_fn=_hyperboloid,
+        grad_paths=("gamma", "bias"),
+        zero_time=True,
+    ),
+    _module_spec(
+        "gyro_rms_pv",
+        lambda dtype: ProperVelocityGyroRMSNorm(_proper_velocity(dtype), 5, use_bias=True, param_dtype=dtype),
+        (8, 5),
+        manifold_fn=_proper_velocity,
+        grad_paths=("gamma", "bias"),
+    ),
+    _module_spec(
+        "gyro_rms_poincare",
+        lambda dtype: PoincareGyroRMSNorm(_poincare(dtype), 5, use_bias=True, param_dtype=dtype),
+        (8, 5),
+        manifold_fn=_poincare,
+        grad_paths=("gamma", "bias"),
+    ),
+    # --- Tangent in, tangent out: the input is the tangent draw itself, not its lift ---
+    _module_spec(
+        "poincare_batchnorm2d",
+        lambda dtype: PoincareBatchNorm2D(_poincare(dtype), 3, param_dtype=dtype),
+        (CONV_B, CONV_HW, CONV_HW, 3),
+        manifold_fn=_poincare,
+        grad_paths=("mean", "var"),
+        output_is_manifold_point=False,
+        make_input=lambda dtype, c: _tangent((CONV_B, CONV_HW, CONV_HW, 3), dtype, scale=0.2),
+    ),
+    # The embedding VQ's codebook is an EMA buffer, not a Param, so it has no gradient row.
+    _module_spec(
+        "vq_embedding_poincare",
+        lambda dtype: _VQQuantized(
+            HypVQEmbeddingPoincare(_poincare(dtype), 6, 5, rngs=nnx.Rngs(0), init_scale=0.3, param_dtype=dtype)
+        ),
+        (16, 5),
+        manifold_fn=_poincare,
+        output_is_manifold_point=False,
+        make_input=lambda dtype, c: _tangent((16, 5), dtype, scale=0.3),
+    ),
+    _module_spec(
+        "vq_mlr_poincare",
+        _vq_mlr_eval,
+        (16, 5),
+        manifold_fn=_poincare,
+        grad_paths=("vq.mlr.kernel", "vq.mlr.bias"),
+        output_is_manifold_point=False,
+        make_input=lambda dtype, c: _tangent((16, 5), dtype, scale=0.3),
+    ),
+    *_activation_specs(),
 )
 
 CONV_SPECS = tuple(s for s in SPECS if s.make_conv is not None)
 MANIFOLD_SPECS = tuple(s for s in SPECS if s.output_is_manifold_point)
 TANGENT_SPECS = tuple(s for s in SPECS if s.has_input_space)
+# Parameter-free rows (activations, HyperbolicRoPE, the EMA-codebook VQ) have no gradient to check.
+GRAD_SPECS = tuple(s for s in SPECS if s.grad_paths)
 # ProperVelocity is unconstrained (``is_in_manifold`` == ``isfinite``), so a
 # curvature sweep of its membership check carries no information.
 CURVATURE_SPECS = tuple(s for s in MANIFOLD_SPECS if s.manifold_fn is not _proper_velocity)
@@ -494,6 +797,23 @@ CURVATURE_SPECS = tuple(s for s in MANIFOLD_SPECS if s.manifold_fn is not _prope
 
 def _ids(specs):
     return [s.id for s in specs]
+
+
+# Library bugs a row exposes, one contract test each, kept as strict xfails so the fix flips them:
+# (test name, spec id) -> (cause, the exception it raises).
+# (test name, row id) -> (reason, exception type). Empty at present: the one entry it held,
+# `HypConv2DPoincare` raising ConcretizationTypeError when built inside a jit trace, is fixed.
+_KNOWN_FAILURES: dict[tuple[str, str], tuple[str, type[Exception]]] = {}
+
+
+def _params_with_known_failures(specs, test_name):
+    """``specs`` as pytest params, with a strict xfail on the rows listed in ``_KNOWN_FAILURES`` for ``test_name``."""
+    params = []
+    for s in specs:
+        known = _KNOWN_FAILURES.get((test_name, s.id))
+        marks = (pytest.mark.xfail(strict=True, reason=known[0], raises=known[1]),) if known else ()
+        params.append(pytest.param(s, id=s.id, marks=marks))
+    return params
 
 
 def _make_input(spec, dtype, c):
@@ -546,7 +866,7 @@ def test_forward_contract(spec):
 
 
 @pytest.mark.parametrize("jit", [jax.jit, nnx.jit], ids=["jax.jit", "nnx.jit"])
-@pytest.mark.parametrize("spec", SPECS, ids=_ids(SPECS))
+@pytest.mark.parametrize("spec", _params_with_known_failures(SPECS, "test_builds_inside_jit"))
 def test_builds_inside_jit(spec, jit):
     """The constructor runs inside a jit trace and builds the same parameters as eagerly.
 
@@ -588,7 +908,7 @@ def test_output_on_manifold_across_curvatures(spec, c):
 # Contract 3 — gradients: finite, nonzero, and jit == eager
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64], ids=["f32", "f64"])
-@pytest.mark.parametrize("spec", SPECS, ids=_ids(SPECS))
+@pytest.mark.parametrize("spec", GRAD_SPECS, ids=_ids(GRAD_SPECS))
 def test_gradient_contract(spec, dtype):
     """Every declared parameter gets a finite gradient, the first one is nonzero,
     and ``nnx.jit`` produces the same gradient as the eager computation.

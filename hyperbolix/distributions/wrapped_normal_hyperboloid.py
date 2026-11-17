@@ -19,6 +19,7 @@ from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..manifolds.hyperboloid import Hyperboloid
 from ..manifolds.hyperboloid import _gyro_difference as _hyperboloid_gyro_difference
+from ..manifolds.protocol import ScalarCurvature
 from ..utils.math_utils import safe_norm
 from ._common import gaussian_log_prob, sample_gaussian, sigma_to_cov
 from ._wrapped_normal_base import _batched_transform, _log_det_jacobian_from_r, _vmap_sample_and_batch
@@ -125,7 +126,7 @@ def log_prob(
     z: Float[Array, "... n_plus_1"],
     mu: Float[Array, "... n_plus_1"],
     sigma: Float[Array, "..."] | float,
-    c: float,
+    c: ScalarCurvature,
     manifold_module: Hyperboloid | None = None,
 ) -> Float[Array, "..."]:
     """Compute log probability of wrapped normal distribution.
@@ -137,7 +138,9 @@ def log_prob(
 
     Args:
         z: Sample point(s) on hyperboloid, shape (..., n+1)
-        mu: Mean point on hyperboloid, shape (..., n+1)
+        mu: Mean point on hyperboloid, shape (..., n+1). ``z`` and ``mu`` broadcast against
+            each other: mu's batch axes pair with z's trailing batch axes, and any further
+            leading axes of ``z`` are sample axes that share the mean.
         sigma: Covariance parameterization. Can be:
             - Scalar: isotropic covariance sigma^2 I (n x n)
             - 1D array of length n: diagonal covariance diag(sigma_1^2, ..., sigma_n^2)
@@ -176,6 +179,8 @@ def log_prob(
 
     # Determine dtype
     dtype = z.dtype
+    # The manifold's dtype decides: a float64 `c` must not promote the result to float64.
+    c = manifold._cast_c(c)
 
     # Extract spatial dimension
     n = mu.shape[-1] - 1  # Spatial dimension
@@ -184,7 +189,13 @@ def log_prob(
     # trailing axes; the leading sample axes broadcast the mean. Steps 1 and 2 must use the
     # *same* layout — vmapping u and mu together over axis 0 (as step 2 used to) pairs a sample
     # axis with a batch axis and fails on sample()'s own output whenever both are present.
-    n_sample_dims = max(z.ndim - mu.ndim, 0)
+    # Both are first broadcast to that layout: a `z` with fewer leading axes than `mu` (one point
+    # against a batch of means) would otherwise have its coordinate axis vmapped against mu's
+    # batch axis, which is silently wrong when the batch size equals the dimension.
+    full_shape = jnp.broadcast_shapes(z.shape, mu.shape)
+    z = jnp.broadcast_to(z, full_shape)
+    mu = jnp.broadcast_to(mu, full_shape[len(full_shape) - mu.ndim :])
+    n_sample_dims = z.ndim - mu.ndim
     n_batch_dims = mu.ndim - 1
 
     # Steps 1 and 2 as one map: v = PT_{μ→μ₀}(log_μ(z)) = log_0((⊖μ) ⊕ z), the identity in
