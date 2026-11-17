@@ -63,12 +63,14 @@ def _make_ball_points(key, n, in_dim, dtype, c=C):
 def test_busemann_layers_reject_the_other_model_at_construction(layer_cls, wrong_manifold_fn, family, in_dim):
     """The Poincaré layers refuse a ``Hyperboloid``, the Hyperboloid layers a ``Poincare``.
 
-    Both manifolds have ``busemann`` and ``_busemann_tangent``, so the method-name validation cannot
-    tell them apart. The mismatched layer then failed at its first call on a shape error, except at
-    ``in_dim = 2``: there one operand has a single spatial entry, which broadcasts against the
-    other's two, and the layer ran without an error.
+    Both manifolds have ``busemann`` and ``_busemann_tangent``, so a validation by method names
+    cannot tell them apart; the shared validator checks the class. The mismatched layer used to
+    fail at its first call on a shape error, except at ``in_dim = 2``: there one operand has a
+    single spatial entry, which broadcasts against the other's two, and the layer ran without an
+    error.
     """
-    with pytest.raises(TypeError, match=f"{family} Busemann layers need a class-based {family} manifold instance"):
+    other = type(wrong_manifold_fn(jnp.float32)).__name__
+    with pytest.raises(TypeError, match=rf"must be a class-based {family} manifold instance .*got {other}\."):
         layer_cls(wrong_manifold_fn(jnp.float32), in_dim, 3, rngs=nnx.Rngs(0))
 
 
