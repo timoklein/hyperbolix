@@ -1586,7 +1586,8 @@ actually hit.</p>
 <p>Two things worth pointing out:</p>
 <ul>
 <li><strong>Curvature is passed at call time</strong>, not stored on the layer. That's why
-  the <code>__call__</code> signatures take <code>c_in</code> / <code>c_out</code> (or <code>c</code>).</li>
+  the <code>__call__</code> signatures take <code>c_in</code> / <code>c_out</code> (or <code>c</code>). When you leave
+  <code>c_out</code> out, it defaults to <code>c_in</code>.</li>
 <li><strong>Inputs are constructed as ambient points</strong> via the constraint projection
   (<code>x_0 = sqrt(||spatial||^2 + 1/c)</code>). This is Pattern B from the
   <a href="../manifolds/#going-euclidean-manifold">Manifolds guide</a> — appropriate for

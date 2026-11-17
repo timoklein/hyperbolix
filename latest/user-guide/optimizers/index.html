@@ -1613,11 +1613,18 @@ you when you're in the rare case that does.</p>
   attention / normalization / regression heads.</li>
 <li>Learnable curvature (via the <code>LearnableCurvature</code> module).</li>
 </ul>
-<p><strong>The single exception</strong>: the legacy Ganea-style Poincaré layers
-(<code>HypLinearPoincare</code>, <code>HypRegressionPoincare</code>) parameterize their <strong>bias</strong>
-<em>directly on the Poincaré ball</em> (the kernel stays Euclidean), so they need
-<code>riemannian_adam</code> (or <code>riemannian_sgd</code>). You can usually just migrate to the
-<code>PP</code> equivalents and stay with <code>optax.adam</code>.</p>
+<p><strong>The exceptions</strong> are the layers that store a parameter <em>on the manifold</em>. They
+need <code>riemannian_adam</code> (or <code>riemannian_sgd</code>):</p>
+<ul>
+<li>The legacy Ganea-style Poincaré layers (<code>HypLinearPoincare</code>,
+  <code>HypRegressionPoincare</code>) parameterize their <strong>bias</strong> <em>directly on the Poincaré
+  ball</em> (the kernel stays Euclidean). You can usually just migrate to the <code>PP</code>
+  equivalents and stay with <code>optax.adam</code>.</li>
+<li><code>LorentzEmbedding</code> with its default <code>parameterization="manifold"</code> stores its
+  table as points on the hyperboloid. One <code>optax.adam</code> step moves the rows off
+  the hyperboloid. <code>parameterization="spatial"</code> stores a Euclidean table and
+  works with <code>optax.adam</code>.</li>
+</ul>
 <h2 id="when-to-use-what">When to Use What<a class="headerlink" href="#when-to-use-what" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1641,6 +1648,10 @@ you when you're in the rare case that does.</p>
 </tr>
 <tr>
 <td>Legacy <code>HypLinearPoincare</code> / <code>HypRegressionPoincare</code></td>
+<td><code>riemannian_adam</code></td>
+</tr>
+<tr>
+<td><code>LorentzEmbedding</code> (default <code>parameterization="manifold"</code>)</td>
 <td><code>riemannian_adam</code></td>
 </tr>
 </tbody>
@@ -1695,7 +1706,9 @@ them is just:</p>
 (<code>curvature=0.1</code>, or a callable such as <code>lambda: self.curvature()</code> for
 learnable curvature). The optimizer's bias update uses it, not the call-time
 <code>c</code>.</p>
-<p>No manual tagging step is required for these built-in layers. If you're
+<p>No manual tagging step is required for these built-in layers. The same holds
+for <code>LorentzEmbedding</code>: its default table is a <code>ManifoldParam</code> on the
+hyperboloid at the <code>c</code> given to its constructor. If you're
 writing your <strong>own</strong> manifold-valued parameter instead — e.g. a hyperbolic
 embedding table — that's when you reach for <code>ManifoldParam</code> (or the
 <code>mark_manifold_param</code> convenience wrapper around an existing <code>nnx.Param</code>)

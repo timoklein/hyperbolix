@@ -1402,6 +1402,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hyperbolix.utils.curvature.AUTO" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AUTO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyperbolix.utils.curvature.Auto" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#usage-example_1" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1658,6 +1680,28 @@
     <span class="md-ellipsis">
       
         LearnableCurvature
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyperbolix.utils.curvature.AUTO" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AUTO
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyperbolix.utils.curvature.Auto" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto
       
     </span>
   </a>
@@ -3794,9 +3838,9 @@ product — see the two lists below.</p>
 the FHCNN and FHNN linears, <code>HypLinearPoincare</code>, <code>LorentzConv2D</code>'s Euclidean convolution,
 <code>HypVQMLRPoincare</code>'s implicit-codebook matmul and <code>hybrid_regularization</code>'s <code>nnx.Linear</code>
 — carry no <code>precision</code> keyword. These are sites where <code>HIGHEST</code> actually costs
-throughput (it replaces one TF32 pass with a three-pass float32 emulation; measured +5.5 % on a
-jitted hyperbolic attention forward), and whether to pay that is the user's call, not the
-library's.</p>
+throughput (it replaces one TF32 pass with a three-pass float32 emulation; measured +10 % to
++25 % on a jitted <code>HyperbolicFullAttention</code> forward on an A100, the two ends from two sessions
+on the same card), and whether to pay that is the user's call, not the library's.</p>
 <p>To run <strong>everything</strong> in full float32, set JAX's own knob — one line, and jit-cache aware, so
 changing it re-traces::</p>
 <div class="language-text highlight"><pre><span></span><code>jax.config.update(&quot;jax_default_matmul_precision&quot;, &quot;highest&quot;)
@@ -3883,7 +3927,8 @@ and one <code>FGGLinear</code>, <code>c = 0.1</code>, trained on an A100 under t
 times over the 72 checkpoints. In the runs trained without a cap on the feature radius, the
 relative gap of the head input to float64 is 6e-4 to 7.5e-3 (maxima over the replayed states)
 and the actor logits are up to 0.14 off (the largest of the 6 144 states of one checkpoint age,
-three seeds; the median is 2.8e-4 to 1.0e-3). With <code>"highest"</code> no greedy action changes, the
+three seeds; the median is 2.8e-4 to 1.0e-3 from 32k training steps on and 8.7e-3 at
+initialisation). With <code>"highest"</code> no greedy action changes, the
 head input is within about 5e-6 and the actor logits within 1.03e-4, and the forward gaps of
 those runs drop by a factor of 740 to
 2 570. The 16 FGG products are the only products in that network that the setting changes, and
@@ -4187,6 +4232,83 @@ outward gradient is blocked and the inward one passes. One float inside,
 </span><span id="__span-0-234"><a id="__codelineno-0-234" name="__codelineno-0-234"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">raw</span> <span class="o">=</span> <span class="n">nnx</span><span class="o">.</span><span class="n">Param</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_inverse</span><span class="p">(</span><span class="n">init_c</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">param_dtype</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div><p><code>AUTO</code> is the default of <code>c_min</code> and <code>c_max</code>: it resolves each bound from the parameterization, as
+described above. <code>Auto</code> is its type.</p>
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="hyperbolix.utils.curvature.AUTO" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">hyperbolix.utils.curvature.AUTO</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#hyperbolix.utils.curvature.AUTO" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">AUTO</span> <span class="o">=</span> <span class="n">Auto</span><span class="p">()</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Default <code>c_min</code>/<code>c_max</code> of :class:<code>LearnableCurvature</code>: resolve the bound from the parameterization.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="hyperbolix.utils.curvature.Auto" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">hyperbolix.utils.curvature.Auto</span>
+
+
+<a href="#hyperbolix.utils.curvature.Auto" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Type of :data:<code>AUTO</code>, the default <code>c_min</code>/<code>c_max</code> of :class:<code>LearnableCurvature</code>.</p>
+<p><code>AUTO</code> means "resolve this clamp bound from the parameterization" (see
+:class:<code>LearnableCurvature</code>), as opposed to <code>None</code>, which disables the bound. Layers that
+build <code>LearnableCurvature</code> instances, such as :class:<code>~hyperbolix.nn_layers.LorentzMoE</code>,
+take <code>AUTO</code> as their default too and forward it. Test for it with
+<code>isinstance(bound, Auto)</code>.</p>
+
+
+
+
+
+
+
+
 
 
 

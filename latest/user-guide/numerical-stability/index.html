@@ -2647,7 +2647,10 @@
 <p>These challenges are specific to the Poincaré ball. The hyperboloid is covered <a href="#the-hyperboloids-two-point-cancellation-failure-mode">below</a>; Klein and the half-space model have their own limits, see <a href="#klein-numerics">Klein</a> and <a href="#halfspace-numerics">Half-Space</a>.</p>
 </div>
 <p>Each model's pairwise operations hold up to a scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d\)</span> (at <span class="arithmatex">\(c = 1\)</span>). Past it
-the chart cannot represent the point; that is a property of the chart, not a bug.</p>
+the chart cannot represent the point; that is a property of the chart, not a bug. The hyperboloid
+has no such ceiling below <span class="arithmatex">\(a \approx 45\)</span>, where computing its float32 time coordinate overflows;
+its float32 error grows with the radius instead (the numbers are the median <code>dist</code> error over
+pairs at distance 1).</p>
 <table>
 <thead>
 <tr>
@@ -2659,8 +2662,8 @@ the chart cannot represent the point; that is a property of the chart, not a bug
 <tbody>
 <tr>
 <td>Hyperboloid</td>
-<td>16.6 / much further</td>
-<td>the storage floor <span class="arithmatex">\(\varepsilon\sinh(a)/\sqrt{c}\)</span> of a stored point</td>
+<td>float32 error <span class="arithmatex">\(\propto \varepsilon\sinh a\)</span>: 5e-4 at 12, 6e-2 at 16.6 / much further</td>
+<td>the storage floor <span class="arithmatex">\(\varepsilon\sinh(a)/\sqrt{c}\)</span> of a stored point, which reaches 1 at 16.6</td>
 </tr>
 <tr>
 <td>Poincaré</td>
@@ -2684,7 +2687,13 @@ the chart cannot represent the point; that is a property of the chart, not a bug
 <p><strong>Float32 (default)</strong>:</p>
 <ul>
 <li>Sufficient up to scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d \approx 7\)</span>, and up to <span class="arithmatex">\(a \approx 10\)</span> outside critical operations</li>
-<li>Much faster on GPU: float64 runs at half rate on A100/H100 and 1/32–1/64 rate on consumer cards</li>
+<li>Much faster on GPU for large matrix products: on an A100 a 4096 × 4096 matmul runs at 90 to
+  100 TFLOP/s in float32 at the JAX default (TF32), 17 in full float32 (<code>"highest"</code>) and 15 in
+  float64. Small stacks of hyperbolic layers (width 256, batch 2,048, forward plus backward) take
+  0.1 to 0.6 ms per step, and there the gap is much smaller: four <code>HTCLinear</code> or <code>FGGLinear</code> layers
+  cost 5 to 25 % more in float64, and the ratio varies with the stack (two <code>HTCLinear</code> layers:
+  about 1.9×, 0.2 ms against 0.1 ms). Consumer cards run float64 at 1/32–1/64 of their float32 rate (vendor
+  specifications)</li>
 <li>Lower memory footprint (important for large models)</li>
 <li>~7 significant decimal digits</li>
 </ul>
@@ -2797,8 +2806,9 @@ the ball has capped points, and float64 is required:</p>
 </span></code></pre></div>
 </div>
 <h3 id="tf32-on-ampere-and-hopper-gpus">TF32 on Ampere and Hopper GPUs<a class="headerlink" href="#tf32-on-ampere-and-hopper-gpus" title="Permanent link">&para;</a></h3>
-<p>XLA:GPU runs float32 matmuls in <strong>TF32</strong> by default. Its 10-bit mantissa carries ~1e-3 relative
-error against float32's ~1e-7, so it silently costs three of your seven significant digits.</p>
+<p>XLA:GPU runs float32 matmuls in <strong>TF32</strong> by default. Its 10-bit mantissa has a machine
+epsilon of ~1e-3 against float32's ~1e-7 and leaves about 3e-4 relative error in a product of
+zero-mean matrices, so it silently costs three to four of your seven significant digits.</p>
 <p>hyperbolix splits its float32 dot products in two:</p>
 <ul>
 <li><strong>Geometry is pinned</strong> to <code>jax.lax.Precision.HIGHEST</code> and is not configurable, with one named exception
@@ -2824,17 +2834,28 @@ error against float32's ~1e-7, so it silently costs three of your seven signific
 <p>What TF32 costs on one layer was measured on the FGG product before it was pinned: on an A100
 (float32 against a float64 reference), the relative error of <code>FGGLinear</code> was <strong>2.6e-4</strong> at TF32
 against <strong>6.8e-8</strong> under <code>HIGHEST</code>. <code>HIGHEST</code> replaces one TF32 pass with a three-pass float32
-emulation, measured <strong>+5.5 %</strong> on a jitted hyperbolic attention forward.</p>
+emulation, measured <strong>+10 % to +25 %</strong> on a jitted <code>HyperbolicFullAttention</code> forward on an A100
+(B = 8, N = 256, 4 heads of 64; the two ends come from two sessions on the same card and code),
+and +1 to +3 % with <code>centroid_form="gemm"</code>, inside the run-to-run spread.</p>
 <p><strong>Depth decides whether you need it.</strong> At depth 2 the default and <code>HIGHEST</code> train identically; the
 float32 gradient error grows with depth (1.5 % at depth 16 for an <code>HTCLinear</code> stack against 2.5e-6
 under <code>HIGHEST</code>). For a deep or gradient-sensitive stack of these layers, set the global knob.
 Details: <a href="../../api-reference/utils/#matmul-precision"><code>hyperbolix.utils.precision</code></a>.</p>
+<p><strong>The size of a product decides whether it runs in TF32.</strong> At the JAX default, XLA compiled small
+float32 products into a fused loop, which is full precision, and larger ones into a GEMM kernel,
+which is TF32. Measured on an A100 (jax 0.9.1) with a bare <code>jnp.einsum("bi,oi-&gt;bo", x, w)</code>: a
+single row was full float32 at every width tried, 5 to 512 (relative error about 1e-7). The switch
+to TF32 (about 3e-4) came between 7 and 8 rows for a 5 → 12 product, between 4 and 5 rows for
+8 → 8, and between 1 and 2 rows for 9 → 14, 64 → 64 and 512 → 512. With the default, a sample
+evaluated alone can therefore differ from the same sample inside a batch by the TF32 error. <code>LorentzMLA</code> at the size its tests use (model width 9, 6 tokens) differed by 3.3e-3
+between one call on two sequences and two calls on one sequence each; under <code>"highest"</code> the
+difference was at most 7.6e-6, which is float32 rounding (on CPU the two are bitwise equal).</p>
 <p><strong>Why the FGG product is pinned.</strong> <code>FGGLinear</code> and <code>FGGConv2D</code> used to follow JAX as well. A
 float64 replay of a trained network changed that: a Procgen PPO agent (BigFish) with an encoder
 of 15 <code>FGGConv2D</code> and one <code>FGGLinear</code> (<code>c = 0.1</code>, trained on an A100 under the JAX default), 72
 checkpoints of 2,048 states each. At the JAX default the greedy action changed 120 times, and in
 the runs trained without a cap on the feature radius the actor logits were up to <strong>0.14</strong> off
-float64 (median 2.8e-4 to 1.0e-3). With <code>jax_default_matmul_precision="highest"</code>, which in
+float64 (median 2.8e-4 to 1.0e-3 from 32k training steps on, 8.7e-3 at initialisation). With <code>jax_default_matmul_precision="highest"</code>, which in
 that network changes only the 16 FGG products, no greedy action changed and the logits were
 within <strong>1.03e-4</strong>. The relative error entered at the first conv stage (4e-4) and stayed near
 1e-3; it did not accumulate with depth. The effect on the return was not measured.</p>
@@ -2857,11 +2878,14 @@ in a deep hierarchy, reach it easily.</p>
 single-point operations are covered in <a href="#hyperboloid-origin-chart">The Hyperboloid Origin Chart</a>,
 and the places that still lose accuracy are listed below.</p>
 <h4 id="hyperboloid-known-limitations">Known Limitations<a class="headerlink" href="#hyperboloid-known-limitations" title="Permanent link">&para;</a></h4>
-<p><code>expmap</code>, <code>ptransp</code>, <code>tangent_proj</code>, <code>tangent_inner</code>, <code>egrad2rgrad</code>, gyro <code>addition</code> and
-<code>busemann</code> are also cancellation-free. <code>is_in_manifold</code> and <code>is_in_tangent_space</code> compare the
+<p><code>expmap</code>, <code>ptransp</code>, <code>tangent_proj</code>, <code>tangent_inner</code>, <code>egrad2rgrad</code> and <code>busemann</code> are also
+cancellation-free. Gyro <code>addition</code> is not when its result lies much closer to the origin than its
+operands: with <code>x</code> at scaled radius 8 and <code>y</code> at 7.5 on the opposite ray, the float32 result (at
+scaled radius 0.5) is off by 3 to 22 %, depending on the direction, and by about 2e-10 in float64. That case is what <code>gyro_difference</code> is
+for (see <a href="#gyro-difference">Gyro-Difference and GyroBatchNorm Centering at Large Radius</a>). <code>is_in_manifold</code> and <code>is_in_tangent_space</code> compare the
 stored time slot with the value the spatial part implies, so an on-sheet point passes a fixed
 <code>atol</code> far out (see <a href="#the-atol-convention">The <code>atol</code> Convention</a>).</p>
-<p>Five places still lose accuracy at large radius:</p>
+<p>Six places still lose accuracy at large radius:</p>
 <ol>
 <li><strong><code>ptransp</code>'s direction below the float32 angular resolution.</strong> A transport step shorter than
    the point-representation floor <code>eps·sinh(a)/√c</code> is lost in the endpoints' storage rounding, and
@@ -2876,15 +2900,23 @@ stored time slot with the value the spatial part implies, so an on-sheet point p
    the origin-tangent vector off <code>gyro_difference</code> and never stores a tangent vector at the mean.
    What limits it is the storage of the two points. With <code>z</code> within O(1) of a mean at scaled
    radius <span class="arithmatex">\(a\)</span>, the stored float32 points are themselves rounded at <span class="arithmatex">\(\varepsilon\sinh a\)</span>, and no
-   formula recovers what that removes: for <code>z</code> at scaled distance 0.5 from the mean, the float32
-   gradient with respect to the mean is off by 5e-4 at <span class="arithmatex">\(a = 12\)</span> and 5e-2 at <span class="arithmatex">\(a = 16\)</span> (medians
-   over 16 directions, <code>n = 10</code>), and from <span class="arithmatex">\(a \approx 20\)</span> by order 1. With <code>z</code> at scaled radius 1
-   the same gradient stays within about 1e-5 of float64 through <span class="arithmatex">\(a = 40\)</span>. The result is
-   non-finite once the mean's spatial coordinate passes the float32 limit of 1.8e19, between
-   <span class="arithmatex">\(a = 40\)</span> and 44 at <code>c = 0.1</code> and between 44 and 46 at <code>c = 1</code>. One finite wrong output remains
-   just below that: with the mean at <span class="arithmatex">\(a = 44\)</span>, <code>z</code> at scaled radius 1 and <code>c = 1</code>, the float32
-   value is still right while the gradient with respect to the mean is off by a factor of about
-   45.</li>
+   formula recovers what that removes. For <code>z</code> at scaled distance 0.5 from the mean, displaced
+   across the mean's ray, the float32 gradient with respect to the mean, compared with float64 at
+   the unrounded points, is off by about 5e-3 at <span class="arithmatex">\(a = 12\)</span>, 0.3 at <span class="arithmatex">\(a = 16\)</span> and 1 at <span class="arithmatex">\(a = 20\)</span>
+   (relative Euclidean error of the gradient in the mean's spatial coordinates, medians over 16
+   directions, <code>n = 10</code>, <code>c = 1</code>). Up to <span class="arithmatex">\(a = 16\)</span> float64 arithmetic on the same float32-stored
+   points is off by as much, so the error comes from the storage; the float32 arithmetic adds
+   about a tenth of it at <span class="arithmatex">\(a = 12\)</span> and about half of it from <span class="arithmatex">\(a \approx 18\)</span>. With <code>z</code> at scaled
+   radius 1 the ambient (Euclidean) gradient with respect to the mean stays within about 1e-5 of
+   float64 through <span class="arithmatex">\(a = 40\)</span>; converting it to a Riemannian gradient at the far mean is a two-point
+   quantity again and has no digits left past the storage floor (off by a factor of about 20 at
+   <span class="arithmatex">\(a = 20\)</span>). Just below the float32 coordinate limit of 1.84e19 (<span class="arithmatex">\(a \approx 45\)</span> at <code>c = 1</code>) one
+   finite wrong output remains: with the mean at <span class="arithmatex">\(a = 44\)</span> the float32 value is still right while
+   the ambient gradient is off by a factor of about 45. Past the limit, float32 <code>expmap_0</code> gives
+   the mean an <code>inf</code> time coordinate and the result is NaN. A mean stored with a finite time
+   coordinate, cast from float64 for example, still gives the right value up to <span class="arithmatex">\(a \approx 87\)</span>
+   (from about 87.2 it is off, by up to 0.3 %, with no error raised), but its gradient is wrong by
+   orders of magnitude, and non-finite from <span class="arithmatex">\(a \approx 84.5\)</span>.</li>
 <li><strong>The MLR score, when the hyperplane itself sits far from the origin.</strong> The reference Lorentz
    MLR assembles an <code>O(1)</code> score from parts of size up to <code>e^(a+|ρ|)/4</code>, with <code>ρ</code> the scaled
    hyperplane offset, so a large bias costs as many digits as a large input radius: near a
@@ -2893,31 +2925,57 @@ stored time slot with the value the spatial part implies, so an on-sheet point p
    <a href="#mlr-large-bias">The MLR Score at a Large Hyperplane Offset</a> below.</li>
 <li><strong>Busemann gradients at a far stored point.</strong> When the Busemann layers score a stored float32
    point, from scaled radius <span class="arithmatex">\(a \approx 29.8\)</span> at <span class="arithmatex">\(c = 1\)</span> (<span class="arithmatex">\(29.4\)</span> at <span class="arithmatex">\(c = 0.3\)</span>) the gradients of the
-   scores with <span class="arithmatex">\(\langle x_s, \omega\rangle \ge 0\)</span> can be up to 0.9 off relative to their largest
+   scores with <span class="arithmatex">\(\langle x_s, \omega\rangle \ge 0\)</span> can be up to about 1 off relative to their largest
    entry while the scores stay right (measured on CPU; see
    <a href="#poincare-tangent-input">Tangent Inputs to the HNN++ and Busemann Layers</a>).</li>
+<li><strong>Float32 gradients of <code>dist</code> within about 2 of the coordinate limit (measured on CPU).</strong> The
+   squared time coordinate overflows float32 at <span class="arithmatex">\(a \approx 45\)</span> for <span class="arithmatex">\(c = 1\)</span> and at 43.9 for
+   <span class="arithmatex">\(c = 0.1\)</span>. Shortly below that, the gradient of <code>dist</code> with respect to the far point goes wrong
+   while the value is still right. At <span class="arithmatex">\(c = 1\)</span> the reverse-mode gradient is off by a relative 0.2
+   at <span class="arithmatex">\(a = 44\)</span> to 44.25 in dimension 2 and by 0.6 to 1 at <span class="arithmatex">\(a = 44\)</span> in dimension 64, where it is
+   already off by 0.5 to 4 % at <span class="arithmatex">\(a = 43\)</span>; the forward-mode derivative is right up to <span class="arithmatex">\(a = 44.25\)</span>
+   and off by 0.7 to 1 at 44.5. At <span class="arithmatex">\(c = 0.1\)</span> the reverse-mode gradient at <span class="arithmatex">\(a = 43\)</span> is right in
+   dimension 2 and off by 3 to 8 % in dimension 8 and by 0.3 to 0.5 in dimension 64, and both
+   modes are off by 0.7 to 1 from 43.5. On an A100 the same gradients agree with float64 to 6e-7
+   up to the limit. The A100 keeps float32 subnormals, which XLA's CPU backend flushes to zero, so
+   that flushing is the likely cause.</li>
 </ol>
 <p>See also <a href="#gyro-difference">Gyro-Difference and GyroBatchNorm Centering at Large Radius</a> and
 <a href="#pv-dist-lift">ProperVelocity <code>dist</code>/<code>logmap</code> Through the Exact Lift</a> below.</p>
 <h4 id="attention-score-floor">Full Attention's Float32 Score Floor<a class="headerlink" href="#attention-score-floor" title="Permanent link">&para;</a></h4>
 <p><code>HyperbolicFullAttention</code>'s scores are <code>(2/c + 2⟨Q,K⟩_L)/τ</code>, and <code>⟨Q,K⟩_L</code> is a difference of two
 Minkowski terms each of size <code>cosh(a_q)·cosh(a_k)/c</code>. A matrix product returns the Gram matrix only
-to absolute <code>eps</code>, so no GEMM spelling avoids the cancellation. The absolute error on one score is
-about <code>eps·cosh(a_q)·cosh(a_k)/(c·τ)</code>: in float32 (<code>c = 1</code>, <code>τ = 1</code>) 4.8e-3 at <code>a = 6</code>, 0.26 at
-<code>a = 8</code>, and 2.0 at <code>a = 9</code>. The default <code>τ = √out_features</code> divides the error and the score spread
+to absolute <code>eps</code>, so no GEMM spelling avoids the cancellation. The absolute error on one score
+has the size <code>eps·cosh(a_q)·cosh(a_k)/(c·τ)</code>: in float32 (<code>c = 1</code>, <code>τ = 1</code>) 4.8e-3 at <code>a = 6</code>, 0.26
+at <code>a = 8</code>, and 2.0 at <code>a = 9</code>. Measured on 12 tokens in 16 dimensions, the median score is off by
+about half of that and the worst of the 144 scores by about 1 to 4 times it. The default <code>τ = √out_features</code> divides the error and the score spread
 alike, so from <code>a ≈ 8</code> the error still exceeds the spread softmax is meant to resolve, and the
 weights come out wrong while staying finite.</p>
 <p>The cheaper first remedy is a <code>HyperboloidGyroRMSNorm</code> in front of the layer, or a smaller <code>c</code>.
-<code>score_dtype=jnp.float64</code> runs the score arithmetic as a float64 island and casts back before the
-softmax; it does not help activations that are themselves stored in float32 past <code>a ≈ 8</code>.</p>
+<code>score_dtype=jnp.float64</code> computes the scores as a float64 island: it casts the spatial parts of
+the queries and keys, rebuilds both time coordinates from them in float64, and casts the scores
+back before the softmax. Its scores are those of a float64 layer fed the same float32 spatial
+coordinates; what remains is the rounding of the stored spatial part. Against a float64 layer on
+the unrounded points (<code>c = 1</code>, <code>τ = 1</code>, 16 spatial dimensions, 12 tokens, query and key clouds at
+scaled radius <code>a</code> whose directions lie within about <code>8/sinh(a)</code> of each other, worst of three
+draws), the largest attention-weight error at <code>a = 4 / 8 / 12</code> is 7.5e-5 / 0.21 / 1.0 by default
+and 9.4e-7 / 3.4e-5 / 1.7e-3 with the island; other draws move these maxima by up to a factor
+of 2. The value aggregation still runs in float32: in self-attention the island's output lies
+1.2e-4 from the float64 output at <code>a = 8</code> and 7.7e-3 at <code>a = 12</code> (geodesic distance), against
+6e-4 to 1e-2 (depending on the draw) and 4.2 by default. Up to 1.5.0 the island also cast the
+stored float32 time coordinates, which carry their own rounding into the cancelling difference,
+and gained at most about 2× over the default (nothing in the attention weights at <code>a = 12</code>).</p>
 <p>The value aggregation has its own form, <code>lorentz_midpoint(form=...)</code>, set by <code>centroid_form</code> on
 <code>HyperbolicFullAttention</code> and <code>LorentzMLA</code>. <code>"variance"</code> (the default of <code>lorentz_midpoint</code> and
 <code>HyperbolicFullAttention</code>) is accurate for far-out values but costs <code>O(N·M·D)</code> work and compiles
-slowly on an A100: <code>LorentzMLA</code> at S = 512 takes 104 s against 9.6 s and did not finish at S = 2048
-in 10 min; <code>HyperbolicFullAttention</code> at N = 512 takes 15.9 s against 4.0 s. <code>"gemm"</code> (the default of
+slowly on an A100. The forward-plus-backward step of <code>LorentzMLA</code> at S = 512 takes about 55 s
+against 9 s (jax 0.9.1) and did not finish at S = 2048 in 10 min; a forward-only jit at S = 512
+takes about 9 min against 3 s. <code>HyperbolicFullAttention</code> at N = 512 takes 15 s against 5 s
+(forward only: 12 s against 2 s). <code>"gemm"</code> (the default of
 <code>LorentzMLA</code>, as in HELM) is one GEMM, but in float32 it loses the centroid once the <em>values</em> pass
-<code>a ≈ 6</code>, even when the scores are accurate: values at <code>a ≈ 9</code> give 11.4 nats of error against 6.4e-4
-for <code>"variance"</code>. bfloat16 activations (<code>eps</code> 2^16 times float32's) make both worse.</p>
+<code>a ≈ 6</code>, even when the scores are accurate: values at <code>a ≈ 9</code> that lie on one geodesic ray
+(measured at <code>c = 0.5</code>) put the centroid 11.4 off in geodesic distance, against 6.4e-4 for
+<code>"variance"</code>. bfloat16 activations (<code>eps</code> 2^16 times float32's) make both worse.</p>
 <p><code>LorentzMLA(score_precision=...)</code> sets the precision of its two score einsums only. The default keeps
 them at <code>HIGHEST</code>. A lower value (<code>DEFAULT</code> is TF32 on Ampere/Hopper) adds its own rounding to the
 cancellation above. The centroid GEMM always stays at <code>HIGHEST</code>.</p>
@@ -3081,7 +3139,7 @@ unrounded input is 8e-3–1.6e-2 in float32, 2e-3–2.6e-3 with a float64 head o
 and 2e-4 (32 dimensions) or 5e-5 (512) with the time coordinate rebuilt, which is the rounding of
 the spatial coordinates themselves. With float64 inputs as well, the law puts a logit error of 1e-3
 at <code>a + |ρ| ≈ 30.5</code>; measured there it was 2e-3–6e-3. A cancellation-free half-angle form was
-measured at 1.8–2.5× the cost and not adopted.
+measured at 1.8–2.5× the cost (forward plus backward, on an H100) and not adopted.
 <code>FGGLinear</code>'s spacelike <code>V</code> has a related <code>eps</code> floor on its column norm, which matters only for a
 small weight column with a large bias.</p>
 <h4 id="input-overflow-fingerprint">Input Overflow<a class="headerlink" href="#input-overflow-fingerprint" title="Permanent link">&para;</a></h4>
@@ -3170,6 +3228,11 @@ through as <code>inf</code> rather than NaN.</p>
 </tr>
 </tbody>
 </table>
+<p>At the small end, the float32 square of a coordinate below <span class="arithmatex">\(1.1\times10^{-19}\)</span> (the square root of
+the smallest normal float32) is flushed to zero (measured on CPU), so for a point whose coordinates
+all lie below it, <code>Hyperboloid.dist_0</code>, Poincaré <code>dist_0</code>, and Poincaré and Klein <code>dist</code> to the
+origin return 0 with a zero gradient (Klein <code>dist</code> is already off when only some coordinates lie below
+it). <code>ProperVelocity.dist_0</code> and <code>Hyperboloid.logmap_0</code> use the two-pass norm and are right there.</p>
 <p>Where a norm is a <em>divisor</em>, floor it multiplicatively <strong>around</strong> the square root,
 <code>floor_at(safe_sqrt(sum(x**2)), MIN_NORM)</code>, not under it: under the <code>sqrt</code>, the untaken branch of
 the surrounding <code>where</code> still has <code>sqrt'(0) = inf</code>, and <span class="arithmatex">\(0 \times \infty\)</span> is NaN. When the floored
@@ -3251,7 +3314,11 @@ float64, enable <code>jax_enable_x64</code> and use <code>Poincare(dtype=jnp.flo
 the layers already project their outputs.</p>
 <p>Near the origin, float32 accuracy depends on the backend's transcendental kernels, which are a few
 ulps off; hyperbolix's own <code>tanh</code>/<code>atanh</code> wrappers (float32: odd series below 1/8, <code>expm1</code>/<code>log1p</code>
-forms above) make the CPU backend match the GPU there.</p>
+forms above) make the CPU backend match the GPU there. In the tail the float32 derivative of
+<code>math_utils.tanh</code> is off by up to 9e-3 (relative) for <span class="arithmatex">\(\lvert x\rvert\)</span> in <span class="arithmatex">\([4, 6)\)</span> and up to
+9e-2 in <span class="arithmatex">\([6, 7.15)\)</span>, just below the output clamp. That is the same order as <code>jnp.tanh</code>'s (1.2e-2
+and 0.15 there); it is left as it is, because the fix would be a custom derivative inside a
+transcendental.</p>
 <h3 id="poincare-roundtrip-ceiling">The Round-Trip Ceiling<a class="headerlink" href="#poincare-roundtrip-ceiling" title="Permanent link">&para;</a></h3>
 <p><code>proj</code> keeps points inside <span class="arithmatex">\(1/\sqrt{c}\)</span> by an absolute margin of <code>eps**0.75</code>
 (<code>_gyrovector_core._max_norm</code>). A stored point therefore has
@@ -3279,8 +3346,15 @@ a_{\max} = \sqrt{c}\,d_0 = 2\,\mathrm{atanh}\bigl(1 - \sqrt{c}\,\varepsilon^{0.7
 <td>13.80</td>
 <td>28.88</td>
 </tr>
+<tr>
+<td>100</td>
+<td>10.35</td>
+<td>25.42</td>
+</tr>
 </tbody>
 </table>
+<p>Since the margin is small, <span class="arithmatex">\(a_{\max}(c) \approx a_{\max}(1) - \ln\sqrt{c}\)</span>: a larger curvature
+lowers the ceiling in scaled radius, by <span class="arithmatex">\(\ln 10 = 2.30\)</span> at <span class="arithmatex">\(c = 100\)</span>.</p>
 <p>Past the ceiling <code>expmap_0</code> saturates, and <code>logmap_0(expmap_0(v))</code> returns the ceiling instead of
 <code>v</code>. In float32 below <span class="arithmatex">\(c \approx 0.035\)</span> the <code>tanh</code>/<code>atanh</code> wrappers' clip at <span class="arithmatex">\(1 - 10\varepsilon\)</span>
 binds first, and <code>expmap_0</code>, <code>logmap_0</code> and <code>dist_0</code> stop at <span class="arithmatex">\(a \approx 14.33\)</span>.</p>
@@ -3306,8 +3380,26 @@ true 14.4, with gradient relative error 1.0.
   <span class="arithmatex">\(1 + 2sc\langle x, y\rangle + c^2\lVert x\rVert^2\lVert y\rVert^2\)</span>. <code>_mobius_denominator</code>
   rewrites <span class="arithmatex">\(1 + t^2\)</span> as <span class="arithmatex">\((1 - t)^2 + 2t\)</span> with <span class="arithmatex">\(t = c\,r_x r_y\)</span>, so the subtraction <span class="arithmatex">\(1 - t\)</span> happens
   before the square. <code>logmap</code> takes its length from the same <code>arcsinh</code> argument as <code>dist</code>.
+  <code>_mobius_denominator</code> floors both norms at <code>MIN_NORM</code> <span class="arithmatex">\(= 10^{-15}\)</span>, so for an operand whose
+  norm lies strictly between 0 and 1e-15 (an exact zero is fine) the values stay right but the
+  Jacobians do not: that of <code>addition</code> with respect to such an operand is off by a relative
+  error that grows with the operand's norm, from about 5e-2 at norm 1e-16 to order 1 just below
+  1e-15, and that of <code>expmap</code> with respect to a tangent of norm 1e-20 at a base point at scaled
+  radius 8 by 4 to 8 (relative; dimensions 8 and 2). Second derivatives are wrong at the exact
+  zero as well, where the first derivative is right: the Hessian of <code>addition</code> in an operand
+  that is exactly zero is wrong by up to order <span class="arithmatex">\(c\lVert x\rVert/\)</span><code>MIN_NORM</code> (6e14 in one
+  direction where the true entry is <span class="arithmatex">\(-0.98\)</span>, at <span class="arithmatex">\(\lVert x\rVert = 0.5\)</span>, <span class="arithmatex">\(c = 1\)</span>, both dtypes), and
+  <code>expmap</code> inherits this at a zero tangent. In float32 the Hessian of <code>expmap</code> in a small tangent
+  is unreliable in general: NaN for norms of 1e-15 to 1e-13, wrong by orders of magnitude at
+  1e-10, off by up to order 1 at 1e-6 (0.003 to 1.4, depending on direction and model) and by up
+  to a few 1e-4 at 1e-3 (float64 at norm 1e-10: 2e-6 on the Poincaré ball, 5e-5 for
+  Stereographic). The float32 Hessian of Stereographic <code>logmap</code> in its base point is
+  NaN at coincident points.
 - <strong>Transport.</strong> <code>ptransp</code> uses the gyration regrouped in <span class="arithmatex">\(s = x + y\)</span> (<span class="arithmatex">\(= y - x\)</span> for the transport), where each coefficient is
-  <span class="arithmatex">\(O(1 - c\lVert x\rVert^2)\)</span> on its own; <code>ptransp(v, x, x)</code> returns <code>v</code> exactly.
+  <span class="arithmatex">\(O(1 - c\lVert x\rVert^2)\)</span> on its own; <code>ptransp(v, x, x)</code> returns <code>v</code> exactly. In
+  dimension 1, where the gyration is exactly the identity, <code>gyration</code> of two operands on opposite
+  sides near the chart ceiling is off by about 1e-6 to 1e-5 (relative, float64, scaled radii near
+  27 and 26, <span class="arithmatex">\(c = 0.1\)</span>), far above the inputs' rounding.
 - <strong><code>apollonian_dist</code></strong> writes its <span class="arithmatex">\(G^2\)</span> as <span class="arithmatex">\(B_x B_y + c\lVert x - y\rVert^2\)</span>, a sum of two
   non-negative terms.</p>
 </li>
@@ -3319,6 +3411,10 @@ gradients of capped points. Some float32 gradients at capped points stay wrong, 
 up to 1.0 (1.3 for Klein <code>addition</code>): Poincaré <code>expmap</code> with respect to its base point, Poincaré <code>addition</code> with respect to
 <span class="arithmatex">\(y\)</span>, Klein <code>expmap</code> with respect to its base point, and Klein <code>addition</code> on pairs of one capped and
 one free point. The floor is not the cause.</p>
+<p>Below the cap, the Jacobian of Poincaré <code>expmap</code> with respect to the tangent carries a relative
+error of the order of <span class="arithmatex">\(\varepsilon\lambda_x\)</span>, with <span class="arithmatex">\(\lambda_x = 2/(1 - c\lVert x\rVert^2)\)</span> the conformal
+factor at the base point: about 1e-4 at scaled radius 8, 1e-3 at 10 and 5e-3 at 12 in float32 (for
+steps whose result stays below the cap), and 5e-8 at 20 and 2e-5 at 26 in float64.</p>
 <h3 id="poincare-tangent-input">Tangent Inputs to the HNN++ and Busemann Layers<a class="headerlink" href="#poincare-tangent-input" title="Permanent link">&para;</a></h3>
 <p><code>HypRegressionPoincarePP</code> and <code>HypLinearPoincarePP</code> with <code>input_space="tangent"</code>,
 <code>HypConv2DPoincare</code> (tangent in, tangent out), and the four Busemann layers with
@@ -3329,13 +3425,18 @@ and <span class="arithmatex">\(\lambda_x - 1 = \cosh(2t)\)</span>, and <code>Hyp
 the lift in closed form.</p>
 <p>These layers are therefore not bound by the ball's ceiling,
 <span class="arithmatex">\(t = \mathrm{atanh}(1 - \sqrt{c}\,\varepsilon^{0.75})\)</span> ≈ 6.32 at <span class="arithmatex">\(c = 1\)</span>: past it the scores keep
-growing, and the conv output's norm is not capped. At <span class="arithmatex">\(t = 8\)</span> the float32
-outputs match float64 to ≤ 1.6e-6 (max-abs error over max-abs value).</p>
+growing, and the conv output's norm is not capped. At <span class="arithmatex">\(t = 8\)</span> the float32 outputs match
+float64 to about 1e-5 or better for <code>HypRegressionPoincarePP</code> (9e-7 to 1.2e-5, depending on the
+draw) and to below 5e-7 for <code>HypConv2DPoincare</code> and <code>HypRegressionPoincareBusemann</code> (max-abs
+error over max-abs value). <code>HypLinearPoincarePP</code> returns a ball point, so its output still stops
+at the chart ceiling: at <span class="arithmatex">\(t = 8\)</span> its float32 output sits at scaled radius 12.66 and its float64
+output at 27.73.</p>
 <p>The Hyperboloid Busemann layers place <span class="arithmatex">\(v = (0, v_s)\)</span> at scaled radius <span class="arithmatex">\(t = \sqrt{c}\,\lVert v_s\rVert\)</span>
 and score <span class="arithmatex">\(\sqrt{c}\,B^\omega = \log(\cosh t - \sinh t\,\langle\omega, \hat v\rangle)\)</span>. For random <span class="arithmatex">\(\omega\)</span> their float32 outputs and gradients stay within 1.2e-6 of float64 from
 <span class="arithmatex">\(t = 1\)</span> to <span class="arithmatex">\(t = 50\)</span>. One limit remains on every route: for <span class="arithmatex">\(\omega\)</span> within float32 rounding of
 <span class="arithmatex">\(\hat v\)</span>, the score depends on the misalignment of <span class="arithmatex">\(\omega\)</span> and <span class="arithmatex">\(\hat v\)</span> times <span class="arithmatex">\(\sinh t\)</span>, which
-float32 cannot resolve at large <span class="arithmatex">\(t\)</span> (at <span class="arithmatex">\(t = 20\)</span>, <span class="arithmatex">\(\sqrt{c}\,B\)</span> is off by 1.7 to 1.9).</p>
+float32 cannot resolve at large <span class="arithmatex">\(t\)</span> (at <span class="arithmatex">\(t = 20\)</span>, <span class="arithmatex">\(\sqrt{c}\,B\)</span> is off by 0.1 to 3, median 0.8,
+over 32 draws of <span class="arithmatex">\(\omega\)</span> rounded from <span class="arithmatex">\(\hat v\)</span>).</p>
 <p>The Busemann layers check the manifold at construction and raise a <code>TypeError</code> for a wrong one:
 <code>HypRegressionPoincareBusemann</code> and <code>HypLinearPoincareBusemann</code> accept only a <code>Poincare</code>,
 <code>HypRegressionHyperboloidBusemann</code> and <code>HypLinearHyperboloidBusemann</code> only a <code>Hyperboloid</code>.</p>
@@ -3466,8 +3567,10 @@ in float32 for <span class="arithmatex">\(\|x\|\)</span> up to at least <span cl
 </div>
 <h3 id="where-each-model-stops">Where Each Model Stops<a class="headerlink" href="#where-each-model-stops" title="Permanent link">&para;</a></h3>
 <p>Pairwise operations hold to the scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d\)</span> below (<span class="arithmatex">\(c = 1\)</span>). Past it the chart
-cannot represent the point, which is not a bug. To choose a manifold by use case, see
-<a href="../manifolds/#choosing-a-manifold">Choosing a manifold</a>.</p>
+cannot represent the point, which is not a bug. The hyperboloid has no such ceiling below
+<span class="arithmatex">\(a \approx 45\)</span>, where computing its float32 time coordinate overflows; its float32 error grows
+with the radius instead (the numbers are the median <code>dist</code> error over pairs at distance 1).
+To choose a manifold by use case, see <a href="../manifolds/#choosing-a-manifold">Choosing a manifold</a>.</p>
 <table>
 <thead>
 <tr>
@@ -3479,8 +3582,8 @@ cannot represent the point, which is not a bug. To choose a manifold by use case
 <tbody>
 <tr>
 <td>Hyperboloid</td>
-<td>16.6 / much further</td>
-<td>the storage floor <span class="arithmatex">\(\varepsilon\sinh(a)/\sqrt{c}\)</span>; the constraint can drift under Euclidean updates (<a href="#the-atol-convention">The <code>atol</code> Convention</a>, <a href="#hyperboloid-known-limitations">Known Limitations</a>)</td>
+<td>float32 error <span class="arithmatex">\(\propto \varepsilon\sinh a\)</span>: 5e-4 at 12, 6e-2 at 16.6 / much further</td>
+<td>the storage floor <span class="arithmatex">\(\varepsilon\sinh(a)/\sqrt{c}\)</span>, which reaches 1 at 16.6; the constraint can drift under Euclidean updates (<a href="#the-atol-convention">The <code>atol</code> Convention</a>, <a href="#hyperboloid-known-limitations">Known Limitations</a>)</td>
 </tr>
 <tr>
 <td>ProperVelocity</td>
@@ -3549,7 +3652,13 @@ computed through the closed forms that degrades. The wider float32 window gives 
 well-behaved gradients below the cutover at the cost of a seam just above it: there the curvature
 gradient has relative error of order <span class="arithmatex">\(\varepsilon/(\lvert\kappa\rvert\,\lVert x\rVert^2)\)</span>, with
 median 1–2 % and worst case 8–30 % (up to 450 % for <code>logmap</code>) over 200 points with
-<span class="arithmatex">\(\lVert x\rVert \approx 0.85\)</span>, and <code>logmap</code>'s gradient changed sign on 1–2 of them.</p>
+<span class="arithmatex">\(\lVert x\rVert \approx 0.85\)</span>, and <code>logmap</code>'s gradient changed sign on 1–2 of them.
+The same error holds at every <span class="arithmatex">\(\lvert c\rvert\)</span> above the cutover, not only next to it, and in
+every <code>Poincare</code> operation, which has no Taylor branch: with <span class="arithmatex">\(u = \lvert c\rvert\,\lVert x\rVert^2\)</span>
+it is up to about <span class="arithmatex">\(3\varepsilon/u\)</span>, in float32 0.3 at <span class="arithmatex">\(u = 10^{-6}\)</span> and 3e-3 at
+<span class="arithmatex">\(u = 10^{-4}\)</span> (<code>dist</code>, <code>dist_0</code>, <code>expmap_0</code> and <code>logmap_0</code>, <span class="arithmatex">\(\lvert c\rvert\)</span> from <span class="arithmatex">\(10^{-5}\)</span> to 1).
+It matters only while every point sits that close to the origin, for example at initialization
+with a learnable curvature.</p>
 <p>The Taylor branch is additionally gated on its convergence region <span class="arithmatex">\(\lvert\kappa\rvert\,\lVert x\rVert^2 &lt; 0.01\)</span>: points at extreme chart radii (<span class="arithmatex">\(\lVert x\rVert \sim 1/\sqrt{\lvert\kappa\rvert}\)</span>, e.g. spherical points far from the chart origin) always keep the exact closed form, no matter how small <span class="arithmatex">\(\lvert\kappa\rvert\)</span> is.</p>
 <p>At exactly <span class="arithmatex">\(c = 0\)</span> the Möbius denominator's signed factorizations have the literal curvature slope
 <span class="arithmatex">\(2s\langle x, y\rangle\)</span> for nonzero operands, so a signed learnable curvature gets a gradient of
@@ -3633,7 +3742,7 @@ stored points:</p>
 <p><code>Klein.dist</code>'s error does not depend on the separation, and it stays at or below the chart
 floor <span class="arithmatex">\(\varepsilon\cosh^2(a)\)</span> (last column, explained <a href="#klein-chart-ceiling">below</a>). <code>Klein.logmap</code>'s error is the
 same size. <code>Klein.dist</code> forward+backward also runs in about half the
-time of the Eq. 4 spelling on an A100.</p>
+time of the Eq. 4 spelling on an A100 (1e6 pairs; at 2,048 pairs the two do not separate).</p>
 <h3 id="klein-chart-ceiling">The Chart Ceiling and Floor<a class="headerlink" href="#klein-chart-ceiling" title="Permanent link">&para;</a></h3>
 <p><strong>Ceiling.</strong> <code>proj</code> caps <span class="arithmatex">\(\lVert x\rVert\)</span> at <span class="arithmatex">\(1/\sqrt{c} - \varepsilon^{0.75}\)</span>, the Poincaré
 ball's <a href="#poincare-roundtrip-ceiling">margin</a>. A Klein point has
@@ -3680,6 +3789,10 @@ geodesic through <span class="arithmatex">\(o\)</span>; along that axis it does 
   the smallest normal number (87.34 in float32, 708.40 in float64), returns an infinite height with
   NaN horizontal coordinates. The gyro operations inherit this limit through <span class="arithmatex">\(\exp_o\)</span>.</li>
 </ul>
+<p>The reverse-mode gradient of such a step fails earlier. For an exactly vertical upward step the
+float32 <code>jax.jacrev</code> of <code>expmap_0</code>, and of <code>gyro_difference</code> on a vertical pair, is not finite
+from <span class="arithmatex">\(\theta \approx 33\)</span> on, while the value is right and float64 is finite (tried up to 80); from
+<span class="arithmatex">\(\theta \approx 44\)</span> forward mode fails too. A step <span class="arithmatex">\(10^{-6}\)</span> off the vertical has a finite Jacobian.</p>
 <h2 id="hyperbolic-function-overflow">The <code>math_utils</code> Wrappers<a class="headerlink" href="#hyperbolic-function-overflow" title="Permanent link">&para;</a></h2>
 <p>The manifolds call the transcendentals in <code>hyperbolix.utils.math_utils</code>, not the <code>jnp</code> builtins.
 Each has a guard that changes neither value nor gradient inside its valid range:</p>
@@ -3724,8 +3837,9 @@ square directly,</p>
 <p>cancels. On the sheet both terms are of size <span class="arithmatex">\(\lVert s\rVert^2\)</span>, the squared spatial radius of the
 inputs, while their difference is only <span class="arithmatex">\(O(1/c)\)</span>, so the float32 relative error grows as
 <span class="arithmatex">\(\varepsilon_{32}\, c\, \lVert s\rVert^2\)</span> (<span class="arithmatex">\(\varepsilon_{32} \approx 1.19\times10^{-7}\)</span>). At
-<span class="arithmatex">\(c = 0.1\)</span> it reaches <span class="arithmatex">\(10^{-3}\)</span> at a spatial radius of about 290, gradients about three times
-sooner, and past <span class="arithmatex">\(\lVert s\rVert \sim 10^4\)</span> the computed square flips sign.</p>
+<span class="arithmatex">\(c = 0.1\)</span> it reaches <span class="arithmatex">\(10^{-3}\)</span> at a spatial radius of about 290, where the gradient's error is about
+three times that of the residual's output, and past <span class="arithmatex">\(\lVert s\rVert \sim 10^4\)</span> the computed square
+flips sign.</p>
 <p>Hyperbolix instead evaluates <span class="arithmatex">\(\langle h,h\rangle_L\)</span> from exact identities, valid for any weights
 as long as the inputs are on the sheet. For the residual <span class="arithmatex">\(h = x + w\,y\)</span> with scalar weight <span class="arithmatex">\(w\)</span>:</p>
 <div class="arithmatex">\[
@@ -3758,7 +3872,9 @@ x_0-q,&amp;q&lt;0.
 \end{cases}
 \]</div>
 <p>The direction <span class="arithmatex">\(v\)</span> must be a unit vector: normalize learned directions before the call. At the
-origin the spatial gradient is exactly <span class="arithmatex">\(-v\)</span> in exact arithmetic. The batched score
+origin the spatial gradient is exactly <span class="arithmatex">\(-v\)</span> in exact arithmetic. Near the origin the value is
+accurate to an absolute <span class="arithmatex">\(\varepsilon\)</span>, not a relative one: for a point at radius 1e-8 along <span class="arithmatex">\(v\)</span>,
+float32 returns 0 where the exact value is <span class="arithmatex">\(-10^{-8}\)</span>, while the gradient stays right. The batched score
 <code>nn_layers.busemann_core._busemann_score</code>, used by the Busemann MLR/FC layers, applies the same
 formula.</p>
 <p>For a model that needs float64 only in the score, use a float64 island: cast <span class="arithmatex">\(\hat x\)</span> and the class
@@ -3816,7 +3932,12 @@ radius 3e-4 and above 1 at 1e-7, with a correct value. With the displacement for
 <p>A nonzero point closer to the origin than <code>MIN_NORM</code> <span class="arithmatex">\(=10^{-15}\)</span> is below what the frame
 resolves, because it floors the radius there. <code>logmap</code> still returns the right value for such a
 point, but its Jacobian with respect to that point is off by order 1. The exact origin is not
-affected.</p>
+affected in <code>logmap</code>, but it is in <code>Hyperboloid.dist</code> and <code>ProperVelocity.dist</code>: with one
+endpoint at the exact origin, the distance carries a constant absolute error of <code>MIN_NORM/2</code> =
+5e-16 at <code>c = 1</code> (a relative error of 5e-6 at radius 1e-10), and below radius 1e-15 it comes out
+a factor 1.414 too large. <code>Hyperboloid.sqdist</code> squares that distance, so it is a factor 2 too
+large there. <code>dist_0</code> has no such error, so use it for a distance from the origin. In float32
+the error is below rounding from radius 1e-8 up.</p>
 <p><code>tangent_norm</code>, <code>tangent_inner</code> and the geodesic length inside <code>expmap</code> have the same property
 with respect to the base point: their radial/perpendicular split of the tangent vector divides by
 <span class="arithmatex">\(\lVert x_s\rVert\)</span>. For a base point with scaled spatial radius at most 1e-1 they take the
@@ -3833,6 +3954,13 @@ ray, <span class="arithmatex">\(y = x\)</span> included). Its angular leg is a n
 <code>gyro_difference</code> have correct gradients there as well as correct values.</p>
 <p>PV <code>logmap</code>, <code>gyro_difference</code> and <code>ptransp</code> inherit this through their exact lifts (below). The
 tests check these derivatives against analytic or finite-difference references.</p>
+<p>Two float32 derivatives with respect to <code>c</code> are wrong while the values are right. The second
+derivative of <code>logmap_0</code>, <code>expmap_0</code> and <code>scalar_mul</code> at the exact origin is NaN, on the
+hyperboloid and in proper velocity (the first derivative is right). Forward-mode <code>jax.jacfwd</code> of
+<code>Hyperboloid.expmap</code> is <code>inf</code> at <code>c = 1e-3</code> for a base point at scaled radius 8 and a tangent of
+scaled length 30, where <code>jax.jacrev</code> is right. On the Poincaré ball the float32 first derivative
+with respect to <code>c</code> of the same three origin maps at the exact origin is NaN at <code>c = 1e-10</code> (true
+value 0); at <code>c = 1e-6</code> and in float64 it is right.</p>
 <h3 id="pv-operation-lifts">ProperVelocity Through the Hyperboloid Lift<a class="headerlink" href="#pv-operation-lifts" title="Permanent link">&para;</a></h3>
 <p><a id="pv-dist-lift"></a>
 <a id="pv-tangent-metric"></a></p>
@@ -3908,8 +4036,9 @@ argument selects which one runs.</p>
 <h4 id="poincare-metric-tensor-dist-0">Slot 2 Reads the Radius Through <code>arcsinh</code><a class="headerlink" href="#poincare-metric-tensor-dist-0" title="Permanent link">&para;</a></h4>
 <p>The metric-tensor distance is
 <span class="arithmatex">\(d_0(x) = \frac{1}{\sqrt{c}}\operatorname{acosh}\big(1 + \frac{2c\lVert x\rVert^2}{1 - c\lVert x\rVert^2}\big)\)</span>,
-whose whole radial signal is a small perturbation of a leading 1: through <code>acosh</code>'s domain floor,
-every float32 radius below <span class="arithmatex">\(\approx 1.1\times10^{-3}/\sqrt{c}\)</span> would round to a distance of 0, with
+whose whole radial signal is a small perturbation of a leading 1: through <code>acosh</code>'s domain floor
+(<code>1 + 10·eps</code>), every float32 radius below <span class="arithmatex">\(\approx 7.7\times10^{-4}/\sqrt{c}\)</span> would read as the same
+distance, <span class="arithmatex">\(\operatorname{acosh}(1 + 10\,\varepsilon_{32})/\sqrt{c} \approx 1.5\times10^{-3}/\sqrt{c}\)</span>, with
 zero gradient. Slot 2 therefore evaluates it with the half-angle identity
 <span class="arithmatex">\(\operatorname{acosh}(1 + 2t) = 2\operatorname{arcsinh}(\sqrt{t})\)</span>,</p>
 <div class="arithmatex">\[
@@ -3932,9 +4061,10 @@ slot 0's body. <code>dist(x, x)</code> is exactly 0, with gradient 0.</p>
 <li>Far points: no version helps. From <span class="arithmatex">\(a = \sqrt{c}\,d \approx 10\)</span>, use float64 or the hyperboloid
   (see the <a href="#precision-requirements-by-distance">table</a>); the ball cannot store a point past
   <span class="arithmatex">\(a = 12.65\)</span> (float32) / 27.73 (float64) at <span class="arithmatex">\(c = 1\)</span> (see
-  <a href="#poincare-roundtrip-ceiling">The Round-Trip Ceiling</a>). The hyperboloid holds float32 accuracy to
-  <span class="arithmatex">\(a \approx 16.6\)</span> (the storage floor) and stores points up to <span class="arithmatex">\(a \approx 45\)</span> at <span class="arithmatex">\(c = 1\)</span>, where the
-  time coordinate overflows (see <a href="#input-overflow-fingerprint">Input Overflow</a>). Convert with
+  <a href="#poincare-roundtrip-ceiling">The Round-Trip Ceiling</a>). The hyperboloid has no such
+  ceiling up to <span class="arithmatex">\(a \approx 45\)</span> at <span class="arithmatex">\(c = 1\)</span>, where computing the time coordinate overflows (see
+  <a href="#input-overflow-fingerprint">Input Overflow</a>); its float32 error grows as <span class="arithmatex">\(\varepsilon\sinh a\)</span>,
+  to a median <code>dist</code> error of 5e-4 at <span class="arithmatex">\(a = 12\)</span> and 6e-2 at 16.6 for pairs at distance 1. Convert with
   <code>isometry_mappings.poincare_to_hyperboloid</code>.</li>
 </ul>
 <h3 id="hyperboloid-distance-versions">Hyperboloid Distance Versions<a class="headerlink" href="#hyperboloid-distance-versions" title="Permanent link">&para;</a></h3>
@@ -4049,8 +4179,9 @@ default at any radius (see <a href="#hyperboloid-known-limitations">above</a>).<
   is fine to <span class="arithmatex">\(a \approx 10\)</span>; use float64 for critical operations from there, and float64 is
   required past the float32 chart ceiling (<span class="arithmatex">\(a \approx 12.65\)</span> at <span class="arithmatex">\(c = 1\)</span>; see the
   <a href="#precision-requirements-by-distance">table</a>).</li>
-<li><strong>For large radii, use the hyperboloid or <code>ProperVelocity</code>.</strong> The hyperboloid holds float32
-  accuracy to <span class="arithmatex">\(a \approx 16.6\)</span> (see <a href="#hyperboloid-known-limitations">Known Limitations</a>);
+<li><strong>For large radii, use the hyperboloid or <code>ProperVelocity</code>.</strong> The hyperboloid's float32
+  error grows as <span class="arithmatex">\(\varepsilon\sinh a\)</span> (5e-4 at <span class="arithmatex">\(a = 12\)</span>, 6e-2 at 16.6; see
+  <a href="#hyperboloid-known-limitations">Known Limitations</a>);
   <code>ProperVelocity</code> lives in unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> and trains with plain <code>optax.adam</code>.</li>
 <li><strong>Use <code>VERSION_MOBIUS_DIRECT</code> for Poincaré distance</strong> (the default). <code>VERSION_MOBIUS</code>
   saturates on far pairs, past <span class="arithmatex">\(\sqrt{c}\,d \approx 12.6\)</span> in float32 and 27.7 in float64 at

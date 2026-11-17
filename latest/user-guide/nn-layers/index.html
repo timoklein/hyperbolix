@@ -1999,7 +1999,7 @@ tables below collapse this into per-task decisions.</p>
 <tr>
 <td><code>HTCLinear</code></td>
 <td>Hyperboloid</td>
-<td><strong>Default</strong> for hyperboloid FC — simple, robust, just works. Also supports cross-curvature (<code>c_in != c_out</code>) for Hypformer blocks</td>
+<td><strong>Default</strong> for hyperboloid FC — simple, robust, just works. Also supports cross-curvature (<code>c_in != c_out</code>) for Hypformer blocks; <code>c_out</code> defaults to <code>c_in</code></td>
 </tr>
 <tr>
 <td><code>FGGLinear</code></td>
@@ -2275,8 +2275,11 @@ optimizer choice:</p>
 </tbody>
 </table>
 <p><strong>Bottom line:</strong> every layer keeps its kernel Euclidean, so plain <code>optax.adam</code>
-works for all of them except the legacy Ganea layers' manifold-valued bias;
-prefer their <code>PP</code> equivalents, or see the <a href="../optimizers/">Riemannian Optimizers guide</a>.</p>
+works for all of them except two cases. The legacy Ganea layers have a
+manifold-valued bias; prefer their <code>PP</code> equivalents. <code>LorentzEmbedding</code> with its
+default <code>parameterization="manifold"</code> stores its table on the hyperboloid; train
+it with <code>riemannian_adam</code> or pass <code>parameterization="spatial"</code>. See the
+<a href="../optimizers/">Riemannian Optimizers guide</a>.</p>
 <h2 id="channel-conventions">Channel Conventions<a class="headerlink" href="#channel-conventions" title="Permanent link">&para;</a></h2>
 <p>The single most common bug in layer construction is passing the wrong channel
 count — ambient (d+1) vs. spatial (d). The full table lives in the
@@ -2323,6 +2326,11 @@ hyperbolic-aware default — keep it unless you have a reason to change it.</p>
 <td>Norm-preserving: the PLFC chain linearizes to <code>y_spatial ≈ W @ u_spatial</code> near the origin, and the fixed LogCat hands over the per-pixel spatial radius, so this holds gain ≈ 1. <code>kernel_init_std=0.02</code> restores the Shi et al. 2026 regime bit-for-bit</td>
 </tr>
 <tr>
+<td><code>HypConv2DHyperboloid</code></td>
+<td>Fan-in normal <code>std=sqrt(1/((C-1)·k² + 1))</code>, bias <code>0</code> (<code>reset_params="fan_in"</code>); <code>(C-1)·k² + 1</code> is the ambient dimension of the HCat output for <code>C</code> input channels and kernel size <code>k</code></td>
+<td>Keeps the spread of the spatial coordinates: it changes by a factor of 0.98 to 1.09 per layer, while the mean distance from the origin grows by 1.04 to 1.22 per layer (16 channels, 3×3 kernels, <code>c = 1</code>). <code>reset_params="uniform"</code> restores the previous default <code>U(-0.02, 0.02)</code>, which shrank the spread by a factor of 0.13 to 0.14 per layer. The Bdeir et al. 2023 reference conv instead draws kernel and bias from <code>U(-s, s)</code> with <code>s = sqrt(2/((C-1)·k²))</code></td>
+</tr>
+<tr>
 <td><code>HypLinearHyperboloidPLFC</code></td>
 <td>Small normal <code>std=0.02</code>, gyro-bias zeros (Shi et al. 2026 PLFC reference init)</td>
 <td><code>kernel_init_std=1.0</code> recovers the old HNN++-style init (Shimizu et al. 2020)</td>
@@ -2336,6 +2344,11 @@ hyperbolic-aware default — keep it unless you have a reason to change it.</p>
 <td><code>HypRegressionPoincare</code> / <code>HypRegressionPoincarePP</code></td>
 <td>Scaled normal <code>std=(2·in·out)^{-0.5}</code> (van Spengler 2023)</td>
 <td>Sibling-scaled: an unscaled <code>N(0,1)</code> kernel gives row norms ≈ <code>sqrt(in_dim)</code>, which overwhelms the MLR output scaling</td>
+</tr>
+<tr>
+<td><code>HypRegressionHyperboloid</code></td>
+<td>Scaled normal <code>std=(2·in_spatial·out)^{-0.5}</code> with <code>in_spatial = in_dim - 1</code>, bias <code>N(0, 0.01²)</code></td>
+<td>The same scaling as the Poincaré MLR heads (van Spengler 2023), with the fan-in counted over the spatial dimensions, because the kernel lies in the tangent space at the origin</td>
 </tr>
 <tr>
 <td><code>HTCLinear</code></td>
