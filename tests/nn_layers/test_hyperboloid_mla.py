@@ -172,6 +172,7 @@ def test_matches_helm_reference_float64(c, mask_kind, centroid_form):
     np.testing.assert_allclose(np.asarray(out), ref, atol=1e-12, rtol=1e-12)
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 def test_matches_helm_reference_float32():
     """Float32 layer against the float64 reference at moderate radius."""
     c = 1.0
@@ -386,6 +387,7 @@ def _far_value_centroid_errors(seed, centroid_form, c=0.5, seq=16, radius=9.0):
     return {"err": err, "w_err": w_err, "a_min": float(a_BHT.min()), "a_max": float(a_BHT.max())}
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 @pytest.mark.parametrize("seed", [0, 1, 2])
 def test_variance_centroid_aggregates_far_values_accurately(seed):
     """``centroid_form="variance"`` keeps float32 centroids of values at scaled radius ~9 accurate.
@@ -480,15 +482,29 @@ def test_hope_shift_invariance():
     assert float(jnp.max(jnp.abs(out - out_perm))) > 1e-6
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 def test_batched_positions_match_per_row_calls():
+    """A ``(B, S)`` position array gives each row what a call on that row alone gives.
+
+    On CPU the two are bitwise equal. On a GPU, XLA compiles the 6-row ``wkv_b`` product into a
+    fused loop and the 12-row one into a GEMM kernel, so the two differ in the last bit (2.4e-7),
+    and the softmax, the ``"gemm"`` centroid and ``wo`` carry that to between 2.9e-6 and 7.6e-6 at
+    the output, varying from process to process (A100, full float32 products, seven processes;
+    ``logs/2026-11-16_prerelease-audit/a100-suite/``). At JAX's default precision the GEMM kernel
+    runs in TF32 and the fused loop does not (difference 3.3e-3), which is why the test pins full
+    precision. A wrong position row moves the output by about 1.
+    """
     c = 1.0
     layer = _make_layer()
     x = _make_points(jax.random.PRNGKey(0), c)
     positions_BS = jnp.stack([jnp.arange(SEQ), jnp.array([4, 1, 7, 2, 9, 3])]).astype(jnp.int32)
     out = layer(x, c, positions=positions_BS)
+    atol = 1e-6 if jax.default_backend() == "cpu" else 5e-5
     for b in range(BATCH):
         out_row = layer(x[b : b + 1], c, positions=positions_BS[b])
-        np.testing.assert_allclose(np.asarray(out[b]), np.asarray(out_row[0]), atol=1e-6)
+        np.testing.assert_allclose(np.asarray(out[b]), np.asarray(out_row[0]), atol=atol)
+    # Non-vacuous: the shared default positions give row 1 a different output.
+    assert float(jnp.max(jnp.abs(out[1] - layer(x, c)[1]))) > 0.1
 
 
 @pytest.mark.parametrize(("centroid_form", "atol"), [("variance", 1e-6), ("gemm", 2e-5)])

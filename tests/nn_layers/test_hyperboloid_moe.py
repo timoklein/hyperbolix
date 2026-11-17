@@ -136,6 +136,7 @@ def _ref_moe(moe, x, c, score_func="softmax", route_scale=1.0):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 @pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("score_func", ["softmax", "sigmoid"])
 @pytest.mark.parametrize("route_scale", [1.0, 2.5])
@@ -273,6 +274,7 @@ def test_expert_output_on_model_sheet(dtype, c, c_expert):
     assert np.max(_sheet_residual(y, c)) < tol
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 @pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("c,c_expert", [(1.0, 0.1), (0.5, 2.0), (1.0, 1.0)])
 def test_expert_matches_paper_transcription(dtype, c, c_expert):
@@ -374,6 +376,7 @@ def test_moe_output_on_manifold(dtype, c, shape):
     assert np.max(_sheet_residual(out, c)) < tol
 
 
+@pytest.mark.usefixtures("full_float32_matmul")
 @pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("score_func", ["softmax", "sigmoid"])
 @pytest.mark.parametrize("num_shared", [0, 1, 2])
