@@ -99,6 +99,7 @@ Two things still cancel at large radius: `HyperbolicFullAttention`'s GEMM-formed
 - Fixtures (`tests/conftest.py`): `seed_jax` (enables float64), `rng`, `dtype`, `tolerance`, `manifold_and_c`, `uniform_points`. Tests cover both dtypes, with `atol=4e-3` (f32) and `1e-7` (f64).
 - A numerics regression test compares float32 with float64 at the input that failed, and fails on the code before the fix.
 - CI runs only the test files listed in the `test-suite` matrix of `.github/workflows/ci.yaml`: add each new test file to an entry.
+- A push tests the locked dependency versions. The same matrix runs weekly (and on demand from the Actions tab) against the newest versions `pyproject.toml` allows (`uv sync --upgrade --dev`). To reproduce such a failure locally, run that command in a scratch copy of the tree, because it rewrites `uv.lock`.
 
 ## Conventions
 
