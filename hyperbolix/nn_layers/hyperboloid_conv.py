@@ -18,7 +18,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.utils.curvature import _inv_softplus
 
-from ._helpers import as_pair, validate_hyperboloid_manifold
+from ._helpers import as_pair, init_dtype, validate_hyperboloid_manifold
 from .hyperboloid_core import extract_patches, hcat_ambient_dim, hrc
 from .hyperboloid_linear import (
     _assert_v_max_safe,
@@ -295,7 +295,7 @@ class HypConv2DHyperboloid(nnx.Module):
                 rngs.params(), (out_channels, hcat_out_ambient_dim), dtype=param_dtype, minval=-bound, maxval=bound
             )
         else:  # "fan_in"
-            std = jnp.sqrt(1.0 / hcat_out_ambient_dim)
+            std = jnp.sqrt(jnp.asarray(1.0 / hcat_out_ambient_dim, dtype=init_dtype(param_dtype))).astype(param_dtype)
             kernel_init = jax.random.normal(rngs.params(), (out_channels, hcat_out_ambient_dim), dtype=param_dtype) * std
         self.kernel = nnx.Param(kernel_init)
         self.bias = nnx.Param(jnp.zeros((1, out_channels), dtype=param_dtype))
@@ -665,7 +665,7 @@ class FGGConv2D(nnx.Module):
         if use_weight_norm:
             self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
             if init_kernel_scale is None:
-                g_init_val = jnp.sqrt(1.0 / (hcat_out_ambient + out_channels))
+                g_init_val = jnp.sqrt(jnp.asarray(1.0 / (hcat_out_ambient + out_channels), dtype=init_dtype(param_dtype)))
             else:
                 g_init_val = _inv_softplus(init_kernel_scale)
             self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val, dtype=param_dtype))  # (O,)

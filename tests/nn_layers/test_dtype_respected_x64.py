@@ -21,6 +21,10 @@ Dimension key: B batch  S sequence  H W feature-map height/width  A ambient dim 
 """
 
 import functools
+import json
+import os
+import subprocess
+import sys
 import warnings
 
 import jax
@@ -29,6 +33,7 @@ import numpy as np
 import optax
 import pytest
 from flax import nnx
+from jax.scipy.special import digamma
 
 from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.poincare import Poincare
@@ -697,6 +702,124 @@ def test_param_dtype_float64_opt_in():
     fgg_bn = FGGMeanOnlyBatchNorm(8, param_dtype=F64)
     assert fgg_bn.bias[...].dtype == F64
     assert fgg_bn.running_mean[...].dtype == F64
+
+
+# Builds every layer whose init scale was a JAX op on Python numbers (`jnp.sqrt(k / n)`), at a size
+# where float32 and float64 round that scale differently (`np.float32(np.sqrt(k / n))` against
+# `np.sqrt(np.float32(k / n))`), plus the LogCat digamma scale and the two sites that took `jnp.sqrt`
+# of a Python-float `c`, at c = 0.9, which float32 and float64 round differently there.
+# Run once in this process (x64 on) and once in a fresh interpreter (x64 off).
+_SEEDED_X64_BUILD = """
+import jax
+import jax.numpy as jnp
+import numpy as np
+from flax import nnx
+from hyperbolix.distributions import uniform_poincare
+from hyperbolix.manifolds import Hyperboloid, Poincare
+from hyperbolix.nn_layers import (
+    FGGConv2D, FGGLinear, FGGLorentzMLR, HypConv2DHyperboloid, HypConv2DPoincare, HypLinearHyperboloidFHNN,
+    HypLinearPoincare, HypLinearPoincarePP, HypRegressionHyperboloid, HypRegressionPoincare,
+    HypRegressionPoincarePP,
+)
+
+
+def build():
+    hyp, poi = Hyperboloid(dtype=jnp.float32), Poincare(dtype=jnp.float32)
+    r = lambda: nnx.Rngs(0)
+    out = {}
+    # FGG: (reset_params, in_features, out_features), each at a size its scale formula leaks at.
+    for rp, i, o in [("fan_out", 6, 24), ("xavier", 14, 16), ("kaiming", 15, 8),
+                     ("lorentz_kaiming", 23, 8), ("mlr", 7, 8)]:
+        out[f"FGGLinear-{rp}"] = FGGLinear(i, o, rngs=r(), reset_params=rp).kernel[...]
+    out["FGGLinear-weight-norm-scale"] = FGGLinear(14, 16, rngs=r(), use_weight_norm=True).kernel_scale[...]
+    out["FGGConv2D-fan_out"] = FGGConv2D(hyp, 4, 24, 3, rngs=r()).kernel[...]
+    out["FGGConv2D-mlr"] = FGGConv2D(hyp, 4, 5, 3, rngs=r(), reset_params="mlr").kernel[...]
+    out["FGGConv2D-weight-norm-scale"] = FGGConv2D(hyp, 4, 11, 3, rngs=r(), use_weight_norm=True).kernel_scale[...]
+    out["FGGLorentzMLR-mlr"] = FGGLorentzMLR(7, 3, rngs=r()).kernel[...]
+    out["HypRegressionHyperboloid"] = HypRegressionHyperboloid(hyp, 4, 3, rngs=r()).kernel[...]
+    out["HypRegressionPoincare"] = HypRegressionPoincare(poi, 3, 3, rngs=r()).kernel[...]
+    out["HypRegressionPoincarePP"] = HypRegressionPoincarePP(poi, 3, 3, rngs=r()).kernel[...]
+    out["HypConv2DHyperboloid-fan_in"] = HypConv2DHyperboloid(hyp, 10, 4, 3, rngs=r(), reset_params="fan_in").kernel[...]
+    out["HypLinearPoincare"] = HypLinearPoincare(poi, 6, 3, rngs=r()).kernel[...]
+    out["HypLinearPoincarePP"] = HypLinearPoincarePP(poi, 6, 3, rngs=r()).kernel[...]
+    out["HypConv2DPoincare-random"] = HypConv2DPoincare(poi, 2, 3, 3, rngs=r(), id_init=False).kernel[...]
+    # FHNN origin fallback: a zero kernel sends every row to the origin, whose time coordinate is 1/sqrt(c).
+    fhnn = HypLinearHyperboloidFHNN(hyp, 4, 3, rngs=r())
+    fhnn.kernel[...] = jnp.zeros_like(fhnn.kernel[...])
+    x_1A = np.float32([[np.sqrt(np.float32(1) / np.float32(0.9)), 0.0, 0.0, 0.0]])
+    out["HypLinearHyperboloidFHNN-origin"] = fhnn(jnp.asarray(x_1A), 0.9)
+    # Rejection sampler (n >= 3): sqrt(c) sets u_max and so every draw.
+    out["uniform_poincare.sample-n3"] = uniform_poincare.sample(
+        jax.random.key(0), 3, 0.9, 1.0, sample_shape=(6,), dtype=jnp.float32
+    )
+    # LogCat of 3 points with 4 spatial dims, built in NumPy float32 so both processes get the same input.
+    space_ND = np.linspace(-0.9, 1.3, 12, dtype=np.float32).reshape(3, 4)
+    time_N1 = np.sqrt(np.float32(1) + np.sum(space_ND**2, axis=-1, keepdims=True, dtype=np.float32))
+    out["Hyperboloid.log_radius_concat"] = hyp.log_radius_concat(jnp.asarray(np.concatenate([time_N1, space_ND], -1)), 1.0)
+    return out
+"""
+
+
+def test_seeded_init_and_logcat_scale_same_with_and_without_x64():
+    """Seeded inits and the LogCat scale give the same float32 values with and without x64.
+
+    Their scales were JAX ops on Python numbers (``jnp.sqrt(5.0 / in_features)``, ``digamma(d / 2)``):
+    float32 without x64 and float64 rounded afterwards with it, so at 12-23 % of layer sizes a
+    seed gave weights 1 ulp apart. They are now computed in float32 (float64 for float64
+    parameters), which leaves every value without x64 as it was. The FHNN origin fallback and the
+    Poincaré-ball rejection sampler took ``jnp.sqrt`` of a Python-float ``c`` the same way.
+    """
+    code = _SEEDED_X64_BUILD + (
+        "\nimport json\n"
+        "print(json.dumps({k: [str(v.dtype), [float(x).hex() for x in np.asarray(v).ravel()]] for k, v in build().items()}))"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "JAX_ENABLE_X64": "0"},
+    )
+    assert proc.returncode == 0, proc.stderr
+    reference = json.loads(proc.stdout.strip().splitlines()[-1])
+
+    namespace: dict = {}
+    exec(_SEEDED_X64_BUILD, namespace)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        values = namespace["build"]()
+    assert jax.config.jax_enable_x64
+    assert set(values) == set(reference)
+    mismatched = []
+    for name, value in values.items():
+        ref_dtype, ref_hex = reference[name]
+        assert ref_dtype == "float32" and value.dtype == F32, (name, ref_dtype, value.dtype)
+        if not np.array_equal(np.asarray(value).ravel(), np.float32([float.fromhex(h) for h in ref_hex])):
+            mismatched.append(name)
+    assert not mismatched, f"differ between x64 on and off: {mismatched}"
+
+
+@pytest.mark.parametrize(
+    "half_dtype, d, n_points",
+    [(jnp.bfloat16, 63, 25), (jnp.float16, 63, 2)],
+)
+def test_logcat_half_precision_scale_is_float32_scale_rounded(half_dtype, d, n_points):
+    """A half-precision LogCat scales by the float32 digamma scale rounded once to its dtype.
+
+    That is what it always did without x64 (the scale was a weakly typed float32). Computing the
+    digamma scale in bfloat16 or float16 instead moves it by 1-2 ulps of that dtype at these sizes.
+    """
+    hyp = Hyperboloid(dtype=half_dtype)
+    space_ND = np.linspace(-0.5, 0.7, n_points * d, dtype=np.float32).reshape(n_points, d)
+    time_N1 = np.sqrt(np.float32(1) + np.sum(space_ND**2, axis=-1, keepdims=True, dtype=np.float32))
+    points_NA = jnp.asarray(np.concatenate([time_N1, space_ND], -1), dtype=half_dtype)
+    out_A = hyp.log_radius_concat(points_NA, 1.0)
+
+    half_d, half_n = jnp.float32(d / 2), jnp.float32(n_points * d / 2)
+    scale_f32 = jnp.exp(0.5 * (digamma(half_d) - digamma(half_n)))
+    expected_space = (scale_f32.astype(half_dtype) * points_NA[:, 1:]).reshape(-1)
+    assert out_A.dtype == half_dtype
+    np.testing.assert_array_equal(np.asarray(out_A[1:], np.float32), np.asarray(expected_space, np.float32))
 
 
 if __name__ == "__main__":

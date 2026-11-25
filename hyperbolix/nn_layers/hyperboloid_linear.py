@@ -32,7 +32,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.utils.curvature import _inv_softplus
 from hyperbolix.utils.math_utils import MIN_NORM, floor_at, safe_hypot, safe_norm, safe_sqrt
 
-from ._helpers import validate_hyperboloid_manifold
+from ._helpers import init_dtype, validate_hyperboloid_manifold
 from .hyperboloid_core import MATMUL_PRECISION, build_spacelike_V, htc, sinh_lift_to_hyperboloid
 
 
@@ -205,7 +205,9 @@ def _fhnn_forward(
     res_BA = jnp.concatenate([y0_B1, y_rem_BD], axis=-1)  # (B, out_dim)
 
     # Origin fallback: near-zero spatial norm -> hyperboloid origin
-    origin_time_B1 = jnp.full_like(y0_B1, 1.0 / jnp.sqrt(c))
+    # `c` cast before the square root (in float32, float64 for float64 input): `jnp.sqrt` of a Python
+    # float ran in float64 under x64 and rounded differently from float32 at some `c` (0.9, 1.8, ...).
+    origin_time_B1 = jnp.full_like(y0_B1, 1.0 / jnp.sqrt(jnp.asarray(c, dtype=init_dtype(z_BO.dtype))))
     origin_BA = jnp.concatenate([origin_time_B1, jnp.zeros_like(y_rem_BD)], axis=-1)
     mask_B1 = z_rem_norm_B1 <= eps
     res_BA = jnp.where(mask_B1, origin_BA, res_BA)
@@ -328,23 +330,29 @@ def _fgg_weight_init(
     # stream from the float32 one, so the same seed gave different weights with x64 on. The draw is
     # float32 for every `param_dtype` up to 32 bits (cast below), so bfloat16/float16 parameters keep
     # the weights a float32 draw rounds to, and float64 only for a float64 `param_dtype`.
-    draw_dtype = jnp.float64 if jnp.dtype(param_dtype) == jnp.float64 else jnp.float32
+    # The scale is computed in the same dtype (`init_dtype`): a bare `jnp.sqrt(1.0 / n)` is float64
+    # under x64 and rounds differently from the float32 one at some sizes.
+    draw_dtype = init_dtype(param_dtype)
     shape = (in_spatial, out_spatial)
+
+    def std(ratio: float) -> Array:
+        return jnp.sqrt(jnp.asarray(ratio, dtype=draw_dtype))
+
     if reset_params == "eye":
         U_IO = 0.5 * jnp.eye(in_spatial, out_spatial)
     elif reset_params == "xavier":
-        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(1.0 / (in_ambient + out_ambient))
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * std(1.0 / (in_ambient + out_ambient))
     elif reset_params == "kaiming":
-        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(2.0 / in_ambient)
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * std(2.0 / in_ambient)
     elif reset_params == "lorentz_kaiming":
-        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(1.0 / in_ambient)
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * std(1.0 / in_ambient)
     elif reset_params == "fan_out":
         # Fan-out std sqrt(1/out_spatial): output spatial norm tracks the input
         # (norm-preserving) instead of growing as sqrt(out_channels) like fan-in.
         # max(.,1) guards the degenerate out_spatial == 0 case (out_features == 1).
-        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(1.0 / max(out_spatial, 1))
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * std(1.0 / max(out_spatial, 1))
     elif reset_params == "mlr":
-        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * jnp.sqrt(5.0 / in_ambient)
+        U_IO = jax.random.normal(key, shape, dtype=draw_dtype) * std(5.0 / in_ambient)
     else:
         raise ValueError(
             f"reset_params must be 'eye', 'xavier', 'kaiming', 'lorentz_kaiming', 'fan_out', or 'mlr', got '{reset_params}'"
@@ -1157,7 +1165,7 @@ class FGGLinear(nnx.Module):
             # Reference: kernel_dir from reset_params (normalized in forward), kernel_scale fixed magnitude
             self.kernel_dir = nnx.Param(U_init)  # (I, O) direction
             if init_kernel_scale is None:
-                g_init_val = jnp.sqrt(1.0 / (in_features + out_features))
+                g_init_val = jnp.sqrt(jnp.asarray(1.0 / (in_features + out_features), dtype=init_dtype(param_dtype)))
             else:
                 g_init_val = _inv_softplus(init_kernel_scale)
             self.kernel_scale = nnx.Param(jnp.full((out_spatial,), g_init_val, dtype=param_dtype))  # (O,)

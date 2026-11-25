@@ -19,7 +19,7 @@ from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import ManifoldParam
 from ..utils.math_utils import asinh, floor_at, safe_norm
-from ._helpers import validate_poincare_manifold
+from ._helpers import init_dtype, validate_poincare_manifold
 
 
 class HypRegressionPoincare(nnx.Module):
@@ -101,7 +101,7 @@ class HypRegressionPoincare(nnx.Module):
         # row norms ≈ sqrt(in_dim) which overwhelms the MLR output scaling. The ‖a‖ factors
         # cancel inside asinh but reappear as the outer ‖a‖ multiplier in _compute_mlr, so
         # the logits scale linearly with the row norm.
-        std = 1.0 / jnp.sqrt(2.0 * in_dim * out_dim)
+        std = (1.0 / jnp.sqrt(jnp.asarray(2.0 * in_dim * out_dim, dtype=init_dtype(param_dtype)))).astype(param_dtype)
         self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * std)
         # Manifold bias (initialized to small random values)
         self.bias = ManifoldParam(
@@ -285,7 +285,7 @@ class HypRegressionPoincarePP(nnx.Module):
         # Tangent space weight — scaled to match reference (van Spengler et al. 2023)
         # Reference uses std = (2 * in_dim * out_dim)^{-0.5}; unscaled normal(0,1) gives
         # row norms ≈ sqrt(in_dim) which overwhelms the MLR output scaling.
-        std = 1.0 / jnp.sqrt(2.0 * in_dim * out_dim)
+        std = (1.0 / jnp.sqrt(jnp.asarray(2.0 * in_dim * out_dim, dtype=init_dtype(param_dtype)))).astype(param_dtype)
         self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * std)
         # Scalar bias (initialized to small random values)
         self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1), dtype=param_dtype) * 0.01)
