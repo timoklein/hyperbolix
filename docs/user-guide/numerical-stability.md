@@ -21,9 +21,9 @@ its float32 error grows with the radius instead. The hyperboloid numbers below a
 float32 `dist` error over 40 pairs at distance 1 whose two points lie at the same scaled radius
 $a$, at the angle that puts them at that distance (spatial dimension 8, $c = 1$, against an exact
 reference on the unrounded points). Pairs on one ray (same direction, radii $a$ and $a + 1$) do
-much better up to $a \approx 12$, because their angular term vanishes: median 5e-7 at $a = 10$ and
-3e-5 at 12. From $a \approx 14$ the small angle left by rounding the two stored points dominates,
-and they lose that advantage (median 0.3 at 16.6).
+much better up to $a \approx 14$, because their angular term vanishes: over 500 pairs the median is
+2e-7 at $a = 10$, 5e-5 at 12 and about 1e-3 at 14, against 7e-5, 6e-4 and 5e-3 for pairs at the same
+radius. By $a = 16$ they have lost that advantage (median 0.1 against 0.06).
 
 | Model | Good to $a$ (float32 / float64) | What sets the limit |
 |---|---|---|
