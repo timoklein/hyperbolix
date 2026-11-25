@@ -10,6 +10,11 @@ Tests cover:
 Dimension key: B=batch, I=in_spatial, O=out_spatial, Ai=in_ambient, Ao=out_ambient, K=classes
 """
 
+import json
+import os
+import subprocess
+import sys
+
 import flax
 import jax
 import jax.numpy as jnp
@@ -748,25 +753,64 @@ def test_fgg_conv2d_default_is_fan_out():
     assert _check_on_hyperboloid(y_ref.reshape(-1, 9), c=1.0, atol=1e-6)
 
 
+_FGG_INIT_KERNELS_CODE = """
+import json
+import jax.numpy as jnp
+import numpy as np
+from flax import nnx
+from hyperbolix.manifolds import Hyperboloid
+from hyperbolix.nn_layers import FGGConv2D, FGGLinear
+
+kernels = {
+    "linear": FGGLinear(6, 8, rngs=nnx.Rngs(0)).kernel[...],
+    "linear_wn": FGGLinear(6, 8, rngs=nnx.Rngs(0), use_weight_norm=True).kernel_dir[...],
+    "conv": FGGConv2D(Hyperboloid(dtype=jnp.float32), 4, 5, 3, rngs=nnx.Rngs(0)).kernel[...],
+}
+print(json.dumps({k: [str(v.dtype), [float(x).hex() for x in np.asarray(v).ravel()]] for k, v in kernels.items()}))
+"""
+
+
 def test_fgg_init_same_weights_with_and_without_x64():
     """A seed gives the same float32 FGG weights whether or not x64 is on.
 
     Up to 1.5.0 ``_fgg_weight_init`` drew in the default float dtype and cast afterwards, so
     under x64 (which this file enables) it drew from the float64 stream: the same seed gave
     weights up to 1.34 (``FGGLinear``) and 2.19 (``FGGConv2D``) away from a float32 user's.
-    The constants are the first three kernel entries printed by a process WITHOUT x64, with
-    1.5.0 and with the fix alike (``logs/2026-11-16_prerelease-audit/fix-hyp-layers-1/probe_fgg_init.py``, Rngs(0),
-    default ``reset_params="fan_out"``, float32 params).
+
+    The reference is computed by a fresh interpreter WITHOUT x64 on the installed JAX, and
+    every kernel entry must match bit for bit (Rngs(0), default ``reset_params="fan_out"``,
+    float32 params). The constants below, the first three entries without x64 under jax 0.9.1,
+    guard the seed stream itself, at ``rtol=1e-6``: jax 0.12 changed its float32 normal sampler,
+    which moves some entries by 1-2 ulps (1.6e-7 relative) with and without x64 alike
+    (``logs/2026-11-25_ci-newest-deps/probe_fgg_init_x64.py``), while the 1.5.0 bug moved them
+    by order one.
     """
-    linear = FGGLinear(6, 8, rngs=nnx.Rngs(0))
-    linear_wn = FGGLinear(6, 8, rngs=nnx.Rngs(0), use_weight_norm=True)
-    conv = FGGConv2D(Hyperboloid(dtype=jnp.float32), 4, 5, 3, rngs=nnx.Rngs(0))
+    proc = subprocess.run(
+        [sys.executable, "-c", _FGG_INIT_KERNELS_CODE],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "JAX_ENABLE_X64": "0"},
+    )
+    assert proc.returncode == 0, proc.stderr
+    reference = json.loads(proc.stdout.strip().splitlines()[-1])
+
+    kernels = {
+        "linear": FGGLinear(6, 8, rngs=nnx.Rngs(0)).kernel[...],
+        "linear_wn": FGGLinear(6, 8, rngs=nnx.Rngs(0), use_weight_norm=True).kernel_dir[...],
+        "conv": FGGConv2D(Hyperboloid(dtype=jnp.float32), 4, 5, 3, rngs=nnx.Rngs(0)).kernel[...],
+    }
+    for name, kernel in kernels.items():
+        ref_dtype, ref_hex = reference[name]
+        assert ref_dtype == "float32" and kernel.dtype == jnp.float32, (name, ref_dtype, kernel.dtype)
+        np.testing.assert_array_equal(
+            np.asarray(kernel).ravel(), np.float32([float.fromhex(h) for h in ref_hex]), err_msg=name
+        )
+
     expected_linear = np.float32([0.379481703042984, -0.342563271522522, -0.28278252482414246])
     expected_conv = np.float32([0.5020071268081665, -0.4531686007976532, -0.3740861117839813])
-
-    np.testing.assert_array_equal(np.asarray(linear.kernel[...]).ravel()[:3], expected_linear)
-    np.testing.assert_array_equal(np.asarray(linear_wn.kernel_dir[...]).ravel()[:3], expected_linear)
-    np.testing.assert_array_equal(np.asarray(conv.kernel[...]).ravel()[:3], expected_conv)
+    for name, expected in [("linear", expected_linear), ("linear_wn", expected_linear), ("conv", expected_conv)]:
+        np.testing.assert_allclose(np.asarray(kernels[name]).ravel()[:3], expected, rtol=1e-6, atol=0, err_msg=name)
 
 
 @pytest.mark.parametrize("param_dtype", [jnp.bfloat16, jnp.float16])

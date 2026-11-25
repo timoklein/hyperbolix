@@ -1993,7 +1993,14 @@ def _log_radius_concat(
     n_total = N * d  # post-concat spatial dimension (n)
 
     # Digamma scale keeps E[log‖v_spatial‖] constant across the concat dim; s == 1 when N == 1.
-    scale = jnp.exp(0.5 * (digamma(d / 2.0) - digamma(n_total / 2.0)))
+    # Computed in float32 (float64 for float64 points), then rounded to the points' dtype:
+    # `digamma(d / 2.0)` on a Python float is float64 under x64 and float32 without it, which gave a
+    # float32 manifold different values depending on the flag. Computing it in bfloat16/float16
+    # instead would change the half-precision values, which always came from the float32 scale.
+    scale_dtype = jnp.float64 if points.dtype == jnp.float64 else jnp.float32
+    half_d, half_n = jnp.asarray(d / 2.0, dtype=scale_dtype), jnp.asarray(n_total / 2.0, dtype=scale_dtype)
+    scale_wide = jnp.exp(0.5 * (digamma(half_d) - digamma(half_n)))
+    scale, scale_sq = scale_wide.astype(points.dtype), (scale_wide**2).astype(points.dtype)
 
     time_N = points[:, 0]  # (N,)
     space_ND = points[:, 1:]  # (N, d)
@@ -2001,7 +2008,7 @@ def _log_radius_concat(
     space_scaled_flat = (scale * space_ND).reshape(-1)  # (N*d,)
 
     # Recompute the time coordinate so the scaled point lies on the (dN)-dim hyperboloid.
-    time_sq = 1.0 / c + scale**2 * jnp.sum(time_N**2 - 1.0 / c)  # scalar
+    time_sq = 1.0 / c + scale_sq * jnp.sum(time_N**2 - 1.0 / c)  # scalar
     time_new = jnp.sqrt(floor_at(time_sq, MIN_NORM))  # scalar
 
     result_A = jnp.concatenate([time_new[None], space_scaled_flat])  # (1 + N*d,) = (dN+1,)

@@ -10,7 +10,22 @@ wrap the assignment in ``nnx.data(...)`` or ``object.__setattr__``; both
 would be no-ops here and only obscure intent.
 """
 
+import jax.numpy as jnp
+from jax.typing import DTypeLike
+
 from hyperbolix.manifolds import Hyperboloid, Manifold, Poincare, ProperVelocity, Stereographic
+
+
+def init_dtype(param_dtype: DTypeLike) -> jnp.dtype:
+    """Dtype an init computes its scale in: float64 for float64 parameters, float32 otherwise.
+
+    An init scale spelled as a JAX op on Python numbers (``jnp.sqrt(5.0 / fan_in)``) runs in
+    float64 under ``jax_enable_x64`` and in float32 without it, and the two round differently at
+    12-23 % of layer sizes, so the same seed gave weights 1 ulp apart. Computing the scale on an
+    array of this dtype gives the values a float32 process always gave, with x64 on or off. A
+    scale that is a Python float (``(2.0 / fan_in) ** 0.5``) does not depend on x64 either.
+    """
+    return jnp.dtype(jnp.float64) if jnp.dtype(param_dtype) == jnp.float64 else jnp.dtype(jnp.float32)
 
 
 def as_pair(x: int | tuple[int, int]) -> tuple[int, int]:

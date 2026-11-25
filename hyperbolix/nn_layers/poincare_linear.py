@@ -20,7 +20,7 @@ from hyperbolix.manifolds.poincare import Poincare
 
 from ..optim import ManifoldParam
 from ..utils.math_utils import _pow2_divisor, floor_at, safe_hypot_norm, safe_sqrt, sinh
-from ._helpers import validate_poincare_manifold
+from ._helpers import init_dtype, validate_poincare_manifold
 
 
 class HypLinearPoincare(nnx.Module):
@@ -101,7 +101,7 @@ class HypLinearPoincare(nnx.Module):
         # Trainable parameters
         # Tangent space weight (Euclidean) - initialized with std = 1/sqrt(fan_in)
         # to prevent outputs from saturating at the Poincaré ball boundary
-        std = 1.0 / jnp.sqrt(in_dim)
+        std = (1.0 / jnp.sqrt(jnp.asarray(in_dim, dtype=init_dtype(param_dtype)))).astype(param_dtype)
         self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * std)
         # Manifold bias (initialized to small random values to avoid gradient issues at origin)
         self.bias = ManifoldParam(
@@ -316,7 +316,7 @@ class HypLinearPoincarePP(nnx.Module):
         # Trainable parameters
         # Tangent space weight - initialized with std = 1/sqrt(fan_in)
         # to prevent outputs from saturating at the Poincaré ball boundary
-        std = 1.0 / jnp.sqrt(in_dim)
+        std = (1.0 / jnp.sqrt(jnp.asarray(in_dim, dtype=init_dtype(param_dtype)))).astype(param_dtype)
         self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_dim), dtype=param_dtype) * std)
         # Scalar bias
         self.bias = nnx.Param(jnp.zeros((out_dim, 1), dtype=param_dtype))

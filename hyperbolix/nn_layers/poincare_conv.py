@@ -30,7 +30,7 @@ from jaxtyping import Array, Float
 from hyperbolix.manifolds.poincare import Poincare, beta_concat_scale
 from hyperbolix.utils.precision import MATMUL_PRECISION
 
-from ._helpers import as_pair, validate_poincare_manifold
+from ._helpers import as_pair, init_dtype, validate_poincare_manifold
 from .poincare_linear import _poincare_pp_forward
 
 
@@ -164,7 +164,7 @@ class HypConv2DPoincare(nnx.Module):
             # The 1/2 factor compensates for the factor of 2 in the HNN++ distance formula.
             kernel_init = 0.5 * jnp.eye(out_channels, concat_dim, dtype=param_dtype)
         else:
-            std = 1.0 / jnp.sqrt(concat_dim)
+            std = (1.0 / jnp.sqrt(jnp.asarray(concat_dim, dtype=init_dtype(param_dtype)))).astype(param_dtype)
             kernel_init = jax.random.normal(rngs.params(), (out_channels, concat_dim), dtype=param_dtype) * std
         self.kernel = nnx.Param(kernel_init)
         self.bias = nnx.Param(jnp.zeros((out_channels, 1), dtype=param_dtype))

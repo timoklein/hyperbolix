@@ -16,7 +16,7 @@ from hyperbolix.manifolds.hyperboloid import Hyperboloid
 from hyperbolix.manifolds.protocol import ScalarCurvature
 from hyperbolix.utils.math_utils import asinh
 
-from ._helpers import validate_hyperboloid_manifold
+from ._helpers import init_dtype, validate_hyperboloid_manifold
 from .hyperboloid_core import MATMUL_PRECISION, build_spacelike_V
 
 
@@ -82,7 +82,7 @@ class HypRegressionHyperboloid(nnx.Module):
         # (van Spengler et al. 2023): std = (2 * in_spatial * out_dim)^{-0.5}; unscaled normal(0,1) gives row
         # norms ≈ sqrt(in_dim - 1) which overwhelms the MLR output scaling.
         in_spatial = in_dim - 1
-        std = 1.0 / jnp.sqrt(2.0 * in_spatial * out_dim)
+        std = (1.0 / jnp.sqrt(jnp.asarray(2.0 * in_spatial * out_dim, dtype=init_dtype(param_dtype)))).astype(param_dtype)
         self.kernel = nnx.Param(jax.random.normal(rngs.params(), (out_dim, in_spatial), dtype=param_dtype) * std)
         # Scalar bias (initialized to small random values)
         self.bias = nnx.Param(jax.random.normal(rngs.params(), (out_dim, 1), dtype=param_dtype) * 0.01)
@@ -183,7 +183,7 @@ class FGGLorentzMLR(nnx.Module):
         # Reference computes std from ambient dimension (in_features)
         key = rngs.params()
         if reset_params == "mlr":
-            std = jnp.sqrt(5.0 / in_features)
+            std = jnp.sqrt(jnp.asarray(5.0 / in_features, dtype=init_dtype(param_dtype))).astype(param_dtype)
             self.kernel = nnx.Param(jax.random.normal(key, (in_spatial, num_classes), dtype=param_dtype) * std)
         else:  # default
             stdv = 1.0 / jnp.sqrt(jnp.array(in_features, dtype=jnp.float32))

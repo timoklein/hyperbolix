@@ -246,7 +246,7 @@ def _sample_radial_rejection(
     the range where its draws flush to 0: at √c·R = 1e-18 (float32, n = 3) every radius below 0.153·R
     comes out as exactly 0, 2564 of 400000 draws where the law puts 1442.
     """
-    sqrt_c = jnp.asarray(jnp.sqrt(c), dtype=dtype)
+    sqrt_c = jnp.sqrt(jnp.asarray(c, dtype=dtype))  # cast first, as in `_sample_radial_n2`
     # Half-angle form, as in `_sample_radial_n2`. The literal cosh(√c·R) - 1 rounded to 0 in float32
     # below √c·R ≈ 3.5e-4, where the acceptance ratio below became 0/0 = NaN and this loop never ended.
     u_max = 2.0 * safe_sinh(0.5 * sqrt_c * R) ** 2
