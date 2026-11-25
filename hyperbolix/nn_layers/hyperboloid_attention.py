@@ -600,12 +600,15 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
     matrix product of the ambient coordinates returns the Gram matrix to absolute
     ``eps``, so the angular term alone already carries an error of
     ``eps sinh(a_q) sinh(a_k) / c``, the same order as the literal form. The absolute
-    error on one score is therefore
+    error on one score is therefore of the size
 
         eps * cosh(a_q) * cosh(a_k) / (c * tau)
 
-    which with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``tau = 1``) is about 4.8e-3
-    at ``a = 6``, 0.26 at ``a = 8`` and 2.0 at ``a = 9``. The default
+    (measured, float32 against float64 on 1,024 query-key pairs in 16 spatial dimensions
+    at scaled radius 4 to 10: about 1 times this at the median, up to about 6 times it
+    in the worst case; ``logs/2026-11-25_score-floor-factor/score_floor.out``), which
+    with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``tau = 1``) is about 4.8e-3 at
+    ``a = 6``, 0.26 at ``a = 8`` and 2.0 at ``a = 9``. The default
     ``tau = sqrt(out_features)`` divides these numbers by ``tau``, but it divides the
     score spread by the same factor, so the radius where the error overtakes the
     spread does not move: from ``a ≈ 8`` the error exceeds the score spread the
