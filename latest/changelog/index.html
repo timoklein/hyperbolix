@@ -1388,6 +1388,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Documentation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1461,7 +1472,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#documentation" class="md-nav__link">
+  <a href="#documentation_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Documentation
@@ -1533,7 +1544,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#documentation_1" class="md-nav__link">
+  <a href="#documentation_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         Documentation
@@ -1605,7 +1616,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#documentation_2" class="md-nav__link">
+  <a href="#documentation_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         Documentation
@@ -1894,7 +1905,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#documentation_3" class="md-nav__link">
+  <a href="#documentation_4" class="md-nav__link">
     <span class="md-ellipsis">
       
         Documentation
@@ -2776,6 +2787,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Documentation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2849,7 +2871,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#documentation" class="md-nav__link">
+  <a href="#documentation_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Documentation
@@ -2921,7 +2943,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#documentation_1" class="md-nav__link">
+  <a href="#documentation_2" class="md-nav__link">
     <span class="md-ellipsis">
       
         Documentation
@@ -2993,7 +3015,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#documentation_2" class="md-nav__link">
+  <a href="#documentation_3" class="md-nav__link">
     <span class="md-ellipsis">
       
         Documentation
@@ -3282,7 +3304,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#documentation_3" class="md-nav__link">
+  <a href="#documentation_4" class="md-nav__link">
     <span class="md-ellipsis">
       
         Documentation
@@ -4137,6 +4159,16 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>Values change with <code>jax_enable_x64</code> on, by one float32 rounding step: a seed gives the same float32 weights with and without x64.</strong> Several init scales were JAX ops on Python numbers (<code>jnp.sqrt(5.0 / in_features)</code>), which run in float64 under x64 and in float32 without it, and the two round differently at 11 to 30 % of layer sizes. They are now computed in float32 (float64 for a float64 <code>param_dtype</code>): <code>FGGLinear</code> and <code>FGGConv2D</code> (every random <code>reset_params</code>, and the weight-norm <code>kernel_scale</code>), <code>FGGLorentzMLR(reset_params="mlr")</code>, <code>HypRegressionHyperboloid</code>, <code>HypRegressionPoincare</code>, <code>HypRegressionPoincarePP</code>, <code>HypConv2DHyperboloid(reset_params="fan_in")</code>, <code>HypLinearPoincare</code>, <code>HypLinearPoincarePP</code> and <code>HypConv2DPoincare(id_init=False)</code>. For the same reason, the digamma scale of <code>Hyperboloid.log_radius_concat</code> (and so of <code>HypConv2DHyperboloidILNN</code>) is computed in float32 (float64 for a float64 manifold) and rounded to the manifold's dtype, and two sites now cast a Python-float <code>c</code> to the working dtype before the square root: the origin fallback of <code>HypLinearHyperboloidFHNN</code> and the radius sampler of <code>uniform_poincare.sample</code> for <code>n &gt;= 3</code> (they differed at <code>c = 0.9</code>, <code>1.8</code>, <code>2.7</code>, among others). Without x64 (float32, bfloat16 and float16 parameters), and with x64 for float64 parameters, all values are unchanged bit for bit against 1.5.1. The one exception is <code>uniform_poincare.sample</code> with <code>dtype=jnp.bfloat16</code> or <code>float16</code> and <code>n &gt;= 3</code>, which now takes <code>sqrt(c)</code> in that dtype, as the <code>n = 2</code> sampler already did.</li>
 <li>The test of FGG init under x64 compared against constants printed under jax 0.9.1 and failed under jax 0.12, whose float32 normal sampler moves some draws by 1 to 2 ulps with and without x64 alike. It now compares against a fresh process without x64 on the installed JAX.</li>
 </ul>
+<h3 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Corrections to the <a href="../user-guide/numerical-stability/">numerical-stability guide</a> and to docstrings. No behaviour changes.<ul>
+<li>The hyperboloid's float32 <code>dist</code> errors (5e-4 at <code>a = 12</code>, 6e-2 at 16.6) apply to two points in different directions, both at radius <code>a</code> and at distance 1 from each other. The guide now says so. Two points in the same direction from the origin have about ten times less error at <code>a = 12</code>.</li>
+<li>The float32 error of an attention score is typically about <code>eps·cosh(a_q)·cosh(a_k)/(c·τ)</code> and at worst about 6 times that, for <code>HyperbolicFullAttention</code> and <code>LorentzMLA</code> alike. The guide said half of it and the <code>LorentzMLA</code> docstring twice.</li>
+<li>The guide's list of operations that still lose accuracy at large radius now includes <code>LorentzMLA</code>'s scores, its default <code>"gemm"</code> centroid and the FGG product <code>x @ V</code>. <code>tangent_proj</code> and <code>egrad2rgrad</code> are no longer called cancellation-free.</li>
+<li>The 1.4.0 entry said Poincaré <code>dist</code> and <code>logmap</code> values changed for every pair by at most 1.3e-13 in float64. That bound holds within scaled radius 5; far pairs changed by up to 3.9e-10.</li>
+</ul>
+</li>
+</ul>
 <h2 id="151-2026-11-16">[1.5.1] - 2026-11-16<a class="headerlink" href="#151-2026-11-16" title="Permanent link">&para;</a></h2>
 <p>Fixes from an audit of 1.5.0. Two defaults change: <code>HypConv2DHyperboloid</code>'s init, and the output curvature of layers that take <code>c_in</code> and <code>c_out</code>. The rule that a manifold's dtype decides now also holds for a float64 <code>c</code> and for NumPy input. Apart from the two defaults and the fixes listed below, float32 results with a Python-float <code>c</code> and <code>jax_enable_x64</code> off are unchanged, except for rounding-level changes in <code>uniform_poincare.log_prob</code> and in the gradient of <code>lorentz_residual</code> with respect to a learnable <code>c</code>. That comparison was made on the lockfile's jax 0.9.1. With jax 0.12 the input gradients of <code>sinh_lift_to_hyperboloid</code>, <code>HypLinearHyperboloidPLFC</code> and <code>HypRegressionPoincare</code> also change in the last bit (relative 3e-7 at most) for a <code>c</code> that float32 does not represent exactly, because <code>c</code> now enters as a float32 array instead of a weakly typed Python scalar; values are bit-identical there too.</p>
 <h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
@@ -4182,7 +4214,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>The README installs with <code>pip install hyperbolix</code>, and its logo and links are absolute URLs, so they also work on PyPI.</li>
 <li><code>RAdamState</code> and <code>RSGDState</code> are exported from <code>hyperbolix.optim</code>.</li>
 </ul>
-<h3 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">&para;</a></h3>
+<h3 id="documentation_1">Documentation<a class="headerlink" href="#documentation_1" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Numerical-stability guide.</strong> The hyperboloid's float32 limit is stated as an error law instead of "good to 16.6": the <code>dist</code> error grows as <code>eps·sinh(a)</code>, with a median of 5e-4 at <code>a = 12</code> and 6e-2 at 16.6 for pairs at distance 1. The wrapped-normal gradient error at a far mean is given against the unrounded points (about 5e-3 at <code>a = 12</code>, 0.3 at <code>a = 16</code>); the old numbers left the storage rounding out. Corrected: the behaviour of a wrapped normal with a mean past <code>a ≈ 44</code>, the float32 errors of the tangent-input Poincaré layers at <code>t = 8</code>, and the aligned Busemann direction at <code>t = 20</code>. New sentences cover effects below or outside training radii: <code>dist</code> with an endpoint at the exact origin (absolute error 5e-16; <code>dist_0</code> has none), float32 underflow of distances for coordinates below 1.1e-19, Jacobians at the Möbius floor for operands of norm below 1e-15, the <code>c</code>-derivative error of about <code>3·eps/(c‖x‖²)</code>, second derivatives in <code>c</code> at the origin, <code>busemann</code> near the origin, the <code>tanh</code> derivative in the tail, and the Poincaré ceiling at <code>c = 100</code> (10.35 / 25.42).</li>
 <li><strong>Numerical-stability guide, TF32.</strong> On an A100 at the JAX default, small float32 products run in full precision and larger ones in TF32 (a single row in full precision at every width tried; a 5 → 12 product switches between 7 and 8 rows), so a sample evaluated alone can differ from the same sample inside a batch by the TF32 error: 3.3e-3 for <code>LorentzMLA</code> at its test size, against at most 7.6e-6 under <code>jax_default_matmul_precision="highest"</code>.</li>
@@ -4223,7 +4255,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>Hyperboloid and proper-velocity <code>expmap</code> lost their base-point Jacobian near the origin, and <code>tangent_norm</code>/<code>tangent_inner</code> their base-point gradient.</strong> The geodesic length came from the radial/perpendicular split of the tangent vector, which divides by <code>‖x_s‖</code>; its gradient with respect to a base point near the origin carried an absolute error of about <code>eps/(√c‖x_s‖)</code> of its natural scale. <code>expmap</code> inherited it: for a step of scaled length 10 the float32 Jacobian with respect to the base point was off by 7e-4 at <code>√c‖x_s‖ = 1e-3</code>, 4e-2 at 1e-5 and above 1 at 1e-7, with a correct value. A base point with <code>√c‖x_s‖ ≤ 0.1</code> now takes the Cartesian form of the transport to the origin, and the <code>expmap</code> Jacobian is within about 1e-6. The reparameterized <code>wrapped_normal_hyperboloid.sample</code> calls this <code>expmap</code> at the mean: with <code>σ = 1</code> its float32 Jacobian with respect to the mean was off by up to 9e-4 at scaled mean radius 1e-4 and 1e-2 at 1e-5, and is now within 1e-6. <strong>Values change</strong> by rounding for a base point inside the neighbourhood, with one exception: for a nonzero base point just below <code>MIN_NORM = 1e-15</code> the three functions returned values off by up to 30 % and are now right. The raw gradient with respect to the ambient point changes along the sheet's normal only. See <a href="../user-guide/numerical-stability/#origin-derivatives">Origin derivatives</a>.</li>
 <li><strong>A float64 <code>c</code> promoted the output of float32 manifolds to float64 under x64.</strong> Manifold methods cast the points to the manifold's dtype but passed <code>c</code> through raw, so float32 points with a float64 0-d <code>c</code> gave float64 from, for example, <code>Hyperboloid.logmap</code>, <code>tangent_norm</code>, <code>tangent_inner</code> and <code>ProperVelocity.expmap</code>. Every method of <code>Hyperboloid</code>, <code>Poincare</code>, <code>ProperVelocity</code>, <code>Klein</code>, <code>HalfSpace</code>, <code>Stereographic</code> and <code>Euclidean</code> now casts <code>c</code> to the manifold's dtype (<code>ManifoldBase._cast_c</code>), so output and computation dtype follow the manifold. Values do not change for a float32 manifold with a Python-float <code>c</code> (bitwise equal on all 320 method/<code>c</code> cells measured); only the output dtype changes where <code>c</code> was a float64 array.</li>
 </ul>
-<h3 id="documentation_1">Documentation<a class="headerlink" href="#documentation_1" title="Permanent link">&para;</a></h3>
+<h3 id="documentation_2">Documentation<a class="headerlink" href="#documentation_2" title="Permanent link">&para;</a></h3>
 <ul>
 <li>The HELM layers (<code>LorentzMLA</code>, <code>LorentzMoE</code>, <code>LorentzMoEGate</code>, <code>LorentzSwiGLU</code>, <code>LorentzResidual</code>) are described as the HELM paper's form, not as reproductions of HELM's released code. Their docstrings list the differences from that code. <code>LorentzResidual</code> matches HELM's LResNet in the forward pass for <code>w_y &gt;= 0</code>; its input gradients differ along the hyperboloid normal only.</li>
 <li>Corrected the float32 limit of the hyperplane MLR heads in the <a href="../user-guide/numerical-stability/#mlr-large-bias">numerical stability guide</a>. Near a hyperplane the logit is off by about <code>eps·e^(a+|ρ|)/4</code>: 1e-3 at <code>a + |ρ| ≈ 10.4</code>, 1e-2 at 12.7 and 0.1 at 15.0. Off the hyperplane the relative error of the gradient is about <code>|tanh δ|</code> times that, with <code>δ</code> the scaled distance to the hyperplane. The earlier rule of thumb (0.1 % at <code>a + ρ ≈ 15</code>) was the median gradient error exactly on the hyperplane, where the first-order term vanishes. A float64 head removes the offset's share only if the time coordinate is also rebuilt in float64 from the spatial part.</li>
@@ -4269,7 +4301,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 </ul>
 <h3 id="fixed_3">Fixed<a class="headerlink" href="#fixed_3" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>Poincaré <code>dist</code> and <code>logmap</code> were wrong for far pairs in float32.</strong> They now use <code>asinh(√c‖x − y‖/√(B_x·B_y))</code> instead of <code>atanh(√c‖(-x) ⊕ y‖)</code>, whose argument rounds towards 1. Two points at scaled radius 7.2 on opposite sides (true distance 14.4, <code>c = 1</code>): <code>dist</code> 14.332947 with an exactly zero gradient → 14.400112. <code>ptransp</code> (the gyration, regrouped in <code>s = x + y</code>) and <code>apollonian_dist</code> no longer cancel near the boundary. <strong>Values change</strong> for every pair, by ≤ 1.3e-13 in float64. Slot 1 (<code>VERSION_MOBIUS</code>) is unchanged and still saturates. See <a href="../user-guide/numerical-stability/#poincare-far-pairs">Far pairs</a>.</li>
+<li><strong>Poincaré <code>dist</code> and <code>logmap</code> were wrong for far pairs in float32.</strong> They now use <code>asinh(√c‖x − y‖/√(B_x·B_y))</code> instead of <code>atanh(√c‖(-x) ⊕ y‖)</code>, whose argument rounds towards 1. Two points at scaled radius 7.2 on opposite sides (true distance 14.4, <code>c = 1</code>): <code>dist</code> 14.332947 with an exactly zero gradient → 14.400112. <code>ptransp</code> (the gyration, regrouped in <code>s = x + y</code>) and <code>apollonian_dist</code> no longer cancel near the boundary. <strong>Values change</strong> for most pairs: by at most 1.3e-13 relative in float64 (5e-5 in float32) within scaled radius 5, and by up to 3.9e-10 in float64 for far pairs (two points at scaled radius 9 on opposite sides, <code>c = 1</code>). Slot 1 (<code>VERSION_MOBIUS</code>) is unchanged and still saturates. See <a href="../user-guide/numerical-stability/#poincare-far-pairs">Far pairs</a>.</li>
 <li><strong><code>Stereographic</code> <code>dist</code>, <code>logmap</code> and <code>geodesic</code> saturated on far pairs at <code>c &gt; 0</code> in float32.</strong> They now use the same <code>asinh</code> identity as <code>Poincare</code>. At the same far pair (true distance 14.4): <code>dist</code> 12.656 → 14.39999. <strong>Values change</strong> for every pair at <code>c &gt; 0</code>; at <code>c ≤ 0</code>, <code>logmap</code> and <code>geodesic</code> are bit-identical and <code>dist</code> moves by ≤ 3.1e-7 relative (float32). See <a href="../user-guide/numerical-stability/#poincare-far-pairs">Far pairs</a>.</li>
 <li><strong>Divisor floors zeroed gradients at capped points.</strong> Poincaré divisors <code>1 − c‖x‖²</code> were floored at their value at the <code>proj</code> cap, which the computed value of 11–76 % of capped points falls below. The floor is now half that value, which none of the measured capped points reaches at <code>c ∈ {0.1, 0.3, 1, 2.5}</code> (very small <code>c</code> can reach it; see the guide). Klein's <code>g_x</code> and the isometry maps use the same half floor. Float32 <code>tangent_norm</code> gradient error at capped points: 1.0 → 3.7e-2. Float32 <code>expmap</code> and <code>⊕</code> gradients at capped points stay wrong, for other reasons. See <a href="../user-guide/numerical-stability/#poincare-divisor-floors">Divisor Floors</a>.</li>
 <li><strong>Float32 overflow collapsed Poincaré rows to the origin with a zero gradient.</strong> <code>HypLinearPoincarePP</code> and <code>HypConv2DPoincare</code> collapsed once an HNN++ score reached <code>√c·v ≈ 44</code> (43.9 at <code>c = 0.1</code>, 45.05 at <code>c = 1</code>); <code>HypLinearPoincareBusemann</code> once <code>O·sinh²(v_max)/c &gt; FLT_MAX</code>. All three now share a lift that rescales each row by a power of two, so a saturated row lands at the ball's edge (<code>√c·‖y‖</code> 0.99999994 against 0 before). Below the old threshold, values move by a few ulp. Remaining sites: <a href="../user-guide/numerical-stability/#silent-overflow-sites">Silent overflow</a>.</li>
@@ -4280,7 +4312,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>The Busemann layers accepted the other model's manifold.</strong> <code>Poincare</code> and <code>Hyperboloid</code> both have <code>busemann</code> and <code>_busemann_tangent</code>, so the method-name check let each into the other model's layers. Such a pair usually failed at the first call with a shape error, but at <code>in_dim = 2</code> some calls ran without an error. All four Busemann layers now check the class and raise a <code>TypeError</code> at construction. The other models (Klein, HalfSpace, Stereographic, ProperVelocity, Euclidean) were already rejected. See <a href="../user-guide/numerical-stability/#poincare-tangent-input">Tangent Inputs</a>.</li>
 <li><strong><code>hope</code> and <code>HyperbolicRoPE</code> rounded the positions to bfloat16 on bfloat16/float16 input</strong>, so between 512 and 1024 a position was rounded to a multiple of 4. The rotation now runs in <code>promote_types(dtype, float32)</code>, as HELM does; float32 and float64 input are unchanged. Worst rotation error of a bfloat16 input at <code>S = 1000</code>: 4.67 → 0.028.</li>
 </ul>
-<h3 id="documentation_2">Documentation<a class="headerlink" href="#documentation_2" title="Permanent link">&para;</a></h3>
+<h3 id="documentation_3">Documentation<a class="headerlink" href="#documentation_3" title="Permanent link">&para;</a></h3>
 <ul>
 <li>New sections in the numerical stability guide: <a href="../user-guide/numerical-stability/#mlr-large-bias">the MLR score at a large hyperplane offset</a> (a half-angle rewrite was measured and not adopted, at 1.9–2.5× forward+backward cost on <code>HypRegressionHyperboloid</code>), <a href="../user-guide/numerical-stability/#input-overflow-fingerprint">input overflow</a>, <a href="../user-guide/numerical-stability/#silent-overflow-sites">where float32 overflow still collapses silently</a>, the divisor floors and the tangent-input paths. The Poincaré precision table now holds measured float32 errors, and the chart ceiling is stated per curvature (12.65 / 27.73 at <code>c = 1</code>). The hybrid examples pass Euclidean features with <code>input_space="tangent"</code>.</li>
 <li>Corrected docs and docstrings: the <code>gyro_difference</code>/<code>ptransp</code> chart rule (the Cartesian chart applies whenever either endpoint's scaled spatial radius is at most 1e-1, not only at the origin); an accuracy warning on <code>Hyperboloid.minkowski_inner</code>; <code>_assert_v_max_safe</code>, which bounds one entry only (<code>v_max ≲ 45.05</code>); and the tangent-projection residual in <code>_egrad2rgrad</code>/<code>_tangent_proj</code>.</li>
@@ -4771,7 +4803,7 @@ migration in its entry.</p>
 <li><strong>Breaking: internal plumbing marked private</strong> — <code>busemann_core.init_weight_norm_params</code> → <code>_init_weight_norm_params</code>, <code>busemann_core.busemann_score</code> → <code>_busemann_score</code>, <code>gyro_normalization.GyroBatchNormBase</code> → <code>_GyroBatchNormBase</code>, <code>GyroRMSNormBase</code> → <code>_GyroRMSNormBase</code></li>
 <li><strong>Internal consolidation</strong>: the <code>1e-15</code> gradient-safety floor has one canonical home, <code>hyperbolix.utils.math_utils.MIN_NORM</code> (the copies in <code>_gyrovector_core</code>, <code>hyperboloid</code>, <code>proper_velocity</code>, <code>busemann_core</code>, <code>hyperboloid_linear</code>, and the three distribution modules are gone; <code>isometry_mappings.MIN_DENOM</code> renamed away); PV's private <code>_mobius_gyration</code> copy is deleted in favour of the shared <code>_gyrovector_core._gyration</code>; <code>_batched_transform</code> is a thin proven-bit-identical wrapper over <code>_vmap_sample_and_batch</code>; <code>hope()</code>'s time reconstruction delegates to <code>spatial_to_hyperboloid</code> (proven bit-identical); <code>frechet_variance</code> is typed manifold-generic (<code>Manifold</code>, matching its Hyperboloid/PV callers); <code>HypLinearPoincare</code>/<code>HypRegressionPoincare</code> drop the never-called <code>compute_mlr_pp</code> from their required manifold methods</li>
 </ul>
-<h3 id="documentation_3">Documentation<a class="headerlink" href="#documentation_3" title="Permanent link">&para;</a></h3>
+<h3 id="documentation_4">Documentation<a class="headerlink" href="#documentation_4" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Fixed four doc examples that raised on construction (<code>HypRegressionHyperboloid</code>, <code>HyperbolicSoftmaxAttention</code>, <code>PoincareBatchNorm2D</code>, <code>HypConv2DHyperboloid</code>), the <code>riemannian_adam</code> <code>b1</code>/<code>b2</code> example, and the <code>uniform_poincare</code> example (nonexistent <code>dim=</code> argument, sample count passed as the dimension, wrong volume value) — all now execute</li>
 <li>Rewrote the layer initialization-scale table to match actual defaults (split <code>HypLinear*PP</code> from the regression heads; added <code>HypLinearHyperboloidPLFC</code> and <code>HypConv2DHyperboloidILNN</code> rows); fixed ambient-vs-spatial channel-convention contradictions (documented the <code>HTCLinear.out_features</code>-is-spatial exception; HCat growth is internal — output width is always <code>out_channels</code>); corrected "manifold-valued weights" to "manifold-valued bias" for the legacy Ganea layers and repositioned <code>mark_manifold_param</code> as guidance for hand-rolled parameters (built-in layers self-tag)</li>

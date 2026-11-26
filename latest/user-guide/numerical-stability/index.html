@@ -2649,8 +2649,11 @@
 <p>Each model's pairwise operations hold up to a scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d\)</span> (at <span class="arithmatex">\(c = 1\)</span>). Past it
 the chart cannot represent the point; that is a property of the chart, not a bug. The hyperboloid
 has no such ceiling below <span class="arithmatex">\(a \approx 45\)</span>, where computing its float32 time coordinate overflows;
-its float32 error grows with the radius instead (the numbers are the median <code>dist</code> error over
-pairs at distance 1).</p>
+its float32 error grows with the radius instead, and its size depends on how the two points lie.
+The hyperboloid numbers below are for two points in different directions: both at scaled radius
+<span class="arithmatex">\(a\)</span>, at distance 1 from each other (median <code>dist</code> error, <span class="arithmatex">\(c = 1\)</span>). Two points in the same
+direction from the origin are the favourable case. Their error is about ten times smaller at
+<span class="arithmatex">\(a = 12\)</span> (5e-5), and by <span class="arithmatex">\(a = 16\)</span> the difference is gone.</p>
 <table>
 <thead>
 <tr>
@@ -2878,8 +2881,13 @@ in a deep hierarchy, reach it easily.</p>
 single-point operations are covered in <a href="#hyperboloid-origin-chart">The Hyperboloid Origin Chart</a>,
 and the places that still lose accuracy are listed below.</p>
 <h4 id="hyperboloid-known-limitations">Known Limitations<a class="headerlink" href="#hyperboloid-known-limitations" title="Permanent link">&para;</a></h4>
-<p><code>expmap</code>, <code>ptransp</code>, <code>tangent_proj</code>, <code>tangent_inner</code>, <code>egrad2rgrad</code> and <code>busemann</code> are also
-cancellation-free. Gyro <code>addition</code> is not when its result lies much closer to the origin than its
+<p><code>expmap</code>, <code>ptransp</code>, <code>tangent_inner</code> and <code>busemann</code> are also cancellation-free. <code>tangent_proj</code>
+and <code>egrad2rgrad</code> are a different case. They take an arbitrary ambient vector <code>v</code> and compute
+the Minkowski product <span class="arithmatex">\(\langle x, v\rangle_L\)</span> directly. At large radius that product loses
+digits, but only digits that <code>v</code> did not carry in the first place, so no other formula would do
+better. In practice: at large radius, use a vector that is tangent by construction (the output of
+<code>logmap</code> or <code>ptransp</code>) instead of projecting an ambient one. Gyro <code>addition</code> is not
+cancellation-free when its result lies much closer to the origin than its
 operands: with <code>x</code> at scaled radius 8 and <code>y</code> at 7.5 on the opposite ray, the float32 result (at
 scaled radius 0.5) is off by 3 to 22 %, depending on the direction, and by about 2e-10 in float64. That case is what <code>gyro_difference</code> is
 for (see <a href="#gyro-difference">Gyro-Difference and GyroBatchNorm Centering at Large Radius</a>). <code>is_in_manifold</code> and <code>is_in_tangent_space</code> compare the
@@ -2890,10 +2898,14 @@ stored time slot with the value the spatial part implies, so an on-sheet point p
 <li><strong><code>ptransp</code>'s direction below the float32 angular resolution.</strong> A transport step shorter than
    the point-representation floor <code>eps·sinh(a)/√c</code> is lost in the endpoints' storage rounding, and
    no formula recovers it.</li>
-<li><strong>Attention scores through a GEMM.</strong> The Lorentzian similarity score behind
-   <code>HyperbolicFullAttention</code> forms <code>2/c + 2⟨Q,K⟩_L</code> from a matrix product, and a GEMM cannot be
-   made cancellation-free the way a single pairwise <code>dist</code> can — see
-   <a href="#attention-score-floor">Full Attention's Float32 Score Floor</a> below.</li>
+<li><strong>Attention scores and the <code>"gemm"</code> centroid.</strong> The Lorentzian similarity score of
+   <code>HyperbolicFullAttention</code> and <code>LorentzMLA</code> forms <code>2/c + 2⟨Q,K⟩_L</code> from a matrix product, and a
+   GEMM cannot be made cancellation-free the way a single pairwise <code>dist</code> can — see
+   <a href="#attention-score-floor">Full Attention's Float32 Score Floor</a> below. The value aggregation
+   <code>lorentz_midpoint(form="gemm")</code>, the default centroid of <code>LorentzMLA</code>, normalizes the weighted
+   sum <code>h</code> of the values by the literal <code>c·(h_0² − ‖h_s‖²)</code>, whose relative error grows as
+   <code>eps·cosh²(a)</code> with the radius <code>a</code> of the values; <code>form="variance"</code> avoids it (see the
+   paragraph on the value aggregation in that section).</li>
 <li><strong>Transport to the origin from a far point.</strong> The generic
    <code>Hyperboloid.ptransp(v, far_point, origin)</code> still cancels: its radial component has a float32
    error of 1.95e-3 at scaled radius 10. The wrapped-normal <code>log_prob</code> does not use it: it reads
@@ -2922,7 +2934,10 @@ stored time slot with the value the spatial part implies, so an on-sheet point p
    hyperplane offset, so a large bias costs as many digits as a large input radius: near a
    hyperplane the float32 logit is off by about 1e-3 at <code>a + |ρ| ≈ 10.4</code>, and in the worst case
    measured from 9 — see
-   <a href="#mlr-large-bias">The MLR Score at a Large Hyperplane Offset</a> below.</li>
+   <a href="#mlr-large-bias">The MLR Score at a Large Hyperplane Offset</a> below. The FGG product <code>x @ V</code>
+   (the hidden product of <code>FGGLinear</code> and <code>FGGConv2D</code>, and the logits of <code>FGGLorentzMLR</code>) forms
+   the same expression in one matrix product, with the offset <code>√c·b/‖w‖</code> set by the bias <code>b</code> and
+   the weight column <code>w</code>.</li>
 <li><strong>Busemann gradients at a far stored point.</strong> When the Busemann layers score a stored float32
    point, from scaled radius <span class="arithmatex">\(a \approx 29.8\)</span> at <span class="arithmatex">\(c = 1\)</span> (<span class="arithmatex">\(29.4\)</span> at <span class="arithmatex">\(c = 0.3\)</span>) the gradients of the
    scores with <span class="arithmatex">\(\langle x_s, \omega\rangle \ge 0\)</span> can be up to about 1 off relative to their largest
@@ -2947,12 +2962,15 @@ stored time slot with the value the spatial part implies, so an on-sheet point p
 Minkowski terms each of size <code>cosh(a_q)·cosh(a_k)/c</code>. A matrix product returns the Gram matrix only
 to absolute <code>eps</code>, so no GEMM spelling avoids the cancellation. The absolute error on one score
 has the size <code>eps·cosh(a_q)·cosh(a_k)/(c·τ)</code>: in float32 (<code>c = 1</code>, <code>τ = 1</code>) 4.8e-3 at <code>a = 6</code>, 0.26
-at <code>a = 8</code>, and 2.0 at <code>a = 9</code>. Measured on 12 tokens in 16 dimensions, the median score is off by
-about half of that and the worst of the 144 scores by about 1 to 4 times it. The default <code>τ = √out_features</code> divides the error and the score spread
+at <code>a = 8</code>, and 2.0 at <code>a = 9</code>. <code>LorentzMLA</code> computes the same score and has the same error.
+Compared with float64, a typical float32 score is off by about this quantity and the worst ones
+by 3 to 6 times it (16 dimensions, scaled radius 4 to 10).
+<code>HyperbolicFullAttention</code>'s default <code>τ = √out_features</code> divides the error and the score spread
 alike, so from <code>a ≈ 8</code> the error still exceeds the spread softmax is meant to resolve, and the
 weights come out wrong while staying finite.</p>
 <p>The cheaper first remedy is a <code>HyperboloidGyroRMSNorm</code> in front of the layer, or a smaller <code>c</code>.
-<code>score_dtype=jnp.float64</code> computes the scores as a float64 island: it casts the spatial parts of
+<code>HyperbolicFullAttention(score_dtype=jnp.float64)</code> computes the scores as a float64 island
+(<code>LorentzMLA</code> has no such option): it casts the spatial parts of
 the queries and keys, rebuilds both time coordinates from them in float64, and casts the scores
 back before the softmax. Its scores are those of a float64 layer fed the same float32 spatial
 coordinates; what remains is the rounding of the stored spatial part. Against a float64 layer on
@@ -3569,7 +3587,8 @@ in float32 for <span class="arithmatex">\(\|x\|\)</span> up to at least <span cl
 <p>Pairwise operations hold to the scaled radius <span class="arithmatex">\(a = \sqrt{c}\,d\)</span> below (<span class="arithmatex">\(c = 1\)</span>). Past it the chart
 cannot represent the point, which is not a bug. The hyperboloid has no such ceiling below
 <span class="arithmatex">\(a \approx 45\)</span>, where computing its float32 time coordinate overflows; its float32 error grows
-with the radius instead (the numbers are the median <code>dist</code> error over pairs at distance 1).
+with the radius instead (the numbers are the median <code>dist</code> error for two points at the same
+radius and at distance 1 from each other; see the <a href="#overview">Overview</a>).
 To choose a manifold by use case, see <a href="../manifolds/#choosing-a-manifold">Choosing a manifold</a>.</p>
 <table>
 <thead>
@@ -4064,7 +4083,8 @@ slot 0's body. <code>dist(x, x)</code> is exactly 0, with gradient 0.</p>
   <a href="#poincare-roundtrip-ceiling">The Round-Trip Ceiling</a>). The hyperboloid has no such
   ceiling up to <span class="arithmatex">\(a \approx 45\)</span> at <span class="arithmatex">\(c = 1\)</span>, where computing the time coordinate overflows (see
   <a href="#input-overflow-fingerprint">Input Overflow</a>); its float32 error grows as <span class="arithmatex">\(\varepsilon\sinh a\)</span>,
-  to a median <code>dist</code> error of 5e-4 at <span class="arithmatex">\(a = 12\)</span> and 6e-2 at 16.6 for pairs at distance 1. Convert with
+  to a median <code>dist</code> error of 5e-4 at <span class="arithmatex">\(a = 12\)</span> and 6e-2 at 16.6 for two points at the same
+  radius and at distance 1 from each other (see the <a href="#overview">Overview</a>). Convert with
   <code>isometry_mappings.poincare_to_hyperboloid</code>.</li>
 </ul>
 <h3 id="hyperboloid-distance-versions">Hyperboloid Distance Versions<a class="headerlink" href="#hyperboloid-distance-versions" title="Permanent link">&para;</a></h3>
@@ -4180,7 +4200,8 @@ default at any radius (see <a href="#hyperboloid-known-limitations">above</a>).<
   required past the float32 chart ceiling (<span class="arithmatex">\(a \approx 12.65\)</span> at <span class="arithmatex">\(c = 1\)</span>; see the
   <a href="#precision-requirements-by-distance">table</a>).</li>
 <li><strong>For large radii, use the hyperboloid or <code>ProperVelocity</code>.</strong> The hyperboloid's float32
-  error grows as <span class="arithmatex">\(\varepsilon\sinh a\)</span> (5e-4 at <span class="arithmatex">\(a = 12\)</span>, 6e-2 at 16.6; see
+  error grows as <span class="arithmatex">\(\varepsilon\sinh a\)</span> (median <code>dist</code> error 5e-4 at <span class="arithmatex">\(a = 12\)</span> and 6e-2 at 16.6
+  for two points at the same radius and at distance 1; see
   <a href="#hyperboloid-known-limitations">Known Limitations</a>);
   <code>ProperVelocity</code> lives in unconstrained <span class="arithmatex">\(\mathbb{R}^n\)</span> and trains with plain <code>optax.adam</code>.</li>
 <li><strong>Use <code>VERSION_MOBIUS_DIRECT</code> for Poincaré distance</strong> (the default). <code>VERSION_MOBIUS</code>
