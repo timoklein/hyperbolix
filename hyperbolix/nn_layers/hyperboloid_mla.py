@@ -131,13 +131,11 @@ class LorentzMLA(nnx.Module):
     :class:`HyperbolicFullAttention` (docs: ``numerical-stability.md#attention-score-floor``):
     ``<q, k>_L = -q_0 k_0 + <q_s, k_s>`` subtracts two terms of size
     ``cosh(a_q) cosh(a_k) / c`` (``a = sqrt(c) d`` the scaled radius) to reach an O(1)
-    difference. The absolute score error is about ``eps cosh(a_q) cosh(a_k) / (c tau)`` at the
-    median and up to about 6 times that in the worst case (float32 against float64, 1,024
-    query-key pairs in 16 spatial dimensions at scaled radius 4 to 10, CPU;
-    ``logs/2026-11-25_score-floor-factor/score_floor.out``). In float32 (``c = 1``,
-    ``tau = 1``) it reaches O(1) near ``a ~ 8``. A bfloat16 input runs these GEMMs in
-    bfloat16, whose ``eps`` is ``2^16`` times float32's; since the error grows as ``e^(2a)``,
-    that moves the same error down by ``ln(2^16) / 2 ~ 5.5`` nats of radius. The weights stay
+    difference. A typical score is off by about ``eps cosh(a_q) cosh(a_k) / (c tau)``, the
+    worst ones by up to 6 times that. In float32 (``c = 1``, ``tau = 1``) the error reaches
+    O(1) near ``a ~ 8``. A bfloat16 input runs these GEMMs in bfloat16, whose ``eps`` is
+    ``2^16`` times float32's; since the error grows as ``e^(2a)``, that moves the same error
+    down by ``ln(2^16) / 2 ~ 5.5`` nats of radius. The weights stay
     finite either way, just wrong. Keep the radius down, or run the layer in float32/float64.
     The two score GEMMs are pinned to HIGHEST by default; a lower
     ``score_precision`` (``DEFAULT``, which is TF32 on Ampere/Hopper) adds its own rounding on top

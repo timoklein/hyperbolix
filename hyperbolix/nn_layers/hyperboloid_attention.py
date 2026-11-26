@@ -604,9 +604,7 @@ class HyperbolicFullAttention(_HyperbolicAttentionBase):
 
         eps * cosh(a_q) * cosh(a_k) / (c * tau)
 
-    (measured, float32 against float64 on 1,024 query-key pairs in 16 spatial dimensions
-    at scaled radius 4 to 10: about 1 times this at the median, up to about 6 times it
-    in the worst case; ``logs/2026-11-25_score-floor-factor/score_floor.out``), which
+    (a typical score is off by about this much, the worst ones by up to 6 times it), which
     with float32's ``eps ≈ 1.19e-7`` (``c = 1``, ``tau = 1``) is about 4.8e-3 at
     ``a = 6``, 0.26 at ``a = 8`` and 2.0 at ``a = 9``. The default
     ``tau = sqrt(out_features)`` divides these numbers by ``tau``, but it divides the

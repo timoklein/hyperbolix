@@ -2311,16 +2311,11 @@ class Hyperboloid(ManifoldBase):
 
         This is the literal form ``-x₀·y₀ + ⟨x_s, y_s⟩``, whose two terms are each
         ``O(cosh²(a)/c)`` and cancel, so the absolute rounding error is about ``eps·cosh²(a)/c``
-        (float32: 0.26 at ``a = 8``, reaching 1 at ``a ≈ 8.7`` for ``c = 1``). The library never
-        calls this method. Its private helper ``_minkowski_inner`` is used in four places, each
-        where the cancellation does no harm: ``expmap_0`` takes the norm of a tangent vector at
-        the origin, whose time component is 0; ``tangent_proj`` and ``egrad2rgrad`` form
-        ``<x, v>_L`` for the projection, which cancels only down to the accuracy of ``v`` itself
-        (see ``_tangent_proj``); and the HoroPCA projection takes the norm of a vector built from
-        the origin and the ideal directions, independent of the radius of the data. Layers that
-        need ``<x, y>_L`` between two far points (the attention scores, the hyperboloid and FGG
-        MLR heads, the FGG product ``x @ V``) form it from matrix products of the coordinates and
-        carry the same kind of error
+        (float32: 0.26 at ``a = 8``, reaching 1 at ``a ≈ 8.7`` for ``c = 1``). The library's own
+        pairwise operations do not use this form. It remains inside ``tangent_proj`` and
+        ``egrad2rgrad``, where no more accurate formula exists, and in the layers that form
+        ``<x, y>_L`` through a matrix product (attention scores, the MLR heads, the FGG product
+        ``x @ V``), which carry this error at large radius
         (``docs/user-guide/numerical-stability.md#hyperboloid-known-limitations``). Do not
         use it to recover ``⟨x, x⟩_L = -1/c``, to check manifold membership, or to form distances —
         use ``dist``/``sqdist``/``tangent_inner``/``is_in_manifold``, which are cancellation-free
