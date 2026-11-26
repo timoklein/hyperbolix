@@ -88,12 +88,12 @@ Pairwise ops hold to the scaled radius `a = √c·d` below (float32 / float64, `
 
 | Model | Good to `a` | Limit |
 |---|---|---|
-| Hyperboloid | no fixed radius: float32 error grows as `eps·sinh(a)` (median `dist` error over pairs at distance 1: 5e-4 at 12, 6e-2 at 16.6) / much further | the storage floor `eps·sinh(a)/√c`, which reaches 1 at 16.6; computing the float32 time coordinate overflows past `a ≈ 45` |
+| Hyperboloid | no fixed radius: float32 error grows as `eps·sinh(a)` (median `dist` error over pairs at distance 1 whose points lie at the same radius: 5e-4 at 12, 6e-2 at 16.6; pairs on one ray do better up to `a ≈ 14`) / much further | the storage floor `eps·sinh(a)/√c`, which reaches 1 at 16.6; computing the float32 time coordinate overflows past `a ≈ 45` |
 | Poincaré | 12.6 / 27.7 (13.8 / 28.9 at `c = 0.1`) | the ball chart's ceiling. `dist` slot 1 (`VERSION_MOBIUS`) saturates there: 12.637 for a true 14.4, gradient relative error 1.0 |
 | Klein | 6.32 / 13.86 | half the Poincaré radius, and the floor `eps·cosh²(a)`. The maps into Klein don't project, so call `Klein.proj` after mapping far points in |
 | HalfSpace | `inf`/NaN past 88.7 / 709.8 | the floor `≈ 0.4·(eps/2)·cosh(√c·δ)/√c`, where `δ` is the distance to the vertical axis through `e_n/√c` |
 
-Two things still cancel at large radius: `HyperbolicFullAttention`'s GEMM-formed scores, and a `ptransp` step below the storage floor.
+A few hyperboloid sites still lose float32 accuracy at large radius, chiefly the GEMM-formed attention scores (`HyperbolicFullAttention`, `LorentzMLA`), `LorentzMLA`'s default `"gemm"` centroid, and the MLR and FGG products at a large hyperplane offset. The full list is in `docs/user-guide/numerical-stability.md#hyperboloid-known-limitations`.
 
 ## Tests
 
