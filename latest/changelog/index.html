@@ -1374,7 +1374,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#152-2026-11-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.5.2 - 2026-11-27
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.5.2 - 2026-11-27">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1408,12 +1419,12 @@
   <a href="#151-2026-11-16" class="md-nav__link">
     <span class="md-ellipsis">
       
-        [1.5.1] - 2026-11-16
+        1.5.1 - 2026-11-16
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="[1.5.1] - 2026-11-16">
+    <nav class="md-nav" aria-label="1.5.1 - 2026-11-16">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2773,7 +2784,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Unreleased">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#152-2026-11-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.5.2 - 2026-11-27
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1.5.2 - 2026-11-27">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2807,12 +2829,12 @@
   <a href="#151-2026-11-16" class="md-nav__link">
     <span class="md-ellipsis">
       
-        [1.5.1] - 2026-11-16
+        1.5.1 - 2026-11-16
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="[1.5.1] - 2026-11-16">
+    <nav class="md-nav" aria-label="1.5.1 - 2026-11-16">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -4153,7 +4175,9 @@
 <p>All notable changes to Hyperbolix will be documented in this file.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
-<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.5.0...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="unreleased"><a href="https://github.com/timoklein/hyperbolix/compare/v1.5.2...HEAD">Unreleased</a><a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="152-2026-11-27"><a href="https://github.com/timoklein/hyperbolix/compare/v1.5.1...v1.5.2">1.5.2</a> - 2026-11-27<a class="headerlink" href="#152-2026-11-27" title="Permanent link">&para;</a></h2>
+<p>A seed now gives the same float32 weights with and without <code>jax_enable_x64</code>. Values change only with x64 on and float32 or lower-precision parameters, by one float32 rounding step. Without x64 all values are unchanged bit for bit against 1.5.1, with the one exception named below (<code>uniform_poincare.sample</code> in bfloat16 or float16). The numerical-stability guide is corrected in several places.</p>
 <h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Values change with <code>jax_enable_x64</code> on, by one float32 rounding step: a seed gives the same float32 weights with and without x64.</strong> Several init scales were JAX ops on Python numbers (<code>jnp.sqrt(5.0 / in_features)</code>), which run in float64 under x64 and in float32 without it, and the two round differently at 11 to 30 % of layer sizes. They are now computed in float32 (float64 for a float64 <code>param_dtype</code>): <code>FGGLinear</code> and <code>FGGConv2D</code> (every random <code>reset_params</code>, and the weight-norm <code>kernel_scale</code>), <code>FGGLorentzMLR(reset_params="mlr")</code>, <code>HypRegressionHyperboloid</code>, <code>HypRegressionPoincare</code>, <code>HypRegressionPoincarePP</code>, <code>HypConv2DHyperboloid(reset_params="fan_in")</code>, <code>HypLinearPoincare</code>, <code>HypLinearPoincarePP</code> and <code>HypConv2DPoincare(id_init=False)</code>. For the same reason, the digamma scale of <code>Hyperboloid.log_radius_concat</code> (and so of <code>HypConv2DHyperboloidILNN</code>) is computed in float32 (float64 for a float64 manifold) and rounded to the manifold's dtype, and two sites now cast a Python-float <code>c</code> to the working dtype before the square root: the origin fallback of <code>HypLinearHyperboloidFHNN</code> and the radius sampler of <code>uniform_poincare.sample</code> for <code>n &gt;= 3</code> (they differed at <code>c = 0.9</code>, <code>1.8</code>, <code>2.7</code>, among others). Without x64 (float32, bfloat16 and float16 parameters), and with x64 for float64 parameters, all values are unchanged bit for bit against 1.5.1. The one exception is <code>uniform_poincare.sample</code> with <code>dtype=jnp.bfloat16</code> or <code>float16</code> and <code>n &gt;= 3</code>, which now takes <code>sqrt(c)</code> in that dtype, as the <code>n = 2</code> sampler already did.</li>
@@ -4169,7 +4193,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 </ul>
 </li>
 </ul>
-<h2 id="151-2026-11-16">[1.5.1] - 2026-11-16<a class="headerlink" href="#151-2026-11-16" title="Permanent link">&para;</a></h2>
+<h2 id="151-2026-11-16"><a href="https://github.com/timoklein/hyperbolix/compare/v1.5.0...v1.5.1">1.5.1</a> - 2026-11-16<a class="headerlink" href="#151-2026-11-16" title="Permanent link">&para;</a></h2>
 <p>Fixes from an audit of 1.5.0. Two defaults change: <code>HypConv2DHyperboloid</code>'s init, and the output curvature of layers that take <code>c_in</code> and <code>c_out</code>. The rule that a manifold's dtype decides now also holds for a float64 <code>c</code> and for NumPy input. Apart from the two defaults and the fixes listed below, float32 results with a Python-float <code>c</code> and <code>jax_enable_x64</code> off are unchanged, except for rounding-level changes in <code>uniform_poincare.log_prob</code> and in the gradient of <code>lorentz_residual</code> with respect to a learnable <code>c</code>. That comparison was made on the lockfile's jax 0.9.1. With jax 0.12 the input gradients of <code>sinh_lift_to_hyperboloid</code>, <code>HypLinearHyperboloidPLFC</code> and <code>HypRegressionPoincare</code> also change in the last bit (relative 3e-7 at most) for a <code>c</code> that float32 does not represent exactly, because <code>c</code> now enters as a float32 array instead of a weakly typed Python scalar; values are bit-identical there too.</p>
 <h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
 <ul>
