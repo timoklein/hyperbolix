@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-27
+
+A seed now gives the same float32 weights with and without `jax_enable_x64`. Values change only with x64 on and float32 or lower-precision parameters, by one float32 rounding step. Without x64 all values are unchanged bit for bit against 1.5.1, with the one exception named below (`uniform_poincare.sample` in bfloat16 or float16). The numerical-stability guide is corrected in several places.
+
 ### Fixed
 - **Values change with `jax_enable_x64` on, by one float32 rounding step: a seed gives the same float32 weights with and without x64.** Several init scales were JAX ops on Python numbers (`jnp.sqrt(5.0 / in_features)`), which run in float64 under x64 and in float32 without it, and the two round differently at 11 to 30 % of layer sizes. They are now computed in float32 (float64 for a float64 `param_dtype`): `FGGLinear` and `FGGConv2D` (every random `reset_params`, and the weight-norm `kernel_scale`), `FGGLorentzMLR(reset_params="mlr")`, `HypRegressionHyperboloid`, `HypRegressionPoincare`, `HypRegressionPoincarePP`, `HypConv2DHyperboloid(reset_params="fan_in")`, `HypLinearPoincare`, `HypLinearPoincarePP` and `HypConv2DPoincare(id_init=False)`. For the same reason, the digamma scale of `Hyperboloid.log_radius_concat` (and so of `HypConv2DHyperboloidILNN`) is computed in float32 (float64 for a float64 manifold) and rounded to the manifold's dtype, and two sites now cast a Python-float `c` to the working dtype before the square root: the origin fallback of `HypLinearHyperboloidFHNN` and the radius sampler of `uniform_poincare.sample` for `n >= 3` (they differed at `c = 0.9`, `1.8`, `2.7`, among others). Without x64 (float32, bfloat16 and float16 parameters), and with x64 for float64 parameters, all values are unchanged bit for bit against 1.5.1. The one exception is `uniform_poincare.sample` with `dtype=jnp.bfloat16` or `float16` and `n >= 3`, which now takes `sqrt(c)` in that dtype, as the `n = 2` sampler already did.
 - The test of FGG init under x64 compared against constants printed under jax 0.9.1 and failed under jax 0.12, whose float32 normal sampler moves some draws by 1 to 2 ulps with and without x64 alike. It now compares against a fresh process without x64 on the installed JAX.
@@ -583,7 +587,9 @@ versioning.
 ### References
 - Based on research by Ganea et al. (2018), Bécigneul & Ganea (2019), Bdeir et al. (2023)
 
-[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/timoklein/hyperbolix/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/timoklein/hyperbolix/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/timoklein/hyperbolix/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/timoklein/hyperbolix/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/timoklein/hyperbolix/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/timoklein/hyperbolix/compare/v1.2.1...v1.3.0
